@@ -38,6 +38,18 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/mcp_parity_ops.py"
             $<TARGET_FILE:bloom-mcp>
         LABELS scripting mcp integration)
+    # The agent surfaces describe themselves alike and read back what they write.
+    if(BLOOM_BUILD_PYTHON)
+        set(bloom_reference_python "${CMAKE_BINARY_DIR}/python")
+    else()
+        set(bloom_reference_python "-")
+    endif()
+    bloom_add_test(NAME bloom.mcp.reference
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/agent_reference.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp integration
+        TIMEOUT 180)
     if(BLOOM_GPU_SHADER_TOOLS_AVAILABLE)
         bloom_add_test(
             NAME bloom.gpu.shader-tools-verify-mcp
