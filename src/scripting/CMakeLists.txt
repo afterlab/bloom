@@ -18,6 +18,7 @@ add_library(bloom_scripting STATIC)
 target_sources(
     bloom_scripting
     PRIVATE
+        agent_guide.cpp
         command_diagnostics.cpp
         export.cpp
         export_headless.cpp
@@ -36,6 +37,7 @@ target_sources(
         operation_registry_parity_project.cpp
         operation_registry_footage.cpp
         operation_values.hpp
+        reference_commands.cpp
         reference_internal.hpp
         reference_surfaces.cpp
         render.cpp

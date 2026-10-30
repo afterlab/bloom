@@ -7,6 +7,7 @@
 #include <initializer_list>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace bloom::scripting::detail {
@@ -35,5 +36,21 @@ struct ArgumentSpec final {
     std::initializer_list<std::pair<std::string_view, std::string_view>> choices = {};
 };
 [[nodiscard]] ReferenceArgument argument(const ArgumentSpec& spec);
+[[nodiscard]] ReferenceEntry makeEntry(ReferenceKind kind, std::string name, std::string area,
+                                       std::string summary, std::string description = {});
+[[nodiscard]] ReferenceError makeError(std::string code, std::string when, std::string remedy,
+                                       bool retryable = false);
+void addExamples(ReferenceEntry& value,
+                 std::initializer_list<std::pair<std::string_view, std::string_view>> list);
+void addRelated(ReferenceEntry& value, std::initializer_list<std::string_view> names);
+void addArguments(ReferenceEntry& value, std::initializer_list<ArgumentSpec> specs);
+[[nodiscard]] ReferenceEffects readOnlyEffects();
+[[nodiscard]] ReferenceEffects editEffects();
+[[nodiscard]] ReferenceEffects fileEffects();
+
+// The entry tables of reference_commands.cpp.
+void addQueryKindEntries(std::vector<ReferenceEntry>& out);
+void addCliCommandEntries(std::vector<ReferenceEntry>& out);
+void addPythonEntries(std::vector<ReferenceEntry>& out);
 
 } // namespace bloom::scripting::detail

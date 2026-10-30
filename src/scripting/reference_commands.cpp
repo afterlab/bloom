@@ -1,0 +1,346 @@
+// The reference entries of the query kinds, the bloom-cli commands and the Python entry points
+// (the MCP tools and shared concepts are in reference_surfaces.cpp).
+
+#include "reference_internal.hpp"
+
+#include <string>
+#include <utility>
+
+namespace bloom::scripting::detail {
+
+// ---------------------------------------------------------------------------------------------
+// Query kinds
+
+void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
+    const auto kind = [&out](std::string name, std::string summary, std::string description,
+                             std::string result, std::initializer_list<ArgumentSpec> arguments,
+                             std::string_view example) {
+        auto value = makeEntry(ReferenceKind::QueryKind, "query:" + name, "document",
+                               std::move(summary), std::move(description));
+        value.effects = readOnlyEffects();
+        addArguments(value, {{.name = "kind",
+                              .type = "string",
+                              .required = true,
+                              .summary = "This kind.",
+                              .choices = {}}});
+        value.arguments.back().choices.push_back({.value = jsonQuote(name), .label = name});
+        addArguments(value, arguments);
+        value.result = std::move(result);
+        value.examples.push_back({.surface = "mcp", .text = std::string(example)});
+        value.related.emplace_back("query");
+        out.push_back(std::move(value));
+    };
+    constexpr ArgumentSpec composition{.name = "composition",
+                                       .type = "integer",
+                                       .required = true,
+                                       .summary = "The composition.",
+                                       .unit = "composition id (query:compositions)",
+                                       .range = ">= 1"};
+    constexpr ArgumentSpec page{.name = "pageSize",
+                                .type = "integer",
+                                .summary = "Records per page.",
+                                .range = "1..64",
+                                .defaultValue = "64"};
+    constexpr ArgumentSpec cursor{.name = "cursor",
+                                  .type = "string",
+                                  .summary = "The previous page's nextCursor; stale after any "
+                                             "edit."};
+    constexpr std::string_view time = "{frames, seconds:[n, d]}";
+
+    kind("project", "The project's id and name.", {}, "{revision, project:{id, name}}", {},
+         R"({"name":"query","arguments":{"kind":"project"}})");
+    kind("compositions",
+         "Every composition with its size, frame rate, duration, work area and settings.",
+         "Times are reported as {frames, seconds:[n, d]} (concept:time), in the composition's "
+         "own frame rate.",
+         "{revision, records:[{id, name, width, height, frameRate:[n, d], fps, "
+         "frameRateNumerator, frameRateDenominator, pixelAspect:[n, d], duration:" +
+             std::string(time) + ", start:" + std::string(time) +
+             " (the timecode label of frame 0), dropFrame, workArea:{start, end}|null (end "
+             "exclusive), background:[r, g, b, a] (display-only), workingColorSpace|null, "
+             "safeAreas:{action, title}, layerCount, folder|null}]}",
+         {}, R"({"name":"query","arguments":{"kind":"compositions"}})");
+    kind("layers", "A composition's layers, topmost first, with timing, masks and parameter ids.",
+         "Each layer's `parameters` maps its transform roles (position, anchor, scale, rotation, "
+         "opacity, blendMode, timeRemap) to parameter ids; `sourceParameters` maps the source "
+         "node's roles (a solid's color, a text layer's text, size, font, ...) the same way. "
+         "Pass those ids to bloom.parameter.set-source or the animation operations.",
+         "{revision, composition, records:[{id, name, index (0 is topmost), slot, merge, "
+         "layerOutputNode, sourceNode|null, sourceType|null, enabled, solo, locked, "
+         "labelColor:[r, g, b]|null, parent|null, start:" +
+             std::string(time) + ", end:" + std::string(time) +
+             " (exclusive), timing:{startTime, speed:[n, d], before, after, extent}, "
+             "masks:[{id, name, mode, inverted, path, feather, expansion, opacity}], "
+             "trackMatte:{source, channel, inverted}|null, parameters:{role: id}, "
+             "sourceParameters:{role: id}}]}",
+         {composition}, R"({"name":"query","arguments":{"kind":"layers","composition":1}})");
+    kind("nodes", "A composition's node graph: nodes, ports, links, card positions and groups.",
+         "Input ports list what feeds them; output ports list where they lead. Merge nodes also "
+         "list their layer stack. `links` repeats every edge once.",
+         "{revision, composition, records:[{id, typeId, name, category, parameters:{role: id}, "
+         "position:[x, y], width, collapsed, muted, group|null, inputs:[{port, kind, required, "
+         "source:{node, port}|null}], outputs:[{port, kind, targets:[{node, port}|{node, role, "
+         "slot}]}], stack?:[{slot, layer, index}]}], links:[{id, source:{node, port}, "
+         "target:{node, port}|{node, role, slot}}], groups:[{id, name, members}]}",
+         {composition}, R"({"name":"query","arguments":{"kind":"nodes","composition":1}})");
+    kind("node-types", "Every node type bloom.node.add accepts, or one type in full.",
+         "Without nodeType: every type with its category, ports and parameter roles. With "
+         "nodeType: the type's ports and every parameter with value kind, default, unit, range, "
+         "accepted values and whether it can be animated. bloom://reference/nodes has the same "
+         "content as Markdown.",
+         "{revision, records:[{id, name, category, schemaVersion, cardinality, inputs:[{port, "
+         "kind, required}], outputs:[{port, kind}], parameters:[{role, schemaKey, valueKind, "
+         "animatable, default, unit?, minimum?, maximum?, choices?}], layerSlots?}]} or, with "
+         "nodeType, {revision, record}",
+         {{.name = "nodeType",
+           .type = "string",
+           .summary = "One type to describe in full.",
+           .unit = "node type id such as bloom.solid"}},
+         R"({"name":"query","arguments":{"kind":"node-types","nodeType":"bloom.solid"}})");
+    kind("parameters", "A composition's parameters: full records, or summary pages.",
+         "Without pageSize or cursor: every full record. With them: bounded summaries whose "
+         "constant values are omitted (valueOmitted:true) and a nextCursor until it is null.",
+         "{revision, records:[{id, schemaKey, source:\"constant\"|\"curve\"|\"driver\", value?, "
+         "curveId?, driverNode?, driverPort?}], nextCursor?, totalRecords?}",
+         {composition, page, cursor},
+         R"({"name":"query","arguments":{"kind":"parameters","composition":1,"pageSize":64}})");
+    kind("parameter",
+         "One parameter's record and its metadata: value kind, unit, range, default, accepted "
+         "values and owner.",
+         "Write values in stored units, the units minimum, maximum and default are in. `unit` "
+         "and `displayScale` are how the Properties panel shows the value (displayed = stored x "
+         "displayScale: an opacity stored as 0.5 shows as 50 %). Enumerations report `choices` "
+         "as {value, label}: write the integer value with bloom.parameter.set-source.",
+         "{revision, composition, parameter, record:{id, schemaKey, source, value|curveId|...}, "
+         "metadata:{valueKind, animatable, default, unit, displayScale, minimum, maximum, "
+         "softMinimum, softMaximum, choices:[{value, label}], owner:{node, typeId, role}|{layer, "
+         "mask, role}|null}}",
+         {composition,
+          {.name = "parameter",
+           .type = "integer",
+           .required = true,
+           .summary = "The parameter.",
+           .unit = "parameter id",
+           .range = ">= 1"},
+          {.name = "expectedRevision",
+           .type = "integer",
+           .summary = "Refuse when the project moved on.",
+           .range = ">= 0"}},
+         R"({"name":"query","arguments":{"kind":"parameter","composition":1,"parameter":5}})");
+    kind(
+        "parameter-value", "A long constant string parameter, in UTF-8 chunks.",
+        "Start at offset 0 and pass each nextOffset until complete is true. Chunks end on a "
+        "UTF-8 boundary.",
+        "{revision, composition, parameter, offset, nextOffset, totalBytes, complete, chunk}",
+        {composition,
+         {.name = "parameter",
+          .type = "integer",
+          .required = true,
+          .summary = "The parameter.",
+          .unit = "parameter id",
+          .range = ">= 1"},
+         {.name = "expectedRevision",
+          .type = "integer",
+          .required = true,
+          .summary = "The revision the chunks must come from.",
+          .range = ">= 0"},
+         {.name = "offset",
+          .type = "integer",
+          .summary = "Byte offset.",
+          .unit = "UTF-8 bytes",
+          .range = ">= 0",
+          .defaultValue = "0"},
+         {.name = "limit",
+          .type = "integer",
+          .summary = "Most bytes.",
+          .unit = "UTF-8 bytes",
+          .range = "4..131072",
+          .defaultValue = "131072"}},
+        R"({"name":"query","arguments":{"kind":"parameter-value","composition":1,"parameter":9,"expectedRevision":4}})");
+    kind("keyframes", "An animated parameter's keys: time, value and interpolation, paged.",
+         "Address the curve by `parameter` (an animated parameter) or by `curve`. Vector and "
+         "colour curves list one row per component key, with `component` naming the axis or "
+         "channel. Times are {frames, seconds:[n, d]} at the composition's rate (concept:time); "
+         "values are in the parameter's own units.",
+         "{revision, composition, parameter|null, curve, valueKind, frameRate:[n, d], "
+         "records:[{keyframe, component|null, time:" +
+             std::string(time) +
+             ", value, interpolation:\"hold\"|\"linear\"|\"ease-in-out\", "
+             "outgoingHandle:{time, value}, incomingHandle:{time, value}}], totalRecords, "
+             "nextCursor|null}",
+         {composition,
+          {.name = "parameter",
+           .type = "integer",
+           .summary = "The animated parameter (or give curve).",
+           .unit = "parameter id",
+           .range = ">= 1"},
+          {.name = "curve",
+           .type = "integer",
+           .summary = "The curve (or give parameter).",
+           .unit = "animation curve id",
+           .range = ">= 1"},
+          page,
+          cursor},
+         R"({"name":"query","arguments":{"kind":"keyframes","composition":1,"parameter":5}})");
+    kind("assets", "Every asset: kind, file, size, folder and tags.", {},
+         "{revision, records:[{id, name, kind:\"image\"|\"sequence\"|\"audio\"|\"font\"|\"video\""
+         "|\"lut\", path, width, height, frames, digest, folder|null, tags}], folders:[{id, "
+         "name, parent|null}]}",
+         {}, R"({"name":"query","arguments":{"kind":"assets"}})");
+    kind("operations", "Every operation schema transact accepts.",
+         "The same schemas help describes, as data.",
+         "{revision, records:[{id, description, arguments:[{name, kind, required, contextual, "
+         "context, summary, unit?, minimum?, maximum?, default?, choices?}], example}]}",
+         {}, R"({"name":"query","arguments":{"kind":"operations"}})");
+    kind("context", "The editor context omitted contextual arguments fall back to.",
+         "In the desktop application: the Viewer's composition, the playhead, the selection and "
+         "the Viewer's display and view. On stdio: the session defaults (concept:context).",
+         "{revision, live, project:{id, name}, composition|null, selectedNodes, selectedLayers, "
+         "time:[n, d] (seconds), display, view, readOnly}",
+         {}, R"({"name":"query","arguments":{"kind":"context"}})");
+}
+
+// ---------------------------------------------------------------------------------------------
+// bloom-cli commands
+
+void addCliCommandEntries(std::vector<ReferenceEntry>& out) {
+    const auto command = [&out](std::string name, std::string summary, std::string description,
+                                std::initializer_list<ArgumentSpec> arguments, std::string result,
+                                std::string_view example, const ReferenceEffects effects) {
+        auto value = makeEntry(ReferenceKind::CliCommand, "bloom-cli " + name, "bloom-cli",
+                               std::move(summary), std::move(description));
+        addArguments(value, arguments);
+        value.result = std::move(result);
+        value.effects = effects;
+        value.examples.push_back({.surface = "cli", .text = std::string(example)});
+        out.push_back(std::move(value));
+    };
+    command("help", "Show the reference index, or one entry in full.",
+            "The same reference the MCP help tool and bloom.help() print. --json prints it as "
+            "JSON.",
+            {{.name = "name", .type = "string", .summary = "The entry; omit for the index."},
+             {.name = "--json", .type = "flag", .summary = "Print JSON instead of text."}},
+            "The reference text on stdout; exit status 1 when the name matches nothing (the "
+            "closest names are printed).",
+            "bloom-cli help bloom.layer.add-solid", readOnlyEffects());
+    command("new", "Create an empty project file.", {},
+            {{.name = "file", .type = "path", .required = true, .summary = "The .bloom file."}},
+            "\"created <file>\"; exit status 2 or 3 on failure.", "bloom-cli new scene.bloom",
+            fileEffects());
+    command("open", "Open a project and print its revision (a validity check).", {},
+            {{.name = "file", .type = "path", .required = true, .summary = "The .bloom file."}},
+            "\"opened <file> revision=N\"; exit status 2 when it cannot be opened.",
+            "bloom-cli open scene.bloom", readOnlyEffects());
+    command(
+        "run", "Run a JSON operation script or a Python script.",
+        "A .json script is an array of {\"op\", \"args\"} objects; each runs as its own "
+        "transaction, in a new empty project that is not saved, and export.* calls drive a "
+        "headless export queue. A .py script runs in the embedded interpreter, where "
+        "bloom.Host(project) opens and saves projects.",
+        {{.name = "script",
+          .type = "path",
+          .required = true,
+          .summary = "A .json operation script or a .py Python script."}},
+        "\"executed N transaction(s), revision=R\" for JSON; exit status 4 (invalid "
+        "operation), 5 (rejected) or 6 (export call refused) names the failing operation.",
+        R"(bloom-cli run edits.json   # [{"op":"bloom.composition.add","args":{"name":"Scene"}}])",
+        {});
+    command("python", "Start an interactive Python prompt with the bloom package.", {}, {},
+            "An interactive interpreter.", "bloom-cli python", {});
+    command("render", "Render one frame or a frame range of a project's first composition.",
+            "Output keeps alpha; the composition background colour is not rendered. Files are "
+            "written as <out>/frame.png or frame.exr (a range numbers them).",
+            {{.name = "--project",
+              .type = "path",
+              .summary = "The project; omit to render a new empty project."},
+             {.name = "--frame",
+              .type = "integer",
+              .summary = "One frame (or --range).",
+              .unit = "composition frame index"},
+             {.name = "--range",
+              .type = "A-B",
+              .summary = "An inclusive frame range (or --frame).",
+              .unit = "composition frame indices"},
+             {.name = "--preset",
+              .type = "string",
+              .required = true,
+              .summary = "The image format.",
+              .choices = {{"PngRgba8SrgbV1", "PNG, 8-bit RGBA, sRGB"},
+                          {"FlatExrRgba32fLinRec709SceneV1",
+                           "OpenEXR, 32-bit float RGBA, linear Rec.709 scene"}}},
+             {.name = "--out",
+              .type = "path",
+              .required = true,
+              .summary = "The output folder; created when missing."}},
+            "The preservation report and \"rendered N frame(s) to <out>\"; exit status 5 on a "
+            "render failure.",
+            "bloom-cli render --project scene.bloom --range 0-47 --preset PngRgba8SrgbV1 --out "
+            "frames",
+            fileEffects());
+    command("export", "Render a saved project's export queue jobs headlessly.",
+            "Exits non-zero unless every selected job succeeds and prints the verification and "
+            "import results as JSON. Output keeps alpha; the composition background colour is "
+            "not rendered.",
+            {{.name = "--project", .type = "path", .required = true, .summary = "The project."},
+             {.name = "--all", .type = "flag", .summary = "Every enabled job (or --job)."},
+             {.name = "--job",
+              .type = "integer",
+              .summary = "One job id; repeat for several.",
+              .unit = "export job id"},
+             {.name = "--replace",
+              .type = "flag",
+              .summary = "Confirm replacing every existing destination that asks."},
+             {.name = "--save",
+              .type = "flag",
+              .summary = "Write the imports of verified results back to the project."}},
+            "Export events as JSON; exit status non-zero when a job fails.",
+            "bloom-cli export --project scene.bloom --all --replace", fileEffects());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Python
+
+void addPythonEntries(std::vector<ReferenceEntry>& out) {
+    const auto api = [&out](std::string name, std::string summary, std::string description,
+                            std::string example) {
+        auto value = makeEntry(ReferenceKind::Python, std::move(name), "python", std::move(summary),
+                               std::move(description));
+        value.examples.push_back({.surface = "python", .text = std::move(example)});
+        out.push_back(std::move(value));
+    };
+    api("bloom.help", "Print the reference index, or one entry in full.",
+        "bloom.help(name=None, *, json=False). With json=True it returns the entry as a dict "
+        "instead of printing.",
+        "bloom.help(\"query:layers\")");
+    api("bloom.ops", "Every operation as a Python function: bloom.ops.<domain>.<verb>.",
+        "bloom.ops.layer.add_solid is bloom.layer.add-solid. Arguments bind positionally or by "
+        "keyword; contextual arguments are keyword-only and default to bloom.context. Outside a "
+        "transaction group each call is its own undo step and returns the result mapping.",
+        "bloom.ops.layer.add_solid(name=\"Red\", color=(1, 0, 0, 1))");
+    api("bloom.transactions.group", "Group operation calls into one atomic undo step.",
+        "with bloom.transactions.group(label, expected_revision=None): ... The calls inside are "
+        "queued and applied together when the block exits; `result` holds the transaction "
+        "result. bloom.transactions.undo() and redo() step the history.",
+        "with bloom.transactions.group(\"Title\") as edit:\n"
+        "    bloom.ops.layer.add_text(name=\"Title\", text=\"Hello\")");
+    api("bloom.context", "The editor context: project, composition, selection, layers, time.",
+        "Read-only. time is a Fraction of seconds.", "bloom.context.composition");
+    api("bloom.data", "Read the project: compositions, assets, layers, nodes, parameters, curves.",
+        "bloom.data.layers(composition), bloom.data.curves(composition) and the other "
+        "collections return proxies whose attributes read the current snapshot.",
+        "bloom.data.layers(bloom.context.composition)");
+    api("bloom.render", "Render a frame or a range to image files.",
+        "bloom.render.frame(number, *, out, composition=None, preset=...) and "
+        "bloom.render.range(first, last, *, out, ...). Output keeps alpha; the composition "
+        "background colour is not rendered.",
+        "bloom.render.frame(0, out=\"frames\")");
+    api("bloom.events", "Subscribe to command events.",
+        "bloom.events.subscribe(callback, kinds=...) and bloom.events.pump().",
+        "bloom.events.subscribe(print)");
+    api("bloom.tasks", "Run cancellable background work with progress.",
+        "bloom.tasks.submit(function, *args) returns a TaskHandle with progress, cancel() and "
+        "result().",
+        "bloom.tasks.submit(work)");
+}
+
+} // namespace bloom::scripting::detail
