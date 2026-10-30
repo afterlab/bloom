@@ -636,6 +636,16 @@ void addTools(std::vector<ReferenceEntry>& out) {
         value.errors = {error("bloom.mcp.export-unavailable",
                               "the queue refused (unknown job, wrong state, platform)",
                               "diagnostic.detail names the queue's availability code")};
+        std::string call = R"({"name":")" + std::string(name) + R"(","arguments":{)";
+        bool firstArgument = true;
+        for (const auto& argument : value.arguments) {
+            if (!argument.required)
+                continue;
+            call += (firstArgument ? "" : ",") + jsonQuote(argument.name) + ":" +
+                    (argument.type == "array" ? "[1]" : "1");
+            firstArgument = false;
+        }
+        value.examples.push_back({.surface = "mcp", .text = call + "}}"});
         related(value, {"export.status", "bloom.export.add-job"});
         out.push_back(std::move(value));
     }

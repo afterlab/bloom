@@ -7,6 +7,7 @@
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/shape.hpp>
@@ -104,6 +105,8 @@ std::vector<ParameterChoice> parameterChoices(const std::string_view key) {
     if (key == "bloom.set-alpha.channel" || key == "bloom.multiply-alpha.channel")
         return numbered({"Alpha", "Red", "Green", "Blue", "Luma", "Alpha Inverted", "Red Inverted",
                          "Green Inverted", "Blue Inverted", "Luma Inverted"});
+    if (key == "bloom.channel-shuffle.mode")
+        return {{d::kChannelShuffleColourMode, "Colour"}, {d::kChannelShuffleRawMode, "Raw"}};
     if (key == "bloom.resize-fit.filter")
         return numbered({"Bilinear"});
     if (key == "bloom.resize-fit.policy")

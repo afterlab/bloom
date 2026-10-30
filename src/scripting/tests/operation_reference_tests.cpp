@@ -181,6 +181,7 @@ void everyChoiceParameterHasValues() {
             // the project, not from a closed list.
             const auto& key = parameter.schemaKey;
             if (key == "bloom.composition-source.composition" || key == "bloom.data.block" ||
+                key == "bloom.ocio-file.lut" ||
                 contains(key, ".part") || contains(key, ".layer") || contains(key, "matte-id"))
                 continue;
             expect(!parameterChoices(key).empty(), definition.key.typeId + "." + parameter.role +
