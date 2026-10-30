@@ -1,6 +1,7 @@
 from typing import Any
 version: str
 facade_version: str
+def reference(name: str = ..., json: bool = ...) -> tuple[bool, str]: ...
 class TaskTicket:
     @property
     def id(self) -> int: ...

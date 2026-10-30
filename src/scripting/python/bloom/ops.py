@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from fractions import Fraction
 from types import ModuleType
 
+import _bloom
+
 from . import _state
 from .data import Proxy
 from .errors import OperationError, checked
@@ -148,6 +150,10 @@ class Operation:
                     summary=argument.get("summary", "")).rstrip())
         if self.example:
             lines += ["", "Example:", "  " + self.example]
+        # The full reference entry: the text bloom.help(), bloom-cli help and MCP help print.
+        found, reference = _bloom.reference(self.id, False)
+        if found:
+            lines += ["", "Reference:", reference.rstrip("\n")]
         return "\n".join(lines)
 
     def __repr__(self):

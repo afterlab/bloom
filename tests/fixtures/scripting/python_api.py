@@ -67,7 +67,13 @@ def operation_stub(schemas):
                 params.append("*")
                 params += [f"{a['name']}: {STUB_TYPES[a['kind']]} = ..." for a in contextual]
             joined = ", ".join(params)
-            lines.append(f"    def {verb}({joined}) -> Mapping[str, Any] | None: ...")
+            lines.append(f"    def {verb}({joined}) -> Mapping[str, Any] | None:")
+            # The full reference entry, the text bloom.help() and MCP help print.
+            _, reference = _bloom.reference(schema["id"], False)
+            reference = reference.rstrip("\n").replace("\\", "\\\\").replace('"""', '\\"""')
+            body = "\n".join(("        " + line).rstrip() for line in reference.split("\n"))
+            lines.append('        """' + body.lstrip() + "\n        " + '"""')
+            lines.append("        ...")
         lines += ["", f"{domain.replace('-', '_')}: {name}", ""]
     lines += ["def registry() -> Mapping[str, Operation]: ...",
               "def get(operation_id: str) -> Operation: ..."]

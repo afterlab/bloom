@@ -1,5 +1,7 @@
 #include "native.hpp"
 
+#include <bloom/scripting/operation_reference.hpp>
+
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -55,6 +57,15 @@ void bindHost(nb::module_& module) {
         .def_ro("headless", &NativeHost::headless);
     module.attr("version") = BLOOM_PYTHON_VERSION;
     module.attr("facade_version") = "1.0";
+    // The agent reference (scripting::OperationReference) bloom.help() prints: the same text as
+    // the MCP help tool and bloom-cli help. Returns (found, text or JSON).
+    module.def(
+        "reference",
+        [](const std::string& name, const bool json) {
+            const auto answer = referenceHelp(name);
+            return nb::make_tuple(answer.found, json ? answer.json : answer.text);
+        },
+        nb::arg("name") = "", nb::arg("json") = false);
     module.def(
         "_shutdown_owned_roots",
         [roots](const std::int64_t timeout) {

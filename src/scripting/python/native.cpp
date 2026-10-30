@@ -173,6 +173,20 @@ nb::list NativeHost::schemas() const {
             value["example"] = argument.example.has_value()
                                    ? nb::cast(pythonLiteral(*argument.example))
                                    : nb::none();
+            value["unit"] = argument.unit;
+            value["minimum"] = argument.minimum ? nb::cast(*argument.minimum) : nb::none();
+            value["maximum"] = argument.maximum ? nb::cast(*argument.maximum) : nb::none();
+            value["default"] = argument.defaultText;
+            nb::list choices;
+            for (const auto& choice : argument.choices) {
+                const auto* text = std::get_if<std::string>(&choice.value.storage);
+                const auto* whole = std::get_if<std::int64_t>(&choice.value.storage);
+                choices.append(nb::make_tuple(text    ? nb::cast(*text)
+                                              : whole ? nb::cast(*whole)
+                                                      : nb::none(),
+                                              choice.label));
+            }
+            value["choices"] = choices;
             arguments.append(value);
         }
         row["arguments"] = arguments;
