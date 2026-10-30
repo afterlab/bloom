@@ -222,6 +222,7 @@ struct TransientResult final {
                                             std::string_view kind, std::uint64_t sessionToken);
 [[nodiscard]] yyjson_mut_val* compositionRecord(Json& out, const document::Composition& value);
 [[nodiscard]] yyjson_mut_val* assetRecord(Json& out, const document::AssetRecord& value);
+[[nodiscard]] yyjson_mut_val* assetFolders(Json& out, const document::Project& project);
 // query nodes: the records with ports, links, positions and groups, plus `links` and `groups`.
 void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
                      const document::Composition& composition);

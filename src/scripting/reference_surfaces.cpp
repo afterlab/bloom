@@ -827,7 +827,8 @@ void addQueryKinds(std::vector<ReferenceEntry>& out) {
          R"({"name":"query","arguments":{"kind":"keyframes","composition":1,"parameter":5}})");
     kind("assets", "Every asset: kind, file, size, folder and tags.", {},
          "{revision, records:[{id, name, kind:\"image\"|\"sequence\"|\"audio\"|\"font\"|\"video\""
-         "|\"lut\", path, width, height, digest, folder|null, tags}]}",
+         "|\"lut\", path, width, height, frames, digest, folder|null, tags}], folders:[{id, "
+         "name, parent|null}]}",
          {}, R"({"name":"query","arguments":{"kind":"assets"}})");
     kind("operations", "Every operation schema transact accepts.",
          "The same schemas help describes, as data.",

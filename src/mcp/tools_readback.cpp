@@ -505,6 +505,18 @@ yyjson_mut_val* assetRecord(Json& out, const document::AssetRecord& asset) {
     return record;
 }
 
+yyjson_mut_val* assetFolders(Json& out, const document::Project& project) {
+    auto* folders = out.array();
+    for (const auto& folder : project.assetFolders()) {
+        auto* row = out.object();
+        out.set(row, "id", out.number(folder.id.value()));
+        out.set(row, "name", out.text(folder.name));
+        out.set(row, "parent", folder.parent ? out.number(folder.parent->value()) : out.null());
+        out.append(folders, row);
+    }
+    return folders;
+}
+
 void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
                      const document::Composition& composition) {
     const auto& graph = composition.graph();

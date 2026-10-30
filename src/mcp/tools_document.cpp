@@ -770,6 +770,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                 out.set(record, "interpretation", interpretationRecord(out, asset));
             out.append(records, record);
         }
+        out.set(result, "folders", assetFolders(out, snapshot.project()));
     } else if (kind == "enums") {
         appendAnimationEnums(out, records);
     } else if (kind == "nodes" || kind == "parameters") {
