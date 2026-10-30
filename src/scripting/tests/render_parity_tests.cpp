@@ -17,6 +17,7 @@
 #include <bloom/scripting/session.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -631,6 +632,45 @@ void testParity() {
         expect(current.gpuEvaluatedFrames == legacy.gpuEvaluatedFrames,
                item.label + ": the same device provenance");
         compare(legacyFolder, currentFolder, item.label);
+    }
+    // DPX (issue #369) has no pre-runner route to compare with: Render::run publishes one
+    // 10-bit or 16-bit RGB file per frame and reports the preset id.
+    for (const auto preset :
+         {output::OutputPresetV1::DpxRgb10V1, output::OutputPresetV1::DpxRgb16V1}) {
+        const bool ten = preset == output::OutputPresetV1::DpxRgb10V1;
+        const auto folder = root / (ten ? "dpx10" : "dpx16");
+        std::filesystem::create_directories(folder);
+        const auto dpx =
+            Render::run(*session, scheduler, compiler,
+                        RenderRequest{.composition = composition,
+                                      .frame = std::nullopt,
+                                      .range = std::pair<std::uint64_t, std::uint64_t>{0, 1},
+                                      .preset = preset,
+                                      .destination = folder / "shot.dpx"},
+                        root / "scratch-dpx", provider);
+        if (!dpx.succeeded) {
+            std::cout << "NOTE: DPX unavailable here: " << dpx.diagnostic << '\n';
+            continue;
+        }
+        std::size_t files = 0;
+        bool headers = true;
+        for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+            if (entry.path().extension() != ".dpx")
+                continue;
+            ++files;
+            std::ifstream input(entry.path(), std::ios::binary);
+            std::array<char, 1664> header{};
+            input.read(header.data(), static_cast<std::streamsize>(header.size()));
+            headers = headers && input.gcount() == 1664 &&
+                      std::string_view(header.data(), 4) == "XPDS" &&
+                      static_cast<unsigned char>(header[803]) == (ten ? 10U : 16U);
+        }
+        expect(dpx.publishedFrames == 2 && files == 2 && headers &&
+                   dpx.preservationReport.find(ten ? "preset=DpxRgb10V1" : "preset=DpxRgb16V1") !=
+                       std::string::npos,
+               std::string(ten ? "dpx 10-bit" : "dpx 16-bit") +
+                   " range: Render::run publishes one verified file per frame: " +
+                   dpx.preservationReport);
     }
     // A cancelled request never starts work; a missing provider is a typed refusal.
     const auto cancelled =

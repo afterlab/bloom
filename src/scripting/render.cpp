@@ -42,6 +42,9 @@ namespace {
         return F::OpenExr;
     case P::TiffRgba16SrgbV1:
         return F::Tiff;
+    case P::DpxRgb10V1:
+    case P::DpxRgb16V1:
+        return F::Dpx;
     case P::ProResMovV1:
         return F::ProResMov;
     case P::DnxhrMxfV1:
@@ -212,6 +215,9 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     output.settings.includeAudio = !document::isImageExportFormat(*format);
     if (output.settings.includeAudio)
         output.settings.loudness = request.loudness;
+    if (*format == document::ExportFormat::Dpx)
+        output.settings.codecProfile =
+            request.preset == output::OutputPresetV1::DpxRgb16V1 ? "16bit" : "10bit";
     const auto destination = std::filesystem::absolute(request.destination).lexically_normal();
     const auto uri = core::fileUriFromAbsolutePath(destination);
     if (!uri)
