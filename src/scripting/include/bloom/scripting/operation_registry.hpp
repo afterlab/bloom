@@ -58,6 +58,13 @@ enum class ContextSource : std::uint8_t {
     Layers,
 };
 
+// One accepted value of a closed argument and the label an artist sees for it: the interpolation
+// "ease-in-out" is "Ease In-Out", the time mode 2 is "Loop".
+struct ArgumentChoice final {
+    Value value;
+    std::string label;
+};
+
 struct ArgumentSchema final {
     std::string name;
     ValueKind kind = ValueKind::String;
@@ -71,6 +78,14 @@ struct ArgumentSchema final {
     // the rejection messages show, and what the conformance test constructs every operation from.
     std::optional<Value> example{};
     std::string summary;
+    // Reference metadata (OperationReference): the unit a number, size or time is in; the closed
+    // range a number must fall in; the accepted values of a closed argument; and what an omitted
+    // optional argument means. Empty when the summary says everything.
+    std::string unit{};
+    std::optional<double> minimum{};
+    std::optional<double> maximum{};
+    std::vector<ArgumentChoice> choices{};
+    std::string defaultText{};
 
     [[nodiscard]] bool contextual() const noexcept { return context != ContextSource::None; }
 };

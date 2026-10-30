@@ -23,6 +23,8 @@ target_sources(
         export_headless.cpp
         json_script.cpp
         live_session_host.cpp
+        operation_docs.cpp
+        operation_docs.hpp
         operation_registry.cpp
         operation_registry_alignment.cpp
         operation_registry_evaluated.cpp

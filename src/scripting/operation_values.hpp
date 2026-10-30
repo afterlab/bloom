@@ -87,5 +87,8 @@ createWithFrameTimes(const OperationSchema& schema, const Arguments& arguments,
 void addLayerAlignmentOperations(std::vector<OperationDescriptor>& descriptors);
 // Registers the bloom.export.* project-truth operations (ADR 0033).
 void addExportOperations(std::vector<OperationDescriptor>& descriptors);
+// Fills the description and the argument reference metadata (unit, range, choices, default) of
+// every registered operation that does not carry its own, from operation_docs.cpp.
+void describeOperations(std::vector<OperationDescriptor>& descriptors);
 
 } // namespace bloom::scripting::detail

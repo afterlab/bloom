@@ -888,13 +888,15 @@ locator(const Arguments& arguments, const std::string& operationId, OperationCre
 
 [[nodiscard]] ArgumentSchema layerArgument() {
     return fromContext("layer", ValueKind::Id, ContextSource::Layer, StableId{1},
-                       "The layer to edit. Defaults to the first selected layer.");
+                       "The layer to edit: a layer id, not its node's id. Defaults to the first "
+                       "selected layer.");
 }
 
 [[nodiscard]] ArgumentSchema nodeSetArgument(std::string name) {
     return fromContext(std::move(name), ValueKind::Array, ContextSource::Selection,
                        ValueArray{Value(StableId{1})},
-                       "Stable ids or proxies. Defaults to the current selection.");
+                       "Node ids (Python also accepts proxies). Defaults to the current "
+                       "selection.");
 }
 
 [[nodiscard]] ArgumentSchema timeArgument() {
@@ -2082,7 +2084,8 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.asset.set-input-color",
         {need("asset", ValueKind::Id, StableId{1}, "The image or video asset to interpret."),
-         maybe("legacy", ValueKind::String, "auto", "Auto, sRGB, Linear or Raw. Defaults to Auto."),
+         maybe("legacy", ValueKind::String, "auto",
+               R"("auto", "srgb", "linear" or "raw" (lower case). Defaults to "auto".)"),
          maybe("inputColorSpaceId", ValueKind::String, "",
                "An exact color-space id in the selected OCIO config; clears the legacy choice.")},
         [](const std::string& op, const Arguments& args) {
@@ -2241,7 +2244,7 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("width", ValueKind::Integer, std::int64_t{1920}, "Pixel width. Defaults to 1920."),
          maybe("height", ValueKind::Integer, std::int64_t{1080}, "Pixel height. Defaults to 1080."),
          maybe("duration", ValueKind::Time, std::int64_t{48},
-               "Duration in frames. Defaults to 48."),
+               "The duration. Defaults to 48 frames."),
          maybe("frameRateNumerator", ValueKind::Integer, std::int64_t{24},
                "Frame-rate numerator. Defaults to 24."),
          maybe("frameRateDenominator", ValueKind::Integer, std::int64_t{1},
@@ -2287,10 +2290,9 @@ OperationRegistry OperationRegistry::builtIn() {
                "Frame-rate numerator (with frameRateDenominator)."),
          maybe("frameRateDenominator", ValueKind::Integer, std::int64_t{1},
                "Frame-rate denominator (with frameRateNumerator)."),
-         maybe("duration", ValueKind::Time, std::int64_t{240},
-               "Duration: whole frames, or [numerator, denominator] seconds."),
+         maybe("duration", ValueKind::Time, std::int64_t{240}, "The duration."),
          maybe("start", ValueKind::Time, std::int64_t{0},
-               "The timecode of frame 0: whole frames, or [numerator, denominator] seconds."),
+               "The timecode label of the composition's first frame."),
          maybe("dropFrame", ValueKind::Boolean, false,
                "Drop-frame timecode labels (honored at 29.97 and 59.94 fps)."),
          maybe("background", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
@@ -2434,7 +2436,7 @@ OperationRegistry OperationRegistry::builtIn() {
 
     add("bloom.composition.set-duration",
         {compositionArgument(),
-         need("duration", ValueKind::Time, std::int64_t{48}, "The new duration in frames.")},
+         need("duration", ValueKind::Time, std::int64_t{48}, "The new duration.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2506,7 +2508,8 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.composition.set-work-area",
         {compositionArgument(),
          need("start", ValueKind::Time, std::int64_t{0}, "The work area's first frame."),
-         need("end", ValueKind::Time, std::int64_t{24}, "The work area's last frame.")},
+         need("end", ValueKind::Time, std::int64_t{24},
+              "The work area's exclusive end, at most the composition duration.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2806,7 +2809,8 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.set-range",
         {compositionArgument(), layerArgument(),
          need("start", ValueKind::Time, std::int64_t{0}, "The layer's first frame."),
-         need("end", ValueKind::Time, std::int64_t{24}, "The layer's last frame.")},
+         need("end", ValueKind::Time, std::int64_t{24},
+              "The layer's exclusive end, at most the composition duration.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2828,7 +2832,8 @@ OperationRegistry OperationRegistry::builtIn() {
          need("startTime", ValueKind::Time, std::int64_t{0},
               "Composition time of the layer's time zero (moves content and keys)."),
          need("start", ValueKind::Time, std::int64_t{0}, "The layer's first frame."),
-         need("end", ValueKind::Time, std::int64_t{24}, "The layer's exclusive end frame."),
+         need("end", ValueKind::Time, std::int64_t{24},
+              "The layer's exclusive end, at most the composition duration."),
          need("speedNumerator", ValueKind::Integer, std::int64_t{1}, "Exact speed numerator."),
          need("speedDenominator", ValueKind::Integer, std::int64_t{1}, "Exact speed denominator.")},
         [](const std::string& op, const Arguments& args) {
@@ -3287,7 +3292,8 @@ OperationRegistry OperationRegistry::builtIn() {
     // --- nodes --------------------------------------------------------------------------------
     add("bloom.node.add",
         {compositionArgument(),
-         need("nodeType", ValueKind::String, "bloom.value-scalar", "The node definition id."),
+         need("nodeType", ValueKind::String, "bloom.value-scalar",
+              "The node type id (query node-types lists them)."),
          maybe("position", ValueKind::Vec2, document::Vec2d{0.0, 0.0},
                "Graph layout position. Defaults to the origin.")},
         [](const std::string& op, const Arguments& args) {
@@ -3312,10 +3318,10 @@ OperationRegistry OperationRegistry::builtIn() {
               "The node, or Merge stack node, that consumes it."),
          alternative("port", ValueKind::String, "input",
                      "The input port name. Required unless a stack role is given."),
-         maybe("role", ValueKind::String, "layer",
+         maybe("role", ValueKind::String, "content",
                "A Merge stack role. Giving it addresses the layer stack instead of a port."),
          maybe("slot", ValueKind::Id, StableId{1},
-               "The stack slot to write. 0, or omitted, creates a new slot."),
+               "The stack slot to write. Omit it to create a new slot."),
          maybe("insertBefore", ValueKind::Id, StableId{1},
                "The slot a new stack link lands above.")},
         [](const std::string& op, const Arguments& args) {
@@ -3345,7 +3351,7 @@ OperationRegistry OperationRegistry::builtIn() {
          need("node", ValueKind::Id, StableId{1}, "The node whose input is cleared."),
          alternative("port", ValueKind::String, "input",
                      "The input port name. Required unless a stack role is given."),
-         maybe("role", ValueKind::String, "layer", "A Merge stack role."),
+         maybe("role", ValueKind::String, "content", "A Merge stack role."),
          maybe("slot", ValueKind::Id, StableId{1}, "The stack slot to clear.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -3531,10 +3537,12 @@ OperationRegistry OperationRegistry::builtIn() {
         {compositionArgument(),
          need("parameter", ValueKind::Id, StableId{1}, "The parameter to repoint."),
          alternative("value", ValueKind::Value, 1.0,
-                     "A constant value in the parameter's kind; a Path parameter takes the path "
-                     "object add-shape and add-mask take."),
-         maybe("curve", ValueKind::Id, StableId{1}, "An existing animation curve."),
-         maybe("driverNode", ValueKind::Id, StableId{1}, "A value-graph node that drives it."),
+                     "A constant value; a Path parameter takes the path object add-shape and "
+                     "add-mask take. Give exactly one of value, curve or driverNode."),
+         maybe("curve", ValueKind::Id, StableId{1},
+               "An existing animation curve, instead of value."),
+         maybe("driverNode", ValueKind::Id, StableId{1},
+               "A value-graph node that drives it, instead of value (with driverPort)."),
          maybe("driverPort", ValueKind::String, "output", "The driving node's output port.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -3605,6 +3613,7 @@ OperationRegistry OperationRegistry::builtIn() {
     detail::parity::addProjectOperations(all);
     detail::parity::addFootageOperations(all);
     detail::parity::addEvaluatedOperations(all);
+    detail::describeOperations(all);
 
     std::ranges::sort(
         all, {}, [](const OperationDescriptor& descriptor) { return descriptor.schema.typeId; });
