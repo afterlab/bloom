@@ -750,8 +750,10 @@ void addQueryKinds(std::vector<ReferenceEntry>& out) {
     kind("parameter",
          "One parameter's record and its metadata: value kind, unit, range, default, accepted "
          "values and owner.",
-         "Enumerations report `choices` as {value, label}: write the integer value with "
-         "bloom.parameter.set-source.",
+         "Write values in stored units, the units minimum, maximum and default are in. `unit` "
+         "and `displayScale` are how the Properties panel shows the value (displayed = stored x "
+         "displayScale: an opacity stored as 0.5 shows as 50 %). Enumerations report `choices` "
+         "as {value, label}: write the integer value with bloom.parameter.set-source.",
          "{revision, composition, parameter, record:{id, schemaKey, source, value|curveId|...}, "
          "metadata:{valueKind, animatable, default, unit, displayScale, minimum, maximum, "
          "softMinimum, softMaximum, choices:[{value, label}], owner:{node, typeId, role}|{layer, "
