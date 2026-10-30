@@ -348,4 +348,45 @@ prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1& source, FlatExrRgba32fOpt
     }
 }
 
+OutputAnalysisAttemptBuildResultV1 prepareDpxAttemptV1(const OutputAnalysisAttemptV1& source,
+                                                       std::string outputColorSpaceId,
+                                                       ExportResourceLedgerV1& ledger) noexcept {
+    try {
+        if (!isDpxPresetV1(source.preset()) || !source.frame())
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        // The EXR conversion carries the colour-space part; the compression option is unused.
+        const auto prepared = PreparedFlatExrOutputV1::prepare(
+            source.frame()->identity().colorIntent, {std::move(outputColorSpaceId)});
+        if (!prepared)
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        DpxRgbAnalysisInputV1 input{
+            .process = {.readyIdentity = source.processIdentity(), .missingDescriptor = {}},
+            .output = prepared,
+            .adapter = outputPresetAvailabilityV1(source.preset()).available
+                           ? OutputAnalysisAdapterStateV1::Qualified
+                           : OutputAnalysisAdapterStateV1::Unavailable};
+        const auto report = source.preset() == OutputPresetV1::DpxRgb10V1
+                                ? analyzeDpxRgb10V1(std::move(input))
+                                : analyzeDpxRgb16V1(std::move(input));
+        if (!report)
+            return OutputAnalysisAttemptBuildResultV1::failure(
+                OutputAnalysisAttemptErrorCodeV1::InvalidReport);
+        return buildOutputAnalysisAttemptV1(
+            {.frame = source.frame(),
+             .processIdentity = source.processIdentity(),
+             .report = report.report(),
+             .target = source.target(),
+             .display = {},
+             .gpuDisplay = {},
+             .processingPolicy = source.resources()->processingPolicy(),
+             .capacityRefresh = source.resources()->capacityRefresh()},
+            ledger);
+    } catch (...) {
+        return OutputAnalysisAttemptBuildResultV1::failure(
+            OutputAnalysisAttemptErrorCodeV1::InternalInvariant);
+    }
+}
+
 } // namespace bloom::output

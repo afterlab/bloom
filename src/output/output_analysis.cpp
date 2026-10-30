@@ -62,8 +62,13 @@ using bloom::output::OutputPresetV1;
     if (preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) {
         return true;
     }
-    if (preset != OutputPresetV1::PngRgba8SrgbV1 && preset != OutputPresetV1::TiffRgba16SrgbV1) {
+    if (preset != OutputPresetV1::PngRgba8SrgbV1 && preset != OutputPresetV1::TiffRgba16SrgbV1 &&
+        !isDpxPresetV1(preset)) {
         return false;
+    }
+    // DPX keeps the working colour space when no output colour space is named.
+    if (isDpxPresetV1(preset) && facet == OutputFacetIdV1::Color) {
+        return true;
     }
     switch (facet) {
     case OutputFacetIdV1::Channels:
@@ -103,6 +108,9 @@ using bloom::output::OutputPresetV1;
         return rule.validForFlatExr;
     case OutputPresetV1::TiffRgba16SrgbV1:
         return rule.validForTiff;
+    case OutputPresetV1::DpxRgb10V1:
+    case OutputPresetV1::DpxRgb16V1:
+        return rule.validForDpx;
     }
     return false;
 }
@@ -254,10 +262,11 @@ checkedMultiply(const std::uint64_t left, const std::uint64_t right) noexcept {
 exceedsHardResourceLimits(const bloom::output::OutputAnalysisReportV1View report) noexcept {
     const auto& pixelFacet = report.facets[0];
     const auto sourcePixels = parsePixels(pixelFacet.sourceDescriptor, "binary32");
-    const std::string_view targetSample = report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8"
-                                          : report.preset == OutputPresetV1::TiffRgba16SrgbV1
-                                              ? "uint16"
-                                              : "binary32";
+    const std::string_view targetSample =
+        report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8"
+        : report.preset == OutputPresetV1::TiffRgba16SrgbV1 || isDpxPresetV1(report.preset)
+            ? "uint16"
+            : "binary32";
     const auto targetPixels = parsePixels(pixelFacet.targetDescriptor, targetSample);
     const auto sourceDataWindow = parseWindow(report.facets[5].sourceDescriptor);
     const auto targetDataWindow = parseWindow(report.facets[5].targetDescriptor);
@@ -363,10 +372,11 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
     const auto& facet = report.facets[facetIndex];
     const auto& pixelFacet = report.facets[0];
     const auto sourcePixels = parsePixels(pixelFacet.sourceDescriptor, "binary32");
-    const std::string_view targetSample = report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8"
-                                          : report.preset == OutputPresetV1::TiffRgba16SrgbV1
-                                              ? "uint16"
-                                              : "binary32";
+    const std::string_view targetSample =
+        report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "uint8"
+        : report.preset == OutputPresetV1::TiffRgba16SrgbV1 || isDpxPresetV1(report.preset)
+            ? "uint16"
+            : "binary32";
     const auto targetPixels = parsePixels(pixelFacet.targetDescriptor, targetSample);
 
     switch (facet.facet) {
@@ -386,11 +396,13 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         if (facet.sourceDescriptor != "component-type=id:binary32") {
             return VocabularyValidation::VocabularyMismatch;
         }
-        return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1
-                                              ? "component-type=id:uint8"
-                                          : report.preset == OutputPresetV1::TiffRgba16SrgbV1
-                                              ? "component-type=id:uint16"
-                                              : "component-type=id:binary32")
+        return facet.targetDescriptor ==
+                       (report.preset == OutputPresetV1::PngRgba8SrgbV1 ? "component-type=id:uint8"
+                        : report.preset == OutputPresetV1::DpxRgb10V1   ? "component-type=id:uint10"
+                        : report.preset == OutputPresetV1::TiffRgba16SrgbV1 ||
+                                report.preset == OutputPresetV1::DpxRgb16V1
+                            ? "component-type=id:uint16"
+                            : "component-type=id:binary32")
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
     case OutputFacetIdV1::Color:
@@ -403,6 +415,18 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
                            facet.targetDescriptor != facet.sourceDescriptor
                        ? VocabularyValidation::Valid
                        : VocabularyValidation::RelationshipMismatch;
+        if (isDpxPresetV1(report.preset)) {
+            // The pixels are converted to the named output colour space; none named keeps the
+            // working space.
+            if (facet.stableCode == OutputFacetStableCodeV1::DpxOutputColorTransform)
+                return isColorDescriptor(facet.targetDescriptor) &&
+                               facet.targetDescriptor != facet.sourceDescriptor
+                           ? VocabularyValidation::Valid
+                           : VocabularyValidation::RelationshipMismatch;
+            return facet.targetDescriptor == facet.sourceDescriptor
+                       ? VocabularyValidation::Valid
+                       : VocabularyValidation::VocabularyMismatch;
+        }
         return facet.targetDescriptor ==
                        (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
                                 report.preset == OutputPresetV1::TiffRgba16SrgbV1
@@ -414,10 +438,13 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
         if (facet.sourceDescriptor != sourceAlpha) {
             return VocabularyValidation::VocabularyMismatch;
         }
-        return facet.targetDescriptor == (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
-                                                  report.preset == OutputPresetV1::TiffRgba16SrgbV1
-                                              ? pngAlpha
-                                              : sourceAlpha)
+        return facet.targetDescriptor ==
+                       (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
+                                report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                            ? pngAlpha
+                        : isDpxPresetV1(report.preset)
+                            ? "association=id:omitted;zero-alpha=id:canonical-zero"
+                            : sourceAlpha)
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
     case OutputFacetIdV1::Channels:
@@ -468,11 +495,15 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
             requiredCode = OutputFacetStableCodeV1::WindowOutOfRange;
         } else if (facet.sourceDescriptor != facet.targetDescriptor) {
             if (facet.facet == OutputFacetIdV1::DataWindow) {
-                requiredCode = report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                requiredCode = isDpxPresetV1(report.preset)
+                                   ? OutputFacetStableCodeV1::DpxOriginWindowRequired
+                               : report.preset == OutputPresetV1::TiffRgba16SrgbV1
                                    ? OutputFacetStableCodeV1::TiffOriginWindowRequired
                                    : OutputFacetStableCodeV1::PngOriginWindowRequired;
             } else {
-                requiredCode = report.preset == OutputPresetV1::TiffRgba16SrgbV1
+                requiredCode = isDpxPresetV1(report.preset)
+                                   ? OutputFacetStableCodeV1::DpxEqualWindowRequired
+                               : report.preset == OutputPresetV1::TiffRgba16SrgbV1
                                    ? OutputFacetStableCodeV1::TiffEqualWindowRequired
                                    : OutputFacetStableCodeV1::PngEqualWindowRequired;
             }
@@ -486,7 +517,7 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
             return VocabularyValidation::VocabularyMismatch;
         }
         if (report.preset == OutputPresetV1::PngRgba8SrgbV1 ||
-            report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
+            report.preset == OutputPresetV1::TiffRgba16SrgbV1 || isDpxPresetV1(report.preset)) {
             if (facet.targetDescriptor != "denominator=u:1;numerator=u:1") {
                 return VocabularyValidation::VocabularyMismatch;
             }
@@ -524,7 +555,8 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
                                               ? "method=id:deflate-level-6-filter-none"
                                           : report.preset == OutputPresetV1::TiffRgba16SrgbV1
                                               ? "method=id:tiff-provider"
-                                              : "method=id:zip")
+                                          : isDpxPresetV1(report.preset) ? "method=id:none"
+                                                                         : "method=id:zip")
                    ? VocabularyValidation::Valid
                    : VocabularyValidation::VocabularyMismatch;
     case OutputFacetIdV1::Metadata:
@@ -543,8 +575,10 @@ validateVocabulary(const bloom::output::OutputAnalysisReportV1View report,
                        ? VocabularyValidation::Valid
                        : VocabularyValidation::VocabularyMismatch;
         }
-        if (report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
-            constexpr std::string_view prefix = "kind=id:tiff-provider;revision=id:";
+        if (report.preset == OutputPresetV1::TiffRgba16SrgbV1 || isDpxPresetV1(report.preset)) {
+            const std::string_view prefix = isDpxPresetV1(report.preset)
+                                                ? "kind=id:dpx-provider;revision=id:"
+                                                : "kind=id:tiff-provider;revision=id:";
             const auto suffix = facet.targetDescriptor.substr(
                 std::min(prefix.size(), facet.targetDescriptor.size()));
             return facet.targetDescriptor.starts_with(prefix) &&

@@ -274,6 +274,15 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
                                  processFrame.identity().colorIntent.ocioConfigRevision))
         return OutputAnalysisDigestV1Result::failure(
             OutputAnalysisDigestErrorCodeV1::TargetDependencyRevisionMismatch);
+    if (isDpxPresetV1(report.preset) &&
+        report.facets[2].stableCode == OutputFacetStableCodeV1::DpxOutputColorTransform) {
+        // The converted pixels depend on the pinned colour configuration revision.
+        const auto hex = processFrame.identity().colorIntent.ocioConfigRevision.toLowercaseHex();
+        if (report.facets[10].targetDescriptor !=
+            "kind=id:dpx-provider;revision=id:" + std::string(hex.data(), hex.size()))
+            return OutputAnalysisDigestV1Result::failure(
+                OutputAnalysisDigestErrorCodeV1::TargetDependencyRevisionMismatch);
+    }
     const auto presetIdentity = outputPresetIdentityV1(report.preset);
     if (!presetIdentity) {
         return OutputAnalysisDigestV1Result::failure(
@@ -318,7 +327,7 @@ computeOutputAnalysisDigestV1(const ProcessFrameSemanticIdentityV1& processIdent
         revisionBytes = std::as_bytes(dependencies.expectedOcioRevision->bytes());
         displayIdentityBytes = displayView->canonicalBytes();
     } else if (report.preset == OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 ||
-               report.preset == OutputPresetV1::TiffRgba16SrgbV1) {
+               report.preset == OutputPresetV1::TiffRgba16SrgbV1 || isDpxPresetV1(report.preset)) {
         if (dependencies.expectedOcioRevision) {
             return OutputAnalysisDigestV1Result::failure(
                 OutputAnalysisDigestErrorCodeV1::UnexpectedExrExpectedOcioRevision);

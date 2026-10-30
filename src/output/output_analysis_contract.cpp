@@ -54,6 +54,12 @@ std::optional<OutputPresetIdentityV1> outputPresetIdentityV1(const OutputPresetV
     case OutputPresetV1::TiffRgba16SrgbV1:
         return OutputPresetIdentityV1{"TiffRgba16SrgbV1", kOutputPresetVersionV1,
                                       "bloom.output.tiff-rgba16-srgb.semantic.v1"};
+    case OutputPresetV1::DpxRgb10V1:
+        return OutputPresetIdentityV1{"DpxRgb10V1", kOutputPresetVersionV1,
+                                      "bloom.output.dpx-rgb10.semantic.v1"};
+    case OutputPresetV1::DpxRgb16V1:
+        return OutputPresetIdentityV1{"DpxRgb16V1", kOutputPresetVersionV1,
+                                      "bloom.output.dpx-rgb16.semantic.v1"};
     }
     return std::nullopt;
 }
@@ -118,13 +124,21 @@ outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
     const auto one = [](const std::string_view text, const OutputFacetIdV1 facet,
                         const OutputPreservationStateV1 state, const bool png, const bool exr,
                         const bool permits, const bool tiff = false) noexcept {
-        return OutputFacetStableCodeRuleV1{text, facetBit(facet), state, png, exr, tiff, permits};
+        // Codes every integer-image preset shares (all three flags) are valid for DPX as well.
+        return OutputFacetStableCodeRuleV1{text,    facetBit(facet),   state, png, exr, tiff,
+                                           permits, png && exr && tiff};
+    };
+    const auto dpxRule = [](const std::string_view text, const OutputFacetIdV1 facet,
+                            const OutputPreservationStateV1 state, const bool permits) noexcept {
+        return OutputFacetStableCodeRuleV1{text,  facetBit(facet), state,   false,
+                                           false, false,           permits, true};
     };
     switch (code) {
     case OutputFacetStableCodeV1::None:
         return OutputFacetStableCodeRuleV1{"",
                                            kOutputAnalysisAllFacetsPermittedV1,
                                            OutputPreservationStateV1::Exact,
+                                           true,
                                            true,
                                            true,
                                            true,
@@ -201,7 +215,8 @@ outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
             true,
             true,
             true,
-            false};
+            false,
+            true};
     case OutputFacetStableCodeV1::PngEqualWindowRequired:
         return one("png.equal-window-required", OutputFacetIdV1::DisplayWindow,
                    OutputPreservationStateV1::Unsupported, true, false, false);
@@ -248,6 +263,33 @@ outputFacetStableCodeRuleV1(const OutputFacetStableCodeV1 code) noexcept {
     case OutputFacetStableCodeV1::PngOcioExternalReference:
         return one("png.ocio-external-reference", OutputFacetIdV1::ExternalDependencies,
                    OutputPreservationStateV1::ExternalReference, true, false, true);
+    case OutputFacetStableCodeV1::DpxClampQuantize:
+        return dpxRule("dpx.clamp-quantize", OutputFacetIdV1::Pixels,
+                       OutputPreservationStateV1::Approximated, true);
+    case OutputFacetStableCodeV1::DpxFloat32ToUint10:
+        return dpxRule("dpx.float32-to-uint10", OutputFacetIdV1::Precision,
+                       OutputPreservationStateV1::Approximated, true);
+    case OutputFacetStableCodeV1::DpxFloat32ToUint16:
+        return dpxRule("dpx.float32-to-uint16", OutputFacetIdV1::Precision,
+                       OutputPreservationStateV1::Approximated, true);
+    case OutputFacetStableCodeV1::DpxOutputColorTransform:
+        return dpxRule("dpx.output-color-transform", OutputFacetIdV1::Color,
+                       OutputPreservationStateV1::Approximated, true);
+    case OutputFacetStableCodeV1::DpxAlphaOmitted:
+        return dpxRule("dpx.alpha-omitted", OutputFacetIdV1::AlphaAssociation,
+                       OutputPreservationStateV1::Omitted, true);
+    case OutputFacetStableCodeV1::DpxOriginWindowRequired:
+        return dpxRule("dpx.origin-window-required", OutputFacetIdV1::DataWindow,
+                       OutputPreservationStateV1::Unsupported, false);
+    case OutputFacetStableCodeV1::DpxEqualWindowRequired:
+        return dpxRule("dpx.equal-window-required", OutputFacetIdV1::DisplayWindow,
+                       OutputPreservationStateV1::Unsupported, false);
+    case OutputFacetStableCodeV1::DpxSquarePixelRequired:
+        return dpxRule("dpx.square-pixel-required", OutputFacetIdV1::PixelAspect,
+                       OutputPreservationStateV1::Unsupported, false);
+    case OutputFacetStableCodeV1::DpxWorkerExternalReference:
+        return dpxRule("dpx.worker-external-reference", OutputFacetIdV1::ExternalDependencies,
+                       OutputPreservationStateV1::ExternalReference, true);
     case OutputFacetStableCodeV1::DependencyMissing:
         return one("dependency.missing", OutputFacetIdV1::ExternalDependencies,
                    OutputPreservationStateV1::Missing, true, true, false, true);

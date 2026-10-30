@@ -206,8 +206,6 @@ struct ExportPresetCatalogueSnapshot final {
 };
 
 inline constexpr std::string_view kExportDefaultVideoPresetId = "builtin:h264-mp4";
-inline constexpr std::string_view kExportDpxUnavailableReason =
-    "DPX sequences are not available in this build";
 inline constexpr std::string_view kExportFallbackVideoPresetId = "builtin:prores-422hq-mov";
 
 struct ExportDefaultPreset final {

@@ -286,4 +286,10 @@ buildOutputAnalysisAttemptV1(OutputAnalysisAttemptBuildInputsV1 inputs,
 prepareFlatExrAttemptV1(const OutputAnalysisAttemptV1&, FlatExrRgba32fOptionsV1,
                         ExportResourceLedgerV1&) noexcept;
 
+// DPX: re-analyses the attempt with the named output colour space (empty keeps the working
+// space) so the report, digest and writer agree on the conversion.
+[[nodiscard]] OutputAnalysisAttemptBuildResultV1
+prepareDpxAttemptV1(const OutputAnalysisAttemptV1&, std::string outputColorSpaceId,
+                    ExportResourceLedgerV1&) noexcept;
+
 } // namespace bloom::output

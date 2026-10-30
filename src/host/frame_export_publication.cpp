@@ -1,6 +1,7 @@
 #include <bloom/host/frame_export_publication.hpp>
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/output/dpx_export_write.hpp>
 #include <bloom/output/flat_exr_options.hpp>
 #include <bloom/output/output_limits.hpp>
 
@@ -121,9 +122,8 @@ namespace {
     return left * right;
 }
 
-[[nodiscard]] std::filesystem::path
-uniqueScratchFilePath(const std::filesystem::path& directory,
-                      const std::string_view extension) {
+[[nodiscard]] std::filesystem::path uniqueScratchFilePath(const std::filesystem::path& directory,
+                                                          const std::string_view extension) {
     static std::atomic<std::uint64_t> counter{0};
     const auto suffix = counter.fetch_add(1, std::memory_order_relaxed);
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -271,6 +271,7 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
     // writer, verifier and protocol-copy overlap without counting those retained products again.
     const bool isPng = attempt.preset() == output::OutputPresetV1::PngRgba8SrgbV1;
     const bool isTiff = attempt.preset() == output::OutputPresetV1::TiffRgba16SrgbV1;
+    const bool isDpx = output::isDpxPresetV1(attempt.preset());
     const auto* descriptor = attempt.frame()->processImage().descriptor();
     if (!descriptor)
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
@@ -308,7 +309,7 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
                                  ? addChecked(std::max(writer, *verifier), pngCodecStateEstimate)
                                  : std::nullopt;
         additional = scratch ? addChecked(preparedBytes, *scratch) : std::nullopt;
-    } else if (isTiff) {
+    } else if (isTiff || isDpx) {
         // The protocol prepares one frame and holds one serialized/copy buffer until acknowledged.
         const auto protocol =
             multiplyChecked(static_cast<std::uint64_t>(descriptor->layout().pixelStorageBytes), 2);
@@ -373,6 +374,7 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
     // this task's scope. See the implementor's report for the full limitation.
     const ScratchFileGuard scratch(uniqueScratchFilePath(scratchDirectory, isPng    ? ".png"
                                                                            : isTiff ? ".tiff"
+                                                                           : isDpx  ? ".dpx"
                                                                                     : ".exr"));
     const auto stageProgressSink = [&](const output::OutputExportProgressV1& stageProgress) {
         lastProgress = clock();
@@ -414,6 +416,23 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
         if (!writeVerify.written && !writeVerify.cancelled) {
             writeVerify.stage = FrameExportPublicationStageV1::Writing;
             writeVerify.payload = tiffResult.error;
+        }
+    } else if (isDpx) {
+        const output::DpxExportWriterV1 writer;
+        const auto dpxResult = writer.run(attempt, scratch.path(), context.cancellation());
+        writeVerify.cancelled = dpxResult.cancelled;
+        writeVerify.written = dpxResult.written;
+        if (dpxResult.written) {
+            writeVerify.semanticDigest = dpxResult.semanticDigest;
+            writeVerify.artifactDigest = dpxResult.artifactDigest;
+            writeVerify.artifactByteCount = dpxResult.artifactBytes;
+        }
+        if (!writeVerify.written && !writeVerify.cancelled) {
+            // A header that differs from what was asked for is a verification failure.
+            writeVerify.stage = dpxResult.error == output::DpxExportWriteErrorCodeV1::TagsDiffer
+                                    ? FrameExportPublicationStageV1::Verifying
+                                    : FrameExportPublicationStageV1::Writing;
+            writeVerify.payload = dpxResult.error;
         }
     } else {
         const output::FlatExrExportWriterV1 writer;
@@ -612,11 +631,11 @@ FrameExportPublicationResultV1 executeExportPublication(
                                             std::move(progress), beforePublication, failureStage);
     } catch (const std::bad_alloc&) {
         // Unwinding has already destroyed the staged lease, scratch guard and scratch claim.
-        return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
-            failureStage, FrameExportResourceExhaustedV1{}));
+        return FrameExportPublicationResultV1::failure(
+            FrameExportPublicationFailureV1(failureStage, FrameExportResourceExhaustedV1{}));
     } catch (...) {
-        return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
-            failureStage, FrameExportUnexpectedFailureV1{}));
+        return FrameExportPublicationResultV1::failure(
+            FrameExportPublicationFailureV1(failureStage, FrameExportUnexpectedFailureV1{}));
     }
 }
 

@@ -2,6 +2,7 @@
 
 #include <bloom/core/sha256.hpp>
 #include <bloom/host/publication_coordinator.hpp>
+#include <bloom/output/dpx_export_write.hpp>
 #include <bloom/output/flat_exr_export_write.hpp>
 #include <bloom/output/output_analysis_attempt.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -199,11 +200,13 @@ struct FrameExportResourceExhaustedV1 final {};
 struct FrameExportPreparedBytesExceededV1 final {};
 struct FrameExportUnexpectedFailureV1 final {};
 
-using FrameExportPublicationFailurePayloadV1 = std::variant<
-    std::monostate, platform::StagedArtifactError, output::FlatExrExportWriteErrorCodeV1,
-    output::PngExportWriteErrorCodeV1, output::TiffExportWriteErrorCodeV1, PublicationGuardStatus,
-    FrameExportDeadlineExceededV1, FrameExportNoProgressExceededV1, FrameExportResourceExhaustedV1,
-    FrameExportPreparedBytesExceededV1, FrameExportUnexpectedFailureV1>;
+using FrameExportPublicationFailurePayloadV1 =
+    std::variant<std::monostate, platform::StagedArtifactError,
+                 output::FlatExrExportWriteErrorCodeV1, output::PngExportWriteErrorCodeV1,
+                 output::TiffExportWriteErrorCodeV1, output::DpxExportWriteErrorCodeV1,
+                 PublicationGuardStatus, FrameExportDeadlineExceededV1,
+                 FrameExportNoProgressExceededV1, FrameExportResourceExhaustedV1,
+                 FrameExportPreparedBytesExceededV1, FrameExportUnexpectedFailureV1>;
 
 class FrameExportPublicationFailureV1 final {
   public:

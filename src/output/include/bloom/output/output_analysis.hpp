@@ -34,7 +34,15 @@ enum class OutputPresetV1 : std::uint8_t {
     Vp9WebmV1 = 11,
     Av1WebmV1 = 12,
     Av1Mp4V1 = 13,
+    // Issue #369 (ADR 0033 section 16): DPX sequences through the FFmpeg worker.
+    DpxRgb10V1 = 14,
+    DpxRgb16V1 = 15,
 };
+
+// Both DPX presets share one analyzer, writer and descriptor vocabulary.
+[[nodiscard]] constexpr bool isDpxPresetV1(const OutputPresetV1 preset) noexcept {
+    return preset == OutputPresetV1::DpxRgb10V1 || preset == OutputPresetV1::DpxRgb16V1;
+}
 
 enum class OutputFacetIdV1 : std::uint8_t {
     Pixels = 1,
@@ -103,6 +111,15 @@ enum class OutputFacetStableCodeV1 : std::uint8_t {
     TiffWorkerExternalReference,
     ExrOutputColorTransform,
     ExrOcioExternalReference,
+    DpxClampQuantize,
+    DpxFloat32ToUint10,
+    DpxFloat32ToUint16,
+    DpxOutputColorTransform,
+    DpxAlphaOmitted,
+    DpxOriginWindowRequired,
+    DpxEqualWindowRequired,
+    DpxSquarePixelRequired,
+    DpxWorkerExternalReference,
 };
 
 struct OutputPresetIdentityV1 final {
@@ -124,6 +141,7 @@ struct OutputFacetStableCodeRuleV1 final {
     bool validForFlatExr;
     bool validForTiff;
     bool presetPermits;
+    bool validForDpx = false;
 
     [[nodiscard]] constexpr bool appliesToFacet(const OutputFacetIdV1 facet) const noexcept {
         const auto value = static_cast<std::uint8_t>(facet);

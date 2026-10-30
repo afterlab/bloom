@@ -11,6 +11,7 @@
 #include <bit>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/media/video/session.hpp>
+#include <bloom/output/dpx_export_write.hpp>
 #include <bloom/output/flat_exr_export_write.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_analysis_digest.hpp>
@@ -213,6 +214,147 @@ void exrOracle(const output::OutputAnalysisAttemptV1& source,
               source.digest() == defaultAttempt.attempt()->digest(),
           "default EXR bytes and identity unchanged");
 }
+// An independent reader for the DPX header and sample layout the worker writes.
+struct DpxFile {
+    std::uint32_t width = 0, height = 0, bits = 0;
+    unsigned descriptor = 0, transfer = 0, primaries = 0;
+    std::vector<std::array<unsigned, 3>> rgb;
+};
+DpxFile readDpx(const std::filesystem::path& path) {
+    const auto data = bytes(path);
+    check(data.size() > 1664 && std::string(data.data(), 4) == "XPDS", "little-endian DPX magic");
+    const auto u8 = [&](std::size_t at) {
+        return static_cast<unsigned>(static_cast<unsigned char>(data[at]));
+    };
+    const auto u16 = [&](std::size_t at) { return u8(at) | (u8(at + 1) << 8U); };
+    const auto u32 = [&](std::size_t at) { return u16(at) | (u16(at + 2) << 16U); };
+    DpxFile file;
+    file.width = u32(772);
+    file.height = u32(776);
+    file.descriptor = u8(800);
+    file.transfer = u8(801);
+    file.primaries = u8(802);
+    file.bits = u8(803);
+    const std::size_t dataOffset = u32(4);
+    check(u32(16) == data.size(), "DPX file size field");
+    file.rgb.resize(std::size_t{file.width} * file.height);
+    if (file.bits == 10) {
+        for (std::size_t i = 0; i < file.rgb.size(); ++i) {
+            const auto word = u32(dataOffset + 4 * i);
+            file.rgb[i] = {(word >> 22U) & 1023U, (word >> 12U) & 1023U, (word >> 2U) & 1023U};
+        }
+    } else {
+        check(file.bits == 16, "DPX depth");
+        const std::size_t row = (std::size_t{file.width} * 6U + 3U) / 4U * 4U;
+        for (std::size_t y = 0; y < file.height; ++y)
+            for (std::size_t x = 0; x < file.width; ++x) {
+                const auto at = dataOffset + y * row + x * 6U;
+                file.rgb[y * file.width + x] = {u16(at), u16(at + 2), u16(at + 4)};
+            }
+    }
+    return file;
+}
+std::shared_ptr<const output::OutputAnalysisAttemptV1>
+dpxAttemptFor(const output::OutputPresetV1 preset,
+              const std::shared_ptr<const runtime::ProcessFrame>& frame,
+              output::ExportResourceLedgerV1& ledger) {
+    const auto identity = output::ProcessFrameSemanticIdentityV1Preparer{}.prepare(frame, {});
+    check(identity.identity() != nullptr, "process identity prepared");
+    output::DpxRgbAnalysisInputV1 input{
+        .process = {.readyIdentity = identity.identity(), .missingDescriptor = {}},
+        .adapter = output::OutputAnalysisAdapterStateV1::Qualified};
+    const auto report = preset == output::OutputPresetV1::DpxRgb10V1
+                            ? output::analyzeDpxRgb10V1(std::move(input))
+                            : output::analyzeDpxRgb16V1(std::move(input));
+    check(report.hasReport() && report.report()->approvable(), "DPX analysis is approvable");
+    auto attempt = output::buildOutputAnalysisAttemptV1(
+        {.frame = frame,
+         .processIdentity = identity.identity(),
+         .report = report.report(),
+         .target = {.targetKey = core::ArtifactTargetKey::fromRaw(1), .targetPath = "shot.dpx"},
+         .display = {}},
+        ledger);
+    check(attempt.hasAttempt(), "DPX attempt");
+    return attempt.attempt();
+}
+// A worker whose FFmpeg was built without the bundled DPX encoder (a dependency prefix older than
+// the lock) answers Unavailable "Encoder is not in the intake": an explicit skip with the reason,
+// not a failure of the code under test.
+[[maybe_unused]] bool workerHasDpxEncoder() {
+    if (output::dpxEncoderAvailableV1())
+        return true;
+    std::cout << "SKIP: DPX sequences — this FFmpeg has no DPX encoder (a dependency prefix "
+                 "older than the lock; rebuild it)\n";
+    return false;
+}
+void dpxOracle(const std::shared_ptr<const runtime::ProcessFrame>& shared,
+               output::ExportResourceLedgerV1& ledger, const std::filesystem::path& directory,
+               const OCIO::ConstConfigRcPtr& config) {
+    if (!workerHasDpxEncoder())
+        return;
+    using Preset = output::OutputPresetV1;
+    struct Case {
+        Preset preset;
+        std::string_view colourSpace;
+        unsigned bits;
+        unsigned transfer, primaries; // DPX header codes
+    };
+    // Linear transfer is DPX code 2; Rec.709 primaries are 6 and every other set is 4
+    // (unspecified).
+    const std::array cases{Case{Preset::DpxRgb10V1, "ACES2065-1", 10, 2, 4},
+                           Case{Preset::DpxRgb16V1, "ACES2065-1", 16, 2, 4},
+                           Case{Preset::DpxRgb16V1, "Linear Rec.709 (sRGB)", 16, 2, 6},
+                           Case{Preset::DpxRgb10V1, "", 10, 2, 4}};
+    for (const auto& c : cases) {
+        const auto source = dpxAttemptFor(c.preset, shared, ledger);
+        const auto& facets = source->report()->view().facets;
+        check(facets[3].stableCode == output::OutputFacetStableCodeV1::DpxAlphaOmitted &&
+                  facets[3].state == output::OutputPreservationStateV1::Omitted &&
+                  facets[1].stableCode ==
+                      (c.bits == 10 ? output::OutputFacetStableCodeV1::DpxFloat32ToUint10
+                                    : output::OutputFacetStableCodeV1::DpxFloat32ToUint16),
+              "DPX analysis states alpha omitted and the integer precision");
+        const auto prepared =
+            c.colourSpace.empty()
+                ? output::OutputAnalysisAttemptBuildResultV1::success(source)
+                : output::prepareDpxAttemptV1(*source, std::string(c.colourSpace), ledger);
+        check(prepared.hasAttempt() && prepared.attempt()->approvable(), "DPX colour analysis");
+        const auto& attempt = *prepared.attempt();
+        check(attempt.report()->view().facets[2].stableCode ==
+                  (c.colourSpace.empty()
+                       ? output::OutputFacetStableCodeV1::None
+                       : output::OutputFacetStableCodeV1::DpxOutputColorTransform),
+              "DPX colour facet names the conversion");
+        const auto path = directory / ("shot." + std::to_string(c.bits) + "-" +
+                                       std::to_string(c.primaries) + ".dpx");
+        const auto written = output::DpxExportWriterV1{}.run(attempt, path, {});
+        check(written.written, "DPX export written and verified by the worker reopen");
+        const auto file = readDpx(path);
+        check(file.width == 64 && file.height == 64 && file.bits == c.bits &&
+                  file.descriptor == 50 && file.transfer == c.transfer &&
+                  file.primaries == c.primaries,
+              "DPX header dimensions, depth, transfer and primaries");
+        std::array<float, 3> oracle{0.08F, 0.18F, 0.3F};
+        if (!c.colourSpace.empty())
+            config->getProcessor("ACEScg", std::string(c.colourSpace).c_str())
+                ->getDefaultCPUProcessor()
+                ->applyRGB(oracle.data());
+        const auto maxCode = static_cast<double>((1U << c.bits) - 1U);
+        unsigned worst = 0;
+        for (const auto& pixel : file.rgb)
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                const auto expected = std::floor(
+                    std::clamp(static_cast<double>(oracle[channel]), 0.0, 1.0) * maxCode + 0.5);
+                const auto delta =
+                    static_cast<unsigned>(std::abs(static_cast<double>(pixel[channel]) - expected));
+                worst = std::max(worst, delta);
+            }
+        check(worst <= 1, "DPX samples match the independent OCIO oracle within one code value");
+        std::cout << "DPX " << c.bits << "-bit "
+                  << (c.colourSpace.empty() ? "working" : c.colourSpace)
+                  << " worst code delta=" << worst << '\n';
+    }
+}
 unsigned sample16(const media::provider::Bytes& bytes, std::size_t offset) {
     return std::to_integer<unsigned>(bytes[offset]) |
            (std::to_integer<unsigned>(bytes[offset + 1]) << 8U);
@@ -368,6 +510,7 @@ int main() {
         testConfigBinding(request.colorIntent);
         exrOracle(*attempt, ledger, path.parent_path(), config);
 #ifdef BLOOM_OUTPUT_ENCODE_TESTS
+        dpxOracle(handoff.frame(), ledger, path.parent_path(), config);
         reviewOracle(*review.frame(), path.parent_path(), config);
 #endif
     } catch (const std::exception& e) {

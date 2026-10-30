@@ -822,6 +822,14 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                               : output::OutputAnalysisAdapterStateV1::Unavailable,
                                .displayName = displayName,
                                .viewName = viewName})
+                    : output::isDpxPresetV1(preset)
+                        ? (preset == output::OutputPresetV1::DpxRgb10V1
+                               ? output::analyzeDpxRgb10V1
+                               : output::analyzeDpxRgb16V1)(
+                              {.process = processSource,
+                               .adapter = output::outputPresetAvailabilityV1(preset).available
+                                              ? output::OutputAnalysisAdapterStateV1::Qualified
+                                              : output::OutputAnalysisAdapterStateV1::Unavailable})
                         : output::analyzeFlatExrRgba32fLinRec709SceneV1({.process = processSource});
                 if (!analyzed.hasReport()) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(

@@ -88,6 +88,9 @@ std::optional<OutputPresetV1> imagePreset(const document::ExportOutputSettings& 
         return OutputPresetV1::FlatExrRgba32fLinRec709SceneV1;
     case ExportFormat::Tiff:
         return OutputPresetV1::TiffRgba16SrgbV1;
+    case ExportFormat::Dpx:
+        return settings.codecProfile == "16bit" ? OutputPresetV1::DpxRgb16V1
+                                                : OutputPresetV1::DpxRgb10V1;
     default:
         return std::nullopt;
     }
@@ -414,6 +417,8 @@ class ImageDriver final : public DriverBase {
             }
             exr_ = {settings.outputColorSpaceId, *compression};
         }
+        if (output::isDpxPresetV1(preset_))
+            dpxColourSpace_ = settings.outputColorSpaceId;
         const auto& availability = output::outputPresetAvailabilityV1(preset_);
         if (!availability.available) {
             failNow(failure(ExportFailureCode::EncoderUnavailable, "export.preset.unavailable",
@@ -460,8 +465,11 @@ class ImageDriver final : public DriverBase {
                     return stopNow();
                 if (!result->value() || !*result->value() || !(*result->value())->approvable())
                     return failNow(failure(ExportFailureCode::AnalysisRefused, "export.exr.colour",
-                                           "The EXR output color space or compression is "
-                                           "unavailable in this project",
+                                           output::isDpxPresetV1(preset_)
+                                               ? "The DPX output color space is unavailable in "
+                                                 "this project"
+                                               : "The EXR output color space or compression is "
+                                                 "unavailable in this project",
                                            tailIndex_));
                 approve(*result->value(), tailIndex_, tailTarget_);
                 if (done_)
@@ -1091,6 +1099,8 @@ class ImageDriver final : public DriverBase {
             (!exr_.outputColorSpaceId.empty() ||
              exr_.compression != output::FlatExrCompressionV1::Zip))
             return prepareExr(std::move(attempt));
+        if (output::isDpxPresetV1(preset_) && !dpxColourSpace_.empty())
+            return prepareDpx(std::move(attempt));
         approve(attempt, tailIndex_, tailTarget_);
     }
 
@@ -1130,6 +1140,33 @@ class ImageDriver final : public DriverBase {
                 frame.refusedAtEpoch = releaseEpoch_ - 1;
             }
         }
+    }
+
+    // DPX carries the output color space like EXR: the attempt is re-analysed with the
+    // conversion so the report, the digest and the writer agree.
+    void prepareDpx(std::shared_ptr<const output::OutputAnalysisAttemptV1> attempt) {
+        auto submission =
+            dependencies_.scheduler.submit<std::shared_ptr<const output::OutputAnalysisAttemptV1>>(
+                runtime::TaskRequest("Prepare DPX output color", input_.owner,
+                                     runtime::TaskPriority::Foreground,
+                                     runtime::TaskExecutor::BlockingIo),
+                [attempt = std::move(attempt), colourSpace = dpxColourSpace_,
+                 ledger = dependencies_.ledger](runtime::TaskContext& context) {
+                    using Result =
+                        runtime::TaskResult<std::shared_ptr<const output::OutputAnalysisAttemptV1>>;
+                    if (context.isCancellationRequested())
+                        return Result::cancelled();
+                    context.reportProgress(
+                        {"ColorPreparing", "DPX output color", 0, std::nullopt});
+                    auto result = output::prepareDpxAttemptV1(*attempt, colourSpace, *ledger);
+                    if (context.isCancellationRequested())
+                        return Result::cancelled();
+                    return Result::succeeded(result ? result.attempt() : nullptr);
+                });
+        if (!submission.accepted())
+            return failNow(failure(ExportFailureCode::ResourceRefused, "export.task.refused",
+                                   "DPX color preparation could not be started", tailIndex_));
+        inFlight_.emplace<PrepareHandle>(std::move(submission.handle));
     }
 
     // Approves one analysed frame and starts its publication beside those already running.
@@ -1305,9 +1342,28 @@ class ImageDriver final : public DriverBase {
             check(ExportCheck::FrameCount,
                   published_ == expected ? ExportCheckOutcome::Passed : ExportCheckOutcome::Failed,
                   "export.check.frame-count", expected, published_));
-        for (const auto what : {ExportCheck::Timing, ExportCheck::ColourTags,
-                                ExportCheck::Container, ExportCheck::Audio})
+        for (const auto what : {ExportCheck::Timing, ExportCheck::Audio})
             checks.push_back(check(what, ExportCheckOutcome::NotApplicable, "export.check.image"));
+        if (output::isDpxPresetV1(preset_)) {
+            // The worker's reopen read each file's header back and refused any difference from
+            // these tags before the file could be published.
+            const auto tags =
+                output::dpxColourTagsV1(input_.output.record.settings.outputColorSpaceId,
+                                        std::string(input_.colorIntent.workingColorSpaceId));
+            const ExportColourTags observed{static_cast<std::uint8_t>(std::max(tags.primaries, 2)),
+                                            static_cast<std::uint8_t>(std::max(tags.transfer, 2)),
+                                            static_cast<std::uint8_t>(std::max(tags.matrix, 2)),
+                                            tags.range == 2};
+            checks.push_back(check(ExportCheck::ColourTags, ExportCheckOutcome::Passed,
+                                   "export.check.colour-tags.match", observed, observed));
+            checks.push_back(check(ExportCheck::Container, ExportCheckOutcome::Passed,
+                                   "export.check.container", std::string("dpx/dpx"),
+                                   std::string("dpx/dpx")));
+        } else {
+            for (const auto what : {ExportCheck::ColourTags, ExportCheck::Container})
+                checks.push_back(
+                    check(what, ExportCheckOutcome::NotApplicable, "export.check.image"));
+        }
         checks.push_back(
             check(ExportCheck::Naming,
                   expected > 1 ? ExportCheckOutcome::Passed : ExportCheckOutcome::NotApplicable,
@@ -1327,6 +1383,7 @@ class ImageDriver final : public DriverBase {
 
     OutputPresetV1 preset_;
     output::FlatExrRgba32fOptionsV1 exr_;
+    std::string dpxColourSpace_;
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan_;
     // The next frame to be accounted (published in order).
     std::uint64_t next_ = 0;
@@ -1814,32 +1871,8 @@ class MediaDriver final : public DriverBase {
 
 } // namespace
 
-// DPX (issue #369) is declared in the 1.29 vocabulary and the catalogue; this build reports it
-// unavailable with a typed reason rather than writing a different format.
-class UnavailableDriver final : public DriverBase {
-  public:
-    UnavailableDriver(const ExportJobRunnerDependencies& dependencies, ExportDriverInput input,
-                      std::string reason)
-        : DriverBase(dependencies, std::move(input)) {
-        fail(failure(ExportFailureCode::EncoderUnavailable, "export.preset.unavailable",
-                     std::move(reason)));
-    }
-    void poll() override {}
-    void stop() override {}
-    void setPaused(bool) override {}
-    [[nodiscard]] bool pausedAtBoundary() const override { return false; }
-    [[nodiscard]] std::uint64_t framesCompleted() const override { return 0; }
-    [[nodiscard]] std::optional<std::uint64_t> currentFrame() const override {
-        return std::nullopt;
-    }
-    [[nodiscard]] ExportDeviceRoute route() const override { return ExportDeviceRoute::None; }
-};
-
 std::unique_ptr<ExportOutputDriver>
 makeExportOutputDriver(const ExportJobRunnerDependencies& dependencies, ExportDriverInput input) {
-    if (input.output.record.settings.format == ExportFormat::Dpx)
-        return std::make_unique<UnavailableDriver>(dependencies, std::move(input),
-                                                   std::string(kExportDpxUnavailableReason));
     if (const auto preset = imagePreset(input.output.record.settings))
         return std::make_unique<ImageDriver>(dependencies, std::move(input), *preset);
     return std::make_unique<MediaDriver>(dependencies, std::move(input));

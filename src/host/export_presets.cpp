@@ -65,8 +65,20 @@ Facets expectedFor(const ExportOutputSettings& settings) {
                 S::Equivalent,
                 S::Equivalent,
                 S::ExternalReference};
-    case ExportFormat::OpenExr:
     case ExportFormat::Dpx:
+        // RGB only: alpha is omitted; the integer samples are clamped and quantized.
+        return {S::Approximated,
+                S::Approximated,
+                S::Approximated,
+                S::Omitted,
+                S::Exact,
+                S::Exact,
+                S::Exact,
+                S::Exact,
+                S::Exact,
+                S::Exact,
+                S::ExternalReference};
+    case ExportFormat::OpenExr:
         return {S::Approximated, S::Approximated,     S::Approximated,
                 S::Equivalent,   S::Equivalent,       S::Exact,
                 S::Exact,        S::Approximated,     S::Equivalent,
@@ -449,9 +461,6 @@ std::optional<ExportPreset> builtInExportPreset(const std::string_view id) {
 ExportAvailability exportPlatformAvailability(const document::ExportOutputSettings& settings,
                                               const ExportEncoderStatus& encoders) {
     const auto format = settings.format;
-    if (format == ExportFormat::Dpx)
-        return unavailable(ExportAvailabilityCode::NoQualifiedEncoder,
-                           std::string(kExportDpxUnavailableReason));
     if (!needsWorker(format))
         return available();
     if (!encoders.probed)

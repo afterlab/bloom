@@ -14,6 +14,7 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/output/dpx_export_write.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/platform/staged_artifact.hpp>
@@ -28,6 +29,7 @@
 #include <vector>
 #include <span>
 #include <cstdio>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -1081,6 +1083,7 @@ void testTransient() {
 // OCIO colour-space names are free text. A working space such as "Linear Rec.709 (sRGB)" (spaces
 // and parentheses) used to fail every frame's analysis before encoding; stills, sequences and
 // movies all export with it now.
+bool workerHasDpxEncoder();
 void testFreeTextWorkingSpace(const std::string& workingSpace) {
     const auto revision = color::ocioBuiltInContentRevision(
         color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
@@ -1110,6 +1113,12 @@ void testFreeTextWorkingSpace(const std::string& workingSpace) {
         {document::ExportRangeKind::Frame, 0, 0});
     add(document::ExportFormat::Tiff, {}, "Exports/still.tiff",
         {document::ExportRangeKind::Frame, 0, 0});
+    if (workerHasDpxEncoder()) {
+        add(document::ExportFormat::Dpx, "10bit", "Exports/still10.dpx",
+            {document::ExportRangeKind::Frame, 0, 0});
+        add(document::ExportFormat::Dpx, "16bit", "Exports/still16.dpx",
+            {document::ExportRangeKind::Frame, 0, 0});
+    }
     add(document::ExportFormat::ProResMov, "hq", "Exports/movie.mov",
         {document::ExportRangeKind::Custom, 0, 1});
     std::vector<document::ExportJobId> ids;
@@ -1321,6 +1330,81 @@ void testConfigurationSwitchFollowsView() {
            "the output follows back to the neutral display/view");
 }
 
+// A worker whose FFmpeg was built without the bundled DPX encoder (a dependency prefix older than
+// the lock) answers Unavailable "Encoder is not in the intake": an explicit skip with the reason,
+// not a failure of the code under test.
+bool workerHasDpxEncoder() {
+    if (output::dpxEncoderAvailableV1())
+        return true;
+    std::cout << "SKIP: DPX sequences — this FFmpeg has no DPX encoder (a dependency prefix "
+                 "older than the lock; rebuild it)\n";
+    return false;
+}
+
+// DPX sequences (issue #369) through the queue: 10-bit and 16-bit RGB files the worker wrote and
+// reopened, with the output colour space converted like EXR and the header tags read back.
+void testDpxSequence(const std::string& profile, const std::string& outputColourSpace) {
+    if (!workerHasDpxEncoder())
+        return;
+    const std::string name = "dpx-" + profile + (outputColourSpace.empty() ? "" : "-converted");
+    const auto revision = color::ocioBuiltInContentRevision(
+        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+    if (!revision) {
+        expect(false, "the ACES config is available");
+        return;
+    }
+    auto colour = document::makeBloomNeutralColorSettingsV1({});
+    colour.processColorSpaceId = "ACEScg";
+    colour.ocioConfig.locator =
+        document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)};
+    colour.ocioConfig.expectedRevision.digest = *revision;
+    Fixture f(name, linuxEncoders(), colour);
+    document::ExportOutputSettings settings;
+    settings.format = document::ExportFormat::Dpx;
+    settings.codecProfile = profile;
+    settings.outputColorSpaceId = outputColourSpace;
+    settings.includeAudio = false;
+    const auto job =
+        f.addJob(settings, "Exports/shot.dpx", document::ExportOverwritePolicy::Replace,
+                 {document::ExportRangeKind::Custom, 0, 1});
+    expect(f.startable(job), name + ": the DPX job becomes startable");
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, name + ": start");
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 180),
+           name + ": the sequence finishes");
+    const auto* view = f.view(job);
+    if (view && view->failure)
+        std::cerr << "  " << name << " failure: " << view->failure->reason << '\n';
+    expect(view && view->state != ExportJobState::Failed, name + ": the sequence publishes");
+    if (!view || view->outputs.empty() || !view->outputs.front().verification)
+        return;
+    const auto& verification = *view->outputs.front().verification;
+    const auto find = [&](host::ExportCheck what) {
+        return std::ranges::find(verification.checks, what, &host::ExportCheckResult::check);
+    };
+    expect(find(host::ExportCheck::Reopen)->outcome == host::ExportCheckOutcome::Passed &&
+               find(host::ExportCheck::FrameCount)->outcome == host::ExportCheckOutcome::Passed &&
+               find(host::ExportCheck::Container)->outcome == host::ExportCheckOutcome::Passed &&
+               find(host::ExportCheck::ColourTags)->outcome == host::ExportCheckOutcome::Passed,
+           name + ": reopen, frame count, container and colour tags pass");
+    std::size_t files = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(f.folder / "Exports")) {
+        if (entry.path().extension() != ".dpx")
+            continue;
+        ++files;
+        std::ifstream input(entry.path(), std::ios::binary);
+        std::array<char, 1664> header{};
+        input.read(header.data(), static_cast<std::streamsize>(header.size()));
+        expect(input.gcount() == 1664 && std::string_view(header.data(), 4) == "XPDS" &&
+                   static_cast<unsigned char>(header[803]) == (profile == "16bit" ? 16U : 10U) &&
+                   static_cast<unsigned char>(header[800]) == 50U &&
+                   static_cast<unsigned char>(header[801]) == 2U,
+               name + ": " + entry.path().filename().string() +
+                   " is an RGB DPX with the declared depth and linear transfer");
+    }
+    expect(files == 2, name + ": one file per frame");
+}
+
 // End to end: a movie through the media worker, reopened by the worker and checked for its
 // container, colour tags, frame count and digest. An empty profile is the format's usual one.
 void testVideoEndToEnd(const document::ExportFormat format,
@@ -1414,6 +1498,8 @@ int main() {
         testVideoEndToEnd(document::ExportFormat::Av1Webm, linuxEncoders(), "av1-webm-10bit",
                           "10bit", true);
         testVideoEndToEnd(document::ExportFormat::Av1Mp4, linuxEncoders(), "av1-mp4", "8bit", true);
+        testDpxSequence("10bit", "");
+        testDpxSequence("16bit", "ACES2065-1");
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

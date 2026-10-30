@@ -96,6 +96,16 @@ template <typename Integer> void appendDecimal(std::string& destination, const I
     return descriptor;
 }
 
+// The DPX provider is the worker; a colour transform binds the pinned configuration revision.
+[[nodiscard]] std::string dpxDependencyDescriptor(const core::Sha256Digest* revision) {
+    std::string descriptor = "kind=id:dpx-provider;revision=id:";
+    if (revision == nullptr)
+        return descriptor + "none";
+    const auto hex = revision->toLowercaseHex();
+    descriptor.append(hex.data(), hex.size());
+    return descriptor;
+}
+
 [[nodiscard]] std::string ocioDependencyDescriptor(const core::Sha256Digest& revision) {
     const auto hex = revision.toLowercaseHex();
     std::string descriptor = "kind=id:ocio;revision=id:";
@@ -235,6 +245,7 @@ template <typename Assessment, typename Source, typename Target>
     const bool acceptsPreset =
         rule && (preset == Preset::PngRgba8SrgbV1                   ? rule->validForPng
                  : preset == Preset::FlatExrRgba32fLinRec709SceneV1 ? rule->validForFlatExr
+                 : output::isDpxPresetV1(preset)                    ? rule->validForDpx
                                                                     : rule->validForTiff);
     if (!rule || !rule->appliesToFacet(facet) || !acceptsPreset) {
         return false;
@@ -363,13 +374,14 @@ class OutputAnalysisAnalyzerV1 final {
         }
         const bool png = preset == OutputPresetV1::PngRgba8SrgbV1;
         const bool tiff = preset == OutputPresetV1::TiffRgba16SrgbV1;
+        const bool dpx = isDpxPresetV1(preset);
         if (png) {
             if (!input.expectedOcioRevision.has_value() || !input.colorResolution.has_value() ||
                 !known(*input.colorResolution)) {
                 return OutputAnalysisAnalyzerResultV1::failure(
                     AnalyzerError::InvalidColorResolutionState);
             }
-        } else if ((!tiff && preset != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) ||
+        } else if ((!tiff && !dpx && preset != OutputPresetV1::FlatExrRgba32fLinRec709SceneV1) ||
                    input.expectedOcioRevision.has_value() || input.colorResolution.has_value()) {
             return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
         }
@@ -414,10 +426,12 @@ class OutputAnalysisAnalyzerV1 final {
                                        ? Code::ProcessFrameMissing
                                        : (png         ? Code::PngDisplayTransformClampQuantize
                                           : tiff      ? Code::TiffDisplayTransformClampQuantize
+                                          : dpx       ? Code::DpxClampQuantize
                                           : transform ? Code::ExrOutputColorTransform
                                                       : Code::None);
-            const auto colorCode = png         ? pngColorCode(*input.colorResolution)
-                                   : tiff      ? Code::TiffLinRec709SceneToSrgb
+            const auto colorCode = png    ? pngColorCode(*input.colorResolution)
+                                   : tiff ? Code::TiffLinRec709SceneToSrgb
+                                   : dpx  ? (transform ? Code::DpxOutputColorTransform : Code::None)
                                    : transform ? Code::ExrOutputColorTransform
                                                : Code::None;
             const auto compressionCode =
@@ -430,7 +444,7 @@ class OutputAnalysisAnalyzerV1 final {
             if (!pngTargetWindow) {
                 return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
             }
-            const bool zeroOriginTarget = png || tiff;
+            const bool zeroOriginTarget = png || tiff || dpx;
             const auto targetDataWindow =
                 zeroOriginTarget ? windowDescriptor(*pngTargetWindow.value()) : sourceDataWindow;
             const auto targetDisplayWindow =
@@ -445,12 +459,14 @@ class OutputAnalysisAnalyzerV1 final {
                     displayWindowCode = Code::WindowOutOfRange;
                 } else {
                     if (sourceDataWindow != targetDataWindow) {
-                        dataWindowCode =
-                            tiff ? Code::TiffOriginWindowRequired : Code::PngOriginWindowRequired;
+                        dataWindowCode = dpx    ? Code::DpxOriginWindowRequired
+                                         : tiff ? Code::TiffOriginWindowRequired
+                                                : Code::PngOriginWindowRequired;
                     }
                     if (sourceDisplayWindow != targetDisplayWindow) {
-                        displayWindowCode =
-                            tiff ? Code::TiffEqualWindowRequired : Code::PngEqualWindowRequired;
+                        displayWindowCode = dpx    ? Code::DpxEqualWindowRequired
+                                            : tiff ? Code::TiffEqualWindowRequired
+                                                   : Code::PngEqualWindowRequired;
                     }
                 }
             } else {
@@ -465,7 +481,10 @@ class OutputAnalysisAnalyzerV1 final {
                 return OutputAnalysisAnalyzerResultV1::failure(AnalyzerError::InternalInvariant);
             }
             const auto pixelAspectCode =
-                png    ? (pixelAspect == core::PixelAspectRatio::square()
+                dpx    ? (pixelAspect == core::PixelAspectRatio::square()
+                              ? Code::None
+                              : Code::DpxSquarePixelRequired)
+                : png  ? (pixelAspect == core::PixelAspectRatio::square()
                               ? Code::None
                               : Code::PngSquarePixelRequired)
                 : tiff ? (pixelAspect == core::PixelAspectRatio::square()
@@ -475,6 +494,7 @@ class OutputAnalysisAnalyzerV1 final {
 
             Code dependencyCode = png         ? Code::PngOcioExternalReference
                                   : tiff      ? Code::TiffWorkerExternalReference
+                                  : dpx       ? Code::DpxWorkerExternalReference
                                   : transform ? Code::ExrOcioExternalReference
                                               : Code::None;
             if (exceedsResourceLimits(descriptor)) {
@@ -490,33 +510,42 @@ class OutputAnalysisAnalyzerV1 final {
             bool valid = true;
             valid = valid &&
                     setAssessment(assessments[0], preset, Facet::Pixels, pixelCode, sourcePixels,
-                                  pixelsDescriptor(dataExtent, png    ? "uint8"
-                                                               : tiff ? "uint16"
-                                                                      : "binary32"));
-            valid = valid && setAssessment(assessments[1], preset, Facet::Precision,
-                                           png    ? Code::PngFloat32ToUint8
-                                           : tiff ? Code::TiffFloat32ToUint16
-                                                  : Code::None,
-                                           std::string(kSourcePrecision),
-                                           png    ? std::string("component-type=id:uint8")
-                                           : tiff ? std::string("component-type=id:uint16")
-                                                  : std::string(kSourcePrecision));
+                                  pixelsDescriptor(dataExtent, png           ? "uint8"
+                                                               : tiff || dpx ? "uint16"
+                                                                             : "binary32"));
+            valid = valid &&
+                    setAssessment(assessments[1], preset, Facet::Precision,
+                                  png    ? Code::PngFloat32ToUint8
+                                  : tiff ? Code::TiffFloat32ToUint16
+                                  : dpx  ? (preset == Preset::DpxRgb10V1 ? Code::DpxFloat32ToUint10
+                                                                         : Code::DpxFloat32ToUint16)
+                                         : Code::None,
+                                  std::string(kSourcePrecision),
+                                  png    ? std::string("component-type=id:uint8")
+                                  : tiff ? std::string("component-type=id:uint16")
+                                  : dpx  ? std::string(preset == Preset::DpxRgb10V1
+                                                           ? "component-type=id:uint10"
+                                                           : "component-type=id:uint16")
+                                         : std::string(kSourcePrecision));
             valid = valid &&
                     setAssessment(assessments[2], preset, Facet::Color, colorCode, sourceColor,
                                   (png || tiff) ? outputColorIdDescriptorV1("srgb_rec709_display")
-                                  : input.exr   ? outputColorIdDescriptorV1(
-                                                      input.exr->options().outputColorSpaceId)
-                                                : sourceColor);
+                                  : (dpx && !transform) ? sourceColor
+                                  : input.exr           ? outputColorIdDescriptorV1(
+                                                              input.exr->options().outputColorSpaceId)
+                                                        : sourceColor);
             valid = valid &&
                     setAssessment(
                         assessments[3], preset, Facet::AlphaAssociation,
                         png    ? Code::PngPremultipliedToStraight
                         : tiff ? Code::TiffPremultipliedToStraight
+                        : dpx  ? Code::DpxAlphaOmitted
                                : Code::None,
                         std::string(kSourceAlpha),
                         (png || tiff)
                             ? std::string("association=id:straight;zero-alpha=id:canonical-zero")
-                            : std::string(kSourceAlpha));
+                        : dpx ? std::string("association=id:omitted;zero-alpha=id:canonical-zero")
+                              : std::string(kSourceAlpha));
             valid = valid && setAssessment(assessments[4], preset, Facet::Channels, Code::None,
                                            std::string(kChannels), std::string(kChannels));
             valid = valid && setAssessment(assessments[5], preset, Facet::DataWindow,
@@ -524,16 +553,17 @@ class OutputAnalysisAnalyzerV1 final {
             valid =
                 valid && setAssessment(assessments[6], preset, Facet::DisplayWindow,
                                        displayWindowCode, sourceDisplayWindow, targetDisplayWindow);
-            valid =
-                valid && setAssessment(assessments[7], preset, Facet::PixelAspect, pixelAspectCode,
-                                       sourcePixelAspect,
-                                       (png || tiff) ? std::string("denominator=u:1;numerator=u:1")
-                                                     : binary32Descriptor(roundedAspect->bits));
+            valid = valid && setAssessment(assessments[7], preset, Facet::PixelAspect,
+                                           pixelAspectCode, sourcePixelAspect,
+                                           (png || tiff || dpx)
+                                               ? std::string("denominator=u:1;numerator=u:1")
+                                               : binary32Descriptor(roundedAspect->bits));
             valid = valid &&
                     setAssessment(
                         assessments[8], preset, Facet::Compression, compressionCode, "",
                         png    ? std::string("method=id:deflate-level-6-filter-none")
                         : tiff ? std::string("method=id:tiff-provider")
+                        : dpx  ? std::string("method=id:none")
                                : "method=id:" +
                                      std::string(input.exr ? flatExrCompressionNameV1(
                                                                  input.exr->options().compression)
@@ -545,6 +575,7 @@ class OutputAnalysisAnalyzerV1 final {
                                   dependencyCode, std::string(kNoDependencies),
                                   png    ? ocioDependencyDescriptor(*input.expectedOcioRevision)
                                   : tiff ? (display ? [&] { const auto hex = display->digest().toLowercaseHex(); return "kind=id:tiff-provider;revision=id:" + std::string(hex.data(), hex.size()); }() : std::string("kind=id:tiff-provider;revision=id:none"))
+                                  : dpx       ? dpxDependencyDescriptor(transform ? &input.exr->processor()->configRevision() : nullptr)
                                   : transform ? ocioDependencyDescriptor(
                                                     input.exr->processor()->configRevision())
                                               : std::string(kNoDependencies));
@@ -644,6 +675,30 @@ OutputAnalysisAnalyzerResultV1
 analyzeFlatExrRgba32fLinRec709SceneV1(FlatExrRgba32fLinRec709SceneAnalysisInputV1 input) noexcept {
     return detail::analyzeFlatExrRgba32fLinRec709SceneV1WithFaultForTest(
         std::move(input), detail::OutputAnalysisAnalyzerFaultV1::None);
+}
+
+OutputAnalysisAnalyzerResultV1 analyzeDpxRgb10V1(DpxRgbAnalysisInputV1 input) noexcept {
+    return detail::OutputAnalysisAnalyzerV1::analyze(OutputPresetV1::DpxRgb10V1,
+                                                     {.exr = std::move(input.output),
+                                                      .process = std::move(input.process),
+                                                      .adapter = input.adapter,
+                                                      .compression = input.compression,
+                                                      .otherDependency = input.otherDependency,
+                                                      .expectedOcioRevision = std::nullopt,
+                                                      .colorResolution = std::nullopt},
+                                                     detail::OutputAnalysisAnalyzerFaultV1::None);
+}
+
+OutputAnalysisAnalyzerResultV1 analyzeDpxRgb16V1(DpxRgbAnalysisInputV1 input) noexcept {
+    return detail::OutputAnalysisAnalyzerV1::analyze(OutputPresetV1::DpxRgb16V1,
+                                                     {.exr = std::move(input.output),
+                                                      .process = std::move(input.process),
+                                                      .adapter = input.adapter,
+                                                      .compression = input.compression,
+                                                      .otherDependency = input.otherDependency,
+                                                      .expectedOcioRevision = std::nullopt,
+                                                      .colorResolution = std::nullopt},
+                                                     detail::OutputAnalysisAnalyzerFaultV1::None);
 }
 
 OutputAnalysisAnalyzerResultV1

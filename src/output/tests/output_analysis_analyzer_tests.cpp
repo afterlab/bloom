@@ -164,6 +164,40 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
                                     Code::AdapterUnavailable,
                             "the TIFF report preserves its uint16 contract and provider reason");
     }
+
+    for (const auto preset : {OutputPresetV1::DpxRgb10V1, OutputPresetV1::DpxRgb16V1}) {
+        const bool ten = preset == OutputPresetV1::DpxRgb10V1;
+        DpxRgbAnalysisInputV1 input{.process = readySource(identity),
+                                    .adapter = OutputAnalysisAdapterStateV1::Qualified};
+        const auto dpx =
+            ten ? analyzeDpxRgb10V1(std::move(input)) : analyzeDpxRgb16V1(std::move(input));
+        expectations.expect(dpx && dpx.report() != nullptr && dpx.report()->approvable(),
+                            "the DPX analysis publishes one approvable valid report");
+        if (!dpx || dpx.report() == nullptr)
+            continue;
+        expectFacet(expectations, *dpx.report(), Facet::Precision, State::Approximated,
+                    ten ? Code::DpxFloat32ToUint10 : Code::DpxFloat32ToUint16,
+                    "component-type=id:binary32",
+                    ten ? "component-type=id:uint10" : "component-type=id:uint16");
+        expectFacet(expectations, *dpx.report(), Facet::AlphaAssociation, State::Omitted,
+                    Code::DpxAlphaOmitted,
+                    "association=id:premultiplied;zero-alpha=id:canonical-zero",
+                    "association=id:omitted;zero-alpha=id:canonical-zero");
+        expectFacet(expectations, *dpx.report(), Facet::ExternalDependencies,
+                    State::ExternalReference, Code::DpxWorkerExternalReference,
+                    "kind=id:none;revision=id:none", "kind=id:dpx-provider;revision=id:none");
+        expectations.expect(
+            facet(*dpx.report(), Facet::Pixels).stableCode == Code::DpxClampQuantize &&
+                facet(*dpx.report(), Facet::Compression).targetDescriptor == "method=id:none",
+            "DPX clamps and quantizes uncompressed integer samples");
+        const auto unavailable = ten ? analyzeDpxRgb10V1({.process = readySource(identity)})
+                                     : analyzeDpxRgb16V1({.process = readySource(identity)});
+        expectations.expect(unavailable && unavailable.report() != nullptr &&
+                                !unavailable.report()->approvable(),
+                            "DPX fails closed without the verified worker");
+        const auto digest = computeOutputAnalysisDigestV1(*identity, dpx.report()->view());
+        expectations.expect(static_cast<bool>(digest), "the DPX report has an analysis digest");
+    }
 }
 
 void testMissingSourceIsolation(Expectations& expectations) {

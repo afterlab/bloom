@@ -88,6 +88,18 @@ struct TiffRgba16SrgbAnalysisInputV1 final {
     std::string viewName{};
 };
 
+// DPX takes the same optional output colour-space conversion as the flat EXR: `output` is the
+// prepared conversion (its compression option is unused) and is empty to keep the working space.
+struct DpxRgbAnalysisInputV1 final {
+    OutputAnalysisProcessSourceV1 process;
+    std::shared_ptr<const PreparedFlatExrOutputV1> output = {};
+    // Callers explicitly supply verified worker availability; the default remains fail-closed.
+    OutputAnalysisAdapterStateV1 adapter = OutputAnalysisAdapterStateV1::Unavailable;
+    OutputAnalysisCompressionStateV1 compression = OutputAnalysisCompressionStateV1::Available;
+    OutputAnalysisOtherDependencyStateV1 otherDependency =
+        OutputAnalysisOtherDependencyStateV1::Available;
+};
+
 enum class OutputAnalysisAnalyzerErrorCodeV1 : std::uint8_t {
     None,
     InvalidProcessSourceState,
@@ -203,6 +215,12 @@ analyzeFlatExrRgba32fLinRec709SceneV1(FlatExrRgba32fLinRec709SceneAnalysisInputV
 
 [[nodiscard]] OutputAnalysisAnalyzerResultV1
 analyzeTiffRgba16SrgbV1(TiffRgba16SrgbAnalysisInputV1 input) noexcept;
+
+[[nodiscard]] OutputAnalysisAnalyzerResultV1
+analyzeDpxRgb10V1(DpxRgbAnalysisInputV1 input) noexcept;
+
+[[nodiscard]] OutputAnalysisAnalyzerResultV1
+analyzeDpxRgb16V1(DpxRgbAnalysisInputV1 input) noexcept;
 
 static_assert(!std::is_default_constructible_v<OutputAnalysisReportV1>);
 static_assert(!std::is_copy_constructible_v<OutputAnalysisReportV1>);
