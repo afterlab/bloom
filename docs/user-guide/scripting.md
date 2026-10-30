@@ -11,7 +11,19 @@ bloom-cli render [--project <file>] (--frame N | --range A-B) \
   --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir> [--replace] \
   [--require-device]
 bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save]
+bloom-cli help [<name>] [--json]
 ```
+
+`bloom-cli help` lists every command, operation, MCP tool and query kind with a one-line summary;
+`bloom-cli help <name>` shows one in full: arguments with their type, unit, range, default and
+accepted values, side effects, the result, errors with what to do, and examples for MCP, Python and
+`bloom-cli`. A command name finds the command (`bloom-cli help render`), and operations accept their
+Python spelling (`bloom-cli help bloom.ops.layer.add_solid`). `--json` prints the entry as JSON, and
+`bloom-cli <command> --help` is `bloom-cli help <command>`. An unknown name prints the closest
+entries and exits with status 1. The MCP `help` tool and `bloom.help()` print the same text.
+
+Times in operation arguments are an integer frame count at the composition's frame rate, or an
+exact `[numerator, denominator]` time in seconds. Ranges with an `end` are end-exclusive.
 
 `run` accepts a JSON array of `{ "op": "<stable-id>", "args": { ... } }` transactions. Each
 transaction is validated against the operation registry and receives an expected current revision.
@@ -49,7 +61,7 @@ headless session has no selection, so name the `layers`:
 They measure the layers with the CPU reference evaluation before the step runs; see
 [Scripting Bloom with Python](python.md#align-and-distribute).
 
-`render` selects the first composition when no project is supplied. A frame writes `frame.png` or
+`render` selects the first composition when no project is supplied. Output keeps alpha; the composition background colour is display-only and is not rendered. A frame writes `frame.png` or
 `frame.exr`; a range writes zero-padded `frame.XXXX` sequence files. The command prints the output
 preservation report and only exits successfully after publication completes. A file that already
 exists is replaced only with `--replace`; without it the command fails and leaves the file as it

@@ -36,6 +36,10 @@ the first and last file, the size Bloom can estimate (nothing when it cannot) an
 blocks it. **Start All** is the one blue button while a checked job is ready, and **Stop All**
 shows only while something renders. A control that cannot act now says why in its tooltip.
 
+Rendered output keeps alpha. The composition's background colour is display-only, like the
+Viewer's transparency grid: it is never rendered into an export, a still render or an MCP capture.
+To get a solid background in the output, add a solid layer at the bottom of the composition.
+
 ## Jobs and outputs
 
 Output keeps alpha: a composition's Background Color is only shown in the Viewer behind the

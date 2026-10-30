@@ -552,6 +552,34 @@ over Bloom's listener.
 - **Capture**: inline below the limit and linked above it; the Viewer's display and view are used;
   the result equals the still export of the same frame byte for byte.
 
+### 11. Self-describing agent surfaces (amendment, 2026-10-30)
+
+Owner direction: "MCP should be treated like our UI for agents", and an agent must never need
+Bloom's source to use it. The same holds for `bloom-cli` and Python.
+
+- `scripting::OperationReference` (Qt-free, `src/scripting`) is the one reference. It is generated
+  from the operation registry (each `OperationSchema` carries a description and each
+  `ArgumentSchema` its unit, range, accepted values with labels and default, filled from
+  `operation_docs.cpp` unless the operation states its own), the surface tables for the MCP tools,
+  query kinds, `bloom-cli` commands, Python entry points and shared concepts
+  (`reference_surfaces.cpp`), and the node registry (`node_reference.hpp`: ports, parameter
+  metadata, enumeration labels).
+- MCP serves it as the `help` tool (the index, or one entry in full), as every `tools/list`
+  description and input-property description, as the `instructions` of `initialize`, and as
+  resources (`resources/list`, `resources/read`): the getting-started guide for agents, the node
+  and parameter reference, the whole reference, its JSON index and the user guides (embedded at
+  build time). `bloom-cli help [name] [--json]` and `bloom.help(name)` print the same text, and
+  the Python operation docstrings and `bloom/ops.pyi` carry it.
+- `query` reads back everything an edit can write, in the units it is written in: compositions
+  (duration, start, work area, frame rate, settings), layers (order, slots, timing, masks, matte,
+  parameter ids), nodes (ports, links, positions, groups, Merge stacks), node types, parameter
+  metadata (unit, range, default, labelled values, owner) and keyframes (time as frames and
+  seconds, value, interpolation, handles; paged). Asset kinds are names.
+- `bloom.mcp.reference` and `bloom.scripting.operation-reference` keep it true: every operation and
+  tool is described, every argument documents its type and unit, every enumeration lists its
+  values, the three surfaces print identical entries, the resources are readable and read-back
+  round-trips.
+
 ## Consequences
 
 - An agent works on the artist's open project. Its edits are undoable, visible at once and guarded

@@ -61,6 +61,14 @@ Example: bloom.ops.layer.add_solid(name="Red", color=(1, 0, 0, 1))
 
 ## Read data and discover operations
 
+`bloom.help()` prints every operation, MCP tool, query kind and command with a one-line summary,
+and `bloom.help("bloom.layer.add-solid")` (or `bloom.help(bloom.ops.layer.add_solid)`) prints one
+entry in full: arguments with type, unit, range, default and accepted values, side effects, the
+result, errors with what to do, and examples for Python, MCP and `bloom-cli`. `json=True` returns
+the entry as a dict. Every `bloom.ops` function's docstring, and `bloom/ops.pyi`, carry the same
+entry, so `help(bloom.ops.layer.add_solid)` and an editor's hover show it too. The MCP `help` tool
+and `bloom-cli help` print exactly the same text.
+
 ```python
 import bloom
 import inspect

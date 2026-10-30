@@ -177,8 +177,12 @@ composition unable to render also appears in the MCP Server editor's activity li
 ("left 'Main' unable to render: ...") and in `transact`'s `compileFailures`.
 
 `render`, `export` and `capture` run as transient jobs of the export queue, with the same checks,
-verification and Viewer priority as the Export editor; they are never saved. Nothing replaces an
-existing file silently: pass `"overwrite":"replace"` or confirm with `export.confirm-replace`.
+verification and Viewer priority as the Export editor; they are never saved. Their output keeps
+alpha: the composition background colour is display-only and is not rendered. Nothing replaces an
+existing file silently: for `render` and `export`, `"overwrite":"ask"` (the default) and `"refuse"`
+both fail with `bloom.mcp.export-unavailable` when the destination exists, because nothing can
+answer the question over MCP; pass `"overwrite":"replace"`. Queue jobs that ask wait for
+`export.confirm-replace`.
 Stopping the server or quitting stops the jobs an agent started this way, never jobs started with
 `export.start`, which belong to the Export editor. Every tool, including render, export and
 capture, works on Linux, macOS and Windows.
@@ -226,20 +230,50 @@ from the [MCP Server panel](mcp-server-panel.md).
 
 Send `initialize` with `protocolVersion`, `capabilities` and `clientInfo`, then send the
 `notifications/initialized` notification. `initialize` returns Bloom's version, facade version,
-headless status, tool support and request limit. `tools/list` returns complete tool input schemas.
+headless status, tool and resource support, the request limit and short `instructions` that point
+an agent at `help` and the getting-started guide.
+
+An agent never needs Bloom's source to use it:
+
+- **`help`** with no arguments lists every tool, query kind, operation, `bloom-cli` command and
+  Python entry point, grouped by area, each with a one-line summary. `help {"name": X}` shows one
+  entry in full: what it does; every argument with its type, unit (frames, pixels, a 0..1 fraction,
+  which id), range, default, the editor context that fills it when omitted, and the accepted values
+  with their labels; side effects (read-only, one undo step, marks the project unsaved, writes
+  files); prerequisites; the result shape; typed errors with what to do about each; examples for
+  MCP, Python and `bloom-cli`; and related entries. `X` may be an operation id
+  (`bloom.layer.add-solid`, or its Python spelling `bloom.ops.layer.add_solid`), a tool
+  (`transact`), a query kind (`query:layers`), a command (`bloom-cli render`) or a concept
+  (`concept:time`, `concept:ids`, `concept:revisions`, `concept:context`, `concept:errors`). An
+  unknown name answers `found: false` with the closest names. `bloom-cli help` and `bloom.help()`
+  print exactly the same text.
+- **`tools/list`** descriptions and every input property's description come from the same
+  reference, with units, ranges, defaults and accepted values.
+- **Resources** (`resources/list`, `resources/read`): `bloom://guide/agents` (find the active
+  composition, add a layer, animate it, render a frame to check, save), `bloom://reference/nodes`
+  (every node type with its ports and parameters: value kinds, defaults, units, ranges, blend modes
+  and other enumerations), `bloom://reference/operations` (the whole reference as one document),
+  `bloom://reference/index.json`, and this guide, the scripting guide and the Python guide.
+
+Times are integers or exact pairs everywhere: an integer is a frame count at the composition's
+frame rate, and `[numerator, denominator]` is an exact time in seconds. Read-back reports every
+time as `{frames, seconds: [n, d]}`, so a value can be written back in the unit it was read in.
+Ranges with an `end` (a layer's range, the work area) are end-exclusive; render frames and export
+job ranges are inclusive frame indices. Ids are stable positive integers, one space per kind: a
+layer id is not the id of the layer's Layer Output node.
+
 Use `tools/call` with `name` and `arguments`:
 
 | Tool | Arguments and result |
 | --- | --- |
-| `query` | `kind`: project, compositions, nodes, parameters, parameter, parameter-value, assets, operations or context; nodes and parameter kinds also need `composition`. The legacy `parameters` query returns full records. `parameters` with `pageSize` (1–64) and optional `cursor` returns bounded summaries and `nextCursor`; constant values are explicitly marked `valueOmitted`. `parameter` with `parameter` ID reads one full record, except a string over 128 KiB returns a summary. `parameter-value` with `parameter` ID and `expectedRevision` reads UTF-8 string chunks using optional byte `offset` and `limit` (4–131072). An operations record carries a `description` (purpose, side effects, outputs, errors with remedies and the undo step; empty for an operation not yet described), every argument's `kind`, `required`, `contextual`, `context` and `summary`, plus a pasteable `example` call. An `assets` record of an image, sequence or video carries its `interpretation` (the
-[Interpret Footage](interpret-footage.md) members `bloom.asset.set-interpretation` takes, plus the
-resolved `playbackFrameRate` and `filePixelAspect`). `context` returns the editor context contextual arguments fall back to: project, composition, selected nodes and layers, time, the Viewer's display and view, read-only state and `live` (false on stdio, which reports the session defaults). |
-| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs, structured diagnostics, `compileFailures` and `compileWarnings` (see [Edits and diagnostics](#edits-and-diagnostics)). Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
-| `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`, optional `overwrite` (`ask`, the default, `replace` or `refuse`). Returns published frame count, preservation report, paths and SHA-256 file digests. |
-| `export` | Render arguments plus optional `profile`, `audio` and `sampleRate`. Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. |
+| `help` | Optional `name`. Returns `found`, `text` (the readable entry or index), and `entry`, `index` or `suggestions` as data. |
+| `query` | `kind`: project, compositions, layers, nodes, node-types, parameters, parameter, parameter-value, keyframes, assets, operations, context or enums (the interpolation, ease and Easy Ease vocabularies). layers, nodes, parameters, parameter, parameter-value and keyframes also need `composition`. `compositions` records carry size, `frameRate`, `fps`, `pixelAspect`, `duration` and `start` as `{frames, seconds}`, `dropFrame`, `workArea` (end exclusive, or null), `background` (display-only), `workingColorSpace`, `safeAreas`, `layerCount` and `folder`. `layers` lists a composition's layers topmost first: `index`, `slot`, `merge`, `layerOutputNode`, `sourceNode`, `sourceType`, enabled, solo, locked, label colour, parent, `start` and exclusive `end`, `timing` (start time, speed, before and after modes, extent), masks, track matte, and the parameter ids of the layer's transform (`parameters`) and its source (`sourceParameters`). `nodes` records carry `name`, `category`, `parameters`, `position`, `width`, `collapsed`, `muted`, `group`, `inputs` (port, kind, required and the connected `source`) and `outputs` (port, kind and `targets`); Merge nodes add their `stack`; the result adds `links` and `groups`. `node-types` lists every type `bloom.node.add` accepts; with `nodeType` it returns one type with each parameter's metadata. `parameter` with `parameter` returns the record and `metadata`: `valueKind`, `animatable`, `default`, `unit`, `displayScale`, `minimum`, `maximum`, `softMinimum`, `softMaximum`, `choices` (`{value, label}`; write the integer value) and `owner`. `keyframes` with `parameter` (an animated one) or `curve` returns the keys sorted by time: `keyframe`, `component` (x, y, z, red, green, blue, alpha, or null), `time` as `{frames, seconds}`, `value`, `interpolation` (hold, linear, ease-in-out) and the ease handles, paged like parameters (`pageSize` 1–64, `nextCursor`). `parameters` without paging returns full records; with `pageSize` (1–64) and optional `cursor` it returns bounded summaries and `nextCursor`; constant values are explicitly marked `valueOmitted`. `parameter-value` with `parameter` ID and `expectedRevision` reads UTF-8 string chunks using optional byte `offset` and `limit` (4–131072). `assets` records carry `kind` as a name (image, sequence, audio, font, video, lut), `path`, size, `frames`, digest, `folder` and `tags`; an image, sequence or video also carries its `interpretation` (the [Interpret Footage](interpret-footage.md) members `bloom.asset.set-interpretation` takes, plus the resolved `playbackFrameRate` and `filePixelAspect`). `layers` records also carry `shy`, `nameFollowsSource` and `sourceName`. An operations record carries a `description`, every argument's `kind`, `required`, `contextual`, `context`, `summary`, `unit`, `minimum`, `maximum`, `default` and `choices`, plus a pasteable `example` call. `context` returns the editor context contextual arguments fall back to: project, composition, selected nodes and layers, time (seconds as `[n, d]`), the Viewer's display and view, read-only state and `live` (false on stdio, which reports the session defaults). |
+| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs, structured diagnostics and `compileFailures` and `compileWarnings` (see [Edits and diagnostics](#edits-and-diagnostics)). Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
+| `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`, optional `overwrite` (`ask`, the default, `replace` or `refuse`). Returns `publishedFrames`, `preservationReport` and `files` with SHA-256 digests. Output keeps alpha; the composition background colour is not rendered. |
+| `export` | Render arguments plus optional `profile`, `audio` and `sampleRate`. Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. Output keeps alpha; the composition background colour is not rendered. |
 | `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. |
-| `history` | `action` (`undo` or `redo`) and `expectedRevision`. One step of the project's history, refused with a stale-revision result when the revision moved. In the desktop application it is queued like a `transact`. |
-| `capture` | Optional `composition` and `frame` (defaults: the context composition at the context time; on stdio the session's composition at frame 0). Renders one PNG at composition resolution through the still export route, with the Viewer's display and view in the desktop application, and returns it as MCP `image` content. A PNG larger than about 2.9 MiB is returned as a `resource_link` to the file with the notice `bloom.mcp.capture-too-large-for-inline`. Captures go to an `mcp-captures` folder in Bloom's per-user cache, which keeps the newest 16. |
+| `history` | `action` (`undo` or `redo`) and `expectedRevision`. One step of the project's history, refused with a stale-revision result when the revision moved. In the desktop application it is queued like a `transact`, and it undoes the most recent step of any origin, including the artist's. |
+| `capture` | Optional `composition` and `frame` (defaults: the context composition at the context time; on stdio the session's composition at frame 0). Renders one PNG at composition resolution through the still export route, with the Viewer's display and view in the desktop application (not its exposure, gamma, channel, region of interest or preview resolution), and returns it as MCP `image` content. Output keeps alpha; the composition background colour is not rendered. A PNG larger than about 2.9 MiB is returned as a `resource_link` to the file with the notice `bloom.mcp.capture-too-large-for-inline`. Captures go to an `mcp-captures` folder in Bloom's per-user cache, which keeps the newest 16. |
 | `export.start`, `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`, `export.retry`, `export.confirm-replace` | The export queue's session commands (`jobs`, `job`, `output`). Each returns `accepted`, the queue revision and, when refused, the availability code and reason. |
 | `export.status`, `export.events`, `export.log`, `export.presets`, `export.script` | The queue snapshot (optionally `sinceRevision`), terminal events after `afterSequence`, a job's run log, the presets available on this computer (with `job`, also for that job's composition: when a source's audio cannot be decoded, presets that carry audio report `available: false` with the reason, and the same presets without audio stay available), and a script that recreates a job (`format` `cli-json` or `python`). In the snapshot, a published movie's output `verification` carries `reopenQuality` (`toleranceProfile`, `toleranceDigest`, `maximumError`, `percentileMaximumError`, `meanError`): the reopen check's tolerance profile and digest, the raw maximum (reported, not checked), the maximum after the top 0.01% of each frame's color samples are set aside, and the mean, in 16-bit units. Outputs without a tolerance profile omit it. |
 | `project.set-color-settings` | `config` (`neutral` Bloom Neutral v1, `aces` ACES 1.3 CG, or `current` to keep the project's own, the only choice for an external configuration) and optional `workingSpace` (neutral: `lin_rec709_scene`, shown as Linear Rec.709 (sRGB); aces: `ACEScg`, `ACES2065-1`, `Linear Rec.709 (sRGB)`, `Linear P3-D65`, `Linear Rec.2020`; omitted keeps the project's when the configuration stays, else the first). Project Settings > Color as the dialog applies it. Not undoable and not in the history: it marks the project dirty and changes how every composition renders. Returns `code` `updated` or `no-change` with the resulting `config`, `workingSpace` (the stored id) and `workingSpaceLabel` (the name Project Settings shows); `invalid-config` and `invalid-settings` (a working space the configuration does not offer) return `succeeded: false`; a read-only project answers `bloom.mcp.read-only`. In the desktop application the window applies it (`bloom.mcp.ui-unbound` if it does not offer it). |
@@ -252,10 +286,9 @@ For example:
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"transact","arguments":{"expectedRevision":0,"label":"Name study","operations":[{"op":"bloom.project.set-name","args":{"name":"Study"}}]}}}
 ```
 
-Operation IDs and argument schemas come directly from the facade registry. Listing an ID does not
-promise that this build implements its adapter. Eleven factories are available, including parameter animation, component keyframes and node removal;
-other registered IDs return their structured unsupported diagnostic. A revision conflict leaves
-the document unchanged. Tool results include both `structuredContent` and a JSON text content item;
+Operation IDs, their argument schemas and their reference entries come directly from the
+operation registry, so `help`, `query {kind:"operations"}`, Python and `bloom-cli` cannot disagree
+about them. A revision conflict leaves the document unchanged. Tool results include both `structuredContent` and a JSON text content item;
 `isError` distinguishes failed operations from successful tools. Invalid JSON-RPC or tool arguments
 produce protocol errors with the request ID where valid.
 
