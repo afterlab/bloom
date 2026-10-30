@@ -263,7 +263,7 @@ class ReadBack(unittest.TestCase):
         self.assertEqual(red['id'], ids[(0, 'layer')])
         self.assertEqual(red['layerOutputNode'], ids[(0, 'layerOutputNode')])
         self.assertEqual(red['parameters']['position'], ids[(0, 'positionParameter')])
-        self.assertEqual(red['sourceType'], 'bloom.solid')
+        self.assertEqual(red['sourceType'], 'bloom.solid-source')
         self.assertEqual(red['sourceParameters']['color'], ids[(0, 'colorParameter')])
         self.assertEqual(red['end'], self.composition_record()['duration'])
         self.assertIn('extent', red['timing'])
@@ -276,11 +276,13 @@ class ReadBack(unittest.TestCase):
                    parameter['metadata']['choices']}
         self.assertEqual(choices['Screen'], 3)
         self.assertEqual(parameter['metadata']['owner']['role'], 'blendMode')
+        # Constant values read back as written.
         self.server.transact(('bloom.parameter.set-source', {
-            'composition': self.composition, 'parameter': blend, 'value': choices['Screen']}))
+            'composition': self.composition, 'parameter': red['parameters']['opacity'],
+            'value': 0.25}))
         record = self.server.query(kind='parameter', composition=self.composition,
-                                   parameter=blend)['record']
-        self.assertEqual(record['value'], 3)
+                                   parameter=red['parameters']['opacity'])['record']
+        self.assertEqual(record['value'], 0.25)
         opacity = self.server.query(kind='parameter', composition=self.composition,
                                     parameter=red['parameters']['opacity'])['metadata']
         self.assertEqual((opacity['minimum'], opacity['maximum']), (0, 1))
@@ -290,6 +292,8 @@ class ReadBack(unittest.TestCase):
         # Keyframes come back with their time in frames and seconds and their value as written.
         position = red['parameters']['position']
         self.server.transact(
+            ('bloom.animation.create-for-parameter', {
+                'composition': self.composition, 'parameter': position, 'time': [0, 1]}),
             ('bloom.animation.set-keyframe-at-time-for-parameter', {
                 'composition': self.composition, 'parameter': position, 'time': [0, 1],
                 'value': [100, 200]}),
@@ -343,9 +347,9 @@ class ReadBack(unittest.TestCase):
 
     def test_node_types_describe_ports_and_parameters(self):
         types = self.server.query(kind='node-types')['records']
-        solid = next(record for record in types if record['id'] == 'bloom.solid')
+        solid = next(record for record in types if record['id'] == 'bloom.solid-source')
         self.assertTrue(solid['outputs'])
-        full = self.server.query(kind='node-types', nodeType='bloom.solid')['record']
+        full = self.server.query(kind='node-types', nodeType='bloom.solid-source')['record']
         color = next(item for item in full['parameters'] if item['role'] == 'color')
         self.assertEqual(color['metadata']['valueKind'], 'color')
 

@@ -451,7 +451,7 @@ std::vector<std::string> OperationReference::suggest(const std::string_view raw,
     std::ranges::stable_sort(scored, {}, &std::pair<std::size_t, std::string>::first);
     std::vector<std::string> result;
     for (const auto& [score, entryName] : scored) {
-        if (result.size() == limit || score > std::max<std::size_t>(4, name.size() / 2))
+        if (result.size() == limit || score > std::max<std::size_t>(2, name.size() / 3))
             break;
         result.push_back(entryName);
     }

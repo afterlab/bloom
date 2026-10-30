@@ -200,7 +200,7 @@ void addTools(std::vector<ReferenceEntry>& out) {
                   {.name = "nodeType",
                    .type = "string",
                    .summary = "One node type, for node-types.",
-                   .unit = "node type id such as bloom.solid"},
+                   .unit = "node type id such as bloom.solid-source"},
                   {.name = "pageSize",
                    .type = "integer",
                    .summary = "Records per page, for parameters and keyframes.",

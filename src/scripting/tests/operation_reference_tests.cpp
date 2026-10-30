@@ -193,7 +193,7 @@ void everyChoiceParameterHasValues() {
            "blend modes are labelled");
     const auto markdown = nodeReferenceMarkdown();
     for (const auto* part : {"# Bloom node and parameter reference", "## Blend modes", "3 Screen",
-                             "bloom.solid", "| Role |"})
+                             "bloom.solid-source", "| Role |"})
         expect(contains(markdown, part), std::string("node reference lacks ") + part);
 }
 

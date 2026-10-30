@@ -95,8 +95,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          {{.name = "nodeType",
            .type = "string",
            .summary = "One type to describe in full.",
-           .unit = "node type id such as bloom.solid"}},
-         R"({"name":"query","arguments":{"kind":"node-types","nodeType":"bloom.solid"}})");
+           .unit = "node type id such as bloom.solid-source"}},
+         R"({"name":"query","arguments":{"kind":"node-types","nodeType":"bloom.solid-source"}})");
     kind("parameters", "A composition's parameters: full records, or summary pages.",
          "Without pageSize or cursor: every full record. With them: bounded summaries whose "
          "constant values are omitted (valueOmitted:true) and a nextCursor until it is null.",
@@ -110,7 +110,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "Write values in stored units, the units minimum, maximum and default are in. `unit` "
          "and `displayScale` are how the Properties panel shows the value (displayed = stored x "
          "displayScale: an opacity stored as 0.5 shows as 50 %). Enumerations report `choices` "
-         "as {value, label}: write the integer value with bloom.parameter.set-source.",
+         "as {value, label}: bloom.parameter.set-source takes either the value or the "
+         "label (case-insensitive).",
          "{revision, composition, parameter, record:{id, schemaKey, source, value|curveId|...}, "
          "metadata:{valueKind, animatable, default, unit, displayScale, minimum, maximum, "
          "softMinimum, softMaximum, choices:[{value, label}], owner:{node, typeId, role}|{layer, "

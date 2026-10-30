@@ -57,20 +57,21 @@ first with the same parameter ids under `parameters`.
 
 ## 3. Animate a parameter
 
-Key the position at frame 0 and frame 47 (an integer time is a frame; `[n, d]` is exact
-seconds). The first key creates the curve. `parameter` is the `positionParameter` id from step 2's
-outputs (7 in a new project).
+Make the position animated, then key it at frame 0 and frame 47 (an integer time is a frame;
+`[n, d]` is exact seconds). `parameter` is the `positionParameter` id from step 2's outputs (4 in
+a new project).
 
 ```json
 {"name":"transact","arguments":{"expectedRevision":1,"label":"Slide","operations":[
-  {"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,"parameter":7,"time":0,"value":[200,540]}},
-  {"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,"parameter":7,"time":47,"value":[1720,540]}}]}}
+  {"op":"bloom.animation.create-for-parameter","args":{"composition":1,"parameter":4,"time":0}},
+  {"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,"parameter":4,"time":0,"value":[200,540]}},
+  {"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,"parameter":4,"time":47,"value":[1720,540]}}]}}
 ```
 
 Read the keys back in the same units:
 
 ```json
-{"name":"query","arguments":{"kind":"keyframes","composition":1,"parameter":7}}
+{"name":"query","arguments":{"kind":"keyframes","composition":1,"parameter":4}}
 ```
 
 `query {kind:"parameter"}` reports a parameter's value kind, unit, range, default and, for

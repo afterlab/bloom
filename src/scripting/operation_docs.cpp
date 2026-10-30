@@ -84,19 +84,26 @@ constexpr std::array kNotes{
         "curve's own width (a number, [x, y], [x, y, z] or [r, g, b, a]).",
         "keyframe", "bloom.animation.set-keyframe-at-time-for-parameter query:keyframes", ""},
     OperationNotes{"bloom.animation.set-keyframe-at-time-for-parameter",
-        "The one call that animates a parameter: sets its value at `time`, creating the curve "
-        "when the parameter is still constant and updating an existing key at that time. The "
-        "value has the parameter's own width (query {kind:\"parameter\"} reports valueKind).",
-        "animationCurve (when created), keyframe",
+        "Sets an animated parameter's value at `time`: updates the key there or inserts one. The "
+        "parameter must already be animated; make a constant one animated first with "
+        "bloom.animation.create-for-parameter (in the same transaction is fine). The value has "
+        "the parameter's own width (query {kind:\"parameter\"} reports valueKind).",
+        "keyframe",
+        "bloom.animation.create-for-parameter "
         "bloom.animation.set-keyframe-at-time-for-parameter-component query:keyframes "
         "bloom.parameter.set-source",
-        "The value has the wrong width => match the parameter's valueKind: scalar is a number, "
-        "vector2 is [x, y], vector3 [x, y, z], color [r, g, b, a]."},
+        "The parameter is not animated (\"Parameter does not have an animation source\") => run "
+        "bloom.animation.create-for-parameter first.\nThe value has the wrong width => match the "
+        "parameter's valueKind: scalar is a number, vector2 is [x, y], vector3 [x, y, z], color "
+        "[r, g, b, a]."},
     OperationNotes{"bloom.animation.set-keyframe-at-time-for-parameter-component",
-        "Keys one axis or channel of a vector or colour parameter at `time`, leaving the other "
-        "components as they are.",
-        "animationCurve (when created), keyframe",
-        "bloom.animation.set-keyframe-at-time-for-parameter query:keyframes", ""},
+        "Keys one axis or channel of an animated vector or colour parameter at `time`, leaving "
+        "the other components as they are. Make a constant parameter animated first with "
+        "bloom.animation.create-for-parameter.",
+        "keyframe",
+        "bloom.animation.create-for-parameter "
+        "bloom.animation.set-keyframe-at-time-for-parameter query:keyframes",
+        "The parameter is not animated => run bloom.animation.create-for-parameter first."},
     OperationNotes{"bloom.animation.set-keyframe-handles",
         "Sets ease handles. Each handle is [curve, keyframe, time, value] with an optional "
         "component: `time` is a fraction 0..1 of the segment's duration measured from the key, "
@@ -294,7 +301,8 @@ constexpr std::array kNotes{
         "query:layers bloom.parameter.set-source", ""},
     OperationNotes{"bloom.layer.add-solid",
         "Adds a composition-sized solid colour layer on top of the layer stack.",
-        "layer, slot, solidNode, layerOutputNode, colorParameter, positionParameter, "
+        "layer, slot, solidNode, layerOutputNode, colorParameter, widthParameter, "
+        "heightParameter, positionParameter, "
         "anchorParameter, scaleParameter, rotationParameter, opacityParameter, blendModeParameter",
         "query:layers bloom.parameter.set-source bloom.animation.set-keyframe-at-time-for-parameter",
         ""},
@@ -437,10 +445,12 @@ constexpr std::array kNotes{
     OperationNotes{"bloom.parameter.set-source",
         "Sets what drives a parameter: exactly one of a constant `value`, an existing `curve`, or "
         "a value-graph `driverNode` with `driverPort`. Enumerations (blend mode, loop mode, text "
-        "alignment and so on) take their stored integer; query {kind:\"parameter\"} lists the "
-        "choices.",
+        "alignment and so on) take either the stored value or its label, matched "
+        "case-insensitively (3 or \"screen\" for the Screen blend mode); query "
+        "{kind:\"parameter\"} lists the choices.",
         "", "query:parameter bloom.animation.set-keyframe-at-time-for-parameter",
-        "[invalid-argument] None of value, curve or driverNode is given => pass exactly one.\nThe value does not fit "
+        "[invalid-argument] None of value, curve or driverNode is given => pass exactly one.\nAn unknown label or an out-of-range value of "
+        "an enumeration => the message names the valid choices.\nThe value does not fit "
         "the parameter's kind or range => query {kind:\"parameter\"} reports valueKind, range and "
         "choices."},
     OperationNotes{"bloom.project.set-name", "Renames the project.", "", "query:project", ""},
@@ -520,6 +530,13 @@ void refine(const std::string& op, ArgumentSchema& argument) {
         argument.unit = "{closed, anchors:[{point:[x, y], inHandle:[x, y]|null, outHandle:[x, "
                         "y]|null, mode?}]} in the layer's content-space pixels; handles are "
                         "relative to their anchor point";
+        break;
+    case ValueKind::Vec2:
+    case ValueKind::Vec3:
+    case ValueKind::Double:
+        if (name == "value")
+            argument.unit = "the animated parameter's own stored units (query:parameter reports "
+                            "them)";
         break;
     case ValueKind::Value:
         if (argument.unit.empty())

@@ -422,8 +422,9 @@ std::string nodeReferenceMarkdown() {
         "Generated from the running build's node registry. Add a node with "
         "`bloom.node.add {nodeType}`, connect ports with `bloom.node.connect`, and set a "
         "parameter with `bloom.parameter.set-source {parameter, value}` (the parameter ids are "
-        "in `query {kind:\"nodes\"}` and `query {kind:\"layers\"}`). Enumerations take their "
-        "stored integer. `query {kind:\"node-types\", nodeType}` returns the same data as JSON.\n\n"
+        "in `query {kind:\"nodes\"}` and `query {kind:\"layers\"}`). Enumerations take "
+        "either the stored value or its label (case-insensitive). `query {kind:\"node-types\", "
+        "nodeType}` returns the same data as JSON.\n\n"
         "Port kinds connect when they are equal, or when the source promotes: integer to "
         "scalar, boolean to integer or scalar, scalar to vector2 or vector3.\n\n"
         "## Blend modes\n\n";
