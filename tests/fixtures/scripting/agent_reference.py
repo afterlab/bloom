@@ -25,7 +25,7 @@ else:
     _bloom = None
 
 SAMPLES = ['bloom.layer.add-solid', 'bloom.animation.set-keyframe-at-time-for-parameter',
-           'query', 'transact', 'render', 'query:layers', 'query:keyframes', 'concept:time',
+           'query', 'transact', 'capture', 'query:layers', 'query:keyframes', 'concept:time',
            'bloom-cli render', 'bloom.help']
 
 
@@ -166,6 +166,10 @@ class Reference(unittest.TestCase):
         self.assertIn('bloom.layer.add-solid', missing['suggestions'])
         self.assertEqual(cli('help', 'bloom.layer.add-solidd').returncode, 1)
         self.assertIn('bloom-cli help', cli('--help').stderr.decode())
+        # A command name finds bloom-cli's own command, and <command> --help is the same entry.
+        command = cli('help', 'render').stdout.decode()
+        self.assertTrue(command.startswith('bloom-cli render'))
+        self.assertEqual(cli('render', '--help').stdout.decode(), command)
 
     def test_resources_are_readable(self):
         listed = self.server.send('resources/list')['result']['resources']
@@ -184,6 +188,28 @@ class Reference(unittest.TestCase):
         nodes = self.server.send('resources/read', {'uri': 'bloom://reference/nodes'})
         self.assertIn('3 Screen', nodes['result']['contents'][0]['text'])
         self.assertIn('error', self.server.send('resources/read', {'uri': 'bloom://nothing'}))
+
+    def test_the_agent_guide_runs_as_written(self):
+        guide = self.server.send('resources/read', {'uri': 'bloom://guide/agents'})
+        text = guide['result']['contents'][0]['text']
+        blocks = [json.loads(block.split('```', 1)[0]) for block in text.split('```json\n')[1:]]
+        fresh = Server()
+        try:
+            outputs = {}
+            for call in blocks:
+                operations = call['arguments'].get('operations', [])
+                if any(op['op'] == 'bloom.composition.add' for op in operations):
+                    continue  # Only for a project without a composition.
+                result = fresh.tool(call['name'], call['arguments'])
+                self.assertNotEqual(result.get('succeeded'), False, json.dumps(result))
+                for item in result.get('outputs', []):
+                    outputs[item['name']] = item['id']
+                for op in operations:
+                    if 'parameter' in op['args']:
+                        self.assertEqual(op['args']['parameter'], outputs['positionParameter'],
+                                         'the guide names a stale parameter id')
+        finally:
+            fresh.close()
 
     def test_query_refusals_name_the_way_out(self):
         response = self.server.send('tools/call', {'name': 'query',

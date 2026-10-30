@@ -715,9 +715,10 @@ only `query`, `transact`, `capture` and `help`; `help {"name": X}` explains any 
 ```
 
 `composition` is the composition the Viewer shows (null when the project has none) and
-`revision` is the revision your next edit names. `query {kind:"compositions"}` lists every
-composition with its size, frame rate, duration (`{frames, seconds}`) and work area. With no
-composition, create one; its id is in `outputs`:
+`revision` is the revision your next edit names. The numbers below are those of a new project,
+which has composition 1 at revision 0; always pass the `revision` your last result returned.
+`query {kind:"compositions"}` lists every composition with its size, frame rate, duration
+(`{frames, seconds}`) and work area. With no composition, create one; its id is in `outputs`:
 
 ```json
 {"name":"transact","arguments":{"expectedRevision":0,"label":"New comp","operations":[
@@ -727,7 +728,7 @@ composition, create one; its id is in `outputs`:
 ## 2. Add a layer
 
 ```json
-{"name":"transact","arguments":{"expectedRevision":1,"label":"Add a red solid","operations":[
+{"name":"transact","arguments":{"expectedRevision":0,"label":"Add a red solid","operations":[
   {"op":"bloom.layer.add-solid","args":{"composition":1,"name":"Red","color":[1,0,0,1]}}]}}
 ```
 
@@ -738,10 +739,11 @@ first with the same parameter ids under `parameters`.
 ## 3. Animate a parameter
 
 Key the position at frame 0 and frame 47 (an integer time is a frame; `[n, d]` is exact
-seconds). The first key creates the curve.
+seconds). The first key creates the curve. `parameter` is the `positionParameter` id from step 2's
+outputs (7 in a new project).
 
 ```json
-{"name":"transact","arguments":{"expectedRevision":2,"label":"Slide","operations":[
+{"name":"transact","arguments":{"expectedRevision":1,"label":"Slide","operations":[
   {"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,"parameter":7,"time":0,"value":[200,540]}},
   {"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,"parameter":7,"time":47,"value":[1720,540]}}]}}
 ```
