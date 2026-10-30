@@ -101,9 +101,11 @@ enum class McpTool : std::uint8_t {
     CompositionSavePreset = 43,
     CompositionRenamePreset = 44,
     CompositionDeletePreset = 45,
+    // The reference: every tool, query kind, operation and command, described.
+    Help = 46,
 };
 
-inline constexpr std::size_t kMcpToolCount = 46;
+inline constexpr std::size_t kMcpToolCount = 47;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -156,6 +158,7 @@ inline constexpr std::size_t kMcpToolCount = 46;
         "composition.save-preset",
         "composition.rename-preset",
         "composition.delete-preset",
+        "help",
     };
     // clang-format on
     return names[static_cast<std::size_t>(tool)];

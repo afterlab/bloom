@@ -214,4 +214,17 @@ struct TransientResult final {
                                                    const McpRequestControl& control);
 [[nodiscard]] yyjson_mut_val* toolList(Json& out);
 
+// ---- Reference (tools_reference.cpp)
+// tools/list with every description and property description taken from the reference.
+[[nodiscard]] yyjson_mut_val* describedToolList(Json& out, yyjson_val* schemas);
+[[nodiscard]] std::string_view serverInstructions() noexcept;
+[[nodiscard]] yyjson_mut_val* helpTool(McpServerCore::State& core, Json& out, McpCall& call,
+                                       yyjson_val* arguments);
+[[nodiscard]] yyjson_mut_val* resourceList(Json& out);
+[[nodiscard]] yyjson_mut_val* resourceRead(Json& out, yyjson_val* params);
+// transact's refusals, naming what the operation takes and where its reference is.
+[[nodiscard]] std::string unknownOperation(std::string_view id);
+// ". help {"name": <operation>} shows every argument.", appended to an argument refusal.
+[[nodiscard]] std::string argumentHelp(std::string_view operation);
+
 } // namespace bloom::mcp

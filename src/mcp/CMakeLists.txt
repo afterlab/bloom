@@ -3,10 +3,30 @@
 bloom_find_dependency(yyjson)
 add_library(bloom_mcp STATIC)
 
+# The user guides the resources serve, embedded so an installed server never reads the source tree.
+set(bloom_mcp_guide_names mcp scripting python)
+set(bloom_mcp_guide_files
+    "${PROJECT_SOURCE_DIR}/docs/user-guide/mcp.md"
+    "${PROJECT_SOURCE_DIR}/docs/user-guide/scripting.md"
+    "${PROJECT_SOURCE_DIR}/docs/user-guide/python.md")
+set(bloom_mcp_guides_source "${CMAKE_CURRENT_BINARY_DIR}/embedded_guides.cpp")
+string(REPLACE ";" "|" bloom_mcp_guide_name_arg "${bloom_mcp_guide_names}")
+string(REPLACE ";" "|" bloom_mcp_guide_file_arg "${bloom_mcp_guide_files}")
+add_custom_command(
+    OUTPUT "${bloom_mcp_guides_source}"
+    COMMAND "${CMAKE_COMMAND}" "-DOUTPUT=${bloom_mcp_guides_source}"
+        "-DNAMES=${bloom_mcp_guide_name_arg}" "-DFILES=${bloom_mcp_guide_file_arg}"
+        -P "${PROJECT_SOURCE_DIR}/cmake/BloomEmbedText.cmake"
+    DEPENDS ${bloom_mcp_guide_files} "${PROJECT_SOURCE_DIR}/cmake/BloomEmbedText.cmake"
+    COMMENT "Embedding the MCP user guides"
+    VERBATIM)
+
 target_sources(
     bloom_mcp
     PRIVATE
         core_internal.hpp
+        embedded_guides.hpp
+        "${bloom_mcp_guides_source}"
         json.cpp
         json.hpp
         projections.cpp
@@ -21,6 +41,7 @@ target_sources(
         tools_profiler.cpp
         tools_project.cpp
         tools_export.cpp
+        tools_reference.cpp
         tools_render.cpp
         tools_session.cpp
     PUBLIC
@@ -37,6 +58,7 @@ target_sources(
 target_compile_features(bloom_mcp PUBLIC cxx_std_20)
 target_link_libraries(bloom_mcp PUBLIC bloom_scripting bloom_host bloom_platform bloom_core)
 target_link_libraries(bloom_mcp PRIVATE yyjson::yyjson)
+target_include_directories(bloom_mcp PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 bloom_enable_warnings(bloom_mcp)
 
 # Test support: a driver that scripts a real McpServerService into every state the MCP Server panel

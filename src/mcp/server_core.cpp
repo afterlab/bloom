@@ -59,6 +59,7 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::CompositionSavePreset,
     McpTool::CompositionRenamePreset,
     McpTool::CompositionDeletePreset,
+    McpTool::Help,
 };
 // clang-format on
 
@@ -432,6 +433,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             auto* toolCapabilities = out.object();
             out.set(toolCapabilities, "listChanged", out.boolean(false));
             out.set(capabilities, "tools", toolCapabilities);
+            auto* resourceCapabilities = out.object();
+            out.set(resourceCapabilities, "listChanged", out.boolean(false));
+            out.set(capabilities, "resources", resourceCapabilities);
             auto* experimental = out.object();
             auto* bloom = out.object();
             out.set(bloom, "facadeVersion", out.text("1.0"));
@@ -440,6 +444,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             out.set(experimental, "bloom", bloom);
             out.set(capabilities, "experimental", experimental);
             out.set(result, "capabilities", capabilities);
+            out.set(result, "instructions", out.text(serverInstructions()));
         } else if (method == "ping") {
             if (params)
                 members(params, {});
@@ -450,6 +455,17 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             if (params)
                 members(params, {});
             result = toolList(out);
+        } else if (method == "resources/list") {
+            if (params)
+                members(params, {"cursor", "_meta"});
+            result = resourceList(out);
+        } else if (method == "resources/templates/list") {
+            if (params)
+                members(params, {"cursor", "_meta"});
+            result = out.object();
+            out.set(result, "resourceTemplates", out.array());
+        } else if (method == "resources/read") {
+            result = resourceRead(out, params);
         } else if (method == "tools/call") {
             members(params, {"name", "arguments", "_meta"}, {"name", "arguments"});
             const auto name = string(member(params, "name"), 64);
@@ -540,6 +556,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                         break;
                     case McpTool::ProjectSetColorSettings:
                         value = colorSettingsTool(state, out, call, arguments);
+                        break;
+                    case McpTool::Help:
+                        value = helpTool(state, out, call, arguments);
                         break;
                     default:
                         value = exportSessionTool(state, out, call, *tool, arguments);

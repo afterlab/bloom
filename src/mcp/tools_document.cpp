@@ -436,8 +436,7 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
         if (operationIds.size() < 200)
             operationIds += (operationIds.empty() ? "" : ",") + id;
         if (!descriptor)
-            throw InvalidInput(at + ": unknown operation \"" + id +
-                               "\"; query {\"kind\":\"operations\"} lists them");
+            throw InvalidInput(at + ": " + unknownOperation(id));
         auto* args = member(operation, "args");
         if (!yyjson_is_obj(args))
             throw InvalidInput(at + " (" + id + "): args must be an object");
@@ -456,12 +455,12 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
             if (schema == descriptor->schema.arguments.end())
                 throw InvalidInput(at + " (" + id + "): unknown argument \"" + name +
                                    "\"; the example is " +
-                                   scripting::exampleCall(descriptor->schema));
+                                   scripting::exampleCall(descriptor->schema) + argumentHelp(id));
             if (!matches(item, schema->kind))
                 throw InvalidInput(at + " (" + id + "): argument \"" + name + "\" expects " +
                                    std::string(scripting::valueKindName(schema->kind)) +
                                    "; the example is " +
-                                   scripting::exampleCall(descriptor->schema));
+                                   scripting::exampleCall(descriptor->schema) + argumentHelp(id));
             // SCRIPT-0 converts these optional fields to uint32_t in its factory.
             if (id == "bloom.composition.add" &&
                 (name == "frameRateNumerator" || name == "frameRateDenominator") &&
@@ -632,15 +631,18 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
     const bool compositionRecords =
         kind == "nodes" || kind == "parameters" || kind == "layers" || kind == "keyframes";
     if (member(arguments, "composition") && !compositionRecords && !individualParameter)
-        throw InvalidInput("This query kind does not accept a composition");
+        throw InvalidInput("query kind " + string(member(arguments, "kind"), 32) +
+                           " does not take composition; help {\"name\":\"query\"} lists "
+                           "each kind's arguments");
     if ((member(arguments, "pageSize") || member(arguments, "cursor")) && kind != "parameters")
-        throw InvalidInput("Paging applies only to parameters");
+        throw InvalidInput("pageSize and cursor apply only to parameters and keyframes");
     if (member(arguments, "parameter") != nullptr && !individualParameter)
         throw InvalidInput("A parameter ID requires an individual parameter query");
     if ((member(arguments, "expectedRevision") || member(arguments, "offset") ||
          member(arguments, "limit")) &&
         !individualParameter)
-        throw InvalidInput("Unexpected parameter fetch option");
+        throw InvalidInput("expectedRevision, offset and limit apply only to parameter and "
+                           "parameter-value queries");
     const auto snapshot = call.session.snapshot();
     if (kind == "context")
         return contextProjection(out, call, snapshot);
@@ -725,6 +727,26 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                 out.set(item, "context",
                         out.text(kContextSources.at(static_cast<std::size_t>(argument.context))));
                 out.set(item, "summary", out.text(argument.summary));
+                out.set(item, "unit", out.text(argument.unit));
+                out.set(item, "minimum",
+                        argument.minimum ? out.real(*argument.minimum) : out.null());
+                out.set(item, "maximum",
+                        argument.maximum ? out.real(*argument.maximum) : out.null());
+                out.set(item, "default", out.text(argument.defaultText));
+                auto* choices = out.array();
+                for (const auto& choice : argument.choices) {
+                    auto* row = out.object();
+                    const auto& stored = choice.value.storage;
+                    const auto* label = std::get_if<std::string>(&stored);
+                    const auto* whole = std::get_if<std::int64_t>(&stored);
+                    out.set(row, "value",
+                            label   ? out.text(*label)
+                            : whole ? out.signedNumber(*whole)
+                                    : out.null());
+                    out.set(row, "label", out.text(choice.label));
+                    out.append(choices, row);
+                }
+                out.set(item, "choices", choices);
                 out.append(schema, item);
             }
             out.set(record, "arguments", schema);
@@ -830,7 +852,10 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
             }
         }
     } else
-        throw InvalidInput("Unknown query kind");
+        throw InvalidInput("Unknown query kind " + kind +
+                           ". Kinds: project, compositions, layers, nodes, node-types, "
+                           "parameters, parameter, parameter-value, keyframes, assets, "
+                           "operations, context");
     out.set(result, "records", records);
     return result;
 }

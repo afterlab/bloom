@@ -89,8 +89,6 @@ static_assert(mcp::toolName(mcp::McpTool::ProfilerSnapshot) == "profiler.snapsho
 // #389: the parity window and application tools are live UI, inline, and never document edits.
 static_assert(mcp::toolName(mcp::McpTool::ProjectSaveCopy) == "project.save-copy");
 static_assert(mcp::toolName(mcp::McpTool::CompositionDeletePreset) == "composition.delete-preset");
-static_assert(static_cast<std::size_t>(mcp::McpTool::CompositionDeletePreset) + 1 ==
-              mcp::kMcpToolCount);
 static_assert(mcp::toolUsesLiveUi(mcp::McpTool::ProjectSaveCopy));
 static_assert(mcp::toolUsesLiveUi(mcp::McpTool::PreferencesSet));
 static_assert(mcp::toolUsesLiveUi(mcp::McpTool::CompositionDeletePreset));
@@ -100,6 +98,8 @@ static_assert(mcp::toolExecution(mcp::McpTool::JobsCancel) == mcp::McpToolExecut
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProfilerSnapshot));
 static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ProfilerSnapshot));
 static_assert(mcp::toolExecution(mcp::McpTool::ProfilerSnapshot) == mcp::McpToolExecution::Inline);
+static_assert(mcp::toolName(mcp::McpTool::Help) == "help");
+static_assert(static_cast<std::size_t>(mcp::McpTool::Help) + 1 == mcp::kMcpToolCount);
 // Project colour settings are project session state, not a document command.
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectSetColorSettings));
 static_assert(mcp::toolExecution(mcp::McpTool::Render) == mcp::McpToolExecution::Task);
