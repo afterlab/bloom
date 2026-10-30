@@ -142,12 +142,6 @@ struct McpServerCore::State {
 [[nodiscard]] yyjson_mut_val* parameterSummary(Json& out, const document::ParameterRecord& value);
 // query kind=enums: the interpolation, ease and Easy Ease vocabularies with their stable ids.
 void appendAnimationEnums(Json& out, yyjson_mut_val* records);
-// query kind=layers: one composition's layers, including the 1.30 shy and nameFollowsSource flags.
-void appendLayerRecords(Json& out, yyjson_mut_val* records, const document::Project& project,
-                        const document::Composition& composition);
-// query kind=keyframes: one record per animation curve, its keys per component.
-void appendKeyframeRecords(Json& out, yyjson_mut_val* records,
-                           const document::Composition& composition);
 // An events-tool record for a notice: {kind, revision, message, composition?, subject?, path?,
 // projectName?}.
 [[nodiscard]] yyjson_mut_val* noticeValue(Json& out, const McpNotice& notice);
@@ -214,7 +208,7 @@ struct TransientResult final {
                                                    const McpRequestControl& control);
 [[nodiscard]] yyjson_mut_val* toolList(Json& out);
 
-// ---- Reference (tools_reference.cpp)
+// ---- Reference and read-back (tools_reference.cpp, tools_readback.cpp)
 // tools/list with every description and property description taken from the reference.
 [[nodiscard]] yyjson_mut_val* describedToolList(Json& out, yyjson_val* schemas);
 [[nodiscard]] std::string_view serverInstructions() noexcept;
@@ -222,9 +216,20 @@ struct TransientResult final {
                                        yyjson_val* arguments);
 [[nodiscard]] yyjson_mut_val* resourceList(Json& out);
 [[nodiscard]] yyjson_mut_val* resourceRead(Json& out, yyjson_val* params);
+// The query kinds owned by tools_readback.cpp: layers, keyframes, node-types.
+[[nodiscard]] bool isReadbackQuery(std::string_view kind) noexcept;
+[[nodiscard]] yyjson_mut_val* readbackQuery(Json& out, McpCall& call, yyjson_val* arguments,
+                                            std::string_view kind, std::uint64_t sessionToken);
+[[nodiscard]] yyjson_mut_val* compositionRecord(Json& out, const document::Composition& value);
+[[nodiscard]] yyjson_mut_val* assetRecord(Json& out, const document::AssetRecord& value);
+// query nodes: the records with ports, links, positions and groups, plus `links` and `groups`.
+void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
+                     const document::Composition& composition);
 // transact's refusals, naming what the operation takes and where its reference is.
 [[nodiscard]] std::string unknownOperation(std::string_view id);
 // ". help {"name": <operation>} shows every argument.", appended to an argument refusal.
 [[nodiscard]] std::string argumentHelp(std::string_view operation);
+[[nodiscard]] yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& composition,
+                                                const document::ParameterRecord& parameter);
 
 } // namespace bloom::mcp

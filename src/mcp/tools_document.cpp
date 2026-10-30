@@ -620,6 +620,10 @@ yyjson_mut_val* contextProjection(Json& out, McpCall& call, const document::Snap
 yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                           yyjson_val* arguments) {
     const auto sessionToken = core.cursorToken ^ (call.generation * 0x9e3779b97f4a7c15ULL);
+    if (auto* requested = member(arguments, "kind");
+        yyjson_is_str(requested) &&
+        isReadbackQuery(std::string_view(yyjson_get_str(requested), yyjson_get_len(requested))))
+        return readbackQuery(out, call, arguments, string(requested, 32), sessionToken);
     members(arguments,
             {"kind", "composition", "pageSize", "cursor", "parameter", "expectedRevision", "offset",
              "limit"},
@@ -687,6 +691,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                     text && text->size() > kParameterStringChunkBytes
                         ? parameterSummary(out, *parameter)
                         : parameterRecord(out, *parameter));
+            out.set(result, "metadata", parameterMetadata(out, *composition, *parameter));
             return result;
         }
         const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
@@ -754,37 +759,11 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
             out.append(records, record);
         }
     } else if (kind == "compositions") {
-        for (const auto& composition : snapshot.project().compositions()) {
-            auto* record = out.object();
-            out.set(record, "id", out.number(composition.id().value()));
-            out.set(record, "name", out.text(composition.name()));
-            out.set(record, "width", out.number(composition.format().width()));
-            out.set(record, "height", out.number(composition.format().height()));
-            out.set(record, "frameRateNumerator",
-                    out.number(composition.format().frameRate().numerator()));
-            out.set(record, "frameRateDenominator",
-                    out.number(composition.format().frameRate().denominator()));
-            // Straight RGBA display values; the Viewer backdrop only, never composited by output.
-            const auto background = composition.backgroundColor();
-            auto* colour = out.array();
-            for (const double channel :
-                 {background.red, background.green, background.blue, background.alpha})
-                out.append(colour, out.real(channel));
-            out.set(record, "backgroundColor", colour);
-            out.append(records, record);
-        }
+        for (const auto& composition : snapshot.project().compositions())
+            out.append(records, compositionRecord(out, composition));
     } else if (kind == "assets") {
         for (const auto& asset : snapshot.project().assets()) {
-            auto* record = out.object();
-            out.set(record, "id", out.number(asset.id.value()));
-            out.set(record, "name", out.text(asset.name));
-            out.set(record, "kind", out.number(static_cast<unsigned>(asset.kind)));
-            out.set(record, "path", out.text(asset.locator.path));
-            out.set(record, "width", out.number(asset.width));
-            out.set(record, "height", out.number(asset.height));
-            const auto digest = asset.contentDigest.toLowercaseHex();
-            out.set(record, "digest",
-                    out.text("sha256:" + std::string(digest.data(), digest.size())));
+            auto* record = assetRecord(out, asset);
             if (asset.kind == document::AssetKind::Image ||
                 asset.kind == document::AssetKind::Sequence ||
                 asset.kind == document::AssetKind::Video)
@@ -793,17 +772,6 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         }
     } else if (kind == "enums") {
         appendAnimationEnums(out, records);
-    } else if (kind == "layers" || kind == "keyframes") {
-        const auto id = integer(member(arguments, "composition"));
-        const auto* composition =
-            snapshot.project().findComposition(document::CompositionId::fromRaw(id));
-        if (!composition)
-            throw InvalidInput("Stale composition ID at revision " +
-                               std::to_string(snapshot.revision().value()));
-        if (kind == "layers")
-            appendLayerRecords(out, records, snapshot.project(), *composition);
-        else
-            appendKeyframeRecords(out, records, *composition);
     } else if (kind == "nodes" || kind == "parameters") {
         const auto id = integer(member(arguments, "composition"));
         const auto* composition =
@@ -812,16 +780,7 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Stale composition ID at revision " +
                                std::to_string(snapshot.revision().value()));
         if (kind == "nodes") {
-            for (const auto& node : composition->graph().nodes()) {
-                auto* record = out.object();
-                out.set(record, "id", out.number(node.id.value()));
-                out.set(record, "typeId", out.text(node.typeId));
-                auto* parameters = out.object();
-                for (const auto& parameter : node.parameters)
-                    out.set(parameters, parameter.role, out.number(parameter.parameterId.value()));
-                out.set(record, "parameters", parameters);
-                out.append(records, record);
-            }
+            appendNodeGraph(out, result, records, *composition);
         } else if (parameterPage) {
             // A summary only carries bounded structural strings (at most 256 bytes each),
             // never a value. Even worst-case JSON escaping and the MCP text copy fit 4 MiB.

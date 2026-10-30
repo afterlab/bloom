@@ -283,6 +283,107 @@ void appendAnimationEnums(Json& out, yyjson_mut_val* records) {
         "easyEase", [&](const std::size_t index) { return easyEaseTokens[index]; }, easyEaseLabels);
 }
 
+} // namespace bloom::mcp
+
+namespace bloom::mcp {
+namespace {
+
+constexpr std::array<std::string_view, 13> kInterpolationLabels{
+    "Constant", "Linear",      "Bezier",   "Sine", "Quadratic", "Cubic",  "Quartic",
+    "Quintic",  "Exponential", "Circular", "Back", "Bounce",    "Elastic"};
+constexpr std::array<std::string_view, 3> kHandleModeLabels{"Free", "Aligned", "Auto"};
+constexpr std::array<std::string_view, 4> kEasingLabels{"Automatic Easing", "Ease In", "Ease Out",
+                                                        "Ease In and Out"};
+
+yyjson_mut_val* rational(Json& out, const core::RationalTime time) {
+    auto* value = out.array();
+    out.append(value, out.signedNumber(time.numerator()));
+    out.append(value, out.signedNumber(time.denominator()));
+    return value;
+}
+
+yyjson_mut_val* handle(Json& out, const document::KeyframeHandle& value) {
+    auto* record = out.object();
+    out.set(record, "time", out.real(value.time));
+    out.set(record, "value", out.real(value.value));
+    return record;
+}
+
+template <typename Keyframe> yyjson_mut_val* keyRecord(Json& out, const Keyframe& key) {
+    auto* record = out.object();
+    out.set(record, "id", out.number(key.id.value()));
+    out.set(record, "time", rational(out, key.time));
+    if constexpr (std::is_same_v<Keyframe, document::ScalarKeyframe>)
+        out.set(record, "value", out.real(key.value));
+    out.set(record, "interpolation",
+            out.text(document::keyframeInterpolationToken(key.outgoingInterpolation)));
+    out.set(record, "interpolationId",
+            out.number(static_cast<std::uint64_t>(key.outgoingInterpolation)));
+    out.set(record, "outgoingHandle", handle(out, key.outgoingHandle));
+    out.set(record, "incomingHandle", handle(out, key.incomingHandle));
+    out.set(record, "ease", out.text(document::keyframeEasingToken(key.easing.easing)));
+    out.set(record, "back", out.real(key.easing.back));
+    out.set(record, "amplitude", out.real(key.easing.amplitude));
+    out.set(record, "period", out.real(key.easing.period));
+    out.set(record, "handleMode", out.text(document::keyframeHandleModeToken(key.handleMode)));
+    out.set(record, "handleModeId", out.number(static_cast<std::uint64_t>(key.handleMode)));
+    return record;
+}
+
+template <typename Keyframes> yyjson_mut_val* keyList(Json& out, const Keyframes& keys) {
+    auto* list = out.array();
+    for (const auto& key : keys)
+        out.append(list, keyRecord(out, key));
+    return list;
+}
+
+constexpr std::array<std::string_view, 7> kComponentNames{"x",     "y",    "z",    "red",
+                                                          "green", "blue", "alpha"};
+
+} // namespace
+
+void appendAnimationEnums(Json& out, yyjson_mut_val* records) {
+    const auto table = [&](const std::string_view name, const auto& tokens, const auto& labels) {
+        auto* record = out.object();
+        out.set(record, "enum", out.text(name));
+        auto* values = out.array();
+        for (std::size_t index = 0; index < labels.size(); ++index) {
+            auto* value = out.object();
+            out.set(value, "id", out.number(index));
+            out.set(value, "token", out.text(tokens(index)));
+            out.set(value, "label", out.text(labels[index]));
+            out.append(values, value);
+        }
+        out.set(record, "values", values);
+        out.append(records, record);
+    };
+    table(
+        "interpolation",
+        [](const std::size_t index) {
+            return document::keyframeInterpolationToken(
+                static_cast<document::KeyframeInterpolation>(index));
+        },
+        kInterpolationLabels);
+    table(
+        "ease",
+        [](const std::size_t index) {
+            return document::keyframeEasingToken(static_cast<document::KeyframeEasing>(index));
+        },
+        kEasingLabels);
+    table(
+        "handleMode",
+        [](const std::size_t index) {
+            return document::keyframeHandleModeToken(
+                static_cast<document::KeyframeHandleMode>(index));
+        },
+        kHandleModeLabels);
+    constexpr std::array<std::string_view, 3> easyEaseTokens{"both", "in", "out"};
+    constexpr std::array<std::string_view, 3> easyEaseLabels{"Easy Ease", "Easy Ease In",
+                                                             "Easy Ease Out"};
+    table(
+        "easyEase", [&](const std::size_t index) { return easyEaseTokens[index]; }, easyEaseLabels);
+}
+
 void appendLayerRecords(Json& out, yyjson_mut_val* records, const document::Project& project,
                         const document::Composition& composition) {
     for (const auto& layer : composition.graph().layerOutputs()) {

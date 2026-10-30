@@ -41,6 +41,7 @@ target_sources(
         tools_profiler.cpp
         tools_project.cpp
         tools_export.cpp
+        tools_readback.cpp
         tools_reference.cpp
         tools_render.cpp
         tools_session.cpp
