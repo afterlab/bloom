@@ -718,6 +718,7 @@ std::vector<ReferenceEntry> surfaceEntries() {
     std::vector<ReferenceEntry> out;
     addConcepts(out);
     addTools(out);
+    addSessionToolEntries(out);
     addQueryKindEntries(out);
     addCliCommandEntries(out);
     addPythonEntries(out);

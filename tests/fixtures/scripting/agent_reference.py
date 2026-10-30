@@ -250,6 +250,24 @@ class ReadBack(unittest.TestCase):
             'end': work['end']['seconds']}))
         self.assertEqual(self.composition_record()['workArea'], work)
 
+    def test_integer_times_are_frames(self):
+        ids = self.server.transact(('bloom.composition.add', {'name': 'Frames', 'duration': 48}))
+        composition = ids[(0, 'composition')]
+        record = next(item for item in self.server.query(kind='compositions')['records']
+                      if item['id'] == composition)
+        self.assertEqual(record['duration']['frames'], 48)
+        self.server.transact(('bloom.composition.set-work-area', {
+            'composition': composition, 'start': 12, 'end': 36}))
+        record = next(item for item in self.server.query(kind='compositions')['records']
+                      if item['id'] == composition)
+        self.assertEqual((record['workArea']['start']['frames'],
+                          record['workArea']['end']['frames']), (12, 36))
+        # A composition added without a duration lasts 48 frames.
+        ids = self.server.transact(('bloom.composition.add', {'name': 'Default'}))
+        record = next(item for item in self.server.query(kind='compositions')['records']
+                      if item['id'] == ids[(0, 'composition')])
+        self.assertEqual(record['duration']['frames'], 48)
+
     def test_layers_parameters_and_keyframes_round_trip(self):
         ids = self.server.transact(
             ('bloom.layer.add-solid', {'composition': self.composition, 'name': 'Red',
@@ -276,6 +294,15 @@ class ReadBack(unittest.TestCase):
                    parameter['metadata']['choices']}
         self.assertEqual(choices['Screen'], 3)
         self.assertEqual(parameter['metadata']['owner']['role'], 'blendMode')
+        # An enumeration takes its stored value or its label, case-insensitively, and reads back
+        # as both.
+        for written, expected in ((choices['Screen'], 'Screen'), ('multiply', 'Multiply'),
+                                  ('DIFFERENCE', 'Difference')):
+            self.server.transact(('bloom.parameter.set-source', {
+                'composition': self.composition, 'parameter': blend, 'value': written}))
+            record = self.server.query(kind='parameter', composition=self.composition,
+                                       parameter=blend)['record']
+            self.assertEqual((record['value'], record['label']), (choices[expected], expected))
         # Constant values read back as written.
         self.server.transact(('bloom.parameter.set-source', {
             'composition': self.composition, 'parameter': red['parameters']['opacity'],

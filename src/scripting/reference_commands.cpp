@@ -101,7 +101,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "Without pageSize or cursor: every full record. With them: bounded summaries whose "
          "constant values are omitted (valueOmitted:true) and a nextCursor until it is null.",
          "{revision, records:[{id, schemaKey, source:\"constant\"|\"curve\"|\"driver\", value?, "
-         "curveId?, driverNode?, driverPort?}], nextCursor?, totalRecords?}",
+         "label? (an enumeration member's), curveId?, nodeId? and port? (a driver)}], nextCursor?, "
+         "totalRecords?}",
          {composition, page, cursor},
          R"({"name":"query","arguments":{"kind":"parameters","composition":1,"pageSize":64}})");
     kind("parameter",

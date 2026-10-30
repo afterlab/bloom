@@ -52,5 +52,7 @@ void addArguments(ReferenceEntry& value, std::initializer_list<ArgumentSpec> spe
 void addQueryKindEntries(std::vector<ReferenceEntry>& out);
 void addCliCommandEntries(std::vector<ReferenceEntry>& out);
 void addPythonEntries(std::vector<ReferenceEntry>& out);
+// The project and window tools (reference_session_tools.cpp).
+void addSessionToolEntries(std::vector<ReferenceEntry>& out);
 
 } // namespace bloom::scripting::detail

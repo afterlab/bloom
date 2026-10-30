@@ -1,18 +1,13 @@
 // The node and parameter vocabulary of the agent surfaces (node_reference.hpp). The closed values
-// mirror the Properties panel's selectors (src/ui/composition_parameter_vocabulary.cpp) in the
-// same order and with the same labels; bloom.scripting.operation-reference checks every Choice
-// schema of the built-in registry has them.
+// are document::parameterEnumOptions(), the one table set-source and read-back use;
+// bloom.scripting.operation-reference checks every Choice schema of the built-in registry has
+// them.
 
 #include "reference_internal.hpp"
 
-#include <bloom/core/blend_mode.hpp>
-#include <bloom/core/scalar_primitives.hpp>
-#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter_presentation.hpp>
-#include <bloom/document/shape.hpp>
-#include <bloom/document/value_operations.hpp>
-#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/scripting/node_reference.hpp>
 
 #include <algorithm>
@@ -25,26 +20,6 @@
 
 namespace bloom::scripting {
 namespace {
-
-using Labels = std::initializer_list<std::string_view>;
-
-std::vector<ParameterChoice> numbered(const Labels labels) {
-    std::vector<ParameterChoice> result;
-    std::int64_t stored = 0;
-    for (const auto label : labels)
-        result.push_back({.value = stored++, .label = std::string(label)});
-    return result;
-}
-
-template <typename Enumeration, std::size_t Count, typename Stored>
-std::vector<ParameterChoice> named(const std::array<Enumeration, Count>& values,
-                                   const std::array<std::string_view, Count>& labels,
-                                   Stored stored) {
-    std::vector<ParameterChoice> result;
-    for (std::size_t index = 0; index < Count; ++index)
-        result.push_back({.value = stored(values[index]), .label = std::string(labels[index])});
-    return result;
-}
 
 std::string number(const double value) {
     if (!std::isfinite(value))
@@ -92,119 +67,12 @@ std::optional<std::int64_t> multiplied(const std::int64_t left, const std::int64
 } // namespace
 
 std::vector<ParameterChoice> parameterChoices(const std::string_view key) {
-    namespace d = document;
-    if (key == d::kBlendModeParameterSchemaKey) {
-        constexpr std::array<std::string_view, 8> labels{
-            "Normal", "Add", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference"};
-        return named(core::kBlendModes, labels, core::blendModeStoredValue);
-    }
-    if (key == d::kGradientRepeatParameterSchemaKey)
-        return numbered({"Clamp", "Repeat", "Mirror"});
-    if (key == "bloom.blur.edge")
-        return numbered({"Transparent", "Clamp"});
-    if (key == "bloom.set-alpha.channel" || key == "bloom.multiply-alpha.channel")
-        return numbered({"Alpha", "Red", "Green", "Blue", "Luma", "Alpha Inverted", "Red Inverted",
-                         "Green Inverted", "Blue Inverted", "Luma Inverted"});
-    if (key == "bloom.channel-shuffle.mode")
-        return {{d::kChannelShuffleColourMode, "Colour"}, {d::kChannelShuffleRawMode, "Raw"}};
-    if (key == "bloom.resize-fit.filter")
-        return numbered({"Bilinear"});
-    if (key == "bloom.resize-fit.policy")
-        return numbered({"Fit", "Fill"});
-    if (key == "bloom.ocio-file.interpolation")
-        return numbered({"Linear", "Tetrahedral", "Best"});
-    if (key == "bloom.ocio-file.direction")
-        return numbered({"Forward", "Inverse"});
-    if (key == "bloom.shape.kind") {
-        std::vector<ParameterChoice> result;
-        for (std::int64_t index = 0; index <= 6; ++index)
-            result.push_back(
-                {.value = index,
-                 .label = std::string(d::shapeKindName(static_cast<d::ShapeKind>(index)))});
-        return result;
-    }
-    if (key == "bloom.shape.stroke-align")
-        return numbered({"Center", "Inside", "Outside"});
-    if (key == "bloom.shape.stroke-join")
-        return numbered({"Miter", "Round", "Bevel"});
-    if (key == "bloom.shape.stroke-cap")
-        return numbered({"Butt", "Round", "Square"});
-    if (key == "bloom.shape.fill-rule")
-        return numbered({"Nonzero", "Even-odd"});
-    if (key == "bloom.image.loop-mode" || key == "bloom.video.loop-mode" ||
-        key == "bloom.composition-source.loop-mode")
-        return numbered({"Hold", "Loop", "Ping-pong"});
-    if (key == "bloom.image.color-space" || key == "bloom.video.color-space")
-        return numbered({"Auto", "sRGB", "Linear", "Raw"});
-    if (key == d::kTextAlignmentParameterSchemaKey)
-        return numbered({"Left", "Center", "Right"});
-    if (key == d::kTextVerticalAlignmentParameterSchemaKey)
-        return numbered({"Top", "Middle", "Bottom"});
-    if (key == d::kTextAnchorModeParameterSchemaKey)
-        return numbered({"Left", "Center", "Right"});
-    if (key == d::kTextOverflowParameterSchemaKey)
-        return numbered({"Clip", "Grow"});
-    if (key == d::kTextFontParameterSchemaKey)
-        return {{d::kTextFontDejaVuSans, "DejaVu Sans"},
-                {d::kTextFontInterRegular, "Inter Regular"},
-                {d::kTextFontInterMedium, "Inter Medium"},
-                {d::kTextFontInterSemiBold, "Inter SemiBold"}};
-    if (key == d::kScalarOperationParameterSchemaKey) {
-        std::vector<ParameterChoice> result;
-        for (const auto operation : d::kScalarOperations) {
-            const auto* signature = core::primitives::scalarPrimitiveSignature(operation);
-            const auto id = signature == nullptr ? std::string_view{} : signature->id;
-            result.push_back({.value = d::scalarOperationStoredValue(operation),
-                              .label = nodeTypeDisplayName(id.substr(id.rfind('.') + 1))});
-        }
-        return result;
-    }
-    if (key == d::kVectorOperationParameterSchemaKey)
-        return named(d::kVectorOperations,
-                     std::array<std::string_view, 7>{"Add", "Subtract", "Multiply", "Divide",
-                                                     "Scale", "Normalize", "Cross Product"},
-                     d::vectorOperationStoredValue);
-    if (key == d::kVectorReductionParameterSchemaKey)
-        return named(d::kVectorReductions,
-                     std::array<std::string_view, 3>{"Length", "Dot Product", "Distance"},
-                     d::vectorReductionStoredValue);
-    if (key == d::kRangeInterpolationParameterSchemaKey)
-        return named(d::kRangeInterpolations,
-                     std::array<std::string_view, 3>{"Linear", "Smoothstep", "Smootherstep"},
-                     d::rangeInterpolationStoredValue);
-    const auto selector = [](const auto value) { return d::selectorStoredValue(value); };
-    if (key == d::kRoundingModeParameterSchemaKey)
-        return named(d::kRoundingModes,
-                     std::array<std::string_view, 4>{"Round", "Floor", "Ceiling", "Truncate"},
-                     selector);
-    if (key == d::kIntegerOperationParameterSchemaKey)
-        return named(d::kIntegerOperations,
-                     std::array<std::string_view, 7>{"Add", "Subtract", "Multiply", "Divide",
-                                                     "Modulo", "Minimum", "Maximum"},
-                     selector);
-    if (key == d::kBooleanOperationParameterSchemaKey)
-        return named(d::kBooleanOperations,
-                     std::array<std::string_view, 5>{"And", "Or", "Xor", "Nand", "Nor"}, selector);
-    if (key == d::kStringCaseParameterSchemaKey)
-        return named(d::kStringCaseModes,
-                     std::array<std::string_view, 3>{"Upper", "Lower", "Title"}, selector);
-    if (key == d::kStringPadSideParameterSchemaKey)
-        return named(d::kStringPadSides, std::array<std::string_view, 2>{"Start", "End"}, selector);
-    if (key == d::kNumberRadixParameterSchemaKey) {
-        constexpr std::array<std::string_view, 4> labels{"Binary", "Octal", "Decimal",
-                                                         "Hexadecimal"};
-        std::vector<ParameterChoice> result;
-        for (std::size_t index = 0; index < d::kOfferedRadices.size(); ++index)
-            result.push_back(
-                {.value = d::kOfferedRadices[index], .label = std::string(labels[index])});
-        return result;
-    }
-    if (key == d::kCompareOperationParameterSchemaKey)
-        return named(d::kCompareOperations,
-                     std::array<std::string_view, 6>{"Equal", "Not Equal", "Less", "Less Or Equal",
-                                                     "Greater", "Greater Or Equal"},
-                     d::compareOperationStoredValue);
-    return {};
+    // The document's table is the one vocabulary (set-source accepts its labels, read-back names
+    // them); this is the same list in the reference's shape.
+    std::vector<ParameterChoice> result;
+    for (auto& option : document::parameterEnumOptions(key))
+        result.push_back({.value = option.value, .label = std::move(option.label)});
+    return result;
 }
 
 std::string nodeTypeDisplayName(const std::string_view typeId) {
@@ -235,18 +103,11 @@ std::string_view nodeCategoryName(const document::NodeCategory category) noexcep
 }
 
 std::string_view socketKindName(const document::SocketValueKind kind) noexcept {
-    constexpr std::array<std::string_view, 11> names{"image",   "audio",  "color",      "scalar",
-                                                     "vector2", "string", "integer",    "boolean",
-                                                     "vector3", "mask",   "channel-set"};
-    const auto index = static_cast<std::size_t>(kind);
-    return index < names.size() ? names[index] : "image";
+    return document::socketValueKindName(kind);
 }
 
 std::string_view parameterKindName(const document::ParameterValueKind kind) noexcept {
-    constexpr std::array<std::string_view, 8> names{"color",   "vector2", "scalar",  "string",
-                                                    "integer", "boolean", "vector3", "path"};
-    const auto index = static_cast<std::size_t>(kind);
-    return index < names.size() ? names[index] : "scalar";
+    return document::parameterValueKindName(kind);
 }
 
 std::string_view assetKindName(const std::uint8_t kind) noexcept {

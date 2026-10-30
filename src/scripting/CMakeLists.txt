@@ -39,6 +39,7 @@ target_sources(
         operation_values.hpp
         reference_commands.cpp
         reference_internal.hpp
+        reference_session_tools.cpp
         reference_surfaces.cpp
         render.cpp
         session.cpp
