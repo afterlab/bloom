@@ -129,6 +129,7 @@ The frame presets are closed, versioned contracts:
 - `PngRgba8SrgbV1`
 - `FlatExrRgba32fLinRec709SceneV1`
 - `TiffRgba16SrgbV1` (Linux supervised worker; explicit unavailable fallback elsewhere)
+- `DpxRgb10V1` and `DpxRgb16V1` (Linux supervised worker; explicit unavailable fallback elsewhere)
 
 Their typed identity derives every portable string and version; callers never provide the fields
 independently and enum ordinals are never serialized:
@@ -138,6 +139,8 @@ independently and enum ordinals are never serialized:
 | `PngRgba8SrgbV1` | exact text `PngRgba8SrgbV1` | `1` | `bloom.output.png-rgba8-srgb.semantic.v1` | exactly 32 bytes | required |
 | `FlatExrRgba32fLinRec709SceneV1` | exact text `FlatExrRgba32fLinRec709SceneV1` | `1` | `bloom.output.exr-rgba32f-lin-rec709-scene.semantic.v1` | zero bytes | zero bytes |
 | `TiffRgba16SrgbV1` | exact text `TiffRgba16SrgbV1` | `1` | `bloom.output.tiff-rgba16-srgb.semantic.v1` | zero bytes | zero bytes |
+| `DpxRgb10V1` | exact text `DpxRgb10V1` | `1` | `bloom.output.dpx-rgb10.semantic.v1` | zero bytes | zero bytes |
+| `DpxRgb16V1` | exact text `DpxRgb16V1` | `1` | `bloom.output.dpx-rgb16.semantic.v1` | zero bytes | zero bytes |
 
 A mismatched preset ID, version, or profile tuple is invalid. For PNG, the separate expected OCIO
 revision must equal both the revision embedded in the canonical `DisplayProcessorIdentity` and the
@@ -145,6 +148,29 @@ revision must equal both the revision embedded in the canonical `DisplayProcesso
 rejects a nonempty OCIO revision or display identity. TIFF has the same zero-byte identity shape
 with its external-dependencies facet qualified only when the supervised worker is available.
 Absent providers produce `adapter.unavailable`.
+
+### DPX sequences (issue #369)
+
+The DPX presets write one 10-bit or 16-bit RGB file per frame through the isolated media worker's
+FFmpeg `dpx` encoder (profiles `rgb10` and `rgb16`, one encode session per file, no Bloom-specific
+writer). Like the flat EXR, a DPX names an optional output color space from the project's OCIO
+config: the premultiplied process pixels are converted to it (unpremultiply, transform,
+premultiply) by the same prepared conversion, and an empty id keeps the working space. The
+converted scene-linear values are then clamped to 0..1 and quantized (`dpx.clamp-quantize`,
+`dpx.float32-to-uint10` or `dpx.float32-to-uint16`, `dpx.output-color-transform`); alpha is not
+stored (`dpx.alpha-omitted`, the color is what the frame shows over black). Data and display
+windows must be equal with a zero origin and pixels square (`dpx.origin-window-required`,
+`dpx.equal-window-required`, `dpx.square-pixel-required`), compression is none, and the
+external-dependencies facet is `dpx.worker-external-reference` with descriptor
+`kind=id:dpx-provider;revision=id:<config revision or none>`.
+
+The DPX header can express only a few tags: the transfer is always linear (code 2), and the
+primaries are Rec.709 (code 6) for the Rec.709 spaces and otherwise written as unspecified, because
+the format has no code for ACES or wide-gamut primaries; the color space itself is recorded by the
+job, not the file. The worker reopens every file, decodes it, and fails the frame unless the header
+bit depth, dimensions, transfer and primaries are the ones requested, the decoded integer samples
+equal the samples given to the encoder, and (against the RGBA16 reference) 16-bit samples are
+exact and 10-bit samples are within 64 sixteen-bit units.
 
 A preset version participates in analysis, semantic output identity, verification, and
 reproducibility.

@@ -128,7 +128,9 @@ used; the panel does not edit them.
 - **ProRes** is written by FFmpeg; it is not an Apple-authorized ProRes implementation.
 - The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
   with a pinned revision.
-- **DPX** sequences are listed but not available in this build; the preset says so.
+- **DPX** sequences are 10-bit or 16-bit RGB files, one per frame, with no alpha (the color is what
+  the frame shows over black). The header carries a linear transfer and Rec.709 primaries or
+  unspecified primaries; the output color space is recorded by the job, not the file.
 
 MP4 movies carry AAC audio; WebM movies carry Opus (shipped with Bloom) at 48 kHz, whatever the
 output's audio sample rate; MOV and MXF carry PCM. Movie containers are tagged from the output's

@@ -229,8 +229,8 @@ configure arguments, and a corresponding-source obligation. The recipe is shared
 library-only, LGPL-2.1-or-later, disables GPL/nonfree/version-3/network/autodetection, and has no
 external codec or crypto libraries. Its closed preview allow-list covers MOV, Matroska, MXF, MPEG-TS,
 WAV, MP3, and AAC demuxing; MOV, Matroska, MXF, and WAV muxing; H.264/HEVC, ProRes, DNxHD, MJPEG,
-TIFF, AAC, MP3, and explicit PCM-family decoding; ProRes KS, DNxHD, PCM-family, AAC, and TIFF
-encoding; the required parsers/bitstream filters; the libavfilter `buffer`, `buffersink` and
+TIFF, DPX (the export reopen check), AAC, MP3, and explicit PCM-family decoding; ProRes KS, DNxHD,
+PCM-family, AAC, TIFF, and DPX encoding; the required parsers/bitstream filters; the libavfilter `buffer`, `buffersink` and
 `bwdif` filters for deinterlacing; and the `file` protocol. VA-API H.264/HEVC
 hardware acceleration is enabled when `libva` is available and can be disabled for a host without
 the development files. On x86 and x86-64 hosts FFmpeg's hand-written SIMD is enabled: the superbuild
@@ -2434,8 +2434,10 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
 - **Limits from the destination.** The encoded artifact's byte limit is the destination's sampled
   free space minus the safety margin (2%, at least 64 MiB), within the provider ceiling, and the
   audio channel cap follows the container (WAV and MOV 64, MXF 16, AAC 8) instead of a fixed 8.
-- **DPX** sequences are part of the 1.29 vocabulary and the catalogue but are reported unavailable
-  with a typed reason in this build.
+- **DPX** sequences (10-bit and 16-bit RGB, `rgb10` and `rgb16`) encode through the worker's FFmpeg
+  `dpx` encoder and reopen through its decoder; see `frame-output.md`. A worker whose FFmpeg was
+  built without that encoder answers `Unavailable` ("Encoder is not in the intake"), which the
+  export reports as an unavailable encoder.
 
 ## Export Audio Sample Formats And Source-Aware Preflight (#428)
 
