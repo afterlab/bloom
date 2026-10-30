@@ -32,6 +32,7 @@
 --enable-decoder=dnxhd
 --enable-decoder=mjpeg
 --enable-decoder=tiff
+--enable-decoder=dpx
 --enable-decoder=vp9
 --enable-decoder=libdav1d
 --enable-decoder=av1
@@ -87,6 +88,7 @@
 --enable-encoder=aac
 --enable-encoder=libopus
 --enable-encoder=tiff
+--enable-encoder=dpx
 --enable-encoder=pcm_alaw
 --enable-encoder=pcm_bluray
 --enable-encoder=pcm_dvd

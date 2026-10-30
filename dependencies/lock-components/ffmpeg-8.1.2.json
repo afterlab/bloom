@@ -114,6 +114,11 @@
           "reason": "AV1 decode through the libdav1d wrapper; dav1d 1.5.4 is a static archive linked into libavcodec"
         },
         {
+          "id": "bloom.feature.ffmpeg-dpx",
+          "state": "enabled",
+          "reason": "DPX encoder and decoder: one-frame 10-bit and 16-bit RGB DPX sequence export and its reopen check in the worker"
+        },
+        {
           "id": "bloom.feature.ffmpeg-kvazaar",
           "state": "enabled",
           "reason": "HEVC software encode through the libkvazaar (8-bit, HEVC Main) and libkvazaar10 (10-bit, HEVC Main 10) wrappers; Kvazaar 2.3.2 is built as two static archives linked into libavcodec"
@@ -175,6 +180,7 @@
         "bloom.capability.ffmpeg.av1-hwaccel-decode",
         "bloom.capability.ffmpeg.av1-software-svt-av1",
         "bloom.capability.ffmpeg.decode",
+        "bloom.capability.ffmpeg.dpx",
         "bloom.capability.ffmpeg.encode",
         "bloom.capability.ffmpeg.h264-nvenc-encode",
         "bloom.capability.ffmpeg.h264-software-openh264",
