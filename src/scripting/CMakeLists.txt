@@ -23,8 +23,10 @@ target_sources(
         export_headless.cpp
         json_script.cpp
         live_session_host.cpp
+        node_reference.cpp
         operation_docs.cpp
         operation_docs.hpp
+        operation_reference.cpp
         operation_registry.cpp
         operation_registry_alignment.cpp
         operation_registry_evaluated.cpp
@@ -34,6 +36,8 @@ target_sources(
         operation_registry_parity_project.cpp
         operation_registry_footage.cpp
         operation_values.hpp
+        reference_internal.hpp
+        reference_surfaces.cpp
         render.cpp
         session.cpp
     PUBLIC
@@ -46,6 +50,8 @@ target_sources(
             include/bloom/scripting/facade.hpp
             include/bloom/scripting/json_script.hpp
             include/bloom/scripting/live_session_host.hpp
+            include/bloom/scripting/node_reference.hpp
+            include/bloom/scripting/operation_reference.hpp
             include/bloom/scripting/operation_registry.hpp
             include/bloom/scripting/query.hpp
             include/bloom/scripting/render.hpp
@@ -107,6 +113,15 @@ if(BUILD_TESTING)
         NAME bloom.scripting.parity-operations
         COMMAND bloom_scripting_parity_operations_test
         LABELS unit scripting commands document
+    )
+    # The agent reference: every operation, tool and argument described, one text everywhere.
+    add_executable(bloom_scripting_operation_reference_test tests/operation_reference_tests.cpp)
+    target_link_libraries(bloom_scripting_operation_reference_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_operation_reference_test)
+    bloom_add_test(
+        NAME bloom.scripting.operation-reference
+        COMMAND bloom_scripting_operation_reference_test
+        LABELS unit scripting mcp
     )
     add_executable(bloom_scripting_layer_alignment_test tests/layer_alignment_tests.cpp)
     target_link_libraries(bloom_scripting_layer_alignment_test PRIVATE bloom_scripting)
