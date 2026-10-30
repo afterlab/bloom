@@ -474,6 +474,12 @@ void chooseIntegers(ArgumentSchema& argument, std::initializer_list<std::string_
     argument.maximum = static_cast<double>(stored - 1);
 }
 
+[[nodiscard]] std::string_view exampleText(const ArgumentSchema& argument) {
+    const auto* text =
+        argument.example ? std::get_if<std::string>(&argument.example->storage) : nullptr;
+    return text ? std::string_view(*text) : std::string_view{};
+}
+
 void range(ArgumentSchema& argument, const double minimum, const double maximum) {
     argument.minimum = minimum;
     argument.maximum = maximum;
@@ -523,7 +529,9 @@ void refine(const std::string& op, ArgumentSchema& argument) {
         argument.unit = kColorUnit;
         break;
     case ValueKind::Id:
-        argument.unit = idUnit(name);
+        argument.unit = name == "before" && op != "bloom.layer.move-before"
+                            ? std::string("layer id (query:layers .id)")
+                            : idUnit(name);
         argument.minimum = 1.0;
         break;
     case ValueKind::Path:
@@ -657,7 +665,14 @@ void refine(const std::string& op, ArgumentSchema& argument) {
                           {"composition", "The composition frame"},
                           {"key-object", "The key layer's bounds"}});
         argument.defaultText = "selection";
-    } else if (name == "role") {
+    } else if (name == "placement") {
+        choose(argument, {{"top", "Above every layer"},
+                          {"bottom", "Below every layer"},
+                          {"before", "Directly above the layer `before`"}});
+        argument.defaultText = "top";
+    } else if (name == "role" &&
+               (op == "bloom.node.connect" || op == "bloom.node.disconnect-input" ||
+                exampleText(argument) == "content")) {
         choose(argument, {{"content", "The slot's image (layer) input"},
                           {"audio", "The slot's audio input"}});
     } else if ((name == "payloadKind" || name == "kind") && op.starts_with("bloom.data-block.")) {
