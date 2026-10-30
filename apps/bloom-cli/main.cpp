@@ -11,6 +11,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/export.hpp>
 #include <bloom/scripting/json_script.hpp>
+#include <bloom/scripting/operation_reference.hpp>
 #include <bloom/scripting/render.hpp>
 #include <bloom/scripting/session.hpp>
 
@@ -18,6 +19,7 @@
 #include <thread>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -67,8 +69,37 @@ class ExportProviderTeardown final {
 void printUsage() {
     std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
-                 "<dir> [--replace] [--require-device] | export --project <file> "
-                 "(--all | --job <id>...) [--replace] [--save]\n";
+                 "<dir> [--replace] [--require-device] | export --project <file> (--all | --job <id>...) [--replace] [--save] | "
+                 "help [<name>] [--json]\n"
+                 "Run `bloom-cli help` for every command, operation and tool, or `bloom-cli help "
+                 "<command>` for one in full.\n";
+}
+
+// The same reference the MCP help tool and bloom.help() print. A command name is looked up as a
+// bloom-cli command first, so `bloom-cli help render` describes this program's render.
+[[nodiscard]] int commandHelp(int argc, char** argv) {
+    bool json = false;
+    std::string name;
+    for (int index = 2; index < argc; ++index) {
+        const std::string_view argument = argv[index];
+        if (argument == "--json") {
+            json = true;
+        } else if (name.empty()) {
+            name = argument;
+        } else {
+            std::cerr << "error[bloom-cli.option]: help takes one name\n";
+            return 2;
+        }
+    }
+    const auto& reference = scripting::OperationReference::builtIn();
+    if (!name.empty() && !name.starts_with("bloom-cli ")) {
+        if (const auto* command = reference.find("bloom-cli " + name);
+            command != nullptr && command->kind == scripting::ReferenceKind::CliCommand)
+            name = command->name;
+    }
+    const auto answer = scripting::referenceHelp(name);
+    std::cout << (json ? answer.json + "\n" : answer.text);
+    return answer.found ? 0 : 1;
 }
 
 [[nodiscard]] std::optional<std::string> readText(const std::filesystem::path& path) {
@@ -482,6 +513,22 @@ int main(int argc, char** argv) {
         return 2;
     }
 #endif
+    if (argc >= 2) {
+        const std::string_view first = argv[1];
+        if (first == "help")
+            return commandHelp(argc, argv);
+        if (first == "--help" || first == "-h") {
+            printUsage();
+            return 0;
+        }
+        if (argc == 3 &&
+            (std::string_view(argv[2]) == "--help" || std::string_view(argv[2]) == "-h")) {
+            char program[] = "bloom-cli";
+            char help[] = "help";
+            std::array<char*, 3> forwarded{program, help, argv[1]};
+            return commandHelp(3, forwarded.data());
+        }
+    }
     if (argc < 3) {
         printUsage();
         return 2;
