@@ -85,11 +85,14 @@ Handshake ffmpegHandshake(const bool hardware) {
              {"dnxhd", "dnxhr_lb", "dnxhr_sq", "dnxhr_hq", "dnxhr_hqx", "dnxhr_444"})
             encode(Role::VideoEncode, "dnxhd", "mxf", profile);
         encode(Role::VideoEncode, "tiff", "tiff", "rgba16");
+        // Issue #369: one DPX image per encode session, 10-bit and 16-bit RGB.
+        encode(Role::VideoEncode, "dpx", "dpx", "rgb10");
+        encode(Role::VideoEncode, "dpx", "dpx", "rgb16");
         for (const auto* codec : {"pcm_s16le", "pcm_s24le", "aac"})
             encode(Role::AudioEncode, codec, "intake-muxers-v1", "source-rate");
         // Opus (the bundled libopus) is defined at 48 kHz and carried by WebM.
         encode(Role::AudioEncode, "opus", "webm", "48000");
-        for (const auto* container : {"mov", "mp4", "mxf", "matroska", "webm", "wav", "tiff"}) {
+        for (const auto* container : {"mov", "mp4", "mxf", "matroska", "webm", "wav", "tiff", "dpx"}) {
             encode(Role::Mux, "intake-encoders-v1", container, "closed-stream-layout-v1");
             encode(Role::ReopenDecode, "intake-encoders-v1", container, "first-last-pcm-v1");
         }

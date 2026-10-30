@@ -246,6 +246,37 @@ void tests(const std::filesystem::path& directory) {
     settings.profile = "rgba16";
     settings.container = "tiff";
     (void)run(settings, directory / "export.tiff");
+    for (const auto* profile : {"rgb10", "rgb16"}) {
+        settings = {};
+        settings.width = 13;
+        settings.height = 7;
+        settings.videoCodec = "dpx";
+        settings.profile = profile;
+        settings.container = "dpx";
+        settings.colour = {1, 8, 0, 2};
+        const auto dpx = run(settings, directory / (std::string("export-") + profile + ".dpx"));
+        // The header declares the depth, and the reopen check read the tags back.
+        test::check(dpx.size() > 1664 && std::to_integer<unsigned>(dpx[0]) == 'X' &&
+                        std::to_integer<unsigned>(dpx[803]) ==
+                            (std::string_view(profile) == "rgb10" ? 10U : 16U),
+                    "DPX header depth");
+        // Linear transfer and Rec.709 primaries are the DPX codes 2 and 6.
+        test::check(std::to_integer<unsigned>(dpx[801]) == 2U &&
+                        std::to_integer<unsigned>(dpx[802]) == 6U,
+                    "DPX header colour tags");
+    }
+    settings = {};
+    settings.width = 13;
+    settings.height = 7;
+    settings.videoCodec = "dpx";
+    settings.profile = "rgb12";
+    settings.container = "dpx";
+    {
+        EncodeSessionV1 refused({});
+        const auto unavailable = refused.begin(settings);
+        test::check(unavailable && unavailable->reason == Error::Unavailable,
+                    "DPX profile outside the closed set is unavailable");
+    }
     // H.264 ships with Bloom (owner, 2026-10-31): the bundled OpenH264 encodes it with nothing
     // installed, in MOV with PCM and in MP4 with AAC.
     settings = {};

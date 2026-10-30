@@ -194,9 +194,22 @@ int videoProfile(const EncodeSettingsV1& s) {
             return AV_PROFILE_AV1_MAIN;
         return s.profile == "10bit" ? AV_PROFILE_VP9_2 : AV_PROFILE_VP9_0;
     }
+    if (s.videoCodec == "dpx") {
+        require(s.profile == "rgb10" || s.profile == "rgb16", "DPX profile unavailable",
+                Error::Unavailable);
+        return 0;
+    }
     require(s.videoCodec == "tiff" && s.profile == "rgba16", "Video encoder unavailable",
             Error::Unavailable);
     return 0;
+}
+// TIFF and DPX are one-image products: the packet is the whole file and there is no muxer.
+bool imageCodec(const EncodeSettingsV1& s) {
+    return s.videoCodec == "tiff" || s.videoCodec == "dpx";
+}
+// DPX stores integer RGB with no alpha: 10-bit packs from planar GBR, 16-bit from packed RGB48.
+AVPixelFormat dpxPixelFormat(const EncodeSettingsV1& s) {
+    return s.profile == "rgb10" ? AV_PIX_FMT_GBRP10LE : AV_PIX_FMT_RGB48LE;
 }
 bool hardwareCodec(const EncodeSettingsV1& s) {
     return s.videoCodec == "h264" || s.videoCodec == "hevc";
@@ -319,10 +332,10 @@ struct Encoder::State {
         require(avcodec_send_frame(track.codec, submitted) >= 0, "Encoder rejected input");
         int status = 0;
         while ((status = avcodec_receive_packet(track.codec, track.packet)) >= 0) {
-            if (settings.videoCodec == "tiff") {
+            if (imageCodec(settings)) {
                 require(PrivateMediaFile::write(&file, track.packet->data, track.packet->size) ==
                             track.packet->size,
-                        "TIFF product exceeds limit", Error::Oversized);
+                        "Image product exceeds limit", Error::Oversized);
             } else {
                 // libvpx and SVT-AV1 leave packet durations unset; one frame each keeps the MP4
                 // track's last sample, and so its duration, exact. Other encoders are untouched.
@@ -345,7 +358,7 @@ struct Encoder::State {
         require(track.codec && track.frame && track.packet, "Encoder allocation", Error::Oversized);
         auto& c = *track.codec;
         c.thread_count =
-            video && settings.videoCodec != "tiff" ? static_cast<int>(settings.threads) : 1;
+            video && !imageCodec(settings) ? static_cast<int>(settings.threads) : 1;
         // Issue #406: the host resolves ProRes's automatic thread count against the address space
         // it launched this worker with; a direct request for zero gets the same bounded count.
         if (video && settings.videoCodec == "prores_ks")
@@ -363,6 +376,7 @@ struct Encoder::State {
             c.framerate = av_inv_q(c.time_base);
             c.profile = videoProfile(settings);
             c.pix_fmt = settings.videoCodec == "tiff"         ? AV_PIX_FMT_RGBA64LE
+                        : settings.videoCodec == "dpx"        ? dpxPixelFormat(settings)
                         : hardwareCodec(settings) && hardware ? AV_PIX_FMT_VAAPI
                         : hardwareCodec(settings) && nvenc && settings.profile == "main10"
                             ? AV_PIX_FMT_P010LE
@@ -372,6 +386,8 @@ struct Encoder::State {
                         : webCodec(settings) ? (settings.profile == "10bit" ? AV_PIX_FMT_YUV420P10LE
                                                                             : AV_PIX_FMT_YUV420P)
                                              : AV_PIX_FMT_YUV422P10LE;
+            if (settings.videoCodec == "dpx")
+                c.bits_per_raw_sample = settings.profile == "rgb10" ? 10 : 16;
             if (settings.videoCodec == "prores_ks" && c.profile >= 4)
                 c.pix_fmt = AV_PIX_FMT_YUVA444P10LE;
             if (settings.videoCodec == "dnxhd") {
@@ -552,10 +568,10 @@ struct Encoder::State {
     }
     void open() {
         require(valid(settings), "Invalid encode settings", Error::InvalidValue);
-        if (settings.videoCodec == "tiff") {
-            require(settings.container == "tiff" && settings.frames == 1 &&
+        if (imageCodec(settings)) {
+            require(settings.container == settings.videoCodec && settings.frames == 1 &&
                         settings.audioCodec.empty(),
-                    "TIFF is a single image product", Error::Unavailable);
+                    "Image formats are single image products", Error::Unavailable);
         } else {
             require(settings.container == "mov" || settings.container == "mp4" ||
                         settings.container == "mxf" || settings.container == "matroska" ||
@@ -698,6 +714,22 @@ struct Encoder::State {
         packets(track, &f);
         audioSubmitted += static_cast<unsigned>(f.nb_samples);
     }
+    // The reopened integer samples must equal the samples that were handed to the DPX encoder.
+    void verifyExactPlanes(const AVFrame& decoded) {
+        const auto& sent = *videoTrack.frame;
+        require(decoded.format == sent.format, "Reopened DPX sample layout differs");
+        const bool planar = sent.format == AV_PIX_FMT_GBRP10LE;
+        const int planes = planar ? 3 : 1;
+        const int rowBytes = planar ? decoded.width * 2 : decoded.width * 6;
+        for (int plane = 0; plane < planes; ++plane)
+            for (int y = 0; y < decoded.height; ++y)
+                require(std::memcmp(decoded.data[plane] +
+                                        static_cast<std::ptrdiff_t>(y) * decoded.linesize[plane],
+                                    sent.data[plane] +
+                                        static_cast<std::ptrdiff_t>(y) * sent.linesize[plane],
+                                    static_cast<std::size_t>(rowBytes)) == 0,
+                        "Reopened DPX samples differ");
+    }
     // Tolerance profile v3: the reference goes through the sample format and the sampling the
     // reopened stream declares, so 4:2:0/4:2:2 chroma decimation is not counted as codec error
     // while a wrong sample layout, matrix, range or siting still is. The maximum is gated after
@@ -708,7 +740,7 @@ struct Encoder::State {
         require(decoded.width == static_cast<int>(settings.width) &&
                     decoded.height == static_cast<int>(settings.height),
                 "Reopened dimensions differ");
-        if (settings.videoCodec != "tiff") {
+        if (!imageCodec(settings)) {
             // The codec's own subsampling, not whatever the stream claims: the decoded layout must
             // decimate chroma exactly as the encoder's input did.
             const auto* actual = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded.format));
@@ -733,6 +765,12 @@ struct Encoder::State {
             std::max(qc.meanError,
                      static_cast<std::uint32_t>((measure.sum + measure.count - 1) / measure.count));
         const auto& rgba = measure.rgba;
+        if (settings.videoCodec == "dpx") {
+            // 16-bit DPX keeps every bit; 10-bit drops the low six, so rounding bounds the error.
+            require(measure.maximum <= (settings.profile == "rgb10" ? 64U : 0U),
+                    "Reopened pixels exceed the DPX precision");
+            verifyExactPlanes(decoded);
+        } else
         require(settings.videoCodec == "tiff"
                     ? rgba == reference
                     : qc.percentileMaximumError <= kVideoTolerancePercentileMaximum &&
@@ -764,10 +802,11 @@ struct Encoder::State {
         qc.bytes = file.size;
         qc.artifact = file.hash();
         require(qc.bytes > 0, "Empty encoded artifact");
-        if (settings.videoCodec == "tiff") {
+        if (imageCodec(settings)) {
+            const bool dpx = settings.videoCodec == "dpx";
             Input input;
-            const auto* codec = avcodec_find_decoder(AV_CODEC_ID_TIFF);
-            require(codec, "TIFF reopen decoder unavailable", Error::Unavailable);
+            const auto* codec = avcodec_find_decoder(dpx ? AV_CODEC_ID_DPX : AV_CODEC_ID_TIFF);
+            require(codec, "Image reopen decoder unavailable", Error::Unavailable);
             input.codec = avcodec_alloc_context3(codec);
             require(input.codec && avcodec_open2(input.codec, codec, nullptr) >= 0,
                     "TIFF reopen failed");
@@ -779,6 +818,14 @@ struct Encoder::State {
                         avcodec_send_packet(input.codec, input.packet) >= 0 &&
                         avcodec_receive_frame(input.codec, input.frame) >= 0,
                     "TIFF reopen failed");
+            if (dpx) {
+                // The header must declare the depth and the tags the encoder was asked for.
+                require(input.codec->bits_per_raw_sample == (settings.profile == "rgb10" ? 10 : 16),
+                        "Reopened DPX bit depth differs");
+                qc.colour = {input.frame->color_primaries, input.frame->color_trc,
+                             input.frame->colorspace, input.frame->color_range};
+                qc.container = "dpx/dpx";
+            }
             compare(*input.frame, firstReference, qc, {});
             qc.frames = 1;
         } else {

@@ -67,7 +67,7 @@ bool valid(const EncodeSettingsV1& v) {
 MediaDeterminismV1 encodeDeterminism(const EncodeSettingsV1& v) {
     if (v.videoCodec.empty() && v.audioCodec.starts_with("pcm_"))
         return MediaDeterminismV1::ByteExact;
-    if (v.videoCodec == "tiff")
+    if (v.videoCodec == "tiff" || v.videoCodec == "dpx")
         return MediaDeterminismV1::DecodedSemanticExact;
     return MediaDeterminismV1::DecodedSemanticTolerance;
 }
