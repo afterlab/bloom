@@ -321,6 +321,8 @@ bool compositeFrameReuseEligibleV1(const OutputPresetV1 preset,
         return profile == "dnxhr_lb" || profile == "dnxhr_sq" || profile == "dnxhr_hq";
     case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
     case OutputPresetV1::TiffRgba16SrgbV1:
+    case OutputPresetV1::DpxRgb10V1:
+    case OutputPresetV1::DpxRgb16V1:
     case OutputPresetV1::PcmWavV1:
         return false;
     }
