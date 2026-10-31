@@ -1,5 +1,6 @@
 // Document 1.34 (issue #381): every Interpret Footage member and a stream's coded pixel aspect
 // ratio round-trip, a document claiming 1.33 cannot carry them, and 1.33 migrates by version alone.
+// The Import members (Skip, a sequence's imported frame range, a still's duration) do too.
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/asset.hpp>
 #include <bloom/document/color_settings.hpp>
@@ -203,6 +204,85 @@ void sequenceMembers() {
     still.kind = AssetKind::Image;
     expect(!still.validate().ok(), "a still cannot carry a frame rate or missing frames");
 }
+// The Import options and preferences (#381): Skip, an imported frame range and a still's
+// duration round-trip, only where they belong, and Skip plays the frames a sequence has.
+void importMembers() {
+    auto seed = makeNewProject("Import", "Main", core::RationalTime::fromInteger(2));
+    AssetRecord asset;
+    asset.id = AssetId::fromRaw(1);
+    asset.kind = AssetKind::Sequence;
+    asset.locator = {"file", "project-relative", "shot.0002.png", "file:///s"};
+    asset.width = 4;
+    asset.height = 4;
+    asset.name = "shot";
+    asset.manifest.pattern = "shot.####.png";
+    asset.manifest.padding = 4;
+    asset.manifest.first = 2;
+    asset.manifest.last = 5;
+    for (const auto frame : {2, 3, 5})
+        asset.manifest.members.push_back(
+            {frame,
+             {"file", "project-relative", "shot." + std::to_string(frame) + ".png", "file:///s"},
+             {}});
+    asset.manifest.gaps = {4};
+    asset.manifest.range = AssetSequenceRange{2, 9};
+    asset.interpretation.missingFrames = AssetMissingFrames::Skip;
+    expect(asset.validate().ok(), "a skipping sequence with an imported range is valid");
+    expect(footageFrameCount(asset) == 3, "a skipping sequence is as long as its frames");
+    const auto third = footageSequenceFrame(asset, 2);
+    expect(third.member != nullptr && third.member->frame == 5,
+           "Skip plays the frames it has back to back");
+    auto holding = asset;
+    holding.interpretation.missingFrames = AssetMissingFrames::HoldPrevious;
+    expect(footageFrameCount(holding) == 4 && footageSequenceFrame(holding, 2).member->frame == 3,
+           "Hold keeps the numbered timing and holds the frame before a gap");
+    holding.interpretation.missingFrames = AssetMissingFrames::Nothing;
+    expect(footageSequenceFrame(holding, 2).member == nullptr &&
+               footageSequenceFrame(holding, 2).frame == 4,
+           "Show nothing selects no member for a gap");
+    auto outside = asset;
+    outside.manifest.range = AssetSequenceRange{3, 9};
+    expect(!outside.validate().ok(), "the frames must lie within the imported range");
+
+    AssetRecord still;
+    still.id = AssetId::fromRaw(2);
+    still.kind = AssetKind::Image;
+    still.locator = {"file", "project-relative", "logo.png", "file:///logo.png"};
+    still.width = 4;
+    still.height = 4;
+    still.name = "logo";
+    still.interpretation.stillDuration = core::RationalTime::fromInteger(5);
+    expect(still.validate().ok() && footageDuration(still, FrameRate::framesPerSecond24()) ==
+                                        std::optional{core::RationalTime::fromInteger(5)},
+           "a still's duration is its length");
+    auto timed = asset;
+    timed.interpretation.stillDuration = still.interpretation.stillDuration;
+    expect(!timed.validate().ok(), "only a still has a still duration");
+    auto ranged = still;
+    ranged.manifest.range = AssetSequenceRange{1, 2};
+    expect(!ranged.validate().ok(), "only a sequence has an imported frame range");
+    auto forever = still;
+    forever.interpretation.stillDuration = core::RationalTime::fromInteger(86401);
+    expect(!forever.validate().ok(), "a still lasts at most 24 hours");
+
+    if (!seed.project.addAsset(asset) || !seed.project.addAsset(still))
+        throw std::logic_error("import assets");
+    const Document document{std::move(seed.project)};
+    const auto text = encode(document);
+    for (const auto* token : {"\"missingFrames\": \"skip\"", "\"stillDuration\"", "\"range\""})
+        expect(text.find(token) != std::string::npos, token);
+    const auto decoded = decodeText(text);
+    expect(decoded.size() == 2 && decoded[0] == asset && decoded[1] == still,
+           "Skip, the frame range and the still duration round-trip exactly");
+    // A 1.33 reader keeps unknown trailing members aside and reads the 1.33 meaning.
+    const auto older = decodeText(replaceRegex(text, R"("minor": 34(\s*\}))", "\"minor\": 33$1"));
+    expect(older.size() == 2 &&
+               older[0].interpretation.missingFrames == AssetMissingFrames::HoldPrevious &&
+               !older[0].manifest.range && !older[1].interpretation.stillDuration,
+           "a document claiming 1.33 does not read them");
+    expect(!decodes(replaceRegex(text, R"("skip")", "\"sometimes\"")),
+           "an unknown missing-frames token is refused");
+}
 void migration() {
     const auto current = encode(makeDocument("01:00:00:00", 2));
     const auto older = replaceRegex(current, R"("minor": 34(\s*\}))", "\"minor\": 33$1");
@@ -229,6 +309,7 @@ int main() {
     try {
         roundTrip();
         sequenceMembers();
+        importMembers();
         migration();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
