@@ -235,6 +235,8 @@ Each run writes `<work-dir>/results/<UTC timestamp>[-label].json`, a `.md` summa
   cache and export, with the fields above;
 - `comparison` when `--baseline` was given.
 
+Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 6757dacbf against 27c0949c](benchmark-results-2026-10-31.md).
+
 ### Baselines and storage comparisons
 
 ```sh
