@@ -25,6 +25,9 @@ template <typename T> T get(Result<T> result) {
 // The MCP repro: black with a centred 10x10 saturated red square, whose left edge falls on an
 // odd column and so shares every 4:2:2/4:2:0 chroma sample with black.
 bool redSquare = false;
+// Issue #406: a full-width alpha ramp (0 at the left edge, opaque at the right) in place of the
+// two-step 4444 alpha, so every 10-bit alpha code the worker converts is exercised.
+bool alphaRamp = false;
 FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
     FrameProduct frame;
     frame.format = PixelFormat::Rgba16;
@@ -43,7 +46,10 @@ FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
             for (unsigned c = 0; c < 4; ++c) {
                 const bool inside = x + 5 >= settings.width / 2 && x < settings.width / 2 + 5 &&
                                     y + 5 >= settings.height / 2 && y < settings.height / 2 + 5;
-                const auto value = c == 3      ? (settings.profile.starts_with("4444") && !redSquare
+                const auto ramp = static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(x) * 65535U / std::max(1U, settings.width - 1));
+                const auto value = c == 3 && alphaRamp ? ramp
+                                   : c == 3    ? (settings.profile.starts_with("4444") && !redSquare
                                                       ? (x < settings.width / 2 ? 20000U : 50000U)
                                                       : 65535U)
                                    : redSquare ? (inside && c == 0 ? 65535U : 0U)
@@ -490,6 +496,23 @@ void chromaSampling(const std::filesystem::path& directory) {
         }
     }
 }
+// Issue #406: ProRes 4444 with an alpha ramp at 1080p and the export runner's automatic thread
+// count. swscale's shifted 10-bit alpha failed the reopen check for any ramp or antialiased edge.
+void prores4444AlphaRamp(const std::filesystem::path& directory) {
+    alphaRamp = true;
+    EncodeSettingsV1 settings;
+    settings.rate = {25, 1};
+    settings.width = 1920;
+    settings.height = 1080;
+    settings.frames = 24;
+    settings.threads = 0;
+    for (const auto* profile : {"4444", "4444xq"}) {
+        settings.profile = profile;
+        (void)run(settings,
+                  directory / (std::string("alpha-ramp-prores-") + profile + "-1080p.mov"));
+    }
+    alphaRamp = false;
+}
 } // namespace
 // ADR 0036: NVIDIA NVENC is the first hardware encoder. Run under the machine GPU lock as
 // bloom.media.encode-nvenc; without an NVIDIA driver every case is skipped (exit 77), and a driver
@@ -559,6 +582,7 @@ int main(int argc, char** argv) {
                     "test output directory");
         if (argc == 3)
             return nvencTests(argv[1]);
+        prores4444AlphaRamp(argv[1]);
         tests(argv[1]);
         chromaSampling(argv[1]);
         // Issue #352: one 8K UHD ProRes frame exports and passes reopen quality check.

@@ -1874,7 +1874,11 @@ bloom.video-rgba16-srgb.v2;first-last;reference=declared-sampling;absolute-max=2
 
 SHA-256: `15e8c88900528492844693ec44fe2261d5a713ec96b4498c1b2ec65c611290d3`.
 The maximum and mean thresholds use unsigned 16-bit sample units. Alpha is checked separately
-against the reference alpha; TIFF requires exact equality.
+against the reference alpha; TIFF requires exact equality. ProRes 4444 stores alpha losslessly, so
+its 10-bit alpha is rounded to the nearest code by Bloom, not by swscale. Issue #406: swscale's
+16- to 10-bit alpha conversion behaves as if one code were 64 units instead of 65535/1023, so a
+sample could land one code high. Soft alpha (any ramp or antialiased edge) then came back up to
+93 units off and failed the 64-unit bound.
 
 The comparison models the codec's own chroma sampling (`reference=declared-sampling`). The
 reopened stream declares its sample format, matrix, range and chroma siting. Bloom takes the

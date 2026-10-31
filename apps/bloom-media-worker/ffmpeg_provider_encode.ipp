@@ -256,6 +256,26 @@ std::string containerToken(const AVFormatContext& format, const AVCodecParameter
         token = settings.container + token.substr(token.find('/'));
     return token;
 }
+// Issue #406: swscale requantizes 16-bit alpha to 10 bits as if one code were 64 units instead of
+// 65535/1023, so a sample can land one code above the nearest (16-bit 61410 became 960, not 959).
+// prores_ks stores alpha losslessly, so soft alpha came back up to 93 16-bit units off, past the
+// 64-unit tolerance, and a 4444 export with an antialiased edge or ramp failed its reopen check.
+// Alpha is never matrixed, so each sample is rounded to the nearest 10-bit code here.
+void quantizeAlpha(const CpuPlane& rgba, AVFrame& frame) {
+    for (std::uint32_t y = 0; y < rgba.height; ++y) {
+        const auto* source = rgba.bytes.data() + static_cast<std::size_t>(y) * rgba.stride;
+        auto* alpha = reinterpret_cast<std::uint16_t*>(
+            frame.data[3] + static_cast<std::ptrdiff_t>(y) * frame.linesize[3]);
+        for (std::uint32_t x = 0; x < rgba.width; ++x) {
+            const auto value =
+                static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(source[x * 8U + 6U])) |
+                (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(source[x * 8U + 7U]))
+                 << 8U);
+            // value * 1023 / 65535 never lands on a half (65535 is odd), so this is exact rounding.
+            alpha[x] = static_cast<std::uint16_t>((value * 1023U + 32767U) / 65535U);
+        }
+    }
+}
 } // namespace
 struct Encoder::State {
     EncodeSettingsV1 settings;
@@ -592,6 +612,8 @@ struct Encoder::State {
         require(sws_scale(track.scale, data, strides, 0, track.codec->height, track.frame->data,
                           track.frame->linesize) == track.codec->height,
                 "Output conversion failed");
+        if (track.frame->format == AV_PIX_FMT_YUVA444P10LE)
+            quantizeAlpha(product.planes[0], *track.frame);
         if (frameCount == 0)
             firstReference = product.planes[0].bytes;
         if (frameCount + 1 == settings.frames)
