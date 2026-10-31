@@ -56,9 +56,16 @@ template <typename Out>
     const auto file = document::footageFilePixelAspect(asset);
     out.set(record, "filePixelAspect", out.text(ratioText(file.numerator(), file.denominator())));
     out.set(record, "loop", out.number(value.loopCount));
+    constexpr std::array<const char*, 3> missing{"hold", "nothing", "skip"};
     out.set(record, "missingFrames",
-            out.text(value.missingFrames == document::AssetMissingFrames::Nothing ? "nothing"
-                                                                                  : "hold"));
+            out.text(missing[static_cast<std::size_t>(value.missingFrames)]));
+    if (value.stillDuration) {
+        auto* still = out.array();
+        out.append(still, out.number(static_cast<std::uint64_t>(value.stillDuration->numerator())));
+        out.append(still,
+                   out.number(static_cast<std::uint64_t>(value.stillDuration->denominator())));
+        out.set(record, "stillDuration", still);
+    }
     constexpr std::array<const char*, 4> legacy{"auto", "srgb", "linear", "raw"};
     out.set(record, "legacy", out.text(legacy[static_cast<std::size_t>(value.colorSpace)]));
     out.set(record, "inputColorSpaceId", out.text(value.inputColorSpaceId));
@@ -353,8 +360,8 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
             {.composition = failure->compositionId.value(),
              .detail = failure->detail,
              .node = failure->nodeId ? std::optional(failure->nodeId->value()) : std::nullopt,
-             .parameter =
-                 failure->parameterId ? std::optional(failure->parameterId->value()) : std::nullopt});
+             .parameter = failure->parameterId ? std::optional(failure->parameterId->value())
+                                               : std::nullopt});
         core.notice(
             {.kind = "composition.compile-failed",
              .message = failure->detail,

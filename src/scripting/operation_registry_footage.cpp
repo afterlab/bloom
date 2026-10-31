@@ -28,7 +28,9 @@ const std::string kSetInterpretation =
     R"("premultiplied" (matted with matteColor, three numbers 0-1 in the file's encoding). )"
     R"(invertAlpha, deinterlace: true or false. fieldOrder: "file", "progressive", "upper" or )"
     R"("lower". pixelAspect: "n/d" (for example "10/11", "2/1") or "file". loop: 1-1000 passes. )"
-    R"(missingFrames: "hold" or "nothing". legacy and inputColorSpaceId: the input color as )"
+    R"(missingFrames: "hold", "nothing" or "skip" (play the frames that exist back to back). )"
+    R"(stillDuration: a still's length as an exact time (seconds, or [numerator, denominator]); )"
+    R"(compositionLength: true restores the composition's length. legacy and inputColorSpaceId: the input color as )"
     R"(bloom.asset.set-input-color takes it ("raw" is Preserve RGB, "linear" Interpret as Linear). )"
     R"(A layer whose out point ended with its footage follows the new length. )"
     R"(Errors: "Asset does not exist"; "Interpret Footage applies to images, sequences and )"
@@ -67,7 +69,11 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
          maybe("pixelAspect", ValueKind::String, "1/1", "Text. n/d, or file."),
          maybe("loop", ValueKind::Integer, std::int64_t{1},
                "Integer 1-1000. Passes of the footage."),
-         maybe("missingFrames", ValueKind::String, "hold", "hold or nothing."),
+         maybe("missingFrames", ValueKind::String, "hold", "hold, nothing or skip."),
+         maybe("stillDuration", ValueKind::Integer, std::int64_t{5},
+               "Exact time. A still's length (5 is five seconds)."),
+         maybe("compositionLength", ValueKind::Boolean, true,
+               "Boolean. true gives a still the composition's length again."),
          maybe("legacy", ValueKind::String, "auto", "auto, srgb, linear or raw."),
          maybe("inputColorSpaceId", ValueKind::String, "",
                "An exact color-space id in the selected OCIO config.")},
@@ -86,6 +92,8 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
             const auto aspect = read.text("pixelAspect");
             const auto loop = read.integer("loop");
             const auto missing = read.text("missingFrames");
+            const auto stillDuration = read.time("stillDuration");
+            const auto compositionLength = read.boolean("compositionLength");
             const auto legacy = read.text("legacy");
             const auto inputId = read.text("inputColorSpaceId");
             if (read.failed())
@@ -161,8 +169,17 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
                     change.missingFrames = document::AssetMissingFrames::HoldPrevious;
                 else if (*missing == "nothing")
                     change.missingFrames = document::AssetMissingFrames::Nothing;
+                else if (*missing == "skip")
+                    change.missingFrames = document::AssetMissingFrames::Skip;
                 else
-                    return argumentFailure(op, "missingFrames", "expects hold or nothing");
+                    return argumentFailure(op, "missingFrames", "expects hold, nothing or skip");
+            }
+            if (compositionLength == true) {
+                change.stillDuration = std::optional<core::RationalTime>{};
+            } else if (stillDuration) {
+                if (*stillDuration <= core::RationalTime{})
+                    return argumentFailure(op, "stillDuration", "expects a time longer than 0");
+                change.stillDuration = *stillDuration;
             }
             if (legacy || inputId) {
                 using document::AssetColorSpace;

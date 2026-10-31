@@ -1781,7 +1781,24 @@ OperationRegistry OperationRegistry::builtIn() {
          need("projectDirectory", ValueKind::String, ".",
               "The project directory the locators are made relative to."),
          maybe("folder", ValueKind::Id, StableId{1},
-               "The Assets folder the new assets land in. Omit for the project root.")},
+               "The Assets folder the new assets land in. Omit for the project root."),
+         // #381: the Import dialog's options and the Import preferences.
+         maybe("asSequence", ValueKind::Boolean, true,
+               "Numbered images become one image sequence (default); false imports each as its "
+               "own still."),
+         maybe("firstFrame", ValueKind::Integer, std::int64_t{1},
+               "With lastFrame: import only these numbered frames of each sequence; Reload "
+               "Footage keeps the range."),
+         maybe("lastFrame", ValueKind::Integer, std::int64_t{100},
+               "The last numbered frame of the range, with firstFrame."),
+         maybe("skipMissingFrames", ValueKind::Boolean, false,
+               "A new sequence plays the frames it has back to back (Missing Frames: Skip)."),
+         maybe("sequenceFrameRate", ValueKind::String, "24",
+               "The rate a new sequence assumes, as \"24\", \"23.976\" or \"n/d\"; omit to "
+               "match the composition. The Import preference \"Sequence frame rate\"."),
+         maybe("stillDuration", ValueKind::Integer, std::int64_t{5},
+               "Exact time. A new still's length (seconds, or [numerator, denominator]); omit "
+               "for the composition's length. The Import preference \"Still duration\".")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto paths = strings(args, op, "paths", error);
@@ -1789,6 +1806,41 @@ OperationRegistry OperationRegistry::builtIn() {
             const auto folder = id(args, op, "folder", error, false);
             if (!paths || !directory || error) {
                 return error;
+            }
+            detail::parity::Reader read(op, args);
+            const auto asSequence = read.boolean("asSequence");
+            const auto firstFrame = read.integer("firstFrame");
+            const auto lastFrame = read.integer("lastFrame");
+            const auto skip = read.boolean("skipMissingFrames");
+            const auto rate = read.text("sequenceFrameRate");
+            const auto still = read.time("stillDuration");
+            if (read.failed())
+                return read.error();
+            commands::ImportOptions options;
+            options.sequences = asSequence.value_or(true);
+            options.skipMissingFrames = skip.value_or(false);
+            if (firstFrame.has_value() != lastFrame.has_value())
+                return failure(op, firstFrame ? "lastFrame" : "firstFrame",
+                               "is required with the other end of the frame range");
+            if (firstFrame) {
+                if (*firstFrame < 0 || *lastFrame < *firstFrame)
+                    return failure(op, "lastFrame",
+                                   "expects a frame range from 0 with lastFrame >= firstFrame");
+                options.frameRange = document::AssetSequenceRange{*firstFrame, *lastFrame};
+            }
+            if (rate) {
+                const auto parsed = document::parseFootageFrameRate(*rate);
+                if (!parsed || !document::isValidFootageFrameRate(*parsed))
+                    return failure(op, "sequenceFrameRate", "expects 24, 23.976 or n/d");
+                options.sequenceFrameRate = parsed;
+            }
+            if (still) {
+                if (*still <= core::RationalTime{} ||
+                    *still >
+                        core::RationalTime::fromInteger(document::kMaxAssetStillDurationSeconds))
+                    return failure(op, "stillDuration",
+                                   "expects a time longer than 0, at most 24 hours");
+                options.stillDuration = still;
             }
             if (paths->empty()) {
                 return failure(op, "paths", "expects at least one media path");
@@ -1798,8 +1850,9 @@ OperationRegistry OperationRegistry::builtIn() {
             for (const auto& entry : *paths) {
                 files.emplace_back(entry);
             }
-            auto import =
-                std::make_unique<commands::ImportAssets>(files, std::filesystem::path(*directory));
+            auto import = std::make_unique<commands::ImportAssets>(
+                files, std::filesystem::path(*directory), std::function<bool()>{},
+                commands::ImportProgressCallback{}, options);
             if (folder.has_value())
                 import->setFolder(document::AssetFolderId::fromRaw(*folder));
             return OperationCreateResult(std::move(import), std::nullopt);
