@@ -137,8 +137,9 @@ class MemoryBudgetLedger final {
     // now. Caches are never a reason for work to wait. Same thread rules as poll; returns the
     // bytes the pools released.
     std::size_t reclaim(std::size_t bytes);
-    // Memory admitted to active work (processing-phase claims) that reusable pools must not grow
-    // into; applied with the next budgets. Thread-safe.
+    // Memory admitted to active work but not yet allocated (processing-phase claims minus their
+    // materialized backing, which measured usage already includes) that reusable pools must not
+    // grow into; applied with the next budgets. Thread-safe.
     void setActiveWorkClaims(std::size_t bytes);
     [[nodiscard]] std::optional<std::size_t> ramHeadroom() const;
     // Production activates this before constructing cache owners; it never gates live processing.

@@ -679,8 +679,8 @@ void applicationWiringKeepsUsableCapacity() {
     expect(spin([&] { return owner.admittedSampleCount() > admitted && !owner.sampleActive(); }),
            "the admitted work is sampled");
     // The limit still has room beyond the headroom and its margin, but the admitted frame's
-    // claims take it.
-    const auto claims = static_cast<std::size_t>(policy->usableCapacity().hostClaimBytes);
+    // claims (none of its bytes are allocated yet, so all of them are pending) take it.
+    const auto claims = static_cast<std::size_t>(policy->usableCapacity().hostPendingClaimBytes);
     const std::size_t pool = held;
     const auto room = 12 * gib - pool;
     expect(room > 2 * gib + gib / 4 && room < 2 * gib + gib / 4 + claims &&

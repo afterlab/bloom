@@ -184,8 +184,11 @@ connectApplicationMemoryBudget(MemoryBudgetController& controller,
                              cacheMemoryBudgetAllocationFromSettings(settings, ledger);
                          policy->applyHostSample(ledger.state(), ledger.physicalByteBudget(),
                                                  allocation);
-                         ledger.setActiveWorkClaims(
-                             static_cast<std::size_t>(policy->usableCapacity().hostClaimBytes));
+                         // Only claims not yet allocated: allocated work and retained preview
+                         // frames are already in the measured usage the pools grow from, and
+                         // counting them twice froze every pool while a RAM preview filled.
+                         ledger.setActiveWorkClaims(static_cast<std::size_t>(
+                             policy->usableCapacity().hostPendingClaimBytes));
                      });
     policy->addRetentionReclaimer(
         [reclaim = controller.workReclaimer()](const render::GpuProcessingPhaseDomain domain,

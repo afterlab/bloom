@@ -6,6 +6,7 @@
 // but not what other work holds now waits (AwaitingCapacity) and is admitted on release. Only a
 // need larger than the whole usable capacity is refused (BudgetRefused).
 #include <bloom/render/native_image_storage.hpp>
+#include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
@@ -414,6 +415,35 @@ void previewWidthIsBounded() {
             "nothing runs when not even one frame fits");
 }
 
+// #411: claims whose backing is allocated are already in measured usage. Reusable pools were held
+// back by every claim, retained preview frames included, so they froze while a RAM preview filled
+// and the preview evicted its own frames. Only the unallocated part is pending.
+void pendingClaimsExcludeAllocatedBacking() {
+    GpuProcessingPhasePolicy policy(32);
+    policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    deliverHost(policy, 20 * kGiB, 1);
+    reportDevice(policy, 1, 22 * kGiB);
+    auto grant = policy.reserve(frame());
+    require(grant.lease != nullptr, "the frame is admitted");
+    auto usable = policy.usableCapacity();
+    require(usable.hostClaimBytes > 0 && usable.hostPendingClaimBytes == usable.hostClaimBytes,
+            "a claim with nothing allocated yet is wholly pending");
+    struct Backing final {
+        std::vector<std::byte> bytes = std::vector<std::byte>(kMiB);
+    };
+    constexpr std::uint64_t allocated = sizeof(Backing) + kMiB;
+    auto backing = bloom::render::adoptProcessingHostBacking(std::make_unique<Backing>(),
+                                                             grant.lease, allocated, allocated);
+    require(backing != nullptr, "the phase adopts its allocated backing");
+    const auto adopted = policy.usableCapacity();
+    require(adopted.hostClaimBytes == usable.hostClaimBytes &&
+                adopted.hostPendingClaimBytes == usable.hostClaimBytes - allocated,
+            "allocated backing leaves the pending claims, not the claims");
+    backing.reset();
+    grant.lease.reset();
+    require(policy.usableCapacity().hostPendingClaimBytes == 0, "released claims are not pending");
+}
+
 int main() {
     try {
         headroomIsTheOnlyMargin();
@@ -426,6 +456,7 @@ int main() {
         retentionIsEvictedBeforeWaiting();
         cachesYieldToWork();
         deviceGrowthBeyondTheClaimUsesLiveRoom();
+        pendingClaimsExcludeAllocatedBacking();
     } catch (const std::exception& error) {
         std::cerr << "admission pressure: " << error.what() << '\n';
         return EXIT_FAILURE;
