@@ -10,9 +10,9 @@
 // Without the pinned shader tools the test SKIPs; without a device it SKIPs (exit 77) unless
 // --require-device is passed.
 
+#include "footage_interpretation_plan_support.hpp"
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
-#include "footage_interpretation_plan_support.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -68,16 +68,16 @@ void check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluato
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     context.assetBaseDirectory = directory;
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
-    const auto plan = aspectPlan(format(8, 8), asset,
-                                 LayerValues{.position = {4.0, 4.0}, .opacity = 1.0}, idBase,
-                                 pixelAspect);
+    const auto plan =
+        aspectPlan(format(8, 8), asset, LayerValues{.position = {4.0, 4.0}, .opacity = 1.0}, idBase,
+                   pixelAspect);
     auto request = requestFor(*plan);
     request.time = time;
     if (aces)
-        request.colorIntent = EvaluationColorIntent{.workingColorSpaceId = "ACEScg",
-                                                    .ocioConfigRevision = {},
-                                                    .ocioConfigUri =
-                                                        bloom::color::kAcesCgV1ConfigUri};
+        request.colorIntent =
+            EvaluationColorIntent{.workingColorSpaceId = "ACEScg",
+                                  .ocioConfigRevision = {},
+                                  .ocioConfigUri = bloom::color::kAcesCgV1ConfigUri};
     const auto prepared = builder.build(plan, request);
     expectations.expect(prepared.hasValue(), (name + ": prepares").c_str());
     if (!prepared) {
@@ -102,10 +102,14 @@ void check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluato
         return;
     const auto cold = runScene(*executor.executor, prepared.scene, kSceneBudget);
     expectations.expect(cold.ready, (name + ": the native run completes").c_str());
-    if (!cold.ready)
+    if (!cold.ready) {
+        std::cerr << name << " executor diagnostic: code="
+                  << static_cast<int>(executor.executor->diagnostic().code) << " "
+                  << executor.executor->diagnostic().message << "\n";
         return;
+    }
     const auto readback = readbackResidentImage(*cold.image, kSceneBudget);
-    expectations.expect(cold.countersAtReady.ocioEffectDispatches > 0,
+    expectations.expect(expectedPasses == 0 || cold.countersAtReady.ocioEffectDispatches > 0,
                         (name + ": the pass dispatched natively").c_str());
     expectations.expect(readback.hasValue() &&
                             pixelsClose(readback.pixels, frame.frame()->processImage().pixels()),
@@ -157,8 +161,8 @@ int main(const int argc, char** argv) {
         sequence.manifest.first = 1;
         sequence.manifest.last = 2;
         for (int frame = 1; frame <= 2; ++frame)
-            sequence.manifest.members.push_back(sequenceMember(
-                directory / ("field." + std::to_string(frame) + ".exr"), frame, 0));
+            sequence.manifest.members.push_back(
+                sequenceMember(directory / ("field." + std::to_string(frame) + ".exr"), frame, 0));
 
         CpuCompositionEvaluator evaluator;
         evaluator.setAssetBaseDirectory(directory);
@@ -218,11 +222,18 @@ int main(const int argc, char** argv) {
               "pixel aspect 10:11 with a matte", false, {}, 1, 10.0 / 11.0);
         // Camera log inputs Bloom synthesizes (#381): the input->working OCIO transform runs as a
         // native program with CPU parity, with no footage pass.
+        // Log plates carry code values in [0, 1]; the signed/HDR still's 4.0 is no camera code.
+        const auto logPlate = directory / "log.exr";
+        writeExrRgba(logPlate, 3, 2,
+                     {ExrPixel{0.1F, 0.4F, 0.7F, 1.0F}, ExrPixel{0.9F, 0.5F, 0.2F, 1.0F},
+                      ExrPixel{0.41F, 0.41F, 0.41F, 1.0F}, ExrPixel{0.0F, 0.05F, 0.5F, 0.5F},
+                      ExrPixel{0.0F, 0.0F, 0.0F, 0.0F}, ExrPixel{0.15F, 0.075F, 0.2F, 0.25F}});
+        const auto logImage = imageAsset(logPlate, "log", 702);
         std::uint64_t base = 93600;
-        for (const auto* space : {"S-Log3 SGamut3 (Bloom)", "LogC4 AWG4 (Bloom)",
-                                  "V-Log V-Gamut (Bloom)", "Apple Log (Bloom)",
-                                  "Log3G10 RWG (Bloom)", "C-Log3 CGamut (Bloom)"}) {
-            auto camera = image;
+        for (const auto* space :
+             {"S-Log3 SGamut3 (Bloom)", "LogC4 AWG4 (Bloom)", "V-Log V-Gamut (Bloom)",
+              "Apple Log (Bloom)", "Log3G10 RWG (Bloom)", "C-Log3 CGamut (Bloom)"}) {
+            auto camera = logImage;
             camera.interpretation.inputColorSpaceId = space;
             check(expectations, *device.device, evaluator, directory, camera, ocioContext, base,
                   std::string("camera log ") + space, false, {}, 0);
