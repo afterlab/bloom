@@ -121,6 +121,33 @@ class ParityOperations(unittest.TestCase):
         refused = self.server.transact([{'op': 'bloom.layer.delete', 'args': {'layers': layers}}])
         self.assertFalse(refused['succeeded'], 'deleting deleted layers is refused')
 
+    def test_import_options(self):
+        # #381: the Import dialog's options and preferences, as the Assets panel imports.
+        root = pathlib.Path(self.directory.name)
+        for frame in (1, 2, 4):
+            write_png(root / f'shot.000{frame}.png')
+        assets = lambda: self.server.tool('query', {'kind': 'assets'})['records']
+        stills = self.server.transact([{'op': 'bloom.asset.import', 'args': {
+            'paths': [str(root / 'shot.0001.png'), str(root / 'shot.0002.png')],
+            'projectDirectory': str(root), 'asSequence': False, 'stillDuration': 5}}])
+        self.assertTrue(stills['succeeded'], stills)
+        records = assets()
+        self.assertEqual([record['kind'] for record in records], [0, 0], 'two stills')
+        self.assertEqual(records[0]['interpretation']['stillDuration'], [5, 1])
+        self.assertTrue(self.server.history('undo')['succeeded'])
+        sequence = self.server.transact([{'op': 'bloom.asset.import', 'args': {
+            'paths': [str(root / 'shot.0001.png')], 'projectDirectory': str(root),
+            'firstFrame': 2, 'lastFrame': 4, 'skipMissingFrames': True,
+            'sequenceFrameRate': '23.976'}}])
+        self.assertTrue(sequence['succeeded'], sequence)
+        interpretation = assets()[0]['interpretation']
+        self.assertEqual((interpretation['missingFrames'], interpretation['frameRate']),
+                         ('skip', '24000/1001'))
+        refused = self.server.transact([{'op': 'bloom.asset.import', 'args': {
+            'paths': [str(root / 'shot.0001.png')], 'projectDirectory': str(root),
+            'firstFrame': 2}}])
+        self.assertFalse(refused['succeeded'], 'a frame range needs both ends')
+
     def test_project_color_settings(self):
         revision = self.server.revision()
         aces = self.server.tool('project.set-color-settings',
