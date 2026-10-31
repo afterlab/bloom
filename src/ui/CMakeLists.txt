@@ -554,6 +554,7 @@ target_sources(
         node_editor_canvas.cpp
         node_editor_items.cpp
         node_editor_interactions.cpp
+        node_editor_gesture_targets.cpp
         node_editor_menus.cpp
         playback_controller.cpp
         preview_frame_cache.cpp
