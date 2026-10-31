@@ -59,6 +59,8 @@ namespace {
 
 #include "gpu_media_color_still_tests.ipp"
 
+#include "gpu_media_color_multilayer_tests.ipp"
+
 #include "gpu_media_color_video_tests.ipp"
 
 } // namespace
@@ -117,6 +119,7 @@ int main(const int argc, char** argv) {
                                 ocioContext);
             testPlayerReferenceVideo(expectations, *device.device, options.fixtures, ocioContext);
             testPqInputSweep(expectations, *device.device, evaluator, ocioContext);
+            testMultilayerNoColourLayerNative(expectations, *device.device, ocioContext);
         }
 
         if (!expectations.ok()) {

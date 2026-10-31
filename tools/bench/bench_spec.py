@@ -11,6 +11,10 @@ FPS = 24
 BLENDER_SERIES = "4.5"  # LTS series the stored generator is pinned to
 
 IMAGE_FORMATS = ("png8", "png16", "exr_half_piz", "exr_float_zip", "exr_multilayer")
+# ADR 0026: an image layer starts on the first part's root layer. Blender's multilayer EXR has no
+# root color channels, so its projects select the composited color layer explicitly; without it the
+# footage has no Image output ("No color layer - use Channels") and the cell measures nothing.
+COLOR_LAYER = {"exr_multilayer": "Composite.Combined"}
 VIDEO_FORMATS = ("h264", "hevc10", "prores422hq", "prores4444", "dnxhr_hqx", "av1", "vp9")
 # tier: (width, height, frames, image formats, video formats)
 TIERS = {

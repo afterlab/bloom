@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -85,6 +86,44 @@ void writeExrRgbaWithChromaticities(const std::filesystem::path& path, const int
     file.writePixels(height);
 }
 
+// ADR 0026: a Blender-style multilayer EXR with no root color channels. Its color lives in the
+// `Composite.Combined` layer, next to a data-only `Depth.Z` channel.
+inline void writeMultilayerExr(const std::filesystem::path& path, const int width, const int height,
+                               const std::vector<ExrPixel>& pixels,
+                               const std::optional<Imf::Chromaticities>& chromaticities = {}) {
+    if (static_cast<int>(pixels.size()) != width * height)
+        throw std::logic_error("multilayer EXR fixture pixel count does not match its size");
+    const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(width - 1, height - 1));
+    Imf::Header header(window, window);
+    header.insert("alphaAssociation", Imf::StringAttribute("premultiplied"));
+    if (chromaticities)
+        header.insert("chromaticities", Imf::ChromaticitiesAttribute(*chromaticities));
+    const std::array<std::string, 5> names{"Composite.Combined.R", "Composite.Combined.G",
+                                           "Composite.Combined.B", "Composite.Combined.A",
+                                           "Depth.Z"};
+    for (const auto& name : names)
+        header.channels().insert(name, Imf::Channel(Imf::FLOAT));
+    std::array<std::vector<float>, 5> planes;
+    for (auto& plane : planes)
+        plane.resize(pixels.size());
+    for (std::size_t index = 0; index < pixels.size(); ++index) {
+        planes[0][index] = pixels[index].red;
+        planes[1][index] = pixels[index].green;
+        planes[2][index] = pixels[index].blue;
+        planes[3][index] = pixels[index].alpha;
+        planes[4][index] = 10.0F + static_cast<float>(index);
+    }
+    Imf::FrameBuffer frameBuffer;
+    const auto stride = static_cast<std::size_t>(width) * sizeof(float);
+    for (std::size_t channel = 0; channel < names.size(); ++channel)
+        frameBuffer.insert(names[channel],
+                           Imf::Slice(Imf::FLOAT, reinterpret_cast<char*>(planes[channel].data()),
+                                      sizeof(float), stride));
+    Imf::OutputFile file(path.string().c_str(), header);
+    file.setFrameBuffer(frameBuffer);
+    file.writePixels(height);
+}
+
 void writeExrRgba(const std::filesystem::path& path, const int width, const int height,
                   const std::vector<ExrPixel>& pixels) {
     writeExrRgbaWithChromaticities(path, width, height, pixels, Imf::Chromaticities());
@@ -134,7 +173,7 @@ void writeExrRgba(const std::filesystem::path& path, const int width, const int 
 [[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
 mediaPlan(const CompositionFormat compositionFormat, const document::AssetRecord& asset,
           const LayerValues layer, const std::uint64_t idBase, const std::int64_t startFrame = 0,
-          const std::int64_t loopMode = 0) {
+          const std::int64_t loopMode = 0, const std::string& colorLayer = {}) {
     const LayerIds ids{bloom::document::ParameterId::fromRaw(idBase + 0),
                        bloom::document::ParameterId::fromRaw(idBase + 1),
                        bloom::document::ParameterId::fromRaw(idBase + 2),
@@ -142,9 +181,9 @@ mediaPlan(const CompositionFormat compositionFormat, const document::AssetRecord
                        bloom::document::ParameterId::fromRaw(idBase + 4),
                        bloom::document::ParameterId::fromRaw(idBase + 5)};
     std::vector<CompiledOperation> operations;
-    operations.emplace_back(
-        bloom::runtime::CompiledImageSource{bloom::document::NodeId::fromRaw(idBase + 10), asset,
-                                            startFrame, loopMode, 0, std::string{}, false});
+    operations.emplace_back(bloom::runtime::CompiledImageSource{
+        bloom::document::NodeId::fromRaw(idBase + 10), asset, startFrame, loopMode, 0,
+        std::string{}, false, std::string{}, colorLayer});
     operations.emplace_back(layerOutput(bloom::document::NodeId::fromRaw(idBase + 11),
                                         bloom::document::LayerId::fromRaw(idBase + 12),
                                         OperationIndex::fromRaw(0), ids, layer));

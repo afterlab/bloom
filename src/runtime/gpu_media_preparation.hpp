@@ -95,6 +95,9 @@ struct MediaUploadOutcome final {
     bool cancelled = false;
     bool cacheHit = false;
     bool converted = false;
+    // ADR 0026 Q1: the selected part and layer have no color channels. The source has no Image
+    // output, so the leaf publishes nothing; this is not a failure.
+    bool noColourLayer = false;
     PreparedGpuSceneDiagnosticCode failureCode = PreparedGpuSceneDiagnosticCode::MediaUnavailable;
     std::string failure;
 };

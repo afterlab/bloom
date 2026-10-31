@@ -1223,5 +1223,7 @@ evaluates differently.
   raw ID without one; a point outside the source reports "No object under the cursor".
 - *Data-only sources.* An Image source whose selected part and layer have no color channels has no
   Image output (ADR 0026 Q1): the evaluator records the information "No color layer — use
-  Channels" and produces nothing, in preview and final render alike. Cryptomatte rank layers are
-  never classified as color layers.
+  Channels" and produces nothing, in preview and final render alike. GPU preparation matches it:
+  the source publishes no command (counted in `GpuSceneMediaStatistics::imageNoColourLayerSources`)
+  and the rest of the frame stays on the device, so a data-only selection never sends the frame to
+  the CPU reference. Cryptomatte rank layers are never classified as color layers.

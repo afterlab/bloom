@@ -145,3 +145,57 @@ void testExrNonFiniteRepair(Expectations& expectations) {
     checkMediaParity(expectations, evaluator, plan, requestFor(*plan), "repaired EXR");
     std::filesystem::remove_all(directory);
 }
+
+// ADR 0026 Q1 (#402): a multilayer EXR whose selected layer has no color channels has no Image
+// output. GPU preparation publishes nothing for that source, exactly as the CPU reference does, so
+// the frame stays prepared instead of failing over to the CPU. Selecting the color layer prepares
+// its upload.
+void testExrNoColourLayerStaysPrepared(Expectations& expectations) {
+    const auto directory = std::filesystem::temp_directory_path() / "bloom_exr_ingest_no_colour";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    const auto path = directory / "multilayer.exr";
+    writeMultilayerExr(path, 3, 2, signedHdrPixels());
+    const auto asset = imageAsset(path, "multilayer", 63000);
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(directory);
+    const auto root =
+        mediaPlan(format(8, 6), asset, LayerValues{.position = {4.0, 3.0}}, 63000, 0, 0, "");
+    auto request = requestFor(*root);
+    request.bypassOperationCache = true;
+    const auto frame = evaluator.evaluate(root, request, {});
+    const bool informed = std::ranges::any_of(frame.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.summary.find("No color layer") != std::string::npos ||
+               diagnostic.detail.find("No color layer") != std::string::npos;
+    });
+    expectations.expect(frame.frame() != nullptr && informed,
+                        "a data-only root layer renders nothing and reports why");
+    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    context.assetBaseDirectory = directory;
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    const auto prepared = builder.build(root, request);
+    expectations.expect(prepared.hasValue(),
+                        "a data-only selection prepares instead of failing over to the CPU" +
+                            (prepared ? std::string{} : ": " + prepared.diagnostic.message));
+    if (prepared) {
+        const auto& statistics = prepared.scene->mediaStatistics();
+        expectations.expect(statistics.imageNoColourLayerSources == 1,
+                            "GPU preparation records the source without a color layer");
+        expectations.expect(prepared.scene->commandForOperation()[0] ==
+                                bloom::runtime::kInvalidGpuSceneCommand,
+                            "the data-only source publishes no command");
+        const bool uploads = std::ranges::any_of(prepared.scene->commands(), [](const auto& c) {
+            return std::holds_alternative<bloom::runtime::GpuSceneUploadCommand>(c);
+        });
+        expectations.expect(!uploads, "the data-only source uploads nothing");
+    }
+    checkMediaParity(expectations, evaluator, root, requestFor(*root), "no-color-layer EXR");
+    const auto colour = mediaPlan(format(8, 6), asset, LayerValues{.position = {4.0, 3.0}},
+                                  63100, 0, 0, "Composite.Combined");
+    checkMediaParity(expectations, evaluator, colour, requestFor(*colour),
+                     "Composite.Combined EXR");
+    const auto selected = builder.build(colour, requestFor(*colour));
+    expectations.expect(selected && selected.scene->mediaStatistics().imageNoColourLayerSources == 0,
+                        "a selected color layer is an ordinary prepared upload");
+    std::filesystem::remove_all(directory);
+}

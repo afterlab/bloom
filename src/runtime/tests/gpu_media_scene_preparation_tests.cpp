@@ -61,6 +61,7 @@ int main() {
         testSequenceReadAhead(expectations, fixture);
         testExrDataWindowRegistration(expectations);
         testExrNonFiniteRepair(expectations);
+        testExrNoColourLayerStaysPrepared(expectations);
         testChangedFrameAndBypass(expectations, evaluator, fixture);
         testChangedColourInterpretation(expectations, evaluator, fixture);
         testSourceKeyExcludesIdsAndRevision(expectations, evaluator, fixture);

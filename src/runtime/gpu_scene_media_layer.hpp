@@ -64,6 +64,8 @@ struct GpuSceneUploadLeafResult final {
     std::optional<MediaCryptomattePlan> cryptomatte;
     std::optional<render::ImageWindow> outputWindow;
     EvaluatedOperationBounds bounds;
+    // ADR 0026 Q1: the source has no color layer, so the leaf publishes no command at all.
+    bool noColourLayer = false;
 };
 
 // Builds the upload result for one ImageSource leaf. On success fills `result` and returns nullopt.
@@ -280,6 +282,10 @@ template <typename Emit, typename ChargeRetained, typename ChargeTransient>
     }
     if (built.has_value()) {
         return built;
+    }
+    if (leaf.noColourLayer) {
+        outputWindow.reset();
+        return std::nullopt;
     }
     outputWindow = leaf.outputWindow;
     return emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit, command, semanticKey);

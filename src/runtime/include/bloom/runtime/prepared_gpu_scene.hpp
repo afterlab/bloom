@@ -122,6 +122,10 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t sourceRevisionBytesHashed = 0;
     // Pixels repaired under the non-finite/out-of-range image ingest policy in this build.
     std::uint64_t imageRepairedPixels = 0;
+    // ADR 0026 Q1: image sources whose selected part and layer have no color channels. They have
+    // no Image output and publish no command, exactly as the CPU reference publishes nothing; the
+    // rest of the frame stays prepared. This is information, not a failure.
+    std::uint64_t imageNoColourLayerSources = 0;
     std::uint64_t sourceBytesRead = 0;
     std::uint64_t sourceIoNanoseconds = 0;
     std::uint64_t sourceHashNanoseconds = 0;

@@ -274,6 +274,11 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
         outcome.cancelled = true;
         return outcome;
     }
+    if (!image.value.has_value() && image.code == media::ImageDiagnosticCode::NoColourChannels) {
+        outcome.noColourLayer = true;
+        ++statistics.imageNoColourLayerSources;
+        return outcome;
+    }
     if (!image.value.has_value()) {
         if (image.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
@@ -596,6 +601,12 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         ++statistics.imageConversions;
         if (decoded.cancelled) {
             outcome.cancelled = true;
+            return outcome;
+        }
+        if (!decoded.value.has_value() &&
+            decoded.code == media::ImageDiagnosticCode::NoColourChannels) {
+            outcome.noColourLayer = true;
+            ++statistics.imageNoColourLayerSources;
             return outcome;
         }
         if (!decoded.value.has_value()) {

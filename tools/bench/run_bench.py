@@ -424,6 +424,8 @@ def build_projects(args, root, selected, projects_dir, log, manifest=None):
                              "media": str(media.resolve()),
                              "label": f"{entry['tier']} {entry['format']}".upper(),
                              "width": entry["width"], "height": entry["height"]})
+                if entry["format"] in spec.COLOR_LAYER:
+                    jobs[-1]["colorLayer"] = spec.COLOR_LAYER[entry["format"]]
                 if layered:
                     jobs[-1].update({"layers": int(variant[1:]),
                                      "mix": [str(path.resolve()) for path, _ in mix],

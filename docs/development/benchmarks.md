@@ -46,7 +46,10 @@ One render per frame writes every image format:
 - `exr_half_piz`, `exr_float_zip`: OpenEXR RGBA half PIZ and float ZIP, linear Rec.709, premultiplied;
 - `exr_multilayer`: the Cycles multilayer EXR (half ZIP; depth, normal, Cryptomatte and the value AOV
   in float): `Composite.Combined`, `ViewLayer.Combined`, `Depth`, `Normal`, `CryptoObject00`/`01`
-  with its manifest, AOVs `bench_color` and `bench_id`, and `Noisy Image`.
+  with its manifest, AOVs `bench_color` and `bench_id`, and `Noisy Image`. It has no root color
+  channels, so its projects select the `Composite.Combined` color layer on every Image source
+  (`bench_spec.COLOR_LAYER`, ADR 0026); without it the footage has no Image output and the cell
+  measures an empty frame. Projects built before this selection existed need `--rebuild-projects`.
 
 Video is encoded locally with FFmpeg from the 16-bit PNG master. Codecs without alpha are flattened
 over black. All are tagged BT.709 primaries, transfer and matrix, limited range, left chroma siting

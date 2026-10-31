@@ -14,6 +14,9 @@ animated text layer. Both carry three export jobs: ProRes 422 HQ MOV, H.264 MP4 
 sequence, written below exports/<project name>/ next to the project, replacing earlier runs and
 evaluating every frame.
 
+A job may name a "colorLayer" (ADR 0026): every Image source of its footage selects that layer,
+which a multilayer EXR without root color channels needs to have an Image output at all.
+
 Variant L<n> (for example L25) is a stack of n layers cycling through the footage and the media
 listed in the job's "mix" (see build_l); the job also carries "layers": n. An optional
 "workAreaFrames" shortens the work area, so RAM preview fills (and playback loops) only those
@@ -79,6 +82,19 @@ def add_footage_layer(composition, asset):
     if len(added) != 1:
         raise RuntimeError("could not identify the new layer's output node")
     return output(result, "layer"), added.pop()
+
+
+def select_color_layer(composition, asset, layer):
+    """Selects the color layer (ADR 0026) on every Image source that reads `asset`."""
+    record = composition_record(composition)
+    values = {parameter["id"]: parameter.get("value") for parameter in record["parameters"]}
+    for node in record["nodes"]:
+        bindings = node["parameters"]
+        if node["type_id"] != "bloom.image-source" or "layer" not in bindings:
+            continue
+        if values.get(bindings.get("asset")) != str(int(asset)):
+            continue
+        set_param(node["id"], "layer", text=layer)
 
 
 def build_b(composition, asset, width, height, base_layer, base_node, image_node, label):
@@ -213,6 +229,8 @@ def build(job):
         elif job["variant"].startswith("L"):
             detail = build_l(composition, job, asset, output(created, "layerOutputNode"),
                              output(created, "imageNode"), directory)
+        if job.get("colorLayer"):
+            select_color_layer(composition, asset, job["colorLayer"])
         if job.get("workAreaFrames"):
             # A shorter work area: RAM preview fills (and playback loops) only these frames.
             bloom.ops.composition.set_work_area(0, int(job["workAreaFrames"]),

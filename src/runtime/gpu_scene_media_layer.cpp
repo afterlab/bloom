@@ -23,6 +23,12 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
         return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::Cancelled,
                                    "Preparation was cancelled"};
     }
+    // ADR 0026 Q1: a data-only selection has no Image output. Publish nothing (no image, window or
+    // bounds), exactly as the CPU reference leaves its slot empty.
+    if (outcome.noColourLayer && outcome.failure.empty()) {
+        result.noColourLayer = true;
+        return std::nullopt;
+    }
     if (!outcome.failure.empty() || outcome.image == nullptr ||
         outcome.image->descriptor() == nullptr) {
         return GpuSceneLeafFailure{outcome.failureCode,
