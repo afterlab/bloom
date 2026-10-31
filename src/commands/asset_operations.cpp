@@ -64,6 +64,13 @@ assetMetadata(const media::provider::ProbeResult& probe) {
              stream.height, stream.sampleRate, stream.colour.primaries, stream.colour.transfer,
              stream.colour.matrix, stream.colour.range, stream.fieldOrder,
              document::timecodeTypeFor(stream.timecode), stream.channelLayout});
+        // #381: the coded pixel aspect ratio Interpret Footage reports as the file's.
+        if (stream.pixelAspect.numerator > 0 && stream.pixelAspect.denominator > 0)
+            if (const auto ratio = core::PixelAspectRatio::create(
+                    static_cast<std::uint64_t>(stream.pixelAspect.numerator),
+                    static_cast<std::uint64_t>(stream.pixelAspect.denominator));
+                ratio && document::isValidFootagePixelAspect(*ratio))
+                asset.videoStreams.back().pixelAspect = *ratio;
     }
     if (asset.width == 0)
         return Unavailable{Error::Unavailable, "The file has no video stream"};

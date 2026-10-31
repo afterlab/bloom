@@ -281,6 +281,13 @@ ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
             s.fieldOrder = p.field_order >= AV_FIELD_UNKNOWN && p.field_order <= AV_FIELD_BT
                                ? static_cast<std::uint8_t>(p.field_order)
                                : 0;
+            // The coded sample aspect ratio displayWidth() resamples to square pixels (#381).
+            auto sar = stream.sample_aspect_ratio;
+            if (sar.num <= 0 || sar.den <= 0)
+                sar = p.sample_aspect_ratio;
+            if (sar.num > 0 && sar.den > 0 && sar.num != sar.den)
+                s.pixelAspect =
+                    turn.quarterTurns % 2 ? rational(sar.den, sar.num) : rational(sar.num, sar.den);
         } else if (p.codec_type == AVMEDIA_TYPE_AUDIO) {
             s.kind = MediaKind::Audio;
             require(p.sample_rate > 0 && p.sample_rate <= static_cast<int>(Limits::sampleRate),

@@ -122,6 +122,7 @@ void probe(Writer& w, const ProbeResult& p) {
         w.text(s.pixelFormat);
         w.text(s.timecode);
         w.number<std::uint8_t>(s.fieldOrder);
+        w.rational(s.pixelAspect);
         w.number<std::uint8_t>(s.appleAuthorized ? 1 : 0);
         w.number(s.sampleRate);
         w.count(s.channelLayout.size(), Limits::channels);
@@ -154,6 +155,7 @@ ProbeResult probe(Reader& r) {
         s.timecode = r.text();
         s.fieldOrder = r.number<std::uint8_t>();
         require(s.fieldOrder <= 5);
+        s.pixelAspect = r.rational();
         const auto authorized = r.number<std::uint8_t>();
         require(authorized <= 1);
         s.appleAuthorized = authorized != 0;

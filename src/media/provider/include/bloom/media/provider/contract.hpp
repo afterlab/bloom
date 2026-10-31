@@ -199,6 +199,9 @@ struct StreamDescriptor {
     // Coded field order (FFmpeg AVFieldOrder numbering): 0 unknown, 1 progressive, 2 top first,
     // 3 bottom first, 4 top coded first/bottom displayed first, 5 the reverse.
     std::uint8_t fieldOrder = 0;
+    // Schema 5 (#381): the coded sample aspect ratio, as displayed (inverted for a quarter-turned
+    // picture). Width above is already the square-pixel display width; 1/1 when undeclared.
+    Rational pixelAspect{1, 1};
     bool appleAuthorized = false;
     std::uint32_t sampleRate = 0;
     std::vector<std::string> channelLayout;

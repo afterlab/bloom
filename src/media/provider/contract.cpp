@@ -102,7 +102,7 @@ bool valid(const ProbeResult& v) {
             s.timebase.numerator <= 0 || !valid(s.rate) || s.rate.numerator <= 0 ||
             !colour(s.colour) || !valid(s.duration) || s.duration.numerator < 0 ||
             !text(s.pixelFormat) || s.timecode.size() > Limits::stringBytes ||
-            !wire::validText(s.timecode))
+            !valid(s.pixelAspect) || s.pixelAspect.numerator <= 0 || !wire::validText(s.timecode))
             return false;
         if (s.format < PixelFormat::Rgba8 || s.format > PixelFormat::Rgba16 ||
             s.kind < MediaKind::Video || s.kind > MediaKind::Data)
