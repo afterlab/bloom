@@ -1014,6 +1014,14 @@ target_link_libraries(bloom_node_canvas_polish_test PRIVATE bloom_ui bloom_proje
 bloom_enable_warnings(bloom_node_canvas_polish_test)
 bloom_add_test(NAME bloom.ui.node-canvas-polish COMMAND bloom_node_canvas_polish_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Issue #359: the Nodes canvas at scale -- per-move work independent of the node count, edits that
+# allocate only the items they touch, and the skipped projection. Counts work, never time.
+add_executable(bloom_node_canvas_scale_test node_canvas_scale_tests.cpp)
+target_include_directories(bloom_node_canvas_scale_test PRIVATE ..)
+target_link_libraries(bloom_node_canvas_scale_test PRIVATE bloom_ui bloom_project Qt6::Test)
+bloom_enable_warnings(bloom_node_canvas_scale_test)
+bloom_add_test(NAME bloom.ui.node-canvas-scale COMMAND bloom_node_canvas_scale_test LABELS ui integration kit TIMEOUT 240 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(bloom_node_group_test node_group_tests.cpp)
 target_include_directories(bloom_node_group_test PRIVATE ..)
 target_link_libraries(bloom_node_group_test PRIVATE bloom_ui bloom_project Qt6::Test)
