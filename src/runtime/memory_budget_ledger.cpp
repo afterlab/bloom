@@ -531,6 +531,11 @@ std::size_t MemoryBudgetLedger::reusableRetainedLocked() const {
     return retained;
 }
 
+std::size_t MemoryBudgetLedger::reusableRetainedBytes() const {
+    const std::lock_guard lock(mutex_);
+    return reusableRetainedLocked();
+}
+
 void MemoryBudgetLedger::applyBudgetsLocked() {
     // Budgets are computed from one retained view before any pool evicts, so an earlier pool's
     // eviction cannot change a later pool's share within the same application.

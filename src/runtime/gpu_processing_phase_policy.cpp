@@ -563,6 +563,8 @@ UsableCapacity GpuProcessingPhasePolicy::usableCapacity() const noexcept {
     result.deviceFreeBytes = subtractSaturating(result.deviceUsableBytes, result.deviceClaimBytes);
     result.hostRetentionBytes =
         addSaturating(counters.ownedPackedHostBytes, counters.ownedPackedHostMetadataBytes);
+    result.hostPendingClaimBytes = subtractSaturating(
+        result.hostClaimBytes, budget_.rootedHostBackingSnapshot().materializedBytes);
     result.admittedPhases = counters.admittedPhases;
     result.admissionRevision = counters.admissionRevision;
     return result;

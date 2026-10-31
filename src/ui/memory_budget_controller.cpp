@@ -1,5 +1,11 @@
 #include <bloom/ui/memory_budget_controller.hpp>
+
+#include <bloom/runtime/memory_headroom.hpp>
+#include <bloom/ui/application_preferences.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+
+#include <QSettings>
 
 #include <QPointer>
 
@@ -157,5 +163,66 @@ void MemoryBudgetController::consume() {
     static_cast<void>(ledger_.applySample(std::move(sample)));
     if (guard)
         emit sampleApplied(); // An observer may delete this owner; access no member afterward.
+}
+
+MemoryBudgetController::Sampler
+applicationMemorySampler(std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy) {
+    return [policy = std::move(policy)](const runtime::CancellationToken& cancellation) {
+        runtime::releaseFreedHostMemory();
+        return policy->sampleHostMemory(cancellation);
+    };
+}
+
+std::function<void()>
+connectApplicationMemoryBudget(MemoryBudgetController& controller,
+                               const std::shared_ptr<runtime::GpuProcessingPhasePolicy>& policy,
+                               runtime::MemoryBudgetLedger& ledger, QObject* context) {
+    QObject::connect(&controller, &MemoryBudgetController::sampleApplied, context,
+                     [policy, &ledger] {
+                         const QSettings settings;
+                         const auto allocation =
+                             cacheMemoryBudgetAllocationFromSettings(settings, ledger);
+                         policy->applyHostSample(ledger.state(), ledger.physicalByteBudget(),
+                                                 allocation);
+                         // Only claims not yet allocated: allocated work and retained preview
+                         // frames are already in the measured usage the pools grow from, and
+                         // counting them twice froze every pool while a RAM preview filled.
+                         ledger.setActiveWorkClaims(static_cast<std::size_t>(
+                             policy->usableCapacity().hostPendingClaimBytes));
+                     });
+    policy->addRetentionReclaimer(
+        [reclaim = controller.workReclaimer()](const render::GpuProcessingPhaseDomain domain,
+                                               const std::uint64_t shortfall) -> std::uint64_t {
+            // Device waits have no ledger pool to evict.
+            if (domain == render::GpuProcessingPhaseDomain::Host)
+                reclaim(static_cast<std::size_t>(shortfall));
+            return 0;
+        });
+    const QPointer guard(&controller);
+    auto applyHeadroom = [policy, &ledger, guard] {
+        const QSettings settings;
+        const auto preferences = loadApplicationPreferences(settings);
+        policy->setHeadroom(
+            {.ramBytes = preferences.ramHeadroomBytes, .vramBytes = preferences.vramHeadroomBytes});
+        // setRamHeadroom applies the new budgets at once against the last sample; the pressure
+        // monitor then samples the machine now, so a larger headroom evicts within one interval.
+        ledger.setRamHeadroom(static_cast<std::size_t>(preferences.ramHeadroomBytes));
+        if (guard)
+            guard->wakePressureMonitor();
+    };
+    applyHeadroom();
+    // Physical memory, a process limit and the device-local size are measured after startup:
+    // re-apply when a sample changes the computed default (a saved value still wins).
+    QObject::connect(&controller, &MemoryBudgetController::sampleApplied, context,
+                     [applyHeadroom, applied = std::pair{runtime::defaultRamHeadroomBytes(),
+                                                         runtime::defaultVramHeadroomBytes()}]() mutable {
+                         const std::pair current{runtime::defaultRamHeadroomBytes(),
+                                                 runtime::defaultVramHeadroomBytes()};
+                         if (current != applied) {
+                             applied = current;
+                             applyHeadroom();
+                         }
+                     });
+    return applyHeadroom;
 }
 } // namespace bloom::ui

@@ -873,11 +873,27 @@ thread and requests a host sample at once (the sampler trims the heap first); he
 providers reclaim synchronously on the process ledger and force their next sample. Reusable pools
 see `poolAvailableLocked`: available memory minus own swap, bounded by the room left in each finite
 cgroup domain (limit minus unreclaimable usage), and never grow into `setActiveWorkClaims` (the
-policy's host claims, applied after each sample). An export waiting for capacity reports
+policy's pending host claims, `UsableCapacity::hostPendingClaimBytes`, applied after each sample).
+Pending claims are the claims not yet backed by a rooted host allocation: allocated work and retained
+packed preview frames are already in the measured usage, and counting them a second time froze
+every pool while a RAM preview filled, so the preview evicted its own frames with memory still
+free. An export waiting for capacity reports
 `ExportDeviceRoute::WaitingForViewer` only while `viewerPriority()` shows the Viewer waiting or
 active; otherwise `WaitingForMemory` with `ExportJobProgress::memoryNeededBytes`. Cache callbacks apply on the owner thread; status bars and
 Preferences observe cached state. Shutdown cancels and stops admission without waiting on a held
 worker. A preference change requests a new sample but applies retention targets immediately.
+
+One function wires this for a Qt composition root: `ui::connectApplicationMemoryBudget` (with
+`ui::applicationMemorySampler`) delivers each sample to the processing policy and the policy's host
+claims to `setActiveWorkClaims`, registers the work reclaimer, and applies the RAM/VRAM headroom
+(the saved preference, else 10% of measured capacity) to the policy and to
+`MemoryBudgetLedger::setRamHeadroom`, again whenever a sample changes the computed default. The
+application and the packed RAM-fill benchmark harness both call it. A ledger without a headroom
+has no usable-capacity model: under a finite OS limit it divides the whole absolute limit between
+the reusable pools (see below), which leaves no room for work. That is what the harness ran before
+#411: inside a 20 GiB cgroup the operation cache held 11.4 GB, the preview cache up to 7.6 GB and
+the other pools about 2.3 GB, the process sat at the limit with under 1 GB outside the pools, and
+2160p video fills stopped at 182–207 of 240 frames waiting for capacity no cache gave back.
 
 ### Actual process constraints and active work
 

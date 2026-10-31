@@ -108,6 +108,8 @@ class MemoryBudgetLedger final {
     void unregisterCache(const void* owner);
     [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
     [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
+    // What every reusable pool holds now (asks each pool; same thread rules as poll).
+    [[nodiscard]] std::size_t reusableRetainedBytes() const;
     void setConfiguredTotal(std::size_t bytes);
     // The RAM headroom preference. Once set, each reusable pool may hold what it retains now plus
     // all measured available memory beyond the headroom: caches fill usable memory and are evicted
@@ -135,8 +137,9 @@ class MemoryBudgetLedger final {
     // now. Caches are never a reason for work to wait. Same thread rules as poll; returns the
     // bytes the pools released.
     std::size_t reclaim(std::size_t bytes);
-    // Memory admitted to active work (processing-phase claims) that reusable pools must not grow
-    // into; applied with the next budgets. Thread-safe.
+    // Memory admitted to active work but not yet allocated (processing-phase claims minus their
+    // materialized backing, which measured usage already includes) that reusable pools must not
+    // grow into; applied with the next budgets. Thread-safe.
     void setActiveWorkClaims(std::size_t bytes);
     [[nodiscard]] std::optional<std::size_t> ramHeadroom() const;
     // Production activates this before constructing cache owners; it never gates live processing.

@@ -59,6 +59,10 @@ struct UsableCapacity final {
     std::uint64_t deviceFreeBytes = 0;
     // Evictable cache retention inside hostClaimBytes (retained preview frames).
     std::uint64_t hostRetentionBytes = 0;
+    // The part of hostClaimBytes not yet backed by a rooted host allocation. Materialized backing
+    // is already in the process's measured usage, so only this part is memory that measured
+    // availability does not yet show as taken (MemoryBudgetLedger::setActiveWorkClaims).
+    std::uint64_t hostPendingClaimBytes = 0;
     std::size_t admittedPhases = 0;
     std::uint64_t admissionRevision = 0;
 };
