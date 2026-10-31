@@ -41,7 +41,7 @@ struct AssetInterpretation {
     std::optional<CompositionTimecode> startTimecode;
     AssetAlphaMode alphaMode = AssetAlphaMode::Guess;
     bool invertAlpha = false;
-    // The colour a Premultiplied alpha was matted against, in the file's own encoding, [0, 1].
+    // The color a Premultiplied alpha was matted against, in the file's own encoding, [0, 1].
     std::array<double, 3> matteColor{0.0, 0.0, 0.0};
     AssetFieldOrder fieldOrder = AssetFieldOrder::File;
     bool deinterlace = false;

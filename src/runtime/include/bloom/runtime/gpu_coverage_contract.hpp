@@ -289,7 +289,7 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.display.custom_view_transform", "custom display/view transform",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});
     // #381 Interpret Footage: alpha Ignore/Invert/premultiplied matte and deinterlacing run as one
-    // pass over the stored samples before the input colour transform.
+    // pass over the stored samples before the input color transform.
     out.push_back(GpuFeatureCoverageEntry{
         "feature.footage.interpretation",
         "Interpret Footage alpha (ignore, invert, matte) and deinterlace pass",

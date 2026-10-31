@@ -459,13 +459,13 @@ value and a rendered frame cannot disagree.
   and sequences decode square; their override is the ratio itself.
 
 **Footage interpretation pass.** Ignore, Invert and a premultiplied matte color, and deinterlacing,
-are pixel transformations of the file's stored samples, so they run before the input colour
+are pixel transformations of the file's stored samples, so they run before the input color
 transform. The decoder produces a stored-samples image (`ImageInterpretation::storedSamples`,
 `videoToStoredSamples`): stored R, G, B and `fma(A, 0.5, 0.5)`, so a transparent pixel keeps its
 stored RGB through the premultiplied image type. The pass (`runtime/footage_interpretation_pass`)
 then, per pixel: for a deinterlaced row of the field not kept, averages the rows above and below
 (one at an edge); decodes alpha; inverts it; and writes Ignore `(rgb, 1)`, Straight `(rgb·a, a)` or
-Premultiplied `(rgb − (1 − a)·matte, a)`. Its output is the premultiplied pre-colour state an
+Premultiplied `(rgb − (1 − a)·matte, a)`. Its output is the premultiplied pre-color state an
 ordinary decode publishes, so the proxy point resample and the input transform follow unchanged.
 On the GPU route the pass is a native `ProcessNeighborhood` program (`FootageInterpretation` in the
 OCIO preparer, parameters baked into the shader) emitted right after the upload, before the

@@ -27,7 +27,7 @@ struct AssetInterpretationChange final {
     std::optional<std::optional<core::PixelAspectRatio>> pixelAspect;
     std::optional<std::uint32_t> loopCount;
     std::optional<document::AssetMissingFrames> missingFrames;
-    // Input colour: the legacy choice and the exact OCIO id, with SetAssetInputColor's rule (an id
+    // Input color: the legacy choice and the exact OCIO id, with SetAssetInputColor's rule (an id
     // uses Auto in the legacy field).
     std::optional<std::pair<document::AssetColorSpace, std::string>> inputColor;
 

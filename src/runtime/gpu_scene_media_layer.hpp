@@ -112,7 +112,7 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     // The window the resample reads: the matte for a Cryptomatte leaf, else the upload.
     auto currentWindow = leaf.descriptor->dataWindow();
     // #381: the footage interpretation pass over the full-resolution stored samples, before any
-    // proxy resample (deinterlacing needs every row) and before the colour transform.
+    // proxy resample (deinterlacing needs every row) and before the color transform.
     if (leaf.interpretation != nullptr) {
         const auto extent = currentWindow.extent();
         if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {

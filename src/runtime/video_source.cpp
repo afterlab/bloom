@@ -372,7 +372,7 @@ convertSelectedVideo(const VideoSourceSelection& selection,
         return media::video::videoToSceneLinear(
             *selection.frame, selection.interpretation, selection.inputColorSpaceId,
             selection.inputProcessor, composition, horizontalScale, verticalScale, budget, cancel);
-    // #381: stored samples at full resolution -> footage pass -> input colour -> proxy resample.
+    // #381: stored samples at full resolution -> footage pass -> input color -> proxy resample.
     auto stored = media::video::videoToStoredSamples(
         *selection.frame, selection.interpretation,
         selection.inputProcessor ? std::string_view(selection.inputColorSpaceId)

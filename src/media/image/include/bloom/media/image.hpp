@@ -37,10 +37,10 @@ struct ImageInterpretation {
     std::string part{};
     std::string layer{};
     // Interpret Footage (#381): decode the file's stored channel values for the runtime's footage
-    // interpretation pass instead of a process image. No colour conversion and no alpha
+    // interpretation pass instead of a process image. No color conversion and no alpha
     // association run; each pixel is (stored R, G, B, 0.5 + 0.5 * stored A), so a transparent
     // pixel keeps its stored RGB through the premultiplied image type (the pass decodes the
-    // biased alpha). Only valid with the Raw colour space. A provider-decoded file (TIFF) is
+    // biased alpha). Only valid with the Raw color space. A provider-decoded file (TIFF) is
     // decoded premultiplied, so its stored RGB under zero alpha is not available.
     bool storedSamples = false;
     friend bool operator==(const ImageInterpretation&, const ImageInterpretation&) = default;

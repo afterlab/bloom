@@ -2,12 +2,12 @@
 
 // Interpret Footage (#381): the footage interpretation pass. Alpha (Ignore, Invert, a
 // premultiplied matte color) and deinterlacing are pixel transformations of the file's stored
-// samples, so they run as one pass before the input colour transform: on the CPU reference here,
+// samples, so they run as one pass before the input color transform: on the CPU reference here,
 // and on the GPU as a ProcessNeighborhood program with the same binary32 arithmetic.
 //
 // Its input is a stored-samples image (media::ImageInterpretation::storedSamples): stored R, G, B
-// and fma(A, 0.5, 0.5). Its output is premultiplied pre-colour-transform RGBA, the same state an
-// ordinary decode publishes, so proxy resampling and the colour transform follow unchanged.
+// and fma(A, 0.5, 0.5). Its output is premultiplied pre-color-transform RGBA, the same state an
+// ordinary decode publishes, so proxy resampling and the color transform follow unchanged.
 
 #include <bloom/document/asset.hpp>
 #include <bloom/media/image.hpp>
@@ -34,7 +34,7 @@ struct FootagePass final {
     enum class Alpha : std::uint8_t { Ignore, Straight, Premultiplied };
     Alpha alpha = Alpha::Straight;
     bool invert = false;
-    // Premultiplied only: the colour the alpha was matted against, in the file's encoding.
+    // Premultiplied only: the color the alpha was matted against, in the file's encoding.
     std::array<float, 3> matte{};
     // 0: no deinterlace; 1: keep the upper field (even frame rows) and interpolate the others; 2:
     // keep the lower field.
@@ -57,7 +57,7 @@ struct FootagePass final {
 applyFootagePass(const FootagePass& pass, const render::Rgba32fImage& stored, std::size_t budget,
                  const std::function<bool()>& cancelled);
 
-// An input colour processor over a premultiplied image: un-premultiply, transform the straight
+// An input color processor over a premultiplied image: un-premultiply, transform the straight
 // RGB, re-premultiply (an alpha-zero pixel stays transparent). The CPU twin of the GPU OCIO CST
 // that follows the pass.
 [[nodiscard]] std::variant<render::Rgba32fImage, std::string>

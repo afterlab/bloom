@@ -372,7 +372,7 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
     std::shared_ptr<const render::Rgba32fImage> image;
     std::uint64_t repairedPixels = 0;
     if (selected.footagePass) {
-        // #381: stored samples -> footage pass -> input colour, then the proxy resample. The disk
+        // #381: stored samples -> footage pass -> input color, then the proxy resample. The disk
         // cache holds ordinary decodes only; the memory cache keeps the interpreted image.
         if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr)
             if (auto cached = memoryCache->find(selected.cacheKey, document::Revision{}))
