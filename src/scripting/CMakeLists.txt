@@ -29,6 +29,7 @@ target_sources(
         operation_frame_times.cpp
         operation_registry_parity_layers.cpp
         operation_registry_parity_project.cpp
+        operation_registry_footage.cpp
         operation_values.hpp
         render.cpp
         session.cpp

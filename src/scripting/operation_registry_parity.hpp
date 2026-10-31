@@ -254,5 +254,7 @@ void addLayerAndNodeOperations(std::vector<OperationDescriptor>& descriptors);
 // Registers the Assets panel's delete and New Composition from Selection, and the Properties
 // panel's reset, typed node-parameter values and video audio stream.
 void addProjectOperations(std::vector<OperationDescriptor>& descriptors);
+// Registers Interpret Footage (#381): bloom.asset.set-interpretation.
+void addFootageOperations(std::vector<OperationDescriptor>& descriptors);
 
 } // namespace bloom::scripting::detail::parity

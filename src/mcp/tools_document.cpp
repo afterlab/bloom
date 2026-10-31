@@ -15,6 +15,54 @@
 
 namespace bloom::mcp {
 namespace {
+// #381: Interpret Footage, as bloom.asset.set-interpretation takes it.
+[[nodiscard]] std::string ratioText(const std::uint64_t numerator, const std::uint64_t denominator) {
+    return std::to_string(numerator) + "/" + std::to_string(denominator);
+}
+template <typename Out>
+[[nodiscard]] auto* interpretationRecord(Out& out, const document::AssetRecord& asset) {
+    const auto& value = asset.interpretation;
+    auto* record = out.object();
+    const auto rate = document::footageFrameRate(asset);
+    out.set(record, "frameRate",
+            out.text(value.frameRate ? ratioText(value.frameRate->numerator(),
+                                                 value.frameRate->denominator())
+                                     : std::string{}));
+    out.set(record, "playbackFrameRate",
+            out.text(rate ? ratioText(rate->numerator(), rate->denominator()) : std::string{}));
+    if (const auto start = document::footageStartTimecode(asset)) {
+        auto* time = out.array();
+        out.append(time, out.number(static_cast<std::uint64_t>(start->start.numerator())));
+        out.append(time, out.number(static_cast<std::uint64_t>(start->start.denominator())));
+        out.set(record, "startTime", time);
+        out.set(record, "dropFrame", out.boolean(start->dropFrame));
+    }
+    out.set(record, "sourceTimecode", out.boolean(!value.startTimecode.has_value()));
+    constexpr std::array<const char*, 4> alpha{"guess", "ignore", "straight", "premultiplied"};
+    out.set(record, "alpha", out.text(alpha[static_cast<std::size_t>(value.alphaMode)]));
+    out.set(record, "invertAlpha", out.boolean(value.invertAlpha));
+    auto* matte = out.array();
+    for (const auto component : value.matteColor)
+        out.append(matte, out.real(component));
+    out.set(record, "matteColor", matte);
+    constexpr std::array<const char*, 4> fields{"file", "progressive", "upper", "lower"};
+    out.set(record, "fieldOrder", out.text(fields[static_cast<std::size_t>(value.fieldOrder)]));
+    out.set(record, "deinterlace", out.boolean(value.deinterlace));
+    const auto aspect = document::footagePixelAspect(asset);
+    out.set(record, "pixelAspect",
+            out.text(value.pixelAspect ? ratioText(aspect.numerator(), aspect.denominator())
+                                       : std::string("file")));
+    const auto file = document::footageFilePixelAspect(asset);
+    out.set(record, "filePixelAspect", out.text(ratioText(file.numerator(), file.denominator())));
+    out.set(record, "loop", out.number(value.loopCount));
+    out.set(record, "missingFrames",
+            out.text(value.missingFrames == document::AssetMissingFrames::Nothing ? "nothing"
+                                                                                  : "hold"));
+    constexpr std::array<const char*, 4> legacy{"auto", "srgb", "linear", "raw"};
+    out.set(record, "legacy", out.text(legacy[static_cast<std::size_t>(value.colorSpace)]));
+    out.set(record, "inputColorSpaceId", out.text(value.inputColorSpaceId));
+    return record;
+}
 constexpr std::array<std::string_view, 7> kContextSources{
     "", "project", "composition", "time", "layer", "selection", "layers"};
 constexpr std::size_t kParameterPageSize = 64;
@@ -665,6 +713,10 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
             const auto digest = asset.contentDigest.toLowercaseHex();
             out.set(record, "digest",
                     out.text("sha256:" + std::string(digest.data(), digest.size())));
+            if (asset.kind == document::AssetKind::Image ||
+                asset.kind == document::AssetKind::Sequence ||
+                asset.kind == document::AssetKind::Video)
+                out.set(record, "interpretation", interpretationRecord(out, asset));
             out.append(records, record);
         }
     } else if (kind == "enums") {
