@@ -135,6 +135,37 @@ Full cold fill, so it produced no rows. Half and Quarter complete for all three.
 test whether the stall is purely cap-induced, for example by running at 40G with no other Bloom
 resident.
 
+**Cause and fix (#411).** The harness's memory attribution (`memoryAtPeak`, `BENCH_MEMORY`) shows
+that almost all of the memory was Bloom's own reusable caches, sized to the whole 20G limit. At the
+DNxHR HQX A stall (205/240), RSS was 21.3 GB: the operation cache held 11.4 GB, the preview cache
+6.8 GB, the other ledger pools 2.3 GB, and less than 1 GB was outside the pools. The harness had
+copied the application's memory setup without the RAM/VRAM headroom, the active-work claims and the
+evict-on-demand reclaimer. With no headroom, the process ledger divided the absolute limit between
+the reusable pools in proportion to their automatic targets, and with no reclaimer a frame that
+waited for host capacity waited for the full timeout. It now runs the application's wiring
+(`connectApplicationMemoryBudget`). A second fault, which the application shared, held back every
+processing claim from pool growth, including claims already allocated (retained packed preview
+frames among them), so pools froze while a RAM preview filled; only unallocated claims are held back
+now.
+
+Re-measured inside the same 20G scope, Full cold, A variant. Before: commit 21a6455fa plus the
+attribution commit. After: the fix, rebased on 9bffab0eb.
+
+| Cell | Before | After |
+|---|---|---|
+| DNxHR HQX A | stalled 205/240, 0.3 fps, timed out at 600 s, peak RSS 21.5 GB | 239/240 prepared, finished, 9.2 fps, peak RSS 15.2 GB |
+| png16 A | 239/240 prepared, 10.4 fps, peak RSS 20.3 GB | 239/240 prepared, 8.5 fps, peak RSS 15.8 GB |
+
+Peak RSS now stays below usable capacity (the 20 GiB limit minus the 2.1 GB default headroom).
+At the after peak the caches held about 14 GB: preview 3.4–3.6 GB, operation cache 6.5–10.4 GB
+(prepared uploads 6.5–8.2 GB, decoded media up to 2.1 GB), next to 4 GB of in-flight work. The
+reusable pools share the room and give back memory in proportion to what they hold, so by the end
+of the fill only 82 (png16) and 101 (DNxHR) of the 240 frames are still cached, and both runs end
+`PartialBudget`. Before, the preview cache had a fixed 7.6 GB share of the limit and kept 230 png16
+frames, at the cost of running the process at the limit. Keeping all 240 frames of a 2160p fill
+inside 20G needs about 8 GB of preview frames, so it depends on which retained bytes give way first:
+the operation cache's prepared uploads and decoded sources, or the preview frames.
+
 ## Conditions
 
 - **Host crash, 2026-10-31 16:14 local.** The first after-run queue ran one runner for the whole

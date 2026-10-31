@@ -183,9 +183,10 @@ Every measurement is a fresh process.
 
 - **RAM-preview fill** (`kind: fill`): the harness's `--bench-project` mode opens the project
   through `ProjectHost` and wires the preview like the desktop application (application scheduler
-  and budget view, process memory ledger and `MemoryBudgetController`, the qualified display
-  bootstrap, settings-derived cache budgets, the packed GPU preview service, fill width from
-  measured capacity). After the Viewer's first frame it starts the RAM preview and reports
+  and budget view, process memory ledger and `MemoryBudgetController` with the application's own
+  memory wiring `connectApplicationMemoryBudget`, which applies the RAM/VRAM headroom, active-work
+  claims and evict-on-demand, the qualified display bootstrap, settings-derived cache budgets, the
+  packed GPU preview service, fill width from measured capacity). After the Viewer's first frame it starts the RAM preview and reports
   `fillFps` = prepared frames / fill seconds at the selected resolution (`Full`, `Half`,
   `Quarter`). **Cold**: the footage is dropped from the OS page cache first
   (`posix_fadvise(DONTNEED)`; `coldDropped` records whether the platform could). **Warm**: the
@@ -218,6 +219,15 @@ Every measurement is a fresh process.
   sampled peak of the process tree; `cpuFallbackFrames` must be 0; `admissionRefusals` and
   `residentDetail` report GPU admission refusals and the resident path's last detail (the 8K tier's
   per-image ceiling shows up here).
+- **Memory attribution** (fills and playback runs): `memoryAtPeak` is the harness's own sample with
+  the highest RSS over the measured window, taken every 250 ms: `rssBytes` with `anonBytes`,
+  `fileBytes` and `shmemBytes` (Linux `/proc`; zero elsewhere), `reusablePoolBytes` (every reusable
+  pool on the process memory ledger), `previewCacheBytes`, `operationCacheBytes` (with its
+  `decodedMediaBytes` and `preparedUploadBytes` entries), and the processing
+  policy's `hostClaimBytes` and `hostUsableBytes` (usable capacity: available memory within the OS
+  limit minus the RAM headroom). RSS minus `reusablePoolBytes` is the memory outside Bloom's
+  caches. The harness also prints a `BENCH_MEMORY` line with the same fields every ten seconds,
+  which the run log keeps, so a fill that stops making progress shows where its memory is.
 
 Process sampling uses `/proc` on Linux and `psutil` where it is installed; without either, CPU and
 RSS sampling are reported as absent rather than guessed.
