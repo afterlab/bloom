@@ -1,4 +1,5 @@
 #pragma once
+#include "footage_interpretation_pass.hpp"
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -26,6 +27,8 @@ struct VideoSourceSelection {
     bool retainedRevision = false;
     // "software", "vaapi" or "software (fallback: <reason>)" for the decoded frame.
     std::string decodeProvenance;
+    // #381: the footage interpretation pass (alpha, deinterlace) the frame runs.
+    std::optional<FootagePass> footagePass;
 };
 class VideoSourceContext final {
   public:
@@ -89,4 +92,12 @@ class VideoSourceContext final {
     MediaSourceRevisionPolicy revisionPolicy = MediaSourceRevisionPolicy::Revalidate,
     bool allowInsertion = true,
     std::size_t hostByteBudget = std::numeric_limits<std::size_t>::max());
+// The selected frame in the working space at the request's proxy scales: videoToSceneLinear, or
+// with a footage pass the stored samples, the pass, the input colour and the proxy resample. The
+// CPU reference for every route.
+[[nodiscard]] media::provider::Result<render::Rgba32fImage>
+convertSelectedVideo(const VideoSourceSelection& selection,
+                     render::Rgba32fImageDescriptor composition, double horizontalScale,
+                     double verticalScale, std::size_t budget,
+                     const std::function<bool()>& cancel);
 } // namespace bloom::runtime::detail

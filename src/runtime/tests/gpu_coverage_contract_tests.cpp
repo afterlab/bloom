@@ -624,6 +624,38 @@ displayProofRunner(const bool customView) {
     add("node.bloom.cryptomatte", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime Cryptomatte production scene preparation",
         [runAllCryptomatte] { return runAllCryptomatte(114100); });
+    // #381: an interpreted still (alpha ignored, then inverted straight, then a premultiplied
+    // matte) prepares the stored-samples upload and the native footage pass.
+    add(
+        "feature.footage.interpretation", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime footage interpretation native tests + production media preparation",
+        [] {
+            FixtureRun combined;
+            combined.prepared = true;
+            const auto& image = bloom::gpu_coverage_media::syntheticImage();
+            std::uint64_t base = 114500;
+            for (const auto mode : {bloom::document::AssetAlphaMode::Ignore,
+                                    bloom::document::AssetAlphaMode::Straight,
+                                    bloom::document::AssetAlphaMode::Premultiplied}) {
+                auto asset = image.asset;
+                asset.interpretation.alphaMode = mode;
+                asset.interpretation.invertAlpha = mode == bloom::document::AssetAlphaMode::Straight;
+                if (mode == bloom::document::AssetAlphaMode::Premultiplied)
+                    asset.interpretation.matteColor = {0.25, 0.5, 0.75};
+                const bloom::runtime::CpuCompositionEvaluator evaluator;
+                const auto plan = bloom::gpu_coverage_media::imageSourcePlan(
+                    asset, LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, base);
+                base += 100;
+                auto run =
+                    runMediaBuilder(plan, evaluator, bloom::gpu_coverage_media::gateDirectory());
+                combined.prepared = combined.prepared && run.prepared;
+                combined.evidence = run.evidence;
+                for (auto& frame : run.frames)
+                    combined.frames.push_back(std::move(frame));
+            }
+            return combined;
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     add("node.bloom.image-source", GpuCoverageFixtureCriterion::Prepared,
         "src/media image source tests", [] {
             const bloom::runtime::CpuCompositionEvaluator evaluator;

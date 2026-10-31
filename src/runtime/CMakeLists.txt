@@ -90,6 +90,8 @@ target_sources(
         composite_frame_cache.cpp
         video_source.hpp
         image_source.cpp
+        footage_time.cpp
+        footage_interpretation_pass.cpp
         image_sequence_read_ahead.cpp
         channel_resolution.cpp
         channel_shuffle.cpp

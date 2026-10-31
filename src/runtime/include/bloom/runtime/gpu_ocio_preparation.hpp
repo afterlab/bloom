@@ -54,6 +54,9 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // The Display kind's exact display/view transform as a float ProcessEffect: display-referred
     // RGBA32F for media delivery quantized beyond 8 bits at the codec boundary.
     DisplayEffect = 8,
+    // #381: the footage interpretation pass (alpha, deinterlace) over stored samples; its
+    // parameters (`footagePass`, detail::FootagePass::parameters()) are baked into the shader.
+    FootageInterpretation = 9,
 };
 
 struct GpuOcioTransformSpec final {
@@ -71,6 +74,8 @@ struct GpuOcioTransformSpec final {
     std::uint8_t blurEdge = 0;
     // LayerMask only.
     std::vector<std::byte> maskData;
+    // FootageInterpretation only.
+    std::vector<float> footagePass;
     // FileTransform only. The shared, immutable LUT resource handle; the reservation keeps the
     // exact opened bytes alive for the whole extraction. Null is an InvalidRequest refusal.
     std::shared_ptr<const color::LutFile> lutFile;

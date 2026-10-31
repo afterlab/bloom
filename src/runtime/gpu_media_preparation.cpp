@@ -307,11 +307,9 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
         }
         ++statistics.uploadCacheMisses;
     }
-    auto converted = media::video::videoToSceneLinear(
-        *selection.frame, selection.interpretation, selection.inputColorSpaceId,
-        selection.inputProcessor, resolved.imageDescriptor, resolved.horizontalScale,
-        resolved.verticalScale, byteBudget(pixelBudget),
-        [&cancellation] { return cancellation.isCancellationRequested(); });
+    auto converted = convertSelectedVideo(
+        selection, resolved.imageDescriptor, resolved.horizontalScale, resolved.verticalScale,
+        byteBudget(pixelBudget), [&cancellation] { return cancellation.isCancellationRequested(); });
     ++statistics.videoConversions;
     if (const auto* error = std::get_if<media::provider::Unavailable>(&converted)) {
         outcome.cancelled = error->reason == media::provider::Error::Cancelled;
@@ -383,6 +381,41 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     outcome.program = prepared.command;
     outcome.semanticKey = makeGpuSceneOcioEffectSemanticKey(
         outcome.uploadSemanticKey, prepared.command->identity(), outputWindow, pixelAspect);
+    return true;
+}
+
+// #381: prepare the footage interpretation pass over the full-resolution stored-samples upload.
+[[nodiscard]] bool prepareFootagePass(const color::ResolvedBloomNeutralConfig& config,
+                                      const FootagePass& pass, const render::ImageWindow window,
+                                      const GpuSceneOcioContext& ocioContext,
+                                      const CancellationToken& cancellation,
+                                      MediaUploadOutcome& outcome,
+                                      GpuSceneMediaStatistics& statistics) {
+    if (ocioContext.preparer == nullptr) {
+        outcome.failure = "No GPU program preparer is configured for footage interpretation";
+        return false;
+    }
+    GpuOcioTransformSpec spec;
+    spec.kind = GpuOcioTransformKind::FootageInterpretation;
+    spec.footagePass = pass.parameters();
+    auto prepared = ocioContext.preparer->prepare(
+        config, spec,
+        GpuOcioCommandGeometry{.width = static_cast<std::uint32_t>(window.extent().width()),
+                               .height = static_cast<std::uint32_t>(window.extent().height())},
+        ocioContext.compileOptions,
+        [&cancellation] { return cancellation.isCancellationRequested(); });
+    if (!prepared) {
+        if (prepared.error == GpuOcioPreparationError::CompileCancelled ||
+            cancellation.isCancellationRequested()) {
+            outcome.cancelled = true;
+            return false;
+        }
+        outcome.failure = "GPU footage interpretation preparation failed: " +
+                          std::string{gpuOcioPreparationErrorName(prepared.error)};
+        return false;
+    }
+    ++statistics.ocioCommandPreparations;
+    outcome.interpretation = prepared.command;
     return true;
 }
 
@@ -516,7 +549,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
                                             request.linearPass.get());
     }
     std::optional<color::ResolvedBloomNeutralConfig> config;
-    if (!identityTransform) {
+    if (!identityTransform || selection.footagePass) {
         config = resolveInputColorConfig(request.colorIntent);
         if (!config) {
             MediaUploadOutcome outcome;
@@ -593,6 +626,13 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
     outcome.semanticKey = outcome.uploadSemanticKey;
     const auto& descriptor = *uploadDescriptor;
+    if (selection.footagePass &&
+        !prepareFootagePass(*config, *selection.footagePass, descriptor.dataWindow(), ocioContext,
+                            cancellation, outcome, statistics)) {
+        if (!outcome.cancelled)
+            outcome.image.reset();
+        return outcome;
+    }
     if (!resolvedProxyIsUnit(resolved)) {
         const auto proxyDescriptor = proxyOutputDescriptor(descriptor, resolved);
         if (!proxyDescriptor.has_value()) {
@@ -984,7 +1024,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
                                             request.linearPass.get());
     }
     std::optional<color::ResolvedBloomNeutralConfig> config;
-    if (!identityTransform) {
+    if (!identityTransform || selection.footagePass) {
         config = resolveInputColorConfig(request.colorIntent);
         if (!config) {
             outcome.failure = "The selected OCIO input configuration is unavailable";
@@ -1026,10 +1066,19 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
             outcome.failure = "Raw video source descriptor is invalid";
             return outcome;
         }
-        auto prepared = media::video::videoToInputColorSpace(
-            *selection.frame, selection.interpretation, selection.inputColorSpaceId,
-            *sourceDescriptor.value(), 1.0, 1.0, byteBudget(pixelBudget),
-            [&cancellation] { return cancellation.isCancellationRequested(); });
+        // #381: a footage pass starts from the stored samples (not premultiplied).
+        auto prepared =
+            selection.footagePass
+                ? media::video::videoToStoredSamples(
+                      *selection.frame, selection.interpretation,
+                      selection.inputProcessor ? std::string_view(selection.inputColorSpaceId)
+                                               : std::string_view{},
+                      *sourceDescriptor.value(), byteBudget(pixelBudget),
+                      [&cancellation] { return cancellation.isCancellationRequested(); })
+                : media::video::videoToInputColorSpace(
+                      *selection.frame, selection.interpretation, selection.inputColorSpaceId,
+                      *sourceDescriptor.value(), 1.0, 1.0, byteBudget(pixelBudget),
+                      [&cancellation] { return cancellation.isCancellationRequested(); });
         ++statistics.videoConversions;
         if (const auto* error = std::get_if<media::provider::Unavailable>(&prepared)) {
             outcome.cancelled = error->reason == media::provider::Error::Cancelled;
@@ -1065,6 +1114,13 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
     outcome.uploadSemanticKey = rawUploadCommandKey(backingKey, *uploadDescriptor);
     outcome.semanticKey = outcome.uploadSemanticKey;
     const auto& descriptor = *uploadDescriptor;
+    if (selection.footagePass &&
+        !prepareFootagePass(*config, *selection.footagePass, descriptor.dataWindow(), ocioContext,
+                            cancellation, outcome, statistics)) {
+        if (!outcome.cancelled)
+            outcome.image.reset();
+        return outcome;
+    }
     if (!resolvedProxyIsUnit(resolved)) {
         const auto proxyDescriptor = proxyOutputDescriptor(descriptor, resolved);
         if (!proxyDescriptor.has_value()) {

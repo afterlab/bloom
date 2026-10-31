@@ -1,4 +1,6 @@
 #include "video_source.hpp"
+#include <bloom/runtime/footage_time.hpp>
+#include "image_source.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
 #include <algorithm>
@@ -152,7 +154,8 @@ void VideoSourceContext::bindRetirement(
 void VideoSourceContext::report(VideoSourceReport value) {
     const std::lock_guard lock(reportMutex_);
     value.sequence = ++reportSequence_;
-    std::erase_if(reports_, [&](const auto& entry) { return entry.assetDigest == value.assetDigest; });
+    std::erase_if(reports_,
+                  [&](const auto& entry) { return entry.assetDigest == value.assetDigest; });
     reports_.insert(reports_.begin(), std::move(value));
     if (reports_.size() > kReportedSources)
         reports_.resize(kReportedSources);
@@ -182,32 +185,6 @@ void VideoSourceContext::beginShutdown() {
         detached.splice(detached.end(), sessions_);
     }
 }
-namespace {
-std::optional<core::RationalTime> shifted(core::RationalTime time, std::int64_t start,
-                                          document::FrameRate rate) {
-    constexpr auto limit = std::numeric_limits<std::int64_t>::max();
-    if (start < -1000000000 || start > 1000000000)
-        return {};
-    const auto offset = core::RationalTime::create(start * rate.denominator(), rate.numerator());
-    if (!offset)
-        return {};
-    const auto divisor = std::gcd(time.denominator(), offset->denominator());
-    if (divisor <= 0)
-        return {};
-    const auto leftScale = offset->denominator() / divisor,
-               rightScale = time.denominator() / divisor;
-    if (leftScale <= 0 || rightScale <= 0)
-        return {};
-    if (time.numerator() == -limit - 1 || std::abs(time.numerator()) > limit / leftScale ||
-        std::abs(offset->numerator()) > limit / rightScale ||
-        time.denominator() > limit / leftScale)
-        return {};
-    const auto left = time.numerator() * leftScale, right = offset->numerator() * rightScale;
-    if ((right > 0 && left < -limit + right) || (right < 0 && left > limit + right))
-        return {};
-    return core::RationalTime::create(left - right, time.denominator() * leftScale);
-}
-} // namespace
 VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::RationalTime time,
                                        document::FrameRate rate, const std::filesystem::path& base,
                                        VideoSourceContext& context, bool useCache,
@@ -232,25 +209,13 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
         selection.warning = "Video stream timing is unavailable";
         return selection;
     }
-    const auto sourceRate =
-        document::FrameRate::create(static_cast<std::uint32_t>(stream->framePeriod.denominator()),
-                                    static_cast<std::uint32_t>(stream->framePeriod.numerator()));
-    const auto local = shifted(time, source.startFrame, rate);
-    const auto frame =
-        local && sourceRate ? valueGraphFrameIndex(*local, *sourceRate) : std::nullopt;
+    // #381: the conformed (or file) rate, the asset's Loop count and the node's start and loop.
+    const auto frame = footageFrameIndex(asset, time, source.startFrame, source.loopMode, rate);
     if (!frame) {
         selection.warning = "Video time exceeds the supported range";
         return selection;
     }
-    auto index = static_cast<std::uint64_t>(std::max<std::int64_t>(0, *frame));
-    if (source.loopMode == 1)
-        index %= asset.frames;
-    else if (source.loopMode == 2 && asset.frames > 1) {
-        index %= 2 * (asset.frames - 1);
-        if (index >= asset.frames)
-            index = 2 * (asset.frames - 1) - index;
-    } else
-        index = std::min(index, asset.frames - 1);
+    const auto index = *frame;
     const auto input = document::effectiveAssetInputColor(asset.interpretation, source.colorSpace,
                                                           source.inputColorSpaceId);
     selection.interpretation = static_cast<std::uint32_t>(input.colorSpace);
@@ -364,6 +329,12 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     const bool hardwareDecoded =
         decodeProvenance.implementation == media::provider::Implementation::Hardware;
     key.add(hardwareDecoded);
+    // #381: a video's alpha reads as straight unless Interpret Footage says premultiplied.
+    selection.footagePass = footagePassFor(
+        asset, asset.interpretation.alphaMode == document::AssetAlphaMode::Premultiplied
+                   ? media::ImageAlphaAssociation::Premultiplied
+                   : media::ImageAlphaAssociation::Straight);
+    key.add(selection.footagePass ? selection.footagePass->identity() : std::string{});
     selection.decodeProvenance = decodeProvenance.description;
     selection.cacheKey = key.bytes();
     if (selection.frame)
@@ -383,8 +354,55 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     // A hardware-decoded preview frame is a distinct preparation from the software reference.
     if (hardwareDecoded)
         decodeKey.add(std::string{"vaapi"});
+    if (selection.footagePass)
+        decodeKey.add(std::string{"stored-samples-v1"});
     selection.decodeKey = decodeKey.digest();
     return selection;
+}
+
+media::provider::Result<render::Rgba32fImage>
+convertSelectedVideo(const VideoSourceSelection& selection,
+                     const render::Rgba32fImageDescriptor composition, const double horizontalScale,
+                     const double verticalScale, const std::size_t budget,
+                     const std::function<bool()>& cancel) {
+    if (!selection.frame)
+        return media::provider::Unavailable{media::provider::Error::Unavailable,
+                                            "Video frame is unavailable"};
+    if (!selection.footagePass)
+        return media::video::videoToSceneLinear(
+            *selection.frame, selection.interpretation, selection.inputColorSpaceId,
+            selection.inputProcessor, composition, horizontalScale, verticalScale, budget, cancel);
+    // #381: stored samples at full resolution -> footage pass -> input colour -> proxy resample.
+    auto stored = media::video::videoToStoredSamples(
+        *selection.frame, selection.interpretation,
+        selection.inputProcessor ? std::string_view(selection.inputColorSpaceId)
+                                 : std::string_view{},
+        composition, budget, cancel);
+    if (auto* error = std::get_if<media::provider::Unavailable>(&stored))
+        return *error;
+    auto interpreted = applyFootagePass(*selection.footagePass,
+                                        std::get<render::Rgba32fImage>(stored), budget, cancel);
+    const auto failed = [&](const std::string& reason) -> media::provider::Result<render::Rgba32fImage> {
+        if (cancel && cancel())
+            return media::provider::Unavailable{media::provider::Error::Cancelled, "Cancelled"};
+        return media::provider::Unavailable{media::provider::Error::InvalidValue, reason};
+    };
+    if (auto* error = std::get_if<std::string>(&interpreted))
+        return failed(*error);
+    if (selection.inputProcessor) {
+        auto converted =
+            applyInputProcessorPremultiplied(std::get<render::Rgba32fImage>(interpreted),
+                                             *selection.inputProcessor, budget, cancel);
+        if (auto* error = std::get_if<std::string>(&converted))
+            return failed(*error);
+        interpreted = std::move(converted);
+    }
+    CancellationToken token;
+    auto resampled = resampleDecodedImage(std::get<render::Rgba32fImage>(interpreted), composition,
+                                          horizontalScale, verticalScale, budget, token);
+    if (!resampled.value.has_value())
+        return failed(resampled.diagnostic);
+    return std::move(*resampled.value);
 }
 } // namespace bloom::runtime::detail
 

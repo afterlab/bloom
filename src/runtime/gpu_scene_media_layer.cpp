@@ -50,6 +50,7 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     result.uploadSemanticKey =
         outcome.uploadSemanticKey.empty() ? outcome.semanticKey : outcome.uploadSemanticKey;
     result.program = outcome.program;
+    result.interpretation = outcome.interpretation;
     result.resample = outcome.resample;
     result.cryptomatte = outcome.cryptomatte;
     return std::nullopt;

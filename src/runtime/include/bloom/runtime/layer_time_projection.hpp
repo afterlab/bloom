@@ -2,6 +2,7 @@
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/composition_time.hpp>
 
 #include <optional>
@@ -22,15 +23,21 @@ resolveSourceExtent(const document::Project& project, const document::Compositio
 
 // A video asset's picture extent: its frame count times its stream period, at the stream rate.
 // nullopt for a non-video asset or unusable stream timing.
-[[nodiscard]] std::optional<TimeExtent> resolveVideoStreamExtent(const document::AssetRecord& asset);
+[[nodiscard]] std::optional<TimeExtent>
+resolveVideoStreamExtent(const document::AssetRecord& asset);
 
 // The layer's resolved content extent, or nullopt for Unbounded (or an unresolvable Source).
-[[nodiscard]] std::optional<TimeExtent>
-resolveLayerExtent(const document::Project& project, const document::Composition& composition,
-                   const document::LayerTiming& timing);
+[[nodiscard]] std::optional<TimeExtent> resolveLayerExtent(const document::Project& project,
+                                                           const document::Composition& composition,
+                                                           const document::LayerTiming& timing);
 
 // Placement time of layer time tau: startTime + tau / speed, exactly (nullopt on overflow).
 [[nodiscard]] std::optional<core::RationalTime>
 placementTimeOfLayerTime(const document::LayerTiming& timing, core::RationalTime layerTime);
+
+// #381: a video's audio timing under its Interpret Footage rate and Loop count; nullopt when
+// neither changes it.
+[[nodiscard]] std::optional<FootageAudioTiming>
+footageAudioTiming(const document::AssetRecord& asset);
 
 } // namespace bloom::runtime

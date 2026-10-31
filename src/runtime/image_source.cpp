@@ -1,4 +1,6 @@
 #include "image_source.hpp"
+#include <bloom/runtime/footage_time.hpp>
+#include "footage_interpretation_pass.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
 #include <algorithm>
@@ -18,54 +20,78 @@ namespace bloom::runtime::detail {
 namespace {
 struct SequenceMemberChoice final {
     const document::AssetSequenceMember* member = nullptr;
+    // #381: the frame is missing from the manifest and the asset shows nothing there.
+    bool missing = false;
+    std::int64_t frame = 0;
     std::string warning;
 };
-// The sequence member a composition time selects: start frame, loop mode and gap hold.
+// The sequence member a composition time selects: the node's start frame and loop mode, the
+// asset's rate, Loop count and missing-frame interpretation (footageFrameIndex), and gap hold.
 SequenceMemberChoice selectSequenceMember(const CompiledImageSource& source,
                                           const core::RationalTime time,
                                           const document::FrameRate rate) {
     const auto& asset = *source.asset;
     SequenceMemberChoice choice;
-    const auto frame = valueGraphFrameIndex(time, rate);
-    if (!frame || asset.manifest.members.empty()) {
+    if (asset.manifest.members.empty()) {
         choice.warning = "Sequence time is outside the supported range";
         return choice;
     }
-    const auto length = static_cast<std::uint64_t>(asset.manifest.last) -
-                        static_cast<std::uint64_t>(asset.manifest.first) + 1;
-    // Long-double subtraction avoids signed overflow even for hostile hand-built plans.
-    const auto elapsed =
-        static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
-    // 2^63 is exactly representable even where long double is only double (MSVC),
-    // unlike INT64_MAX which rounds up there. The upper bound is exclusive.
-    if (elapsed < -9223372036854775808.0L || elapsed >= 9223372036854775808.0L) {
+    const auto offset = footageFrameIndex(asset, time, source.startFrame, source.loopMode, rate);
+    if (!offset) {
         choice.warning = "Sequence time exceeds the frame range";
         return choice;
     }
-    const auto signedOffset = static_cast<std::int64_t>(elapsed);
-    std::uint64_t offset = 0;
-    if (signedOffset >= 0) {
-        offset = static_cast<std::uint64_t>(signedOffset);
-        if (source.loopMode == 1)
-            offset %= length;
-        else if (source.loopMode == 2 && length > 1) {
-            const auto period = 2 * (length - 1);
-            offset %= period;
-            if (offset >= length)
-                offset = period - offset;
-        } else
-            offset = std::min(offset, length - 1);
-    }
     const auto wanted =
-        static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
+        static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + *offset);
     auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
                                           &document::AssetSequenceMember::frame);
     if (found != asset.manifest.members.begin())
         --found;
+    choice.frame = wanted;
+    if (found->frame != wanted &&
+        asset.interpretation.missingFrames == document::AssetMissingFrames::Nothing) {
+        choice.missing = true;
+        return choice;
+    }
     choice.member = &*found;
     return choice;
 }
+// A transparent 1x1 image at the frame origin: what a missing sequence frame decodes to when the
+// asset shows nothing there. Its frame bounds (imageSourceFrameBounds) keep the layer geometry.
+media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+missingFrameImage(const std::size_t budget) {
+    const auto window = render::ImageWindow::create(0, 0, 1, 1);
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *window.value(), *window.value(), core::PixelAspectRatio::square());
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
+    if (!builder)
+        return {{}, "Image source exceeds the pixel budget"};
+    auto row = builder.value()->row(0);
+    (*row.value())[0] = render::Rgba32f::transparent();
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return {{}, "Image source pixel validation failed"};
+    return {std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())), {}};
+}
 } // namespace
+
+media::ImageAlphaAssociation imageSourceAlphaAssociation(const CompiledImageSource& source) {
+    // #381: an explicit asset alpha interpretation applies to every use of the asset; Guess leaves
+    // each node's Premultiply switch (made from the file's declared association) in charge.
+    if (source.asset) {
+        switch (source.asset->interpretation.alphaMode) {
+        case document::AssetAlphaMode::Straight:
+        case document::AssetAlphaMode::Ignore:
+            return media::ImageAlphaAssociation::Straight;
+        case document::AssetAlphaMode::Premultiplied:
+            return media::ImageAlphaAssociation::Premultiplied;
+        case document::AssetAlphaMode::Guess:
+            break;
+        }
+    }
+    return source.premultiply ? media::ImageAlphaAssociation::Straight
+                              : media::ImageAlphaAssociation::Premultiplied;
+}
 
 std::string imageSourceRevisionKey(const core::Sha256Digest& digest,
                                    const document::AssetLocator& locator,
@@ -133,6 +159,23 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     std::int64_t memberFrame = 0;
     if (asset.kind == document::AssetKind::Sequence) {
         const auto member = selectSequenceMember(source, time, rate);
+        if (member.missing) {
+            // #381: a missing frame shows nothing; no file is read.
+            selected.missingFrame = true;
+            selected.available = true;
+            selected.frameWidth = asset.width;
+            selected.frameHeight = asset.height;
+            OperationKey key;
+            key.add(std::string{"missing-sequence-frame-v1"});
+            const auto digest = asset.contentDigest.toLowercaseHex();
+            key.add(std::string(digest.begin(), digest.end()));
+            key.add(member.frame);
+            key.add(asset.width);
+            key.add(asset.height);
+            selected.cacheKey = key.bytes();
+            selected.decodeKey = key.digest();
+            return selected;
+        }
         if (!member.member) {
             selected.warning = member.warning;
             return selected;
@@ -140,7 +183,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
         locator = &member.member->locator;
         selected.digest = member.member->contentDigest;
         memberFrame = member.member->frame;
-        if (asset.manifest.hasGaps())
+        if (asset.manifest.hasGaps() &&
+            asset.interpretation.missingFrames == document::AssetMissingFrames::HoldPrevious)
             selected.warning = "Sequence gaps hold the preceding frame";
     }
     const auto revisionKeyText = imageSourceRevisionKey(selected.digest, *locator, base);
@@ -193,9 +237,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                                                           source.inputColorSpaceId);
     selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(input.colorSpace);
     selected.interpretation.inputColorSpaceId = input.inputColorSpaceId;
-    selected.interpretation.alphaAssociation = source.premultiply
-                                                   ? media::ImageAlphaAssociation::Straight
-                                                   : media::ImageAlphaAssociation::Premultiplied;
+    selected.interpretation.alphaAssociation = imageSourceAlphaAssociation(source);
     selected.interpretation.part = source.part;
     selected.interpretation.layer = source.layer;
     selected.available = selected.sourceRevision != nullptr &&
@@ -264,6 +306,17 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     key.add(selected.available);
     key.add(locator->path);
     key.add(locator->relinkHint);
+    // #381: the footage interpretation pass (alpha, deinterlace) is part of the converted image.
+    if (selected.available && selected.sourceRevision) {
+        selected.footagePass = footagePassFor(asset, selected.interpretation.alphaAssociation);
+        if (selected.footagePass) {
+            const auto* part = selected.sourceRevision->probe().findPart(source.part);
+            const auto originY = part != nullptr ? part->dataY - part->displayY
+                                                 : selected.sourceRevision->probe().dataOffsetY;
+            selected.footagePass->rowParity = static_cast<std::uint8_t>(originY & 1);
+        }
+    }
+    key.add(selected.footagePass ? selected.footagePass->identity() : std::string{});
     selected.cacheKey = key.bytes();
     // Decode-only identity: the selected member's content digest plus the requested alpha
     // association. Colour interpretation, input/working colour space, config revision, proxy and
@@ -272,7 +325,11 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     OperationKey decodeKey;
     decodeKey.add(std::string{"gpu-raw-decode-v2"});
     decodeKey.add(std::string(digest.begin(), digest.end()));
-    decodeKey.add(selected.interpretation.alphaAssociation);
+    // A footage pass decodes the stored samples, which no association changes.
+    if (selected.footagePass)
+        decodeKey.add(std::string{"stored-samples-v1"});
+    else
+        decodeKey.add(selected.interpretation.alphaAssociation);
     decodeKey.add(selected.interpretation.part);
     decodeKey.add(selected.interpretation.layer);
     selected.decodeKey = decodeKey.digest();
@@ -305,8 +362,48 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
         *decodeStatistics = {};
     if (!selected.available)
         return {{}, selected.warning};
+    if (selected.missingFrame) {
+        auto missing = missingFrameImage(budget);
+        if (!missing.value)
+            return {{}, missing.diagnostic};
+        return resampleDecodedImage(**missing.value, composition, horizontalScale, verticalScale,
+                                    budget, cancel);
+    }
     std::shared_ptr<const render::Rgba32fImage> image;
     std::uint64_t repairedPixels = 0;
+    if (selected.footagePass) {
+        // #381: stored samples -> footage pass -> input colour, then the proxy resample. The disk
+        // cache holds ordinary decodes only; the memory cache keeps the interpreted image.
+        if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr)
+            if (auto cached = memoryCache->find(selected.cacheKey, document::Revision{}))
+                image = cached->image;
+        if (!image) {
+            auto stored = decodeRawImageSource(selected, budget, cancel, decodeStatistics);
+            if (!stored.value.has_value())
+                return {{}, stored.diagnostic, stored.cancelled, stored.code};
+            const auto cancelled = [&cancel] { return cancel.isCancellationRequested(); };
+            auto interpreted = applyFootagePass(*selected.footagePass, **stored.value, budget,
+                                                cancelled);
+            if (auto* error = std::get_if<std::string>(&interpreted))
+                return {{}, *error, cancel.isCancellationRequested()};
+            if (selected.inputProcessor) {
+                auto converted = applyInputProcessorPremultiplied(
+                    std::get<render::Rgba32fImage>(interpreted), *selected.inputProcessor, budget,
+                    cancelled);
+                if (auto* error = std::get_if<std::string>(&converted))
+                    return {{}, *error, cancel.isCancellationRequested()};
+                interpreted = std::move(converted);
+            }
+            image = std::make_shared<const render::Rgba32fImage>(
+                std::move(std::get<render::Rgba32fImage>(interpreted)));
+            if (memoryAccess == ImageSourceMemoryCacheAccess::ReadWrite && memoryCache != nullptr)
+                memoryCache->store(selected.cacheKey, document::Revision{},
+                                   {.image = image, .values = {}, .bounds = {}},
+                                   OperationCacheEntryKind::DecodedMedia, {}, linearPass);
+        }
+        return resampleDecodedImage(*image, composition, horizontalScale, verticalScale, budget,
+                                    cancel);
+    }
     if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr) {
         auto cached = memoryCache->find(selected.cacheKey, document::Revision{});
         if (cached)
@@ -350,10 +447,14 @@ decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t bud
         *decodeStatistics = {};
     if (!selected.available)
         return {{}, selected.warning};
+    if (selected.missingFrame)
+        return missingFrameImage(budget);
     media::ImageInterpretation rawInterpretation;
     rawInterpretation.colorSpace = media::ImageColorSpace::Raw;
     rawInterpretation.inputColorSpaceId = {};
     rawInterpretation.alphaAssociation = selected.interpretation.alphaAssociation;
+    // #381: the footage pass reads the file's stored samples.
+    rawInterpretation.storedSamples = selected.footagePass.has_value();
     rawInterpretation.part = selected.interpretation.part;
     rawInterpretation.layer = selected.interpretation.layer;
     if (!selected.sourceRevision)
@@ -377,6 +478,9 @@ frameRelativeDataWindow(const render::Rgba32fImageDescriptor& decoded) noexcept 
 
 std::optional<ContentBounds>
 imageSourceFrameBounds(const ImageSourceSelection& selection) noexcept {
+    if (selection.missingFrame)
+        return ContentBounds{0.0, 0.0, static_cast<double>(selection.frameWidth),
+                             static_cast<double>(selection.frameHeight)};
     if (!selection.sourceRevision)
         return std::nullopt;
     const auto& probe = selection.sourceRevision->probe();

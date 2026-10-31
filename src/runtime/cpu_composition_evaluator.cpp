@@ -3,6 +3,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "cryptomatte.hpp"
+#include <bloom/runtime/footage_time.hpp>
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
@@ -462,10 +463,10 @@ enum class ScalarDomain : std::uint8_t {
                           hasValidScalarCurveReference(*combine->factor, plan, index, failure)));
                 }
                 if (effect.maskInput)
-                    validKernel = validKernel && effect.maskInput->value() < index &&
-                                  std::holds_alternative<ImageCombineKernel>(effect.kernel) &&
-                                  std::get<ImageCombineKernel>(effect.kernel).mode ==
-                                      ImageCombineMode::Mix;
+                    validKernel =
+                        validKernel && effect.maskInput->value() < index &&
+                        std::holds_alternative<ImageCombineKernel>(effect.kernel) &&
+                        std::get<ImageCombineKernel>(effect.kernel).mode == ImageCombineMode::Mix;
                 if (const auto* masks = std::get_if<LayerMaskKernel>(&effect.kernel))
                     for (const auto& mask : masks->masks)
                         validKernel =
@@ -501,9 +502,9 @@ enum class ScalarDomain : std::uint8_t {
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
                                   file->processSpaceId.size() <= 256 &&
-                                  (!file->asset || (file->asset->kind == document::AssetKind::Lut &&
-                                                    plan.operationAssetsValid(
-                                                        OperationIndex::fromRaw(index))));
+                                  (!file->asset ||
+                                   (file->asset->kind == document::AssetKind::Lut &&
+                                    plan.operationAssetsValid(OperationIndex::fromRaw(index))));
                 if (effect.input.value() < index && validInputArity && validKernel)
                     return true;
                 failure = diagnostic(
@@ -541,11 +542,11 @@ enum class ScalarDomain : std::uint8_t {
                 const bool stepsValid = !steps.empty() && [&] {
                     for (std::size_t step = 0; step < steps.size(); ++step) {
                         const auto& item = steps[step];
-                        const bool valid =
-                            item.kind == CompiledChannelStepKind::Source
-                                ? item.source < shuffle.channels.sources.size()
-                                : item.input < step && (item.kind != CompiledChannelStepKind::Copy ||
-                                                        item.from < step);
+                        const bool valid = item.kind == CompiledChannelStepKind::Source
+                                               ? item.source < shuffle.channels.sources.size()
+                                               : item.input < step &&
+                                                     (item.kind != CompiledChannelStepKind::Copy ||
+                                                      item.from < step);
                         if (!valid)
                             return false;
                     }
@@ -1642,9 +1643,15 @@ std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& c
             return std::nullopt;
         time = *mapped;
     }
-    if (clip.sourceLoopExtent)
-        return wrapSourceAudioTime(time, clip.startTime, *clip.sourceLoopExtent,
-                                   clip.sourceLoopMode);
+    if (clip.sourceLoopExtent) {
+        const auto wrapped =
+            wrapSourceAudioTime(time, clip.startTime, *clip.sourceLoopExtent, clip.sourceLoopMode);
+        if (!wrapped)
+            return std::nullopt;
+        time = *wrapped;
+    }
+    if (clip.footage)
+        return detail::footageAudioTime(*clip.footage, clip.startTime, time);
     return time;
 }
 
@@ -1721,6 +1728,7 @@ std::optional<AudioMixDescription> CpuCompositionEvaluator::evaluateAudioMix(
         description.clips.back().sourceLoopMode = source.loopMode;
         description.clips.back().sourceLoopExtent = source.loopExtent;
         description.clips.back().audioStream = source.audioStream;
+        description.clips.back().footage = source.footage;
         if (!layer.time) {
             // #354: identity timing still gates the layer's in/out window (a trimmed head is
             // silent), through the same range test a retimed layer uses.
@@ -2104,6 +2112,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             });
         };
         std::vector<detail::LayerMatrix> layerMatrices(plan->operations().size());
+        // #381: each layer's matrix for its own content (with its footage pixel aspect); children
+        // compose `layerMatrices`, which has none.
+        std::vector<detail::LayerMatrix> contentMatrices(plan->operations().size());
 
         struct VectorChain {
             std::size_t source;
@@ -2237,20 +2248,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 std::shared_ptr<const detail::PreparedLayerMasks> layerMasks;
                 if (const auto* masks = std::get_if<LayerMaskKernel>(&effect->kernel)) {
                     const auto maskTime =
-                        detail::timeForClock(frameResolved, request.time, plan->operationClock(
-                                                 OperationIndex::fromRaw(index)));
-                    layerMasks = detail::sampleLayerMasks(*masks, *plan, resolved, maskTime,
-                                                          resolved.horizontalScale,
-                                                          resolved.verticalScale);
+                        detail::timeForClock(frameResolved, request.time,
+                                             plan->operationClock(OperationIndex::fromRaw(index)));
+                    layerMasks =
+                        detail::sampleLayerMasks(*masks, *plan, resolved, maskTime,
+                                                 resolved.horizontalScale, resolved.verticalScale);
                 }
                 preparedEffect =
                     request.bypassLookNodes && effect->look
                         ? detail::PreparedImageEffect{}
-                        : imageEffectContext()->prepare(*effect, request.colorIntent, mediaBase,
-                                                        cancellation, pointwiseAmount,
-                                                        canvasMargins, resolved.horizontalScale,
-                                                        resolved.verticalScale, sampledChannel,
-                                                        std::move(layerMasks));
+                        : imageEffectContext()->prepare(
+                              *effect, request.colorIntent, mediaBase, cancellation,
+                              pointwiseAmount, canvasMargins, resolved.horizontalScale,
+                              resolved.verticalScale, sampledChannel, std::move(layerMasks));
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&
@@ -2379,12 +2389,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                                    "Layer transform could not be resolved", {}, operationSubject));
                 const auto centre = bounds[layer->input.value()].output.centre();
-                auto matrix = detail::LayerMatrix::authored(
-                    position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
-                    scale->value, rotation->value);
-                if (layer->parent)
+                const document::Vec2d pivot{centre.x + anchor->value.x,
+                                            centre.y + anchor->value.y};
+                auto matrix = detail::LayerMatrix::authored(position->value, pivot, scale->value,
+                                                            rotation->value);
+                auto content = detail::LayerMatrix::authored(
+                    position->value, pivot,
+                    {scale->value.x * layer->sourcePixelAspect, scale->value.y}, rotation->value);
+                if (layer->parent) {
                     matrix = layerMatrices[layer->parent->value()].times(matrix);
+                    content = layerMatrices[layer->parent->value()].times(content);
+                }
                 layerMatrices[index] = matrix;
+                contentMatrices[index] = content;
             }
             const auto& operation = plan->operations()[index];
             if ((std::holds_alternative<CompiledSolid>(operation) &&
@@ -3009,11 +3026,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         [&](const CompiledVideoSource&) {
                             if (!selectedVideo || !selectedVideo->frame)
                                 return;
-                            auto image = media::video::videoToSceneLinear(
-                                *selectedVideo->frame, selectedVideo->interpretation,
-                                selectedVideo->inputColorSpaceId, selectedVideo->inputProcessor,
-                                resolved.imageDescriptor, resolved.horizontalScale,
-                                resolved.verticalScale, remainingPixelBudget(),
+                            auto image = detail::convertSelectedVideo(
+                                *selectedVideo, resolved.imageDescriptor,
+                                resolved.horizontalScale, resolved.verticalScale,
+                                remainingPixelBudget(),
                                 [&] { return cancellation.isCancellationRequested(); });
                             if (const auto* error =
                                     std::get_if<media::provider::Unavailable>(&image)) {
@@ -3057,8 +3073,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     effectPixelBudget, cancellation, operationIndex, progress,
                                     resolved.horizontalScale, resolved.verticalScale,
                                     effect.maskInput
-                                        ? std::optional<const render::Rgba32fImage*>{
-                                              slots[effect.maskInput->value()].get()}
+                                        ? std::optional<
+                                              const render::Rgba32fImage*>{slots[effect.maskInput
+                                                                                     ->value()]
+                                                                               .get()}
                                         : std::nullopt);
                                 if (result.cancelled) {
                                     operationCancelled = true;
@@ -3510,7 +3528,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 .translationY = 0.0,
                                 .anchorX = anchor->value.x,
                                 .anchorY = anchor->value.y,
-                                .scaleX = scale->value.x,
+                                .scaleX = scale->value.x * layer.sourcePixelAspect,
                                 .scaleY = scale->value.y,
                                 .rotationDegrees = rotation->value,
                                 .opacity = opacity->value,
@@ -3583,7 +3601,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             }
                             std::optional<detail::ParentedLayerTransform> parented;
                             if (layer.parent) {
-                                parented.emplace(layerMatrices[index],
+                                parented.emplace(contentMatrices[index],
                                                  sourceDescriptor->dataWindow(),
                                                  resolved.horizontalScale, resolved.verticalScale,
                                                  static_cast<float>(opacity->value));
@@ -3900,8 +3918,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     // own layer clock, not the Merge's.
                                     const auto resolvedMode = detail::resolveParameter(
                                         *layerOutput,
-                                        detail::resolvedForClock(
-                                            frameResolved, plan->operationClock(layerIndex)));
+                                        detail::resolvedForClock(frameResolved,
+                                                                 plan->operationClock(layerIndex)));
                                     if (!resolvedMode.has_value()) {
                                         auto modeSubject = operationSubject;
                                         modeSubject.parameterId = layerOutput->blendModeParameterId;

@@ -55,6 +55,8 @@ struct GpuSceneUploadLeafResult final {
     // A real input->working OCIO ProcessEffect command to emit over the upload, or null for an
     // exact-identity transform.
     std::shared_ptr<const PreparedGpuOcioCommand> program;
+    // #381: the footage interpretation pass, emitted right after the upload.
+    std::shared_ptr<const PreparedGpuOcioCommand> interpretation;
     // A PointResampleV1 gather from the full-resolution upload to the proxy output when the source
     // is under a fractional proxy (only set alongside a non-null program). Null at unit scale.
     std::optional<MediaResamplePlan> resample;
@@ -109,6 +111,27 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     std::string currentKey = uploadKey;
     // The window the resample reads: the matte for a Cryptomatte leaf, else the upload.
     auto currentWindow = leaf.descriptor->dataWindow();
+    // #381: the footage interpretation pass over the full-resolution stored samples, before any
+    // proxy resample (deinterlacing needs every row) and before the colour transform.
+    if (leaf.interpretation != nullptr) {
+        const auto extent = currentWindow.extent();
+        if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+            return error;
+        }
+        GpuSceneOcioEffectCommand pass{.index = kInvalidGpuSceneCommand,
+                                       .sourceOperation = operationIndex,
+                                       .input = current,
+                                       .inputKey = currentKey,
+                                       .program = std::move(leaf.interpretation),
+                                       .outputWindow = currentWindow,
+                                       .displayWindow = leaf.descriptor->displayWindow(),
+                                       .pixelAspect = leaf.descriptor->pixelAspect(),
+                                       .semanticKey = {}};
+        pass.semanticKey = makeGpuSceneOcioEffectSemanticKey(
+            pass.inputKey, pass.program->identity(), pass.outputWindow, pass.pixelAspect);
+        currentKey = pass.semanticKey;
+        current = emit(std::move(pass));
+    }
     if (leaf.cryptomatte.has_value()) {
         const auto& matte = leaf.cryptomatte->output;
         const auto extent = matte.dataWindow().extent();

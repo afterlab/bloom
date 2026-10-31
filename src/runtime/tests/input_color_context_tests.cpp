@@ -228,7 +228,7 @@ void testVideoRules(Expectations& expectations) {
                             untagged.warning.find("color primaries") != std::string::npos &&
                             untagged.warning.find("matrix coefficients") != std::string::npos &&
                             untagged.warning.find("range") != std::string::npos &&
-                            untagged.warning.find("Input Color") != std::string::npos,
+                            untagged.warning.find("Interpret Footage") != std::string::npos,
                         "an untagged stream names its missing tags and the override");
     // Owner decision (2026-10-24): with the picture geometry, Auto assumes the size convention
     // for the missing tags and carries the visible note instead of refusing.
@@ -239,7 +239,7 @@ void testVideoRules(Expectations& expectations) {
     expectations.expect(assumedHd.automatic && assumedHd.id == config->sRgbTextureColorSpaceId() &&
                             assumedHd.warning ==
                                 "Color tags missing — assumed Rec.709 with the sRGB transfer. "
-                                "Change in Assets → Input Color",
+                                "Change in Assets → Interpret Footage",
                         "untagged HD resolves to the sRGB texture space with the note");
     expectations.expect(assumedSd.automatic && assumedSd.id == config->sRgbTextureColorSpaceId() &&
                             assumedSd.warning.find("assumed Rec.601 with the sRGB transfer") !=

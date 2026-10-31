@@ -317,9 +317,10 @@ struct LayerMaskKernel final {
     std::vector<CompiledLayerMask> masks;
     friend bool operator==(const LayerMaskKernel&, const LayerMaskKernel&) = default;
 };
-using ImageEffectKernel = std::variant<IdentityImageKernel, CstKernel, FileTransformKernel,
-                                       PointwiseImageKernel, ImageCombineKernel, CanvasImageKernel,
-                                       DiscreteImageKernel, ResizeFitKernel, SeparableBlurKernel, LayerMaskKernel>;
+using ImageEffectKernel =
+    std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
+                 ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
+                 SeparableBlurKernel, LayerMaskKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;
@@ -332,8 +333,8 @@ struct CompiledImageEffect final {
     // ADR 0028: Image Mix's optional Mask (coverage in the alpha channel of the mask transport),
     // sampled by global pixel coordinate; its per-pixel factor is factor * mask.
     std::optional<OperationIndex> maskInput{};
-    // ADR 0028: this effect applies a track matte to the Layer Output at `input`; a Merge reads that
-    // layer's blend mode and clock through it (see mergeEntryLayerOutput).
+    // ADR 0028: this effect applies a track matte to the Layer Output at `input`; a Merge reads
+    // that layer's blend mode and clock through it (see mergeEntryLayerOutput).
     bool trackMatte = false;
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
@@ -403,6 +404,17 @@ struct CompiledLayerTime final {
     friend bool operator==(const CompiledLayerTime&, const CompiledLayerTime&) = default;
 };
 
+// #381: a video's audio follows its Interpret Footage rate and Loop count. Source time (after the
+// node's start) is wrapped to one pass of the footage while within `loops` passes, silent after,
+// then scaled by numerator/denominator (the conformed rate over the file's rate).
+struct FootageAudioTiming final {
+    core::RationalTime pass{};
+    std::uint32_t loops = 1;
+    std::int64_t numerator = 1;
+    std::int64_t denominator = 1;
+    friend bool operator==(const FootageAudioTiming&, const FootageAudioTiming&) = default;
+};
+
 struct CompiledAudioSource final {
     document::NodeId sourceNodeId;
     document::AssetId assetId;
@@ -415,6 +427,8 @@ struct CompiledAudioSource final {
     std::optional<TimeExtent> loopExtent{};
     // Document 1.25: which of the asset's audio streams (0-based among its audio streams) plays.
     std::uint32_t audioStream = 0;
+    // #381: absent unless the video is conformed or looped.
+    std::optional<FootageAudioTiming> footage{};
 
     friend bool operator==(const CompiledAudioSource&, const CompiledAudioSource&) = default;
 };
@@ -564,6 +578,11 @@ struct CompiledLayerOutput {
     std::optional<OperationIndex> parent{};
     // Plan v9 (ADR 0024): absent for identity timing.
     std::optional<CompiledLayerTime> time{};
+    // #381 Interpret Footage: the horizontal pixel aspect the layer's footage is shown with,
+    // relative to how it decodes (the override over the file's ratio). It scales the layer's own
+    // content in layer space, before its scale and rotation, like a pixel-aspect conversion; a
+    // child layer inherits the layer's transform without it. 1 for everything else.
+    double sourcePixelAspect = 1.0;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 
@@ -779,7 +798,8 @@ class CompiledCompositionPlan final {
 [[nodiscard]] inline OperationIndex mergeEntryLayerIndex(const CompiledCompositionPlan& plan,
                                                          const OperationIndex input) noexcept {
     if (input.value() < plan.operations().size())
-        if (const auto* effect = std::get_if<CompiledImageEffect>(&plan.operations()[input.value()]);
+        if (const auto* effect =
+                std::get_if<CompiledImageEffect>(&plan.operations()[input.value()]);
             effect != nullptr && effect->trackMatte)
             return effect->input;
     return input;

@@ -1771,6 +1771,40 @@ if(bloom_roi_media_color_glslang_validator AND bloom_roi_media_color_spirv_val)
 endif()
 bloom_enable_warnings(bloom_runtime_gpu_roi_media_color_native_test)
 bloom_enable_strict_floating_point(bloom_runtime_gpu_roi_media_color_native_test)
+
+# Interpret Footage (#381): missing frames and pixel aspect on the CPU reference.
+add_executable(bloom_runtime_footage_interpretation_cpu_test footage_interpretation_cpu_tests.cpp)
+target_include_directories(bloom_runtime_footage_interpretation_cpu_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS} "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_footage_interpretation_cpu_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
+            bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
+bloom_enable_warnings(bloom_runtime_footage_interpretation_cpu_test)
+bloom_add_test(NAME bloom.runtime.footage-interpretation-cpu
+               COMMAND bloom_runtime_footage_interpretation_cpu_test LABELS unit runtime)
+
+# Interpret Footage (#381): the footage interpretation pass on a real device against the CPU oracle.
+add_executable(bloom_runtime_gpu_footage_interpretation_native_test
+    gpu_footage_interpretation_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_footage_interpretation_native_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_footage_interpretation_native_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
+            bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
+if(bloom_roi_media_color_glslang_validator AND bloom_roi_media_color_spirv_val)
+    target_compile_definitions(bloom_runtime_gpu_footage_interpretation_native_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_roi_media_color_tools_dir}\"")
+endif()
+bloom_enable_warnings(bloom_runtime_gpu_footage_interpretation_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_footage_interpretation_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_footage_interpretation_native
+    COMMAND bloom_runtime_gpu_footage_interpretation_native_test
+    LABELS runtime native gpu
+    TIMEOUT 120
+)
+set_tests_properties(bloom.runtime.gpu_footage_interpretation_native PROPERTIES SKIP_RETURN_CODE 77)
 target_compile_options(bloom_runtime_gpu_roi_media_color_native_test PRIVATE -Wno-unused-function)
 bloom_add_test(
     NAME bloom.runtime.gpu_roi_media_color_native
@@ -1884,3 +1918,9 @@ target_include_directories(bloom_runtime_gpu_processing_phase_preparation_test P
 bloom_enable_warnings(bloom_runtime_gpu_processing_phase_preparation_test)
 bloom_add_test(NAME bloom.runtime.gpu_processing_phase_preparation
     COMMAND bloom_runtime_gpu_processing_phase_preparation_test LABELS unit gpu memory)
+
+add_executable(bloom_runtime_footage_time_test footage_time_tests.cpp)
+target_include_directories(bloom_runtime_footage_time_test PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime)
+target_link_libraries(bloom_runtime_footage_time_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_footage_time_test)
+bloom_add_test(NAME bloom.runtime.footage-time COMMAND bloom_runtime_footage_time_test LABELS unit runtime)

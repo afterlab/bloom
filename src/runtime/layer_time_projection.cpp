@@ -13,7 +13,8 @@ template <typename Value>
 [[nodiscard]] const Value* constantOf(const document::Composition& composition,
                                       const document::NodeRecord& node,
                                       const std::string_view role) {
-    const auto binding = std::ranges::find(node.parameters, role, &document::ParameterBinding::role);
+    const auto binding =
+        std::ranges::find(node.parameters, role, &document::ParameterBinding::role);
     if (binding == node.parameters.end())
         return nullptr;
     const auto* record = composition.parameters().find(binding->parameterId);
@@ -45,19 +46,40 @@ template <typename Value>
 
 } // namespace
 
+std::optional<FootageAudioTiming> footageAudioTiming(const document::AssetRecord& asset) {
+    if (asset.kind != document::AssetKind::Video)
+        return std::nullopt;
+    const auto file = document::footageFileFrameRate(asset);
+    const auto conformed = asset.interpretation.frameRate;
+    const auto loops = std::max<std::uint32_t>(1, asset.interpretation.loopCount);
+    if ((!conformed || !file || *conformed == *file) && loops == 1)
+        return std::nullopt;
+    const auto rate = document::footageFrameRate(asset);
+    if (!rate || asset.frames == 0 ||
+        asset.frames > static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))
+        return std::nullopt;
+    const auto pass = core::RationalTime::create(
+        static_cast<std::int64_t>(asset.frames) * rate->denominator(), rate->numerator());
+    if (!pass)
+        return std::nullopt;
+    FootageAudioTiming timing{*pass, loops, 1, 1};
+    if (conformed && file) {
+        // Source seconds per interpreted second: the conformed rate over the file's rate.
+        timing.numerator = std::int64_t{conformed->numerator()} * file->denominator();
+        timing.denominator = std::int64_t{conformed->denominator()} * file->numerator();
+    }
+    return timing;
+}
+
 std::optional<TimeExtent> resolveVideoStreamExtent(const document::AssetRecord& asset) {
     if (asset.kind != document::AssetKind::Video)
         return std::nullopt;
-    const auto stream = std::ranges::find(asset.videoStreams, 1U, &document::AssetVideoStream::kind);
-    if (stream == asset.videoStreams.end() || stream->framePeriod.numerator() <= 0 ||
-        stream->framePeriod.denominator() > std::numeric_limits<std::uint32_t>::max() ||
-        stream->framePeriod.numerator() > std::numeric_limits<std::uint32_t>::max())
-        return std::nullopt;
-    const auto streamRate =
-        document::FrameRate::create(static_cast<std::uint32_t>(stream->framePeriod.denominator()),
-                                    static_cast<std::uint32_t>(stream->framePeriod.numerator()));
-    const auto duration = streamRate ? framesAt(asset.frames, *streamRate) : std::nullopt;
-    return duration ? std::optional{TimeExtent{*duration, *streamRate}} : std::nullopt;
+    // #381: the conformed (or file) rate and the asset's Loop count.
+    const auto rate = document::footageFrameRate(asset);
+    const auto loops =
+        static_cast<std::uint64_t>(std::max<std::uint32_t>(1, asset.interpretation.loopCount));
+    const auto duration = rate ? framesAt(asset.frames * loops, *rate) : std::nullopt;
+    return duration ? std::optional{TimeExtent{*duration, *rate}} : std::nullopt;
 }
 
 std::optional<TimeExtent> resolveSourceExtent(const document::Project& project,
@@ -76,10 +98,12 @@ std::optional<TimeExtent> resolveSourceExtent(const document::Project& project,
         if (asset == nullptr || asset->kind != document::AssetKind::Sequence || !identityStart() ||
             asset->manifest.last < asset->manifest.first)
             return std::nullopt;
-        const auto length = static_cast<std::uint64_t>(asset->manifest.last) -
-                            static_cast<std::uint64_t>(asset->manifest.first) + 1;
-        const auto duration = framesAt(length, rate);
-        return duration ? std::optional{TimeExtent{*duration, rate}} : std::nullopt;
+        // #381: an assumed rate (else one member per composition frame) and the Loop count.
+        const auto sequenceRate = document::footageFrameRate(*asset).value_or(rate);
+        const auto loops =
+            static_cast<std::uint64_t>(std::max<std::uint32_t>(1, asset->interpretation.loopCount));
+        const auto duration = framesAt(document::footageFrameCount(*asset) * loops, sequenceRate);
+        return duration ? std::optional{TimeExtent{*duration, sequenceRate}} : std::nullopt;
     }
     if (node->typeId == "bloom.video-source") {
         const auto* asset = assetOf(project, composition, *node);
@@ -122,7 +146,8 @@ std::optional<TimeExtent> resolveLayerExtent(const document::Project& project,
 std::optional<core::RationalTime> placementTimeOfLayerTime(const document::LayerTiming& timing,
                                                            const core::RationalTime layerTime) {
     // start + tau * den / num, with checked 64-bit products.
-    const auto multiply = [](const std::int64_t a, const std::int64_t b) -> std::optional<std::int64_t> {
+    const auto multiply = [](const std::int64_t a,
+                             const std::int64_t b) -> std::optional<std::int64_t> {
         constexpr auto limit = std::numeric_limits<std::int64_t>::max();
         if (a == std::numeric_limits<std::int64_t>::min() ||
             b == std::numeric_limits<std::int64_t>::min())

@@ -1,4 +1,5 @@
 #pragma once
+#include "footage_interpretation_pass.hpp"
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -44,7 +45,19 @@ struct ImageSourceSelection {
     bool budgetExceeded = false;
     std::shared_ptr<const media::ImageSourceRevision> sourceRevision;
     bool retainedRevision = false;
+    // #381: the selected sequence frame is missing and the asset shows nothing there. The
+    // selection is available, reads no file and decodes to a transparent image whose frame bounds
+    // are the sequence's frame size.
+    bool missingFrame = false;
+    // #381: the footage interpretation pass the converted image runs (alpha, deinterlace).
+    std::optional<FootagePass> footagePass;
+    std::uint32_t frameWidth = 0;
+    std::uint32_t frameHeight = 0;
 };
+// The association an image source decodes with: an explicit asset alpha interpretation, else the
+// node's Premultiply switch.
+[[nodiscard]] media::ImageAlphaAssociation
+imageSourceAlphaAssociation(const CompiledImageSource& source);
 // The revision-cache key of one immutable image file (selectImageSource stores captures under it).
 [[nodiscard]] std::string imageSourceRevisionKey(const core::Sha256Digest& digest,
                                                  const document::AssetLocator& locator,

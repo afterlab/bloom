@@ -62,6 +62,8 @@ struct AudioClipDescription final {
     std::optional<TimeExtent> sourceLoopExtent{};
     // The asset audio stream the clip plays (0-based among the asset's audio streams).
     std::uint32_t audioStream = 0;
+    // #381: a conformed or looped video's audio timing, applied last (see FootageAudioTiming).
+    std::optional<FootageAudioTiming> footage{};
 
     friend bool operator==(const AudioClipDescription&, const AudioClipDescription&) = default;
 };

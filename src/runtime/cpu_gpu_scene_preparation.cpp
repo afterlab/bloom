@@ -753,6 +753,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto authoredMatrix = detail::LayerMatrix::authored(
                 position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
                 scale->value, rotation->value);
+            // #381: the layer's own content carries its footage pixel aspect; children compose
+            // the matrix without it.
+            const auto contentAuthored = detail::LayerMatrix::authored(
+                position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
+                {scale->value.x * layer->sourcePixelAspect, scale->value.y}, rotation->value);
+            detail::LayerMatrix contentComposed = contentAuthored;
             detail::LayerMatrix composed = authoredMatrix;
             if (layer->parent) {
                 const auto parentIndex = layer->parent->value();
@@ -766,6 +772,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                 "Layer parent matrix is unavailable");
                 }
                 composed = parentMatrix->times(authoredMatrix);
+                contentComposed = parentMatrix->times(contentAuthored);
             }
             layerMatrices[index] = composed;
             std::optional<detail::GpuSceneVectorChain> chained;
@@ -791,7 +798,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             render::LayerTransform::Authored authored{
                 .anchorX = anchor->value.x,
                 .anchorY = anchor->value.y,
-                .scaleX = scale->value.x,
+                .scaleX = scale->value.x * layer->sourcePixelAspect,
                 .scaleY = scale->value.y,
                 .rotationDegrees = rotation->value,
                 .opacity = opacity->value,
@@ -813,7 +820,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             std::optional<detail::ParentedLayerTransform> parented;
             if (layer->parent) {
-                parented.emplace(composed, sourceWindow, hScale, vScale,
+                parented.emplace(contentComposed, sourceWindow, hScale, vScale,
                                  static_cast<float>(opacity->value));
                 if (!parented->finite()) {
                     return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
@@ -861,7 +868,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                        matrix.x * hScale == std::floor(matrix.x * hScale) &&
                        matrix.y * vScale == std::floor(matrix.y * vScale);
             };
-            const bool nativeGrid = isNativeGrid(composed);
+            const bool nativeGrid = isNativeGrid(contentComposed);
             // The full AUTHOR-space chain matrix the CPU rasterizes through: the enclosing layers'
             // composed matrix multiplied into the input's own chain. For a direct leaf this is just
             // the layer's own matrix.
@@ -936,7 +943,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 }
             }
             if (const auto error = detail::emitAffineLayerCommand(
-                    inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, composed,
+                    inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, contentComposed,
                     hScale, vScale, opacity->value, fullPixelAspect, operationIndex,
                     chargeTransient, emit, commandForOperation[index], keyOf[index])) {
                 return fail(error->code, error->message);

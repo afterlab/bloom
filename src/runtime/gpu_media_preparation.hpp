@@ -84,6 +84,9 @@ struct MediaUploadOutcome final {
     std::string semanticKey;
     std::string uploadSemanticKey;
     std::shared_ptr<const PreparedGpuOcioCommand> program;
+    // #381: the footage interpretation pass over the stored-samples upload, run before the
+    // resample and the colour transform. Null without a pass.
+    std::shared_ptr<const PreparedGpuOcioCommand> interpretation;
     std::optional<MediaResamplePlan> resample;
     std::optional<MediaCryptomattePlan> cryptomatte;
     // Image-source frame bounds when the data window differs from the frame (see

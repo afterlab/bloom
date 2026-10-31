@@ -10,6 +10,7 @@
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/layer_masks.hpp>
+#include <bloom/document/layer_source.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/runtime/curve_compilation.hpp>

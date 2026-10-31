@@ -331,7 +331,8 @@ lower(const std::vector<document::NodeId>& order) {
             const bool maskUsed =
                 hasReachableOutput(nodeId, document::kCryptomatteMaskOutputPort) ||
                 (inspected && !previewInspected);
-            const bool imageUsed = hasReachableOutput(nodeId, document::kCryptomatteImageOutputPort);
+            const bool imageUsed =
+                hasReachableOutput(nodeId, document::kCryptomatteImageOutputPort);
             const bool imageConnected =
                 fixedInputEdge(nodeId, document::kCryptomatteImageInputPort) != nullptr;
             const auto imageInput =
@@ -345,8 +346,7 @@ lower(const std::vector<document::NodeId>& order) {
                 // #364 Viewer preview: the ID colours mixed halfway with the input image (Image
                 // Mix with the preview as its base, so a data-only or absent image -- a
                 // transparent second input -- still shows the colours).
-                const auto previewPort =
-                    std::string(document::kCryptomattePreviewInspectionPort);
+                const auto previewPort = std::string(document::kCryptomattePreviewInspectionPort);
                 if (isMuted(nodeId)) {
                     portOperations_.insert_or_assign({nodeId, previewPort},
                                                      imageInput ? *imageInput : emptyImage());
@@ -376,9 +376,12 @@ lower(const std::vector<document::NodeId>& order) {
             if (isMuted(nodeId)) {
                 // A muted Cryptomatte isolates nothing: no matte, and the image passes through.
                 if (maskUsed)
-                    portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteMaskOutputPort)}, emptyImage());
+                    portOperations_.insert_or_assign(
+                        {nodeId, std::string(document::kCryptomatteMaskOutputPort)}, emptyImage());
                 if (imageUsed)
-                    portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteImageOutputPort)}, imageInput ? *imageInput : emptyImage());
+                    portOperations_.insert_or_assign(
+                        {nodeId, std::string(document::kCryptomatteImageOutputPort)},
+                        imageInput ? *imageInput : emptyImage());
                 continue;
             }
             auto cryptomatte = lowerCryptomatte(*node);
@@ -387,7 +390,8 @@ lower(const std::vector<document::NodeId>& order) {
             const auto matte = runtime::OperationIndex::fromRaw(operations.size());
             operations.emplace_back(std::move(*cryptomatte));
             indices.emplace(nodeId, matte);
-            portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteMaskOutputPort)}, matte);
+            portOperations_.insert_or_assign(
+                {nodeId, std::string(document::kCryptomatteMaskOutputPort)}, matte);
             if (imageUsed) {
                 auto image = matte;
                 if (imageInput) {
@@ -402,7 +406,8 @@ lower(const std::vector<document::NodeId>& order) {
                 } else if (imageConnected) {
                     image = emptyImage(); // an empty input image stays empty
                 }
-                portOperations_.insert_or_assign({nodeId, std::string(document::kCryptomatteImageOutputPort)}, image);
+                portOperations_.insert_or_assign(
+                    {nodeId, std::string(document::kCryptomatteImageOutputPort)}, image);
             }
             continue;
         }
@@ -497,8 +502,8 @@ lower(const std::vector<document::NodeId>& order) {
                 if (!kernel)
                     return {};
                 maskedContent = runtime::OperationIndex::fromRaw(operations.size());
-                operations.emplace_back(runtime::CompiledImageEffect{nodeId, *content,
-                                                                     std::move(*kernel)});
+                operations.emplace_back(
+                    runtime::CompiledImageEffect{nodeId, *content, std::move(*kernel)});
             }
         }
         // ADR 0028 Mask node: an opaque white canvas, masked.
@@ -533,7 +538,8 @@ lower(const std::vector<document::NodeId>& order) {
                     const auto targetIndex = indices.find(target->nodeId);
                     if (targetIndex == indices.end())
                         continue;
-                    const auto* source = composition_->graph().findLayer(target->trackMatte->source);
+                    const auto* source =
+                        composition_->graph().findLayer(target->trackMatte->source);
                     std::optional<runtime::OperationIndex> matte;
                     if (source != nullptr)
                         if (const auto found = indices.find(source->nodeId); found != indices.end())
@@ -603,7 +609,8 @@ lower(const std::vector<document::NodeId>& order) {
     if (!audioMix.has_value()) {
         return {};
     }
-    auto planOutput = output == indices.end() ? runtime::OperationIndex::fromRaw(0) : output->second;
+    auto planOutput =
+        output == indices.end() ? runtime::OperationIndex::fromRaw(0) : output->second;
     if (request_.channelInspection && request_.channelInspection->channels.empty()) {
         // #364 Viewer matte preview: an inspection with no channels shows a pixel output port
         // (a Cryptomatte's Mask) directly.
@@ -628,8 +635,8 @@ lower(const std::vector<document::NodeId>& order) {
         runtime::CompiledChannelShuffle shuffle;
         shuffle.sourceNodeId = inspection.node;
         std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
-        const auto root = lowerChannelStep(document::OutputPortRef{inspection.node, inspection.port},
-                                           shuffle.channels, memo, 0);
+        const auto root = lowerChannelStep(
+            document::OutputPortRef{inspection.node, inspection.port}, shuffle.channels, memo, 0);
         if (!root)
             return {};
         if (*root + 1 != shuffle.channels.steps.size()) {
@@ -650,11 +657,18 @@ lower(const std::vector<document::NodeId>& order) {
         operations.emplace_back(runtime::CompiledCompositionOutput{outputNodeId, mergeIndex});
     }
     runtime::CompiledCompositionPlanDefinition definition{
-        request_.snapshot.revision(), request_.snapshot.project().id(), request_.compositionId,
-        composition_->format(), std::move(operations), planOutput,
-        std::move(curveTables->scalar), std::move(curveTables->vec2),
-        std::move(curveTables->vec3), std::move(curveTables->color4),
-        std::move(valueOperations_), valueOutputCount_,
+        request_.snapshot.revision(),
+        request_.snapshot.project().id(),
+        request_.compositionId,
+        composition_->format(),
+        std::move(operations),
+        planOutput,
+        std::move(curveTables->scalar),
+        std::move(curveTables->vec2),
+        std::move(curveTables->vec3),
+        std::move(curveTables->color4),
+        std::move(valueOperations_),
+        valueOutputCount_,
         runtime::kCompiledCompositionPlanSemanticsVersion,
         runtime::kAnimationSamplingSemanticsVersion,
         !request_.parameterOverrides.empty(),
@@ -717,12 +731,14 @@ lower(const std::vector<document::NodeId>& order) {
             // #354: embedded audio follows its picture's loop mode over the picture extent.
             const auto* loop =
                 parameterConstant<std::int64_t>(findParameterBinding(audioSource, "loopMode"));
+            const auto& asset = *request_.snapshot.project().findAsset(compiled.assetId);
             if (loop != nullptr && (*loop == 1 || *loop == 2)) {
-                compiled.loopExtent = runtime::resolveVideoStreamExtent(
-                    *request_.snapshot.project().findAsset(compiled.assetId));
+                compiled.loopExtent = runtime::resolveVideoStreamExtent(asset);
                 if (compiled.loopExtent)
                     compiled.loopMode = *loop;
             }
+            // #381: the audio follows a conformed rate and the Loop count.
+            compiled.footage = runtime::footageAudioTiming(asset);
         }
         const auto sourceIndex = mix.sources.size();
         mix.sources.push_back(std::move(compiled));
@@ -1230,7 +1246,8 @@ lowerImageEffect(const document::NodeRecord& node,
 // Appends the steps that produce the ChannelSet on `output` and returns the index of its step.
 // `memo` shares a step between consumers of the same output.
 [[nodiscard]] std::optional<std::uint32_t>
-lowerChannelStep(const document::OutputPortRef& output, runtime::CompiledChannelExpression& expression,
+lowerChannelStep(const document::OutputPortRef& output,
+                 runtime::CompiledChannelExpression& expression,
                  std::map<std::pair<document::NodeId, std::string>, std::uint32_t>& memo,
                  const std::size_t depth) {
     if (depth > 256) {
@@ -1278,8 +1295,8 @@ lowerChannelStep(const document::OutputPortRef& output, runtime::CompiledChannel
                 : nullptr;
         // A muted source contributes no asset; resolution then reports it unavailable.
         expression.sources.push_back(runtime::CompiledChannelSource{
-            node->id, record && !isMuted(node->id) ? std::optional{*record} : std::nullopt,
-            *start, *loop, *space, inputSpace == nullptr ? std::string{} : *inputSpace,
+            node->id, record && !isMuted(node->id) ? std::optional{*record} : std::nullopt, *start,
+            *loop, *space, inputSpace == nullptr ? std::string{} : *inputSpace,
             part == nullptr ? std::string{} : *part});
         step.kind = runtime::CompiledChannelStepKind::Source;
         step.source = static_cast<std::uint32_t>(expression.sources.size() - 1);
@@ -1468,8 +1485,9 @@ lowerVideoSource(const document::NodeRecord& node) {
                                     const runtime::SocketValueKind kind,
                                     const std::optional<runtime::ValueOutputIndex>& resolved) {
     const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
-    const auto* driver =
-        parameter == nullptr ? nullptr : std::get_if<document::DriverBindingSource>(&parameter->source);
+    const auto* driver = parameter == nullptr
+                             ? nullptr
+                             : std::get_if<document::DriverBindingSource>(&parameter->source);
     if (driver == nullptr || resolved.has_value())
         return false;
     auto diagnosticSubject = subject(node.id, "parameter." + binding->role);
@@ -1509,9 +1527,12 @@ lowerShape(const document::NodeRecord& node) {
     if (unreadableDriver(node, fillBinding, runtime::SocketValueKind::Boolean, drivenFill) ||
         unreadableDriver(node, strokeBinding, runtime::SocketValueKind::Boolean, drivenStroke))
         return std::nullopt;
-    const auto* fillEnabled = storedFill != nullptr ? storedFill : drivenFill ? &fillDefault : nullptr;
-    const auto* strokeEnabled =
-        storedStroke != nullptr ? storedStroke : drivenStroke ? &strokeDefault : nullptr;
+    const auto* fillEnabled = storedFill != nullptr ? storedFill
+                              : drivenFill          ? &fillDefault
+                                                    : nullptr;
+    const auto* strokeEnabled = storedStroke != nullptr ? storedStroke
+                                : drivenStroke          ? &strokeDefault
+                                                        : nullptr;
     const auto* align = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeAlign"));
     const auto* join = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeJoin"));
     const auto* cap = parameterConstant<std::int64_t>(findParameterBinding(node, "strokeCap"));
@@ -1522,23 +1543,23 @@ lowerShape(const document::NodeRecord& node) {
         return std::nullopt;
     }
     auto shape = runtime::CompiledShape{node.id,
-                                  static_cast<document::ShapeKind>(*kind),
-                                  *size,
-                                  *radius,
-                                  *points,
-                                  *ratio,
-                                  *start,
-                                  *end,
-                                  *path,
-                                  *fillEnabled,
-                                  *fill,
-                                  *strokeEnabled,
-                                  *stroke,
-                                  *width,
-                                  static_cast<document::ShapeStrokeAlign>(*align),
-                                  static_cast<document::ShapeStrokeJoin>(*join),
-                                  static_cast<document::ShapeStrokeCap>(*cap),
-                                  static_cast<document::ShapeFillRule>(*rule)};
+                                        static_cast<document::ShapeKind>(*kind),
+                                        *size,
+                                        *radius,
+                                        *points,
+                                        *ratio,
+                                        *start,
+                                        *end,
+                                        *path,
+                                        *fillEnabled,
+                                        *fill,
+                                        *strokeEnabled,
+                                        *stroke,
+                                        *width,
+                                        static_cast<document::ShapeStrokeAlign>(*align),
+                                        static_cast<document::ShapeStrokeJoin>(*join),
+                                        static_cast<document::ShapeStrokeCap>(*cap),
+                                        static_cast<document::ShapeFillRule>(*rule)};
     shape.fillEnabledParameterId = fillBinding->parameterId;
     shape.drivenFillEnabled = drivenFill;
     shape.strokeEnabledParameterId = strokeBinding->parameterId;
@@ -1786,6 +1807,18 @@ lowerLayerOutput(const document::NodeRecord& node,
     const auto time = lowerLayerTime(node, *boundary->second);
     if (!time)
         return std::nullopt;
+    // #381: the footage's pixel aspect override, relative to its decoded (file) ratio.
+    double sourcePixelAspect = 1.0;
+    if (const auto source = document::layerSource(*composition_, *boundary->second))
+        if (const auto* assetId = std::get_if<document::AssetId>(&*source))
+            if (const auto* asset = request_.snapshot.project().findAsset(*assetId);
+                asset != nullptr && asset->interpretation.pixelAspect) {
+                const auto file = document::footageFilePixelAspect(*asset);
+                const auto shown = *asset->interpretation.pixelAspect;
+                sourcePixelAspect =
+                    (static_cast<double>(shown.numerator()) / shown.denominator()) /
+                    (static_cast<double>(file.numerator()) / file.denominator());
+            }
     return runtime::CompiledLayerOutput{node.id,
                                         boundary->second->layerId,
                                         *input,
@@ -1800,7 +1833,8 @@ lowerLayerOutput(const document::NodeRecord& node,
                                         boundary->second->endPoint(composition_->duration()),
                                         drivenBlendMode,
                                         parentIndex,
-                                        *time};
+                                        *time,
+                                        sourcePixelAspect};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -1964,16 +1998,16 @@ lowerLayerMasks(const document::LayerOutputBoundary& boundary) {
 }
 
 // The Mask node: one Add mask over an opaque white canvas-sized input.
-[[nodiscard]] std::optional<runtime::LayerMaskKernel> lowerMaskNode(const document::NodeRecord& node) {
+[[nodiscard]] std::optional<runtime::LayerMaskKernel>
+lowerMaskNode(const document::NodeRecord& node) {
     const auto binding = [&](const std::string_view role) {
         const auto* found = findParameterBinding(node, role);
         return found == nullptr ? document::ParameterId{} : found->parameterId;
     };
     const auto* inverted = parameterConstant<bool>(findParameterBinding(node, "inverted"));
-    auto compiled =
-        compiledLayerMask({}, document::LayerMaskMode::Add, inverted != nullptr && *inverted,
-                          binding("path"), binding("feather"), binding("expansion"),
-                          binding("opacity"));
+    auto compiled = compiledLayerMask({}, document::LayerMaskMode::Add,
+                                      inverted != nullptr && *inverted, binding("path"),
+                                      binding("feather"), binding("expansion"), binding("opacity"));
     if (!compiled) {
         addTopologyFailure(node.id, "Mask node parameters could not be lowered.");
         return std::nullopt;
