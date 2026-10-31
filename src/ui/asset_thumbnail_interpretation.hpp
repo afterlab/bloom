@@ -7,12 +7,14 @@
 #include <QImage>
 #include <bloom/document/asset.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/media/provider/contract.hpp>
 #include <bloom/render/image.hpp>
 
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace bloom::color {
@@ -37,6 +39,14 @@ struct ThumbnailGrid final {
     std::vector<render::Rgba32f> pixels;
 };
 [[nodiscard]] ThumbnailGrid sampleThumbnailGrid(const render::Rgba32fImage& image);
+
+// A video frame's stored samples through the footage pass and `processor` at full resolution, as
+// the renderer's CPU reference, nearest-sampled to the thumbnail size.
+[[nodiscard]] media::provider::Result<render::Rgba32fImage> interpretedVideoThumbnail(
+    const document::AssetRecord& asset, media::ImageAlphaAssociation association,
+    const media::provider::FrameProduct& frame, const std::string& inputId,
+    const color::CpuColorSpaceProcessor* processor,
+    const render::Rgba32fImageDescriptor& descriptor, const std::function<bool()>& cancelled);
 
 // How much wider than its decoded picture the asset's thumbnail is drawn: the Interpret Footage
 // pixel aspect ratio over the one the decode already applied (a video's coded ratio).

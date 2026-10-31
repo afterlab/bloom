@@ -1,5 +1,6 @@
 #include "asset_thumbnail_interpretation.hpp"
 
+#include <bloom/media/video/colour.hpp>
 #include <bloom/runtime/footage_proxy.hpp>
 
 #include <algorithm>
@@ -62,6 +63,53 @@ ThumbnailGrid sampleThumbnailGrid(const render::Rgba32fImage& image) {
     return grid;
 }
 
+// #381: a video frame's stored samples through the footage pass and input color at full
+// resolution, as the renderer's CPU reference, then nearest-sampled to the thumbnail size.
+media::provider::Result<render::Rgba32fImage> interpretedVideoThumbnail(
+    const document::AssetRecord& asset, const media::ImageAlphaAssociation association,
+    const media::provider::FrameProduct& frame, const std::string& inputId,
+    const color::CpuColorSpaceProcessor* processor,
+    const render::Rgba32fImageDescriptor& descriptor, const std::function<bool()>& cancelled) {
+    auto stored = media::video::videoToStoredSamples(
+        frame, static_cast<std::uint32_t>(asset.interpretation.colorSpace),
+        processor != nullptr ? std::string_view(inputId) : std::string_view{}, descriptor,
+        media::kMaxImageStorageBytes, cancelled);
+    if (auto* error = std::get_if<media::provider::Unavailable>(&stored))
+        return *error;
+    auto interpreted = runtime::interpretFootageProxy(
+        asset, association, 0, std::get<render::Rgba32fImage>(stored), processor,
+        media::kMaxImageStorageBytes, cancelled);
+    if (auto* error = std::get_if<std::string>(&interpreted))
+        return media::provider::Unavailable{media::provider::Error::InvalidValue, *error};
+    const auto grid = sampleThumbnailGrid(std::get<render::Rgba32fImage>(interpreted));
+    const auto invalid = media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                                      "The thumbnail size is invalid"};
+    const auto window = render::ImageWindow::create(0, 0, grid.width, grid.height);
+    if (!window)
+        return invalid;
+    const auto small = render::Rgba32fImageDescriptor::create(*window.value(), *window.value(),
+                                                              core::PixelAspectRatio::square());
+    if (!small)
+        return invalid;
+    auto builder =
+        render::Rgba32fImageBuilder::create(*small.value(), media::kMaxImageStorageBytes);
+    if (!builder)
+        return media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                            "The thumbnail exceeds the pixel budget"};
+    for (std::uint32_t y = 0; y < grid.height; ++y) {
+        auto row = builder.value()->row(y);
+        if (!row)
+            return media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                                "The thumbnail row is unavailable"};
+        for (std::uint32_t x = 0; x < grid.width; ++x)
+            (*row.value())[x] = grid.pixels[static_cast<std::size_t>(y) * grid.width + x];
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                            "The thumbnail is invalid"};
+    return std::move(*frozen.value());
+}
 double thumbnailPixelAspectScale(const document::AssetRecord& asset) {
     const auto shown = document::footagePixelAspect(asset);
     const auto decoded = document::footageFilePixelAspect(asset);
