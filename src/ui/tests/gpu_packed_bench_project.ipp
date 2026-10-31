@@ -17,6 +17,8 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 
+#include <QTimer>
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -31,6 +33,7 @@
 #include <sys/resource.h>
 #endif
 
+#include <fstream>
 #include <iomanip>
 #include <set>
 #include <sstream>
@@ -80,6 +83,60 @@ std::chrono::seconds gBenchTimeout{1800};
 [[nodiscard]] double benchEpochSeconds() {
     return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch())
         .count();
+}
+
+// Where the process's memory is, sampled during the measured window. RSS splits come from
+// /proc on Linux (absent elsewhere); the pools are Bloom's own accounting: every reusable pool on
+// the process ledger, the two largest of them by name, and the bytes admitted to active work.
+struct BenchMemorySample {
+    double seconds = 0;
+    std::uint64_t preparedFrames = 0;
+    std::uint64_t rssBytes = 0;
+    std::uint64_t anonBytes = 0;
+    std::uint64_t fileBytes = 0;
+    std::uint64_t shmemBytes = 0;
+    std::uint64_t reusablePoolBytes = 0;
+    std::uint64_t previewCacheBytes = 0;
+    std::uint64_t operationCacheBytes = 0;
+    std::uint64_t hostClaimBytes = 0;
+    std::uint64_t hostUsableBytes = 0;
+};
+
+void benchReadProcStatus(BenchMemorySample& sample) {
+#if defined(__linux__)
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    const auto read = [&line](const std::string_view key, std::uint64_t& out) {
+        if (!line.starts_with(key))
+            return;
+        std::istringstream value(line.substr(key.size()));
+        std::uint64_t kibibytes = 0;
+        if (value >> kibibytes)
+            out = kibibytes * 1024ULL;
+    };
+    while (std::getline(status, line)) {
+        read("VmRSS:", sample.rssBytes);
+        read("RssAnon:", sample.anonBytes);
+        read("RssFile:", sample.fileBytes);
+        read("RssShmem:", sample.shmemBytes);
+    }
+#else
+    static_cast<void>(sample);
+#endif
+}
+
+[[nodiscard]] std::string benchMemoryJson(const BenchMemorySample& sample) {
+    std::ostringstream out;
+    out << std::setprecision(6) << "{\"seconds\":" << sample.seconds
+        << ",\"preparedFrames\":" << sample.preparedFrames << ",\"rssBytes\":" << sample.rssBytes
+        << ",\"anonBytes\":" << sample.anonBytes << ",\"fileBytes\":" << sample.fileBytes
+        << ",\"shmemBytes\":" << sample.shmemBytes
+        << ",\"reusablePoolBytes\":" << sample.reusablePoolBytes
+        << ",\"previewCacheBytes\":" << sample.previewCacheBytes
+        << ",\"operationCacheBytes\":" << sample.operationCacheBytes
+        << ",\"hostClaimBytes\":" << sample.hostClaimBytes
+        << ",\"hostUsableBytes\":" << sample.hostUsableBytes << '}';
+    return out.str();
 }
 
 [[nodiscard]] double benchProcessCpuSeconds() {
@@ -433,9 +490,38 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"firstFrameSeconds\":" << firstFrameSeconds
          << ",\"firstFrameProvider\":" << firstProvider
          << ",\"previewCacheBudgetBytes\":" << frameCache->byteBudget();
+    const auto memoryWindowStarted = std::chrono::steady_clock::now();
+    // Memory over the measured window: the sample with the highest RSS, and a line every ten
+    // seconds so a run that stops making progress shows where its memory is.
+    BenchMemorySample memoryPeak;
+    std::chrono::steady_clock::time_point lastMemoryLine{};
+    QTimer memoryTimer;
+    memoryTimer.setInterval(250);
+    QObject::connect(&memoryTimer, &QTimer::timeout, [&] {
+        BenchMemorySample sample;
+        sample.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                       memoryWindowStarted)
+                             .count();
+        sample.preparedFrames = ram.preparedFrameCount();
+        benchReadProcStatus(sample);
+        sample.reusablePoolBytes = runtime::processMemoryBudgetLedger().reusableRetainedBytes();
+        sample.previewCacheBytes = frameCache->residentBytes();
+        sample.operationCacheBytes = evaluator.operationCache()->retainedBytes();
+        const auto capacity = policy->usableCapacity();
+        sample.hostClaimBytes = capacity.hostClaimBytes;
+        sample.hostUsableBytes = capacity.hostUsableBytes;
+        if (sample.rssBytes >= memoryPeak.rssBytes)
+            memoryPeak = sample;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastMemoryLine >= 10s) {
+            lastMemoryLine = now;
+            std::cout << "BENCH_MEMORY " << benchMemoryJson(sample) << '\n' << std::flush;
+        }
+    });
     const auto before = service.status().counters;
     const auto cpuBefore = benchProcessCpuSeconds();
     const auto started = std::chrono::steady_clock::now();
+    memoryTimer.start();
     json << std::setprecision(15) << ",\"windowStartEpoch\":" << benchEpochSeconds()
          << std::setprecision(6);
     if (gBenchPlayback) {
@@ -517,6 +603,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             codes += (codes.empty() ? "" : "; ") + item.code + ": " + item.summary;
         json << ",\"lastFrameDiagnostics\":" << benchJson(codes);
     }
+    memoryTimer.stop();
     const auto after = service.status().counters;
     const auto claims = policy->snapshot().reservations;
     json << ",\"cpuFallbackFrames\":" << after.cpuFallbacks - before.cpuFallbacks
@@ -542,6 +629,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"residentDetail\":" << benchJson(service.status().residentDetail)
          << ",\"hostCapacityBytes\":" << claims.hostCapacityBytes.value_or(0)
          << ",\"deviceCapacityBytes\":" << claims.deviceCapacityBytes.value_or(0)
+         << ",\"memoryAtPeak\":" << benchMemoryJson(memoryPeak)
          << ",\"peakRssBytes\":" << benchPeakRssBytes() << ",\"processSeconds\":"
          << std::chrono::duration<double>(std::chrono::steady_clock::now() - processStarted)
                 .count()

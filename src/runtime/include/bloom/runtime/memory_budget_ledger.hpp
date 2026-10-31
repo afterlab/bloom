@@ -108,6 +108,8 @@ class MemoryBudgetLedger final {
     void unregisterCache(const void* owner);
     [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
     [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
+    // What every reusable pool holds now (asks each pool; same thread rules as poll).
+    [[nodiscard]] std::size_t reusableRetainedBytes() const;
     void setConfiguredTotal(std::size_t bytes);
     // The RAM headroom preference. Once set, each reusable pool may hold what it retains now plus
     // all measured available memory beyond the headroom: caches fill usable memory and are evicted
