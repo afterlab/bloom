@@ -34,7 +34,7 @@ constexpr std::int32_t kTransferPq = 16, kTransferHlg = 18;
 constexpr std::int32_t kPrimariesBt2020 = 9;
 // The interpretation that resolves a refused stream, named in every diagnostic.
 constexpr std::string_view kOverride =
-    "; choose an input color space for the asset (Assets, Input Color...) or its Video node";
+    "; choose its input color in Interpret Footage or on its Video node";
 [[nodiscard]] bool knownMatrix(const std::int32_t matrix) {
     return matrix == kMatrixBt709 || matrix == kMatrixBt470bg || matrix == kMatrixSmpte170m ||
            matrix == kMatrixBt2020Ncl;
@@ -126,7 +126,7 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
              render::Rgba32fImageDescriptor composition, const double horizontalScale,
              const double verticalScale, const std::size_t byteBudget,
              const std::function<bool()>& cancel, const bool configManaged,
-             const bool applyProcessor) {
+             const bool applyProcessor, const bool storedSamples = false) {
     // The frame was digest-verified when it crossed the worker boundary and is immutable since.
     if (!validLayout(frame) || overrideTransfer > 3 || !std::isfinite(horizontalScale) ||
         !std::isfinite(verticalScale) || horizontalScale <= 0 || horizontalScale > 1 ||
@@ -238,8 +238,12 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
             if (configManaged) {
                 convertedRow[x] = {rgb[0], rgb[1], rgb[2], alpha};
             } else {
-                const auto pixel = render::Rgba32f::fromPremultiplied(
-                    rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha);
+                const auto pixel =
+                    storedSamples
+                        ? render::Rgba32f::fromPremultiplied(rgb[0], rgb[1], rgb[2],
+                                                             std::fma(alpha, 0.5F, 0.5F))
+                        : render::Rgba32f::fromPremultiplied(rgb[0] * alpha, rgb[1] * alpha,
+                                                             rgb[2] * alpha, alpha);
                 if (!pixel)
                     return Unavailable{Error::InvalidValue, "Video pixel is invalid"};
                 (*row.value())[x] = *pixel.value();
@@ -250,8 +254,13 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
         if (configManaged) {
             for (std::uint32_t x = 0; x < w; ++x) {
                 const auto& sample = convertedRow[x];
-                const auto pixel = render::Rgba32f::fromPremultiplied(
-                    sample[0] * sample[3], sample[1] * sample[3], sample[2] * sample[3], sample[3]);
+                const auto pixel =
+                    storedSamples
+                        ? render::Rgba32f::fromPremultiplied(sample[0], sample[1], sample[2],
+                                                             std::fma(sample[3], 0.5F, 0.5F))
+                        : render::Rgba32f::fromPremultiplied(sample[0] * sample[3],
+                                                             sample[1] * sample[3],
+                                                             sample[2] * sample[3], sample[3]);
                 if (!pixel)
                     return Unavailable{Error::InvalidValue, "Video pixel is invalid"};
                 (*row.value())[x] = *pixel.value();
@@ -363,7 +372,7 @@ AssumedVideoColour assumeMissingVideoColour(const ColourTags& source,
     const bool sdr = !wide && (tags.transfer == 1 || tags.transfer == 6 || tags.transfer == 13);
     result.note = std::string("Color tags missing — assumed ") +
                   (wide ? "Rec.2020" : hd ? "Rec.709" : "Rec.601") +
-                  (sdr ? " with the sRGB transfer" : "") + ". Change in Assets → Input Color";
+                  (sdr ? " with the sRGB transfer" : "") + ". Change in Assets → Interpret Footage";
     // v2: the SDR assumption resolves to the sRGB texture space instead of the camera/linear one.
     result.identity = "assumed-colour-v2:" + filled + ":" + std::to_string(tags.primaries) + "," +
                       std::to_string(tags.transfer) + "," + std::to_string(tags.matrix) + "," +
@@ -421,5 +430,14 @@ videoToInputColorSpace(const FrameProduct& frame, const std::uint32_t overrideTr
                         horizontalScale, verticalScale, byteBudget, cancel,
                         /*configManaged=*/!inputColorSpaceId.empty(),
                         /*applyProcessor=*/false);
+}
+media::provider::Result<render::Rgba32fImage>
+videoToStoredSamples(const FrameProduct& frame, const std::uint32_t overrideTransfer,
+                     const std::string_view inputColorSpaceId,
+                     render::Rgba32fImageDescriptor composition, const std::size_t byteBudget,
+                     const std::function<bool()>& cancel) {
+    return convertVideo(frame, overrideTransfer, inputColorSpaceId, {}, composition, 1.0, 1.0,
+                        byteBudget, cancel, /*configManaged=*/!inputColorSpaceId.empty(),
+                        /*applyProcessor=*/false, /*storedSamples=*/true);
 }
 } // namespace bloom::media::video

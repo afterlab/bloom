@@ -555,9 +555,10 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
             (interpretation.alphaAssociation == ImageAlphaAssociation::Auto
                  ? layout->alphaAssociation
                  : interpretation.alphaAssociation) == ImageAlphaAssociation::Premultiplied;
-        const bool convert = !interpretation.inputColorSpaceId.empty() ||
-                             interpretation.colorSpace == ImageColorSpace::Srgb ||
-                             processor != nullptr;
+        const bool stored = interpretation.storedSamples;
+        const bool convert = !stored && (!interpretation.inputColorSpaceId.empty() ||
+                                         interpretation.colorSpace == ImageColorSpace::Srgb ||
+                                         processor != nullptr);
         std::shared_ptr<const color::CpuInputProcessor> compatibilityProcessor;
         if (convert && !processor) {
             const auto resolved = color::resolveBloomNeutralV1BuiltIn(
@@ -661,7 +662,7 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
                     }
                     // Premultiplied RGB at zero alpha (additive emission) cannot survive the v1
                     // process image; it is dropped and reported.
-                    if (sourcePremultiplied && target[3] == 0.0F &&
+                    if (!stored && sourcePremultiplied && target[3] == 0.0F &&
                         (target[0] != 0.0F || target[1] != 0.0F || target[2] != 0.0F))
                         repaired = true;
                     repairedRow[static_cast<std::size_t>(x)] = repaired;
@@ -695,12 +696,12 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
                         sample[3] = std::clamp(sample[3], 0.0F, 1.0F);
                         repaired = true;
                     }
-                    const auto red =
-                        sourcePremultiplied && !convert ? sample[0] : sample[0] * sample[3];
-                    const auto green =
-                        sourcePremultiplied && !convert ? sample[1] : sample[1] * sample[3];
-                    const auto blue =
-                        sourcePremultiplied && !convert ? sample[2] : sample[2] * sample[3];
+                    const bool asStored = stored || (sourcePremultiplied && !convert);
+                    const auto red = asStored ? sample[0] : sample[0] * sample[3];
+                    const auto green = asStored ? sample[1] : sample[1] * sample[3];
+                    const auto blue = asStored ? sample[2] : sample[2] * sample[3];
+                    if (stored)
+                        sample[3] = storedSampleAlpha(sample[3]);
                     // The v1 process image cannot carry premultiplied RGB at zero alpha
                     // (additive emission); such a pixel becomes transparent and is reported.
                     if (sample[3] == 0.0F && (red != 0.0F || green != 0.0F || blue != 0.0F))

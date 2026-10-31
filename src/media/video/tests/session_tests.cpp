@@ -313,7 +313,7 @@ void colourInterpretation(const std::filesystem::path& directory) {
         const auto tagged = fill({1, 1, 1, 1}, 64, 48, 24);
         check(hd.assumed && hd.tags == provider::ColourTags{1, 1, 1, 1} &&
                   hd.note == "Color tags missing — assumed Rec.709 with the sRGB transfer. "
-                             "Change in Assets → Input Color",
+                             "Change in Assets → Interpret Footage",
               "untagged HD assumes Rec.709 limited range with the visible note");
         check(pal.tags == provider::ColourTags{5, 6, 5, 1} &&
                   ntsc.tags == provider::ColourTags{6, 6, 6, 1} &&

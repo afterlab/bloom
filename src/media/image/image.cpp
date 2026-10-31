@@ -3,6 +3,7 @@
 #include "image_work_statistics.hpp"
 #include "stb_image_adapter.hpp"
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
@@ -139,6 +140,44 @@ template <typename T> [[nodiscard]] ImageResult<T> providerMissing() {
             "TIFF provider is missing; MEDIA-3 must provide the worker adapter",
             false,
             ImageDiagnosticCode::ProviderMissing};
+}
+
+// A provider's premultiplied image as stored samples: its RGB unchanged, alpha biased.
+ImageResult<std::shared_ptr<const render::Rgba32fImage>>
+storedSampleImage(const std::shared_ptr<const render::Rgba32fImage>& image,
+                  const std::size_t pixelBudget) {
+    if (!image || image->descriptor() == nullptr)
+        return {{},
+                "Image provider returned an invalid RGBA32F image",
+                false,
+                ImageDiagnosticCode::ProviderFailed};
+    auto builder = render::Rgba32fImageBuilder::create(*image->descriptor(), pixelBudget);
+    if (!builder)
+        return {{},
+                "Decoded image exceeds the pixel storage budget",
+                false,
+                ImageDiagnosticCode::PixelBudgetExceeded};
+    const auto window = image->descriptor()->dataWindow();
+    const auto width = window.extent().width();
+    for (std::uint64_t y = 0; y < window.extent().height(); ++y) {
+        auto row = builder.value()->row(window.originY() + static_cast<std::int64_t>(y));
+        if (!row)
+            return {{}, "Image output row is unavailable", false, ImageDiagnosticCode::DecodeFailed};
+        for (std::uint64_t x = 0; x < width; ++x) {
+            const auto& pixel = image->pixels()[static_cast<std::size_t>(y * width + x)];
+            const auto stored = render::Rgba32f::fromPremultiplied(
+                pixel.red(), pixel.green(), pixel.blue(), storedSampleAlpha(pixel.alpha()));
+            if (!stored)
+                return {{}, "Image provider returned an invalid pixel", false,
+                        ImageDiagnosticCode::ProviderFailed};
+            (*row.value())[static_cast<std::size_t>(x)] = *stored.value();
+        }
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return {{}, "Image provider returned an invalid image", false,
+                ImageDiagnosticCode::ProviderFailed};
+    return {std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())), {}};
 }
 
 ImageResult<std::shared_ptr<const render::Rgba32fImage>>
@@ -386,6 +425,8 @@ ImageResult<ImageProbe> probeImage(const std::filesystem::path& path, const Canc
         return {{}, "Image probe allocation or I/O failed"};
     }
 }
+float storedSampleAlpha(const float alpha) noexcept { return std::fma(alpha, 0.5F, 0.5F); }
+
 static ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* revision,
                 const ImageInterpretation& interpretation,
@@ -447,6 +488,23 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                             ImageDiagnosticCode::ColorSpaceUnavailable};
                 processor = std::move(prepared).takeProcessor();
             }
+            if (interpretation.storedSamples) {
+                auto premultiplied = interpretation;
+                premultiplied.storedSamples = false;
+                premultiplied.alphaAssociation = ImageAlphaAssociation::Premultiplied;
+                const auto response = provider->decode({.path = path,
+                                                        .interpretation = premultiplied,
+                                                        .pixelBudget = pixelBudget,
+                                                        .expectedDigest = expectedDigest});
+                if (!response.value.has_value())
+                    return {{},
+                            response.diagnostic,
+                            response.cancelled,
+                            response.code == ImageDiagnosticCode::None
+                                ? ImageDiagnosticCode::ProviderFailed
+                                : response.code};
+                return storedSampleImage(response.value->image, pixelBudget);
+            }
             const auto response = provider->decode({.path = path,
                                                     .interpretation = interpretation,
                                                     .pixelBudget = pixelBudget,
@@ -496,10 +554,11 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                     ImageDiagnosticCode::DecodeFailed};
         if (cancelled(cancel))
             return {{}, {}, true};
-        const bool convert = !interpretation.inputColorSpaceId.empty() ||
-                             interpretation.colorSpace == ImageColorSpace::Auto ||
-                             interpretation.colorSpace == ImageColorSpace::Srgb ||
-                             processor != nullptr;
+        const bool stored = interpretation.storedSamples;
+        const bool convert = !stored && (!interpretation.inputColorSpaceId.empty() ||
+                                         interpretation.colorSpace == ImageColorSpace::Auto ||
+                                         interpretation.colorSpace == ImageColorSpace::Srgb ||
+                                         processor != nullptr);
         std::shared_ptr<const color::CpuInputProcessor> compatibilityProcessor;
         if (convert && !processor) {
             const auto resolved = color::resolveBloomNeutralV1BuiltIn(
@@ -546,7 +605,8 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                 for (std::size_t c = 0; c < 4; ++c)
                     row[static_cast<std::size_t>(x)][c] =
                         static_cast<float>(samples[offset + c]) / 65535.0F;
-                if (interpretation.alphaAssociation == ImageAlphaAssociation::Premultiplied) {
+                if (!stored &&
+                    interpretation.alphaAssociation == ImageAlphaAssociation::Premultiplied) {
                     for (std::size_t c = 0; c < 3; ++c)
                         row[static_cast<std::size_t>(x)][c] =
                             row[static_cast<std::size_t>(x)][3] > 0.0F
@@ -564,8 +624,12 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
             auto outputRow = builder.value()->row(static_cast<std::int64_t>(y));
             for (std::uint64_t x = 0; x < width; ++x) {
                 const auto& sample = row[static_cast<std::size_t>(x)];
-                auto pixel = render::Rgba32f::fromPremultiplied(
-                    sample[0] * sample[3], sample[1] * sample[3], sample[2] * sample[3], sample[3]);
+                auto pixel =
+                    stored ? render::Rgba32f::fromPremultiplied(sample[0], sample[1], sample[2],
+                                                                storedSampleAlpha(sample[3]))
+                           : render::Rgba32f::fromPremultiplied(sample[0] * sample[3],
+                                                                sample[1] * sample[3],
+                                                                sample[2] * sample[3], sample[3]);
                 if (!pixel)
                     return {{}, "Input color conversion produced an invalid pixel"};
                 (*outputRow.value())[static_cast<std::size_t>(x)] = *pixel.value();

@@ -36,8 +36,17 @@ struct ImageInterpretation {
     // layer whose R/G/B[/A] or Y[/A] channels form the colour image (empty: the root layer).
     std::string part{};
     std::string layer{};
+    // Interpret Footage (#381): decode the file's stored channel values for the runtime's footage
+    // interpretation pass instead of a process image. No colour conversion and no alpha
+    // association run; each pixel is (stored R, G, B, 0.5 + 0.5 * stored A), so a transparent
+    // pixel keeps its stored RGB through the premultiplied image type (the pass decodes the
+    // biased alpha). Only valid with the Raw colour space. A provider-decoded file (TIFF) is
+    // decoded premultiplied, so its stored RGB under zero alpha is not available.
+    bool storedSamples = false;
     friend bool operator==(const ImageInterpretation&, const ImageInterpretation&) = default;
 };
+// The stored-samples alpha encoding (above): fma(alpha, 0.5, 0.5).
+[[nodiscard]] float storedSampleAlpha(float alpha) noexcept;
 
 enum class ImageFormat : std::uint8_t { Png, Jpeg, Exr, Tiff };
 
