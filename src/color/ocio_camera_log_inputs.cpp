@@ -1,6 +1,9 @@
 #include "ocio_camera_log_inputs.hpp"
 
 #include <array>
+#include <map>
+#include <mutex>
+#include <utility>
 
 namespace bloom::color::detail {
 namespace {
@@ -33,8 +36,8 @@ constexpr std::array<CameraLogSpace, 11> kCameraLogSpaces{{
 
 // OCIO's implementation of a built-in, embedded as a group so a pinned config of any version can
 // carry it: the exact ops the built-in runs, identical CPU output and GPU processor cache id.
-[[nodiscard]] OCIO::GroupTransformRcPtr embeddedBuiltin(const std::string_view style,
-                                                        const OCIO::TransformDirection direction) {
+[[nodiscard]] OCIO::GroupTransformRcPtr buildEmbeddedBuiltin(const std::string_view style,
+                                                             const OCIO::TransformDirection direction) {
     auto raw = OCIO::Config::CreateRaw()->createEditableCopy();
     raw->setMajorVersion(2);
     raw->setMinorVersion(4);
@@ -42,6 +45,19 @@ constexpr std::array<CameraLogSpace, 11> kCameraLogSpaces{{
     transform->setStyle(std::string(style).c_str());
     transform->setDirection(direction);
     return raw->getProcessor(transform)->createGroupTransform();
+}
+
+// Built once per process: every pinned-config resolution reuses the same embedded ops (a copy, so
+// no caller can edit the shared group).
+[[nodiscard]] OCIO::GroupTransformRcPtr embeddedBuiltin(const std::string_view style,
+                                                       const OCIO::TransformDirection direction) {
+    static std::mutex mutex;
+    static std::map<std::pair<std::string, int>, OCIO::GroupTransformRcPtr> built;
+    const std::lock_guard lock(mutex);
+    auto& entry = built[{std::string(style), static_cast<int>(direction)}];
+    if (!entry)
+        entry = buildEmbeddedBuiltin(style, direction);
+    return OCIO::DynamicPtrCast<OCIO::GroupTransform>(entry->createEditableCopy());
 }
 
 // Rec.709 (D65) RGB to CIE XYZ (SMPTE RP 177), the matrix the Rec.2100 spaces use.
