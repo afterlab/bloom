@@ -130,3 +130,8 @@ target_link_libraries(bloom_commands_export_queue_test PRIVATE bloom_commands)
 bloom_enable_warnings(bloom_commands_export_queue_test)
 bloom_add_test(NAME bloom.commands.export-queue COMMAND bloom_commands_export_queue_test
                LABELS commands unit)
+
+add_executable(bloom_commands_footage_interpretation_test footage_interpretation_operations_tests.cpp)
+target_link_libraries(bloom_commands_footage_interpretation_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_footage_interpretation_test)
+bloom_add_test(NAME bloom.commands.footage-interpretation COMMAND bloom_commands_footage_interpretation_test LABELS unit commands)

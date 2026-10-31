@@ -12,6 +12,7 @@ target_sources(
         data_block_operations.cpp
         export_queue_operations.cpp
         asset_organization_operations.cpp
+        footage_interpretation_operations.cpp
         node_operations.cpp
         layer_operations.cpp
         layer_time_operations.cpp

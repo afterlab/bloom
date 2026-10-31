@@ -769,15 +769,8 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
         return added;
     layer->timing.contentExtent = document::SourceLayerExtent{*imageNode};
     const auto rate = composition->format().frameRate();
-    std::optional<core::RationalTime> length;
-    if (asset->kind == document::AssetKind::Sequence &&
-        asset->manifest.last >= asset->manifest.first) {
-        const auto frames = static_cast<std::int64_t>(asset->manifest.last) -
-                            static_cast<std::int64_t>(asset->manifest.first) + 1;
-        length = core::RationalTime::create(frames * rate.denominator(), rate.numerator());
-    } else if (video && asset->duration > core::RationalTime{}) {
-        length = asset->duration;
-    }
+    // #381: the interpreted length (an assumed or conformed rate, and Loop).
+    const auto length = document::footageDuration(*asset, rate);
     if (length && *length < composition->duration()) {
         // End on the first composition frame boundary at or after the media end.
         const auto frames = (length->numerator() * rate.numerator() +

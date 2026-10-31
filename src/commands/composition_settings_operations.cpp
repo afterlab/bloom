@@ -209,20 +209,8 @@ OperationResult UpdateCompositionSettings::apply(document::Draft& draft) const {
 CompositionSettings compositionSettingsForAsset(const document::AssetRecord& asset,
                                                 CompositionSettings base) {
     base.name = asset.name.empty() ? base.name : asset.name;
-    auto rate = base.format.frameRate();
-    if (asset.kind == document::AssetKind::Video)
-        for (const auto& stream : asset.videoStreams)
-            if (stream.kind == 1 && stream.framePeriod.numerator() > 0 &&
-                stream.framePeriod.denominator() > 0 &&
-                stream.framePeriod.denominator() <= std::numeric_limits<std::uint32_t>::max() &&
-                stream.framePeriod.numerator() <= std::numeric_limits<std::uint32_t>::max()) {
-                // A frame period of n/d seconds is a rate of d/n frames per second.
-                if (const auto streamRate = document::FrameRate::create(
-                        static_cast<std::uint32_t>(stream.framePeriod.denominator()),
-                        static_cast<std::uint32_t>(stream.framePeriod.numerator())))
-                    rate = *streamRate;
-                break;
-            }
+    // #381: the footage's interpreted rate (a conformed video, a sequence's assumed rate).
+    const auto rate = document::footageFrameRate(asset).value_or(base.format.frameRate());
     const bool visual = asset.kind == document::AssetKind::Image ||
                         asset.kind == document::AssetKind::Sequence ||
                         asset.kind == document::AssetKind::Video;
@@ -235,15 +223,10 @@ CompositionSettings compositionSettingsForAsset(const document::AssetRecord& ass
     else if (const auto rated = document::CompositionFormat::create(
                  base.format.width(), base.format.height(), base.format.pixelAspect(), rate))
         base.format = *rated;
-    if ((asset.kind == document::AssetKind::Video || asset.kind == document::AssetKind::Audio) &&
-        asset.duration > core::RationalTime{})
+    if (asset.kind == document::AssetKind::Audio && asset.duration > core::RationalTime{})
         base.duration = asset.duration;
-    else if (asset.kind == document::AssetKind::Sequence && !asset.manifest.members.empty())
-        if (const auto frames = core::RationalTime::create(
-                static_cast<std::int64_t>(asset.manifest.members.size()) *
-                    static_cast<std::int64_t>(base.format.frameRate().denominator()),
-                static_cast<std::int64_t>(base.format.frameRate().numerator())))
-            base.duration = *frames;
+    else if (const auto length = document::footageDuration(asset, base.format.frameRate()))
+        base.duration = *length;
     return base;
 }
 
