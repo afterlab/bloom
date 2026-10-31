@@ -89,6 +89,7 @@ class InterpretFootageDialog final : public kit::KDialog {
     kit::KDropdown* missing_ = nullptr;
     kit::KDropdown* color_ = nullptr;
     kit::KLabel* colorStatus_ = nullptr;
+    kit::KLabel* rateUnit_ = nullptr;
     QWidget* rateRow_ = nullptr;
     QWidget* timecodeRow_ = nullptr;
     QWidget* matteRow_ = nullptr;

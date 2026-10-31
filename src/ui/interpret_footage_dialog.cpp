@@ -152,7 +152,7 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         if (video) {
             const auto file = document::footageFileFrameRate(asset);
             rateMode_->addItem(
-                file ? tr("Use the file's rate (%1 fps)").arg(footageFrameRateText(*file))
+                file ? tr("Use the file's rate: %1 fps").arg(footageFrameRateText(*file))
                      : tr("Use the file's rate"),
                 QStringLiteral("file"));
             rateMode_->addItem(tr("Conform to"), QStringLiteral("override"));
@@ -166,9 +166,9 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         rate_->setPlaceholderText(tr("24, 23.976 or 30000/1001"));
         rate_->setFont(kit::font(kit::TypeRole::Value));
         rate_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        auto* unit = new kit::KLabel(tr("fps"), body);
-        unit->setTone(kit::Color::Muted);
-        rateRow_ = row(body, {rateMode_, rate_, unit}, rate_);
+        rateUnit_ = new kit::KLabel(tr("fps"), body);
+        rateUnit_->setTone(kit::Color::Muted);
+        rateRow_ = row(body, {rateMode_, rate_, rateUnit_}, rate_);
         form->addRow(tr("Frame Rate"), rateRow_)
             ->setObjectName(QStringLiteral("interpretFootageRateError"));
         select(*rateMode_, value.frameRate ? QStringLiteral("override") : QStringLiteral("file"));
@@ -193,8 +193,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
             return formatTimelineFrameLabel(frames, rate, true,
                                             {core::RationalTime{}, timecode.dropFrame});
         };
-        timecodeMode_->addItem(source ? tr("Use the source's (%1)").arg(label(*source))
-                                      : tr("Use the source's (none)"),
+        timecodeMode_->addItem(source ? tr("Use the source's: %1").arg(label(*source))
+                                      : tr("Use the source's: none"),
                                QStringLiteral("source"));
         timecodeMode_->addItem(tr("Override"), QStringLiteral("override"));
         timecode_ = new kit::KLineEdit(body);
@@ -202,6 +202,13 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         timecode_->setAccessibleName(tr("Start timecode"));
         timecode_->setPlaceholderText(tr("00:00:00:00"));
         timecode_->setFont(kit::font(kit::TypeRole::Value));
+        // Right-aligned like the rate and every other numeric field.
+        timecode_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        // The two mode menus share one width so the rate and timecode fields line up.
+        const int modeWidth =
+            std::max(rateMode_->sizeHint().width(), timecodeMode_->sizeHint().width());
+        rateMode_->setFixedWidth(modeWidth);
+        timecodeMode_->setFixedWidth(modeWidth);
         timecodeRow_ = row(body, {timecodeMode_, timecode_}, timecode_);
         form->addRow(tr("Start Timecode"), timecodeRow_)
             ->setObjectName(QStringLiteral("interpretFootageTimecodeError"));
@@ -220,8 +227,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
     alpha_ = dropdown(body, "interpretFootageAlpha", tr("Alpha"));
     const bool declaredPremultiplied =
         value.alphaAssociation == document::AssetAlphaAssociation::Premultiplied;
-    alpha_->addItem(declaredPremultiplied ? tr("Guess from the file (Premultiplied)")
-                                          : tr("Guess from the file (Straight)"),
+    alpha_->addItem(declaredPremultiplied ? tr("Guess from the file: Premultiplied")
+                                          : tr("Guess from the file: Straight"),
                     static_cast<int>(document::AssetAlphaMode::Guess));
     alpha_->addItem(tr("Ignore"), static_cast<int>(document::AssetAlphaMode::Ignore));
     alpha_->addItem(tr("Straight (Unmatted)"),
@@ -254,7 +261,7 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         auto file = asset;
         file.interpretation.fieldOrder = document::AssetFieldOrder::File;
         fieldOrder_->addItem(
-            tr("Use the file's (%1)").arg(fieldOrderText(document::footageFieldOrder(file))),
+            tr("Use the file's: %1").arg(fieldOrderText(document::footageFieldOrder(file))),
             static_cast<int>(document::AssetFieldOrder::File));
         fieldOrder_->addItem(tr("Progressive"),
                              static_cast<int>(document::AssetFieldOrder::Progressive));
@@ -277,7 +284,7 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
     // Pixel aspect ratio.
     pixelAspect_ = dropdown(body, "interpretFootagePixelAspect", tr("Pixel Aspect Ratio"));
     pixelAspect_->addItem(
-        tr("Use the file's (%1)").arg(ratioText(document::footageFilePixelAspect(asset))),
+        tr("Use the file's: %1").arg(ratioText(document::footageFilePixelAspect(asset))),
         QString{});
     for (const auto& choice : kPixelAspects)
         pixelAspect_->addItem(
@@ -308,6 +315,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
                           static_cast<int>(document::AssetMissingFrames::HoldPrevious));
         missing_->addItem(tr("Show nothing"),
                           static_cast<int>(document::AssetMissingFrames::Nothing));
+        missing_->addItem(tr("Skip them"), static_cast<int>(document::AssetMissingFrames::Skip));
+        missing_->setToolTip(tr("Skip them plays the frames the sequence has back to back"));
         select(*missing_, static_cast<int>(value.missingFrames));
         form->addRow(tr("Missing Frames"), missing_);
         watch(missing_);
@@ -316,7 +325,9 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
     // Color management.
     color_ = dropdown(body, "interpretFootageColor", tr("Input Color"));
     color_->setSearchable(true);
-    color_->setWidthFloor(kit::px(kit::Size::DropdownWidth) * 2);
+    // As wide as the other menus whatever the longest space name: the field column, not its items.
+    color_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    color_->setMinimumWidth(kit::px(kit::Size::DropdownWidth) * 2);
     initialColor_ = interpretColorData(value);
     colorStatus_ = new kit::KLabel(body);
     colorStatus_->setObjectName(QStringLiteral("interpretFootageColorStatus"));
@@ -492,8 +503,11 @@ std::optional<commands::AssetInterpretationChange> InterpretFootageDialog::chang
 }
 
 void InterpretFootageDialog::refresh() {
-    if (rate_ != nullptr)
-        rate_->setVisible(rateMode_->currentData().toString() == QStringLiteral("override"));
+    if (rate_ != nullptr) {
+        const bool rate = rateMode_->currentData().toString() == QStringLiteral("override");
+        rate_->setVisible(rate);
+        rateUnit_->setVisible(rate);
+    }
     if (timecode_ != nullptr)
         timecode_->setEnabled(timecodeMode_->currentData().toString() ==
                               QStringLiteral("override"));
