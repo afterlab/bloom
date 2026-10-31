@@ -938,7 +938,7 @@ before any large allocation. Codec/device constraints, not an absolute image cei
 | CPU-plane storage including row padding | explicit caller `pixelBudget` for the in-process image decoder (default 256 MiB) |
 | Wire frame excluding its length prefix | 513 MiB (one 8192 x 8192 16-bit 4:4:4:4 product) |
 | Audio | 64 named channels, 65536 samples per channel, 384000 Hz |
-| Worker address space / open descriptors | per stream: 1 GiB + twelve 16-bit 4:4:4:4 frames, 2 GiB floor (UHD), 4 GiB at 8K UHD, 16 GiB ceiling / 64; core dumps disabled |
+| Worker address space / open descriptors | per stream: 1 GiB + twelve 16-bit 4:4:4:4 frames, 2 GiB floor (UHD), 4 GiB at 8K UHD, 16 GiB ceiling / 64; ProRes encode adds 32 bytes per pixel per encoder thread; core dumps disabled |
 | Default pool slots / call deadline | 2 / 5 seconds |
 | Default cancellation message / SIGTERM grace | 50 ms / 100 ms |
 
@@ -1980,7 +1980,16 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
   ColourTags and Container checks.
 - **Multithreaded encode.** The worker uses an automatic thread count for video. Lossy codecs
   already declare `DecodedSemanticTolerance`, so threading can change bytes but not the decoded
-  tolerance; PCM stays `ByteExact` and TIFF single-threaded `DecodedSemanticExact`.
+  tolerance; PCM stays `ByteExact` and TIFF single-threaded `DecodedSemanticExact`. ProRes
+  (`prores_ks`) is frame-threaded: each encoder thread holds its own 10-bit input frame, slice
+  coefficients and worst-case packet. Issue #406: at 64 threads 1080p 4444 outgrew the
+  frame-sized 2 GiB worker address space, and UHD 4444 did at 16. The host therefore resolves the
+  automatic ProRes count itself: the hardware thread count, at most 64 (FFmpeg's frame-thread
+  maximum), and reduced only where the threads would pass the 16 GiB ceiling (12 threads at 8K
+  UHD). It launches the worker with the stream's worker address space plus 32 bytes per pixel per
+  thread (`proresEncodeAddressSpaceBytes`; 1080p at 16 threads gets 3 GiB, 1080p at 64 and UHD at
+  16 get 6 GiB) and sends that explicit count. 4444 was measured at 22 to 25 bytes per pixel per
+  thread in 1080p and 20 in UHD.
 - **Limits from the destination.** The encoded artifact's byte limit is the destination's sampled
   free space minus the safety margin (2%, at least 64 MiB), within the provider ceiling, and the
   audio channel cap follows the container (WAV and MOV 64, MXF 16, AAC 8) instead of a fixed 8.

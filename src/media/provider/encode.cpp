@@ -1,10 +1,16 @@
 #include "wire.hpp"
+#include <algorithm>
 #include <bloom/media/provider/encode.hpp>
 #include <limits>
 
 namespace bloom::media::provider {
 namespace {
 bool validCode(const std::int32_t code) { return code >= -1 && code <= 255; }
+std::uint64_t proresThreadBytes(const std::uint32_t width, const std::uint32_t height) noexcept {
+    const auto pixels = static_cast<std::uint64_t>(std::min(width, Limits::dimension)) *
+                        std::min(height, Limits::dimension);
+    return std::min(pixels, Limits::pixels) * kProresEncodeThreadBytesPerPixel;
+}
 } // namespace
 std::uint32_t containerChannelLimit(const std::string_view container,
                                     const std::string_view audioCodec) noexcept {
@@ -15,6 +21,27 @@ std::uint32_t containerChannelLimit(const std::string_view container,
     if (container == "mxf")
         return 16;
     return Limits::channels;
+}
+std::uint64_t proresEncodeAddressSpaceBytes(const std::uint32_t width, const std::uint32_t height,
+                                            const std::uint32_t threads) noexcept {
+    constexpr std::uint64_t granule = 256ULL << 20U;
+    const auto wanted = workerAddressSpaceBytes(width, height) +
+                        std::clamp<std::uint64_t>(threads, 1, kEncodeMaximumThreads) *
+                            proresThreadBytes(width, height);
+    const auto rounded = (wanted + granule - 1) / granule * granule;
+    return std::min(rounded, kWorkerAddressSpaceCeiling);
+}
+std::uint32_t proresEncodeThreads(const std::uint32_t requested,
+                                  const std::uint32_t hardwareThreads, const std::uint32_t width,
+                                  const std::uint32_t height) noexcept {
+    const auto wanted =
+        std::clamp(requested != 0 ? requested : hardwareThreads, 1U, kEncodeMaximumThreads);
+    const auto base = workerAddressSpaceBytes(width, height);
+    const auto perThread = std::max<std::uint64_t>(1, proresThreadBytes(width, height));
+    const auto fitting =
+        base >= kWorkerAddressSpaceCeiling ? 0 : (kWorkerAddressSpaceCeiling - base) / perThread;
+    return static_cast<std::uint32_t>(
+        std::clamp<std::uint64_t>(fitting, 1, static_cast<std::uint64_t>(wanted)));
 }
 bool valid(const EncodeSettingsV1& v) {
     return v.width > 0 && v.height > 0 && v.width <= Limits::dimension &&

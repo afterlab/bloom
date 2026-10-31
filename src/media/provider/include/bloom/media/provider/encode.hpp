@@ -27,6 +27,26 @@ struct EncodeSettingsV1 {
     std::string vaapiDevice;
     friend bool operator==(const EncodeSettingsV1&, const EncodeSettingsV1&) = default;
 };
+// Issue #406: prores_ks is frame-threaded. Every encoder thread keeps its own 10-bit 4:4:4:4 (or
+// 4:2:2) input frame, slice coefficients and worst-case packet, so the worker's address space
+// grows with the thread count as well as the frame extent: 1080p 4444 at 64 automatic threads
+// passed the 2 GiB media-v1 floor and failed to allocate. Each thread is budgeted 32 bytes per
+// pixel on top of the stream's media-v1 worker address space (workerAddressSpaceBytes); 4444 was
+// measured at 22 to 25 bytes per pixel per thread in 1080p and 20 in UHD.
+inline constexpr std::uint64_t kProresEncodeThreadBytesPerPixel = 32;
+// FFmpeg's frame-threaded encoder maximum, and the largest EncodeSettingsV1::threads.
+inline constexpr std::uint32_t kEncodeMaximumThreads = 64;
+// The address space a ProRes encode worker gets for `threads` encoder threads: the stream's
+// media-v1 worker address space plus kProresEncodeThreadBytesPerPixel per pixel per thread,
+// rounded up to 256 MiB and never above kWorkerAddressSpaceCeiling.
+[[nodiscard]] std::uint64_t proresEncodeAddressSpaceBytes(std::uint32_t width, std::uint32_t height,
+                                                          std::uint32_t threads) noexcept;
+// The ProRes encoder thread count that is actually run: the request, or for zero (automatic)
+// the hardware thread count, never above kEncodeMaximumThreads and reduced until its
+// proresEncodeAddressSpaceBytes fits under the ceiling, never below one.
+[[nodiscard]] std::uint32_t proresEncodeThreads(std::uint32_t requested,
+                                                std::uint32_t hardwareThreads, std::uint32_t width,
+                                                std::uint32_t height) noexcept;
 // Issue #369: each container's own audio channel limit, replacing the fixed 8-channel cap.
 [[nodiscard]] std::uint32_t containerChannelLimit(std::string_view container,
                                                   std::string_view audioCodec) noexcept;

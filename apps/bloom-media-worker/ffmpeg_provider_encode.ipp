@@ -342,6 +342,12 @@ struct Encoder::State {
         auto& c = *track.codec;
         c.thread_count =
             video && settings.videoCodec != "tiff" ? static_cast<int>(settings.threads) : 1;
+        // Issue #406: the host resolves ProRes's automatic thread count against the address space
+        // it launched this worker with; a direct request for zero gets the same bounded count.
+        if (video && settings.videoCodec == "prores_ks")
+            c.thread_count = static_cast<int>(
+                proresEncodeThreads(settings.threads, std::thread::hardware_concurrency(),
+                                    settings.width, settings.height));
         c.flags |= AV_CODEC_FLAG_BITEXACT;
         if (format && (format->oformat->flags & AVFMT_GLOBALHEADER))
             c.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
