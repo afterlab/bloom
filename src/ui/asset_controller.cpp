@@ -1,5 +1,6 @@
 #include "asset_data_thumbnail.hpp"
 #include "asset_thumbnail_display.hpp"
+#include "asset_thumbnail_interpretation.hpp"
 #include "colour_space_names.hpp"
 #include "import_options_pane.hpp"
 #include "network_share_paths.hpp"
@@ -27,6 +28,7 @@
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/footage_proxy.hpp>
 #include <bloom/runtime/footage_time.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/input_color_context.hpp>
@@ -259,6 +261,10 @@ struct ThumbnailSelection {
     // The selected part/layer carries no colour channels (a data-only image).
     bool dataOnly = false;
     std::string part;
+    // #381: the footage pass identity when Interpret Footage's alpha needs the stored samples
+    // (empty: an ordinary decode), and the frame row of the decode's first data row.
+    std::string footagePass;
+    std::int64_t firstRow = 0;
 };
 
 [[nodiscard]] bool fontFileMatches(const document::AssetRecord& asset) {
@@ -319,6 +325,53 @@ struct ThumbnailSelection {
     }
     return asset;
 }
+// #381: a video frame's stored samples through the footage pass and input color at full
+// resolution, as the renderer's CPU reference, then nearest-sampled to the thumbnail size.
+media::provider::Result<render::Rgba32fImage> interpretedVideoThumbnail(
+    const document::AssetRecord& asset, const media::ImageAlphaAssociation association,
+    const media::provider::FrameProduct& frame, const std::string& inputId,
+    const color::CpuColorSpaceProcessor* processor,
+    const render::Rgba32fImageDescriptor& descriptor, const std::function<bool()>& cancelled) {
+    auto stored = media::video::videoToStoredSamples(
+        frame, static_cast<std::uint32_t>(asset.interpretation.colorSpace),
+        processor != nullptr ? std::string_view(inputId) : std::string_view{}, descriptor,
+        media::kMaxImageStorageBytes, cancelled);
+    if (auto* error = std::get_if<media::provider::Unavailable>(&stored))
+        return *error;
+    auto interpreted = runtime::interpretFootageProxy(
+        asset, association, 0, std::get<render::Rgba32fImage>(stored), processor,
+        media::kMaxImageStorageBytes, cancelled);
+    if (auto* error = std::get_if<std::string>(&interpreted))
+        return media::provider::Unavailable{media::provider::Error::InvalidValue, *error};
+    const auto grid = detail::sampleThumbnailGrid(std::get<render::Rgba32fImage>(interpreted));
+    const auto invalid = media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                                      "The thumbnail size is invalid"};
+    const auto window = render::ImageWindow::create(0, 0, grid.width, grid.height);
+    if (!window)
+        return invalid;
+    const auto small = render::Rgba32fImageDescriptor::create(*window.value(), *window.value(),
+                                                              core::PixelAspectRatio::square());
+    if (!small)
+        return invalid;
+    auto builder =
+        render::Rgba32fImageBuilder::create(*small.value(), media::kMaxImageStorageBytes);
+    if (!builder)
+        return media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                            "The thumbnail exceeds the pixel budget"};
+    for (std::uint32_t y = 0; y < grid.height; ++y) {
+        auto row = builder.value()->row(y);
+        if (!row)
+            return media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                                "The thumbnail row is unavailable"};
+        for (std::uint32_t x = 0; x < grid.width; ++x)
+            (*row.value())[x] = grid.pixels[static_cast<std::size_t>(y) * grid.width + x];
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    if (!frozen)
+        return media::provider::Unavailable{media::provider::Error::InvalidValue,
+                                            "The thumbnail is invalid"};
+    return std::move(*frozen.value());
+}
 // UI-only frame projection of the Image source contract. Use the public exact frame mapping;
 // runtime implementation headers are deliberately outside this module's boundary.
 ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
@@ -341,15 +394,16 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
                                                                      source.loopMode, rate);
         if (!offset)
             return selected;
-        const auto wanted =
-            static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + *offset);
-        auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
-                                              &document::AssetSequenceMember::frame);
-        if (found != asset.manifest.members.begin())
-            --found;
-        locator = &found->locator;
-        selected.digest = found->contentDigest;
-        memberFrame = found->frame;
+        // A gap that shows nothing still has a picture here: the frame before it, as before.
+        auto frame = document::footageSequenceFrame(asset, *offset);
+        if (frame.member == nullptr) {
+            auto held = std::ranges::upper_bound(asset.manifest.members, frame.frame, {},
+                                                 &document::AssetSequenceMember::frame);
+            frame.member = held == asset.manifest.members.begin() ? &*held : &*std::prev(held);
+        }
+        locator = &frame.member->locator;
+        selected.digest = frame.member->contentDigest;
+        memberFrame = frame.member->frame;
     }
     selected.path = media::resolveImagePath(locator->path, locator->relinkHint, directory);
     const auto input = document::effectiveAssetInputColor(asset.interpretation, source.colorSpace,
@@ -371,8 +425,14 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     selected.part = source.part;
     if (selected.available) {
         const auto* part = probe.value->findPart(source.part);
-        selected.dataOnly = part != nullptr && std::ranges::find(part->colourLayers, source.layer) ==
-                                                   part->colourLayers.end();
+        selected.dataOnly =
+            part != nullptr &&
+            std::ranges::find(part->colourLayers, source.layer) == part->colourLayers.end();
+        // The renderer's rule (image_source.cpp): the parity of the first data row.
+        selected.firstRow =
+            part != nullptr ? part->dataY - part->displayY : probe.value->dataOffsetY;
+        selected.footagePass = runtime::footageProxyPassIdentity(
+            asset, selected.interpretation.alphaAssociation, selected.firstRow);
     }
     if (selected.available && !selected.dataOnly) {
         const auto config = runtime::detail::resolveInputColorConfig(colorIntent);
@@ -414,6 +474,8 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     const auto synthesized =
         color::synthesizedColorSpaceIdentity(selected.interpretation.inputColorSpaceId);
     selected.cacheKey += ":" + synthesized;
+    if (!selected.footagePass.empty())
+        selected.cacheKey += ":pass:" + selected.footagePass;
     media::cache::ImageCacheKeyInputs diskInputs;
     diskInputs.contentDigest = selected.digest;
     diskInputs.memberFrame = memberFrame;
@@ -1225,7 +1287,10 @@ void AssetController::startThumbnails() {
                 Preview preview;
                 const auto selected = selectThumbnail(source, sampleTime, rate, directory,
                                                       context.cancellation(), colorIntent);
-                preview.key = selected.cacheKey + ':' + thumbnailDisplayIdentity;
+                const auto aspect =
+                    source.asset ? detail::thumbnailPixelAspectScale(*source.asset) : 1.0;
+                preview.key = selected.cacheKey + ':' + thumbnailDisplayIdentity + ":par:" +
+                              std::to_string(aspect);
                 preview.inputColorSpaceName = selected.inputColorSpaceName;
                 preview.inputColorSpaceWarning = selected.inputColorSpaceWarning;
                 preview.inputColorSpaceAutomatic = selected.inputColorSpaceAutomatic;
@@ -1269,11 +1334,19 @@ void AssetController::startThumbnails() {
                 // whole lambda already runs on a BlockingIo worker thread, so a disk-cache write
                 // here is synchronous (writeAsync = false) -- there is no evaluation thread to
                 // avoid blocking.
-                auto decoded = media::cache::decodeThroughDiskCache(
-                    selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
-                    diskCache, /*writeAsync=*/false,
-                    [&] { return context.isCancellationRequested(); }, {},
-                    media::kMaxImageStorageBytes, selected.inputProcessor);
+                // Interpret Footage's alpha reads the stored samples through the footage pass;
+                // the disk cache holds ordinary decodes only, as in the renderer.
+                const auto cancelled = [&] { return context.isCancellationRequested(); };
+                auto decoded =
+                    selected.footagePass.empty()
+                        ? media::cache::decodeThroughDiskCache(
+                              selected.path, selected.interpretation, selected.digest,
+                              selected.diskCacheKey, diskCache, /*writeAsync=*/false, cancelled,
+                              {}, media::kMaxImageStorageBytes, selected.inputProcessor)
+                        : detail::decodeInterpretedThumbnail(
+                              *source.asset, selected.path, selected.interpretation,
+                              selected.digest, selected.firstRow, selected.inputProcessor.get(),
+                              cancelled);
                 if (!decoded.value.has_value())
                     preview.problem = decoded.diagnostic.empty() ? "The image could not be decoded"
                                                                  : decoded.diagnostic;
@@ -1316,6 +1389,8 @@ void AssetController::startThumbnails() {
                             "The thumbnail display transform could not process this image";
                     }
                 }
+                // #381: the interpreted pixel aspect ratio is the thumbnail's shape.
+                preview.image = detail::withThumbnailPixelAspect(preview.image, aspect);
                 if (!preview.image.isNull()) {
                     // CACHEFIX-1: the 512-entry bound was only ever a bound on COUNT, and the
                     // 8 MiB it claimed was an unmeasured inference from "at most 64 x 64 RGBA8".
@@ -1435,6 +1510,15 @@ void AssetController::startThumbnails() {
                         preview.key += thumbnailDisplayIdentity;
                         preview.key += ':';
                         preview.key += assumedColourIdentity;
+                        // #381: Interpret Footage's alpha (the renderer's video rule: straight
+                        // unless it says premultiplied) and pixel aspect ratio.
+                        const auto association = asset.interpretation.alphaMode ==
+                                                         document::AssetAlphaMode::Premultiplied
+                                                     ? media::ImageAlphaAssociation::Premultiplied
+                                                     : media::ImageAlphaAssociation::Straight;
+                        const auto pass = runtime::footageProxyPassIdentity(asset, association);
+                        const auto aspect = detail::thumbnailPixelAspectScale(asset);
+                        preview.key += ":pass:" + pass + ":par:" + std::to_string(aspect);
                         const auto cachedPreview = results->cache.find(preview.key);
                         if (available && colorAvailable && thumbnailDisplay &&
                             cachedPreview != results->cache.end()) {
@@ -1458,13 +1542,21 @@ void AssetController::startThumbnails() {
                                         const auto scale =
                                             std::min(1.0, 64.0 / static_cast<double>(std::max(
                                                                      asset.width, asset.height)));
-                                        const auto pixels = media::video::videoToSceneLinear(
-                                            **product,
-                                            static_cast<std::uint32_t>(
-                                                asset.interpretation.colorSpace),
-                                            inputId, inputProcessor, *descriptor.value(), scale,
-                                            scale, 65536,
-                                            [&] { return context.isCancellationRequested(); });
+                                        const auto cancelled = [&] {
+                                            return context.isCancellationRequested();
+                                        };
+                                        const auto pixels =
+                                            pass.empty()
+                                                ? media::video::videoToSceneLinear(
+                                                      **product,
+                                                      static_cast<std::uint32_t>(
+                                                          asset.interpretation.colorSpace),
+                                                      inputId, inputProcessor, *descriptor.value(),
+                                                      scale, scale, 65536, cancelled)
+                                                : interpretedVideoThumbnail(
+                                                      asset, association, **product, inputId,
+                                                      inputProcessor.get(), *descriptor.value(),
+                                                      cancelled);
                                         if (const auto* image =
                                                 std::get_if<render::Rgba32fImage>(&pixels)) {
                                             const auto extent =
@@ -1493,9 +1585,11 @@ void AssetController::startThumbnails() {
                                                         packed.data(),
                                                         packed.size() * sizeof(render::Rgba8));
                                             }
-                                            if (displayValid)
+                                            if (displayValid) {
                                                 preview.missing = false;
-                                            else {
+                                                preview.image = detail::withThumbnailPixelAspect(
+                                                    preview.image, aspect);
+                                            } else {
                                                 preview.image = {};
                                                 preview.inputColorSpaceWarning =
                                                     "The thumbnail display transform could not "

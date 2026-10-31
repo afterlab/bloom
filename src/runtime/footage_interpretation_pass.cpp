@@ -1,5 +1,7 @@
 #include "footage_interpretation_pass.hpp"
 
+#include <bloom/runtime/footage_proxy.hpp>
+
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 
 #include <algorithm>
@@ -229,3 +231,34 @@ render::OcioGpuProgramResult buildFootagePassProgram(const std::span<const float
 }
 
 } // namespace bloom::runtime::detail
+
+namespace bloom::runtime {
+
+std::string footageProxyPassIdentity(const document::AssetRecord& asset,
+                                     const media::ImageAlphaAssociation association,
+                                     const std::int64_t firstRow) {
+    auto pass = detail::footagePassFor(asset, association);
+    if (!pass)
+        return {};
+    pass->rowParity = static_cast<std::uint8_t>(firstRow & 1);
+    return pass->identity();
+}
+
+std::variant<render::Rgba32fImage, std::string>
+interpretFootageProxy(const document::AssetRecord& asset,
+                      const media::ImageAlphaAssociation association, const std::int64_t firstRow,
+                      const render::Rgba32fImage& stored,
+                      const color::CpuColorSpaceProcessor* processor, const std::size_t budget,
+                      const std::function<bool()>& cancelled) {
+    auto pass = detail::footagePassFor(asset, association);
+    if (!pass)
+        return std::string("The footage needs no interpretation pass");
+    pass->rowParity = static_cast<std::uint8_t>(firstRow & 1);
+    auto interpreted = detail::applyFootagePass(*pass, stored, budget, cancelled);
+    if (processor == nullptr || std::holds_alternative<std::string>(interpreted))
+        return interpreted;
+    return detail::applyInputProcessorPremultiplied(std::get<render::Rgba32fImage>(interpreted),
+                                                    *processor, budget, cancelled);
+}
+
+} // namespace bloom::runtime

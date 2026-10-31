@@ -523,6 +523,7 @@ target_sources(
         assets_editor_internal.hpp
         asset_controller.cpp
         asset_data_thumbnail.cpp
+        asset_thumbnail_interpretation.cpp
         asset_data_thumbnail.hpp
         cryptomatte_controller.cpp
         context_bar.cpp
