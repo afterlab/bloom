@@ -7,8 +7,10 @@
 
 #include <QAbstractFileIconProvider>
 #include <QComboBox>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QIcon>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListView>
 #include <QPalette>
@@ -18,6 +20,7 @@
 #include <QToolButton>
 #include <QTreeView>
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -260,10 +263,38 @@ std::unique_ptr<QFileDialog> buildFileDialog(QWidget& owner, const KFileRequest&
     return dialog;
 }
 
+void addFileDialogOptions(QFileDialog& dialog, const QString& label, QWidget& pane) {
+    pane.setParent(&dialog);
+    auto* grid = qobject_cast<QGridLayout*>(dialog.layout());
+    if (grid == nullptr) {
+        if (dialog.layout() != nullptr)
+            dialog.layout()->addWidget(&pane);
+        return;
+    }
+    // Under "Files of type", the label in the dialog's own label column and the pane under the
+    // fields, so the dialog keeps one label column and one field column.
+    const int row = grid->rowCount();
+    auto* caption = new QLabel(label, &dialog);
+    caption->setObjectName(QStringLiteral("fileDialogOptionsLabel"));
+    caption->setBuddy(&pane);
+    grid->addWidget(caption, row, 0, Qt::AlignLeft | Qt::AlignTop);
+    grid->addWidget(&pane, row, 1, 1, std::max(1, grid->columnCount() - 1));
+    pane.show();
+}
+
 QStringList chooseFiles(QWidget& owner, const KFileRequest& request) {
+    return chooseFiles(owner, request, {});
+}
+
+QStringList chooseFiles(QWidget& owner, const KFileRequest& request, const KFileOptions& options) {
     const auto dialog = buildFileDialog(owner, request);
+    QWidget* pane = options.build ? options.build(*dialog) : nullptr;
+    if (pane != nullptr)
+        addFileDialogOptions(*dialog, options.label, *pane);
     if (dialog->exec() != QDialog::Accepted)
         return {};
+    if (pane != nullptr && options.accepted)
+        options.accepted(*pane);
     auto files = dialog->selectedFiles();
     if (request.mode == KFileRequest::Mode::Save)
         for (auto& file : files)

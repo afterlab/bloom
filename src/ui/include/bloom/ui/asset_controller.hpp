@@ -100,15 +100,21 @@ class AssetController final : public QObject {
                     QObject* parent = nullptr,
                     AudioProcessingAdmission audioAdmission = AudioProcessingAdmission{});
     ~AssetController() override;
+    // The Import Media dialog, with its import options (#381): sequences or single images, a frame
+    // range, skipping missing frames, and Create a composition, whose follow-up makes one from the
+    // imported footage.
     void requestImport(QWidget* parent = nullptr);
     // The same dialog, with `followUp` run once the import it starts commits (the Viewer's Add >
-    // Import and Add… adds the imported media as layers).
+    // Import and Add… adds the imported media as layers); it then offers no composition.
     void requestImport(QWidget* parent, ImportFollowUp followUp);
     // Imports into the current import folder (see setImportFolder).
     void importFiles(const QStringList& paths);
-    // Imports into `folder`; nullopt is the Assets root. `followUp` runs after the commit.
+    // Imports into `folder`; nullopt is the Assets root. `followUp` runs after the commit. Every
+    // import reads the Import preferences (sequence frame rate, still duration) into `options`.
     void importFiles(const QStringList& paths, std::optional<document::AssetFolderId> folder,
-                     ImportFollowUp followUp = {});
+                     ImportFollowUp followUp = {}, commands::ImportOptions options = {});
+    // New Composition from Selection for the assets an import resolved to, opened once made.
+    [[nodiscard]] ImportFollowUp compositionFollowUp();
     // Session state (#378): the Assets folder an import lands in when no drop target names one.
     // The Assets panel keeps it on the selected folder, or the folder of the selected item.
     void setImportFolder(std::optional<document::AssetFolderId> folder) noexcept {
@@ -251,7 +257,8 @@ class AssetController final : public QObject {
         QString diagnostic;
     };
     void prepare(const QStringList& paths, document::AssetId relinkId = {},
-                 std::optional<document::AssetFolderId> folder = {});
+                 std::optional<document::AssetFolderId> folder = {},
+                 commands::ImportOptions options = {});
     void refresh();
     void startThumbnails();
     void poll();

@@ -150,18 +150,19 @@ QWidget* PreferencesWindow::addPreferencesRow(QVBoxLayout* layout, QWidget* pare
     return row;
 }
 
-kit::KValueField* PreferencesWindow::addAutomaticRow(QVBoxLayout* layout, QWidget* parent,
-                                                     const QString& objectName,
-                                                     const QString& label, const double maximum,
-                                                     const int decimals, const QString& unit,
-                                                     const double customDefault) {
+kit::KValueField*
+PreferencesWindow::addAutomaticRow(QVBoxLayout* layout, QWidget* parent, const QString& objectName,
+                                   const QString& label, const double maximum, const int decimals,
+                                   const QString& unit, const double customDefault,
+                                   const QString& automaticText, const QString& customText) {
+    const auto automatic = automaticText.isEmpty() ? tr("Automatic") : automaticText;
     // A value whose zero means Automatic: a mode (Automatic / Custom) and, for Custom, the value
     // with its unit. The field stays the one source of the value.
     auto* mode = new kit::KDropdown(parent);
     mode->setObjectName(objectName + QStringLiteral("Mode"));
     mode->setAccessibleName(label);
-    mode->addItem(tr("Automatic"), QStringLiteral("automatic"));
-    mode->addItem(tr("Custom"), QStringLiteral("custom"));
+    mode->addItem(automatic, QStringLiteral("automatic"));
+    mode->addItem(customText.isEmpty() ? tr("Custom") : customText, QStringLiteral("custom"));
     properties::ValueCellSpec spec;
     spec.objectName = objectName;
     spec.accessibleName = label;
@@ -172,7 +173,7 @@ kit::KValueField* PreferencesWindow::addAutomaticRow(QVBoxLayout* layout, QWidge
     spec.unit = unit;
     auto* field = properties::makeValueCell(spec, parent);
     field->setCompact(false);
-    field->setSpecialValueText(tr("Automatic"));
+    field->setSpecialValueText(automatic);
     setValueWidth(*field);
     (void)addPreferencesRow(layout, parent, label, {mode, field});
     auto custom = std::make_shared<double>(customDefault);
@@ -244,7 +245,7 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
     // A page whose id no group names (a later page such as Sounds, until it is listed) still
     // appears, in a group of its own after these.
     std::vector<std::vector<QString>> groups{
-        {QStringLiteral("general"), QStringLiteral("sounds")},
+        {QStringLiteral("general"), QStringLiteral("import"), QStringLiteral("sounds")},
         {QStringLiteral("viewer"), QStringLiteral("timeline"), QStringLiteral("nodes")},
         {QStringLiteral("memory"), QStringLiteral("performance")}};
     std::vector<QString> unlisted;
@@ -479,6 +480,7 @@ std::vector<PreferencesWindow::Page> PreferencesWindow::buildPages() {
     pages.push_back({QStringLiteral("nodes"), tr("Node Graph"), buildNodeGraphPage()});
     pages.push_back({QStringLiteral("viewer"), tr("Viewer"), buildViewerPage()});
     pages.push_back({QStringLiteral("sounds"), tr("Sounds"), buildSoundsPage()});
+    pages.push_back({QStringLiteral("import"), tr("Import"), buildImportPage()});
     pages.push_back({QStringLiteral("performance"), tr("Performance"), buildPerformancePage()});
     return pages;
 }

@@ -82,6 +82,7 @@ class PreferencesWindow final : public kit::KDialog {
     QWidget* buildNodeGraphPage();
     QWidget* buildViewerPage();
     QWidget* buildSoundsPage();
+    QWidget* buildImportPage();
     QWidget* buildPerformancePage();
     [[nodiscard]] QWidget* makeScrollPage();
 
@@ -89,10 +90,12 @@ class PreferencesWindow final : public kit::KDialog {
     QWidget* addPreferencesRow(QVBoxLayout* layout, QWidget* parent, const QString& label,
                                std::initializer_list<QWidget*> controls);
     // A value whose zero means Automatic: an Automatic / Custom mode and the value with its unit.
+    // `automaticText` and `customText` rename the two modes (empty: Automatic and Custom).
     kit::KValueField* addAutomaticRow(QVBoxLayout* layout, QWidget* parent,
                                       const QString& objectName, const QString& label,
                                       double maximum, int decimals, const QString& unit,
-                                      double customDefault);
+                                      double customDefault, const QString& automaticText = {},
+                                      const QString& customText = {});
 
     // Row helpers. Each returns the control it built and registers a refresh callback that
     // re-reads the draft with signals blocked.

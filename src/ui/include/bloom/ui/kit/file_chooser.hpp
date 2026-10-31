@@ -4,6 +4,7 @@
 #include <QStringList>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -40,8 +41,22 @@ struct KFileRequest final {
 [[nodiscard]] std::unique_ptr<QFileDialog> buildFileDialog(QWidget& owner,
                                                            const KFileRequest& request);
 
+// An options pane under a file dialog's file type row (Import's sequence and composition
+// options, #381), with `label` in the dialog's label column. The dialog owns the pane.
+void addFileDialogOptions(QFileDialog& dialog, const QString& label, QWidget& pane);
+
+// The options pane of one file dialog request: `build` makes it as a child of the dialog, and
+// `accepted` reads it when the dialog is accepted, before the dialog and pane go away.
+struct KFileOptions final {
+    QString label;
+    std::function<QWidget*(QWidget& dialog)> build;
+    std::function<void(QWidget& pane)> accepted;
+};
+
 // The chosen paths (empty when cancelled). Synchronous: a file dialog is modal on every platform.
 [[nodiscard]] QStringList chooseFiles(QWidget& owner, const KFileRequest& request);
+[[nodiscard]] QStringList chooseFiles(QWidget& owner, const KFileRequest& request,
+                                      const KFileOptions& options);
 [[nodiscard]] std::optional<QString> chooseFile(QWidget& owner, const KFileRequest& request);
 
 // The directory the next dialog of `kind` starts in, and recording it.

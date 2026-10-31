@@ -26,9 +26,12 @@
 // key, default, and stored spelling, and no target outside bloom_ui should write global
 // preferences directly.
 
+#include <bloom/core/rational_time.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 class QSettings;
@@ -103,6 +106,14 @@ struct ApplicationPreferences final {
     bool viewerThirds = false;
     bool viewerRulers = false;
     bool viewerPixelGrid = false;
+
+    // Import (#381). What a newly imported image sequence assumes as its frame rate (absent: one
+    // image per composition frame) and how long a newly imported still lasts (absent: the
+    // composition's length). The import command writes them into each new asset's
+    // interpretation; assets already imported keep theirs.
+    std::optional<document::FrameRate> importSequenceFrameRate =
+        document::FrameRate::framesPerSecond24();
+    std::optional<core::RationalTime> importStillDuration;
 
     // Sounds and notifications (docs/ux/sound.md). Event sounds (render and import results,
     // warnings, refusals) are on by default; interaction sounds are opt-in.

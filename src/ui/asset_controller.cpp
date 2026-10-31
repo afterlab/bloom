@@ -1,8 +1,10 @@
 #include "asset_data_thumbnail.hpp"
 #include "asset_thumbnail_display.hpp"
 #include "colour_space_names.hpp"
+#include "import_options_pane.hpp"
 #include "network_share_paths.hpp"
 #include <QDir>
+#include <QSettings>
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
@@ -12,6 +14,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
+#include <bloom/commands/project_item_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -30,6 +33,7 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
+#include <bloom/ui/application_preferences.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/file_chooser.hpp>
@@ -802,21 +806,75 @@ void AssetController::requestImport(QWidget* parent, ImportFollowUp followUp) {
     // Every file dialog has an owner; a request without one opens nothing.
     if (parent == nullptr)
         return;
-    const auto paths = kit::chooseFiles(*parent, {.mode = kit::KFileRequest::Mode::OpenMany,
-                                                  .title = tr("Import Media"),
-                                                  .kind = QStringLiteral("media"),
-                                                  .nameFilters = mediaFileFilter(),
-                                                  .defaultSuffix = {},
-                                                  .startPath = {}});
-    if (!paths.empty())
-        importFiles(paths, importFolder_, std::move(followUp));
+    // #381: the import options sit under the file list, as in After Effects.
+    const bool offerComposition = !followUp;
+    commands::ImportOptions options;
+    bool createComposition = false;
+    const auto paths =
+        kit::chooseFiles(*parent,
+                         {.mode = kit::KFileRequest::Mode::OpenMany,
+                          .title = tr("Import Media"),
+                          .kind = QStringLiteral("media"),
+                          .nameFilters = mediaFileFilter(),
+                          .defaultSuffix = {},
+                          .startPath = {}},
+                         {.label = tr("Options:"),
+                          .build = [offerComposition](QWidget& dialog) -> QWidget* {
+                              return new ImportOptionsPane(offerComposition, &dialog);
+                          },
+                          .accepted =
+                              [&](QWidget& pane) {
+                                  const auto& choices = static_cast<ImportOptionsPane&>(pane);
+                                  options = choices.options();
+                                  createComposition = choices.createComposition();
+                                  choices.remember();
+                              }});
+    if (paths.empty())
+        return;
+    if (createComposition)
+        followUp = compositionFollowUp();
+    importFiles(paths, importFolder_, std::move(followUp), options);
+}
+AssetController::ImportFollowUp AssetController::compositionFollowUp() {
+    return [this](const std::vector<document::AssetId>& assets) -> QString {
+        const auto snapshot = session_.snapshot();
+        const auto& project = snapshot.project();
+        std::vector<document::AssetId> footage;
+        for (const auto id : assets)
+            if (const auto* asset = project.findAsset(id);
+                asset != nullptr && asset->kind != document::AssetKind::Lut &&
+                asset->kind != document::AssetKind::Font)
+                footage.push_back(id);
+        if (footage.empty())
+            return {};
+        // The Assets panel's New Composition from Selection, filed with the import.
+        commands::Transaction transaction("New Composition from Import", snapshot.revision());
+        transaction.emplace<commands::AddCompositionFromFootage>(
+            footage,
+            session_.composition() != nullptr ? std::optional(session_.compositionId())
+                                              : std::nullopt,
+            tr("Composition %1").arg(project.compositions().size() + 1).toStdString(),
+            importFolder_);
+        const auto result = session_.executeTransaction(std::move(transaction));
+        const auto id = result.outputId<document::CompositionId>(commands::kAddCompositionOutput);
+        if (!id)
+            return {};
+        (void)session_.setComposition(*id);
+        const auto* made = session_.snapshot().project().findComposition(*id);
+        return made != nullptr ? tr("Created %1").arg(QString::fromStdString(made->name()))
+                               : QString{};
+    };
 }
 void AssetController::importFiles(const QStringList& paths) { importFiles(paths, importFolder_); }
 void AssetController::importFiles(const QStringList& paths,
                                   const std::optional<document::AssetFolderId> folder,
-                                  ImportFollowUp followUp) {
+                                  ImportFollowUp followUp, commands::ImportOptions options) {
+    // The Import preferences: the interpretation new sequences and stills start with (#381).
+    const auto preferences = loadApplicationPreferences(QSettings{});
+    options.sequenceFrameRate = preferences.importSequenceFrameRate;
+    options.stillDuration = preferences.importStillDuration;
     const auto running = importShared_;
-    prepare(paths, {}, folder);
+    prepare(paths, {}, folder, std::move(options));
     // Kept only for the batch import this call started, never one already running.
     if (importShared_ != nullptr && importShared_ != running)
         importFollowUp_ = std::move(followUp);
@@ -874,7 +932,8 @@ void AssetController::remove(document::AssetId id) {
     static_cast<void>(session_.executeTransaction(std::move(transaction)));
 }
 void AssetController::prepare(const QStringList& paths, document::AssetId relinkId,
-                              const std::optional<document::AssetFolderId> folder) {
+                              const std::optional<document::AssetFolderId> folder,
+                              commands::ImportOptions options) {
     if (!host_.canSave()) {
         emit diagnostic(tr("Media import requires an idle, editable project"));
         return;
@@ -894,6 +953,10 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
     base_ = session_.snapshot();
     const bool relinkFont = relinkId.isValid() && base_->project().findAsset(relinkId) != nullptr &&
                             base_->project().findAsset(relinkId)->kind == document::AssetKind::Font;
+    // Relink and Reload read the file the way the asset was imported (a still stays a still, a
+    // sequence keeps its frame range).
+    if (const auto* target = relinkId.isValid() ? base_->project().findAsset(relinkId) : nullptr)
+        options = commands::relinkOptions(*target);
     // A batch import shares its progress, per-item outcome and the artist's stop request (#377).
     auto shared = relinkId.isValid() ? nullptr : std::make_shared<ImportShared>();
     auto submission = scheduler_.submit<OperationHandle>(
@@ -901,7 +964,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
             "Import media",
             {.kind = runtime::TaskOwnerKind::Application, .id = runtime::TaskOwnerId::fromRaw(1)},
             runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo),
-        [files = std::move(files), directory, relinkId, relinkFont, folder, shared,
+        [files = std::move(files), directory, relinkId, relinkFont, folder, shared, options,
          hook = importProgressHook_](runtime::TaskContext& context) {
             auto result = std::make_shared<std::unique_ptr<commands::Operation>>();
             std::vector<runtime::TaskDiagnostic> warnings;
@@ -922,7 +985,7 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                     std::make_unique<commands::RelinkFontAsset>(relinkId, fontAssetRecord(*found));
             } else if (relinkId.isValid())
                 *result = std::make_unique<commands::RelinkAsset>(relinkId, files.front(),
-                                                                  directory, cancel);
+                                                                  directory, cancel, options);
             else {
                 {
                     const std::lock_guard lock(shared->mutex);
@@ -950,8 +1013,8 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
                     if (hook)
                         hook(state);
                 };
-                auto prepared =
-                    std::make_unique<commands::ImportAssets>(files, directory, stop, progress);
+                auto prepared = std::make_unique<commands::ImportAssets>(files, directory, stop,
+                                                                         progress, options);
                 prepared->setFolder(folder);
                 {
                     const std::lock_guard lock(shared->mutex);

@@ -1,5 +1,7 @@
 #include <bloom/ui/application_preferences.hpp>
 
+#include <bloom/document/asset.hpp>
+
 #include <QSettings>
 #include <QString>
 
@@ -7,7 +9,9 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string_view>
+#include <utility>
 
 namespace bloom::ui {
 namespace {
@@ -38,6 +42,24 @@ constexpr auto kSoundVolumeKey = "sound/volume-percent";
 constexpr auto kEventSoundsKey = "sound/events";
 constexpr auto kInteractionSoundsKey = "sound/interaction";
 constexpr auto kRenderNotificationsKey = "sound/render-notifications";
+constexpr auto kImportSequenceFrameRateKey = "import/sequence-frame-rate";
+constexpr auto kImportStillDurationKey = "import/still-duration";
+// "composition", or an exact "n/d" (a rate in frames per second, a duration in seconds).
+constexpr auto kCompositionSpelling = "composition";
+
+[[nodiscard]] std::optional<std::pair<std::int64_t, std::int64_t>>
+ratioFromSettings(const QSettings& settings, const char* const key) {
+    const auto parts = settings.value(QLatin1String(key)).toString().split(QLatin1Char('/'));
+    if (parts.size() != 2)
+        return std::nullopt;
+    bool numeratorParsed = false;
+    bool denominatorParsed = false;
+    const auto numerator = parts[0].toLongLong(&numeratorParsed);
+    const auto denominator = parts[1].toLongLong(&denominatorParsed);
+    if (!numeratorParsed || !denominatorParsed || numerator <= 0 || denominator <= 0)
+        return std::nullopt;
+    return std::pair{numerator, denominator};
+}
 
 // The byte-budget reader (media_disk_cache_settings.cpp) parse the value
 // through toString().toULongLong() and treat a missing, zero, or unparseable value as "default".
@@ -216,6 +238,26 @@ ApplicationPreferences loadApplicationPreferences(const QSettings& settings) {
         settings.value(QLatin1String(kInteractionSoundsKey), false).toBool();
     preferences.renderNotificationsEnabled =
         settings.value(QLatin1String(kRenderNotificationsKey), true).toBool();
+    // A missing or unreadable value reads as the default; "composition" as the composition's own.
+    if (settings.value(QLatin1String(kImportSequenceFrameRateKey)).toString() ==
+        QLatin1StringView(kCompositionSpelling)) {
+        preferences.importSequenceFrameRate.reset();
+    } else if (const auto ratio = ratioFromSettings(settings, kImportSequenceFrameRateKey)) {
+        constexpr auto limit = std::numeric_limits<std::uint32_t>::max();
+        const auto rate =
+            ratio->first <= limit && ratio->second <= limit
+                ? document::FrameRate::create(static_cast<std::uint32_t>(ratio->first),
+                                              static_cast<std::uint32_t>(ratio->second))
+                : std::nullopt;
+        if (rate && document::isValidFootageFrameRate(*rate))
+            preferences.importSequenceFrameRate = rate;
+    }
+    if (const auto ratio = ratioFromSettings(settings, kImportStillDurationKey)) {
+        const auto duration = core::RationalTime::create(ratio->first, ratio->second);
+        if (duration &&
+            *duration <= core::RationalTime::fromInteger(document::kMaxAssetStillDurationSeconds))
+            preferences.importStillDuration = duration;
+    }
     return preferences;
 }
 
@@ -276,6 +318,15 @@ void saveApplicationPreferences(QSettings& settings, const ApplicationPreference
     settings.setValue(QLatin1String(kInteractionSoundsKey), preferences.interactionSoundsEnabled);
     settings.setValue(QLatin1String(kRenderNotificationsKey),
                       preferences.renderNotificationsEnabled);
+    const auto& rate = preferences.importSequenceFrameRate;
+    settings.setValue(QLatin1String(kImportSequenceFrameRateKey),
+                      rate ? QStringLiteral("%1/%2").arg(rate->numerator()).arg(rate->denominator())
+                           : QString::fromLatin1(kCompositionSpelling));
+    const auto& still = preferences.importStillDuration;
+    settings.setValue(
+        QLatin1String(kImportStillDurationKey),
+        still ? QStringLiteral("%1/%2").arg(still->numerator()).arg(still->denominator())
+              : QString::fromLatin1(kCompositionSpelling));
 }
 
 const char* timelineTimeFormatValue(const TimelineTimeFormat format) noexcept {
