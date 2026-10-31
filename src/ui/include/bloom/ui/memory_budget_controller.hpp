@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -81,4 +82,25 @@ class MemoryBudgetController final : public QObject {
     std::shared_ptr<std::atomic<bool>> pressureQueued_ = std::make_shared<std::atomic<bool>>(false);
     std::unique_ptr<runtime::MemoryPressureMonitor> pressureMonitor_;
 };
+
+// The application's host sampler: freed cache pages leave the process first (on the worker), then
+// the processing policy samples host memory so its backing credit matches the measurement.
+[[nodiscard]] MemoryBudgetController::Sampler
+applicationMemorySampler(std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy);
+
+// The composition root's memory wiring, shared by the application and the harnesses that measure
+// it, so a measurement cannot run a different memory model from the product:
+// - every applied sample reaches the processing policy, and the policy's host claims reach the
+//   ledger, so reusable pools never grow into memory admitted to active work;
+// - work waiting for host capacity makes every reusable pool give back the shortfall at once
+//   (evict-on-demand), so caches are never a reason to wait;
+// - the RAM headroom (the saved preference, else the default share of measured capacity) reaches
+//   the ledger and, with the VRAM headroom, the policy: now, whenever a sample changes the computed
+//   default, and on every call of the returned function (a preference Apply). Without it the
+//   ledger has no usable-capacity model and reusable pools may take the whole OS limit.
+// Connections live as long as `context`.
+std::function<void()>
+connectApplicationMemoryBudget(MemoryBudgetController& controller,
+                               const std::shared_ptr<runtime::GpuProcessingPhasePolicy>& policy,
+                               runtime::MemoryBudgetLedger& ledger, QObject* context);
 } // namespace bloom::ui

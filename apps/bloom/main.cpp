@@ -237,35 +237,14 @@ int main(int argc, char* argv[]) try {
         32, packedHostRetirement, taskBudgetView);
     bloom::ui::MemoryBudgetController memoryBudgetController(
         taskScheduler, taskUiBridge, bloom::runtime::processMemoryBudgetLedger(),
-        [processingPhasePolicy](const bloom::runtime::CancellationToken& cancellation) {
-            // Freed cache pages leave the process before it is measured (worker thread).
-            bloom::runtime::releaseFreedHostMemory();
-            return processingPhasePolicy->sampleHostMemory(cancellation);
-        });
-    QObject::connect(
-        &memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied, &application,
-        [processingPhasePolicy, &playbackSettings] {
-            auto& ledger = bloom::runtime::processMemoryBudgetLedger();
-            const auto physicalBytes = ledger.physicalByteBudget();
-            const auto allocation =
-                bloom::ui::cacheMemoryBudgetAllocationFromSettings(playbackSettings, ledger);
-            const auto delivered = ledger.state();
-            processingPhasePolicy->applyHostSample(delivered, physicalBytes, allocation);
-            // Reusable pools never grow into memory admitted to active work.
-            ledger.setActiveWorkClaims(static_cast<std::size_t>(
-                processingPhasePolicy->usableCapacity().hostClaimBytes));
-        });
-    // Evict-on-demand: work that waits for host memory makes every reusable pool give back the
-    // shortfall at once (on the UI thread, which owns the cache callbacks) and takes a fresh
-    // sample, so caches are never a reason to wait. Device waits have no ledger pool to evict.
-    processingPhasePolicy->addRetentionReclaimer(
-        [reclaim = memoryBudgetController.workReclaimer()](
-            const bloom::render::GpuProcessingPhaseDomain domain,
-            const std::uint64_t shortfall) -> std::uint64_t {
-            if (domain == bloom::render::GpuProcessingPhaseDomain::Host)
-                reclaim(static_cast<std::size_t>(shortfall));
-            return 0;
-        });
+        bloom::ui::applicationMemorySampler(processingPhasePolicy));
+    // Samples reach the processing policy and the ledger's active-work claims, host capacity waits
+    // evict reusable pools, and the RAM/VRAM headroom (memory/ramHeadroomBytes and
+    // memory/vramHeadroomBytes, else 10% of measured capacity) bounds both. The packed RAM-fill
+    // benchmark harness runs this same wiring.
+    const auto applyHeadroom = bloom::ui::connectApplicationMemoryBudget(
+        memoryBudgetController, processingPhasePolicy, bloom::runtime::processMemoryBudgetLedger(),
+        &application);
     // Explicit opt-in, one bounded numeric-only buffer. The path is only an export destination;
     // it and media locators never enter trace records. No formatting or I/O runs in UI callbacks.
     const QString previewTraceDestination = qEnvironmentVariable("BLOOM_PREVIEW_TRACE");
@@ -821,37 +800,9 @@ int main(int argc, char* argv[]) try {
     application.installEventFilter(&interactionSounds);
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
                      applyFeedbackPreferences);
-    // Memory headroom (RAM and VRAM left free for the system): the committed value reaches the
-    // processing policy on Apply and OK, and once now for the saved value.
-    const auto applyHeadroom = [processingPhasePolicy, &memoryBudgetController] {
-        const QSettings settings;
-        const auto preferences = bloom::ui::loadApplicationPreferences(settings);
-        processingPhasePolicy->setHeadroom(
-            {.ramBytes = preferences.ramHeadroomBytes, .vramBytes = preferences.vramHeadroomBytes});
-        // Reusable caches fill available memory beyond the same RAM headroom.
-        // setRamHeadroom applies the new budgets at once against the last sample; the pressure
-        // monitor then samples the machine now, so a larger headroom evicts within one interval
-        // and the freed memory is returned to the OS.
-        bloom::runtime::processMemoryBudgetLedger().setRamHeadroom(
-            static_cast<std::size_t>(preferences.ramHeadroomBytes));
-        memoryBudgetController.wakePressureMonitor();
-    };
-    applyHeadroom();
+    // Memory headroom: the committed value reaches the processing policy and the ledger on Apply
+    // and OK.
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window, applyHeadroom);
-    // Without a saved preference the headroom is 10% of the measured capacity. Physical memory, a
-    // process limit and the GPU's device-local size are measured after startup, so re-apply when a
-    // sample changes the computed default (a saved value still wins inside applyHeadroom).
-    QObject::connect(
-        &memoryBudgetController, &bloom::ui::MemoryBudgetController::sampleApplied, &window,
-        [applyHeadroom, applied = std::pair{bloom::runtime::defaultRamHeadroomBytes(),
-                                            bloom::runtime::defaultVramHeadroomBytes()}]() mutable {
-            const std::pair current{bloom::runtime::defaultRamHeadroomBytes(),
-                                    bloom::runtime::defaultVramHeadroomBytes()};
-            if (current != applied) {
-                applied = current;
-                applyHeadroom();
-            }
-        });
     QObject::connect(&window, &bloom::ui::MainWindow::soundTestRequested, &window,
                      [&uiFeedback](const bloom::ui::ApplicationPreferences& draft) {
                          uiFeedback.playTest(bloom::ui::feedbackSettingsFrom(draft));

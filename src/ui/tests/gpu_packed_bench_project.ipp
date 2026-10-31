@@ -1,6 +1,7 @@
 // Benchmark mode of the packed RAM-fill harness: a saved project instead of a synthetic sequence.
 // It is wired like the desktop application (apps/bloom/main.cpp): app scheduler and budget view,
-// process ledger, MemoryBudgetController, qualified display bootstrap, settings-derived cache
+// process ledger, MemoryBudgetController with the application's memory wiring
+// (connectApplicationMemoryBudget), qualified display bootstrap, settings-derived cache
 // budgets, the packed GPU preview service, RAM preview fill width from measured capacity, and
 // background read-ahead for playback. It measures; it does not qualify parity (the cache100 and
 // route-proof gates do). tools/bench/run_bench.py drives it, one fresh process per measurement.
@@ -287,19 +288,13 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     ui::TaskUiBridge bridge(scheduler);
     const auto policy =
         std::make_shared<runtime::GpuProcessingPhasePolicy>(32, retirementOwner, taskBudgetView);
-    ui::MemoryBudgetController memoryController(
-        scheduler, bridge, runtime::processMemoryBudgetLedger(),
-        [policy](const runtime::CancellationToken& cancellation) {
-            return policy->sampleHostMemory(cancellation);
-        });
-    QObject::connect(&memoryController, &ui::MemoryBudgetController::sampleApplied, &bridge,
-                     [policy, &playbackSettings] {
-                         auto& ledger = runtime::processMemoryBudgetLedger();
-                         const auto allocation =
-                             ui::cacheMemoryBudgetAllocationFromSettings(playbackSettings, ledger);
-                         policy->applyHostSample(ledger.state(), ledger.physicalByteBudget(),
-                                                 allocation);
-                     });
+    ui::MemoryBudgetController memoryController(scheduler, bridge,
+                                                runtime::processMemoryBudgetLedger(),
+                                                ui::applicationMemorySampler(policy));
+    // The application's memory model, not a copy of it: delivered samples, active-work claims,
+    // evict-on-demand for host capacity waits, and the RAM/VRAM headroom.
+    static_cast<void>(ui::connectApplicationMemoryBudget(
+        memoryController, policy, runtime::processMemoryBudgetLedger(), &bridge));
     ui::QualifiedDisplayProcessorBootstrap bootstrap(scheduler, bridge, qualifiedProvider);
     auto frameCache =
         std::make_shared<ui::PreviewFrameCache>(cacheBudgets.previewFrameCacheByteBudget);

@@ -5,6 +5,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/qualified_display_processor_provider.hpp>
@@ -578,6 +579,119 @@ void reclaimForWorkOnUiThread() {
     expect(spin([&] { return scheduler.isQuiescent(); }), "reclaim scheduler retires");
     ledger.unregisterCache(&held);
 }
+// #411: the RAM-fill benchmark harness wired its own copy of the application's memory model and
+// left out the headroom and evict-on-demand. Inside a 20 GiB cgroup the ledger then divided the
+// whole limit between the reusable pools (7.6 GiB preview + 12.4 GiB operation cache), so the
+// process sat at the limit and 2160p video work waited for capacity that no cache gave back.
+// Every composition root now runs connectApplicationMemoryBudget: pools fill usable capacity (the
+// room in the limit minus the headroom), never grow into memory admitted to work, and give back a
+// waiting frame's shortfall at once. Runs last: it points the default QSettings at a temporary
+// directory.
+void applicationWiringKeepsUsableCapacity() {
+    QTemporaryDir directory;
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory.path());
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QCoreApplication::setOrganizationName("BloomTest");
+    QCoreApplication::setApplicationName("MemoryWiring");
+    QSettings().setValue(QString::fromUtf8(runtime::kRamHeadroomKey.data(),
+                                           static_cast<int>(runtime::kRamHeadroomKey.size())),
+                         QString::number(2 * gib));
+    runtime::MemoryBudgetLedger ledger(60 * gib, 60 * gib);
+    ledger.beginProcessSampling();
+    // One reusable pool with the automatic operation-cache target. The process uses 8 GiB
+    // outside it; the pool's bytes count against the same 20 GiB limit.
+    std::atomic<std::size_t> held{0};
+    ledger.registerCache(
+        &held, 30 * gib, [&] { return held.load(); },
+        [&](const std::size_t value) { held = std::min(held.load(), value); });
+    const auto cgroup = [&](const runtime::CancellationToken&) {
+        auto measured = sample();
+        measured.process.domains = {{"/fixture", runtime::ProcessMemoryLimitKind::Finite,
+                                     20 * gib, 8 * gib + held.load()}};
+        measured.process.reclaimableBytes = {std::size_t{0}};
+        measured.process.sampledAt = std::chrono::steady_clock::now();
+        return measured;
+    };
+    runtime::TaskScheduler scheduler(config());
+    ui::TaskUiBridge bridge(scheduler);
+    std::optional<runtime::MemoryPressureMonitor::Options> noMonitor;
+    ui::MemoryBudgetController owner(scheduler, bridge, ledger, cgroup, nullptr, noMonitor);
+    expect(spin([&] { return owner.admittedSampleCount() >= 1 && !owner.sampleActive(); }),
+           "the initial cgroup sample settles");
+    expect(ledger.cacheByteBudget(&held) == 20 * gib,
+           "without the application wiring a reusable pool may take the whole OS limit");
+
+    const auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(32);
+    static_cast<void>(ui::connectApplicationMemoryBudget(owner, policy, ledger, &bridge));
+    expect(ledger.ramHeadroom() == 2 * gib && policy->headroom().ramBytes == 2 * gib,
+           "the saved RAM headroom reaches the ledger and the processing policy at once");
+    // Room in the limit (20 - 8) minus the headroom and its 256 MiB hysteresis margin.
+    expect(ledger.cacheByteBudget(&held) == 12 * gib - 2 * gib - gib / 4,
+           "the pool fills usable capacity, not the whole limit");
+    const auto samples = owner.admittedSampleCount();
+    owner.requestSample();
+    expect(spin([&] {
+               return owner.admittedSampleCount() > samples && !owner.sampleActive() &&
+                      policy->usableCapacity().hostReady;
+           }),
+           "delivered samples reach the processing policy");
+    expect(policy->usableCapacity().hostUsableBytes == 10 * gib,
+           "usable host capacity is the room in the limit minus the headroom");
+    expect(policy->reportDevice(1, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
+                                    .device_local_bytes = 24 * gib,
+                                    .available_bytes = 22 * gib}),
+           "device report accepted");
+
+    // The pool fills its budget, then a 2160p frame (four float planes of source) needs more
+    // than the 1 GiB left.
+    held = 9 * gib;
+    const auto filled = owner.admittedSampleCount();
+    owner.requestSample();
+    expect(spin([&] { return owner.admittedSampleCount() > filled && !owner.sampleActive(); }),
+           "the filled pool is sampled");
+    const std::uint64_t pixels = 3840ULL * 2160;
+    const runtime::GpuProcessingPhaseEnvelope frame{
+        .output = runtime::GpuProcessingPhaseOutput::FloatFinal,
+        .pixels = pixels,
+        .metadataBytes = 16ULL << 20,
+        .requestedSourceBytes = pixels * 64,
+        .minimumSourceBytes = pixels * 64,
+        .requestedExecutorBytes = pixels * 64,
+        .minimumExecutorBytes = pixels * 64,
+        .deviceWorkingBytes = 64ULL << 20};
+    const auto beforeReclaim = owner.admittedSampleCount();
+    const auto waiting = policy->reserve(frame);
+    const auto need = policy->lastAwaitingNeed();
+    expect(waiting.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity && need &&
+               need->domain == render::GpuProcessingPhaseDomain::Host && need->shortfallBytes > 0,
+           "a frame that does not fit the free capacity waits on the host");
+    // The reclaim runs on this thread and takes a fresh sample at once.
+    expect(spin([&] {
+               return owner.reclaimApplications() == 1 &&
+                      owner.admittedSampleCount() > beforeReclaim && !owner.sampleActive();
+           }) && held <= 9 * gib - need->shortfallBytes,
+           "the waiting frame's shortfall is evicted from the reusable pool at once");
+    auto grant = policy->reserve(frame);
+    expect(grant.lease != nullptr,
+           "the frame is admitted once the eviction is sampled; it does not wait forever");
+    const auto admitted = owner.admittedSampleCount();
+    owner.requestSample();
+    expect(spin([&] { return owner.admittedSampleCount() > admitted && !owner.sampleActive(); }),
+           "the admitted work is sampled");
+    // The limit still has room beyond the headroom and its margin, but the admitted frame's
+    // claims take it.
+    const auto claims = static_cast<std::size_t>(policy->usableCapacity().hostClaimBytes);
+    const std::size_t pool = held;
+    const auto room = 12 * gib - pool;
+    expect(room > 2 * gib + gib / 4 && room < 2 * gib + gib / 4 + claims &&
+               ledger.cacheByteBudget(&held) == pool,
+           "the pool never grows into memory admitted to active work");
+    grant.lease.reset();
+    owner.beginShutdown();
+    scheduler.beginShutdown();
+    expect(spin([&] { return scheduler.isQuiescent(); }), "wiring scheduler retires");
+    ledger.unregisterCache(&held);
+}
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     heldSampling();
@@ -587,5 +701,6 @@ int main(int argc, char** argv) {
     liveSettingsAndDeliveredCapacity();
     sampledPressurePreviewRecovery();
     coldForegroundAndSettings();
+    applicationWiringKeepsUsableCapacity();
     return failures == 0 ? 0 : 1;
 }
