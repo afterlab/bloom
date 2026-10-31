@@ -136,7 +136,7 @@ void testRoundTrip() {
 
 void testMigration() {
     const auto current = encode(makeDocument(false));
-    auto older = replaceOnce(current, "\"minor\": 33", "\"minor\": 28");
+    auto older = replaceOnce(current, "\"minor\": 34", "\"minor\": 28");
     older = std::regex_replace(
         older, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
     older = std::regex_replace(
@@ -152,9 +152,9 @@ void testMigration() {
            "a 1.28 document decodes with an empty queue");
     // To the current 1.31: the export-queue step, the easing step, then the version-only node group
     // colour step.
-    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 33},
+    const auto migrated = migrateDocumentDom(parsed.document()->root(), {1, 28}, {1, 34},
                                              kProductionDocumentMigrationSteps, {}, operation);
-    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 5,
+    expect(migrated.outcome() == MigrationOutcome::Migrated && migrated.stepsApplied() == 6,
            "1.28 to 1.31 runs the export-queue, easing and node group colour steps");
     if (migrated.outcome() != MigrationOutcome::Migrated)
         return;
@@ -166,10 +166,10 @@ void testMigration() {
            "a migrated 1.28 project equals the same project saved at 1.31");
 
     // The already-migrated guard: a 1.28-labelled file that already has the queue is refused.
-    const auto mislabelled = replaceOnce(current, "\"minor\": 33", "\"minor\": 28");
+    const auto mislabelled = replaceOnce(current, "\"minor\": 34", "\"minor\": 28");
     auto bad = parseStrictJsonDom(std::as_bytes(std::span(mislabelled)), {}, operation);
     if (bad) {
-        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 33},
+        const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 34},
                                                 kProductionDocumentMigrationSteps, {}, operation);
         expect(refused.outcome() != MigrationOutcome::Migrated,
                "a 1.28 file that already carries the queue is not migrated twice");
@@ -278,8 +278,8 @@ void testWebmFormats() {
     seed.project.setExportQueue({{webm}});
     const Document document{std::move(seed.project)};
     const auto text = encode(document);
-    expect(text.find("\"minor\": 33\n  },\n  \"project\"") != std::string::npos,
-           "the document is written at 1.33");
+    expect(text.find("\"minor\": 34\n  },\n  \"project\"") != std::string::npos,
+           "the document is written at 1.34");
     for (const auto* token : {"\"vp9-webm\"", "\"av1-webm\"", "\"av1-mp4\"", "\"8bit\""})
         expect(text.find(token) != std::string::npos, "each 1.33 token is written");
     const auto decoded = decodeQueue(text);
@@ -291,12 +291,12 @@ void testWebmFormats() {
     wrong.settings.codecProfile = "main10";
     expect(!validateExportOutput(wrong).ok(), "an HEVC profile does not apply to VP9");
 
-    const auto older = replaceOnce(text, "\"minor\": 33\n  },\n  \"project\"",
+    const auto older = replaceOnce(text, "\"minor\": 34\n  },\n  \"project\"",
                                    "\"minor\": 32\n  },\n  \"project\"");
     expect(!decodeQueue(older), "a document claiming 1.32 cannot name a 1.33 format");
 
     const auto plain = encode(makeDocument(true));
-    const auto plain132 = replaceOnce(plain, "\"minor\": 33\n  },\n  \"project\"",
+    const auto plain132 = replaceOnce(plain, "\"minor\": 34\n  },\n  \"project\"",
                                       "\"minor\": 32\n  },\n  \"project\"");
     expect(static_cast<bool>(decodeQueue(plain132)), "a 1.32 queue without new formats decodes");
     auto operation = memory();

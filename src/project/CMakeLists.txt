@@ -397,6 +397,13 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_video_metadata_test)
     bloom_add_test(NAME bloom.project.video-metadata COMMAND bloom_project_video_metadata_test LABELS unit persistence)
 
+    add_executable(bloom_project_footage_interpretation_test
+                   tests/footage_interpretation_persistence_tests.cpp)
+    target_link_libraries(bloom_project_footage_interpretation_test PRIVATE bloom_project)
+    bloom_enable_warnings(bloom_project_footage_interpretation_test)
+    bloom_add_test(NAME bloom.project.footage-interpretation
+                   COMMAND bloom_project_footage_interpretation_test LABELS unit persistence)
+
     add_executable(bloom_project_node_group_test tests/node_group_persistence_tests.cpp)
     target_link_libraries(bloom_project_node_group_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_node_group_test)

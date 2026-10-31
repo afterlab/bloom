@@ -17,6 +17,67 @@
     const auto text = digest.toLowercaseHex();
     return state.ok(state.writer.stringValue(std::string_view(text.data(), text.size())));
 }
+// Document 1.34 (#381): the Interpret Footage members, each written only when it differs from
+// its default, in this fixed order after alphaAssociation.
+[[nodiscard]] bool
+emitFootageInterpretation(EmitState& state,
+                          const bloom::document::AssetInterpretation& value) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    const auto token = [&](const std::string_view name, const std::string_view text) {
+        return state.ok(writer.memberName(name)) && state.ok(writer.stringValue(text));
+    };
+    const auto flag = [&](const std::string_view name) {
+        return state.ok(writer.memberName(name)) && state.ok(writer.booleanValue(true));
+    };
+    if (value.frameRate &&
+        (!state.ok(writer.memberName("frameRate")) ||
+         !emitRational(state, value.frameRate->numerator(), value.frameRate->denominator())))
+        return false;
+    if (value.startTimecode &&
+        (!state.ok(writer.memberName("startTimecode")) || !state.ok(writer.beginObject()) ||
+         !state.ok(writer.memberName("start")) ||
+         !emitRational(state, value.startTimecode->start.numerator(),
+                       value.startTimecode->start.denominator()) ||
+         !state.ok(writer.memberName("dropFrame")) ||
+         !state.ok(writer.booleanValue(value.startTimecode->dropFrame)) ||
+         !state.ok(writer.endObject())))
+        return false;
+    if (value.alphaMode != AssetAlphaMode::Guess &&
+        !token("alphaMode", value.alphaMode == AssetAlphaMode::Ignore     ? "ignore"
+                            : value.alphaMode == AssetAlphaMode::Straight ? "straight"
+                                                                          : "premultiplied"))
+        return false;
+    if (value.invertAlpha && !flag("invertAlpha"))
+        return false;
+    if (value.matteColor != std::array<double, 3>{}) {
+        if (!state.ok(writer.memberName("matteColor")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto component : value.matteColor)
+            if (!emitFloat64Value(state, "matteColor", component))
+                return false;
+        if (!state.ok(writer.endArray()))
+            return false;
+    }
+    if (value.fieldOrder != AssetFieldOrder::File &&
+        !token("fieldOrder", value.fieldOrder == AssetFieldOrder::Progressive  ? "progressive"
+                             : value.fieldOrder == AssetFieldOrder::UpperFirst ? "upperFirst"
+                                                                               : "lowerFirst"))
+        return false;
+    if (value.deinterlace && !flag("deinterlace"))
+        return false;
+    if (value.pixelAspect &&
+        (!state.ok(writer.memberName("pixelAspect")) ||
+         !emitRational(state, value.pixelAspect->numerator(), value.pixelAspect->denominator())))
+        return false;
+    if (value.loopCount != 1 && (!state.ok(writer.memberName("loopCount")) ||
+                                 !state.ok(writer.integerValue(value.loopCount))))
+        return false;
+    if (value.missingFrames != AssetMissingFrames::HoldPrevious &&
+        !token("missingFrames", "nothing"))
+        return false;
+    return true;
+}
 [[nodiscard]] bool emitAssets(EmitState& state) noexcept {
     auto& writer = state.writer;
     if (!state.ok(writer.memberName("assets")) || !state.ok(writer.beginArray()))
@@ -43,6 +104,7 @@
             !state.ok(writer.memberName("alphaAssociation")) ||
             !state.ok(writer.integerValue(
                 static_cast<std::uint32_t>(asset.interpretation.alphaAssociation))) ||
+            !emitFootageInterpretation(state, asset.interpretation) ||
             !state.ok(writer.endObject()) || !state.ok(writer.memberName("width")) ||
             !state.ok(writer.integerValue(asset.width)) || !state.ok(writer.memberName("height")) ||
             !state.ok(writer.integerValue(asset.height)) ||
@@ -162,7 +224,15 @@
                 for (const auto& channel : stream.channelLayout)
                     if (!state.ok(writer.stringValue(channel)))
                         return false;
-                if (!state.ok(writer.endArray()) || !state.ok(writer.endObject()))
+                if (!state.ok(writer.endArray()))
+                    return false;
+                // Document 1.34: the coded pixel aspect ratio, written only when not square.
+                if (stream.pixelAspect != bloom::core::PixelAspectRatio::square() &&
+                    (!state.ok(writer.memberName("pixelAspect")) ||
+                     !emitRational(state, stream.pixelAspect.numerator(),
+                                   stream.pixelAspect.denominator())))
+                    return false;
+                if (!state.ok(writer.endObject()))
                     return false;
             }
             if (!state.ok(writer.endArray()) || !state.ok(writer.endObject()))

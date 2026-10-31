@@ -156,7 +156,8 @@ enum class Step {
     EasingAndLayerFlags,
     NodeGroupColors,
     KeyframeHandleModes,
-    WebmExportFormats
+    WebmExportFormats,
+    FootageInterpretation
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -182,10 +183,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // `nameFollowsSource`) is optional. The open path infers nameFollowsSource for a decoded
     // document older than 1.30 during reconstruction, where the source names are known.
     if (step == Step::EasingAndLayerFlags)
-    // Node group colours (1.30 -> 1.31) are version-only: the new `color` member is optional and
-    // absent means the neutral frame.
-    if (step == Step::NodeGroupColors)
-        return false;
+        // Node group colours (1.30 -> 1.31) are version-only: the new `color` member is optional
+        // and absent means the neutral frame.
+        if (step == Step::NodeGroupColors)
+            return false;
     // Keyframe handle modes (1.31 -> 1.32) are version-only: the keyframe `handleMode` member is
     // optional and absent means Free.
     if (step == Step::KeyframeHandleModes)
@@ -193,6 +194,11 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // The WebM and AV1 export formats (1.32 -> 1.33) are version-only: they add tokens no older
     // document can contain.
     if (step == Step::WebmExportFormats)
+        return false;
+    // Interpret Footage (1.33 -> 1.34, #381) is version-only: every new interpretation member and
+    // the stream pixel aspect ratio are optional and absent at their defaults, which reproduce the
+    // previous playback exactly.
+    if (step == Step::FootageInterpretation)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -351,35 +357,36 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
             return transform(member.value(), child, step, output);
         };
         if (scope == Scope::Root && member.key() == "schemaVersion") {
-            append(output, step == Step::NodeLayout             ? "{\"major\":1,\"minor\":1}"
-                           : step == Step::NodeGroups           ? "{\"major\":1,\"minor\":2}"
-                           : step == Step::AnimationBreadth     ? "{\"major\":1,\"minor\":3}"
-                           : step == Step::ValueGraph           ? "{\"major\":1,\"minor\":4}"
-                           : step == Step::LayerTimeline        ? "{\"major\":1,\"minor\":5}"
-                           : step == Step::Merges               ? "{\"major\":1,\"minor\":6}"
-                           : step == Step::ContentBounds        ? "{\"major\":1,\"minor\":7}"
-                           : step == Step::SafeAreas            ? "{\"major\":1,\"minor\":8}"
-                           : step == Step::Images               ? "{\"major\":1,\"minor\":10}"
-                           : step == Step::Audio                ? "{\"major\":1,\"minor\":11}"
-                           : step == Step::KeyframeHandles      ? "{\"major\":1,\"minor\":12}"
-                           : step == Step::LayerParenting       ? "{\"major\":1,\"minor\":13}"
-                           : step == Step::Paths                ? "{\"major\":1,\"minor\":14}"
-                           : step == Step::TextCapability       ? "{\"major\":1,\"minor\":15}"
-                           : step == Step::AssetOrganization    ? "{\"major\":1,\"minor\":16}"
-                           : step == Step::Video                ? "{\"major\":1,\"minor\":17}"
-                           : step == Step::DataBlocks           ? "{\"major\":1,\"minor\":18}"
-                           : step == Step::WorkingColorSpace    ? "{\"major\":1,\"minor\":19}"
-                           : step == Step::AssetInputColorSpace ? "{\"major\":1,\"minor\":20}"
-                           : step == Step::LutAssets            ? "{\"major\":1,\"minor\":21}"
-                           : step == Step::LayerMasks           ? "{\"major\":1,\"minor\":24}"
-                           : step == Step::CompositionFolders   ? "{\"major\":1,\"minor\":27}"
-                           : step == Step::VideoColourDefault   ? "{\"major\":1,\"minor\":28}"
-                           : step == Step::ExportQueue          ? "{\"major\":1,\"minor\":29}"
-                           : step == Step::EasingAndLayerFlags  ? "{\"major\":1,\"minor\":30}"
-                           : step == Step::NodeGroupColors      ? "{\"major\":1,\"minor\":31}"
-                           : step == Step::KeyframeHandleModes  ? "{\"major\":1,\"minor\":32}"
-                           : step == Step::WebmExportFormats    ? "{\"major\":1,\"minor\":33}"
-                                                                : "{\"major\":1,\"minor\":22}");
+            append(output, step == Step::NodeLayout              ? "{\"major\":1,\"minor\":1}"
+                           : step == Step::NodeGroups            ? "{\"major\":1,\"minor\":2}"
+                           : step == Step::AnimationBreadth      ? "{\"major\":1,\"minor\":3}"
+                           : step == Step::ValueGraph            ? "{\"major\":1,\"minor\":4}"
+                           : step == Step::LayerTimeline         ? "{\"major\":1,\"minor\":5}"
+                           : step == Step::Merges                ? "{\"major\":1,\"minor\":6}"
+                           : step == Step::ContentBounds         ? "{\"major\":1,\"minor\":7}"
+                           : step == Step::SafeAreas             ? "{\"major\":1,\"minor\":8}"
+                           : step == Step::Images                ? "{\"major\":1,\"minor\":10}"
+                           : step == Step::Audio                 ? "{\"major\":1,\"minor\":11}"
+                           : step == Step::KeyframeHandles       ? "{\"major\":1,\"minor\":12}"
+                           : step == Step::LayerParenting        ? "{\"major\":1,\"minor\":13}"
+                           : step == Step::Paths                 ? "{\"major\":1,\"minor\":14}"
+                           : step == Step::TextCapability        ? "{\"major\":1,\"minor\":15}"
+                           : step == Step::AssetOrganization     ? "{\"major\":1,\"minor\":16}"
+                           : step == Step::Video                 ? "{\"major\":1,\"minor\":17}"
+                           : step == Step::DataBlocks            ? "{\"major\":1,\"minor\":18}"
+                           : step == Step::WorkingColorSpace     ? "{\"major\":1,\"minor\":19}"
+                           : step == Step::AssetInputColorSpace  ? "{\"major\":1,\"minor\":20}"
+                           : step == Step::LutAssets             ? "{\"major\":1,\"minor\":21}"
+                           : step == Step::LayerMasks            ? "{\"major\":1,\"minor\":24}"
+                           : step == Step::CompositionFolders    ? "{\"major\":1,\"minor\":27}"
+                           : step == Step::VideoColourDefault    ? "{\"major\":1,\"minor\":28}"
+                           : step == Step::ExportQueue           ? "{\"major\":1,\"minor\":29}"
+                           : step == Step::EasingAndLayerFlags   ? "{\"major\":1,\"minor\":30}"
+                           : step == Step::NodeGroupColors       ? "{\"major\":1,\"minor\":31}"
+                           : step == Step::KeyframeHandleModes   ? "{\"major\":1,\"minor\":32}"
+                           : step == Step::WebmExportFormats     ? "{\"major\":1,\"minor\":33}"
+                           : step == Step::FootageInterpretation ? "{\"major\":1,\"minor\":34}"
+                                                                 : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
                 return false;
@@ -940,14 +947,21 @@ MigrationStepOutcome migrateWebmExportFormatsV1_32(const JsonValue& root,
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
+MigrationStepOutcome migrateFootageInterpretationV1_33(const JsonValue& root,
+                                                       std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "33") ||
+        !transform(root, Scope::Root, Step::FootageInterpretation, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
 MigrationStepOutcome migrateExportQueueV1_28(const JsonValue& root, std::pmr::memory_resource*,
                                              Buffer& output) {
     if (!sourceVersionIs(root, "28") || !transform(root, Scope::Root, Step::ExportQueue, output))
         return MigrationStepOutcome::failure("/project/exportQueue");
     return MigrationStepOutcome::success();
 }
-MigrationStepOutcome migrateNodeGroupColorsV1_30(const JsonValue& root,
-                                                 std::pmr::memory_resource*, Buffer& output) {
+MigrationStepOutcome migrateNodeGroupColorsV1_30(const JsonValue& root, std::pmr::memory_resource*,
+                                                 Buffer& output) {
     if (!sourceVersionIs(root, "30") ||
         !transform(root, Scope::Root, Step::NodeGroupColors, output))
         return MigrationStepOutcome::failure("/schemaVersion");

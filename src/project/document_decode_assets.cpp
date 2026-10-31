@@ -3,6 +3,9 @@
 #include <bloom/document/asset.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <limits>
+#include <optional>
+#include <span>
+#include <vector>
 
 namespace bloom::project::detail {
 namespace {
@@ -132,6 +135,118 @@ bool font(const JsonValue& node, DecodeState& state, const std::string& path,
         return false;
     return true;
 }
+bool float64(const JsonValue& node, DecodeState& state, const std::string& path, double& out) {
+    const auto token = node.kind() == JsonValueKind::Number ? node.asNumberToken() : std::nullopt;
+    if (!token) {
+        state.fail(DocumentDecodeError::WrongValueKind, path);
+        return false;
+    }
+    const auto parsed = parseKnownFloat64(*token);
+    if (!parsed) {
+        state.fail(DocumentDecodeError::InvalidFloat64, path);
+        return false;
+    }
+    out = *parsed.value();
+    return true;
+}
+bool trueFlag(const JsonValue& node, DecodeState& state, const std::string& path, bool& out) {
+    if (node.asBoolean() != std::optional<bool>{true}) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    out = true;
+    return true;
+}
+// Document 1.34 (#381): the optional Interpret Footage members after alphaAssociation, each present
+// only when it differs from its default and always in this order.
+constexpr std::array<std::string_view, 10> kFootageInterpretationKeys{
+    "frameRate",  "startTimecode", "alphaMode",   "invertAlpha", "matteColor",
+    "fieldOrder", "deinterlace",   "pixelAspect", "loopCount",   "missingFrames"};
+bool footageInterpretation(const JsonValue& node, const std::span<const JsonValue* const> values,
+                           const std::span<const std::string_view> keys, DecodeState& state,
+                           const std::string& path, document::AssetInterpretation& out) {
+    using namespace document;
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+        const auto key = keys[index];
+        const auto& value = *values[index];
+        const auto choice = [&](std::initializer_list<std::string_view> tokens) -> int {
+            std::string_view text;
+            if (!decodeStringMember(value, state, path, text))
+                return -1;
+            int position = 1;
+            for (const auto token : tokens) {
+                if (token == text)
+                    return position;
+                ++position;
+            }
+            state.fail(DocumentDecodeError::DomainViolation, path);
+            return -1;
+        };
+        if (key == "frameRate") {
+            FrameRate rate = FrameRate::framesPerSecond24();
+            if (!decodeFrameRateValue(value, state, path, rate))
+                return false;
+            out.frameRate = rate;
+        } else if (key == "startTimecode") {
+            constexpr std::array<std::string_view, 2> parts{"start", "dropFrame"};
+            std::vector<const JsonValue*> fields;
+            CompositionTimecode timecode;
+            if (!matchOrderedMembers(value, parts, true, state, path, fields) ||
+                !decodeRationalTimeValue(*fields[0], state, path, timecode.start) ||
+                !fields[1]->asBoolean()) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+            timecode.dropFrame = *fields[1]->asBoolean();
+            out.startTimecode = timecode;
+        } else if (key == "alphaMode") {
+            const auto mode = choice({"ignore", "straight", "premultiplied"});
+            if (mode < 0)
+                return false;
+            out.alphaMode = static_cast<AssetAlphaMode>(mode);
+        } else if (key == "invertAlpha") {
+            if (!trueFlag(value, state, path, out.invertAlpha))
+                return false;
+        } else if (key == "matteColor") {
+            if (value.kind() != JsonValueKind::Array || value.arrayElements().size() != 3) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                if (!float64(value.arrayElements()[channel], state, path, out.matteColor[channel]))
+                    return false;
+            if (out.matteColor == std::array<double, 3>{}) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+        } else if (key == "fieldOrder") {
+            const auto order = choice({"progressive", "upperFirst", "lowerFirst"});
+            if (order < 0)
+                return false;
+            out.fieldOrder = static_cast<AssetFieldOrder>(order);
+        } else if (key == "deinterlace") {
+            if (!trueFlag(value, state, path, out.deinterlace))
+                return false;
+        } else if (key == "pixelAspect") {
+            FrameRate ratio = FrameRate::framesPerSecond24();
+            if (!decodeFrameRateValue(value, state, path, ratio))
+                return false;
+            out.pixelAspect =
+                core::PixelAspectRatio::create(ratio.numerator(), ratio.denominator());
+        } else if (key == "loopCount") {
+            if (!number(value, state, path, out.loopCount) || out.loopCount < 2) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+        } else if (key == "missingFrames") {
+            if (choice({"nothing"}) < 0)
+                return false;
+            out.missingFrames = AssetMissingFrames::Nothing;
+        }
+    }
+    (void)node;
+    return true;
+}
 bool video(const JsonValue& node, DecodeState& state, const std::string& path,
            document::AssetRecord& out) {
     constexpr std::array<std::string_view, 3> keys{"frames", "duration", "streams"};
@@ -158,9 +273,24 @@ bool video(const JsonValue& node, DecodeState& state, const std::string& path,
     for (const auto& value : fields[2]->arrayElements()) {
         document::AssetVideoStream stream;
         std::vector<const JsonValue*> members;
+        // Document 1.34 appends an optional coded pixel aspect ratio.
+        const auto* pixelAspect =
+            state.documentMinor >= 34 ? value.findMember("pixelAspect") : nullptr;
         if (!matchOrderedMembers(value, streamKeys, false, state, path, members) ||
-            value.objectMembers().size() != streamKeys.size())
+            value.objectMembers().size() != streamKeys.size() + (pixelAspect ? 1U : 0U) ||
+            (pixelAspect != nullptr &&
+             value.objectMembers().back().key() != std::string_view("pixelAspect")))
             return false;
+        if (pixelAspect != nullptr) {
+            document::FrameRate ratio = document::FrameRate::framesPerSecond24();
+            if (!decodeFrameRateValue(*pixelAspect, state, path, ratio))
+                return false;
+            const auto created =
+                core::PixelAspectRatio::create(ratio.numerator(), ratio.denominator());
+            if (!created || *created == core::PixelAspectRatio::square())
+                return false;
+            stream.pixelAspect = *created;
+        }
         if (!number(*members[0], state, path, stream.id))
             return false;
         if (!number(*members[1], state, path, stream.kind))
@@ -254,8 +384,12 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
                      : kind == "lut"      ? document::AssetKind::Lut
                      : kind == "video"    ? document::AssetKind::Video
                                           : document::AssetKind::Font;
-        constexpr std::array<std::string_view, 3> interpretationKeys{
-            "colorSpace", "inputColorSpaceId", "alphaAssociation"};
+        std::vector<std::string_view> interpretationKeys{"colorSpace", "inputColorSpaceId",
+                                                         "alphaAssociation"};
+        if (state.documentMinor >= 34 && fields[4]->kind() == JsonValueKind::Object)
+            for (const auto key : kFootageInterpretationKeys)
+                if (fields[4]->findMember(key) != nullptr)
+                    interpretationKeys.push_back(key);
         constexpr std::array<std::string_view, 2> legacyInterpretationKeys{"colorSpace",
                                                                            "alphaAssociation"};
         std::vector<const JsonValue*> interpretation;
@@ -276,9 +410,16 @@ bool decodeAssets(const JsonValue& node, DecodeState& state, const std::string& 
             state.fail(DocumentDecodeError::DomainViolation, path);
             return false;
         }
-        asset.interpretation = {static_cast<document::AssetColorSpace>(space),
-                                std::move(inputColorSpaceId),
-                                static_cast<document::AssetAlphaAssociation>(alpha)};
+        asset.interpretation.colorSpace = static_cast<document::AssetColorSpace>(space);
+        asset.interpretation.inputColorSpaceId = std::move(inputColorSpaceId);
+        asset.interpretation.alphaAssociation = static_cast<document::AssetAlphaAssociation>(alpha);
+        if (currentInterpretation && interpretationKeys.size() > 3 &&
+            !footageInterpretation(*fields[4], std::span(interpretation).subspan(3),
+                                   std::span<const std::string_view>(interpretationKeys).subspan(3),
+                                   state, path, asset.interpretation)) {
+            state.fail(DocumentDecodeError::DomainViolation, path);
+            return false;
+        }
         if (asset.kind == document::AssetKind::Font) {
             const auto* fontNode = value.findMember("font");
             if (fontNode == nullptr || !font(*fontNode, state, path, asset)) {

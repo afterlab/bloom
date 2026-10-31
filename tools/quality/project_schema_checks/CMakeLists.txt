@@ -16,6 +16,7 @@ add_library(
     easing_schema_checks.cpp
     handle_mode_schema_checks.cpp
     export_format_schema_checks.cpp
+    footage_schema_checks.cpp
     video_schema_checks.cpp
     node_layout_schema_checks.cpp
     schema_check_helpers.cpp

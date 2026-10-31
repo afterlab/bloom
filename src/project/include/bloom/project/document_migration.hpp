@@ -231,9 +231,9 @@ migrateVideoColourDefaultV1_27(const JsonValue& root, std::pmr::memory_resource*
 // The export queue (ADR 0033), document 1.28 -> 1.29: appends `project.exportQueue` with an empty
 // `jobs` array and the zero `exportJob`/`exportOutput` allocator high-water members. Its
 // already-migrated guard checks for their presence.
-[[nodiscard]] MigrationStepOutcome
-migrateExportQueueV1_28(const JsonValue& root, std::pmr::memory_resource* resource,
-                        std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateExportQueueV1_28(const JsonValue& root,
+                                                           std::pmr::memory_resource* resource,
+                                                           std::pmr::vector<char>& output);
 // Easing equations and layer flags, document 1.29 -> 1.30: version-only. The new interpolation
 // tokens are new values, and the keyframe `easing` and layer `shy`/`nameFollowsSource` members are
 // optional. Reconstruction of a decoded pre-1.30 document infers nameFollowsSource.
@@ -242,9 +242,9 @@ migrateEasingAndLayerFlagsV1_29(const JsonValue& root, std::pmr::memory_resource
                                 std::pmr::vector<char>& output);
 // Node group colours (task N1), document 1.30 -> 1.31: version-only. A frame's optional `color`
 // member is new and absent means the neutral frame.
-[[nodiscard]] MigrationStepOutcome
-migrateNodeGroupColorsV1_30(const JsonValue& root, std::pmr::memory_resource* resource,
-                            std::pmr::vector<char>& output);
+[[nodiscard]] MigrationStepOutcome migrateNodeGroupColorsV1_30(const JsonValue& root,
+                                                               std::pmr::memory_resource* resource,
+                                                               std::pmr::vector<char>& output);
 // Keyframe handle modes, document 1.31 -> 1.32: version-only. The keyframe `handleMode` member is
 // optional, written only for Aligned and Auto, and absent means Free.
 [[nodiscard]] MigrationStepOutcome
@@ -256,6 +256,13 @@ migrateKeyframeHandleModesV1_31(const JsonValue& root, std::pmr::memory_resource
 [[nodiscard]] MigrationStepOutcome
 migrateWebmExportFormatsV1_32(const JsonValue& root, std::pmr::memory_resource* resource,
                               std::pmr::vector<char>& output);
+// Interpret Footage, document 1.33 -> 1.34 (#381): version-only. Assets gain optional frame rate,
+// start timecode, alpha, field, pixel aspect, loop and missing-frame interpretation members and
+// video streams an optional coded pixel aspect ratio; all are absent at their defaults, which
+// reproduce the 1.33 behavior (sequences keep one member per composition frame).
+[[nodiscard]] MigrationStepOutcome
+migrateFootageInterpretationV1_33(const JsonValue& root, std::pmr::memory_resource* resource,
+                                  std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -289,7 +296,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 29}, {1, 30}, migrateEasingAndLayerFlagsV1_29},
     MigrationStepDescriptor{{1, 30}, {1, 31}, migrateNodeGroupColorsV1_30},
     MigrationStepDescriptor{{1, 31}, {1, 32}, migrateKeyframeHandleModesV1_31},
-    MigrationStepDescriptor{{1, 32}, {1, 33}, migrateWebmExportFormatsV1_32}};
+    MigrationStepDescriptor{{1, 32}, {1, 33}, migrateWebmExportFormatsV1_32},
+    MigrationStepDescriptor{{1, 33}, {1, 34}, migrateFootageInterpretationV1_33}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must
