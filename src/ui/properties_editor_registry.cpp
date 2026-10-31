@@ -761,8 +761,8 @@ void PropertiesEditor::refreshVideoSourceRows(const document::NodeRecord* node,
                                          : &*std::ranges::find(asset->videoStreams, 1U,
                                                                &document::AssetVideoStream::kind);
     if (auto* fieldOrder = findChild<kit::KLabel*>(QStringLiteral("propertiesVideoFieldOrder")))
-        fieldOrder->setText(video ? videoFieldOrderText(video->fieldOrder) : tr("Unavailable"));
+        fieldOrder->setText(video ? footageFieldOrderText(*asset) : tr("Unavailable"));
     if (auto* timecode = findChild<kit::KLabel*>(QStringLiteral("propertiesVideoTimecode")))
-        timecode->setText(video ? videoTimecodeText(*video) : tr("Unavailable"));
+        timecode->setText(video ? footageTimecodeText(*asset) : tr("Unavailable"));
 }
 } // namespace bloom::ui

@@ -5,6 +5,7 @@
 #include <QSignalBlocker>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <limits>
 #include <optional>
@@ -57,6 +58,29 @@ QString videoTimecodeText(const document::AssetVideoStream& stream) {
     return QObject::tr("%1 (%2)").arg(QString::fromStdString(stream.timecode),
                                       stream.timecodeType == 2 ? QObject::tr("drop-frame")
                                                                : QObject::tr("non-drop"));
+}
+QString footageTimecodeText(const document::AssetRecord& asset) {
+    const auto* stream = [&]() -> const document::AssetVideoStream* {
+        const auto found = std::ranges::find(asset.videoStreams, 1U, &document::AssetVideoStream::kind);
+        return found == asset.videoStreams.end() ? nullptr : &*found;
+    }();
+    if (!asset.interpretation.startTimecode)
+        return stream ? videoTimecodeText(*stream) : QObject::tr("None");
+    const auto rate =
+        document::footageFrameRate(asset).value_or(document::FrameRate::framesPerSecond24());
+    const auto& start = *asset.interpretation.startTimecode;
+    const auto frame = static_cast<std::uint64_t>(
+        std::max<std::int64_t>(0, timecodeStartFrame(rate, {start.start, false})));
+    return QObject::tr("%1 (Interpret Footage)")
+        .arg(formatTimelineFrameLabel(frame, rate, true, {core::RationalTime{}, start.dropFrame}));
+}
+QString footageFieldOrderText(const document::AssetRecord& asset) {
+    const auto text = videoFieldOrderText(document::footageFieldOrder(asset));
+    if (asset.interpretation.fieldOrder == document::AssetFieldOrder::File &&
+        !asset.interpretation.deinterlace)
+        return text;
+    return QObject::tr("%1 (Interpret Footage%2)")
+        .arg(text, asset.interpretation.deinterlace ? QObject::tr(", deinterlaced") : QString{});
 }
 QString imageAssetDisplayName(const document::AssetRecord& asset) {
     return QString::fromStdString(asset.name);

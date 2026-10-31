@@ -18,6 +18,10 @@ QString imageRangeText(const document::AssetRecord* asset);
 // Document 1.25 video source metadata as shown in Properties and the Assets tooltip.
 QString videoFieldOrderText(std::uint32_t fieldOrder);
 QString videoTimecodeText(const document::AssetVideoStream& stream);
+// #381: the asset's start timecode and field order as Interpret Footage reads them; an override
+// is marked.
+QString footageTimecodeText(const document::AssetRecord& asset);
+QString footageFieldOrderText(const document::AssetRecord& asset);
 QString imageAssetDisplayName(const document::AssetRecord& asset);
 QString mediaLayerDisplayName(const CompositionSession& session, document::LayerId id);
 void refreshVideoAssetSelector(kit::KDropdown& selector, const CompositionSession& session,
