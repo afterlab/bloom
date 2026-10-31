@@ -130,8 +130,12 @@ std::string_view footageInterpretationIssue(const AssetInterpretation& value) {
         return "Invalid alpha interpretation";
     if (value.fieldOrder > AssetFieldOrder::LowerFirst)
         return "Invalid field order";
-    if (value.missingFrames > AssetMissingFrames::Nothing)
+    if (value.missingFrames > AssetMissingFrames::Skip)
         return "Invalid missing-frame interpretation";
+    if (value.stillDuration &&
+        (*value.stillDuration <= core::RationalTime{} ||
+         *value.stillDuration > core::RationalTime::fromInteger(kMaxAssetStillDurationSeconds)))
+        return "A still's duration must be longer than 0 and at most 24 hours";
     if (value.frameRate && !isValidFootageFrameRate(*value.frameRate))
         return "The frame rate must be between 0.01 and 1000 frames per second";
     if (value.pixelAspect && !isValidFootagePixelAspect(*value.pixelAspect))
@@ -154,6 +158,8 @@ std::string_view footageInterpretationKindIssue(const AssetKind kind,
         return "Only a video or an image sequence has a frame rate, a start timecode or a loop";
     if (kind != AssetKind::Sequence && value.missingFrames != neutral.missingFrames)
         return "Only an image sequence has missing frames";
+    if (kind != AssetKind::Image && value.stillDuration)
+        return "Only a still has a still duration";
     if (!timed(kind) && (value.fieldOrder != neutral.fieldOrder || value.deinterlace))
         return "Only a video or an image sequence has fields";
     if (!visual(kind) && (value.alphaMode != neutral.alphaMode || value.invertAlpha ||
@@ -184,14 +190,37 @@ std::optional<FrameRate> footageFrameRate(const AssetRecord& asset) {
 std::uint64_t footageFrameCount(const AssetRecord& asset) {
     if (asset.kind == AssetKind::Video)
         return asset.frames;
+    if (asset.kind == AssetKind::Sequence &&
+        asset.interpretation.missingFrames == AssetMissingFrames::Skip)
+        return asset.manifest.members.size();
     if (asset.kind == AssetKind::Sequence && asset.manifest.last >= asset.manifest.first)
         return static_cast<std::uint64_t>(asset.manifest.last) -
                static_cast<std::uint64_t>(asset.manifest.first) + 1;
     return 0;
 }
 
+FootageSequenceFrame footageSequenceFrame(const AssetRecord& asset, const std::uint64_t offset) {
+    const auto& members = asset.manifest.members;
+    if (members.empty())
+        return {};
+    if (asset.interpretation.missingFrames == AssetMissingFrames::Skip) {
+        const auto& member = members[std::min<std::uint64_t>(offset, members.size() - 1)];
+        return {&member, member.frame};
+    }
+    const auto wanted =
+        static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
+    auto found = std::ranges::upper_bound(members, wanted, {}, &AssetSequenceMember::frame);
+    if (found != members.begin())
+        --found;
+    if (found->frame != wanted && asset.interpretation.missingFrames == AssetMissingFrames::Nothing)
+        return {nullptr, wanted};
+    return {&*found, wanted};
+}
+
 std::optional<core::RationalTime> footageDuration(const AssetRecord& asset,
                                                   const FrameRate compositionRate) {
+    if (asset.kind == AssetKind::Image)
+        return asset.interpretation.stillDuration;
     const auto frames = footageFrameCount(asset);
     if (frames == 0)
         return std::nullopt;

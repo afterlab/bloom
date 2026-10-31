@@ -74,7 +74,12 @@ emitFootageInterpretation(EmitState& state,
                                  !state.ok(writer.integerValue(value.loopCount))))
         return false;
     if (value.missingFrames != AssetMissingFrames::HoldPrevious &&
-        !token("missingFrames", "nothing"))
+        !token("missingFrames",
+               value.missingFrames == AssetMissingFrames::Skip ? "skip" : "nothing"))
+        return false;
+    if (value.stillDuration && (!state.ok(writer.memberName("stillDuration")) ||
+                                !emitRational(state, value.stillDuration->numerator(),
+                                              value.stillDuration->denominator())))
         return false;
     return true;
 }
@@ -133,7 +138,16 @@ emitFootageInterpretation(EmitState& state,
             if (!state.ok(writer.stringValue(text.view())))
                 return false;
         }
-        if (!state.ok(writer.endArray()) || !state.ok(writer.endObject()))
+        if (!state.ok(writer.endArray()))
+            return false;
+        // Document 1.34 (#381): the imported frame range, only when the import was limited.
+        if (asset.manifest.range &&
+            (!state.ok(writer.memberName("range")) || !state.ok(writer.beginObject()) ||
+             !emitNamedSigned(state, "first", asset.manifest.range->first) ||
+             !emitNamedSigned(state, "last", asset.manifest.range->last) ||
+             !state.ok(writer.endObject())))
+            return false;
+        if (!state.ok(writer.endObject()))
             return false;
         if (asset.kind == bloom::document::AssetKind::Font) {
             if (!state.ok(writer.memberName("font")) || !state.ok(writer.beginObject()) ||

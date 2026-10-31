@@ -4,8 +4,9 @@
 #include <string>
 
 namespace bloom::quality {
-// Document 1.34 (#381) adds the optional Interpret Footage members to an asset's interpretation and
-// an optional coded pixel aspect ratio to a video stream. Removing exactly those, restoring the
+// Document 1.34 (#381) adds the optional Interpret Footage members to an asset's interpretation, an
+// optional imported frame range to a sequence manifest and an optional coded pixel aspect ratio to
+// a video stream. Removing exactly those, restoring the
 // inline 1.11 interpretation and the 1.25 stream reference and renaming the version must give back
 // the 1.33 artifact exactly.
 namespace {
@@ -69,12 +70,26 @@ void validateDocumentSchemaV1_34(const json::Value& schema) {
              {"deinterlace", R"({"const":true})"},
              {"pixelAspect", ratio},
              {"loopCount", R"({"type":"integer","minimum":2,"maximum":1000})"},
-             {"missingFrames", R"({"enum":["nothing"]})"}}) {
+             {"missingFrames", R"({"enum":["nothing","skip"]})"},
+             {"stillDuration", R"({"$ref":"#/$defs/rationalTime"})"}}) {
         requireExact(members.at(key), expected, "1.34 interpretation member");
         erase(members, key);
     }
     asset.at("interpretation") = interpretation;
     erase(defs, "assetInterpretation-1.34");
+    requireExact(asset.at("manifest"), R"({"$ref":"#/$defs/assetManifest-1.34"})",
+                 "1.34 asset manifest");
+    auto manifestDef = defs.at("assetManifest-1.34");
+    requireExact(manifestDef.at("properties").at("range"),
+                 R"({"type":"object","required":["first","last"],"properties":{)"
+                 R"("first":{"$ref":"#/$defs/signed64Decimal"},)"
+                 R"("last":{"$ref":"#/$defs/signed64Decimal"}},"unevaluatedProperties":false})",
+                 "1.34 manifest frame range");
+    erase(manifestDef.at("properties"), "range");
+    if (!json::exactEqual(manifestDef, defs.at("assetManifest-1.11")))
+        fail("assetManifest-1.34 is not assetManifest-1.11 with a frame range");
+    asset.at("manifest") = json::parse(R"({"$ref":"#/$defs/assetManifest-1.11"})");
+    erase(defs, "assetManifest-1.34");
     auto& streams = defs.at("video-1.17").at("properties").at("streams");
     requireExact(streams.at("items"), R"({"$ref":"#/$defs/videoStream-1.34"})",
                  "1.34 video stream");

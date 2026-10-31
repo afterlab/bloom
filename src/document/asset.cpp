@@ -80,6 +80,9 @@ ValidationResult AssetRecord::validate() const {
         result.add(ValidationCode::InvalidValue, "locator", "Invalid asset locator");
     if (kind > AssetKind::Lut)
         result.add(ValidationCode::InvalidValue, "kind", "Invalid asset kind");
+    if (kind != AssetKind::Sequence && manifest.range)
+        result.add(ValidationCode::InvalidValue, "manifest.range",
+                   "Only an image sequence has an imported frame range");
     if (kind == AssetKind::Lut) {
         if (locator.kind != "file" || width != 0 || height != 0 || !manifest.members.empty() ||
             !manifest.gaps.empty() || !manifest.pattern.empty() || !videoStreams.empty())
@@ -219,6 +222,11 @@ ValidationResult AssetRecord::validate() const {
             gapIndex != manifest.gaps.size())
             result.add(ValidationCode::InvalidValue, "manifest.gaps",
                        "Sequence gaps disagree with members");
+        if (manifest.range &&
+            (manifest.range->first < 0 || manifest.range->last < manifest.range->first ||
+             manifest.first < manifest.range->first || manifest.last > manifest.range->last))
+            result.add(ValidationCode::InvalidValue, "manifest.range",
+                       "The sequence's frames must lie within its imported frame range");
     } else if (kind == AssetKind::Audio) {
         if (!manifest.members.empty() || !manifest.gaps.empty() || !manifest.pattern.empty())
             result.add(ValidationCode::InvalidValue, "manifest",

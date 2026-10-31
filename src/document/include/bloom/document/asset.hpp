@@ -25,9 +25,13 @@ inline constexpr std::size_t kMaxAssetInputColorSpaceIdBytes = 256;
 enum class AssetAlphaMode : std::uint8_t { Guess, Ignore, Straight, Premultiplied };
 // The field order the asset is read with. File uses the order captured at import.
 enum class AssetFieldOrder : std::uint8_t { File, Progressive, UpperFirst, LowerFirst };
-// What a sequence shows for a frame its manifest does not have.
-enum class AssetMissingFrames : std::uint8_t { HoldPrevious, Nothing };
+// What a sequence shows for a frame its manifest does not have. Skip plays the frames it has back
+// to back, as if the missing ones had never been numbered (After Effects' "Force alphabetical
+// order"), so the sequence is as long as the frames it holds.
+enum class AssetMissingFrames : std::uint8_t { HoldPrevious, Nothing, Skip };
 inline constexpr std::uint32_t kMaxAssetLoopCount = 1000;
+// The longest still duration an import gives a still: 24 hours.
+inline constexpr std::int64_t kMaxAssetStillDurationSeconds = 86400;
 struct AssetInterpretation {
     AssetColorSpace colorSpace = AssetColorSpace::Auto;
     // Empty means Auto. Non-empty values are exact ids from the qualified project OCIO config.
@@ -50,6 +54,9 @@ struct AssetInterpretation {
     // The footage plays this many times end to end; its natural length is multiplied.
     std::uint32_t loopCount = 1;
     AssetMissingFrames missingFrames = AssetMissingFrames::HoldPrevious;
+    // A still's length, from the Import preference "Still duration" (absent: the composition's
+    // length, how Bloom has always placed a still). A layer made from the still ends there.
+    std::optional<core::RationalTime> stillDuration;
     friend bool operator==(const AssetInterpretation&, const AssetInterpretation&) = default;
 };
 // The validation of the 1.34 Interpret Footage members, shared by AssetRecord::validate() and the
@@ -92,6 +99,12 @@ struct AssetSequenceMember {
     core::Sha256Digest contentDigest;
     friend bool operator==(const AssetSequenceMember&, const AssetSequenceMember&) = default;
 };
+// The numbered frames an import was limited to (document 1.34): Reload Footage reads only these.
+struct AssetSequenceRange {
+    std::int64_t first = 0;
+    std::int64_t last = 0;
+    friend bool operator==(const AssetSequenceRange&, const AssetSequenceRange&) = default;
+};
 struct AssetSequenceManifest {
     std::string pattern;
     std::uint32_t padding = 0;
@@ -99,6 +112,8 @@ struct AssetSequenceManifest {
     std::int64_t last = 0;
     std::vector<AssetSequenceMember> members;
     std::vector<std::int64_t> gaps;
+    // Absent: every numbered file of the sequence.
+    std::optional<AssetSequenceRange> range;
     [[nodiscard]] bool hasGaps() const noexcept {
         if (!gaps.empty())
             return true;
@@ -177,10 +192,20 @@ struct AssetRecord {
 // The rate the asset's frames advance at: a video's conformed rate or file rate, a sequence's
 // assumed rate. Nullopt for a sequence that matches the composition and for non-timed assets.
 [[nodiscard]] std::optional<FrameRate> footageFrameRate(const AssetRecord& asset);
-// Frames in one pass of timed footage (sequence first..last, video frames); 0 otherwise.
+// Frames in one pass of timed footage (sequence first..last, or its members when it skips missing
+// frames; video frames); 0 otherwise.
 [[nodiscard]] std::uint64_t footageFrameCount(const AssetRecord& asset);
+// The sequence member frame `offset` (0-based, within footageFrameCount) shows: the member itself,
+// the one a gap holds, or none for a gap that shows nothing. `frame` is the numbered frame wanted.
+struct FootageSequenceFrame final {
+    const AssetSequenceMember* member = nullptr;
+    std::int64_t frame = 0;
+};
+[[nodiscard]] FootageSequenceFrame footageSequenceFrame(const AssetRecord& asset,
+                                                        std::uint64_t offset);
 // The natural length of timed footage including Loop, at `compositionRate` for a sequence that
-// matches the composition. Nullopt for stills, audio and anything without a length.
+// matches the composition, or a still's duration. Nullopt for a still without one, audio and
+// anything without a length.
 [[nodiscard]] std::optional<core::RationalTime> footageDuration(const AssetRecord& asset,
                                                                 FrameRate compositionRate);
 // The field order in the stream numbering (0 unknown, 1 progressive, 2 top first, 3 bottom first,

@@ -3,7 +3,7 @@
     "$id": "urn:kinetik:bloom:schema:project-document:1.34",
     "title": "Bloom Project Document 1.34",
     "$comment":
-        "Schema 1.34 adds the Interpret Footage asset members (frame rate, start timecode, alpha, fields, pixel aspect ratio, loop and missing frames) and a video stream's coded pixel aspect ratio, all optional. The document shape is otherwise 1.33's.",
+        "Schema 1.34 adds the Interpret Footage asset members (frame rate, start timecode, alpha, fields, pixel aspect ratio, loop, missing frames and a still's duration), a sequence's imported frame range and a video stream's coded pixel aspect ratio, all optional. The document shape is otherwise 1.33's.",
     "type": "object",
     "required": [
         "schemaVersion",
@@ -2296,6 +2296,65 @@
             },
             "unevaluatedProperties": false
         },
+        "assetManifest-1.34": {
+            "type": "object",
+            "required": [
+                "pattern",
+                "padding",
+                "first",
+                "last",
+                "members",
+                "gaps"
+            ],
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "maxLength": 4096
+                },
+                "padding": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                },
+                "first": {
+                    "$ref": "#/$defs/signed64Decimal"
+                },
+                "last": {
+                    "$ref": "#/$defs/signed64Decimal"
+                },
+                "members": {
+                    "type": "array",
+                    "maxItems": 100000,
+                    "items": {
+                        "$ref": "#/$defs/assetMember-1.11"
+                    }
+                },
+                "gaps": {
+                    "type": "array",
+                    "maxItems": 100000,
+                    "items": {
+                        "$ref": "#/$defs/signed64Decimal"
+                    }
+                },
+                "range": {
+                    "type": "object",
+                    "required": [
+                        "first",
+                        "last"
+                    ],
+                    "properties": {
+                        "first": {
+                            "$ref": "#/$defs/signed64Decimal"
+                        },
+                        "last": {
+                            "$ref": "#/$defs/signed64Decimal"
+                        }
+                    },
+                    "unevaluatedProperties": false
+                }
+            },
+            "unevaluatedProperties": false
+        },
         "asset-1.11": {
             "type": "object",
             "required": [
@@ -2346,7 +2405,7 @@
                     "maximum": 16384
                 },
                 "manifest": {
-                    "$ref": "#/$defs/assetManifest-1.11"
+                    "$ref": "#/$defs/assetManifest-1.34"
                 },
                 "audio": {
                     "$ref": "#/$defs/audio-1.11"
@@ -2523,8 +2582,12 @@
                 },
                 "missingFrames": {
                     "enum": [
-                        "nothing"
+                        "nothing",
+                        "skip"
                     ]
+                },
+                "stillDuration": {
+                    "$ref": "#/$defs/rationalTime"
                 }
             },
             "unevaluatedProperties": false

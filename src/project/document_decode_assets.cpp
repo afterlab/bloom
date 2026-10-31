@@ -69,8 +69,11 @@ bool locator(const JsonValue& node, DecodeState& state, const std::string& path,
 }
 bool manifest(const JsonValue& node, DecodeState& state, const std::string& path,
               document::AssetSequenceManifest& out) {
-    constexpr std::array<std::string_view, 6> keys{"pattern", "padding", "first",
-                                                   "last",    "members", "gaps"};
+    // Document 1.34 (#381) appends the optional imported frame range.
+    std::vector<std::string_view> keys{"pattern", "padding", "first", "last", "members", "gaps"};
+    if (state.documentMinor >= 34 && node.kind() == JsonValueKind::Object &&
+        node.findMember("range") != nullptr)
+        keys.emplace_back("range");
     std::vector<const JsonValue*> members;
     if (!matchOrderedMembers(node, keys, false, state, path, members) ||
         !text(*members[0], state, path, out.pattern) ||
@@ -100,6 +103,16 @@ bool manifest(const JsonValue& node, DecodeState& state, const std::string& path
         if (!integer(value, state, path, frame))
             return false;
         out.gaps.push_back(frame);
+    }
+    if (keys.size() > 6) {
+        constexpr std::array<std::string_view, 2> rangeKeys{"first", "last"};
+        std::vector<const JsonValue*> bounds;
+        document::AssetSequenceRange range;
+        if (!matchOrderedMembers(*members[6], rangeKeys, false, state, path, bounds) ||
+            !integer(*bounds[0], state, path, range.first) ||
+            !integer(*bounds[1], state, path, range.last))
+            return false;
+        out.range = range;
     }
     return true;
 }
@@ -159,9 +172,9 @@ bool trueFlag(const JsonValue& node, DecodeState& state, const std::string& path
 }
 // Document 1.34 (#381): the optional Interpret Footage members after alphaAssociation, each present
 // only when it differs from its default and always in this order.
-constexpr std::array<std::string_view, 10> kFootageInterpretationKeys{
-    "frameRate",  "startTimecode", "alphaMode",   "invertAlpha", "matteColor",
-    "fieldOrder", "deinterlace",   "pixelAspect", "loopCount",   "missingFrames"};
+constexpr std::array<std::string_view, 11> kFootageInterpretationKeys{
+    "frameRate",   "startTimecode", "alphaMode", "invertAlpha",   "matteColor",   "fieldOrder",
+    "deinterlace", "pixelAspect",   "loopCount", "missingFrames", "stillDuration"};
 bool footageInterpretation(const JsonValue& node, const std::span<const JsonValue* const> values,
                            const std::span<const std::string_view> keys, DecodeState& state,
                            const std::string& path, document::AssetInterpretation& out) {
@@ -239,9 +252,15 @@ bool footageInterpretation(const JsonValue& node, const std::span<const JsonValu
                 return false;
             }
         } else if (key == "missingFrames") {
-            if (choice({"nothing"}) < 0)
+            const auto missing = choice({"nothing", "skip"});
+            if (missing < 0)
                 return false;
-            out.missingFrames = AssetMissingFrames::Nothing;
+            out.missingFrames = static_cast<AssetMissingFrames>(missing);
+        } else if (key == "stillDuration") {
+            core::RationalTime duration;
+            if (!decodeRationalTimeValue(value, state, path, duration))
+                return false;
+            out.stillDuration = duration;
         }
     }
     (void)node;
