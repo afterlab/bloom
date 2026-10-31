@@ -297,7 +297,7 @@ search or inline rename field.
 | View > Expand All / Collapse All | Expands or collapses every folder |
 | Add > New Composition…, footer New Composition | Opens the Composition dialog in create mode and adds one composition, filed in the selected folder (see "Composition Dialog" below) |
 | Add > New Folder, footer New Folder | Creates a folder in the selected folder and starts its inline rename |
-| Add > Import…, footer Import, File > Import | Imports into the selected folder: a selected folder, or the folder of the selected item; the root with nothing selected |
+| Add > Import…, footer Import, File > Import | Imports into the selected folder: a selected folder, or the folder of the selected item; the root with nothing selected. The Import Media dialog's options under Files of type (#381): sequence or single images, Skip missing frames, Only frames *first* to *last*, Create a composition (not offered when the import adds layers); the check boxes are remembered, the range is not |
 | Select > All / None | Selects all visible rows or clears the selection |
 | Click, Shift-click, Ctrl-click; Up/Down/Left/Right, Home/End | Selects one row, a range or a set; arrows move and Left/Right collapse or expand folders |
 | F2 or Return | Renames the current row in place (asset, composition or folder); Return, Escape and clicking away commit |

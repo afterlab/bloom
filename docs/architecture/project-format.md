@@ -1,7 +1,7 @@
 # Bloom Project Format
 
 The current document schema is 1.34. It adds the optional Interpret Footage members of an asset's
-interpretation and a video stream's coded pixel aspect ratio (see "Interpret Footage In Document
+interpretation, a sequence's imported frame range and a video stream's coded pixel aspect ratio (see "Interpret Footage In Document
 1.34"). Document 1.33 added the export formats `vp9-webm`, `av1-webm` and `av1-mp4` and their codec
 profiles (see "Export Formats In Document 1.33"). Document 1.32 added the optional
 keyframe member `handleMode` (see "Keyframe Handle Modes In Document 1.32"). Document 1.31 added the optional node group `color` (see "Node Group
@@ -1597,18 +1597,28 @@ differs from its default, so an asset the artist never interpreted is written ex
 | `deinterlace` | `true` | not deinterlaced |
 | `pixelAspect` | `{numerator, denominator}` in [1/100, 100] | the file's ratio |
 | `loopCount` | integer 2 to 1000: the footage plays this many times end to end | 1 |
-| `missingFrames` | `nothing`: a frame the sequence manifest lacks shows nothing | hold the previous frame |
+| `missingFrames` | `nothing`: a frame the sequence manifest lacks shows nothing; `skip`: the sequence plays the frames it has back to back, so it is as long as its members | hold the previous frame |
+| `stillDuration` | rational time, more than 0 and at most 24 hours: a still's length, from the Import preference **Still duration**; a layer made from the still ends there and New Composition from it is that long | the composition's length |
+
+A sequence's `manifest` gains an optional trailing `range` (`{first, last}`, signed decimal
+frame numbers, `first <= last`): the numbered frames an import was limited to (the Import option
+**Only frames**). Every member lies within it, and Reload Footage and Relink read only those frames
+again; absent means every numbered file of the sequence.
 
 A video stream gains an optional trailing `pixelAspect` (`{numerator, denominator}`, never 1/1):
 the coded sample aspect ratio the decoder resamples to square pixels, captured at import (provider
-schema 5); absent means square. A still has no frame rate, start timecode, fields or loop, and only
-a sequence has missing frames; validation refuses them on other kinds. A member written at its
-default, an unknown token, or any 1.34 member in a document claiming an older minor is refused.
+schema 5); absent means square. A still has no frame rate, start timecode, fields or loop, only
+a sequence has missing frames and a frame range, and only a still has a still duration; validation
+refuses them on other kinds. A member written at its default or an unknown token is refused. A
+document claiming an older minor cannot carry a stream `pixelAspect`; trailing interpretation and
+manifest members there are kept aside as unknown members and not read, so it opens with the
+defaults.
 
 The `1.33` → `1.34` DOM step `migrateFootageInterpretationV1_33` only advances the version: every
 older asset opens with the defaults, which reproduce 1.33 playback exactly (a sequence keeps one
-member per composition frame). The schema artifacts reference `assetInterpretation-1.34` and
-`videoStream-1.34`; the schema check restores the 1.33 artifact from them exactly.
+member per composition frame). The schema artifacts reference `assetInterpretation-1.34`,
+`assetManifest-1.34` and `videoStream-1.34`; the schema check restores the 1.33 artifact from them
+exactly.
 
 ## Export Formats In Document 1.33
 

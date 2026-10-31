@@ -59,7 +59,8 @@ a child layer parented to it is not stretched.
 longer.
 
 **Missing Frames** (image sequences). A frame missing from the sequence can **hold the previous
-frame**, as before, or **show nothing**.
+frame**, as before, or **show nothing**; **Skip them** plays the frames the sequence has back to
+back, so a sequence of frames 1, 2 and 4 is three frames long.
 
 **Input Color.** **Auto** reads the file's color tags (for untagged video, the assumption Bloom
 shows in the note); the space Auto chose is named in the menu. Choose **Preserve RGB** to bring the
@@ -68,10 +69,40 @@ color configuration. Camera log spaces (S-Log3, LogC3, LogC4, V-Log, Log3G10, RE
 C-Log3 and Apple Log) are always offered, even when the configuration does not list them. A
 source node's own input color in Properties still overrides the asset's.
 
+## Import options and preferences
+
+The **Import Media** dialog sets how footage is first read, under **Files of type**:
+
+- **Import numbered images as a sequence** (on by default). Off, each numbered file you chose is
+  imported as its own still.
+- **Skip missing frames** gives a new sequence **Missing Frames: Skip them**.
+- **Only frames** *first* **to** *last* reads only those numbered frames of each sequence; the rest
+  are not read at all. The range stays with the sequence: **Reload Footage** and **Relink** read the
+  same frames again. A range holding one frame imports that frame as a still.
+- **Create a composition** makes a composition from the imported footage, as **New Composition from
+  Selection** does, and opens it.
+
+The **Import** page of Preferences sets what new footage starts with: the **Sequence frame rate** a
+new sequence assumes (24 fps unless you change it; **Match composition** plays one image per
+composition frame) and the **Still duration** a new still lasts (the composition's length unless
+you choose a fixed length; a layer made from the still then ends there, and a composition made from
+it is that long). These are your preferences, not part of a project: Bloom writes them into each
+new asset when it imports, so footage keeps its interpretation wherever the project is opened, and
+sequences already in a project keep playing as they did. Reload Footage and Relink keep a still a
+still even when its file is numbered.
+
+The Assets thumbnails show the interpretation: **Ignore** and **Invert alpha** (and a premultiplied
+matte color) the way a layer renders them, and the pixel aspect ratio as the thumbnail's shape.
+
 ## From an agent or a script
 
 `bloom.asset.set-interpretation` sets the same members (see [Using Bloom from an agent](mcp.md)),
-and `query` with `kind=assets` returns each footage asset's interpretation.
+including `missingFrames` `skip` and a still's `stillDuration` (`compositionLength: true` restores
+the composition's length), and `query` with `kind=assets` returns each footage asset's
+interpretation. `bloom.asset.import` takes the import options as `asSequence`, `firstFrame` with
+`lastFrame` and `skipMissingFrames`, and the preferences as `sequenceFrameRate` (omit it to match
+the composition) and `stillDuration`; an agent then makes a composition with
+`bloom.composition.add-from-assets` from the asset IDs the import outputs.
 
 ## Platforms
 

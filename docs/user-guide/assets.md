@@ -45,6 +45,22 @@ Dropping a folder imports every image, image sequence, video, audio file and LUT
 inside it and its subfolders; other files and hidden files are left out. Imports keep stable
 identities, so organizing them preserves the nodes and layers that already use them.
 
+### Import options
+
+The **Import Media** dialog has its options under **Files of type** (see
+[Interpret Footage](interpret-footage.md#import-options-and-preferences)):
+
+- **Import numbered images as a sequence** (on by default) makes the numbered images of one name an
+  image sequence; turn it off to import each file you chose as its own still.
+- **Skip missing frames** makes a new sequence play the frames it has back to back.
+- **Only frames** *first* **to** *last* imports only those numbered frames of each sequence.
+- **Create a composition** makes a composition from what was imported and opens it (an import that
+  already adds layers, such as **Add > Import and Add…**, does not offer it).
+
+Bloom remembers the check boxes for the next import. Dropped files, folders and scripted imports use
+the defaults. Every import gives new sequences and stills the frame rate and duration set on the
+**Import** page of Preferences.
+
 ### Import progress
 
 An import that takes longer than a moment shows its progress. First Bloom finds what to import:
