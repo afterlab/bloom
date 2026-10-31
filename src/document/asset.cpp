@@ -109,6 +109,11 @@ ValidationResult AssetRecord::validate() const {
         interpretation.inputColorSpaceId.find('\0') != std::string::npos ||
         interpretation.alphaAssociation > AssetAlphaAssociation::Premultiplied)
         result.add(ValidationCode::InvalidValue, "interpretation", "Invalid image interpretation");
+    if (const auto issue = footageInterpretationIssue(interpretation); !issue.empty())
+        result.add(ValidationCode::InvalidValue, "interpretation", std::string(issue));
+    else if (const auto kindIssue = footageInterpretationKindIssue(kind, interpretation);
+             !kindIssue.empty())
+        result.add(ValidationCode::InvalidValue, "interpretation", std::string(kindIssue));
     if (kind == AssetKind::Video) {
         if (videoStreams.empty() || videoStreams.size() > 256 || duration <= core::RationalTime{} ||
             frames == 0 || frames > 16777216 || !manifest.members.empty() ||
@@ -132,7 +137,8 @@ ValidationResult AssetRecord::validate() const {
                 stream.primaries < -1 || stream.primaries > 255 || stream.transfer < -1 ||
                 stream.transfer > 255 || stream.matrix < -1 || stream.matrix > 255 ||
                 stream.range < -1 || stream.range > 2 || stream.fieldOrder > 5 ||
-                stream.timecodeType > 2 || (stream.timecodeType == 0) != stream.timecode.empty())
+                stream.timecodeType > 2 || (stream.timecodeType == 0) != stream.timecode.empty() ||
+                !isValidFootagePixelAspect(stream.pixelAspect))
                 result.add(ValidationCode::InvalidValue, "video.streams",
                            "Invalid stream metadata");
             if (stream.kind == 2 && (stream.sampleRate == 0 || stream.channelLayout.empty()))

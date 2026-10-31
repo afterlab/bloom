@@ -1,11 +1,15 @@
 #pragma once
 
+#include <array>
+#include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/core/sha256.hpp>
+#include <bloom/document/composition_settings.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,13 +19,48 @@ enum class AssetKind : std::uint8_t { Image, Sequence, Audio, Font, Video, Lut }
 enum class AssetColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class AssetAlphaAssociation : std::uint8_t { Straight, Premultiplied };
 inline constexpr std::size_t kMaxAssetInputColorSpaceIdBytes = 256;
+// Interpret Footage (#381, document 1.34). How the asset's alpha channel is read. Guess follows the
+// association the file declared at import (`alphaAssociation`), and leaves each image node's own
+// Premultiply switch in charge; the explicit modes apply to every use of the asset.
+enum class AssetAlphaMode : std::uint8_t { Guess, Ignore, Straight, Premultiplied };
+// The field order the asset is read with. File uses the order captured at import.
+enum class AssetFieldOrder : std::uint8_t { File, Progressive, UpperFirst, LowerFirst };
+// What a sequence shows for a frame its manifest does not have.
+enum class AssetMissingFrames : std::uint8_t { HoldPrevious, Nothing };
+inline constexpr std::uint32_t kMaxAssetLoopCount = 1000;
 struct AssetInterpretation {
     AssetColorSpace colorSpace = AssetColorSpace::Auto;
     // Empty means Auto. Non-empty values are exact ids from the qualified project OCIO config.
     std::string inputColorSpaceId;
+    // The association the file declared at import (what Guess follows).
     AssetAlphaAssociation alphaAssociation = AssetAlphaAssociation::Straight;
+    // Document 1.34. A sequence's assumed rate (absent: one member per composition frame, the
+    // pre-1.34 timing) or a video's conformed rate (absent: the file's rate).
+    std::optional<FrameRate> frameRate;
+    // Absent: the source's own start timecode.
+    std::optional<CompositionTimecode> startTimecode;
+    AssetAlphaMode alphaMode = AssetAlphaMode::Guess;
+    bool invertAlpha = false;
+    // The colour a Premultiplied alpha was matted against, in the file's own encoding, [0, 1].
+    std::array<double, 3> matteColor{0.0, 0.0, 0.0};
+    AssetFieldOrder fieldOrder = AssetFieldOrder::File;
+    bool deinterlace = false;
+    // Absent: the file's pixel aspect ratio.
+    std::optional<core::PixelAspectRatio> pixelAspect;
+    // The footage plays this many times end to end; its natural length is multiplied.
+    std::uint32_t loopCount = 1;
+    AssetMissingFrames missingFrames = AssetMissingFrames::HoldPrevious;
     friend bool operator==(const AssetInterpretation&, const AssetInterpretation&) = default;
 };
+// The validation of the 1.34 Interpret Footage members, shared by AssetRecord::validate() and the
+// commands that edit them. Empty when valid.
+[[nodiscard]] std::string_view footageInterpretationIssue(const AssetInterpretation& value);
+// The 1.34 members that only some asset kinds may set (a frame rate on a still is refused).
+[[nodiscard]] std::string_view footageInterpretationKindIssue(AssetKind kind,
+                                                              const AssetInterpretation& value);
+// The frame rate and pixel aspect bounds an Interpret Footage override may use.
+[[nodiscard]] bool isValidFootageFrameRate(FrameRate rate) noexcept;
+[[nodiscard]] bool isValidFootagePixelAspect(core::PixelAspectRatio ratio) noexcept;
 struct EffectiveAssetInputColor final {
     AssetColorSpace colorSpace = AssetColorSpace::Auto;
     std::string inputColorSpaceId;
@@ -90,6 +129,9 @@ struct AssetVideoStream {
     // 2 drop-frame), captured at import and shown in Assets and Properties.
     std::uint32_t fieldOrder = 0, timecodeType = 0;
     std::vector<std::string> channelLayout;
+    // Document 1.34. The coded pixel aspect ratio the decoder already resamples to square pixels
+    // (width above is the display width); square when the file declares none or predates 1.34.
+    core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
     friend bool operator==(const AssetVideoStream&, const AssetVideoStream&) = default;
 };
 // SMPTE timecode type from its text: drop-frame timecode separates frames with ';' (or '.'),
@@ -127,6 +169,29 @@ struct AssetRecord {
     [[nodiscard]] ValidationResult validate() const;
     friend bool operator==(const AssetRecord&, const AssetRecord&) = default;
 };
+// Interpret Footage (#381) resolution, shared by the runtime, commands and every UI surface so a
+// visible choice and the rendered result cannot disagree.
+//
+// The file's own frame rate: the first video stream's, else nullopt (sequences have none).
+[[nodiscard]] std::optional<FrameRate> footageFileFrameRate(const AssetRecord& asset);
+// The rate the asset's frames advance at: a video's conformed rate or file rate, a sequence's
+// assumed rate. Nullopt for a sequence that matches the composition and for non-timed assets.
+[[nodiscard]] std::optional<FrameRate> footageFrameRate(const AssetRecord& asset);
+// Frames in one pass of timed footage (sequence first..last, video frames); 0 otherwise.
+[[nodiscard]] std::uint64_t footageFrameCount(const AssetRecord& asset);
+// The natural length of timed footage including Loop, at `compositionRate` for a sequence that
+// matches the composition. Nullopt for stills, audio and anything without a length.
+[[nodiscard]] std::optional<core::RationalTime> footageDuration(const AssetRecord& asset,
+                                                                FrameRate compositionRate);
+// The field order in the stream numbering (0 unknown, 1 progressive, 2 top first, 3 bottom first,
+// 4 and 5 the coded/displayed reverses), after any override.
+[[nodiscard]] std::uint32_t footageFieldOrder(const AssetRecord& asset);
+// The file's pixel aspect ratio (a video stream's coded ratio; square for stills and sequences).
+[[nodiscard]] core::PixelAspectRatio footageFilePixelAspect(const AssetRecord& asset);
+// The pixel aspect the asset is read with: the override, else the file's.
+[[nodiscard]] core::PixelAspectRatio footagePixelAspect(const AssetRecord& asset);
+// The source start timecode: the override, else a video stream's timecode text at its rate.
+[[nodiscard]] std::optional<CompositionTimecode> footageStartTimecode(const AssetRecord& asset);
 // Lexical only: importing and migration share a portable UTF-8 file-stem default.
 [[nodiscard]] std::string defaultAssetName(const AssetRecord& asset);
 } // namespace bloom::document

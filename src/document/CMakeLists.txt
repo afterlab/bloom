@@ -28,6 +28,7 @@ target_sources(
         project_incremental_validation.cpp
         render_reachability.cpp
         asset.cpp
+        footage_interpretation.cpp
         value_node_definitions.cpp
         value_utility_nodes.cpp
     PUBLIC
