@@ -6,6 +6,7 @@
 #include <bloom/media/provider/media_workers.hpp>
 #include <filesystem>
 #include <random>
+#include <thread>
 
 namespace bloom::media::provider {
 namespace {
@@ -177,6 +178,17 @@ struct EncodeSessionV1::State {
             launch.addressSpaceBytes =
                 std::max(launch.addressSpaceBytes,
                          av1EncodeAddressSpaceBytes(settings.width, settings.height));
+        // Issue #406: frame-threaded ProRes holds a frame per encoder thread. The automatic
+        // count is resolved here so the worker runs exactly the threads its address space covers.
+        auto request = settings;
+        if (mediaCodecFamilyV1(settings.videoCodec) == "prores") {
+            request.threads =
+                proresEncodeThreads(settings.threads, std::thread::hardware_concurrency(),
+                                    settings.width, settings.height);
+            launch.addressSpaceBytes = std::max(
+                launch.addressSpaceBytes,
+                proresEncodeAddressSpaceBytes(settings.width, settings.height, request.threads));
+        }
         if (options.stagedOutput) {
             // Streaming into the staged artifact is an FFmpeg worker protocol (ADR 0033 section
             // 16); the caller expects the bytes there, so a platform route cannot serve it.
@@ -203,7 +215,7 @@ struct EncodeSessionV1::State {
         if (const auto error =
                 failure(exchange(MessageKind::Handshake, hello, MessageKind::Handshake)))
             return error;
-        return failure(exchange(MessageKind::EncodeBegin, settings, MessageKind::Ack));
+        return failure(exchange(MessageKind::EncodeBegin, request, MessageKind::Ack));
     }
 };
 EncodeSessionV1::EncodeSessionV1(EncodeSessionOptionsV1 options,

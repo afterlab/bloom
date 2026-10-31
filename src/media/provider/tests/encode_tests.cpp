@@ -7,8 +7,10 @@
 #include <filesystem>
 #include <fstream>
 #include <numeric>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <tuple>
 #include <unistd.h>
 #include <utility>
 using namespace bloom::media::provider;
@@ -25,6 +27,9 @@ template <typename T> T get(Result<T> result) {
 // The MCP repro: black with a centred 10x10 saturated red square, whose left edge falls on an
 // odd column and so shares every 4:2:2/4:2:0 chroma sample with black.
 bool redSquare = false;
+// Issue #406: a full-width alpha ramp (0 at the left edge, opaque at the right) in place of the
+// two-step 4444 alpha, so every 10-bit alpha code the worker converts is exercised.
+bool alphaRamp = false;
 FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
     FrameProduct frame;
     frame.format = PixelFormat::Rgba16;
@@ -43,7 +48,10 @@ FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
             for (unsigned c = 0; c < 4; ++c) {
                 const bool inside = x + 5 >= settings.width / 2 && x < settings.width / 2 + 5 &&
                                     y + 5 >= settings.height / 2 && y < settings.height / 2 + 5;
-                const auto value = c == 3      ? (settings.profile.starts_with("4444") && !redSquare
+                const auto ramp = static_cast<std::uint32_t>(
+                    static_cast<std::uint64_t>(x) * 65535U / std::max(1U, settings.width - 1));
+                const auto value = c == 3 && alphaRamp ? ramp
+                                   : c == 3    ? (settings.profile.starts_with("4444") && !redSquare
                                                       ? (x < settings.width / 2 ? 20000U : 50000U)
                                                       : 65535U)
                                    : redSquare ? (inside && c == 0 ? 65535U : 0U)
@@ -490,6 +498,84 @@ void chromaSampling(const std::filesystem::path& directory) {
         }
     }
 }
+#if defined(__linux__)
+// The soft address-space limit the worker was launched with, from /proc.
+std::uint64_t addressSpaceLimit(std::int64_t pid) {
+    std::ifstream limits("/proc/" + std::to_string(pid) + "/limits");
+    std::string line;
+    while (std::getline(limits, line))
+        if (line.starts_with("Max address space")) {
+            std::istringstream fields(line.substr(17));
+            std::uint64_t soft = 0;
+            fields >> soft;
+            return soft;
+        }
+    return 0;
+}
+#endif
+// Issue #406: ProRes 4444 with soft alpha at 1080p and UHD. Every case failed before the fix:
+// swscale's shifted 10-bit alpha failed the reopen check for any ramp or antialiased edge, and
+// frame-threaded prores_ks (a frame per encoder thread) outgrew the frame-sized worker address
+// space at 64 threads in 1080p and at 16 threads in UHD.
+void prores4444Threaded(const std::filesystem::path& directory) {
+    // The thread budget: automatic resolves to the hardware threads within FFmpeg's maximum, and
+    // the count shrinks only where the frame-sized threads would pass the ceiling.
+    test::check(proresEncodeThreads(0, 16, 1920, 1080) == 16 &&
+                    proresEncodeThreads(0, 0, 1920, 1080) == 1 &&
+                    proresEncodeThreads(0, 256, 1920, 1080) == kEncodeMaximumThreads &&
+                    proresEncodeThreads(64, 16, 1920, 1080) == 64 &&
+                    proresEncodeThreads(64, 16, 3840, 2160) == 56 &&
+                    proresEncodeThreads(0, 64, 7680, 4320) == 12 &&
+                    proresEncodeThreads(64, 64, 8192, 8192) == 4,
+                "ProRes encoder threads fit the worker address-space ceiling");
+    test::check(proresEncodeAddressSpaceBytes(1920, 1080, 1) == (std::uint64_t{9} << 28U) &&
+                    proresEncodeAddressSpaceBytes(1920, 1080, 16) == (std::uint64_t{3} << 30U) &&
+                    proresEncodeAddressSpaceBytes(1920, 1080, 64) == (std::uint64_t{6} << 30U) &&
+                    proresEncodeAddressSpaceBytes(3840, 2160, 16) == (std::uint64_t{6} << 30U) &&
+                    proresEncodeAddressSpaceBytes(16384, 16384, 64) == kWorkerAddressSpaceCeiling,
+                "ProRes worker address space grows with frame extent and threads");
+    alphaRamp = true;
+    EncodeSettingsV1 settings;
+    settings.rate = {25, 1};
+    settings.width = 1920;
+    settings.height = 1080;
+    settings.frames = 24;
+    // The export runner's automatic thread count, in both alpha profiles.
+    settings.threads = 0;
+    for (const auto* profile : {"4444", "4444xq"}) {
+        settings.profile = profile;
+        (void)run(settings,
+                  directory / (std::string("alpha-ramp-prores-") + profile + "-1080p.mov"));
+    }
+    // A 64-thread computer's automatic count, and UHD at 16 threads.
+    settings.profile = "4444";
+    for (const auto& [width, height, threads, frames] :
+         {std::tuple{1920U, 1080U, 64U, 70U}, std::tuple{3840U, 2160U, 16U, 20U}}) {
+        settings.width = width;
+        settings.height = height;
+        settings.threads = threads;
+        settings.frames = frames;
+        // The worker runs with the address space its frame extent and threads need.
+        std::uint64_t limit = 0;
+        EncodeSessionOptionsV1 options;
+        options.launched = [&limit](std::int64_t pid) {
+#if defined(__linux__)
+            limit = addressSpaceLimit(pid);
+#else
+            (void)pid;
+#endif
+        };
+        (void)run(settings,
+                  directory / ("alpha-ramp-prores-4444-" + std::to_string(height) + "p-" +
+                               std::to_string(threads) + "t.mov"),
+                  std::move(options));
+#if defined(__linux__)
+        test::check(limit == proresEncodeAddressSpaceBytes(width, height, threads),
+                    "the ProRes worker runs with its thread-sized address space");
+#endif
+    }
+    alphaRamp = false;
+}
 } // namespace
 // ADR 0036: NVIDIA NVENC is the first hardware encoder. Run under the machine GPU lock as
 // bloom.media.encode-nvenc; without an NVIDIA driver every case is skipped (exit 77), and a driver
@@ -559,6 +645,7 @@ int main(int argc, char** argv) {
                     "test output directory");
         if (argc == 3)
             return nvencTests(argv[1]);
+        prores4444Threaded(argv[1]);
         tests(argv[1]);
         chromaSampling(argv[1]);
         // Issue #352: one 8K UHD ProRes frame exports and passes reopen quality check.
