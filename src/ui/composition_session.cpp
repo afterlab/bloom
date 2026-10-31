@@ -89,6 +89,13 @@ buildColorProcessor(const document::ColorSettings& settings) {
     return std::make_shared<const color::PreparedCpuDisplayProcessorHandle>(std::move(*handle));
 }
 
+bool CompositionSession::colorConverterReady() const {
+    if (!colorConverterState_)
+        return false;
+    const std::lock_guard lock(colorConverterState_->mutex);
+    return colorConverterState_->processor != nullptr;
+}
+
 kit::KColorConverter CompositionSession::colorConverter(const std::string_view schemaKey) {
     static_assert(document::kSolidColorEncoding == "bloom.reference.linear-srgb");
     // Every Color4d-valued schema -- including the shape source's fillColor/strokeColor and any

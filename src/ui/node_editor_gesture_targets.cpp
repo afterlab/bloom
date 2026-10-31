@@ -1,6 +1,7 @@
 // What a Nodes canvas gesture is over and what it may land on: hit tests, the link a pick-up
 // lifts, the sockets a drag can reach, and the Merge slot caret. Split from the gesture handlers in
-// node_editor_interactions.cpp so each stays readable.
+// node_editor_interactions.cpp so each stays readable. What a pointer move asks here reads the
+// scene's spatial index or the canvas's id index, never a walk of every item (#359).
 #include "node_editor_gesture_targets.hpp"
 
 #include <QAbstractButton>
@@ -154,14 +155,15 @@ std::optional<document::OutputPortRef> incomingSource(const document::Compositio
                ? std::nullopt
                : std::optional(document::OutputPortRef{driver->sourceNodeId, driver->outputPort});
 }
-SocketItem* findOutput(QGraphicsScene& scene, const document::OutputPortRef& output) {
-    for (auto* item : scene.items())
-        if (auto* socket = dynamic_cast<SocketItem*>(item); socket && socket->output == output)
-            return socket;
+SocketItem* findOutput(const NodeCanvasIndex& index, const document::OutputPortRef& output) {
+    if (const auto* card = index.node(output.nodeId))
+        for (auto* socket : card->sockets())
+            if (socket->output == output)
+                return socket;
     return nullptr;
 }
 std::pair<SocketItem*, SocketItem*> insertionSockets(NodeItem& card,
-                                                     const document::Composition& composition) {
+                                                     const NodeProjectionIndex& links) {
     SocketItem* input = nullptr;
     SocketItem* output = nullptr;
     for (auto* socket : card.sockets()) {
@@ -173,7 +175,7 @@ std::pair<SocketItem*, SocketItem*> insertionSockets(NodeItem& card,
             output = socket;
     }
     if (!input || !output || !input->draggable() || !output->draggable() || !input->input ||
-        !output->output || inputEdge(composition, *input->input))
+        !output->output || links.edgeInto(*input->input))
         return {};
     return {input, output};
 }
@@ -197,61 +199,62 @@ QString refusalFor(const NodeInteraction& gesture, const SocketItem& socket,
         .arg(socketKindName(from), socketKindName(to));
 }
 
-} // namespace
-
 // Tells every socket on the canvas whether the link now being dragged could land on it (task S1,
 // item 6). The socket the drag STARTED from keeps its resting ink: it is the thing in the artist's
 // hand, not a candidate to aim at.
-void markLinkAffinity(QGraphicsScene& scene, const NodeInteraction& gesture,
-                      const SocketItem* origin) {
+void markSocketAffinity(SocketItem& socket, const NodeInteraction& gesture,
+                        const SocketItem* origin) {
+    if (&socket == origin) {
+        socket.setDragAffinity(SocketItem::DragAffinity::Idle);
+        return;
+    }
     const bool fromOutput = gesture.output.has_value();
-    for (auto* item : scene.items()) {
-        auto* socket = dynamic_cast<SocketItem*>(item);
-        if (socket == nullptr)
-            continue;
-        if (socket == origin) {
-            socket->setDragAffinity(SocketItem::DragAffinity::Idle);
-            continue;
-        }
-        const bool opposite = fromOutput ? socket->input.has_value() : socket->output.has_value();
-        // The shared promotion whitelist, not kind equality: a socket an Integer output can widen
-        // into is a socket the drag can land on, so the affinity an artist SEES is the rule
-        // ConnectPorts will actually apply.
-        const bool compatible =
-            socket->draggable() && opposite &&
-            (socket->acceptsAnyKind() ||
-             (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket->kind)
-                         : document::isAcceptedSocketConnection(socket->kind, gesture.linkKind)));
-        socket->setDragAffinity(compatible ? SocketItem::DragAffinity::Compatible
-                                           : SocketItem::DragAffinity::Incompatible,
-                                compatible ? QString{} : refusalFor(gesture, *socket, opposite));
-    }
+    const bool opposite = fromOutput ? socket.input.has_value() : socket.output.has_value();
+    // The shared promotion whitelist, not kind equality: a socket an Integer output can widen
+    // into is a socket the drag can land on, so the affinity an artist SEES is the rule
+    // ConnectPorts will actually apply.
+    const bool compatible =
+        socket.draggable() && opposite &&
+        (socket.acceptsAnyKind() ||
+         (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket.kind)
+                     : document::isAcceptedSocketConnection(socket.kind, gesture.linkKind)));
+    socket.setDragAffinity(compatible ? SocketItem::DragAffinity::Compatible
+                                      : SocketItem::DragAffinity::Incompatible,
+                           compatible ? QString{} : refusalFor(gesture, socket, opposite));
 }
+} // namespace
 
-void clearLinkAffinity(QGraphicsScene& scene) {
-    for (auto* item : scene.items()) {
-        if (auto* socket = dynamic_cast<SocketItem*>(item)) {
-            socket->setDragAffinity(SocketItem::DragAffinity::Idle);
-            socket->setDropIndicator(std::nullopt);
-        }
-    }
+void markLinkAffinity(const NodeCanvasIndex& index, const NodeInteraction& gesture,
+                      const SocketItem* origin) {
+    for (const auto& [id, card] : index.nodes)
+        for (auto* socket : card->sockets())
+            markSocketAffinity(*socket, gesture, origin);
 }
 
 // Marks, on the Merge node's ordered multi-input, which position in the stack order the pointer is
 // currently at (task S1, item 7). The pill is simultaneously dimmed as incompatible by
 // markLinkAffinity() above -- a stack slot is structural and accepts no drop -- so the caret
-// reports the pointer's position in the order and never promises a landing.
-void updateOrderedDropIndicator(QGraphicsScene& scene, const QPointF cursor) {
-    for (auto* item : scene.items()) {
+// reports the pointer's position in the order and never promises a landing. Only a pill under
+// the pointer can carry a caret, so a move asks the scene's index for those and clears the ones
+// the previous move marked (#359), rather than visiting every socket on the canvas.
+void updateOrderedDropIndicator(QGraphicsScene& scene, NodeInteraction& gesture,
+                                const QPointF cursor) {
+    std::vector<SocketItem*> marked;
+    for (auto* item : scene.items(cursor)) {
         auto* socket = dynamic_cast<SocketItem*>(item);
         if (socket == nullptr || !socket->multiInput())
             continue;
         socket->setDropIndicator(socket->slotIndexAt(socket->mapFromScene(cursor)));
+        marked.push_back(socket);
     }
+    for (auto* socket : gesture.indicated)
+        if (std::ranges::find(marked, socket) == marked.end())
+            socket->setDropIndicator(std::nullopt);
+    gesture.indicated = std::move(marked);
 }
 
 void previewInsertion(QGraphicsScene& scene, NodeInteraction& gesture,
-                      const document::Composition& composition, const QPointF cursor) {
+                      const NodeProjectionIndex& links, const QPointF cursor) {
     if (gesture.insertEdge)
         gesture.insertEdge->emphasize(false);
     gesture.insertEdge = nullptr;
@@ -260,7 +263,7 @@ void previewInsertion(QGraphicsScene& scene, NodeInteraction& gesture,
     auto* card = cardAt(scene, cursor);
     if (!card || !gesture.positions.contains(card->id()))
         return;
-    if (!insertionSockets(*card, composition).first)
+    if (!insertionSockets(*card, links).first)
         return;
     for (auto* item : scene.items(cursor)) {
         auto* edge = dynamic_cast<NodeEdgeItem*>(item);

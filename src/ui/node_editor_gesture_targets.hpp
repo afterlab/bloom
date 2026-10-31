@@ -22,17 +22,18 @@ bool fieldAt(QGraphicsScene& scene, QPointF point);
 // Where an input's value comes from, whichever durable record carries it.
 std::optional<document::OutputPortRef> incomingSource(const document::Composition& composition,
                                                       const document::InputPortRef& input);
-node_editor::SocketItem* findOutput(QGraphicsScene& scene, const document::OutputPortRef& output);
-// The image input and output a card dropped onto a link would be wired through.
+node_editor::SocketItem* findOutput(const node_editor::NodeCanvasIndex& index,
+                                    const document::OutputPortRef& output);
+// The image input and output a card dropped onto a link would be wired through, judged against
+// the projection's own link index so a drag's per-move preview never walks the edge list.
 std::pair<node_editor::SocketItem*, node_editor::SocketItem*>
-insertionSockets(node_editor::NodeItem& card, const document::Composition& composition);
+insertionSockets(node_editor::NodeItem& card, const node_editor::NodeProjectionIndex& links);
 // Tells every socket on the canvas whether the link now being dragged could land on it.
-void markLinkAffinity(QGraphicsScene& scene, const NodeInteraction& gesture,
+void markLinkAffinity(const node_editor::NodeCanvasIndex& index, const NodeInteraction& gesture,
                       const node_editor::SocketItem* origin);
-void clearLinkAffinity(QGraphicsScene& scene);
 // The Merge slot caret under the pointer during a link drag.
-void updateOrderedDropIndicator(QGraphicsScene& scene, QPointF cursor);
+void updateOrderedDropIndicator(QGraphicsScene& scene, NodeInteraction& gesture, QPointF cursor);
 // The link a single dragged card would be inserted into on release, emphasized while it is.
 void previewInsertion(QGraphicsScene& scene, NodeInteraction& gesture,
-                      const document::Composition& composition, QPointF cursor);
+                      const node_editor::NodeProjectionIndex& links, QPointF cursor);
 } // namespace bloom::ui::node_gesture

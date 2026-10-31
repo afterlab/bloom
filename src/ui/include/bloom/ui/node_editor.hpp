@@ -10,6 +10,7 @@
 #include <bloom/ui/preferences_aware.hpp>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -47,6 +48,12 @@ namespace bloom::ui {
 
 class CompositionSession;
 struct NodeInteraction;
+namespace node_editor {
+class NodeGroupItem;
+class NodeItem;
+struct NodeCanvasIndex;
+struct NodeProjectionIndex;
+} // namespace node_editor
 namespace kit {
 class KLabel;
 class KSearchPopup;
@@ -115,8 +122,9 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // Reconciles the scene against `snapshot`'s composition IN PLACE: node cards are matched by
     // their stable NodeId and updated, never dropped and rebuilt, so an in-node kit field keeps its
     // identity (and its keyboard focus) across the snapshot change that its own edit produced.
-    // Cards for nodes that left the graph are removed; edges, which carry no widget state, are
-    // rebuilt outright each time.
+    // Sockets and links are reconciled the same way (#359): only the ones an edit added, removed
+    // or re-ended are allocated or freed. A publication whose composition content -- and what the
+    // cards read beside it -- is the content already projected is skipped outright.
     void setProjection(const document::Snapshot& snapshot, document::CompositionId compositionId);
     // Re-reads every card's VALUES and keyframe diamonds from the current snapshot, leaving the
     // projection's structure -- cards, sockets, links, frames, the scene rectangle -- exactly where
@@ -129,11 +137,14 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // view shows them, and without rebuilding any selector. A time-varying card outside every view
     // is marked stale; `staleOnly` brings exactly those up to date once a view reaches them.
     void refreshTimeValues(bool staleOnly = false);
+    // Constant-time lookups by stable id (#359), never a walk of the scene's items.
     [[nodiscard]] QGraphicsItem* findNodeItem(document::NodeId nodeId) const;
     [[nodiscard]] QGraphicsItem* findNodeGroupItem(document::NodeGroupId groupId) const;
-    // Recomputes every group frame from the live member cards. Called by the projection and by
-    // every move in flight, which is what makes a frame follow its members rather than a saved
-    // rectangle.
+    // Every card the projection holds, in no particular order.
+    [[nodiscard]] std::vector<node_editor::NodeItem*> nodeItems() const;
+    // Recomputes every group frame from the live member cards. Called by the projection; a move in
+    // flight reshapes only the frames holding a card it moves, which is what makes a frame follow
+    // its members rather than a saved rectangle.
     void updateGroupGeometry();
 
     // Test/diagnostic surface only, mirroring ViewerEditor's own *ForTest precedent: an in-node kit
@@ -148,7 +159,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
     [[nodiscard]] NodeSockets nodeSocketsForTest(document::NodeId nodeId) const;
 
     // Task NODES-1, deliverable 2: the link style every edge draws with. Changing it walks every
-    // NodeEdgeItem currently in the scene and repaints it in place -- a fresh edge (rebuildEdges())
+    // NodeEdgeItem currently in the scene and repaints it in place -- a fresh edge (reconcileEdges())
     // reads the same member at construction, so the two can never disagree.
     void setLinkStyle(LinkStyle style);
     [[nodiscard]] LinkStyle linkStyle() const noexcept { return linkStyle_; }
@@ -176,12 +187,16 @@ class NodeGraphicsScene final : public QGraphicsScene {
     void mouseDoubleClickEvent(QGraphicsSceneMouseEvent* event) override;
 
   private:
-    void rebuildEdges(const document::Composition& composition);
+    void reconcileEdges(const node_editor::NodeProjectionIndex& links);
     void rebuildGroups(const document::Composition& composition);
+    void updateGroupFrame(node_editor::NodeGroupItem& group);
+    void updateGroupGeometry(const std::map<document::NodeId, QPointF>& moved);
+    void clearLinkAffinity();
 
     CompositionSession* session_ = nullptr;
     Submit submit_;
     std::unique_ptr<NodeInteraction> interaction_;
+    std::unique_ptr<node_editor::NodeCanvasIndex> index_;
     LinkStyle linkStyle_ = LinkStyle::Spline;
     bool snapEnabled_ = false;
     qreal gridSize_ = kit::px(kit::Size::NodeGrid);
@@ -380,7 +395,7 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     void selectLinkedUpstream();
     void selectLinkedDownstream();
     // Shared BFS the two linked-selection commands above both walk, over the SAME link set
-    // rebuildEdges() draws (graph edges followed by every driver binding) so "linked" here can
+    // the canvas draws (graph edges followed by every driver binding) so "linked" here can
     // never disagree with what the canvas actually shows as a wire. Returns `seeds` itself united
     // with whatever following edges (upstream: toward sources; downstream: toward destinations)
     // reaches transitively.

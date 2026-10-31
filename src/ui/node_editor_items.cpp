@@ -649,6 +649,7 @@ SocketItem::SocketItem(const document::NodeId node, QString portName,
                        std::optional<document::OutputPortRef> outputRef, QGraphicsItem* parent)
     : QGraphicsItem(parent), name(std::move(portName)), kind(valueKind), input(std::move(inputRef)),
       output(std::move(outputRef)) {
+    ++nodeCanvasWorkCounters().socketsCreated;
     setData(kNodeItemKindRole, QStringLiteral("socket"));
     setData(kNodeStableIdRole, QVariant::fromValue<qulonglong>(node.value()));
     setData(kNodeSocketNameRole, name);
@@ -847,119 +848,133 @@ void SocketItem::hoverLeaveEvent(QGraphicsSceneHoverEvent* event) {
     QGraphicsItem::hoverLeaveEvent(event);
 }
 
+namespace {
+// One socket a card's definition asks for, before it is matched against the sockets the card
+// already carries.
+struct SocketSpec final {
+    QString name;
+    document::SocketValueKind kind = document::SocketValueKind::Image;
+    std::optional<document::InputPortRef> input;
+    std::optional<document::OutputPortRef> output;
+    bool pill = false;
+    std::vector<document::InputPortRef> ordered;
+    bool anyKind = false;
+    bool linked = false;
+};
+// The fields a SocketItem fixes at construction. Everything else a spec carries is updated on the
+// kept item in place.
+bool sameSocket(const SocketItem& socket, const SocketSpec& spec) {
+    return socket.multiInput() == spec.pill && socket.kind == spec.kind && socket.name == spec.name &&
+           socket.input == spec.input && socket.output == spec.output;
+}
+} // namespace
+
 void NodeItem::buildSockets(const document::NodeRecord& node,
                             const document::Composition& composition,
+                            const NodeProjectionIndex& links,
                             const document::NodeDefinitionRegistry& registry) {
-    for (auto* socket : sockets_)
-        delete socket;
-    sockets_.clear();
     linkedInputs_.clear();
-    const auto* definition = registry.find(node.typeId, node.schemaVersion);
-    if (!definition)
-        return;
-    // A reroute's sockets take the kind of the link it sits on (task FIX1, item I); the
-    // definition's declared Image is only the placeholder a definition must name. An unconnected
-    // reroute keeps the placeholder for painting and accepts anything, which is what its own
-    // kind-less state means.
-    const auto rerouteKind = document::isRerouteNodeType(node.typeId)
-                                 ? composition.graph().rerouteKind(node.id, registry)
-                                 : std::nullopt;
-    const auto kindOf = [&rerouteKind](const document::SocketValueKind declared) {
-        return rerouteKind.value_or(declared);
-    };
-    const bool kindless = document::isRerouteNodeType(node.typeId) && !rerouteKind.has_value();
-    for (const auto& port : definition->inputs) {
-        document::InputPortRef input = document::NodeInputRef{node.id, port.name};
-        // Two kinds of port, one question each. An OPERAND socket is linked when its parameter
-        // carries a driver binding; an image transport port is linked when an edge terminates on
-        // it. That split is not an inconsistency -- each has exactly one durable record of where
-        // its value comes from, which is why an edge and a binding can never disagree about a
-        // socket.
-        const auto binding =
-            std::ranges::find(node.parameters, port.name, &document::ParameterBinding::role);
-        const bool linked =
-            binding != node.parameters.end()
-                ? [&] {
-                      const auto* parameter = composition.parameters().find(binding->parameterId);
-                      return parameter != nullptr &&
-                             std::holds_alternative<document::DriverBindingSource>(
-                                 parameter->source);
-                  }()
-                : std::ranges::any_of(composition.graph().edges(), [&](const auto& edge) {
-                      return edge.destination == input;
-                  });
-        if (linked)
-            linkedInputs_.insert(QString::fromStdString(port.name));
-        sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
-                                          kindOf(port.valueKind), input, std::nullopt, this));
-        sockets_.back()->setAcceptsAnyKind(kindless);
-        sockets_.back()->linked = linked;
-    }
-    if (definition->layerSlotInput && composition.graph().merge(node.id)) {
-        // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row per
-        // slot. The slot model underneath is exactly as it was -- these are its own slots, in its
-        // own order -- and every edge that terminates on any of them terminates on this one socket.
-        //
-        // Task FIX1, item B: the pill exists even when the stack is EMPTY, and its own `input` is
-        // the invalid-slot sentinel that ConnectPorts reads as "make a new slot here". Without it a
-        // fresh composition's Merge node had no port at all and the artist had nothing to wire the
-        // first layer into.
-        const auto& port = *definition->layerSlotInput;
-        const auto entries = composition.graph().merge(node.id)->entries();
-        std::vector<document::InputPortRef> ordered;
-        ordered.reserve(entries.size());
-        for (const auto& slot : entries)
-            ordered.push_back(document::LayerStackInputRef{node.id, slot.slotId, port.role});
-        auto* pill = new SocketItem(
-            node.id, QString::fromStdString(port.role), port.valueKind,
-            document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role}, std::nullopt,
-            this);
-        pill->linked = !ordered.empty();
-        pill->setOrderedInputs(std::move(ordered));
-        sockets_.push_back(pill);
-    }
-    if (definition->audioLayerSlotInput && composition.graph().merge(node.id)) {
-        // Task FOLLOW-1: a second stack pill, below the content pill, for the audio transport the
-        // same stable slots carry (docs/architecture/layer-graph-model.md, Audio Sources And
-        // Layers). Unlike the content pill -- whose ordered inputs are every stack entry, because a
-        // visible slot always has a content edge -- audio is optional per slot, so this pill's
-        // ordered inputs are only the slots that actually carry an audio edge.
-        const auto& port = *definition->audioLayerSlotInput;
-        const auto entries = composition.graph().merge(node.id)->entries();
-        std::vector<document::InputPortRef> ordered;
-        for (const auto& slot : entries) {
-            const document::InputPortRef ref =
-                document::LayerStackInputRef{node.id, slot.slotId, port.role};
-            if (std::ranges::any_of(composition.graph().edges(),
-                                    [&](const auto& edge) { return edge.destination == ref; }))
-                ordered.push_back(ref);
+    std::vector<SocketSpec> specs;
+    if (const auto* definition = registry.find(node.typeId, node.schemaVersion)) {
+        // A reroute's sockets take the kind of the link it sits on (task FIX1, item I); the
+        // definition's declared Image is only the placeholder a definition must name. An
+        // unconnected reroute keeps the placeholder for painting and accepts anything, which is
+        // what its own kind-less state means.
+        const auto rerouteKind = document::isRerouteNodeType(node.typeId)
+                                     ? composition.graph().rerouteKind(node.id, registry)
+                                     : std::nullopt;
+        const bool kindless = document::isRerouteNodeType(node.typeId) && !rerouteKind.has_value();
+        for (const auto& port : definition->inputs) {
+            document::InputPortRef input = document::NodeInputRef{node.id, port.name};
+            // Two kinds of port, one question each. An OPERAND socket is linked when its parameter
+            // carries a driver binding; an image transport port is linked when an edge terminates
+            // on it. That split is not an inconsistency -- each has exactly one durable record of
+            // where its value comes from, which is why an edge and a binding can never disagree
+            // about a socket.
+            const auto binding =
+                std::ranges::find(node.parameters, port.name, &document::ParameterBinding::role);
+            const bool linked =
+                binding != node.parameters.end()
+                    ? [&] {
+                          const auto* parameter =
+                              composition.parameters().find(binding->parameterId);
+                          return parameter != nullptr &&
+                                 std::holds_alternative<document::DriverBindingSource>(
+                                     parameter->source);
+                      }()
+                    : links.edgeInto(input);
+            if (linked)
+                linkedInputs_.insert(QString::fromStdString(port.name));
+            specs.push_back({QString::fromStdString(port.name), rerouteKind.value_or(port.valueKind),
+                             std::move(input), std::nullopt, false, {}, kindless, linked});
         }
-        auto* pill = new SocketItem(
-            node.id, QString::fromStdString(port.role), port.valueKind,
-            document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role}, std::nullopt,
-            this);
-        pill->linked = !ordered.empty();
-        pill->setOrderedInputs(std::move(ordered));
-        sockets_.push_back(pill);
+        const auto* merge = composition.graph().merge(node.id);
+        if (definition->layerSlotInput && merge) {
+            // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row
+            // per slot. The slot model underneath is exactly as it was -- these are its own slots,
+            // in its own order -- and every edge that terminates on any of them terminates on this
+            // one socket.
+            //
+            // Task FIX1, item B: the pill exists even when the stack is EMPTY, and its own `input`
+            // is the invalid-slot sentinel that ConnectPorts reads as "make a new slot here".
+            // Without it a fresh composition's Merge node had no port at all and the artist had
+            // nothing to wire the first layer into.
+            const auto& port = *definition->layerSlotInput;
+            SocketSpec pill{QString::fromStdString(port.role), port.valueKind,
+                            document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role},
+                            std::nullopt, true, {}, false, false};
+            for (const auto& slot : merge->entries())
+                pill.ordered.push_back(document::LayerStackInputRef{node.id, slot.slotId, port.role});
+            pill.linked = !pill.ordered.empty();
+            specs.push_back(std::move(pill));
+        }
+        if (definition->audioLayerSlotInput && merge) {
+            // Task FOLLOW-1: a second stack pill, below the content pill, for the audio transport
+            // the same stable slots carry (docs/architecture/layer-graph-model.md, Audio Sources
+            // And Layers). Unlike the content pill -- whose ordered inputs are every stack entry,
+            // because a visible slot always has a content edge -- audio is optional per slot, so
+            // this pill's ordered inputs are only the slots that actually carry an audio edge.
+            const auto& port = *definition->audioLayerSlotInput;
+            SocketSpec pill{QString::fromStdString(port.role), port.valueKind,
+                            document::LayerStackInputRef{node.id, document::LayerSlotId{}, port.role},
+                            std::nullopt, true, {}, false, false};
+            for (const auto& slot : merge->entries()) {
+                const document::InputPortRef ref =
+                    document::LayerStackInputRef{node.id, slot.slotId, port.role};
+                if (links.edgeInto(ref))
+                    pill.ordered.push_back(ref);
+            }
+            pill.linked = !pill.ordered.empty();
+            specs.push_back(std::move(pill));
+        }
+        // An output is linked when an edge or a driver binding reads from it.
+        for (const auto& port : definition->outputs)
+            specs.push_back({QString::fromStdString(port.name), port.valueKind, std::nullopt,
+                             document::OutputPortRef{node.id, port.name}, false, {}, false,
+                             links.outputLinked(node.id, port.name)});
     }
-    // An output is linked when an edge or a driver binding reads from it.
-    std::set<std::string> linkedOutputs;
-    for (const auto& edge : composition.graph().edges())
-        if (edge.source.nodeId == node.id)
-            linkedOutputs.insert(edge.source.port);
-    for (const auto& candidate : composition.graph().nodes())
-        for (const auto& binding : candidate.parameters)
-            if (const auto* parameter = composition.parameters().find(binding.parameterId))
-                if (const auto* driver =
-                        std::get_if<document::DriverBindingSource>(&parameter->source);
-                    driver != nullptr && driver->sourceNodeId == node.id)
-                    linkedOutputs.insert(driver->outputPort);
-    for (const auto& port : definition->outputs) {
-        sockets_.push_back(new SocketItem(node.id, QString::fromStdString(port.name),
-                                          port.valueKind, std::nullopt,
-                                          document::OutputPortRef{node.id, port.name}, this));
-        sockets_.back()->linked = linkedOutputs.contains(port.name);
+
+    auto previous = std::move(sockets_);
+    sockets_.clear();
+    sockets_.reserve(specs.size());
+    for (auto& spec : specs) {
+        SocketItem* socket = nullptr;
+        if (const auto kept = std::ranges::find_if(
+                previous, [&spec](const auto* old) { return old && sameSocket(*old, spec); });
+            kept != previous.end()) {
+            socket = *kept;
+            *kept = nullptr;
+        } else {
+            socket = new SocketItem(node.id, spec.name, spec.kind, spec.input, spec.output, this);
+        }
+        socket->setAcceptsAnyKind(spec.anyKind);
+        socket->linked = spec.linked;
+        if (spec.pill && (!socket->multiInput() || socket->orderedInputs() != spec.ordered))
+            socket->setOrderedInputs(std::move(spec.ordered));
+        sockets_.push_back(socket);
     }
+    for (auto* socket : previous)
+        delete socket;
 }
 
 NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& output,
@@ -973,10 +988,15 @@ NodeEdgeItem::NodeEdgeItem(NodeItem& source, NodeItem& destination, SocketItem& 
     setAcceptHoverEvents(true);
     setAcceptedMouseButtons(Qt::NoButton);
     setZValue(-1);
+    reattach();
+}
+void NodeEdgeItem::reattach() {
     // Every link names both of its ends (task FIX1, item C), so hovering a wire in a dense graph
     // says what it connects instead of leaving the artist to trace it.
-    setToolTip(QCoreApplication::translate("node_editor", "%1 · %2  →  %3 · %4")
-                   .arg(source.title(), output.name, destination.title(), input.name));
+    const QString tip = QCoreApplication::translate("node_editor", "%1 · %2  →  %3 · %4")
+                            .arg(source_.title(), output_.name, destination_.title(), input_.name);
+    if (toolTip() != tip)
+        setToolTip(tip);
     source_.addEdge(*this);
     destination_.addEdge(*this);
     updatePath();

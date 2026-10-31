@@ -28,12 +28,18 @@ QPointF snappedToGrid(const QPointF point, const qreal gridSize) {
 NodeGraphicsScene::~NodeGraphicsScene() { cancelGesture(); }
 void NodeGraphicsScene::setSubmit(Submit submit) {
     submit_ = std::move(submit);
-    for (auto* item : items()) {
-        if (auto* card = dynamic_cast<NodeItem*>(item))
-            card->setAuthoringEnabled(canSubmit());
-        else if (auto* group = dynamic_cast<NodeGroupItem*>(item))
-            group->setAuthoringEnabled(canSubmit());
-    }
+    for (const auto& [id, card] : index_->nodes)
+        card->setAuthoringEnabled(canSubmit());
+    for (const auto& [id, group] : index_->groups)
+        group->setAuthoringEnabled(canSubmit());
+}
+// Only a link drag marks socket affinity and slot carets, so only its end has any to clear.
+void NodeGraphicsScene::clearLinkAffinity() {
+    for (const auto& [id, card] : index_->nodes)
+        for (auto* socket : card->sockets()) {
+            socket->setDragAffinity(SocketItem::DragAffinity::Idle);
+            socket->setDropIndicator(std::nullopt);
+        }
 }
 commands::CommandResult NodeGraphicsScene::submit(commands::Transaction&& transaction) {
     if (submit_)
@@ -47,7 +53,8 @@ bool NodeGraphicsScene::gestureActive() const {
 }
 void NodeGraphicsScene::cancelGesture() {
     auto& gesture = *interaction_;
-    clearLinkAffinity(*this);
+    if (gesture.mode == NodeInteraction::Mode::Link)
+        clearLinkAffinity();
     if (gesture.insertEdge)
         gesture.insertEdge->emphasize(false);
     delete gesture.line;
@@ -61,11 +68,12 @@ void NodeGraphicsScene::cancelGesture() {
     if (gesture.mode == NodeInteraction::Mode::Resize)
         if (auto* card = dynamic_cast<NodeItem*>(findNodeItem(gesture.resized)))
             card->setPreviewWidth(gesture.width);
-    for (auto* item : items())
-        if (dynamic_cast<NodeEdgeItem*>(item))
-            item->show();
+    // The one link a pick-up hid is the link into the input it picked up.
+    if (gesture.pickedInput)
+        index_->visitLinksInto(*gesture.pickedInput, [](NodeEdgeItem& link) { link.show(); });
+    const auto moved = std::move(gesture.positions);
     gesture = {};
-    updateGroupGeometry();
+    updateGroupGeometry(moved);
 }
 void NodeGraphicsScene::selectAllNodes() {
     if (!session_ || !session_->composition())
@@ -178,7 +186,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
             gesture.origin = socket->mapToScene(socket->anchorFor(*pressedInput));
         if (pressedInput) {
             if (const auto existing = incomingSource(*session_->composition(), *pressedInput)) {
-                auto* source = findOutput(*this, *existing);
+                auto* source = findOutput(*index_, *existing);
                 if (!source) {
                     cancelGesture();
                     return;
@@ -189,10 +197,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
                 gesture.origin = source->scenePos();
                 // Addressed by DESTINATION, not by edge id: a driver link has no edge and therefore
                 // no id, and one input has exactly one incoming link either way.
-                for (auto* item : items())
-                    if (auto* link = dynamic_cast<NodeEdgeItem*>(item);
-                        link && link->edge.destination == *pressedInput)
-                        link->hide();
+                index_->visitLinksInto(*pressedInput, [](NodeEdgeItem& link) { link.hide(); });
             }
         }
         gesture.linkKind = socket->kind;
@@ -200,7 +205,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
             addPath({}, linePen(kit::color(socketColorToken(gesture.linkKind)), kit::kNodeLinkWidth));
         gesture.line->setZValue(10);
         gesture.line->setData(kNodeItemKindRole, QStringLiteral("link-preview"));
-        markLinkAffinity(*this, gesture, socket);
+        markLinkAffinity(*index_, gesture, socket);
         return;
     }
     if (auto* card = cardAt(*this, event->scenePos())) {
@@ -322,8 +327,8 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
                 const QPointF target = position + delta;
                 card->setPos(snap ? snappedToGrid(target, gridSize_) : target);
             }
-        previewInsertion(*this, gesture, *session_->composition(), event->scenePos());
-        updateGroupGeometry();
+        previewInsertion(*this, gesture, index_->links, event->scenePos());
+        updateGroupGeometry(gesture.positions);
         break;
     }
     case NodeInteraction::Mode::Resize:
@@ -368,7 +373,7 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         gesture.line->setPath(gesture.output
                                   ? linkPath(gesture.origin, event->scenePos(), linkStyle_)
                                   : linkPath(event->scenePos(), gesture.origin, linkStyle_));
-        updateOrderedDropIndicator(*this, event->scenePos());
+        updateOrderedDropIndicator(*this, gesture, event->scenePos());
         break;
     }
     case NodeInteraction::Mode::Idle:
@@ -443,7 +448,7 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
             transaction.emplace<commands::MoveNodes>(compositionId, moved, membership);
         if (gesture.insertEdge && !moved.empty()) {
             auto* card = dynamic_cast<NodeItem*>(findNodeItem(moved.begin()->first));
-            const auto [input, output] = insertionSockets(*card, *session_->composition());
+            const auto [input, output] = insertionSockets(*card, index_->links);
             if (input && output && input->input && output->output) {
                 transaction.emplace<commands::ConnectPorts>(
                     compositionId, gesture.insertEdge->edge.source, *input->input);
@@ -460,7 +465,9 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         QPainterPathStroker stroke;
         stroke.setWidth(kit::kEmphasisStroke);
         const auto crossing = stroke.createStroke(gesture.line->path());
-        for (auto* item : items()) {
+        // Only a link whose bounds meet the stroke's can cross it; the scene's index finds those,
+        // in the same topmost-first order a full walk would.
+        for (auto* item : items(crossing.boundingRect(), Qt::IntersectsItemBoundingRect)) {
             const auto* edge = dynamic_cast<NodeEdgeItem*>(item);
             if (edge == nullptr || !crossing.intersects(edge->shape()))
                 continue;
@@ -475,7 +482,7 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         QPainterPathStroker stroke;
         stroke.setWidth(kit::kEmphasisStroke);
         const auto cut = stroke.createStroke(gesture.line->path());
-        for (auto* item : items())
+        for (auto* item : items(cut.boundingRect(), Qt::IntersectsItemBoundingRect))
             if (const auto* edge = dynamic_cast<NodeEdgeItem*>(item);
                 edge && !edge->structural && cut.intersects(edge->shape()))
                 transaction.emplace<commands::DisconnectInput>(compositionId,

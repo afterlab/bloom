@@ -556,6 +556,7 @@ target_sources(
         node_editor_interactions.cpp
         node_editor_gesture_targets.cpp
         node_editor_menus.cpp
+        node_editor_projection.cpp
         playback_controller.cpp
         preview_frame_cache.cpp
         preview_frame_trace.cpp

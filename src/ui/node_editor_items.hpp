@@ -10,6 +10,8 @@
 #pragma once
 #include <bloom/ui/node_editor.hpp>
 
+#include "node_editor_projection.hpp"
+
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/host/font_catalogue.hpp>
@@ -204,6 +206,26 @@ inline NodeCardRefreshCounters& nodeCardRefreshCounters() {
     return counters;
 }
 
+// Diagnostic counters for the canvas's own projection and gesture work (#359), in the same shape
+// as the playback counters above. A pointer move must cost the same on a 50-node graph as on a
+// 500-node one, and an edit must allocate only the items it touches, so the tests count lookups,
+// linear item walks and item allocations rather than wall-clock time.
+struct NodeCanvasWorkCounters final {
+    std::size_t itemLookups = 0;
+    std::size_t itemsScanned = 0;
+    std::size_t cardRefreshes = 0;
+    std::size_t cardsCreated = 0;
+    std::size_t socketsCreated = 0;
+    std::size_t edgesCreated = 0;
+    std::size_t edgesDeleted = 0;
+    std::size_t projections = 0;
+    std::size_t projectionsSkipped = 0;
+};
+inline NodeCanvasWorkCounters& nodeCanvasWorkCounters() {
+    static NodeCanvasWorkCounters counters;
+    return counters;
+}
+
 class SocketItem final : public QGraphicsItem {
   public:
     SocketItem(document::NodeId node, QString name, document::SocketValueKind kind,
@@ -357,10 +379,20 @@ class NodeItem final : public QGraphicsObject {
     // first refresh that sees a given set of parameter roles, and afterwards only reconfigured --
     // exactly the discipline PropertiesEditor::rebuild() already follows, and what lets a card's
     // own field survive the snapshot change its edit produced.
+    // A card refreshed on its own, outside a projection, indexes its composition's links itself.
     void
     refresh(const document::NodeRecord& node, const document::Composition& composition,
             const document::NodeLayoutRecord& layout,
             const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
+        refresh(node, composition, layout, buildProjectionIndex(composition), registry);
+    }
+    // `links` is the projection's one index of what is linked (#359), so the sockets ask it
+    // rather than each walking the composition's edge list.
+    void
+    refresh(const document::NodeRecord& node, const document::Composition& composition,
+            const document::NodeLayoutRecord& layout, const NodeProjectionIndex& links,
+            const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions()) {
+        ++nodeCanvasWorkCounters().cardRefreshes;
         layout_ = layout;
         shapeSource_ = node.typeId == document::kShapeSourceNodeType;
         if (shapeSource_)
@@ -415,7 +447,7 @@ class NodeItem final : public QGraphicsObject {
                            .arg(id_.value()));
         }
         ensureFields(node, registry);
-        buildSockets(node, composition, registry);
+        buildSockets(node, composition, links, registry);
         refreshValues(node, composition);
         relayout();
     }
@@ -624,7 +656,11 @@ class NodeItem final : public QGraphicsObject {
     }
 
   private:
+    // Reconciles the card's sockets against its definition IN PLACE (#359): a socket whose port,
+    // kind and shape are unchanged is kept -- and with it every link that ends on it -- and only
+    // its linked state and ordered slots are updated.
     void buildSockets(const document::NodeRecord& node, const document::Composition& composition,
+                      const NodeProjectionIndex& links,
                       const document::NodeDefinitionRegistry& registry);
     // Takes the inline rename field off the card and out of the scene immediately, then defers its
     // deletion. See the definition for why hiding it is not enough.
@@ -2323,6 +2359,16 @@ class NodeEdgeItem final : public QGraphicsPathItem {
         update();
     }
     [[nodiscard]] LinkStyle linkStyle() const noexcept { return style_; }
+    // True when this link is drawn between exactly these four items. Addresses only, never a
+    // dereference: a stale link's ends may already be gone when a projection asks (#359).
+    [[nodiscard]] bool joins(const NodeItem& source, const NodeItem& destination,
+                             const SocketItem& output, const SocketItem& input) const noexcept {
+        return &source_ == &source && &destination_ == &destination && &output_ == &output &&
+               &input_ == &input;
+    }
+    // Registers this link with both of its cards again and brings its tooltip and path up to date:
+    // what a kept link needs from a projection that moved or renamed its ends.
+    void reattach();
     document::EdgeRecord edge;
     bool structural;
 

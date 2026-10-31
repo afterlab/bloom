@@ -4,6 +4,7 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <functional>
+#include <vector>
 
 namespace bloom::ui {
 // This is transient canvas state. Frozen revision and stable IDs prevent a gesture from editing
@@ -31,5 +32,7 @@ struct NodeInteraction final {
     QGraphicsPathItem* line = nullptr;
     QGraphicsRectItem* box = nullptr;
     node_editor::NodeEdgeItem* insertEdge = nullptr;
+    // The Merge pills a link drag is showing its slot caret on: the only ones a move has to clear.
+    std::vector<node_editor::SocketItem*> indicated;
 };
 } // namespace bloom::ui

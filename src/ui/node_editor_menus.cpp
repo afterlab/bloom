@@ -82,10 +82,7 @@ class AddShapeMenuNode final : public commands::Operation {
 // estimate.
 [[nodiscard]] NodeCardSizes measuredNodeSizes(const NodeGraphicsScene& scene) {
     NodeCardSizes sizes;
-    for (auto* item : scene.items()) {
-        const auto* card = dynamic_cast<const node_editor::NodeItem*>(item);
-        if (card == nullptr)
-            continue;
+    for (const auto* card : scene.nodeItems()) {
         const auto rect = card->cardRect();
         sizes.emplace(card->id(), document::NodeCardSize{rect.width(), rect.height()});
     }
@@ -394,8 +391,8 @@ std::set<document::NodeId> NodeGraphEditor::linkedNodes(const std::set<document:
     const auto* composition = session_.composition();
     if (composition == nullptr)
         return seeds;
-    // The SAME link set rebuildEdges() draws: graph edges followed by every driver binding, read as
-    // (source, destination) pairs, so "linked" here can never disagree with what the canvas
+    // The SAME link set buildProjectionIndex() draws: graph edges followed by every driver binding,
+    // read as (source, destination) pairs, so "linked" here can never disagree with what the canvas
     // actually shows as a wire.
     std::vector<std::pair<document::NodeId, document::NodeId>> links;
     for (const auto& edge : composition->graph().edges())
