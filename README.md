@@ -41,11 +41,6 @@ time and tells you how long is left. You can keep working while it runs.
 
 ![The Export queue rendering a composition at 44 percent, under the Viewer, with two more jobs queued](docs/images/readme/export-queue.webp)
 
-**The result.** The first six seconds of that export, scaled down from the H.264 file the queue
-wrote.
-
-![An animated title card: the word Bloom scales in over a shifting purple background, a ring grows around it and a star turns](docs/images/readme/render-loop.webp)
-
 ## What works today
 
 **Build a shot**
