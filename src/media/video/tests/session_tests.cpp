@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <bloom/core/pixel_aspect_ratio.hpp>
@@ -10,9 +11,11 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 namespace {
 void check(bool value, const char* message) {
@@ -703,9 +706,48 @@ void vp9AndAv1(const std::filesystem::path& directory) {
         }
     }
 }
+// Issue #402: waiting callers are admitted in presentation order from the decoder's position, so
+// concurrent preparation of neighbouring frames decodes forward instead of seeking back a GOP for
+// each one; a passed-over request is admitted after a bounded number of grants.
+void waiterAdmission() {
+    using bloom::media::video::FrameWaiter;
+    using bloom::media::video::nextAdmittedFrameWaiter;
+    using Position = std::optional<std::pair<std::uint32_t, std::uint64_t>>;
+    check(!nextAdmittedFrameWaiter({}, Position{{0, 10}}, 3), "nobody waiting admits nobody");
+    // Woken out of order: 14, 11, 13, 12 after frame 10.
+    std::vector<FrameWaiter> waiters{{0, 14, 1, 0}, {0, 11, 2, 0}, {0, 13, 3, 0}, {0, 12, 4, 0}};
+    std::vector<std::uint64_t> served;
+    Position last{{0, 10}};
+    std::uint64_t grants = 0;
+    while (const auto next = nextAdmittedFrameWaiter(waiters, last, grants)) {
+        const auto chosen = std::ranges::find(waiters, *next, &FrameWaiter::ticket);
+        served.push_back(chosen->frame);
+        last = std::pair{chosen->stream, chosen->frame};
+        ++grants;
+        waiters.erase(chosen);
+    }
+    check(served == std::vector<std::uint64_t>{11, 12, 13, 14},
+          "concurrent waiters are served in presentation order");
+    // Frames before the decoder's position come after every frame at or after it.
+    waiters = {{0, 3, 1, 0}, {0, 21, 2, 0}, {0, 20, 3, 0}};
+    check(nextAdmittedFrameWaiter(waiters, Position{{0, 20}}, 0) == 3U,
+          "the decoder's own position is served first");
+    check(nextAdmittedFrameWaiter(waiters, Position{{0, 30}}, 0) == 1U,
+          "with nothing ahead, the lowest frame is served (one seek)");
+    check(nextAdmittedFrameWaiter(waiters, std::nullopt, 0) == 1U,
+          "a fresh decoder serves the lowest frame");
+    // A backward request passed over kFrameWaiterMaximumBypass times goes next.
+    waiters = {{0, 0, 1, 0}, {0, 40, 2, 15}};
+    check(nextAdmittedFrameWaiter(waiters, Position{{0, 39}}, 15) == 2U,
+          "a recent backward request waits behind forward frames");
+    check(nextAdmittedFrameWaiter(waiters, Position{{0, 39}},
+                                  bloom::media::video::kFrameWaiterMaximumBypass) == 1U,
+          "a backward request is admitted after a bounded number of grants");
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
+        waiterAdmission();
         run(argv[1]);
         retainedRouting(argv[1]);
         colourInterpretation(argv[1]);

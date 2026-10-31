@@ -15,8 +15,11 @@
 #include <fstream>
 #include <iostream>
 #include <new>
+#include <optional>
 #include <thread>
 #include <type_traits>
+#include <tuple>
+#include <utility>
 namespace bloom::media::video {
 bool isVideoExtension(const std::filesystem::path& path) {
     auto extension = path.extension().string();
@@ -149,6 +152,22 @@ struct VideoDecodeSession::State {
     std::timed_mutex mutex;
     std::mutex frameMutex;
     std::shared_ptr<InFlightFrame> inFlightFrame;
+    // Issue #402: callers waiting for the one retained decoder, admitted in presentation order
+    // (nextAdmittedFrameWaiter) rather than in wake-up order.
+    std::vector<FrameWaiter> frameWaiters;
+    std::condition_variable frameAdmission;
+    std::uint64_t frameTickets = 0;
+    std::uint64_t frameGrants = 0;
+    std::optional<std::pair<std::uint32_t, std::uint64_t>> lastGrantedFrame;
+    // Called with frameMutex held.
+    [[nodiscard]] bool admitsNext(const FrameWaiter& candidate) const {
+        const auto next = nextAdmittedFrameWaiter(frameWaiters, lastGrantedFrame, frameGrants);
+        if (!next)
+            return false;
+        const auto best = std::ranges::find(frameWaiters, *next, &FrameWaiter::ticket);
+        return best->ticket == candidate.ticket ||
+               (best->stream == candidate.stream && best->frame == candidate.frame);
+    }
     std::mutex revisionMutex;
     std::shared_ptr<const platform::ReadOnlyFileSnapshot> revision;
     std::shared_ptr<platform::FileSnapshotQuota> quota;
@@ -165,6 +184,7 @@ struct VideoDecodeSession::State {
                 state.inFlightFrame.reset();
             }
             flight.completed.notify_all();
+            state.frameAdmission.notify_all();
         }
     };
     State(std::filesystem::path source, std::string worker,
@@ -698,22 +718,34 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
     bool leader = false;
     {
         // A different in-flight frame is waited for, not refused: requests are served in turn
-        // by the one retained decoder, which keeps its forward position between them.
+        // by the one retained decoder, which keeps its forward position between them. Waiters
+        // are admitted in presentation order (State::admitsNext).
         std::unique_lock lock(state_->frameMutex);
+        const FrameWaiter waiter{stream, index, ++state_->frameTickets, state_->frameGrants};
+        state_->frameWaiters.push_back(waiter);
+        const auto leave = [&] {
+            std::erase_if(state_->frameWaiters,
+                          [&](const FrameWaiter& entry) { return entry.ticket == waiter.ticket; });
+            state_->frameAdmission.notify_all();
+        };
         while (!flight) {
-            if (!state_->inFlightFrame) {
+            if (state_->inFlightFrame && state_->inFlightFrame->key == key)
+                flight = state_->inFlightFrame;
+            else if (!state_->inFlightFrame && state_->admitsNext(waiter)) {
                 flight = std::make_shared<State::InFlightFrame>(key);
                 state_->inFlightFrame = flight;
                 leader = true;
-            } else if (state_->inFlightFrame->key == key)
-                flight = state_->inFlightFrame;
-            else {
-                const auto busy = state_->inFlightFrame;
-                busy->completed.wait_for(lock, std::chrono::milliseconds(20));
-                if (cancel && cancel())
+                ++state_->frameGrants;
+                state_->lastGrantedFrame = std::pair{stream, index};
+            } else {
+                state_->frameAdmission.wait_for(lock, std::chrono::milliseconds(20));
+                if (cancel && cancel()) {
+                    leave();
                     return Unavailable{Error::Cancelled, "Video frame wait cancelled"};
+                }
             }
         }
+        leave();
     }
     if (leader && cache)
         if (auto cached = cache->find(key)) {
@@ -725,6 +757,7 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
                 state_->inFlightFrame.reset();
             }
             flight->completed.notify_all();
+            state_->frameAdmission.notify_all();
             publish(describe(hardware));
             return cached;
         }
@@ -783,6 +816,31 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
     }
     publish(flight->provenance);
     return flight->result;
+}
+std::optional<std::uint64_t>
+nextAdmittedFrameWaiter(const std::span<const FrameWaiter> waiters,
+                        const std::optional<std::pair<std::uint32_t, std::uint64_t>> lastGranted,
+                        const std::uint64_t grants) noexcept {
+    const FrameWaiter* best = nullptr;
+    for (const auto& waiter : waiters)
+        if (grants - waiter.enrolledAt >= kFrameWaiterMaximumBypass &&
+            (!best || waiter.ticket < best->ticket))
+            best = &waiter;
+    if (best)
+        return best->ticket;
+    const auto forward = [&](const FrameWaiter& waiter) {
+        return lastGranted && waiter.stream == lastGranted->first &&
+               waiter.frame >= lastGranted->second;
+    };
+    for (const auto& waiter : waiters) {
+        if (!best || (forward(waiter) && !forward(*best)))
+            best = &waiter;
+        else if (forward(waiter) == forward(*best) &&
+                 std::tuple{waiter.stream, waiter.frame, waiter.ticket} <
+                     std::tuple{best->stream, best->frame, best->ticket})
+            best = &waiter;
+    }
+    return best ? std::optional{best->ticket} : std::nullopt;
 }
 Result<AudioBlock> VideoDecodeSession::audio(const ProbeResult& source, std::uint32_t stream,
                                              std::uint64_t sample, std::uint32_t count,

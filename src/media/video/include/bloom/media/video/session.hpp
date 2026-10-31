@@ -8,6 +8,8 @@
 #include <list>
 #include <mutex>
 #include <optional>
+#include <span>
+#include <utility>
 namespace bloom::media::video {
 [[nodiscard]] bool isVideoExtension(const std::filesystem::path& path);
 using Cancel = std::function<bool()>;
@@ -111,8 +113,27 @@ class DecodedVideoCache final {
     std::list<Entry> entries_;
     std::size_t budget_ = 0, resident_ = 0;
 };
+// Issue #402: a caller waiting for a session's one retained decoder. Concurrent preparation asks
+// for neighbouring frames at once; serving them in wake-up order made a long-GOP decoder seek back
+// to the previous keyframe and decode the group again for almost every frame.
+struct FrameWaiter final {
+    std::uint32_t stream = 0;
+    std::uint64_t frame = 0;
+    std::uint64_t ticket = 0;     // unique, increasing in arrival order
+    std::uint64_t enrolledAt = 0; // grants made before this caller started waiting
+};
+inline constexpr std::uint64_t kFrameWaiterMaximumBypass = 16;
+// The ticket of the waiter the decoder serves next: the nearest frame at or after the last granted
+// frame of the same stream (where the decoder continues without a seek), else the lowest frame. A
+// waiter passed over kFrameWaiterMaximumBypass times goes first (oldest first), so a backward
+// request such as a loop restart waits a bounded number of frames. Empty when nobody waits.
+[[nodiscard]] std::optional<std::uint64_t>
+nextAdmittedFrameWaiter(std::span<const FrameWaiter> waiters,
+                        std::optional<std::pair<std::uint32_t, std::uint64_t>> lastGranted,
+                        std::uint64_t grants) noexcept;
 // Blocking off-UI facade. One worker request per asset at a time: identical frame requests share
-// the in-flight result and other requests wait (cancellably) rather than fail Busy. The caller's
+// the in-flight result and other requests wait (cancellably) rather than fail Busy. Waiting
+// requests are admitted by nextAdmittedFrameWaiter. The caller's
 // shared task owns admission and completion.
 class VideoDecodeSession final {
   public:

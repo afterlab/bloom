@@ -1616,6 +1616,16 @@ without seeking (for example every second frame of a 50p source in a 25p composi
 backward request or one past a later key packet seeks. A missing exact timestamp, unsupported layout or
 unavailable rate is a typed refusal.
 
+The host session serves one frame request at a time and queues the rest (issue #402). Queued
+requests are admitted in presentation order, not in the order their threads wake: first the
+nearest frame at or after the last frame granted on that stream, where the retained decoder
+continues without a seek, then the lowest earlier frame. Concurrent preparation (RAM preview,
+read-ahead) asks for neighboring frames at once; admitting them in wake-up order sent a long-GOP
+decoder back to the previous keyframe for almost every frame, which cost a whole GOP of decoding per
+frame on streams with one keyframe in 240. A request passed over 16 times is admitted next (oldest
+first), so a backward request such as a loop restart or a scrub waits a bounded number of frames
+(`video::nextAdmittedFrameWaiter`).
+
 Footage timing and layout (issue #367), all applied by the worker as source interpretation so the
 rest of Bloom sees display geometry:
 
