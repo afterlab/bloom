@@ -57,6 +57,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 - [The Export panel](user-guide/exporting-video.md) — the render queue, outputs, destinations and replacing files.
 - [Organizing Assets](user-guide/assets.md) — folders, display names, tags, search and drag order.
+- [Interpret Footage](user-guide/interpret-footage.md) — frame rate, start timecode, alpha, fields,
+  pixel aspect, loop, missing frames and input color for imported media.
 - [Import from network shares](user-guide/network-shares.md) — mounting an SMB share and
   importing from it on Linux, macOS and Windows.
 - [Preferences](user-guide/preferences.md) — global preferences, which changes take effect immediately,

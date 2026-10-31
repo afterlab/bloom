@@ -53,7 +53,7 @@ Auto resolution is format-specific and never uses an ambient `$OCIO` or a decode
 | Video: linear transfer, Rec.709 primaries | Working space |
 | Video: BT.2020 + PQ tags | The config's Rec.2100 PQ space (active or inactive), otherwise the synthesized `Rec.2100-PQ (Bloom)` space |
 | Video: BT.2020 + HLG tags | The config's Rec.2100 HLG space, otherwise the synthesized `Rec.2100-HLG (Bloom)` space |
-| Video: missing tags | Filled by the size convention (Rec.709 for HD, Rec.601 for SD, BT.709 transfer, limited range; [media I/O](media-io.md)) and resolved as above, with the visible note "Color tags missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Color" (Rec.601 for SD, Rec.2020 without the transfer clause for wide-gamut streams) |
+| Video: missing tags | Filled by the size convention (Rec.709 for HD, Rec.601 for SD, BT.709 transfer, limited range; [media I/O](media-io.md)) and resolved as above, with the visible note "Color tags missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Interpret Footage" (Rec.601 for SD, Rec.2020 without the transfer clause for wide-gamut streams) |
 | Video: other Rec.2020 tags | Typed refusal naming the input-color override |
 
 ### Ordinary SDR video default
@@ -74,6 +74,39 @@ The resolved input space is part of every video cache key, so frames, thumbnails
 entries made under the old default are never reused. A reference test compares both the CPU
 reference and the GPU route with FFmpeg's decode of generated H.264 color patches (within 2 codes
 per channel, mean 0.75).
+
+### Synthesized camera log input spaces (#381)
+
+Interpret Footage offers the common camera log encodings in every pinned config, as the HLG space
+is. A resolved pinned config that does not already name one gains, in memory:
+
+| Space | OCIO built-in |
+| --- | --- |
+| `S-Log3 SGamut3 (Bloom)` | `SONY_SLOG3-SGAMUT3_to_ACES2065-1` |
+| `S-Log3 SG3.Cine (Bloom)` | `SONY_SLOG3-SGAMUT3.CINE_to_ACES2065-1` |
+| `Venice SG3 (Bloom)` | `SONY_SLOG3-SGAMUT3-VENICE_to_ACES2065-1` |
+| `Venice SG3.Cine (Bloom)` | `SONY_SLOG3-SGAMUT3.CINE-VENICE_to_ACES2065-1` |
+| `LogC3 AWG3 (Bloom)` | `ARRI_ALEXA-LOGC-EI800-AWG_to_ACES2065-1` |
+| `LogC4 AWG4 (Bloom)` | `ARRI_LOGC4_to_ACES2065-1` |
+| `V-Log V-Gamut (Bloom)` | `PANASONIC_VLOG-VGAMUT_to_ACES2065-1` |
+| `Log3G10 RWG (Bloom)` | `RED_LOG3G10-RWG_to_ACES2065-1` |
+| `C-Log2 CGamut (Bloom)` | `CANON_CLOG2-CGAMUT_to_ACES2065-1` |
+| `C-Log3 CGamut (Bloom)` | `CANON_CLOG3-CGAMUT_to_ACES2065-1` |
+| `Apple Log (Bloom)` | `APPLE_LOG_to_ACES2065-1` |
+
+Each is the camera built-in (taken from a raw OCIO 2.4 config's processor, so the pinned configs
+keep their versions), then, for Bloom Neutral only, `UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD` and
+the inverse Rec.709 (D65) RGB to XYZ matrix; the ACES configs' reference is ACES2065-1 already.
+Family `Input`, scene-referred, never an Auto result, re-synthesized on every resolution,
+and validated. A built-in the linked OCIO lacks is simply not offered. Transform identity includes
+`synthesizedColorSpaceIdentity()` (`bloom-camera-log-v1;<built-in>;ocio=<version>`). The CPU
+processor and the GPU OCIO program are OCIO's own for the space, so the camera spaces follow the
+ordinary input transform path (CPU parity is proven natively in
+`bloom.runtime.gpu_footage_interpretation_native` under both configs).
+
+Interpret Footage also names the two legacy no-conversion choices plainly: **Preserve RGB** is the
+`Raw` interpretation (values enter the working space unchanged) and **Interpret as Linear** is the
+legacy `Linear` interpretation.
 
 ### Synthesized Rec.709 camera input space
 

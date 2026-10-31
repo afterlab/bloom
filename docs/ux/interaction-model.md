@@ -310,7 +310,7 @@ search or inline rename field.
 | Drop files or folders onto Assets | Imports them into the folder under the pointer, or the root on empty space |
 | Drop files or folders onto Timeline or Viewer | Imports them into the selected Assets folder, then makes layers of what was imported |
 | Drop files or folders onto Nodes | Imports them into the selected Assets folder; no node is added |
-| Right-click an asset | New Composition from Selection, Input Color…, Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete, then New Folder, New Composition…, Import… |
+| Right-click an asset | New Composition from Selection, Interpret Footage…, Copy Interpretation, Paste Interpretation, Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…, Delete, then New Folder, New Composition…, Import… |
 | Right-click a composition | Open, Composition Settings…, Rename, Duplicate, Delete, then the same three |
 | Right-click a folder | Rename, Delete, then the same three; empty space offers only the three |
 

@@ -98,7 +98,7 @@ inverse OETF; the picker currently lists it as **Rec.709 video**) as the input c
 tags. Footage with missing color tags is not refused: Bloom follows the usual NLE convention and
 assumes Rec.709 for HD and larger pictures and Rec.601 for SD, with video (limited) range, and
 fills only the tags that are missing. The asset then shows an Info mark and the note "Color tags
-missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Input Color"; choose an
+missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Interpret Footage"; choose an
 explicit input color space to replace the assumption. A project saved by a Bloom version before
 this default (document 1.28) shows a one-time note when you open it if any of its video looks
 different now; saving the project records the new default. ARRI

@@ -429,6 +429,54 @@ space; EXR AP0, AP1, and Rec.709/D65 chromaticities map to `ACES2065-1`, `ACEScg
 chromaticities assumes the working space with a warning. The exact config revision is part of every
 resolved input identity.
 
+#### Interpret Footage (#381, document 1.34)
+
+Interpretation is project truth on the asset, edited only through `SetAssetInterpretation` (one
+undo entry for a whole selection; the Assets panel's Interpret Footage dialog, Paste
+Interpretation and the `bloom.asset.set-interpretation` operation all issue it). Every surface and
+the runtime read it through the shared resolvers in `document/asset.hpp` (`footageFrameRate`,
+`footageDuration`, `footageFieldOrder`, `footagePixelAspect`, `footageStartTimecode`), so a shown
+value and a rendered frame cannot disagree.
+
+- **Frame rate and Loop.** `runtime::detail::footageFrameIndex` maps a source's operand time to a
+  frame of one pass: the node's start frame (composition frames) and loop mode over the whole
+  interpreted length, the asset's Loop count, and its assumed (sequence) or conformed (video)
+  rate. A sequence without an assumed rate keeps the pre-1.34 rule, one member per composition
+  frame. The resolved layer extent (`resolveSourceExtent`, `resolveVideoStreamExtent`), new layers
+  and new compositions take the interpreted length; `SetAssetInterpretation` moves an out point
+  that ended with the footage to the new end. A video's audio follows: `FootageAudioTiming` wraps
+  each pass and scales by the conformed rate over the file rate, so picture and sound stay in sync
+  (the audio is resampled, not pitch-corrected). A conform changes only which decoded frame is
+  chosen, so decode caches are shared.
+- **Missing frames.** With Show Nothing a frame the manifest lacks reads no file and decodes to a
+  transparent 1x1 image whose frame bounds are the sequence's frame, so layer geometry is unchanged.
+- **Start timecode.** Display and metadata only: no frame moves.
+- **Alpha and fields** run as the footage interpretation pass (below).
+- **Pixel aspect.** The decoder already resamples a file's coded ratio to square pixels; an override
+  is the ratio over the file's. It scales the layer's own content horizontally in layer space,
+  before the layer's scale and rotation (`CompiledLayerOutput::sourcePixelAspect`), on the CPU
+  oracle and the GPU affine alike; a child layer inherits the parent's transform without it. Stills
+  and sequences decode square; their override is the ratio itself.
+
+**Footage interpretation pass.** Ignore, Invert and a premultiplied matte color, and deinterlacing,
+are pixel transformations of the file's stored samples, so they run before the input colour
+transform. The decoder produces a stored-samples image (`ImageInterpretation::storedSamples`,
+`videoToStoredSamples`): stored R, G, B and `fma(A, 0.5, 0.5)`, so a transparent pixel keeps its
+stored RGB through the premultiplied image type. The pass (`runtime/footage_interpretation_pass`)
+then, per pixel: for a deinterlaced row of the field not kept, averages the rows above and below
+(one at an edge); decodes alpha; inverts it; and writes Ignore `(rgb, 1)`, Straight `(rgb·a, a)` or
+Premultiplied `(rgb − (1 − a)·matte, a)`. Its output is the premultiplied pre-colour state an
+ordinary decode publishes, so the proxy point resample and the input transform follow unchanged.
+On the GPU route the pass is a native `ProcessNeighborhood` program (`FootageInterpretation` in the
+OCIO preparer, parameters baked into the shader) emitted right after the upload, before the
+resample; the CPU reference uses the same binary32 operations (fma, one rounding each). Coverage
+axis `feature.footage.interpretation` is Required; `bloom.runtime.gpu_footage_interpretation_native`
+proves parity at 2e-6 on stills and an interlaced sequence. Ordinary interpretations (Guess,
+Straight, Premultiplied over black, progressive) keep the ordinary decode and caches. The pass's
+identity is part of the converted-image cache key and the raw decode key; the CPU route does not use
+the disk cache for interpreted footage. Assets thumbnails do not show the alpha or deinterlace
+interpretation.
+
 ### 3. Packet And Frame Index
 
 An index is keyed by source identity, provider/version, selected stream, and interpretation. It
@@ -1750,7 +1798,7 @@ Issue #365 interpretation rules:
   was scene-linear, so the encoded signal was shown pale. The Rec.709 camera inverse OETF
   (`Rec.709 Camera (Bloom)`), Rec.2100 PQ/HLG and log spaces stay explicit Input Color choices.
   The assumption is shown as the note "Color tags missing — assumed Rec.709 with the sRGB
-  transfer. Change in Assets → Input Color" (Rec.601 for SD; "assumed Rec.2020" without the
+  transfer. Change in Assets → Interpret Footage" (Rec.601 for SD; "assumed Rec.2020" without the
   transfer clause for a wide-gamut stream) in the asset's color note, an Info mark on its Assets
   row, and "Auto (assumed: …)" in the input color display. The filled tags and which of them were
   assumed (`assumed-colour-v2:<filled>:p,t,m,r`; v2 since the SDR default changed) are part of the

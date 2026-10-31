@@ -803,7 +803,7 @@ Dialog automation names (lane C): the Composition dialog's fields are `compositi
 `compositionSettingsDurationUnit`, its buttons `compositionSettingsButtons`, `compositionSettingsOk`
 and `compositionSettingsCancel` (the earlier `assets*` names are retired); its preset prompts are
 `compositionSavePreset`, `compositionRenamePreset` and `compositionDeletePreset`. Other dialogs:
-`compositionRenamePrompt`, `assetsDeleteConfirmation`, `assetsTagsDialog`, `assetsInputColorDialog`,
+`compositionRenamePrompt`, `assetsDeleteConfirmation`, `assetsTagsDialog`, `interpretFootageDialog`,
 `viewerSafeAreaDialog`, `projectColorSettingsDialog`, `projectUnsavedChanges`,
 `projectRecoverUnsaved`, `preferencesWindow` (with `preferencesOkButton`,
 `preferencesCategoryRail`, `preferencesActionsButton`, `preferencesRestoreDefaultsAction`,
@@ -1084,7 +1084,7 @@ frames), 24 fps`; `Color: sRGB (from the file) · Straight alpha`). The color fa
 color space by its plain name, then the alpha, then the color note once; a note, a missing source
 or an unshowable one turns that part Warn, with the detail in its tooltip
 (`Color: sRGB · Straight alpha · Color tags missing — assumed Rec.709 with the sRGB transfer.
-Change in Assets → Input Color`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
+Change in Assets → Interpret Footage`). Bloom Neutral's interchange identifiers read as plain names (`lin_rec709_scene`
 is **Linear Rec.709 (sRGB)** (the working-space label, `host::workingColorSpaceLabel`), `srgb_rec709_display` **sRGB**, the synthesized Rec.709 camera space
 **Rec.709 video**); another config's spaces show the names the config gives them. A space Auto read
 from the file's own tags adds `(from the file)` in the tooltip; an assumed one is explained by the
@@ -1113,8 +1113,8 @@ a priority row: as the panel narrows its menus fold one at a time into the overf
 (`dots-three-vertical`) -- Select first, then Add, then View -- and the Search toggle keeps its
 place beside Maximize. Text set by any other route (a Tags cell, automation) opens the row too.
 
-Context menus follow After Effects. An asset: New Composition from Selection, Input Color…
-(interpret footage), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
+Context menus follow After Effects. An asset: New Composition from Selection, Interpret Footage…,
+Copy Interpretation, Paste Interpretation (footage only), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
 Delete. A composition: Open, Composition Settings…, Rename, Duplicate, Delete. A folder: Rename,
 Delete. Each ends with New Folder, New Composition… and Import…, which is the whole menu on empty
 space. Reveal selects the file in the platform's file manager (freedesktop.org
@@ -1122,6 +1122,26 @@ space. Reveal selects the file in the platform's file manager (freedesktop.org
 folder holding it where that is not available; one helper chooses the command per platform. Deleting unused items is immediate; deleting a used item, or a folder that holds items,
 first asks in a warning box that names the usage, and for folders offers Delete Folders Only (the
 contents move up) or Delete with Contents. Every delete is one transaction and one undo step.
+
+Interpret Footage (#381) is one KDialog form (Wide) per selection, After Effects' order: Frame
+Rate (a mode dropdown: the file's rate or Conform to for video, Match the composition or Assume
+this frame rate for a sequence, with an exact rate field), Start Timecode (the source's or an
+override), Alpha (Guess from the file, Ignore, Straight, Premultiplied with a Matte Color chip shown
+only for Premultiplied, and an Invert alpha check), Fields (the file's order or an override, and
+Deinterlace), Pixel Aspect Ratio (the file's or Composition Settings' list), Loop (times), Missing
+Frames (sequences) and Input Color (Auto with the resolved space named, Preserve RGB, Interpret as
+Linear, legacy sRGB and every space of the project configuration, camera log spaces included). Rows
+a selected kind does not have are absent; the title names a multi-selection ("Interpret Footage —
+3 items"), whose OK changes only what the artist changed, on every item, as one undo entry. The
+selection header shows an Interpret Footage icon button at the end of its facts line while footage
+is selected. Copy and Paste Interpretation carry every member through a session clipboard. Names:
+`interpretFootageDialog`, `interpretFootageRateMode`, `interpretFootageRate`,
+`interpretFootageTimecodeMode`, `interpretFootageTimecode`, `interpretFootageAlpha`,
+`interpretFootageMatte`, `interpretFootageInvertAlpha`, `interpretFootageFieldOrder`,
+`interpretFootageDeinterlace`, `interpretFootagePixelAspect`, `interpretFootageLoop`,
+`interpretFootageMissingFrames`, `interpretFootageColor`, `interpretFootageButtons`; the actions
+`assetsInterpretFootageAction`, `assetsCopyInterpretationAction`,
+`assetsPasteInterpretationAction`; the header button `assetsSelectionInterpretFootage`.
 
 Rename edits the Name cell in place through a kit line edit, from Rename, F2 or Return. Return,
 Escape and clicking away commit (Escape confirms everywhere; Undo is the discard). Every accepted rename uses the shared command transaction. The
@@ -1264,7 +1284,7 @@ content needs at that width.
 Dialogs open asynchronously (window-modal, answered through a callback) unless a caller must hand a
 synchronous answer back: the Composition dialog, the
 unsaved-change, open, save and recovery prompts of the project host, Preferences, and prompts nested
-inside an already modal dialog run with `exec()`, each documented at its call site. Edit Tags, Input Color, Custom Safe Areas, Project Settings — Color, Delete, Rename Composition,
+inside an already modal dialog run with `exec()`, each documented at its call site. Edit Tags, Interpret Footage, Custom Safe Areas, Project Settings — Color, Delete, Rename Composition,
 Restore Defaults and every failure notice are asynchronous. The keys are in
 [interaction-model.md](interaction-model.md#dialogs).
 

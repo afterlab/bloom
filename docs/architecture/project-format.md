@@ -1,7 +1,9 @@
 # Bloom Project Format
 
-The current document schema is 1.33. It adds the export formats `vp9-webm`, `av1-webm` and `av1-mp4`
-and their codec profiles (see "Export Formats In Document 1.33"). Document 1.32 added the optional
+The current document schema is 1.34. It adds the optional Interpret Footage members of an asset's
+interpretation and a video stream's coded pixel aspect ratio (see "Interpret Footage In Document
+1.34"). Document 1.33 added the export formats `vp9-webm`, `av1-webm` and `av1-mp4` and their codec
+profiles (see "Export Formats In Document 1.33"). Document 1.32 added the optional
 keyframe member `handleMode` (see "Keyframe Handle Modes In Document 1.32"). Document 1.31 added the optional node group `color` (see "Node Group
 Colors In Document 1.31"). Document 1.30 added Blender's keyframe easing equations (ten interpolation
 tokens and the optional keyframe `easing` member) and the optional presentation-only layer members
@@ -1393,9 +1395,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.33`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.34`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.33.schema.json` and `manifest-1.33.schema.json`; the
+The current artifacts are `document-1.34.schema.json` and `manifest-1.34.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1577,6 +1579,36 @@ flag on exactly the layers whose name already equals their source's current name
 audio source's asset name, or a nested composition's name; see
 [layer-graph-model.md](layer-graph-model.md#layer-timeline-contract)). Following the source therefore
 changes no visible name. The DOM step, which archive loading does not run, leaves the flag absent.
+
+## Interpret Footage In Document 1.34
+
+Document `1.34` (issue #381) adds the Interpret Footage members to an asset's `interpretation`
+object, after `alphaAssociation` and in this order. Each is optional and written only when it
+differs from its default, so an asset the artist never interpreted is written exactly as in 1.33:
+
+| Member | Value | Default (absent) |
+| --- | --- | --- |
+| `frameRate` | `{numerator, denominator}`: a sequence's assumed rate or a video's conformed rate | a sequence advances one member per composition frame; a video plays at its file rate |
+| `startTimecode` | `{start, dropFrame}`: the start timecode override as an exact time | the source's own timecode |
+| `alphaMode` | `ignore`, `straight` or `premultiplied` | Guess: the association the file declared (`alphaAssociation`), with each image node's Premultiply switch in charge |
+| `invertAlpha` | `true` | not inverted |
+| `matteColor` | three numbers in [0, 1]: the color a premultiplied alpha was matted against, in the file's encoding | black |
+| `fieldOrder` | `progressive`, `upperFirst` or `lowerFirst` | the field order captured at import |
+| `deinterlace` | `true` | not deinterlaced |
+| `pixelAspect` | `{numerator, denominator}` in [1/100, 100] | the file's ratio |
+| `loopCount` | integer 2 to 1000: the footage plays this many times end to end | 1 |
+| `missingFrames` | `nothing`: a frame the sequence manifest lacks shows nothing | hold the previous frame |
+
+A video stream gains an optional trailing `pixelAspect` (`{numerator, denominator}`, never 1/1):
+the coded sample aspect ratio the decoder resamples to square pixels, captured at import (provider
+schema 5); absent means square. A still has no frame rate, start timecode, fields or loop, and only
+a sequence has missing frames; validation refuses them on other kinds. A member written at its
+default, an unknown token, or any 1.34 member in a document claiming an older minor is refused.
+
+The `1.33` → `1.34` DOM step `migrateFootageInterpretationV1_33` only advances the version: every
+older asset opens with the defaults, which reproduce 1.33 playback exactly (a sequence keeps one
+member per composition frame). The schema artifacts reference `assetInterpretation-1.34` and
+`videoStream-1.34`; the schema check restores the 1.33 artifact from them exactly.
 
 ## Export Formats In Document 1.33
 

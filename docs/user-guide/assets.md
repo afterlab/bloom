@@ -92,8 +92,9 @@ together; one **Undo** reverses the whole move. A folder cannot be moved into it
 
 Right-click an item for the commands that apply to it:
 
-- **Media:** New Composition from Selection, Input Color… (how its colors are interpreted),
-  Replace Footage…, Reload Footage, Reveal in File Manager (shows the file selected in your file
+- **Media:** New Composition from Selection, Interpret Footage… (frame rate, timecode, alpha,
+  fields, pixel aspect, loop and color; see [Interpret Footage](interpret-footage.md)), Copy
+  Interpretation, Paste Interpretation, Replace Footage…, Reload Footage, Reveal in File Manager (shows the file selected in your file
   manager, or opens its folder where that is not possible), Rename, Edit Tags…, Delete.
 - **Compositions:** Open, Composition Settings…, Rename, Duplicate, Delete.
 - **Folders:** Rename, Delete.
