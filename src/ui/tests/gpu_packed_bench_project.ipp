@@ -99,6 +99,8 @@ struct BenchMemorySample {
     std::uint64_t reusablePoolBytes = 0;
     std::uint64_t previewCacheBytes = 0;
     std::uint64_t operationCacheBytes = 0;
+    std::uint64_t decodedMediaBytes = 0;   // operation-cache entries of decoded source media
+    std::uint64_t preparedUploadBytes = 0; // operation-cache entries of prepared GPU uploads
     std::uint64_t hostClaimBytes = 0;
     std::uint64_t hostUsableBytes = 0;
 };
@@ -135,6 +137,8 @@ void benchReadProcStatus(BenchMemorySample& sample) {
         << ",\"reusablePoolBytes\":" << sample.reusablePoolBytes
         << ",\"previewCacheBytes\":" << sample.previewCacheBytes
         << ",\"operationCacheBytes\":" << sample.operationCacheBytes
+        << ",\"decodedMediaBytes\":" << sample.decodedMediaBytes
+        << ",\"preparedUploadBytes\":" << sample.preparedUploadBytes
         << ",\"hostClaimBytes\":" << sample.hostClaimBytes
         << ",\"hostUsableBytes\":" << sample.hostUsableBytes << '}';
     return out.str();
@@ -502,6 +506,10 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         sample.reusablePoolBytes = runtime::processMemoryBudgetLedger().reusableRetainedBytes();
         sample.previewCacheBytes = frameCache->residentBytes();
         sample.operationCacheBytes = evaluator.operationCache()->retainedBytes();
+        sample.decodedMediaBytes = evaluator.operationCache()->retainedBytes(
+            runtime::OperationCacheEntryKind::DecodedMedia);
+        sample.preparedUploadBytes = evaluator.operationCache()->retainedBytes(
+            runtime::OperationCacheEntryKind::PreparedUpload);
         const auto capacity = policy->usableCapacity();
         sample.hostClaimBytes = capacity.hostClaimBytes;
         sample.hostUsableBytes = capacity.hostUsableBytes;
