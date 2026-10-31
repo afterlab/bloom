@@ -13,6 +13,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 
 #include <QAction>
@@ -241,6 +242,7 @@ void editorFlow() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    ui::kit::installKinetikTheme(application);
     QApplication::setOrganizationName(QStringLiteral("BloomInterpretFootageTests"));
     QApplication::setApplicationName(QStringLiteral("InterpretFootage"));
     QStandardPaths::setTestModeEnabled(true);
