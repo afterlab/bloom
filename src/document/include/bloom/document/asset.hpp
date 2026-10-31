@@ -192,6 +192,14 @@ struct AssetRecord {
 [[nodiscard]] core::PixelAspectRatio footagePixelAspect(const AssetRecord& asset);
 // The source start timecode: the override, else a video stream's timecode text at its rate.
 [[nodiscard]] std::optional<CompositionTimecode> footageStartTimecode(const AssetRecord& asset);
+// A frame rate as typed: "24", an exact decimal such as "12.5", "n/d", or the NTSC decimals
+// 23.976, 29.97, 47.952, 59.94, 119.88 and 14.985, which name the exact n/1001 rates. Nullopt when
+// unreadable (the bounds are isValidFootageFrameRate's).
+[[nodiscard]] std::optional<FrameRate> parseFootageFrameRate(std::string_view text);
+// SMPTE "HH:MM:SS:FF" (';' or '.' before the frames for drop-frame, honoured at 30000/1001 and
+// 60000/1001) at `rate`, as a start time.
+[[nodiscard]] std::optional<CompositionTimecode> parseFootageTimecode(std::string_view text,
+                                                                      FrameRate rate);
 // Lexical only: importing and migration share a portable UTF-8 file-stem default.
 [[nodiscard]] std::string defaultAssetName(const AssetRecord& asset);
 } // namespace bloom::document

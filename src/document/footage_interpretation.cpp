@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace bloom::document {
 namespace {
@@ -18,9 +19,10 @@ namespace {
     const auto found = std::ranges::find(asset.videoStreams, 1U, &AssetVideoStream::kind);
     return found == asset.videoStreams.end() ? nullptr : &*found;
 }
-// SMPTE "HH:MM:SS:FF" (or ';'/'.' before the frames for drop-frame) at `rate`, as a time.
-[[nodiscard]] std::optional<CompositionTimecode> parseTimecode(const std::string_view text,
-                                                               const FrameRate rate) {
+} // namespace
+
+std::optional<CompositionTimecode> parseFootageTimecode(const std::string_view text,
+                                                        const FrameRate rate) {
     std::array<std::uint32_t, 4> fields{};
     std::size_t position = 0;
     bool drop = false;
@@ -64,7 +66,48 @@ namespace {
         return std::nullopt;
     return CompositionTimecode{*time, drop};
 }
-} // namespace
+
+std::optional<FrameRate> parseFootageFrameRate(std::string_view text) {
+    while (!text.empty() && text.front() == ' ')
+        text.remove_prefix(1);
+    while (!text.empty() && text.back() == ' ')
+        text.remove_suffix(1);
+    static constexpr std::array<std::pair<std::string_view, std::uint32_t>, 6> kNtsc{
+        {{"23.976", 24000}, {"29.97", 30000}, {"47.952", 48000}, {"59.94", 60000},
+         {"119.88", 120000}, {"14.985", 15000}}};
+    for (const auto& [name, numerator] : kNtsc)
+        if (text == name)
+            return FrameRate::create(numerator, 1001);
+    const auto number = [](const std::string_view digits) -> std::optional<std::uint64_t> {
+        std::uint64_t value = 0;
+        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (digits.empty() || error != std::errc{} || end != digits.data() + digits.size())
+            return std::nullopt;
+        return value;
+    };
+    constexpr auto maximum = std::numeric_limits<std::uint32_t>::max();
+    if (const auto slash = text.find('/'); slash != std::string_view::npos) {
+        const auto numerator = number(text.substr(0, slash));
+        const auto denominator = number(text.substr(slash + 1));
+        if (!numerator || !denominator || *numerator > maximum || *denominator > maximum)
+            return std::nullopt;
+        return FrameRate::create(static_cast<std::uint32_t>(*numerator),
+                                 static_cast<std::uint32_t>(*denominator));
+    }
+    const auto dot = text.find('.');
+    const auto whole = number(dot == std::string_view::npos ? text : text.substr(0, dot));
+    const auto fraction = dot == std::string_view::npos ? std::string_view{} : text.substr(dot + 1);
+    if (!whole || fraction.size() > 6 || (!fraction.empty() && !number(fraction)))
+        return std::nullopt;
+    std::uint64_t denominator = 1;
+    for (std::size_t digit = 0; digit < fraction.size(); ++digit)
+        denominator *= 10;
+    const auto value = *whole * denominator + (fraction.empty() ? 0 : *number(fraction));
+    if (value > maximum)
+        return std::nullopt;
+    return FrameRate::create(static_cast<std::uint32_t>(value),
+                             static_cast<std::uint32_t>(denominator));
+}
 
 bool isValidFootageFrameRate(const FrameRate rate) noexcept {
     // 1/100 to 1000 frames per second, the composition settings' practical bounds.
@@ -192,7 +235,7 @@ std::optional<CompositionTimecode> footageStartTimecode(const AssetRecord& asset
     const auto rate = footageFileFrameRate(asset);
     if (stream == nullptr || stream->timecode.empty() || !rate)
         return std::nullopt;
-    return parseTimecode(stream->timecode, *rate);
+    return parseFootageTimecode(stream->timecode, *rate);
 }
 
 } // namespace bloom::document
