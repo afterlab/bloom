@@ -278,10 +278,11 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
         }
     }
     // Every category shows without scrolling: the rail is never shorter than its rows.
-    int railHeight = 2 * categoryRail_->frameWidth();
+    const int frame = categoryRail_->frameWidth();
+    int rows = frame + frame;
     for (int row = 0; row < categoryRail_->count(); ++row)
-        railHeight += categoryRail_->item(row)->sizeHint().height();
-    categoryRail_->setMinimumHeight(railHeight);
+        rows += categoryRail_->item(row)->sizeHint().height();
+    categoryRail_->setMinimumHeight(rows);
     connect(categoryRail_, &QListWidget::currentItemChanged, pages_, [this](QListWidgetItem* item) {
         if (item == nullptr || !item->data(Qt::UserRole).isValid())
             return;
