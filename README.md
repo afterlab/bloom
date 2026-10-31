@@ -8,9 +8,9 @@ composition.**
 
 ![Bloom's Default workspace: Assets, the Viewer showing a title card, Properties for the selected Title layer, and a Timeline of colored layers with keyframes](docs/images/readme/default-workspace.webp)
 
-Bloom is an open-source desktop app for motion graphics and visual effects. If you've worked in
-After Effects, you'll feel at home: layers on a timeline, keyframes, precomps, masks, track mattes
-and a render queue. Underneath, every composition is also a node graph. Open the Nodes panel and
+Bloom is an open-source desktop app for motion graphics and visual effects. If you've used a
+layer-based compositor, you'll feel at home: layers on a timeline, keyframes, precomps, masks,
+track mattes and a render queue. Underneath, every composition is also a node graph. Open the Nodes panel and
 you're looking at the same shot, not a copy of it. Change either one and the other follows.
 
 Bloom is written in C++20 and Qt 6. On Linux, the Viewer and final renders run on the GPU through
@@ -58,7 +58,7 @@ wrote.
 **Animate**
 
 - Keyframe any property and shape the motion in the Graph Editor, with value and speed graphs.
-- Easy Ease, plus Blender's easing curves, from Sine through Elastic.
+- Easy Ease, plus a full set of easing curves, from Sine through Elastic.
 - Undo and redo for every edit, whether it came from a panel, a script or an agent.
 
 **Work in nodes**
