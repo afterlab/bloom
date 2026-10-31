@@ -112,7 +112,10 @@ def bloom_revision(build_dir):
             source = Path(found.group(1))
     commit = run_text(["git", "-C", str(source), "rev-parse", "HEAD"])
     dirty = run_text(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"])
-    return {"commit": commit, "dirty": bool(dirty)}
+    # The upstream main the build sits on, so a branch carrying only benchmark tooling still
+    # names the shipped code it measured.
+    base = run_text(["git", "-C", str(source), "merge-base", "HEAD", "origin/main"])
+    return {"commit": commit, "dirty": bool(dirty), "originMainBase": base}
 
 
 def find_loader(build_dir, explicit):
