@@ -1,6 +1,7 @@
 // Interpret Footage (#381): the dialog's rows follow the footage kind and report only what the
 // artist changed; the Assets context menu and selection header open it on the selection, and one
-// OK is one undo entry; Copy and Paste Interpretation copy every member.
+// OK is one undo entry; Copy and Paste Interpretation copy every member. With
+// BLOOM_INTERPRET_CAPTURE_DIR set it also saves the video and still dialogs as PNGs.
 #include "assets_editor_internal.hpp"
 #include "interpret_footage_dialog.hpp"
 
@@ -16,6 +17,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDir>
 #include <QLineEdit>
 #include <QMenu>
 #include <QStandardPaths>
@@ -34,6 +36,19 @@ void expect(const bool condition, const char* message) {
         std::fprintf(stderr, "FAIL: %s\n", message);
         ok = false;
     }
+}
+
+void capture(QWidget& widget, const QString& name) {
+    const auto directory = qEnvironmentVariable("BLOOM_INTERPRET_CAPTURE_DIR");
+    if (directory.isEmpty())
+        return;
+    QDir().mkpath(directory);
+    widget.show();
+    QApplication::processEvents();
+    const QString scale = qEnvironmentVariable("QT_SCALE_FACTOR", QStringLiteral("1")).remove('.');
+    expect(widget.grab().toImage().save(directory + QStringLiteral("/%1-dpr%2.png").arg(name, scale)),
+           "the capture is written");
+    widget.hide();
 }
 
 document::AssetRecord video(const std::uint64_t id, const std::string& name) {
@@ -109,6 +124,7 @@ void dialogRows() {
     expect(change && change->startTimecode && *change->startTimecode &&
                (*change->startTimecode)->start == *core::RationalTime::create(300 * 1001, 30000),
            "a start timecode override at the conformed rate");
+    capture(dialog, QStringLiteral("interpret-video"));
 
     const auto logo = still(2);
     ui::InterpretFootageDialog stillDialog(logo, 1, {document::AssetKind::Image}, {}, {}, owner);
@@ -121,6 +137,7 @@ void dialogRows() {
     expect(change && change->inputColor &&
                change->inputColor->first == document::AssetColorSpace::Raw,
            "Preserve RGB is the no-conversion input");
+    capture(stillDialog, QStringLiteral("interpret-still"));
 }
 
 QTreeWidgetItem* findText(QTreeWidget& tree, const QString& name) {
