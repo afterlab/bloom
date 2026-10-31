@@ -41,19 +41,12 @@ SequenceMemberChoice selectSequenceMember(const CompiledImageSource& source,
         choice.warning = "Sequence time exceeds the frame range";
         return choice;
     }
-    const auto wanted =
-        static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + *offset);
-    auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
-                                          &document::AssetSequenceMember::frame);
-    if (found != asset.manifest.members.begin())
-        --found;
-    choice.frame = wanted;
-    if (found->frame != wanted &&
-        asset.interpretation.missingFrames == document::AssetMissingFrames::Nothing) {
-        choice.missing = true;
-        return choice;
-    }
-    choice.member = &*found;
+    // The member, the one a gap holds, none for a gap that shows nothing, or the members back to
+    // back when the asset skips missing frames.
+    const auto frame = document::footageSequenceFrame(asset, *offset);
+    choice.frame = frame.frame;
+    choice.member = frame.member;
+    choice.missing = frame.member == nullptr;
     return choice;
 }
 // A transparent 1x1 image at the frame origin: what a missing sequence frame decodes to when the
