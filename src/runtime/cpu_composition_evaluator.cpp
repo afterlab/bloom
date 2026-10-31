@@ -3,7 +3,6 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "cryptomatte.hpp"
-#include <bloom/runtime/footage_time.hpp>
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
@@ -15,6 +14,7 @@
 #include <bloom/media/video/colour.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/composition_time.hpp>
+#include <bloom/runtime/footage_time.hpp>
 
 #include <bloom/core/rational_time.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -2389,8 +2389,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                                    "Layer transform could not be resolved", {}, operationSubject));
                 const auto centre = bounds[layer->input.value()].output.centre();
-                const document::Vec2d pivot{centre.x + anchor->value.x,
-                                            centre.y + anchor->value.y};
+                const document::Vec2d pivot{centre.x + anchor->value.x, centre.y + anchor->value.y};
                 auto matrix = detail::LayerMatrix::authored(position->value, pivot, scale->value,
                                                             rotation->value);
                 auto content = detail::LayerMatrix::authored(
@@ -3027,9 +3026,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (!selectedVideo || !selectedVideo->frame)
                                 return;
                             auto image = detail::convertSelectedVideo(
-                                *selectedVideo, resolved.imageDescriptor,
-                                resolved.horizontalScale, resolved.verticalScale,
-                                remainingPixelBudget(),
+                                *selectedVideo, resolved.imageDescriptor, resolved.horizontalScale,
+                                resolved.verticalScale, remainingPixelBudget(),
                                 [&] { return cancellation.isCancellationRequested(); });
                             if (const auto* error =
                                     std::get_if<media::provider::Unavailable>(&image)) {

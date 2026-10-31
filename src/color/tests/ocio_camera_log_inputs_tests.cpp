@@ -22,11 +22,11 @@ using bloom::color::OcioConfigLocatorKind;
 
 [[nodiscard]] bloom::color::OcioBuiltInResolutionResult resolve(const std::string_view uri,
                                                                 const std::string_view working) {
-    const auto revision = bloom::color::ocioBuiltInContentRevision(OcioConfigLocatorKind::BloomBuiltIn,
-                                                                   uri);
-    return bloom::color::resolveOcioBuiltIn(OcioConfigLocatorKind::BloomBuiltIn, uri,
-                                            revision.value_or(bloom::color::kBloomNeutralV1ConfigDigest),
-                                            working);
+    const auto revision =
+        bloom::color::ocioBuiltInContentRevision(OcioConfigLocatorKind::BloomBuiltIn, uri);
+    return bloom::color::resolveOcioBuiltIn(
+        OcioConfigLocatorKind::BloomBuiltIn, uri,
+        revision.value_or(bloom::color::kBloomNeutralV1ConfigDigest), working);
 }
 
 struct Camera final {
@@ -61,8 +61,8 @@ void testConfig(const std::string_view uri, const std::string_view working,
         expect(prepared.processor()->apply(pixel), label + ": " + name + " applies");
         // Grey stays neutral and lands near 0.18 (the curves' published values are rounded).
         const auto mean = (pixel[0][0] + pixel[0][1] + pixel[0][2]) / 3.0F;
-        expect(std::abs(mean - 0.18F) < 0.02F, label + ": " + name + " grey decodes near 0.18 (" +
-                                                   std::to_string(mean) + ")");
+        expect(std::abs(mean - 0.18F) < 0.02F,
+               label + ": " + name + " grey decodes near 0.18 (" + std::to_string(mean) + ")");
         expect(std::abs(pixel[0][0] - pixel[0][2]) < 0.01F,
                label + ": " + name + " grey stays neutral");
         expect(!bloom::color::synthesizedColorSpaceIdentity(camera.id).empty(),

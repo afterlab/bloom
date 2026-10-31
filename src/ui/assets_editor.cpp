@@ -4,7 +4,6 @@
 #include <QHeaderView>
 #include <QKeySequence>
 #include <QMenu>
-#include <bloom/ui/export_queue_adapter.hpp>
 #include <QSettings>
 #include <QShortcut>
 #include <QTimer>
@@ -22,6 +21,7 @@
 #include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/composition_thumbnail_controller.hpp>
+#include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
@@ -269,12 +269,12 @@ void AssetsEditor::showContextMenu(const QPoint position) {
             add(tr("Interpret Footage…"), "assetsInterpretFootageAction", [this, id] {
                 interpretFootage(id);
             })->setToolTip(tr("Frame rate, timecode, alpha, fields, pixel aspect, loop and color"));
-            add(tr("Copy Interpretation"), "assetsCopyInterpretationAction",
-                [this, id] { copyInterpretation(id); })
-                ->setEnabled(single);
-            add(tr("Paste Interpretation"), "assetsPasteInterpretationAction",
-                [this] { pasteInterpretation(); })
-                ->setEnabled(assets::copiedInterpretation().has_value());
+            add(tr("Copy Interpretation"), "assetsCopyInterpretationAction", [this, id] {
+                copyInterpretation(id);
+            })->setEnabled(single);
+            add(tr("Paste Interpretation"), "assetsPasteInterpretationAction", [this] {
+                pasteInterpretation();
+            })->setEnabled(assets::copiedInterpretation().has_value());
         }
         add(tr("Replace Footage…"), "assetsReplaceFootageAction", [this, id] {
             if (auto* controller = session_.assetController())

@@ -92,7 +92,6 @@ videoToInputColorSpace(const media::provider::FrameProduct& frame, std::uint32_t
 // fma(alpha, 0.5, 0.5) (see media::ImageInterpretation::storedSamples).
 [[nodiscard]] media::provider::Result<render::Rgba32fImage>
 videoToStoredSamples(const media::provider::FrameProduct& frame, std::uint32_t overrideTransfer,
-                     std::string_view inputColorSpaceId,
-                     render::Rgba32fImageDescriptor composition, std::size_t byteBudget,
-                     const std::function<bool()>& cancel = {});
+                     std::string_view inputColorSpaceId, render::Rgba32fImageDescriptor composition,
+                     std::size_t byteBudget, const std::function<bool()>& cancel = {});
 } // namespace bloom::media::video

@@ -271,7 +271,8 @@ void contextMenus(TestContext& context) {
                              "assetsContextImportAction"};
     auto names = contextMenu(*tree, at("Clip"));
     for (const auto* name :
-         {"assetsNewCompositionFromSelectionAction", "assetsInterpretFootageAction", "assetsCopyInterpretationAction", "assetsPasteInterpretationAction",
+         {"assetsNewCompositionFromSelectionAction", "assetsInterpretFootageAction",
+          "assetsCopyInterpretationAction", "assetsPasteInterpretationAction",
           "assetsReplaceFootageAction", "assetsReloadAction", "assetsRevealAction",
           "assetsRenameAction", "assetsEditTagsAction", "assetsDeleteAction"})
         context.expect(names.contains(QString::fromLatin1(name)), name);

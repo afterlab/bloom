@@ -1,8 +1,8 @@
 #pragma once
-#include <QPoint>
-#include <QString>
 #include <QPersistentModelIndex>
+#include <QPoint>
 #include <QSet>
+#include <QString>
 #include <QStyledItemDelegate>
 #include <QTreeWidget>
 #include <bloom/core/rational_time.hpp>
@@ -239,12 +239,12 @@ class AssetTree final : public QTreeWidget {
 
 // The compact summary strip above the tree (one fixed SummaryStrip height): with one item, a
 // thumbnail well, the name with its usage trailing in Faint, and one Muted line of skimmable facts
-// (`Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB · Straight`), a warning in Warn; with
-// several, their count and kinds; with none, the project's kinds in one Faint line. The detailed
-// sentence of each fact is its tooltip. It reads the project and the controllers' published state
-// only; thumbnails are prepared on their workers.
-// Copy Interpretation's clipboard (#381): session state for this run of the application, never
-// project truth. Empty until an interpretation is copied.
+// (`Sequence · 2048 × 858 · 0:00:16:02 · 386 f · 24 fps · sRGB · Straight`), a warning in Warn;
+// with several, their count and kinds; with none, the project's kinds in one Faint line. The
+// detailed sentence of each fact is its tooltip. It reads the project and the controllers'
+// published state only; thumbnails are prepared on their workers. Copy Interpretation's clipboard
+// (#381): session state for this run of the application, never project truth. Empty until an
+// interpretation is copied.
 [[nodiscard]] std::optional<document::AssetInterpretation>& copiedInterpretation();
 
 class SummaryStrip final : public QWidget {

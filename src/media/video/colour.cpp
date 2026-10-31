@@ -239,11 +239,10 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
                 convertedRow[x] = {rgb[0], rgb[1], rgb[2], alpha};
             } else {
                 const auto pixel =
-                    storedSamples
-                        ? render::Rgba32f::fromPremultiplied(rgb[0], rgb[1], rgb[2],
-                                                             std::fma(alpha, 0.5F, 0.5F))
-                        : render::Rgba32f::fromPremultiplied(rgb[0] * alpha, rgb[1] * alpha,
-                                                             rgb[2] * alpha, alpha);
+                    storedSamples ? render::Rgba32f::fromPremultiplied(rgb[0], rgb[1], rgb[2],
+                                                                       std::fma(alpha, 0.5F, 0.5F))
+                                  : render::Rgba32f::fromPremultiplied(
+                                        rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha);
                 if (!pixel)
                     return Unavailable{Error::InvalidValue, "Video pixel is invalid"};
                 (*row.value())[x] = *pixel.value();
@@ -371,7 +370,9 @@ AssumedVideoColour assumeMissingVideoColour(const ColourTags& source,
     // R'G'B' is shown with (ADR 0032).
     const bool sdr = !wide && (tags.transfer == 1 || tags.transfer == 6 || tags.transfer == 13);
     result.note = std::string("Color tags missing — assumed ") +
-                  (wide ? "Rec.2020" : hd ? "Rec.709" : "Rec.601") +
+                  (wide ? "Rec.2020"
+                   : hd ? "Rec.709"
+                        : "Rec.601") +
                   (sdr ? " with the sRGB transfer" : "") + ". Change in Assets → Interpret Footage";
     // v2: the SDR assumption resolves to the sRGB texture space instead of the camera/linear one.
     result.identity = "assumed-colour-v2:" + filled + ":" + std::to_string(tags.primaries) + "," +

@@ -136,7 +136,9 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
                              : tr("Interpret Footage — %1").arg(QString::fromStdString(asset.name)),
                    QStringLiteral("interpretFootageDialog"), owner, Qt::WindowModal, Width::Wide),
       asset_(asset) {
-    const auto has = [&](const AssetKind kind) { return std::ranges::find(kinds, kind) != kinds.end(); };
+    const auto has = [&](const AssetKind kind) {
+        return std::ranges::find(kinds, kind) != kinds.end();
+    };
     timed_ = has(AssetKind::Sequence) || has(AssetKind::Video);
     sequence_ = has(AssetKind::Sequence);
     const bool video = asset.kind == AssetKind::Video;
@@ -149,9 +151,10 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         rateMode_ = dropdown(body, "interpretFootageRateMode", tr("Frame Rate"));
         if (video) {
             const auto file = document::footageFileFrameRate(asset);
-            rateMode_->addItem(file ? tr("Use the file's rate (%1 fps)").arg(footageFrameRateText(*file))
-                                    : tr("Use the file's rate"),
-                               QStringLiteral("file"));
+            rateMode_->addItem(
+                file ? tr("Use the file's rate (%1 fps)").arg(footageFrameRateText(*file))
+                     : tr("Use the file's rate"),
+                QStringLiteral("file"));
             rateMode_->addItem(tr("Conform to"), QStringLiteral("override"));
         } else {
             rateMode_->addItem(tr("Match the composition"), QStringLiteral("file"));
@@ -169,7 +172,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         form->addRow(tr("Frame Rate"), rateRow_)
             ->setObjectName(QStringLiteral("interpretFootageRateError"));
         select(*rateMode_, value.frameRate ? QStringLiteral("override") : QStringLiteral("file"));
-        const auto shown = value.frameRate ? value.frameRate : document::footageFileFrameRate(asset);
+        const auto shown =
+            value.frameRate ? value.frameRate : document::footageFileFrameRate(asset);
         rate_->setText(shown ? footageFrameRateText(*shown) : QStringLiteral("24"));
         connect(rateMode_, &kit::KDropdown::currentIndexChanged, this, [this](int) { refresh(); });
         connect(rate_, &QLineEdit::textChanged, this, [this](const QString&) { refresh(); });
@@ -186,7 +190,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
             const auto rate = timecodeRate();
             const auto frames = static_cast<std::uint64_t>(
                 std::max<std::int64_t>(0, timecodeStartFrame(rate, {timecode.start, false})));
-            return formatTimelineFrameLabel(frames, rate, true, {core::RationalTime{}, timecode.dropFrame});
+            return formatTimelineFrameLabel(frames, rate, true,
+                                            {core::RationalTime{}, timecode.dropFrame});
         };
         timecodeMode_->addItem(source ? tr("Use the source's (%1)").arg(label(*source))
                                       : tr("Use the source's (none)"),
@@ -204,7 +209,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
                value.startTimecode ? QStringLiteral("override") : QStringLiteral("source"));
         const auto shownTimecode = value.startTimecode ? value.startTimecode : source;
         timecode_->setText(shownTimecode ? label(*shownTimecode) : QStringLiteral("00:00:00:00"));
-        connect(timecodeMode_, &kit::KDropdown::currentIndexChanged, this, [this](int) { refresh(); });
+        connect(timecodeMode_, &kit::KDropdown::currentIndexChanged, this,
+                [this](int) { refresh(); });
         connect(timecode_, &QLineEdit::textChanged, this, [this](const QString&) { refresh(); });
         watch(timecodeMode_);
         watch(timecode_);
@@ -218,7 +224,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
                                           : tr("Guess from the file (Straight)"),
                     static_cast<int>(document::AssetAlphaMode::Guess));
     alpha_->addItem(tr("Ignore"), static_cast<int>(document::AssetAlphaMode::Ignore));
-    alpha_->addItem(tr("Straight (Unmatted)"), static_cast<int>(document::AssetAlphaMode::Straight));
+    alpha_->addItem(tr("Straight (Unmatted)"),
+                    static_cast<int>(document::AssetAlphaMode::Straight));
     alpha_->addItem(tr("Premultiplied (Matted with color)"),
                     static_cast<int>(document::AssetAlphaMode::Premultiplied));
     select(*alpha_, static_cast<int>(value.alphaMode));
@@ -246,9 +253,11 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         fieldOrder_ = dropdown(body, "interpretFootageFieldOrder", tr("Field Order"));
         auto file = asset;
         file.interpretation.fieldOrder = document::AssetFieldOrder::File;
-        fieldOrder_->addItem(tr("Use the file's (%1)").arg(fieldOrderText(document::footageFieldOrder(file))),
-                             static_cast<int>(document::AssetFieldOrder::File));
-        fieldOrder_->addItem(tr("Progressive"), static_cast<int>(document::AssetFieldOrder::Progressive));
+        fieldOrder_->addItem(
+            tr("Use the file's (%1)").arg(fieldOrderText(document::footageFieldOrder(file))),
+            static_cast<int>(document::AssetFieldOrder::File));
+        fieldOrder_->addItem(tr("Progressive"),
+                             static_cast<int>(document::AssetFieldOrder::Progressive));
         fieldOrder_->addItem(tr("Upper Field First"),
                              static_cast<int>(document::AssetFieldOrder::UpperFirst));
         fieldOrder_->addItem(tr("Lower Field First"),
@@ -259,18 +268,21 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         deinterlace_->setObjectName(QStringLiteral("interpretFootageDeinterlace"));
         deinterlace_->setChecked(value.deinterlace);
         (void)form->addCheckRow(QString{}, *deinterlace_, tr("Deinterlace"));
-        connect(fieldOrder_, &kit::KDropdown::currentIndexChanged, this, [this](int) { refresh(); });
+        connect(fieldOrder_, &kit::KDropdown::currentIndexChanged, this,
+                [this](int) { refresh(); });
         watch(fieldOrder_);
         watch(deinterlace_);
     }
 
     // Pixel aspect ratio.
     pixelAspect_ = dropdown(body, "interpretFootagePixelAspect", tr("Pixel Aspect Ratio"));
-    pixelAspect_->addItem(tr("Use the file's (%1)").arg(ratioText(document::footageFilePixelAspect(asset))),
-                          QString{});
+    pixelAspect_->addItem(
+        tr("Use the file's (%1)").arg(ratioText(document::footageFilePixelAspect(asset))),
+        QString{});
     for (const auto& choice : kPixelAspects)
-        pixelAspect_->addItem(tr(choice.label),
-                              QStringLiteral("%1:%2").arg(choice.numerator).arg(choice.denominator));
+        pixelAspect_->addItem(
+            tr(choice.label),
+            QStringLiteral("%1:%2").arg(choice.numerator).arg(choice.denominator));
     if (value.pixelAspect && pixelAspect_->findData(ratioData(*value.pixelAspect)) < 0)
         pixelAspect_->addItem(ratioText(*value.pixelAspect), ratioData(*value.pixelAspect));
     select(*pixelAspect_, value.pixelAspect ? ratioData(*value.pixelAspect) : QString{});
@@ -294,7 +306,8 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
         missing_ = dropdown(body, "interpretFootageMissingFrames", tr("Missing Frames"));
         missing_->addItem(tr("Hold the previous frame"),
                           static_cast<int>(document::AssetMissingFrames::HoldPrevious));
-        missing_->addItem(tr("Show nothing"), static_cast<int>(document::AssetMissingFrames::Nothing));
+        missing_->addItem(tr("Show nothing"),
+                          static_cast<int>(document::AssetMissingFrames::Nothing));
         select(*missing_, static_cast<int>(value.missingFrames));
         form->addRow(tr("Missing Frames"), missing_);
         watch(missing_);
@@ -334,8 +347,7 @@ void InterpretFootageDialog::setColorChoices(std::vector<InterpretColorChoice> c
     {
         const QSignalBlocker blocked(color_);
         color_->clearItems();
-        color_->addItem(resolvedColor_.isEmpty() ? tr("Auto")
-                                                 : tr("Auto (%1)").arg(resolvedColor_),
+        color_->addItem(resolvedColor_.isEmpty() ? tr("Auto") : tr("Auto (%1)").arg(resolvedColor_),
                         QStringLiteral("auto"));
         color_->addItem(tr("Preserve RGB (no color conversion)"), QStringLiteral("raw"));
         color_->addItem(tr("Interpret as Linear"), QStringLiteral("linear"));
@@ -371,9 +383,9 @@ QString InterpretFootageDialog::issue() const {
     }
     if (timecodeMode_ != nullptr &&
         timecodeMode_->currentData().toString() == QStringLiteral("override") &&
-        !parseTimelineFrameLabel(timecode_->text(), timecodeRate(), true,
-                                 {core::RationalTime{},
-                                  timecode_->text().contains(QLatin1Char(';'))}))
+        !parseTimelineFrameLabel(
+            timecode_->text(), timecodeRate(), true,
+            {core::RationalTime{}, timecode_->text().contains(QLatin1Char(';'))}))
         return tr("Enter the start timecode as HH:MM:SS:FF");
     if (!interpretation())
         return tr("The interpretation is out of range");
@@ -399,11 +411,11 @@ std::optional<document::AssetInterpretation> InterpretFootageDialog::interpretat
                               document::hasDropFrameTimecode(rate);
             const auto frames = parseTimelineFrameLabel(timecode_->text(), rate, true,
                                                         {core::RationalTime{}, drop});
-            const auto start = frames && *frames < (std::uint64_t{1} << 40)
-                                   ? core::RationalTime::create(
-                                         static_cast<std::int64_t>(*frames) * rate.denominator(),
-                                         rate.numerator())
-                                   : std::nullopt;
+            const auto start =
+                frames && *frames < (std::uint64_t{1} << 40)
+                    ? core::RationalTime::create(
+                          static_cast<std::int64_t>(*frames) * rate.denominator(), rate.numerator())
+                    : std::nullopt;
             if (!start)
                 return std::nullopt;
             value.startTimecode = document::CompositionTimecode{*start, drop};
@@ -418,7 +430,8 @@ std::optional<document::AssetInterpretation> InterpretFootageDialog::interpretat
                         std::clamp(static_cast<double>(matte.green), 0.0, 1.0),
                         std::clamp(static_cast<double>(matte.blue), 0.0, 1.0)};
     if (fieldOrder_ != nullptr) {
-        value.fieldOrder = static_cast<document::AssetFieldOrder>(fieldOrder_->currentData().toInt());
+        value.fieldOrder =
+            static_cast<document::AssetFieldOrder>(fieldOrder_->currentData().toInt());
         value.deinterlace = deinterlace_->isChecked();
     }
     const auto ratio = pixelAspect_->currentData().toString().split(QLatin1Char(':'));
@@ -426,8 +439,8 @@ std::optional<document::AssetInterpretation> InterpretFootageDialog::interpretat
                                                                            ratio[1].toULongLong())
                                           : std::nullopt;
     if (loop_ != nullptr)
-        value.loopCount = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
-            loop_->integerValue(), 1, document::kMaxAssetLoopCount));
+        value.loopCount = static_cast<std::uint32_t>(
+            std::clamp<std::int64_t>(loop_->integerValue(), 1, document::kMaxAssetLoopCount));
     if (missing_ != nullptr)
         value.missingFrames =
             static_cast<document::AssetMissingFrames>(missing_->currentData().toInt());
@@ -485,9 +498,9 @@ void InterpretFootageDialog::refresh() {
         timecode_->setEnabled(timecodeMode_->currentData().toString() ==
                               QStringLiteral("override"));
     if (auto* form = findChild<kit::KForm*>())
-        form->setRowVisible(matteRow_, static_cast<document::AssetAlphaMode>(
-                                           alpha_->currentData().toInt()) ==
-                                           document::AssetAlphaMode::Premultiplied);
+        form->setRowVisible(matteRow_,
+                            static_cast<document::AssetAlphaMode>(alpha_->currentData().toInt()) ==
+                                document::AssetAlphaMode::Premultiplied);
     revalidate();
 }
 

@@ -1,5 +1,4 @@
 #include "video_source.hpp"
-#include <bloom/runtime/footage_time.hpp>
 #include "image_source.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
@@ -7,6 +6,7 @@
 #include <bloom/media/image.hpp>
 #include <bloom/media/video/colour.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/footage_time.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
@@ -330,10 +330,10 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
         decodeProvenance.implementation == media::provider::Implementation::Hardware;
     key.add(hardwareDecoded);
     // #381: a video's alpha reads as straight unless Interpret Footage says premultiplied.
-    selection.footagePass = footagePassFor(
-        asset, asset.interpretation.alphaMode == document::AssetAlphaMode::Premultiplied
-                   ? media::ImageAlphaAssociation::Premultiplied
-                   : media::ImageAlphaAssociation::Straight);
+    selection.footagePass = footagePassFor(asset, asset.interpretation.alphaMode ==
+                                                          document::AssetAlphaMode::Premultiplied
+                                                      ? media::ImageAlphaAssociation::Premultiplied
+                                                      : media::ImageAlphaAssociation::Straight);
     key.add(selection.footagePass ? selection.footagePass->identity() : std::string{});
     selection.decodeProvenance = decodeProvenance.description;
     selection.cacheKey = key.bytes();
@@ -382,7 +382,8 @@ convertSelectedVideo(const VideoSourceSelection& selection,
         return *error;
     auto interpreted = applyFootagePass(*selection.footagePass,
                                         std::get<render::Rgba32fImage>(stored), budget, cancel);
-    const auto failed = [&](const std::string& reason) -> media::provider::Result<render::Rgba32fImage> {
+    const auto failed =
+        [&](const std::string& reason) -> media::provider::Result<render::Rgba32fImage> {
         if (cancel && cancel())
             return media::provider::Unavailable{media::provider::Error::Cancelled, "Cancelled"};
         return media::provider::Unavailable{media::provider::Error::InvalidValue, reason};
@@ -390,9 +391,8 @@ convertSelectedVideo(const VideoSourceSelection& selection,
     if (auto* error = std::get_if<std::string>(&interpreted))
         return failed(*error);
     if (selection.inputProcessor) {
-        auto converted =
-            applyInputProcessorPremultiplied(std::get<render::Rgba32fImage>(interpreted),
-                                             *selection.inputProcessor, budget, cancel);
+        auto converted = applyInputProcessorPremultiplied(
+            std::get<render::Rgba32fImage>(interpreted), *selection.inputProcessor, budget, cancel);
         if (auto* error = std::get_if<std::string>(&converted))
             return failed(*error);
         interpreted = std::move(converted);

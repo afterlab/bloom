@@ -64,15 +64,16 @@ int main() {
         expect(present.frame() != nullptr && !transparent(present.frame()->processImage()),
                "a present frame still shows");
         if (empty.frame() != nullptr && present.frame() != nullptr)
-            expect(empty.frame()->evaluatedBounds()[1].local == present.frame()->evaluatedBounds()[1].local,
+            expect(empty.frame()->evaluatedBounds()[1].local ==
+                       present.frame()->evaluatedBounds()[1].local,
                    "a missing frame keeps the sequence's frame bounds");
 
         // Pixel aspect: 2:1 doubles the layer's content width about its anchor.
         const auto still = imageAsset(directory / "gap.1.exr", "still", 801);
         const auto aspectFrame = [&](const double aspect) {
-            const auto plan = aspectPlan(format(16, 8), still,
-                                         LayerValues{.position = {8.0, 4.0}, .opacity = 1.0}, 94100,
-                                         aspect);
+            const auto plan =
+                aspectPlan(format(16, 8), still,
+                           LayerValues{.position = {8.0, 4.0}, .opacity = 1.0}, 94100, aspect);
             auto request = requestFor(*plan);
             request.bypassOperationCache = true;
             return evaluator.evaluate(plan, request, {});

@@ -18,8 +18,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <span>
 #include <optional>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -62,11 +62,12 @@ applyFootagePass(const FootagePass& pass, const render::Rgba32fImage& stored, st
 // that follows the pass.
 [[nodiscard]] std::variant<render::Rgba32fImage, std::string>
 applyInputProcessorPremultiplied(const render::Rgba32fImage& image,
-                                 const color::CpuColorSpaceProcessor& processor,
-                                 std::size_t budget, const std::function<bool()>& cancelled);
+                                 const color::CpuColorSpaceProcessor& processor, std::size_t budget,
+                                 const std::function<bool()>& cancelled);
 
 // The GPU ProcessNeighborhood program of `pass` (parameters are baked into the shader text, so the
 // shader digest is the pass identity).
-[[nodiscard]] render::OcioGpuProgramResult buildFootagePassProgram(std::span<const float> parameters);
+[[nodiscard]] render::OcioGpuProgramResult
+buildFootagePassProgram(std::span<const float> parameters);
 
 } // namespace bloom::runtime::detail

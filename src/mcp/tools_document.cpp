@@ -16,7 +16,8 @@
 namespace bloom::mcp {
 namespace {
 // #381: Interpret Footage, as bloom.asset.set-interpretation takes it.
-[[nodiscard]] std::string ratioText(const std::uint64_t numerator, const std::uint64_t denominator) {
+[[nodiscard]] std::string ratioText(const std::uint64_t numerator,
+                                    const std::uint64_t denominator) {
     return std::to_string(numerator) + "/" + std::to_string(denominator);
 }
 template <typename Out>
@@ -25,9 +26,9 @@ template <typename Out>
     auto* record = out.object();
     const auto rate = document::footageFrameRate(asset);
     out.set(record, "frameRate",
-            out.text(value.frameRate ? ratioText(value.frameRate->numerator(),
-                                                 value.frameRate->denominator())
-                                     : std::string{}));
+            out.text(value.frameRate
+                         ? ratioText(value.frameRate->numerator(), value.frameRate->denominator())
+                         : std::string{}));
     out.set(record, "playbackFrameRate",
             out.text(rate ? ratioText(rate->numerator(), rate->denominator()) : std::string{}));
     if (const auto start = document::footageStartTimecode(asset)) {

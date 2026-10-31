@@ -24,13 +24,13 @@
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/footage_time.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/asset_controller.hpp>
-#include <bloom/runtime/footage_time.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/file_chooser.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -333,8 +333,8 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
         // #381: the asset's rate, Loop count and the node's start and loop, as the renderer.
         const auto offset = asset.manifest.members.empty()
                                 ? std::nullopt
-                                : runtime::detail::footageFrameIndex(
-                                      asset, time, source.startFrame, source.loopMode, rate);
+                                : runtime::detail::footageFrameIndex(asset, time, source.startFrame,
+                                                                     source.loopMode, rate);
         if (!offset)
             return selected;
         const auto wanted =
@@ -355,10 +355,11 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     // #381: an explicit Interpret Footage alpha applies to every use, as in the renderer.
     const auto mode = asset.interpretation.alphaMode;
     selected.interpretation.alphaAssociation =
-        mode == document::AssetAlphaMode::Premultiplied ? media::ImageAlphaAssociation::Premultiplied
-        : mode != document::AssetAlphaMode::Guess       ? media::ImageAlphaAssociation::Straight
-        : source.premultiply                            ? media::ImageAlphaAssociation::Straight
-                                                        : media::ImageAlphaAssociation::Premultiplied;
+        mode == document::AssetAlphaMode::Premultiplied
+            ? media::ImageAlphaAssociation::Premultiplied
+        : mode != document::AssetAlphaMode::Guess ? media::ImageAlphaAssociation::Straight
+        : source.premultiply                      ? media::ImageAlphaAssociation::Straight
+                                                  : media::ImageAlphaAssociation::Premultiplied;
     const auto probe =
         media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
     selected.available = probe.value && probe.value->contentDigest == selected.digest;

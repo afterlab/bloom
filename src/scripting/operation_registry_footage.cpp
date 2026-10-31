@@ -65,7 +65,8 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
          maybe("fieldOrder", ValueKind::String, "upper", "file, progressive, upper or lower."),
          maybe("deinterlace", ValueKind::Boolean, false, "Boolean. Deinterlace the fields."),
          maybe("pixelAspect", ValueKind::String, "1/1", "Text. n/d, or file."),
-         maybe("loop", ValueKind::Integer, std::int64_t{1}, "Integer 1-1000. Passes of the footage."),
+         maybe("loop", ValueKind::Integer, std::int64_t{1},
+               "Integer 1-1000. Passes of the footage."),
          maybe("missingFrames", ValueKind::String, "hold", "hold or nothing."),
          maybe("legacy", ValueKind::String, "auto", "auto, srgb, linear or raw."),
          maybe("inputColorSpaceId", ValueKind::String, "",
@@ -142,10 +143,9 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
                     change.pixelAspect = std::optional<core::PixelAspectRatio>{};
                 } else {
                     const auto ratio = document::parseFootageFrameRate(*aspect);
-                    const auto pixel =
-                        ratio ? core::PixelAspectRatio::create(ratio->numerator(),
-                                                              ratio->denominator())
-                              : std::nullopt;
+                    const auto pixel = ratio ? core::PixelAspectRatio::create(ratio->numerator(),
+                                                                              ratio->denominator())
+                                             : std::nullopt;
                     if (!pixel)
                         return argumentFailure(op, "pixelAspect", "expects n/d or file");
                     change.pixelAspect = pixel;
@@ -166,11 +166,11 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors) {
             }
             if (legacy || inputId) {
                 using document::AssetColorSpace;
-                const auto choice = token<AssetColorSpace, 4>(
-                    legacy.value_or("auto"), {{{"auto", AssetColorSpace::Auto},
-                                               {"srgb", AssetColorSpace::Srgb},
-                                               {"linear", AssetColorSpace::Linear},
-                                               {"raw", AssetColorSpace::Raw}}});
+                const auto choice = token<AssetColorSpace, 4>(legacy.value_or("auto"),
+                                                              {{{"auto", AssetColorSpace::Auto},
+                                                                {"srgb", AssetColorSpace::Srgb},
+                                                                {"linear", AssetColorSpace::Linear},
+                                                                {"raw", AssetColorSpace::Raw}}});
                 if (!choice)
                     return argumentFailure(op, "legacy", "expects auto, srgb, linear or raw");
                 change.inputColor = std::pair{*choice, inputId.value_or(std::string{})};

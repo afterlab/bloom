@@ -307,9 +307,10 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
         }
         ++statistics.uploadCacheMisses;
     }
-    auto converted = convertSelectedVideo(
-        selection, resolved.imageDescriptor, resolved.horizontalScale, resolved.verticalScale,
-        byteBudget(pixelBudget), [&cancellation] { return cancellation.isCancellationRequested(); });
+    auto converted =
+        convertSelectedVideo(selection, resolved.imageDescriptor, resolved.horizontalScale,
+                             resolved.verticalScale, byteBudget(pixelBudget),
+                             [&cancellation] { return cancellation.isCancellationRequested(); });
     ++statistics.videoConversions;
     if (const auto* error = std::get_if<media::provider::Unavailable>(&converted)) {
         outcome.cancelled = error->reason == media::provider::Error::Cancelled;

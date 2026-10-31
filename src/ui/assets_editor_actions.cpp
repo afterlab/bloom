@@ -1,6 +1,6 @@
 #include "asset_input_picker_guard.hpp"
-#include "interpret_footage_dialog.hpp"
 #include "assets_editor_internal.hpp"
+#include "interpret_footage_dialog.hpp"
 #include "project_change_check.hpp"
 #include "project_item_delete.hpp"
 #include "reveal_in_file_manager.hpp"

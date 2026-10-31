@@ -18,14 +18,16 @@ builderFor(const render::Rgba32fImage& image, const std::size_t budget) {
 }
 [[nodiscard]] std::string literal(const float value) {
     char text[64];
-    const auto end = std::to_chars(text, text + sizeof(text), value, std::chars_format::scientific, 9);
+    const auto end =
+        std::to_chars(text, text + sizeof(text), value, std::chars_format::scientific, 9);
     return {text, end.ptr};
 }
 } // namespace
 
 std::vector<float> FootagePass::parameters() const {
-    return {static_cast<float>(alpha), invert ? 1.0F : 0.0F, matte[0], matte[1], matte[2],
-            static_cast<float>(keepField), static_cast<float>(rowParity)};
+    return {
+        static_cast<float>(alpha),     invert ? 1.0F : 0.0F,         matte[0], matte[1], matte[2],
+        static_cast<float>(keepField), static_cast<float>(rowParity)};
 }
 
 std::string FootagePass::identity() const {
@@ -77,8 +79,7 @@ applyFootagePass(const FootagePass& pass, const render::Rgba32fImage& stored,
             return std::string("Footage row is unavailable");
         // A row of the field that is not kept is the mean of its neighbours (one at an edge).
         const bool interpolate =
-            pass.keepField != 0 &&
-            (((y + pass.rowParity) & 1) != (pass.keepField == 1 ? 0 : 1));
+            pass.keepField != 0 && (((y + pass.rowParity) & 1) != (pass.keepField == 1 ? 0 : 1));
         std::int64_t up = y - 1;
         std::int64_t down = y + 1;
         if (up < 0)
@@ -184,13 +185,12 @@ render::OcioGpuProgramResult buildFootagePassProgram(const std::span<const float
     const auto keep = static_cast<int>(parameters[5]);
     const auto parity = static_cast<int>(parameters[6]) & 1;
     // The CPU reference's arithmetic exactly: fma, one rounding per operation, no reassociation.
-    std::string shader =
-        "vec4 bloom_footage_pass(ivec2 c) {\n"
-        " ivec2 size = imageSize(bloom_ocio_input);\n"
-        " precise vec4 s = imageLoad(bloom_ocio_input, c);\n";
+    std::string shader = "vec4 bloom_footage_pass(ivec2 c) {\n"
+                         " ivec2 size = imageSize(bloom_ocio_input);\n"
+                         " precise vec4 s = imageLoad(bloom_ocio_input, c);\n";
     if (keep != 0) {
-        shader += " if (((c.y + " + std::to_string(parity) + ") & 1) != " +
-                  std::to_string(keep == 1 ? 0 : 1) +
+        shader += " if (((c.y + " + std::to_string(parity) +
+                  ") & 1) != " + std::to_string(keep == 1 ? 0 : 1) +
                   ") {\n"
                   "  int up = c.y - 1; int down = c.y + 1;\n"
                   "  if (up < 0) up = down;\n"

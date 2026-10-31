@@ -34,7 +34,7 @@ constexpr std::array<CameraLogSpace, 11> kCameraLogSpaces{{
 // OCIO's implementation of a built-in, embedded as a group so a pinned config of any version can
 // carry it: the exact ops the built-in runs, identical CPU output and GPU processor cache id.
 [[nodiscard]] OCIO::GroupTransformRcPtr embeddedBuiltin(const std::string_view style,
-                                                       const OCIO::TransformDirection direction) {
+                                                        const OCIO::TransformDirection direction) {
     auto raw = OCIO::Config::CreateRaw()->createEditableCopy();
     raw->setMajorVersion(2);
     raw->setMinorVersion(4);
@@ -96,10 +96,9 @@ OCIO::ConstConfigRcPtr withBloomCameraLogInputs(const OCIO::ConstConfigRcPtr& co
         auto space = OCIO::ColorSpace::Create(OCIO::REFERENCE_SPACE_SCENE);
         space->setName(name.c_str());
         space->setFamily("Input");
-        space->setDescription(
-            (std::string("Bloom-synthesized camera log input (OCIO ") + std::string(camera.style) +
-             ")")
-                .c_str());
+        space->setDescription((std::string("Bloom-synthesized camera log input (OCIO ") +
+                               std::string(camera.style) + ")")
+                                  .c_str());
         space->setTransform(toReference, OCIO::COLORSPACE_DIR_TO_REFERENCE);
         if (!editable)
             editable = config->createEditableCopy();

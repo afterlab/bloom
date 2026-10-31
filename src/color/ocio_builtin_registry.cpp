@@ -1,7 +1,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 
-#include "ocio_internal.hpp"
 #include "ocio_camera_log_inputs.hpp"
+#include "ocio_internal.hpp"
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_content_revision.hpp>
 

@@ -73,14 +73,19 @@ std::optional<FrameRate> parseFootageFrameRate(std::string_view text) {
     while (!text.empty() && text.back() == ' ')
         text.remove_suffix(1);
     static constexpr std::array<std::pair<std::string_view, std::uint32_t>, 6> kNtsc{
-        {{"23.976", 24000}, {"29.97", 30000}, {"47.952", 48000}, {"59.94", 60000},
-         {"119.88", 120000}, {"14.985", 15000}}};
+        {{"23.976", 24000},
+         {"29.97", 30000},
+         {"47.952", 48000},
+         {"59.94", 60000},
+         {"119.88", 120000},
+         {"14.985", 15000}}};
     for (const auto& [name, numerator] : kNtsc)
         if (text == name)
             return FrameRate::create(numerator, 1001);
     const auto number = [](const std::string_view digits) -> std::optional<std::uint64_t> {
         std::uint64_t value = 0;
-        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        const auto [end, error] =
+            std::from_chars(digits.data(), digits.data() + digits.size(), value);
         if (digits.empty() || error != std::errc{} || end != digits.data() + digits.size())
             return std::nullopt;
         return value;

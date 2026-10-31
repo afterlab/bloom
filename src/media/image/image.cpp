@@ -3,7 +3,6 @@
 #include "image_work_statistics.hpp"
 #include "stb_image_adapter.hpp"
 #include <algorithm>
-#include <cmath>
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
@@ -12,6 +11,7 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <cmath>
 #include <fstream>
 #include <limits>
 #include <span>
@@ -162,20 +162,25 @@ storedSampleImage(const std::shared_ptr<const render::Rgba32fImage>& image,
     for (std::uint64_t y = 0; y < window.extent().height(); ++y) {
         auto row = builder.value()->row(window.originY() + static_cast<std::int64_t>(y));
         if (!row)
-            return {{}, "Image output row is unavailable", false, ImageDiagnosticCode::DecodeFailed};
+            return {
+                {}, "Image output row is unavailable", false, ImageDiagnosticCode::DecodeFailed};
         for (std::uint64_t x = 0; x < width; ++x) {
             const auto& pixel = image->pixels()[static_cast<std::size_t>(y * width + x)];
             const auto stored = render::Rgba32f::fromPremultiplied(
                 pixel.red(), pixel.green(), pixel.blue(), storedSampleAlpha(pixel.alpha()));
             if (!stored)
-                return {{}, "Image provider returned an invalid pixel", false,
+                return {{},
+                        "Image provider returned an invalid pixel",
+                        false,
                         ImageDiagnosticCode::ProviderFailed};
             (*row.value())[static_cast<std::size_t>(x)] = *stored.value();
         }
     }
     auto frozen = std::move(*builder.value()).freeze();
     if (!frozen)
-        return {{}, "Image provider returned an invalid image", false,
+        return {{},
+                "Image provider returned an invalid image",
+                false,
                 ImageDiagnosticCode::ProviderFailed};
     return {std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())), {}};
 }
@@ -555,10 +560,10 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
         if (cancelled(cancel))
             return {{}, {}, true};
         const bool stored = interpretation.storedSamples;
-        const bool convert = !stored && (!interpretation.inputColorSpaceId.empty() ||
-                                         interpretation.colorSpace == ImageColorSpace::Auto ||
-                                         interpretation.colorSpace == ImageColorSpace::Srgb ||
-                                         processor != nullptr);
+        const bool convert =
+            !stored && (!interpretation.inputColorSpaceId.empty() ||
+                        interpretation.colorSpace == ImageColorSpace::Auto ||
+                        interpretation.colorSpace == ImageColorSpace::Srgb || processor != nullptr);
         std::shared_ptr<const color::CpuInputProcessor> compatibilityProcessor;
         if (convert && !processor) {
             const auto resolved = color::resolveBloomNeutralV1BuiltIn(

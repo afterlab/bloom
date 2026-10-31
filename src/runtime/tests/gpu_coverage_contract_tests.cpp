@@ -639,7 +639,8 @@ displayProofRunner(const bool customView) {
                                     bloom::document::AssetAlphaMode::Premultiplied}) {
                 auto asset = image.asset;
                 asset.interpretation.alphaMode = mode;
-                asset.interpretation.invertAlpha = mode == bloom::document::AssetAlphaMode::Straight;
+                asset.interpretation.invertAlpha =
+                    mode == bloom::document::AssetAlphaMode::Straight;
                 if (mode == bloom::document::AssetAlphaMode::Premultiplied)
                     asset.interpretation.matteColor = {0.25, 0.5, 0.75};
                 const bloom::runtime::CpuCompositionEvaluator evaluator;

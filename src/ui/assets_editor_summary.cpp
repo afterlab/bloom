@@ -287,18 +287,17 @@ void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
                         : colourSpaceDisplayName(asset->interpretation.inputColorSpaceId);
             // #381: an explicit Interpret Footage alpha, else what the file declared.
             const auto mode = asset->interpretation.alphaMode;
-            const bool premultiplied =
-                mode == document::AssetAlphaMode::Premultiplied ||
-                (mode == document::AssetAlphaMode::Guess &&
-                 asset->interpretation.alphaAssociation ==
-                     document::AssetAlphaAssociation::Premultiplied);
+            const bool premultiplied = mode == document::AssetAlphaMode::Premultiplied ||
+                                       (mode == document::AssetAlphaMode::Guess &&
+                                        asset->interpretation.alphaAssociation ==
+                                            document::AssetAlphaAssociation::Premultiplied);
             const auto alpha = mode == document::AssetAlphaMode::Ignore ? tr("Alpha ignored")
-                               : premultiplied                         ? tr("Premultiplied")
-                                                                       : tr("Straight");
+                               : premultiplied                          ? tr("Premultiplied")
+                                                                        : tr("Straight");
             colourLong = tr("Color: %1").arg(input) +
                          (mode == document::AssetAlphaMode::Ignore ? tr(" · Alpha ignored")
-                          : premultiplied                         ? tr(" · Premultiplied alpha")
-                                                                  : tr(" · Straight alpha")) +
+                          : premultiplied                          ? tr(" · Premultiplied alpha")
+                                                                   : tr(" · Straight alpha")) +
                          (asset->interpretation.invertAlpha ? tr(" · Inverted") : QString{});
             QStringList colourFacts{space, alpha};
             if (const auto warning =

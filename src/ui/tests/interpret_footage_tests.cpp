@@ -93,8 +93,8 @@ void dialogRows() {
     expect(!dialog.change() && !dialog.issue().isEmpty(), "an unreadable rate is refused");
     dialog.rate()->setText(QStringLiteral("30000/1001"));
     dialog.loop()->setIntegerValue(3);
-    dialog.alpha()->setCurrentIndex(dialog.alpha()->findData(
-        static_cast<int>(document::AssetAlphaMode::Premultiplied)));
+    dialog.alpha()->setCurrentIndex(
+        dialog.alpha()->findData(static_cast<int>(document::AssetAlphaMode::Premultiplied)));
     dialog.deinterlace()->setChecked(true);
     dialog.pixelAspect()->setCurrentIndex(dialog.pixelAspect()->findData(QStringLiteral("2:1")));
     change = dialog.change();

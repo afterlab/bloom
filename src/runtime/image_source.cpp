@@ -1,5 +1,4 @@
 #include "image_source.hpp"
-#include <bloom/runtime/footage_time.hpp>
 #include "footage_interpretation_pass.hpp"
 #include "input_color_context.hpp"
 #include "operation_key.hpp"
@@ -8,6 +7,7 @@
 #include <bloom/media/cache/media_disk_cache_decode.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
+#include <bloom/runtime/footage_time.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <charconv>
 #include <cmath>
@@ -382,14 +382,14 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
             if (!stored.value.has_value())
                 return {{}, stored.diagnostic, stored.cancelled, stored.code};
             const auto cancelled = [&cancel] { return cancel.isCancellationRequested(); };
-            auto interpreted = applyFootagePass(*selected.footagePass, **stored.value, budget,
-                                                cancelled);
+            auto interpreted =
+                applyFootagePass(*selected.footagePass, **stored.value, budget, cancelled);
             if (auto* error = std::get_if<std::string>(&interpreted))
                 return {{}, *error, cancel.isCancellationRequested()};
             if (selected.inputProcessor) {
-                auto converted = applyInputProcessorPremultiplied(
-                    std::get<render::Rgba32fImage>(interpreted), *selected.inputProcessor, budget,
-                    cancelled);
+                auto converted =
+                    applyInputProcessorPremultiplied(std::get<render::Rgba32fImage>(interpreted),
+                                                     *selected.inputProcessor, budget, cancelled);
                 if (auto* error = std::get_if<std::string>(&converted))
                     return {{}, *error, cancel.isCancellationRequested()};
                 interpreted = std::move(converted);

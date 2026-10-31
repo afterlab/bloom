@@ -556,9 +556,9 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
                  ? layout->alphaAssociation
                  : interpretation.alphaAssociation) == ImageAlphaAssociation::Premultiplied;
         const bool stored = interpretation.storedSamples;
-        const bool convert = !stored && (!interpretation.inputColorSpaceId.empty() ||
-                                         interpretation.colorSpace == ImageColorSpace::Srgb ||
-                                         processor != nullptr);
+        const bool convert =
+            !stored && (!interpretation.inputColorSpaceId.empty() ||
+                        interpretation.colorSpace == ImageColorSpace::Srgb || processor != nullptr);
         std::shared_ptr<const color::CpuInputProcessor> compatibilityProcessor;
         if (convert && !processor) {
             const auto resolved = color::resolveBloomNeutralV1BuiltIn(

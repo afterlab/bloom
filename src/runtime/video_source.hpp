@@ -98,6 +98,5 @@ class VideoSourceContext final {
 [[nodiscard]] media::provider::Result<render::Rgba32fImage>
 convertSelectedVideo(const VideoSourceSelection& selection,
                      render::Rgba32fImageDescriptor composition, double horizontalScale,
-                     double verticalScale, std::size_t budget,
-                     const std::function<bool()>& cancel);
+                     double verticalScale, std::size_t budget, const std::function<bool()>& cancel);
 } // namespace bloom::runtime::detail
