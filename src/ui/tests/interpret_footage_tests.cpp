@@ -1,7 +1,7 @@
 // Interpret Footage (#381): the dialog's rows follow the footage kind and report only what the
 // artist changed; the Assets context menu and selection header open it on the selection, and one
 // OK is one undo entry; Copy and Paste Interpretation copy every member. With
-// BLOOM_INTERPRET_CAPTURE_DIR set it also saves the video and still dialogs as PNGs.
+// BLOOM_INTERPRET_CAPTURE_DIR set it also saves the video, still and sequence dialogs as PNGs.
 #include "assets_editor_internal.hpp"
 #include "interpret_footage_dialog.hpp"
 
@@ -87,6 +87,28 @@ document::AssetRecord still(const std::uint64_t id) {
     return asset;
 }
 
+document::AssetRecord sequence(const std::uint64_t id) {
+    document::AssetRecord asset;
+    asset.id = document::AssetId::fromRaw(id);
+    asset.name = "shot";
+    asset.kind = document::AssetKind::Sequence;
+    asset.locator = {"file", "project-relative", "shot.0001.png", "file:///media/shot.0001.png"};
+    asset.width = 8;
+    asset.height = 8;
+    asset.manifest.pattern = "shot.####.png";
+    asset.manifest.padding = 4;
+    asset.manifest.first = 1;
+    asset.manifest.last = 4;
+    for (const std::int64_t frame : {1, 2, 4})
+        asset.manifest.members.push_back(
+            {frame,
+             {"file", "project-relative", "shot.000" + std::to_string(frame) + ".png",
+              "file:///media/shot.png"},
+             {}});
+    asset.manifest.gaps = {3};
+    return asset;
+}
+
 void dialogRows() {
     QWidget owner;
     const auto clip = video(1, "clip");
@@ -139,6 +161,28 @@ void dialogRows() {
                change->inputColor->first == document::AssetColorSpace::Raw,
            "Preserve RGB is the no-conversion input");
     capture(stillDialog, QStringLiteral("interpret-still"));
+    expect(stillDialog.pixelAspect()->itemText(0) ==
+                   QStringLiteral("Use the file's: Square Pixels (1.0)") &&
+               stillDialog.alpha()->itemText(0) == QStringLiteral("Guess from the file: Straight"),
+           "the file's values read without nested parentheses");
+
+    auto shot = sequence(4);
+    ui::InterpretFootageDialog sequenceDialog(shot, 1, {document::AssetKind::Sequence}, {}, {},
+                                              owner);
+    expect(sequenceDialog.missingFrames() != nullptr &&
+               sequenceDialog.missingFrames()->findData(
+                   static_cast<int>(document::AssetMissingFrames::Skip)) >= 0,
+           "a sequence can skip its missing frames");
+    sequenceDialog.missingFrames()->setCurrentIndex(sequenceDialog.missingFrames()->findData(
+        static_cast<int>(document::AssetMissingFrames::Skip)));
+    change = sequenceDialog.change();
+    expect(change && change->missingFrames == document::AssetMissingFrames::Skip,
+           "Skip them is reported");
+    sequenceDialog.rateMode()->setCurrentIndex(1);
+    expect(sequenceDialog.rateMode()->width() == sequenceDialog.timecodeMode()->width() &&
+               sequenceDialog.timecode()->alignment().testFlag(Qt::AlignRight),
+           "the rate and timecode fields line up and read right-aligned");
+    capture(sequenceDialog, QStringLiteral("interpret-sequence"));
 }
 
 QTreeWidgetItem* findText(QTreeWidget& tree, const QString& name) {

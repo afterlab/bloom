@@ -310,15 +310,15 @@ void testRestartBadgesAndRail(Expectations& check) {
         else
             categories << rail->item(row)->text();
     }
-    check.expect(categories == QStringList{"General", "Sounds", "Viewer", "Timeline",
+    check.expect(categories == QStringList{"General", "Import", "Sounds", "Viewer", "Timeline",
                                            "Node Graph", "Memory & Caches", "Performance"} &&
                      gaps == 2,
-                 "the sidebar lists the seven categories in three groups");
-    check.expect(pages->count() == 7, "the stack carries the seven pages");
+                 "the sidebar lists the eight categories in three groups");
+    check.expect(pages->count() == 8, "the stack carries the eight pages");
     const auto pageOf = [pages](const char* name) {
         return pages->indexOf(pages->findChild<QWidget*>(QLatin1StringView(name)));
     };
-    rail->setCurrentRow(4);
+    rail->setCurrentRow(5);
     check.expect(pages->currentIndex() == pageOf("preferencesTimelinePage"),
                  "selecting a category switches the page");
     // A sidebar list, not radio dots: the keyboard moves through it like any list, over the gaps.

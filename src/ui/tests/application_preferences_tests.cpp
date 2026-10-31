@@ -152,6 +152,41 @@ void testSoundDefaultsAndBounds(Expectations& check) {
                  "saving clamps the volume");
 }
 
+// Import (#381): a sequence rate (or the composition's) and a still duration (or the
+// composition's length), exact through their n/d spelling; anything unreadable is the default.
+void testImportPreferences(Expectations& check) {
+    QTemporaryDir directory;
+    auto settings = openSettings(directory);
+    const auto defaults = ui::loadApplicationPreferences(settings);
+    check.expect(defaults.importSequenceFrameRate ==
+                         bloom::document::FrameRate::framesPerSecond24() &&
+                     !defaults.importStillDuration,
+                 "new sequences assume 24 fps and stills span the composition by default");
+    auto prefs = defaults;
+    prefs.importSequenceFrameRate = bloom::document::FrameRate::create(30000, 1001);
+    prefs.importStillDuration = bloom::core::RationalTime::create(5, 2);
+    ui::saveApplicationPreferences(settings, prefs);
+    check.expect(settings.value(QStringLiteral("import/sequence-frame-rate")).toString() ==
+                     QStringLiteral("30000/1001"),
+                 "the rate is stored exactly");
+    const auto loaded = ui::loadApplicationPreferences(settings);
+    check.expect(loaded.importSequenceFrameRate == prefs.importSequenceFrameRate &&
+                     loaded.importStillDuration == prefs.importStillDuration,
+                 "the Import preferences round-trip exactly");
+    prefs.importSequenceFrameRate.reset();
+    prefs.importStillDuration.reset();
+    ui::saveApplicationPreferences(settings, prefs);
+    const auto composition = ui::loadApplicationPreferences(settings);
+    check.expect(!composition.importSequenceFrameRate && !composition.importStillDuration,
+                 "Match composition and Composition length round-trip");
+    settings.setValue(QStringLiteral("import/sequence-frame-rate"), QStringLiteral("5000/1"));
+    settings.setValue(QStringLiteral("import/still-duration"), QStringLiteral("nonsense"));
+    const auto invalid = ui::loadApplicationPreferences(settings);
+    check.expect(invalid.importSequenceFrameRate == defaults.importSequenceFrameRate &&
+                     !invalid.importStillDuration,
+                 "an out-of-range rate or an unreadable duration reads as the default");
+}
+
 void testInvalidValuesFallBack(Expectations& check) {
     QTemporaryDir directory;
     auto settings = openSettings(directory);
@@ -313,6 +348,7 @@ int main(int argc, char** argv) {
     testFullRoundTrip(check);
     testHeadroomPreferences(check);
     testSoundDefaultsAndBounds(check);
+    testImportPreferences(check);
     testInvalidValuesFallBack(check);
     testLegacyCheckerboardMigrates(check);
     testNonFiniteGridSizeFallsBack(check);
