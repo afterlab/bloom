@@ -920,6 +920,18 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+add_executable(bloom_interpret_footage_test interpret_footage_tests.cpp)
+target_include_directories(bloom_interpret_footage_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_interpret_footage_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_interpret_footage_test)
+bloom_add_test(
+    NAME bloom.ui.interpret_footage
+    COMMAND bloom_interpret_footage_test
+    LABELS ui integration assets
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_assets_panel_test assets_panel_tests.cpp)
 target_include_directories(bloom_assets_panel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_assets_panel_test PRIVATE bloom_ui Qt6::Test)

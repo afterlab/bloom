@@ -217,7 +217,7 @@ void statusBarVideoNote(const std::filesystem::path& clip, const std::string& fa
     std::cout << "status bar video cell: " << text << '\n';
     expect(text.starts_with("Video: software") &&
                text.ends_with("Color tags missing — assumed " + family +
-                              " with the sRGB transfer. Change in Assets → Input Color"),
+                              " with the sRGB transfer. Change in Assets → Interpret Footage"),
            "status bar: the decode route and the assumed-colour note are shown");
     expect(bar.videoToolTipForTest().contains(QString::fromStdString(assets.front().name)),
            "status bar: the tooltip names the source");
@@ -289,7 +289,7 @@ int main(int argc, char** argv) {
                    label + ": Auto shows a thumbnail instead of a color refusal");
             expect(video.assumed && video.colourNote == "Color tags missing — assumed " + family +
                                                             " with the sRGB transfer. Change in "
-                                                            "Assets → Input Color",
+                                                            "Assets → Interpret Footage",
                    label + ": the assumption is a visible note naming its fix");
             expect(video.inputDisplay.rfind("Auto (assumed: ", 0) == 0,
                    label + ": the input color display says the space was assumed");
@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
             expect(video.imported && !video.missing && video.thumbnail && video.problem.empty() &&
                        video.assumed &&
                        video.colourNote == "Color tags missing — assumed Rec.709 with the "
-                                           "sRGB transfer. Change in Assets → Input Color",
+                                           "sRGB transfer. Change in Assets → Interpret Footage",
                    path.filename().string() + ": renders in Auto with the Rec.709 note");
         }
         for (const auto& path : extra)

@@ -70,7 +70,10 @@ class AssetsEditor final : public QWidget, public EditorChromeProvider {
     void createFolder();
     void beginRename(QTreeWidgetItem* item);
     void editTags(document::AssetId id);
-    void editInputColor(document::AssetId id);
+    // Interpret Footage (#381) for the selected footage, showing `id`'s interpretation.
+    void interpretFootage(document::AssetId id);
+    void copyInterpretation(document::AssetId id);
+    void pasteInterpretation();
     void removeSelected();
     void revealInFileManager(document::AssetId id);
     void requestImport();

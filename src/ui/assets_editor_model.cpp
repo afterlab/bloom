@@ -34,15 +34,8 @@ QString frameRateText(const document::FrameRate rate) {
     return text;
 }
 std::optional<document::FrameRate> videoFrameRate(const document::AssetRecord& asset) {
-    for (const auto& stream : asset.videoStreams)
-        if (stream.kind == 1 && stream.framePeriod.numerator() > 0 &&
-            stream.framePeriod.denominator() > 0 &&
-            stream.framePeriod.numerator() <= std::numeric_limits<std::uint32_t>::max() &&
-            stream.framePeriod.denominator() <= std::numeric_limits<std::uint32_t>::max())
-            return document::FrameRate::create(
-                static_cast<std::uint32_t>(stream.framePeriod.denominator()),
-                static_cast<std::uint32_t>(stream.framePeriod.numerator()));
-    return std::nullopt;
+    // #381: the rate the footage plays at, a conformed rate included.
+    return document::footageFrameRate(asset);
 }
 std::uint64_t framesAt(const core::RationalTime time, const document::FrameRate rate) {
     const auto seconds = std::max(0.0, time.toSeconds());
@@ -80,11 +73,14 @@ document::FrameRate sequenceRate(const document::Composition* active) {
                              : document::CompositionFormat{}.frameRate();
 }
 std::uint64_t sequenceFrames(const document::AssetRecord& asset) {
+    // #381: Loop repeats the sequence.
+    const std::uint64_t loops = std::max<std::uint32_t>(1, asset.interpretation.loopCount);
     if (asset.manifest.last >= asset.manifest.first && !asset.manifest.members.empty())
-        return static_cast<std::uint64_t>(static_cast<std::int64_t>(asset.manifest.last) -
-                                          static_cast<std::int64_t>(asset.manifest.first)) +
-               1;
-    return asset.manifest.members.size();
+        return (static_cast<std::uint64_t>(static_cast<std::int64_t>(asset.manifest.last) -
+                                           static_cast<std::int64_t>(asset.manifest.first)) +
+                1) *
+               loops;
+    return asset.manifest.members.size() * loops;
 }
 QString assetKindText(const document::AssetRecord& asset) {
     const auto extension = asset.locator.path.substr(asset.locator.path.find_last_of('.') + 1);
@@ -252,6 +248,12 @@ QString AssetsEditor::rowSignature() const {
         text(asset.manifest.pattern);
         text(asset.fontStyle);
         text(asset.interpretation.inputColorSpaceId);
+        // #381: the interpretation the rows show (rate, length, alpha).
+        number(static_cast<int>(asset.interpretation.colorSpace));
+        number(asset.interpretation.frameRate ? asset.interpretation.frameRate->numerator() : 0);
+        number(asset.interpretation.frameRate ? asset.interpretation.frameRate->denominator() : 0);
+        number(asset.interpretation.loopCount);
+        number(static_cast<int>(asset.interpretation.alphaMode));
         number(asset.width);
         number(asset.height);
         time(asset.duration);
@@ -366,9 +368,10 @@ void AssetsEditor::rebuild() {
             setDimensions(item, asset.width, asset.height);
         if (video) {
             const auto rate = videoFrameRate(asset);
+            const auto length = rate ? document::footageDuration(asset, *rate) : std::nullopt;
             if (rate)
-                setDuration(item, framesAt(asset.duration, *rate), *rate,
-                            asset.duration.toSeconds());
+                setDuration(item, framesAt(length.value_or(asset.duration), *rate), *rate,
+                            length.value_or(asset.duration).toSeconds());
             else
                 setColumn(item, DurationColumn, audioDuration(asset.duration),
                           asset.duration.toSeconds());
@@ -379,10 +382,15 @@ void AssetsEditor::rebuild() {
             setColumn(item, DurationColumn, audioDuration(asset.duration),
                       asset.duration.toSeconds());
         else if (sequence) {
-            const auto rate = sequenceRate(session_.composition());
+            const auto rate =
+                document::footageFrameRate(asset).value_or(sequenceRate(session_.composition()));
             const auto frames = sequenceFrames(asset);
             setDuration(item, frames, rate,
                         static_cast<double>(frames) * rate.denominator() / rate.numerator());
+            // #381: an assumed rate is the sequence's own; otherwise it has none.
+            if (asset.interpretation.frameRate)
+                setColumn(item, FrameRateColumn, frameRateText(rate),
+                          static_cast<double>(rate.numerator()) / rate.denominator());
         }
         if (const auto bytes = controller ? controller->fileSize(asset.id) : std::nullopt) {
             setColumn(item, FileSizeColumn, fileSizeText(*bytes), static_cast<double>(*bytes));

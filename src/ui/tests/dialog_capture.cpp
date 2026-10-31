@@ -524,8 +524,8 @@ void assetDialogs(test::WindowFixture& fixture, const QString& scratch) {
     constexpr int kAssetRole = Qt::UserRole + 2;
     context(itemFor(kAssetRole, asset->value()), "assetsEditTagsAction");
     shootAsync(QStringLiteral("edit-tags"), QStringLiteral("assetsTagsDialog"));
-    context(itemFor(kAssetRole, asset->value()), "assetsInputColorAction");
-    shootAsync(QStringLiteral("input-colour"), QStringLiteral("assetsInputColorDialog"));
+    context(itemFor(kAssetRole, asset->value()), "assetsInterpretFootageAction");
+    shootAsync(QStringLiteral("interpret-footage"), QStringLiteral("interpretFootageDialog"));
     if (folder) {
         ProjectItemSelection selection;
         selection.folders = {*folder};

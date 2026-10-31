@@ -514,6 +514,7 @@ target_sources(
         assets_editor_model.cpp
         assets_editor_tree.cpp
         assets_editor_actions.cpp
+        interpret_footage_dialog.cpp
         assets_editor_summary.cpp
         assets_editor_columns.cpp
         assets_editor_delegate.cpp

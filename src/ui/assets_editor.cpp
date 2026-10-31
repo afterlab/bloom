@@ -13,6 +13,7 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/footage_interpretation_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
@@ -61,6 +62,7 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     columns_->restore();
 
     summary_ = new SummaryStrip(session_, *tree_, this);
+    summary_->interpretRequested = [this](const document::AssetId id) { interpretFootage(id); };
     layout->addWidget(summary_);
     searchBar_ = new SearchBar(this);
     search_ = searchBar_->field();
@@ -263,12 +265,17 @@ void AssetsEditor::showContextMenu(const QPoint position) {
                 return record && layerable(*record);
             }));
         menu->addSeparator();
-        if (asset && (asset->kind == document::AssetKind::Image ||
-                      asset->kind == document::AssetKind::Sequence ||
-                      asset->kind == document::AssetKind::Video))
-            add(tr("Input Color…"), "assetsInputColorAction", [this, id] {
-                editInputColor(id);
-            })->setToolTip(tr("Interpret the footage's color"));
+        if (asset && commands::isInterpretableFootage(asset->kind)) {
+            add(tr("Interpret Footage…"), "assetsInterpretFootageAction", [this, id] {
+                interpretFootage(id);
+            })->setToolTip(tr("Frame rate, timecode, alpha, fields, pixel aspect, loop and color"));
+            add(tr("Copy Interpretation"), "assetsCopyInterpretationAction",
+                [this, id] { copyInterpretation(id); })
+                ->setEnabled(single);
+            add(tr("Paste Interpretation"), "assetsPasteInterpretationAction",
+                [this] { pasteInterpretation(); })
+                ->setEnabled(assets::copiedInterpretation().has_value());
+        }
         add(tr("Replace Footage…"), "assetsReplaceFootageAction", [this, id] {
             if (auto* controller = session_.assetController())
                 controller->relink(id, this);

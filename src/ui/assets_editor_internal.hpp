@@ -6,6 +6,7 @@
 #include <QStyledItemDelegate>
 #include <QTreeWidget>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/asset.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/ui/kit/icons.hpp>
@@ -27,6 +28,7 @@ class QMenu;
 namespace bloom::ui {
 class CompositionSession;
 namespace kit {
+class KIconButton;
 class KLabel;
 class KThumbnail;
 } // namespace kit
@@ -241,17 +243,25 @@ class AssetTree final : public QTreeWidget {
 // several, their count and kinds; with none, the project's kinds in one Faint line. The detailed
 // sentence of each fact is its tooltip. It reads the project and the controllers' published state
 // only; thumbnails are prepared on their workers.
+// Copy Interpretation's clipboard (#381): session state for this run of the application, never
+// project truth. Empty until an interpretation is copied.
+[[nodiscard]] std::optional<document::AssetInterpretation>& copiedInterpretation();
+
 class SummaryStrip final : public QWidget {
   public:
     // `tree` is the one the strip summarises when nothing is selected.
     SummaryStrip(CompositionSession& session, const QTreeWidget& tree, QWidget* parent);
     void refresh(const QList<QTreeWidgetItem*>& selection);
+    // #381: the header's Interpret Footage button asks for the dialog on this asset.
+    std::function<void(document::AssetId)> interpretRequested;
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
 
   private:
     void place();
+    kit::KIconButton* interpret_ = nullptr;
+    document::AssetId footage_{};
     CompositionSession& session_;
     const QTreeWidget* tree_ = nullptr;
     kit::KThumbnail* thumbnail_ = nullptr;

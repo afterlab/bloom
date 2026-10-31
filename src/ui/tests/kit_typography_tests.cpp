@@ -413,8 +413,8 @@ void auditAssets(Audit& audit, ui::test::WindowFixture& fixture, const QString& 
     };
     viaMenu(QStringLiteral("Plate"), QStringLiteral("assetsEditTagsAction"),
             QStringLiteral("Edit Tags"));
-    viaMenu(QStringLiteral("Plate"), QStringLiteral("assetsInputColorAction"),
-            QStringLiteral("Input Color"));
+    viaMenu(QStringLiteral("Plate"), QStringLiteral("assetsInterpretFootageAction"),
+            QStringLiteral("Interpret Footage"));
     // Deleting a folder that holds items asks first, through a kit confirmation.
     viaMenu(QStringLiteral("Plates"), QStringLiteral("assetsDeleteAction"),
             QStringLiteral("Delete confirmation"));

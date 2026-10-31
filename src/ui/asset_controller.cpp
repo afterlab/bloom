@@ -30,6 +30,7 @@
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/runtime/footage_time.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/file_chooser.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -329,31 +330,15 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     selected.digest = asset.contentDigest;
     std::int64_t memberFrame = 0;
     if (asset.kind == document::AssetKind::Sequence) {
-        const auto frame = runtime::valueGraphFrameIndex(time, rate);
-        if (!frame || asset.manifest.members.empty())
+        // #381: the asset's rate, Loop count and the node's start and loop, as the renderer.
+        const auto offset = asset.manifest.members.empty()
+                                ? std::nullopt
+                                : runtime::detail::footageFrameIndex(
+                                      asset, time, source.startFrame, source.loopMode, rate);
+        if (!offset)
             return selected;
-        const auto elapsed =
-            static_cast<long double>(*frame) - static_cast<long double>(source.startFrame);
-        if (elapsed < -9223372036854775808.0L || elapsed >= 9223372036854775808.0L)
-            return selected;
-        const auto length = static_cast<std::uint64_t>(asset.manifest.last) -
-                            static_cast<std::uint64_t>(asset.manifest.first) + 1;
-        const auto signedOffset = static_cast<std::int64_t>(elapsed);
-        std::uint64_t offset = 0;
-        if (signedOffset >= 0) {
-            offset = static_cast<std::uint64_t>(signedOffset);
-            if (source.loopMode == 1)
-                offset %= length;
-            else if (source.loopMode == 2 && length > 1) {
-                const auto period = 2 * (length - 1);
-                offset %= period;
-                if (offset >= length)
-                    offset = period - offset;
-            } else
-                offset = std::min(offset, length - 1);
-        }
         const auto wanted =
-            static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + offset);
+            static_cast<std::int64_t>(static_cast<std::uint64_t>(asset.manifest.first) + *offset);
         auto found = std::ranges::upper_bound(asset.manifest.members, wanted, {},
                                               &document::AssetSequenceMember::frame);
         if (found != asset.manifest.members.begin())
@@ -367,9 +352,13 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
                                                           source.inputColorSpaceId);
     selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(input.colorSpace);
     selected.interpretation.inputColorSpaceId = input.inputColorSpaceId;
-    selected.interpretation.alphaAssociation = source.premultiply
-                                                   ? media::ImageAlphaAssociation::Straight
-                                                   : media::ImageAlphaAssociation::Premultiplied;
+    // #381: an explicit Interpret Footage alpha applies to every use, as in the renderer.
+    const auto mode = asset.interpretation.alphaMode;
+    selected.interpretation.alphaAssociation =
+        mode == document::AssetAlphaMode::Premultiplied ? media::ImageAlphaAssociation::Premultiplied
+        : mode != document::AssetAlphaMode::Guess       ? media::ImageAlphaAssociation::Straight
+        : source.premultiply                            ? media::ImageAlphaAssociation::Straight
+                                                        : media::ImageAlphaAssociation::Premultiplied;
     const auto probe =
         media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
     selected.available = probe.value && probe.value->contentDigest == selected.digest;

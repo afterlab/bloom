@@ -13,7 +13,9 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/composition_thumbnail_controller.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/thumbnail.hpp>
 
 namespace bloom::ui::assets {
@@ -137,6 +139,16 @@ SummaryStrip::SummaryStrip(CompositionSession& session, const QTreeWidget& tree,
     usage_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     kind_ = line("assetsSelectionKind", kit::TypeRole::UiSmall, kit::Color::Muted);
     colour_ = line("assetsSelectionColour", kit::TypeRole::UiSmall, kit::Color::Muted);
+    interpret_ = new kit::KIconButton(this);
+    interpret_->setObjectName(QStringLiteral("assetsSelectionInterpretFootage"));
+    interpret_->setIcon(kit::icon(kit::IconId::SlidersHorizontal, kit::IconRole::Chrome));
+    interpret_->setToolTip(tr("Interpret Footage…"));
+    interpret_->setAccessibleName(tr("Interpret Footage"));
+    interpret_->hide();
+    QObject::connect(interpret_, &QAbstractButton::clicked, this, [this] {
+        if (interpretRequested && footage_.isValid())
+            interpretRequested(footage_);
+    });
 }
 
 void SummaryStrip::resizeEvent(QResizeEvent* event) {
@@ -165,7 +177,12 @@ void SummaryStrip::place() {
     const int kind = std::min(natural(*kind_, kindText_), width);
     kind_->setGeometry(left, kindTop, kind, line);
     const int colourLeft = left + kind;
-    colour_->setGeometry(colourLeft, kindTop, std::max(0, this->width() - colourLeft), line);
+    // #381: the Interpret Footage button ends the facts line while footage is selected.
+    const int button = interpret_->isHidden() ? 0 : line;
+    interpret_->setGeometry(this->width() - button, kindTop, button, line);
+    colour_->setGeometry(colourLeft, kindTop,
+                         std::max(0, this->width() - colourLeft - button - (button ? gap : 0)),
+                         line);
 }
 
 void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
@@ -207,7 +224,8 @@ void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
         switch (asset->kind) {
         case document::AssetKind::Video:
             if (const auto rate = videoFrameRate(*asset)) {
-                const auto frames = framesAt(asset->duration, *rate);
+                const auto frames = framesAt(
+                    document::footageDuration(*asset, *rate).value_or(asset->duration), *rate);
                 facts += timing(frames, *rate);
                 timingLong =
                     tr("%1, %2 fps").arg(durationText(frames, *rate), frameRateText(*rate));
@@ -226,7 +244,8 @@ void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
             }
             break;
         case document::AssetKind::Sequence: {
-            const auto rate = sequenceRate(session_.composition());
+            const auto rate =
+                document::footageFrameRate(*asset).value_or(sequenceRate(session_.composition()));
             facts += timing(sequenceFrames(*asset), rate);
             timingLong = tr("%1, %2 fps")
                              .arg(durationText(sequenceFrames(*asset), rate), frameRateText(rate));
@@ -266,11 +285,22 @@ void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
                     asset->interpretation.inputColorSpaceId.empty()
                         ? tr("Automatic")
                         : colourSpaceDisplayName(asset->interpretation.inputColorSpaceId);
-            const bool premultiplied = asset->interpretation.alphaAssociation ==
-                                       document::AssetAlphaAssociation::Premultiplied;
+            // #381: an explicit Interpret Footage alpha, else what the file declared.
+            const auto mode = asset->interpretation.alphaMode;
+            const bool premultiplied =
+                mode == document::AssetAlphaMode::Premultiplied ||
+                (mode == document::AssetAlphaMode::Guess &&
+                 asset->interpretation.alphaAssociation ==
+                     document::AssetAlphaAssociation::Premultiplied);
+            const auto alpha = mode == document::AssetAlphaMode::Ignore ? tr("Alpha ignored")
+                               : premultiplied                         ? tr("Premultiplied")
+                                                                       : tr("Straight");
             colourLong = tr("Color: %1").arg(input) +
-                         (premultiplied ? tr(" · Premultiplied alpha") : tr(" · Straight alpha"));
-            QStringList colourFacts{space, premultiplied ? tr("Premultiplied") : tr("Straight")};
+                         (mode == document::AssetAlphaMode::Ignore ? tr(" · Alpha ignored")
+                          : premultiplied                         ? tr(" · Premultiplied alpha")
+                                                                  : tr(" · Straight alpha")) +
+                         (asset->interpretation.invertAlpha ? tr(" · Inverted") : QString{});
+            QStringList colourFacts{space, alpha};
             if (const auto warning =
                     controller ? controller->inputColorSpaceWarning(asset->id) : QString{};
                 !warning.isEmpty()) {
@@ -340,6 +370,17 @@ void SummaryStrip::refresh(const QList<QTreeWidgetItem*>& selection) {
         kindLong = kindShort;
         kindTone = kit::Color::Faint;
     }
+    // The footage Interpret Footage opens on: the single selected footage item, else the first.
+    footage_ = {};
+    for (const auto* chosen : selection)
+        if (const auto* record = project.findAsset(assetId(chosen));
+            record && (record->kind == document::AssetKind::Image ||
+                       record->kind == document::AssetKind::Sequence ||
+                       record->kind == document::AssetKind::Video)) {
+            footage_ = record->id;
+            break;
+        }
+    interpret_->setVisible(footage_.isValid());
     if (picture.isNull())
         picture = kit::iconPixmap(icon, kit::Size::IconLarge, tint);
     thumbnail_->setVisible(!summary);

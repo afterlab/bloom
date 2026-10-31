@@ -999,7 +999,7 @@ void testOlderProjectVideoColourNotice(Expectations& expectations) {
     expectations.expect(
         !noticeAtSignal.isEmpty() && noticeAtSignal.contains("earlier version of Bloom") &&
             noticeAtSignal.contains("affects 1 video in") &&
-            noticeAtSignal.contains("Input Color"),
+            noticeAtSignal.contains("Interpret Footage"),
         "video color notice: an older project with an Auto video asset shows the note, got: " +
             noticeAtSignal.toStdString());
 
