@@ -24,6 +24,8 @@ constexpr std::int64_t kMaximumFrame = 99999999;
 [[nodiscard]] kit::KCheckBox* check(QWidget* parent, const char* name, const QString& label) {
     auto* box = new kit::KCheckBox(label, parent);
     box->setObjectName(QString::fromLatin1(name));
+    // Every row a control tall, so the check rows line up with the frame fields and the label.
+    box->setMinimumHeight(kit::px(kit::Size::Control));
     return box;
 }
 
@@ -76,7 +78,8 @@ ImportOptionsPane::ImportOptionsPane(const bool offerComposition, QWidget* paren
     grid->addWidget(skip_, 0, 1);
     grid->addLayout(rangeRow, 1, 0);
     grid->addWidget(composition_, 1, 1);
-    grid->setColumnStretch(1, 1);
+    // Two left-aligned columns; the room to the right stays empty.
+    grid->setColumnStretch(2, 1);
 
     connect(sequence_, &QAbstractButton::toggled, this, [this](bool) { refresh(); });
     connect(range_, &QAbstractButton::toggled, this, [this](bool) { refresh(); });

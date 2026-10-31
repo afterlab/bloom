@@ -209,7 +209,10 @@ InterpretFootageDialog::InterpretFootageDialog(const document::AssetRecord& asse
             std::max(rateMode_->sizeHint().width(), timecodeMode_->sizeHint().width());
         rateMode_->setFixedWidth(modeWidth);
         timecodeMode_->setFixedWidth(modeWidth);
-        timecodeRow_ = row(body, {timecodeMode_, timecode_}, timecode_);
+        // As wide as the rate's "fps", so the rate and timecode fields end together.
+        auto* unitSpace = new QWidget(body);
+        unitSpace->setFixedWidth(rateUnit_->sizeHint().width());
+        timecodeRow_ = row(body, {timecodeMode_, timecode_, unitSpace}, timecode_);
         form->addRow(tr("Start Timecode"), timecodeRow_)
             ->setObjectName(QStringLiteral("interpretFootageTimecodeError"));
         select(*timecodeMode_,

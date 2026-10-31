@@ -277,6 +277,9 @@ void addFileDialogOptions(QFileDialog& dialog, const QString& label, QWidget& pa
     auto* caption = new QLabel(label, &dialog);
     caption->setObjectName(QStringLiteral("fileDialogOptionsLabel"));
     caption->setBuddy(&pane);
+    // A control tall, as the pane's rows are, so the label reads on its first row.
+    caption->setFixedHeight(px(Size::Control));
+    caption->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     grid->addWidget(caption, row, 0, Qt::AlignLeft | Qt::AlignTop);
     grid->addWidget(&pane, row, 1, 1, std::max(1, grid->columnCount() - 1));
     pane.show();
