@@ -1,6 +1,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 
 #include "ocio_internal.hpp"
+#include "ocio_camera_log_inputs.hpp"
 #include <bloom/color/display_processor_identity.hpp>
 #include <bloom/color/ocio_content_revision.hpp>
 
@@ -547,7 +548,7 @@ std::string synthesizedColorSpaceIdentity(const std::string_view colorSpaceId) {
         return std::string("bloom-pq-scene-v1;ocio=") + OCIO::GetVersion();
     if (colorSpaceId == kBloomRec709CameraColorSpaceId)
         return std::string("bloom-rec709-camera-v1;ocio=") + OCIO::GetVersion();
-    return {};
+    return detail::cameraLogColorSpaceIdentity(colorSpaceId);
 }
 std::string_view ResolvedBloomNeutralConfig::rec2100PqColorSpaceId() const& noexcept {
     return rec2100PqColorSpaceId_;
@@ -757,6 +758,8 @@ resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_vi
         config = withBloomHlgInput(config, isNeutral);
         config = withBloomPqInput(config, isNeutral);
         config = withBloomRec709CameraInput(config, isNeutral);
+        // #381: camera log inputs Interpret Footage offers in every pinned config.
+        config = detail::withBloomCameraLogInputs(config, isNeutral);
     } catch (const OCIO::Exception&) {
         auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
         result.recomputedRevision_ = recomputed;

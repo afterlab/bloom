@@ -148,6 +148,7 @@ target_sources(
     bloom_color_ocio
     PRIVATE
         ocio_builtin_registry.cpp
+        ocio_camera_log_inputs.cpp
         ocio_cpu_color_space_processor.cpp
         ocio_cpu_file_transform_processor.cpp
         lut_file.cpp
@@ -259,6 +260,14 @@ if(BUILD_TESTING)
         LABELS unit color ocio identity
     )
 
+    add_executable(bloom_color_ocio_camera_log_inputs_test tests/ocio_camera_log_inputs_tests.cpp)
+    target_link_libraries(bloom_color_ocio_camera_log_inputs_test PRIVATE bloom_color_ocio)
+    bloom_enable_warnings(bloom_color_ocio_camera_log_inputs_test)
+    bloom_add_test(
+        NAME bloom.color.ocio-camera-log-inputs
+        COMMAND bloom_color_ocio_camera_log_inputs_test
+        LABELS unit color ocio
+    )
     add_executable(
         bloom_color_ocio_cpu_color_space_processor_test
         tests/ocio_cpu_color_space_processor_tests.cpp
