@@ -112,6 +112,7 @@ AssetInterpretationChange::everything(const document::AssetInterpretation& value
     change.pixelAspect = value.pixelAspect;
     change.loopCount = value.loopCount;
     change.missingFrames = value.missingFrames;
+    change.stillDuration = value.stillDuration;
     change.inputColor = std::pair{value.colorSpace, value.inputColorSpaceId};
     return change;
 }
@@ -139,6 +140,8 @@ AssetInterpretationChange::appliedTo(const AssetKind kind,
     }
     if (kind == AssetKind::Sequence && missingFrames)
         value.missingFrames = *missingFrames;
+    if (kind == AssetKind::Image && stillDuration)
+        value.stillDuration = *stillDuration;
     if (alphaMode)
         value.alphaMode = *alphaMode;
     if (invertAlpha)
@@ -166,10 +169,12 @@ OperationResult SetAssetInterpretation::apply(document::Draft& draft) const {
                                          "Choose one input color interpretation");
     {
         // Out-of-range values are refused whatever the targets' kinds.
-        document::AssetInterpretation probe;
-        probe = change_.appliedTo(AssetKind::Sequence, probe);
-        if (const auto issue = document::footageInterpretationIssue(probe); !issue.empty())
-            return OperationResult::rejected(OperationIssueCode::InvalidValue, std::string(issue));
+        for (const auto kind : {AssetKind::Sequence, AssetKind::Image}) {
+            const auto probe = change_.appliedTo(kind, document::AssetInterpretation{});
+            if (const auto issue = document::footageInterpretationIssue(probe); !issue.empty())
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 std::string(issue));
+        }
     }
     std::vector<document::AssetRecord> updated;
     bool anyFootage = false;

@@ -761,13 +761,16 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
     auto* layer = layerId ? composition->graph().findLayer(*layerId) : nullptr;
     if (layer != nullptr)
         layer->nameFollowsSource = !asset->name.empty();
-    if (asset->kind == document::AssetKind::Image)
+    const bool still = asset->kind == document::AssetKind::Image;
+    // A still spans the composition unless the Import preference gave it a duration (#381).
+    if (still && !asset->interpretation.stillDuration)
         return added;
     // ADR 0024: timed media starts at its natural length (capped by the composition), with the
     // media as its content extent, so after its last frame the layer shows nothing.
     if (layer == nullptr || !imageNode)
         return added;
-    layer->timing.contentExtent = document::SourceLayerExtent{*imageNode};
+    if (!still)
+        layer->timing.contentExtent = document::SourceLayerExtent{*imageNode};
     const auto rate = composition->format().frameRate();
     // #381: the interpreted length (an assumed or conformed rate, and Loop).
     const auto length = document::footageDuration(*asset, rate);

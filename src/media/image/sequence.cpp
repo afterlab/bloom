@@ -59,7 +59,8 @@ struct ListedMembers {
 // Every directory entry numbered like `name`, without opening any of them. `progress` gets the
 // running count with a zero total: the total is what this pass discovers.
 ListedMembers listMembers(const std::filesystem::path& path, const NumberedName& name,
-                          const CancelImageWork& cancel, const ImageProgress& progress) {
+                          const CancelImageWork& cancel, const ImageProgress& progress,
+                          const std::optional<SequenceFrameRange>& range) {
     ListedMembers listed;
     std::error_code error;
     auto directory = path.parent_path();
@@ -84,6 +85,8 @@ ListedMembers listMembers(const std::filesystem::path& path, const NumberedName&
         if (!candidate || candidate->prefix != name.prefix || candidate->suffix != name.suffix ||
             candidate->extension != name.extension)
             continue;
+        if (range && (candidate->frame < range->first || candidate->frame > range->last))
+            continue;
         if (listed.members.size() >= kMaxSequenceEntries) {
             listed.diagnostic = "Sequence exceeds 100000 matching members";
             return listed;
@@ -102,12 +105,13 @@ ListedMembers listMembers(const std::filesystem::path& path, const NumberedName&
 } // namespace
 std::optional<std::uint64_t> countSequenceMembers(const std::filesystem::path& path,
                                                   const CancelImageWork& cancel,
-                                                  const ImageProgress& progress) {
+                                                  const ImageProgress& progress,
+                                                  const std::optional<SequenceFrameRange>& range) {
     try {
         const auto name = numberedName(path);
         if (!name)
             return std::uint64_t{1};
-        const auto listed = listMembers(path, *name, cancel, progress);
+        const auto listed = listMembers(path, *name, cancel, progress, range);
         if (listed.cancelled)
             return std::nullopt;
         // A refused listing still counts as one item; reading reports why.
@@ -138,7 +142,8 @@ std::optional<std::string> sequenceKey(const std::filesystem::path& path) {
 }
 ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
                                            const CancelImageWork& cancel,
-                                           const ImageProgress& progress) {
+                                           const ImageProgress& progress,
+                                           const std::optional<SequenceFrameRange>& range) {
     try {
         SequenceManifest manifest;
         const auto name = numberedName(path);
@@ -149,11 +154,13 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
             name->prefix + std::string(name->padding, '#') + name->suffix + name->extension;
         // Pass 1 lists the members (directory entries only); pass 2 reads and hashes each one,
         // which is the slow part, so progress can report a known total while it runs.
-        auto listed = listMembers(path, *name, cancel, progress);
+        auto listed = listMembers(path, *name, cancel, progress, range);
         if (listed.cancelled)
             return {{}, {}, true};
         if (!listed.diagnostic.empty())
             return {{}, std::move(listed.diagnostic)};
+        if (range && listed.members.empty())
+            return {{}, "No frames in the frame range"};
         if (listed.mixedPadding)
             manifest.diagnostics.emplace_back("Sequence mixes frame-number padding");
         const auto total = static_cast<std::uint64_t>(listed.members.size());

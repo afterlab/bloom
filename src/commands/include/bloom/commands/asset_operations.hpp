@@ -1,6 +1,7 @@
 #pragma once
 #include <bloom/commands/operation.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/document/asset.hpp>
 #include <bloom/media/provider/contract.hpp>
 #include <filesystem>
 #include <functional>
@@ -216,6 +217,22 @@ using ImportProgressCallback = std::function<void(const ImportProgress&)>;
 // The file types a chosen folder contributes: images, image-sequence members, video, audio and
 // LUTs, by extension and ignoring case. A file chosen on its own is always tried.
 [[nodiscard]] bool isImportableMediaFile(const std::filesystem::path& path);
+// How an import reads what it is given (#381): the Import dialog's options and the Import
+// preferences. The defaults are how Bloom has always imported.
+struct ImportOptions final {
+    // Numbered images become one image sequence; false imports each as its own still.
+    bool sequences = true;
+    // Only the numbered frames from first to last of each sequence (kept on the asset, so Reload
+    // Footage reads the same frames).
+    std::optional<document::AssetSequenceRange> frameRange;
+    // A new sequence plays the frames it has back to back (Missing Frames: Skip).
+    bool skipMissingFrames = false;
+    // Interpretation a new sequence or still starts with (the Import preferences): a sequence's
+    // assumed rate (absent: match the composition) and a still's duration (absent: the
+    // composition's length).
+    std::optional<document::FrameRate> sequenceFrameRate;
+    std::optional<core::RationalTime> stillDuration;
+};
 // Construct on an import worker: preparation searches folders, probes, hashes and scans. apply only
 // copies the prepared records into a draft, so publishing the command never performs media I/O.
 //
@@ -227,7 +244,7 @@ class ImportAssets final : public Operation {
     ImportAssets(const std::vector<std::filesystem::path>& paths,
                  const std::filesystem::path& projectDirectory,
                  const std::function<bool()>& cancel = {},
-                 const ImportProgressCallback& progress = {});
+                 const ImportProgressCallback& progress = {}, const ImportOptions& options = {});
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.asset.import"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
     // The Assets folder the new assets land in, after its existing assets (#378). A folder removed
@@ -263,16 +280,22 @@ class ImportAssets final : public Operation {
 };
 class RelinkAsset final : public Operation {
   public:
+    // A still stays a still and a sequence keeps its imported frame range: `options` should say
+    // so (relinkOptions) to spare reading frames apply would leave out, and apply enforces it.
     RelinkAsset(document::AssetId id, const std::filesystem::path& path,
                 const std::filesystem::path& projectDirectory,
-                const std::function<bool()>& cancel = {});
+                const std::function<bool()>& cancel = {}, const ImportOptions& options = {});
     [[nodiscard]] std::string_view typeId() const noexcept override { return "bloom.asset.relink"; }
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
 
   private:
     document::AssetId id_;
+    std::filesystem::path path_;
+    std::filesystem::path base_;
     ImportAssets prepared_;
 };
+// The import options that read `asset`'s file again the way it was imported.
+[[nodiscard]] ImportOptions relinkOptions(const document::AssetRecord& asset);
 class RemoveAsset final : public Operation {
   public:
     explicit RemoveAsset(document::AssetId id) : id_(id) {}

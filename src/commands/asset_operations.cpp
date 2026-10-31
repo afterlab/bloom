@@ -2,6 +2,7 @@
 #include <array>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/footage_interpretation_operations.hpp>
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
@@ -222,10 +223,49 @@ struct PreparedItem final {
 };
 // Probes, hashes and (for numbered images) scans one item. Nothing it prepares is visible to the
 // batch until it returns Prepared, so an interrupted item leaves no partial record behind.
+// The manifest digest: every member's frame and content digest, in order.
+std::optional<core::Sha256Digest>
+sequenceDigest(const std::vector<document::AssetSequenceMember>& members) {
+    core::Sha256Hasher hasher;
+    for (const auto& member : members) {
+        const auto frame = std::to_string(member.frame) + ":";
+        const auto digest = member.contentDigest.toLowercaseHex();
+        if (!hasher.update(std::as_bytes(std::span(frame))) ||
+            !hasher.update(std::as_bytes(std::span(digest))))
+            return std::nullopt;
+    }
+    return hasher.finalize();
+}
+// first, last and the legacy per-frame gap list from the sorted members (media::scanSequence's
+// encoding: the gap list only for spans older readers accepted).
+void describeMembers(document::AssetSequenceManifest& manifest) {
+    manifest.first = manifest.members.front().frame;
+    manifest.last = manifest.members.back().frame;
+    manifest.gaps.clear();
+    if (static_cast<std::uint64_t>(manifest.last) - static_cast<std::uint64_t>(manifest.first) >=
+        media::kMaxSequenceEntries)
+        return;
+    for (std::size_t index = 1; index < manifest.members.size(); ++index)
+        for (auto frame = manifest.members[index - 1].frame + 1;
+             frame < manifest.members[index].frame; ++frame)
+            manifest.gaps.push_back(frame);
+}
+// The interpretation a new asset starts with from the Import options and preferences.
+void applyImportDefaults(document::AssetRecord& asset, const ImportOptions& options) {
+    if (asset.kind == document::AssetKind::Sequence) {
+        asset.interpretation.frameRate = options.sequenceFrameRate;
+        if (options.skipMissingFrames)
+            asset.interpretation.missingFrames = document::AssetMissingFrames::Skip;
+        asset.manifest.range = options.frameRange;
+    } else if (asset.kind == document::AssetKind::Image) {
+        asset.interpretation.stillDuration = options.stillDuration;
+    }
+}
 PreparedItem prepareItem(const std::filesystem::path& path,
                          const std::filesystem::path& projectDirectory,
                          const std::function<bool()>& cancel,
-                         const std::function<void(std::uint64_t, std::uint64_t)>& frames) {
+                         const std::function<void(std::uint64_t, std::uint64_t)>& frames,
+                         const ImportOptions& options) {
     const auto extension = lowerExtension(path);
     if (color::isLutExtension(path)) {
         const auto lut = color::readLutFile(path, cancel);
@@ -285,10 +325,21 @@ PreparedItem prepareItem(const std::filesystem::path& path,
             return PreparedItem::interrupted();
         return PreparedItem::failed(probe.diagnostic);
     }
-    auto sequence = media::scanSequence(path, cancel, [&](std::uint64_t done, std::uint64_t of) {
-        if (frames)
-            frames(done, of);
-    });
+    // Import as single images: a numbered file is a still like any other.
+    const auto range = options.frameRange
+                           ? std::optional(media::SequenceFrameRange{options.frameRange->first,
+                                                                     options.frameRange->last})
+                           : std::nullopt;
+    auto sequence =
+        options.sequences
+            ? media::scanSequence(
+                  path, cancel,
+                  [&](std::uint64_t done, std::uint64_t of) {
+                      if (frames)
+                          frames(done, of);
+                  },
+                  range)
+            : media::ImageResult<media::SequenceManifest>{media::SequenceManifest{}, {}};
     if (!sequence.value.has_value()) {
         if (sequence.cancelled)
             return PreparedItem::interrupted();
@@ -297,6 +348,11 @@ PreparedItem prepareItem(const std::filesystem::path& path,
     document::AssetRecord asset;
     asset.locator = locator(path, projectDirectory);
     asset.contentDigest = probe.value->contentDigest;
+    // A frame range holding one frame imports that frame as a still.
+    if (sequence.value->members.size() == 1 && sequence.value->members.front().path != path) {
+        asset.locator = locator(sequence.value->members.front().path, projectDirectory);
+        asset.contentDigest = sequence.value->members.front().contentDigest;
+    }
     asset.width = probe.value->width;
     asset.height = probe.value->height;
     // New imports keep the legacy interpretation at Auto.  The probe's format,
@@ -316,19 +372,18 @@ PreparedItem prepareItem(const std::filesystem::path& path,
         asset.manifest.first = scan.first;
         asset.manifest.last = scan.last;
         asset.manifest.gaps = scan.gaps;
-        core::Sha256Hasher hasher;
-        for (const auto& member : scan.members) {
+        for (const auto& member : scan.members)
             asset.manifest.members.push_back(
                 {member.frame, locator(member.path, projectDirectory), member.contentDigest});
-            const auto frame = std::to_string(member.frame) + ":";
-            const auto digest = member.contentDigest.toLowercaseHex();
-            if (!hasher.update(std::as_bytes(std::span(frame))) ||
-                !hasher.update(std::as_bytes(std::span(digest))))
-                return PreparedItem::failed("Sequence digest failed");
-        }
-        asset.contentDigest = hasher.finalize();
+        const auto digest = sequenceDigest(asset.manifest.members);
+        if (!digest)
+            return PreparedItem::failed("Sequence digest failed");
+        asset.contentDigest = *digest;
         asset.locator = asset.manifest.members.front().locator;
+    } else {
+        asset.kind = document::AssetKind::Image;
     }
+    applyImportDefaults(asset, options);
     return PreparedItem::prepared(std::move(asset));
 }
 } // namespace
@@ -340,7 +395,7 @@ bool isImportableMediaFile(const std::filesystem::path& path) {
 ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                            const std::filesystem::path& projectDirectory,
                            const std::function<bool()>& cancel,
-                           const ImportProgressCallback& progress) {
+                           const ImportProgressCallback& progress, const ImportOptions& options) {
     const auto stopRequested = [&] {
         if (!cancel)
             return false;
@@ -380,7 +435,8 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
         normal = (error ? path : normal).lexically_normal();
         if (!seen.insert(normal).second)
             return;
-        if (const auto key = media::sequenceKey(path); key && !sequences.insert(*key).second)
+        if (const auto key = options.sequences ? media::sequenceKey(path) : std::nullopt;
+            key && !sequences.insert(*key).second)
             return;
         items.push_back(path);
     };
@@ -438,12 +494,15 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
     const auto total = items.size();
     std::vector<std::uint64_t> weights(total, 1);
     for (std::size_t index = 0; index < total; ++index) {
-        if (!media::sequenceKey(items[index]))
+        if (!options.sequences || !media::sequenceKey(items[index]))
             continue;
         finding(items[index], 0, true);
         const auto counted = media::countSequenceMembers(
             items[index], stopRequested,
-            [&](std::uint64_t found, std::uint64_t) { finding(items[index], found, true); });
+            [&](std::uint64_t found, std::uint64_t) { finding(items[index], found, true); },
+            options.frameRange ? std::optional(media::SequenceFrameRange{options.frameRange->first,
+                                                                         options.frameRange->last})
+                               : std::nullopt);
         if (!counted) {
             refuseCancelled();
             notImported_ = total;
@@ -490,14 +549,16 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
         }
         PreparedItem item;
         try {
-            item = prepareItem(path, projectDirectory, stopRequested,
-                               [&](std::uint64_t read, std::uint64_t of) {
-                                   // The listing pass inside the scan reports no total.
-                                   if (of == 0 || sequenceFrames == 0)
-                                       return;
-                                   const auto share = std::min(weight, read * weight / of);
-                                   reading(index, workBase + share, std::min(read, of), of);
-                               });
+            item = prepareItem(
+                path, projectDirectory, stopRequested,
+                [&](std::uint64_t read, std::uint64_t of) {
+                    // The listing pass inside the scan reports no total.
+                    if (of == 0 || sequenceFrames == 0)
+                        return;
+                    const auto share = std::min(weight, read * weight / of);
+                    reading(index, workBase + share, std::min(read, of), of);
+                },
+                options);
         } catch (const std::exception& error) {
             item = PreparedItem::failed(error.what());
         }
@@ -572,9 +633,17 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
                                  failure.path.filename().string() + ": " + failure.diagnostic});
     return result;
 }
+ImportOptions relinkOptions(const document::AssetRecord& asset) {
+    ImportOptions options;
+    options.sequences = asset.kind != document::AssetKind::Image;
+    if (asset.kind == document::AssetKind::Sequence)
+        options.frameRange = asset.manifest.range;
+    return options;
+}
 RelinkAsset::RelinkAsset(document::AssetId id, const std::filesystem::path& path,
-                         const std::filesystem::path& base, const std::function<bool()>& cancel)
-    : id_(id), prepared_({path}, base, cancel) {}
+                         const std::filesystem::path& base, const std::function<bool()>& cancel,
+                         const ImportOptions& options)
+    : id_(id), path_(path), base_(base), prepared_({path}, base, cancel, {}, options) {}
 OperationResult RelinkAsset::apply(document::Draft& draft) const {
     auto* target = draft.project().findAsset(id_);
     if (!target)
@@ -582,12 +651,53 @@ OperationResult RelinkAsset::apply(document::Draft& draft) const {
     if (!prepared_.diagnostic().empty() || prepared_.prepared().size() != 1)
         return OperationResult::rejected(OperationIssueCode::InvalidValue, prepared_.diagnostic());
     auto replacement = prepared_.prepared().front();
+    // A still stays the still chosen, however its file is numbered.
+    if (target->kind == document::AssetKind::Image &&
+        replacement.kind == document::AssetKind::Sequence) {
+        const auto chosen = locator(path_, base_);
+        const auto member = std::ranges::find(replacement.manifest.members, chosen.path,
+                                              [](const auto& entry) { return entry.locator.path; });
+        if (member == replacement.manifest.members.end())
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "The chosen file is not a frame of its sequence");
+        replacement.kind = document::AssetKind::Image;
+        replacement.locator = member->locator;
+        replacement.contentDigest = member->contentDigest;
+        replacement.manifest = {};
+    }
+    // A sequence keeps the frame range it was imported with.
+    if (target->kind == document::AssetKind::Sequence && target->manifest.range &&
+        replacement.kind == document::AssetKind::Sequence) {
+        const auto range = *target->manifest.range;
+        std::erase_if(replacement.manifest.members, [range](const auto& member) {
+            return member.frame < range.first || member.frame > range.last;
+        });
+        if (replacement.manifest.members.size() < 2)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "The sequence has fewer than two frames in its "
+                                             "frame range");
+        describeMembers(replacement.manifest);
+        const auto digest = sequenceDigest(replacement.manifest.members);
+        if (!digest)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Sequence digest failed");
+        replacement.contentDigest = *digest;
+        replacement.locator = replacement.manifest.members.front().locator;
+        replacement.manifest.range = range;
+    }
     replacement.id = id_;
     replacement.name = target->name;
     replacement.folder = target->folder;
     replacement.tags = target->tags;
     replacement.order = target->order;
-    replacement.interpretation = target->interpretation;
+    // A relink that changes the kind keeps only the interpretation the new kind has.
+    replacement.interpretation = replacement.kind == target->kind
+                                     ? target->interpretation
+                                     : AssetInterpretationChange::everything(target->interpretation)
+                                           .appliedTo(replacement.kind, replacement.interpretation);
+    if (!replacement.validate().ok())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "The relinked file cannot replace this asset");
     *target = std::move(replacement);
     return OperationResult::applied({{"asset", id_}});
 }
