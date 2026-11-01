@@ -31,7 +31,8 @@ The Profiler panel, the benchmark harness (BENCH_MEMORY) and the agent surfaces 
 The header is data only, apart from small inline helpers (the unattributed math, name copying,
 the bucket index). Schema 2 made pool counters (entries, hits, misses, stores, evictions,
 refusals) and executor busy time `ProfilerMetric`s, so a source that does not count them reports
-them absent rather than zero.
+them absent rather than zero. Schema 3 added each pool's cumulative evicted bytes
+(`ProfilerPool::evictedBytes`).
 
 ## Sampler
 
@@ -56,26 +57,76 @@ Sources, each read at the sampler rate unless noted:
 | --- | --- |
 | RSS | Linux `/proc/self/statm` (O(1), never `smaps`), macOS `task_info`, Windows `GetProcessMemoryInfo` |
 | Anonymous | Linux statm `resident - shared` (the kernel's anonymous resident pages); absent elsewhere |
-| Machine, headroom, usable, ledger totals, pressure flags, the aggregate pool row | the memory budget ledger, through `readProfilerLedger()` (below) |
-| Unattributed, idle baseline | computed from what is present; the baseline is the unattributed gap at the first sample that has the pool holding |
-| GPU live/retiring bytes, refusals, reclaims | the render module's process-wide `GpuImageReclamationStats`, read-only, through an injected function pointer (absent in a build without a GPU device) |
+| Machine, headroom, usable, ledger totals, pressure flags | the memory budget ledger, through `readProfilerLedger()` (below) |
+| Pool rows | `MemoryBudgetLedger::copyProfilerPools()`, through the adapter: one row per registered pool (below) |
+| Staging live and peak | the process-wide telemetry counters (below); the peak restarts when the sampler starts |
+| Admission claims | the UI-side hook: `GpuProcessingPhasePolicy::usableCapacity()` host claims minus the retained preview frames they include |
+| Unattributed, idle baseline | computed from what is present; the baseline is the unattributed gap at the first sample that has the pool rows |
+| GPU live/retiring bytes, refusals, reclaims | the render module's process-wide `GpuImageReclamationStats`, read-only, through an injected function pointer (`runtime::readProfilerGpuDevice`; absent in a build without a GPU device) |
+| GPU upload and readback bytes, submits | the telemetry counters, reported only in a process whose GPU reader found a device |
+| GPU heap budget and usage | the telemetry counters: the preview display service's owner thread queries `VK_EXT_memory_budget` (summed over device-local heaps) at most once a second while a sampler runs; `gpuBudgetQueryAgeNs` is its age; absent on a device without the extension or before the first query |
+| GPU utilization | absent: Vulkan has no portable query and Bloom links no vendor library |
 | Process CPU time | `getrusage` (Linux, macOS), `GetProcessTimes` (Windows) |
-| Tasks and executor pools | `TaskScheduler::copyProfilerTasks()`: counts and the top 16 tasks copied into the snapshot's fixed slots under the scheduler lock, names truncated, no allocation or formatting under the lock; worker counts and queue depths per executor |
+| Tasks and executor pools | `TaskScheduler::copyProfilerTasks()`: counts and the top 16 tasks copied into the snapshot's fixed slots under the scheduler lock, names truncated, no allocation or formatting under the lock; per executor pool (CPU, Blocking I/O, GPU submit, and Row bands when the scheduler has a row-band pool) its workers, queue depth and busy time |
+| Stage histograms | the telemetry counters (below) |
+| Helper processes | the telemetry counters' helper registry; each listed pid is read through Linux `/proc/<pid>/statm` and `/proc/<pid>/stat` (fixed buffers), macOS `proc_pidinfo(PROC_PIDTASKINFO)`, Windows `GetProcessMemoryInfo`, `GetProcessTimes` and `GetExitCodeProcess`. A process that is gone or a zombie is listed as not alive with absent figures |
 | Playback fps, dropped frames, RAM Preview cached frames and fill rate, export fps | the UI-side hook (below) |
 
-Absent until the engine's counter work lands: file-backed and shared memory and the ledger sample's
-age (the ledger's process sample carries cgroup figures, not a memory breakdown), per-pool rows and
-their counters and ceilings (the ledger exposes only the aggregate holding), staging and admission
-claims, the driver heap figures, upload and readback bytes, submits, utilization, executor busy
-time, stage histograms, pressure counters and helper processes (their process IDs are not
-reachable outside the media provider).
+Still absent: file-backed and shared memory and the ledger sample's age (the ledger's process
+sample carries cgroup figures, not a memory breakdown), pool entry counts, GPU utilization and the
+pressure section (admission waits and refusals, evicted bytes by cause).
+
+**Pool identity and counters.** A pool registers its Profiler identity once, after
+`registerCache`, with `MemoryBudgetLedger::setPoolProfile(owner, MemoryPoolProfile)`
+(`memory_pool_counters.hpp`): a fixed name, a kind (scratch, cache or live) and a
+`MemoryPoolCounters`, six relaxed atomics (hits, misses, stores, evictions, evicted bytes,
+refusals) the pool increments next to the work it already does. A pool that is several rows
+supplies a `rows` callback instead. The ledger reads counters without the pool's lock; the host,
+pending and device bytes come from the pool's existing holding callback, the ceiling from its
+registration. A registered pool without a profile is one "Unnamed pool" row with absent counters.
+
+| Row (kind) | Hit / miss | Store | Eviction (bytes) | Refusal |
+| --- | --- | --- | --- | --- |
+| Preview frames (cache) | `PreviewFrameCache::take` | an inserted frame | budget, pressure and GPU-resident evictions (the frame's charge) | a rejected or unallocatable frame |
+| Operation cache: operations, Operation cache: decoded media (cache) | `OperationCache::find`: a hit under the found entry's kind, a miss under the kind the caller asked for | an inserted entry | LRU eviction (the entry's standalone charge) | over the budget, or allocation failure |
+| Decoded video (cache) | `DecodedVideoCache::find` | `store` | budget eviction (plane bytes) | a frame larger than the budget |
+| Proxies (cache) | the thumbnail lookups of the asset preview worker | a kept thumbnail | trimming (thumbnail bytes) | a thumbnail larger than the allowance |
+| Decoded audio (cache) | reusing a cached buffer | a kept buffer | trimming (buffer bytes) | a buffer sent for delivery only |
+| Media disk cache write queue (scratch) | disk-cache lookups | disk writes | disk entries evicted (bytes on disk) | writes the queue refused |
+
+**Telemetry counters.** `bloom::core::telemetry` (`src/core/include/bloom/core/telemetry_counters.hpp`)
+holds the process-wide always-on counters, in the core module because render, media, output and
+runtime all count into it and only the sampler reads it. Each update is a relaxed atomic add on a
+path that already does the work (two for a stage: its bucket and its summed duration; the staging
+peak is a compare-and-swap only when a new peak is reached), plus the steady-clock reads that time
+a stage. Nothing there allocates, locks or formats.
+
+- **Host upload staging** (scratch, ADR 0037): the converted pixels a scene's upload command holds
+  (`gpu_media_preparation.cpp`, including what `GpuSceneBuildUploads` shares inside one build),
+  counted at allocation and subtracted by their deleter, and the host-visible Vulkan upload
+  staging buffers (`createUploadStagingBuffer` / `UploadStagingBuffer::release`).
+- **GPU transfers:** upload bytes at the image upload's submission (its staging size), readback
+  bytes at each readback submission (process, display, resident and output readbacks), and every
+  `vkQueueSubmit`.
+- **Stage histograms**, log2 buckets from 16 µs: decode (the video worker's frame round trip and
+  `media::decodeImage`), colour convert (decoded video to the working-space float image), upload
+  and GPU render (the GPU scene executor's submission to observed fence, on its existing timing),
+  transfer (the preview's packed display transfer and the final render's readback, on their
+  existing timing) and encode (handing a frame to the encoder worker). A failed or cancelled
+  attempt records nothing.
+- **Helper processes:** a fixed registry of eight slots. The media worker pool registers each
+  worker process it launches (one-call and retained) for its lifetime, and the colour workers
+  (the OCIO CPU file-transform worker and the GPU program extraction worker) theirs.
+  `MediaWorkerPool::workerProcessIds()` is the pool's read-only view of its own entries.
+- **Profiler active:** set while a sampler thread runs; the GPU heap-budget query runs only then.
 
 **The ledger adapter.** `readProfilerLedger()` (`profiler_ledger_adapter.hpp`) is the one place
 that reads the ledger, through existing const accessors only: `state()`, `reusableHolding()`,
-`ramHeadroom()`, `usableByteBudget()` and `physicalByteBudget()`. `state()` copies the whole
-process sample (strings and vectors), so the hook refreshes it only after the ledger applied a
-sample or a pressure sample; `reusableHolding()` asks every registered pool and follows the
-ledger's thread rule, so it runs on the UI thread.
+`ramHeadroom()`, `usableByteBudget()`, `physicalByteBudget()` and `copyProfilerPools()`.
+`state()` copies the whole process sample (strings and vectors), so the hook refreshes it only
+after the ledger applied a sample or a pressure sample; `copyProfilerPools()` asks every
+registered pool what it holds and follows the ledger's thread rule, so it runs on the UI thread.
+It fills fixed rows and never allocates.
 
 ## Feed
 
@@ -104,6 +155,27 @@ is read off the UI thread.
 `FakeProfilerFeed` (`profiler_fake_feed.hpp`) is a deterministic source for tests and captures:
 sample n is a pure function of n, with growth, plateaus, eviction drops, absent fields and stale
 ages. The application does not use it.
+
+## One source
+
+- **MCP/CLI.** `profiler.snapshot` (read-only, inline, no session lease) returns
+  `{"succeeded": true, "snapshot": {...}}`, the snapshot serialized by
+  `runtime::profilerSnapshotJson()` (`profiler_snapshot_json.hpp`): member names as in the header,
+  enums as lowercase words, absent values as `null`, `schemaVersion` first. The desktop host fills
+  it on the UI thread (the hook publishes the UI-owned values, then the sampler takes one sample
+  unless its thread is running, in which case its newest sample is returned); the stdio host
+  (`bloom-mcp`) samples its own process on request.
+- **Benchmarks.** The harness's `BENCH_MEMORY` figures come from the same snapshot (see
+  [Benchmarks](../development/benchmarks.md)), and `--bench-profiler` prints the window's last
+  snapshot in the same JSON.
+
+## Cost
+
+The always-on cost is the counters above: relaxed atomic adds and the stage clock reads, measured
+at a few nanoseconds each (`bloom.core.telemetry_counters` prints them). With no Profiler shown
+nothing samples, no sampler thread exists and the GPU heap-budget query does not run. One sample
+costs a few microseconds on Linux, takes no lock while it copies or formats, and allocates nothing
+(tested over 10,000 samples, with a helper process and staging bytes present).
 
 ## Panel cost rules
 

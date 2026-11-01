@@ -106,7 +106,7 @@ Platform/GPU capability -> project semantics
 | `apps/bloom` | process entry point and final service wiring |
 | `src/host` | Qt-free application services and `ProjectSession`, compiled-in module catalog, dependency validation, registries |
 | `src/ui` | Qt shell, editor panels including the Assets composition browser, view models, interaction adapters |
-| `src/core` | IDs, rational time, diagnostics, math, small value types |
+| `src/core` | IDs, rational time, diagnostics, math, small value types, and the process-wide telemetry counters the Profiler reads ([profiler feed](profiler-feed.md)) |
 | `src/document` | persistent project authoring model and validation |
 | `src/commands` | commands, transactions, undo/redo, dirty state, events |
 | `src/project` | schemas, migrations, atomic `.bloom` read/write |

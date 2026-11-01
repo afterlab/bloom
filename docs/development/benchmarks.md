@@ -242,19 +242,31 @@ Every measurement is a fresh process.
   `residentDetail` report GPU admission refusals and the resident path's last detail (the 8K tier's
   per-image ceiling shows up here).
 - **Memory attribution** (fills and playback runs): `memoryAtPeak` is the harness's own sample with
-  the highest RSS over the measured window, taken every 250 ms: `rssBytes` with `anonBytes`,
-  `fileBytes` and `shmemBytes` (Linux `/proc`; zero elsewhere), `reusablePoolBytes` (every reusable
-  pool on the process memory ledger), `previewCacheBytes`, `operationCacheBytes` (with its
-  `decodedMediaBytes` entries), `otherPoolBytes` (the reusable pools outside those two: decoded
-  video, the disk-cache write queue and the asset pools), and the processing
-  policy's `hostClaimBytes` and `hostUsableBytes` (usable capacity: available memory within the OS
-  limit minus the RAM headroom). Pool bytes are host allocations, each distinct allocation counted
-  once, including bytes pending asynchronous retirement (`operationPendingBytes`,
-  `reusablePendingBytes`); `operationSharedBytes` is what per-entry accounting would have added for
-  storage several entries share, and `reusableDeviceBytes` (device-resident pool bytes) and
-  `deviceClaimBytes` are device memory, outside the host totals
-  ([what the pools count](../architecture/evaluation-primitives.md#what-the-pools-count)). Anonymous
-  RSS minus `reusablePoolBytes` is the memory outside Bloom's caches. `peakDeviceBytes` is the
+  the highest RSS over the measured window, taken every 250 ms. Its figures come from the runtime
+  telemetry contract, `ProfilerSnapshot` ([Profiler telemetry feed](../architecture/profiler-feed.md)),
+  the same numbers the Profiler panel and MCP `profiler.snapshot` show, under the field names
+  earlier results used: `rssBytes` and `anonBytes` (Linux statm resident and resident minus shared;
+  anonymous is absent elsewhere), `fileBytes` and `shmemBytes` (absent: the snapshot does not
+  split them at the sampling rate), and the ledger's per-pool rows summed as `reusablePoolBytes`
+  (every pool on the process memory ledger), `previewCacheBytes` (the Preview frames row),
+  `operationCacheBytes` (the two Operation cache rows, with `decodedMediaBytes` the decoded-media
+  row) and `otherPoolBytes` (the rest: decoded video, the disk-cache write queue and the asset
+  pools). The snapshot also gives `stagingLiveBytes` and `stagingPeakBytes` (host upload staging,
+  scratch), `admissionClaimBytes` (host bytes admission granted to running work, outside the
+  preview retention) and `unattributedBytes` (anonymous minus pools, pending retirement, staging
+  and claims). Pool bytes are host allocations, each distinct allocation counted once, including
+  bytes pending asynchronous retirement (`operationPendingBytes`, `reusablePendingBytes`);
+  `reusableDeviceBytes` is device-resident pool bytes, outside the host totals
+  ([what the pools count](../architecture/evaluation-primitives.md#what-the-pools-count)). Four
+  figures the snapshot does not carry are read from their owners as before:
+  `operationSharedBytes` (what per-entry accounting would have added for storage several entries
+  share) and the processing policy's `hostClaimBytes` (including retained preview frames),
+  `hostUsableBytes` (available memory within the OS limit minus the RAM headroom) and
+  `deviceClaimBytes`. A value the platform cannot supply is `null`, never 0. Without
+  `--bench-profiler` no sampler thread runs (a closed Profiler) and each tick takes one sample on
+  the harness thread; with it the sampler thread runs over the window, as an open Profiler does,
+  and the harness prints the window's last snapshot as a `BENCH_PROFILER` line in the
+  `profiler.snapshot` JSON. `peakDeviceBytes` is the
   process tree's peak device memory as the driver reports it (`nvidia-smi --query-compute-apps`,
   NVIDIA only). The harness also prints a `BENCH_MEMORY` line with the same fields every ten seconds,
   which the run log keeps, so a fill that stops making progress shows where its memory is.
