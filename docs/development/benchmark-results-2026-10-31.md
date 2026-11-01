@@ -166,6 +166,46 @@ frames, at the cost of running the process at the limit. Keeping all 240 frames 
 inside 20G needs about 8 GB of preview frames, so it depends on which retained bytes give way first:
 the operation cache's prepared uploads and decoded sources, or the preview frames.
 
+### RAM Preview retention (#413)
+
+The owner chose **preview first**: while a RAM Preview fill is active, operation-cache
+intermediates and prepared upload host copies give way before finished preview frames
+([eviction priority](../architecture/evaluation-primitives.md#eviction-priority-during-ram-preview)).
+Outside a fill nothing changes. Ordinary pools cover deficits and work reclaims first; the preview
+cache takes room from them before it evicts a frame of its own; and during the fill only the
+preview cache grows into free memory.
+
+Re-measured inside the same 20G scope (`MemoryMax=20G`, no swap), Full cold, A variant, on
+2026-11-01. Before: main 3d559ed1e. After: the #413 branch on the same base. The 2160p cells ran
+twice. "Kept" is `cachedFrames` at the end of the fill, of 240. The pool columns come from
+`memoryAtPeak`, the harness sample with the highest RSS.
+
+| Cell | Before: kept, fps, peak RSS | Before at peak: preview / operation (uploads) | After: kept, fps, peak RSS | After at peak: preview / operation (uploads) |
+|---|---|---|---|---|
+| 2160p png16 | 111 and 85, 12.5 and 12.4 fps, 15.5 and 16.1 GB | 3.7–4.0 / 9.9–10.3 GB (7.6–8.1) | 240 and 240, 13.2 and 12.8 fps, 9.9 and 10.0 GB | 7.5–7.7 / 0.4–0.5 GB (0.3–0.4) |
+| 2160p DNxHR HQX | 7 and 23, 9.5 and 9.3 fps, 8.1 and 8.7 GB | 1.6–1.8 / 8.9–9.3 GB (0) | 240 and 240, 11.4 and 11.2 fps, 9.6 and 9.6 GB | 7.8–7.9 / 0.5 GB (0.5) |
+| 1080p H.264 | 240, 71.3 fps, 6.1 GB | 2.0 / 6.3 GB (0) | 240, 87.6 fps, 2.8 GB | 2.0 / 0.1 GB (0.1) |
+| 720p H.264 | 240, 126.8 fps, 4.6 GB | 0.9 / 6.3 GB (0) | 240, 147.5 fps, 1.5 GB | 0.9 / 0.06 GB (0.06) |
+
+Every fill finished `Complete` after the change, with no preview evictions or pressure drops, no
+OOM and 0 CPU-fallback frames; cached playback of the 2160p ranges ran at 24.0 fps. Every
+before 2160p fill ended `PartialBudget`. For comparison, #411's after numbers were png16 82/240 at
+8.5 fps and DNxHR 101/240 at 9.2 fps, peak RSS 15.2–15.8 GB. On main, DNxHR kept even fewer
+frames (7–23) at only 8–9 GB RSS, with host claims at 12 GB: the preview cache fell to 0 while
+the operation cache refilled to 10 GB. That is consistent with proportional yielding to work that
+waits for host capacity, which the operation cache recovers from and finished frames do not.
+
+Over a 2160p png16 fill (the harness's ten-second `BENCH_MEMORY` lines), the preview cache grows
+0 → 4.4 → 8.0 GB while the operation cache stays at 0.4–0.6 GB. Before, the operation cache was at
+9.4 GB after ten seconds. The intermediate step of the change, priority only, without holding the
+Ordinary pools' growth, also kept 240/240, but the operation cache still took 5–8 GB of prepared
+uploads early in the fill and png16 slowed to 8.8–9.4 fps, because retained preview frames and the
+operation cache together narrowed the frames in flight that free capacity sizes.
+
+Keeping all 240 frames of a 2160p fill takes 7.96 GB of preview frames. With the working set of
+the frames in flight, the process now peaks at about 10 GB inside the 20 GiB limit, so this
+profile has room to spare.
+
 ## Conditions
 
 - **Host crash, 2026-10-31 16:14 local.** The first after-run queue ran one runner for the whole

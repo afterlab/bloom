@@ -231,6 +231,9 @@ Every measurement is a fresh process.
   limit minus the RAM headroom). RSS minus `reusablePoolBytes` is the memory outside Bloom's
   caches. The harness also prints a `BENCH_MEMORY` line with the same fields every ten seconds,
   which the run log keeps, so a fill that stops making progress shows where its memory is.
+  Fills also report `cachedFrames` (frames still retained when the fill ends) and
+  `previewFirstYieldedBytes`: bytes the other reusable pools gave back so a finished preview frame
+  was kept instead of an earlier one (preview-first eviction priority during a fill).
 
 Process sampling uses `/proc` on Linux and `psutil` where it is installed; without either, CPU and
 RSS sampling are reported as absent rather than guessed.
