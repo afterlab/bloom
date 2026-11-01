@@ -125,9 +125,11 @@ void ProfilerHistory::push(const ProfilerSnapshot& snapshot) noexcept {
         if (index < executorCount && index < oldExecutors && seconds > 0.0) {
             const auto& now = cpu.executorPools[index];
             const auto& then = old.cpu.executorPools[index];
-            if (now.workers > 0 && now.busyNs >= then.busyNs)
-                utilization = static_cast<float>(static_cast<double>(now.busyNs - then.busyNs) /
-                                                 (seconds * 1e9 * now.workers));
+            if (now.workers > 0 && now.busyNs.present && then.busyNs.present &&
+                now.busyNs.value >= then.busyNs.value)
+                utilization =
+                    static_cast<float>(static_cast<double>(now.busyNs.value - then.busyNs.value) /
+                                       (seconds * 1e9 * now.workers));
         }
         rings_[static_cast<std::size_t>(kSeriesCount + kPoolSeries + slot)].push(utilization);
     }

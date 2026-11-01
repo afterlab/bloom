@@ -30,7 +30,8 @@
 
 namespace bloom::runtime {
 
-inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 1;
+// 2: pool counters and executor busy time can be absent (a source that does not count them).
+inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 2;
 
 inline constexpr std::size_t kProfilerNameCapacity = 48;
 inline constexpr std::size_t kProfilerMaximumPools = 32;
@@ -86,15 +87,16 @@ struct ProfilerPool final {
     std::uint64_t hostBytes = 0;
     std::uint64_t pendingBytes = 0;
     std::uint64_t deviceBytes = 0;
-    std::uint64_t entries = 0;
+    // Absent when the pool's owner does not count entries.
+    ProfilerCount entries{};
     // The pool's selected allowance; absent for a pool without a ceiling.
     ProfilerBytes ceilingBytes{};
-    // Cumulative.
-    std::uint64_t hits = 0;
-    std::uint64_t misses = 0;
-    std::uint64_t stores = 0;
-    std::uint64_t evictions = 0;
-    std::uint64_t refusals = 0;
+    // Cumulative; absent when the pool's owner does not count them.
+    ProfilerCount hits{};
+    ProfilerCount misses{};
+    ProfilerCount stores{};
+    ProfilerCount evictions{};
+    ProfilerCount refusals{};
 };
 
 struct ProfilerMemory final {
@@ -163,8 +165,9 @@ struct ProfilerExecutorPool final {
     ProfilerName name{};
     std::uint32_t workers = 0;
     std::uint32_t queueDepth = 0;
-    // Cumulative nanoseconds the pool's workers spent running tasks, summed over workers.
-    std::uint64_t busyNs = 0;
+    // Cumulative nanoseconds the pool's workers spent running tasks, summed over workers; absent
+    // when the executor does not measure it.
+    ProfilerMetric<std::uint64_t> busyNs{};
 };
 
 struct ProfilerCpu final {

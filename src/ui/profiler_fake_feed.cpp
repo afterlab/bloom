@@ -1,6 +1,5 @@
 #include <bloom/ui/profiler_fake_feed.hpp>
 
-#include <QByteArray>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -43,13 +42,13 @@ void addPool(runtime::ProfilerMemory& memory, const std::string_view name,
     pool.hostBytes = host;
     pool.pendingBytes = pending;
     pool.deviceBytes = device;
-    pool.entries = entries;
+    pool.entries = of(entries);
     pool.ceilingBytes = ceiling;
-    pool.hits = t * (12 + memory.poolCount);
-    pool.misses = t * 2 + t / 7;
-    pool.stores = t * 3;
-    pool.evictions = evictions;
-    pool.refusals = t / 90;
+    pool.hits = of(t * (12 + memory.poolCount));
+    pool.misses = of(t * 2 + t / 7);
+    pool.stores = of(t * 3);
+    pool.evictions = of(evictions);
+    pool.refusals = of(t / 90);
 }
 
 void addTask(runtime::ProfilerWorkload& workload, const std::string_view name,
@@ -206,7 +205,7 @@ void fillFakeProfilerSnapshot(const std::uint64_t serial, const std::chrono::mil
         runtime::setProfilerName(pool.name, executor.name);
         pool.workers = executor.workers;
         pool.queueDepth = static_cast<std::uint32_t>(executor.busy * 10.0 + (pressure ? 14 : 0));
-        pool.busyNs = static_cast<std::uint64_t>(ns * executor.workers * executor.busyIntegral);
+        pool.busyNs = of(static_cast<std::uint64_t>(ns * executor.workers * executor.busyIntegral));
     }
 
     // ---- Workload.
@@ -293,13 +292,6 @@ FakeProfilerFeed::~FakeProfilerFeed() { shutdown(); }
 bool FakeProfilerFeed::readLatest(runtime::ProfilerSnapshot& out) {
     fillFakeProfilerSnapshot(next_++, interval(), out);
     return true;
-}
-
-std::unique_ptr<ProfilerFeed> makeDevelopmentProfilerFeed(QObject* parent) {
-    const QByteArray value = qgetenv(kProfilerFakeFeedVariable);
-    if (value.isEmpty() || value == "0")
-        return nullptr;
-    return std::make_unique<FakeProfilerFeed>(parent);
 }
 
 } // namespace bloom::ui

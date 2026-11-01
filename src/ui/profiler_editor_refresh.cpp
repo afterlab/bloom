@@ -355,21 +355,21 @@ QVariant ProfilerEditor::poolCell(const int row, const int column, const int rol
     case PoolDeviceColumn:
         return numberCell(static_cast<double>(pool.deviceBytes), MetricUnit::Bytes, role);
     case PoolEntriesColumn:
-        return numberCell(static_cast<double>(pool.entries), MetricUnit::Count, role);
+        return metricCell(pool.entries, MetricUnit::Count, role);
     case PoolCeilingColumn:
         if (!pool.ceilingBytes.present)
             return role == Qt::DisplayRole ? QVariant(tr("None")) : QVariant{};
         return metricCell(pool.ceilingBytes, MetricUnit::Bytes, role);
     case PoolHitsColumn:
-        return numberCell(static_cast<double>(pool.hits), MetricUnit::Count, role);
+        return metricCell(pool.hits, MetricUnit::Count, role);
     case PoolMissesColumn:
-        return numberCell(static_cast<double>(pool.misses), MetricUnit::Count, role);
+        return metricCell(pool.misses, MetricUnit::Count, role);
     case PoolStoresColumn:
-        return numberCell(static_cast<double>(pool.stores), MetricUnit::Count, role);
+        return metricCell(pool.stores, MetricUnit::Count, role);
     case PoolEvictionsColumn:
-        return numberCell(static_cast<double>(pool.evictions), MetricUnit::Count, role);
+        return metricCell(pool.evictions, MetricUnit::Count, role);
     case PoolRefusalsColumn:
-        return numberCell(static_cast<double>(pool.refusals), MetricUnit::Count, role);
+        return metricCell(pool.refusals, MetricUnit::Count, role);
     default:
         return {};
     }
