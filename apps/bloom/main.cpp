@@ -60,6 +60,7 @@
 #include <bloom/ui/memory_budget_controller.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/preview_frame_trace.hpp>
+#include <bloom/ui/profiler_fake_feed.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/qualified_display_processor_bootstrap.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
@@ -619,6 +620,10 @@ int main(int argc, char* argv[]) try {
     // configured sublimits installed above remain in force.
     gpuViewerBootstrap.bindResidentCache(*previewFrameCache);
     bloom::ui::ViewerGpuDependencies viewerGpuDependencies = gpuViewerBootstrap.dependencies();
+    // The Profiler's feed (#423), declared before the registry so it outlives every Profiler panel.
+    // Until the runtime sampler is wired it is the fake feed under BLOOM_PROFILER_FAKE_FEED (for
+    // development only) and otherwise none, so every metric reads absent.
+    const auto profilerFeed = bloom::ui::makeDevelopmentProfilerFeed();
     bloom::ui::EditorRegistry editorRegistry;
     bloom::app::DeferredEditorTeardown deferredEditorTeardown;
     // Jobs is deliberately NOT registered (task F1, item F6). An editor in this registry is an
@@ -666,7 +671,7 @@ int main(int argc, char* argv[]) try {
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
         editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
         &viewerGpuDependencies, gpuExportProvider, &exportQueueAdapter, &liveSessionHost,
-        &mcpAdapter);
+        &mcpAdapter, profilerFeed.get());
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,

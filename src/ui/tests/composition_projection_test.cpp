@@ -243,8 +243,8 @@ parameterForRole(const bloom::document::Composition& composition,
     ui::EditorRegistry registry;
     if (!require(ui::registerFoundationEditors(registry, session, previewController),
                  "foundation editor registration succeeds") ||
-        !require(registry.editors().size() == 8,
-                 "foundation registration exposes eight replaceable editor types")) {
+        !require(registry.editors().size() == 9,
+                 "foundation registration exposes nine replaceable editor types")) {
         return false;
     }
     ui::TimelineEditor timeline(session, previewController);

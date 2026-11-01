@@ -27,6 +27,7 @@ namespace bloom::ui {
 class CompositionPreviewController;
 class ExportQueueAdapter;
 class McpServerAdapter;
+class ProfilerFeed;
 class RamPreviewController;
 class CompositionSession;
 class ProjectHost;
@@ -77,12 +78,15 @@ class EditorRegistry final {
 // through (ADR 0034), already fed by an application-lifetime LiveSessionAdapter; the composition
 // root passes the same host to the in-app MCP server so both share one commit queue. Null makes
 // the registry own a host and its adapter for the Script editor alone.
+//
+// `profilerFeed` is the application-lifetime feed the Profiler panels read (#423). Null registers
+// the Profiler with no source, every metric absent. It must outlive every editor.
 [[nodiscard]] bool registerFoundationEditors(
     EditorRegistry& registry, CompositionSession& session,
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
     ProjectHost* projectHost = nullptr, const ViewerGpuDependencies* gpuDependencies = nullptr,
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {},
-    ExportQueueAdapter* exportQueue = nullptr,
-    scripting::LiveSessionHost* liveSession = nullptr, McpServerAdapter* mcpServer = nullptr);
+    ExportQueueAdapter* exportQueue = nullptr, scripting::LiveSessionHost* liveSession = nullptr,
+    McpServerAdapter* mcpServer = nullptr, ProfilerFeed* profilerFeed = nullptr);
 
 } // namespace bloom::ui

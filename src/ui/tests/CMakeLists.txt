@@ -2367,3 +2367,27 @@ foreach(scale IN ITEMS 1 1.5)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
         LABELS "ui;grammar" TIMEOUT 120)
 endforeach()
+
+# The Profiler panel (#423): registration and glyph, feed subscription with a refcount, fixed
+# history rings, absent versus zero, stale ages, unattributed math, the trivially copyable snapshot.
+add_executable(bloom_profiler_panel_test profiler_panel_tests.cpp)
+target_link_libraries(bloom_profiler_panel_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_profiler_panel_test)
+bloom_add_test(
+    NAME bloom.ui.profiler-panel
+    COMMAND bloom_profiler_panel_test
+    LABELS ui unit
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+)
+
+# Profiler captures over the fake feed at DPR 1 and 1.5; BLOOM_PROFILER_CAPTURE_DIR keeps them.
+add_executable(bloom_profiler_panel_capture profiler_panel_capture.cpp)
+target_link_libraries(bloom_profiler_panel_capture PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_profiler_panel_capture)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.profiler_panel_capture.dpr${scale} COMMAND bloom_profiler_panel_capture)
+    set_tests_properties(bloom.ui.profiler_panel_capture.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;grammar" TIMEOUT 120)
+endforeach()

@@ -516,6 +516,16 @@ target_sources(
         mcp_live_ui_binding.cpp
         mcp_server_adapter.cpp
         mcp_server_editor.cpp
+        profiler_editor.cpp
+        profiler_editor_refresh.cpp
+        profiler_fake_feed.cpp
+        profiler_feed.cpp
+        profiler_history.cpp
+        profiler_rows.hpp
+        profiler_table_model.cpp
+        profiler_table_model.hpp
+        profiler_text.cpp
+        profiler_text.hpp
         mcp_server_service_port.cpp
         mcp_server_text.cpp
         licenses_window.cpp
@@ -697,6 +707,10 @@ target_sources(
             include/bloom/ui/mcp_live_ui_binding.hpp
             include/bloom/ui/mcp_server_adapter.hpp
             include/bloom/ui/mcp_server_editor.hpp
+            include/bloom/ui/profiler_editor.hpp
+            include/bloom/ui/profiler_fake_feed.hpp
+            include/bloom/ui/profiler_feed.hpp
+            include/bloom/ui/profiler_history.hpp
             include/bloom/ui/mcp_server_service_port.hpp
             include/bloom/ui/mcp_server_text.hpp
             include/bloom/ui/interaction_sounds.hpp

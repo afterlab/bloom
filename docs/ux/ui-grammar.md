@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-30
+Updated: 2026-11-01
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -25,7 +25,9 @@ Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`, `KRangeSelector`,
 `KTextField` (and its `KLineEdit` and `KSearchField` forms), `KTextArea`, `KFieldFrame`, `KSection`,
 `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
-Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). A read-only picture
+Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). Live read-only numbers
+and their history use `KReadoutGrid`, `KTimeSeriesChart` and `KHistogramChart` over
+`kit::SampleRing`s (see "Profiler panel" below). A read-only picture
 uses `KThumbnail`: the `ImageThumbnail` square on `SurfaceSunken` (`Cell::Card`), or the Assets
 summary strip's 64 × 40 Field well (`Cell::Strip`), showing a worker-decoded proxy or a glyph fitted
 without changing its aspect ratio; it never loads anything.
@@ -755,6 +757,9 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `SwitchTrackWidth / SwitchTrackHeight` | 30 / 16 | `KSwitch` |
 | `RadioMark / RadioDot` | 14 / 6 | `KRadioGroup` discrete mark and its selected dot (even, so it centers on the pixel grid) |
 | `PickerSquare / PickerMarker / CheckerCell` | 160 / 8 / 8 | `KColorPicker` square, marker, and every alpha checkerboard cell |
+| `ChartHeight / HistogramHeight` | 96 / 72 | `KTimeSeriesChart` / `KHistogramChart` |
+| `ReadoutLabelWidth / ReadoutValueWidth` | 168 / 112 | `KReadoutGrid` label column / right-aligned value column |
+| `ReadoutColumnWidth` | 400 | One `KReadoutGrid` column: a grid at least twice this wide flows into two |
 
 `kKeyDiamondRadius` is 4.5 and `kNodeCanvasHalfExtent` is 262144 logical pixels. Ratios,
 centering divisors and wheel detents are unitless computations, not pixel dimensions.
@@ -1458,6 +1463,42 @@ without its reason in the tooltip and under the control.
 | `windowStatusBarMcp`, `preferencesMcpLink` | Status bar indicator (shown only while running or failed), Preferences link |
 
 Narrow panels hide the clients columns in this order: last tool, in flight, version.
+
+## Profiler panel
+
+Editor `bloom.profiler`, "Profiler", panel-switcher glyph `IconId::Profiler` (Phosphor `gauge`).
+It reads `runtime::ProfilerSnapshot`s from a `ProfilerFeed` and holds no runtime state of its own
+([feed and cost rules](../architecture/profiler-feed.md)). It has no header or footer controls.
+Its body is a scroll area of collapsible `KSection`s (Memory, GPU, CPU, Workload, Pressure,
+Processes; collapse persists under `profiler/sections/<id>/collapsed`), each composed from three kit
+primitives and the kit item-view table:
+
+- `KTimeSeriesChart` (`Size::ChartHeight`): stacked bands, lines and labelled horizontal markers
+  over `kit::SampleRing`s, newest sample at the right edge, y from zero to a rounded maximum (or a
+  fixed one, such as 100% for utilization). It reads its rings when it paints and repaints only on
+  `samplesChanged()`.
+- `KHistogramChart` (`Size::HistogramHeight`): one bar per fixed bucket with the title, p50, p95
+  and sample count above and the edge labels below; absent reads "Unavailable".
+- `KReadoutGrid`: label/value/note rows at the `PropertyRow` pitch, an optional series swatch that
+  makes a row a legend entry, numbers formatted in `kit::MetricUnit` only when the row paints, and
+  two columns once the grid is wide enough.
+- Tables (pools, tasks, events, helpers) are `QTableView`s at the `ListRow` pitch with no selection,
+  sized to their rows so the panel scrolls rather than the table.
+
+Absent metrics read "Unavailable" in `Faint`, never 0; a value from a slower source carries its age
+as a note, in `Warn` once older than ten seconds. Without a feed the panel shows one `Muted` line,
+`profilerNoSource`, above the sections.
+
+| Object name | Part |
+| --- | --- |
+| `profilerEditor`, `profilerScroll`, `profilerContent`, `profilerNoSource` | the panel, its scroll area and body, the no-source line |
+| `profilerSection_memory`, `_gpu`, `_cpu`, `_workload`, `_pressure`, `_processes` | `KSection`s |
+| `profilerMemoryChart`, `profilerMemoryReadouts`, `profilerPoolsHeading`, `profilerPoolTable` | Memory |
+| `profilerGpuMemoryChart`, `profilerGpuTransferChart`, `profilerGpuReadouts` | GPU |
+| `profilerCpuChart`, `profilerExecutorChart`, `profilerCpuReadouts` | CPU |
+| `profilerTaskCounts`, `profilerTasksHeading`, `profilerTaskTable`, `profilerStagesHeading`, `profilerStage_<0..5>`, `profilerThroughputHeading`, `profilerThroughputChart`, `profilerThroughputReadouts` | Workload |
+| `profilerPressureChart`, `profilerPressureReadouts`, `profilerEventsHeading`, `profilerEventTable` | Pressure |
+| `profilerHelperTable` | Processes |
 
 ### Compile failure details
 

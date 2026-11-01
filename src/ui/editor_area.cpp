@@ -74,6 +74,9 @@ constexpr auto kHeaderIconRole = kit::IconRole::Chrome;
     if (editorId == "bloom.export") {
         return kit::IconId::ExportPanel;
     }
+    if (editorId == "bloom.profiler") {
+        return kit::IconId::Profiler;
+    }
     return std::nullopt;
 }
 

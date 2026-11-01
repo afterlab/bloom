@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-30
+Updated: 2026-11-01
 
 ## Purpose
 
@@ -289,6 +289,26 @@ There is no Recessed recipe: the header icon buttons and dropdown fields that us
 Color is never the only carrier of a state. A disabled control also stops responding; a selected
 one also changes its fill or its edge; a toggle also moves its thumb.
 
+### Charts
+
+The Profiler's chart primitives (`kit::KTimeSeriesChart`, `kit::KHistogramChart`,
+`kit::KReadoutGrid`; [UI grammar](ui-grammar.md#profiler-panel)) add no colour of their own.
+
+| Element | Recipe |
+| --- | --- |
+| Plot | A `SurfaceSunken` well with one `Border` hairline and `Radius::Small`; quarter grid lines are `Border` hairlines |
+| Axis labels | `UiSmall` in `Muted`, top and middle, on a plate of the well's own `SurfaceSunken` so a series never covers them |
+| Series | `kit::chartSeriesColor(i)` cycles eight existing tokens: `GraphCurve3`, `GraphCurve2`, `ComponentZ`, `GraphCurve5`, `ComponentY`, `Label2`, `Label8`, `Label6`. None is `Accent`, `Keyframe`, `Warn` or `Error`, so a series never reads as a selection, a key or a state |
+| Line | `kChartLineStroke` (1.5), round caps and joins; a dashed line is a second series of the same kind (anonymous memory under RSS) |
+| Band | Stacked bottom up, filled at `kChartBandOpacity` (0.45) under a hairline edge in the band's full colour |
+| Marker | A dashed hairline at a reference value (an idle baseline, a heap budget) labelled at its right end in `UiSmall` |
+| Gap | An absent sample breaks a line and adds nothing to a band: absent never draws as zero |
+| Histogram | One bar per bucket in `Muted`, the median bucket in `Foreground`; the title, p50/p95 and count above, the first, middle and last edges below in `Faint` |
+| Readout | Label in `Ui`/`Muted` (with the series swatch when the row is a legend), numbers in `Value` right-aligned in one column, words in `Ui`, a note in `UiSmall`/`Muted`; absent reads "Unavailable" in `Faint`; an age turns `Warn` once stale |
+
+A reserved series takes a state or neutral token where its meaning is a state: the Profiler's
+unattributed memory band is `Warn`, RSS and the driver's heap use are `Foreground`.
+
 ### Motion
 
 | Token | Duration | Curve | Use |
@@ -335,7 +355,7 @@ Phosphor Icons is Bloom's default interface icon family.
   comes from the host control's metrics, so it takes only the role's weight
   (`iconWeight(IconRole::Chrome)`) and keeps that box.
 - Add another upstream weight only when a role needs it. The vendored subset carries `regular`,
-  `fill` and `bold` complete over every Phosphor-backed id (82 `IconId`s: 76 vendored glyphs per
+  `fill` and `bold` complete over every Phosphor-backed id (90 `IconId`s: 84 vendored glyphs per
   weight, two ids that reuse another's glyph -- Subtract and Search -- and four shape-tool glyphs
   Bloom draws itself), because a role
   that asks for a weight must find it for every icon: a missing file renders as a silent blank,
@@ -359,7 +379,8 @@ Phosphor Icons is Bloom's default interface icon family.
   below.
 - A composition is the `film-strip` glyph wherever one is meant (an Assets row, New Composition,
   the Viewer's composition picker); an image sequence is the `images` stack; RAM Preview has its own
-  `lightning` glyph (the pinned Phosphor release has no memory-chip glyph).
+  `lightning` glyph (the pinned Phosphor release has no memory-chip glyph). The Profiler panel is
+  the `gauge`.
 
 The complete Phosphor catalog is not embedded in Bloom's main executable by default. If a concrete
 workflow later needs the entire catalog, package it as a pinned external Qt `.rcc` resource and load

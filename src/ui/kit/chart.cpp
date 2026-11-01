@@ -304,6 +304,11 @@ void KTimeSeriesChart::paintEvent(QPaintEvent* event) {
         painter.setPen(color(Color::Muted));
         painter.drawText(box, Qt::AlignCenter, label);
     };
+    // An empty chart has no scale to label.
+    const bool anyMarker = std::ranges::any_of(
+        markers_, [](const Marker& marker) { return !std::isnan(marker.value); });
+    if (count == 0 && !anyMarker)
+        return;
     axisLabel(plot.top(), maximum);
     axisLabel(plot.center().y() - metrics.height(), maximum / 2.0);
 }

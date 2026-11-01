@@ -1,5 +1,6 @@
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/mcp_server_editor.hpp>
+#include <bloom/ui/profiler_editor.hpp>
 
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/export_editor.hpp>
@@ -62,7 +63,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                                std::shared_ptr<host::GpuExportProvider> gpuExportProvider,
                                ExportQueueAdapter* const exportQueue,
                                scripting::LiveSessionHost* const liveSession,
-                               McpServerAdapter* const mcpServer) {
+                               McpServerAdapter* const mcpServer,
+                               ProfilerFeed* const profilerFeed) {
     std::shared_ptr<ScriptPanelRuntime> script;
 #ifdef BLOOM_BUILD_PYTHON
     if (projectHost) {
@@ -119,7 +121,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
            addEditor("bloom.script", "Script",
                      [script](QWidget* parent) { return new ScriptPanel(script, parent); }) &&
            registerExportEditor(registry, session, exportQueue) &&
-           registerMcpServerEditor(registry, mcpServer);
+           registerMcpServerEditor(registry, mcpServer) &&
+           registerProfilerEditor(registry, profilerFeed);
 }
 
 } // namespace bloom::ui

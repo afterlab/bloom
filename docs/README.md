@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-10-30
+Updated: 2026-11-01
 
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
@@ -39,8 +39,9 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/dependency-intake.md`](architecture/dependency-intake.md),
    [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md),
    [`architecture/gpu-backend.md`](architecture/gpu-backend.md),
-   [`architecture/platform-support.md`](architecture/platform-support.md), and
-   [`architecture/ui-feedback.md`](architecture/ui-feedback.md) — execution and platform
+   [`architecture/platform-support.md`](architecture/platform-support.md),
+   [`architecture/ui-feedback.md`](architecture/ui-feedback.md), and
+   [`architecture/profiler-feed.md`](architecture/profiler-feed.md) — execution and platform
    contracts and extension boundaries.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
 8. [`decisions/`](decisions/) — accepted architecture decision records.
@@ -76,6 +77,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Using Bloom from an agent](user-guide/mcp.md) — stdio MCP tools and request limits.
 - [When a composition cannot render](user-guide/compile-failures.md) — the status bar's Details popup and what to do.
 - [MCP Server panel](user-guide/mcp-server-panel.md) — start or stop the in-app MCP server, port, token and clients.
+- [The Profiler panel](user-guide/profiler.md) — Bloom's memory, GPU, CPU, workload, pressure and
+  helper processes over time.
 - [Headless scripting](user-guide/scripting.md) — `bloom-cli`, JSON transactions, and headless
   frame/range rendering.
 
