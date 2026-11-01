@@ -174,7 +174,9 @@ The runner never uses a display: Bloom processes run with `QT_QPA_PLATFORM=offsc
 | `layers` | 1080p | EXR half (plus the L mix) | L10, L25, L50; Full, Half, Quarter; cold and warm; cached playback after every fill; playback; no exports |
 
 `--tier`, `--format`, `--variant`, `--resolution`, `--cache`, `--export`, `--no-export` and
-`--no-playback` narrow a suite. `--workspace` runs the harness with the application's window
+`--no-playback` narrow a suite. `--playback-only` measures cold playback alone (no fills, no
+exports); `--playback-resolution` (repeatable, default `Full`) picks the playback measurements'
+resolutions and `--playback-repeat` how many fresh processes each gets. `--workspace` runs the harness with the application's window
 instead of a bare Viewer: `MainWindow` with every foundation editor (Timeline, Properties, Node,
 Assets, ...), plus the application's `AssetController`, `AudioPlaybackSession`, live-session
 adapter and playback read-ahead, so per-tick work outside the Viewer is measured too. The harness
@@ -207,6 +209,13 @@ Every measurement is a fresh process.
   time by dropping frames rather than slowing down.
 - **Playback** (`kind: playback`): a cold start with background read-ahead and no RAM fill;
   `playbackFps` = distinct frames shown / seconds, next to the frames the transport asked for.
+- **Start of playback** (both playback measurements, prefixed `play` or `cachedPlay`):
+  `FirstMotionSeconds` is the time from Play until the Viewer first shows a Current frame other
+  than the start frame; `DroppedFirstSecond` and `PaintedFirstSecond` are the footer's dropped
+  count and the distinct Current frames shown one second after Play; `DroppedTotal` is the dropped
+  count at the end of the run; `ReadAheadWidth` is the read-ahead window at Play; and
+  `FrameCachedSeconds` lists, for each of the first 24 frames from the start, when it entered the
+  preview cache (-1 when it never did).
 - **Export** (`kind: export`): `bloom-cli export --job <id> --replace`; `secondsPerFrame` = process
   wall time / frames, including start-up. The export's own provenance gives `gpuFrames` and the
   CPU-reference frame count (`cpuFallbackFrames`). An export that cannot run on this

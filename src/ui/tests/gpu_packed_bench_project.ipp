@@ -5,6 +5,7 @@
 // budgets, the packed GPU preview service, RAM preview fill width from measured capacity, and
 // background read-ahead for playback. It measures; it does not qualify parity (the cache100 and
 // route-proof gates do). tools/bench/run_bench.py drives it, one fresh process per measurement.
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
@@ -35,9 +36,11 @@
 #endif
 
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <set>
 #include <sstream>
+#include <vector>
 
 namespace {
 std::string gBenchProject;
@@ -174,11 +177,40 @@ struct BenchPlayback {
     double uiBusySeconds = 0.0;        // time spent inside event-loop slices on the UI thread
     double maxSliceMs = 0.0;           // the longest single event-loop slice
     std::uint64_t longSlices = 0;      // slices longer than one frame period
+    // Start of playback (#404). Seconds are from play().
+    double firstMotionSeconds = -1.0;     // the shown Current frame first left the start frame
+    std::uint64_t droppedFirstSecond = 0; // the footer's dropped count one second after play()
+    std::uint64_t paintedFirstSecond = 0; // distinct Current frames shown in that second
+    std::uint64_t droppedTotal = 0;       // the footer's dropped count when the run ends
+    std::uint64_t readAheadWidth = 0;     // frames the read-ahead may keep in flight at play()
+    // When each of the first frames from the start entered the preview cache (-1: never).
+    std::vector<double> frameCachedSeconds;
 };
+
+constexpr std::size_t kBenchStartFrames = 24;
+
+struct PreviewFrameCacheKeyProbe {
+    core::RationalTime time;
+    double cachedSeconds = -1.0;
+};
+
+// The start-of-playback fields shared by both playback measurements (#404).
+void benchStartJson(std::ostringstream& json, const char* prefix, const BenchPlayback& played) {
+    json << ",\"" << prefix << "FirstMotionSeconds\":" << played.firstMotionSeconds << ",\""
+         << prefix << "DroppedFirstSecond\":" << played.droppedFirstSecond << ",\"" << prefix
+         << "PaintedFirstSecond\":" << played.paintedFirstSecond << ",\"" << prefix
+         << "DroppedTotal\":" << played.droppedTotal << ",\"" << prefix
+         << "ReadAheadWidth\":" << played.readAheadWidth << ",\"" << prefix
+         << "FrameCachedSeconds\":[";
+    for (std::size_t index = 0; index < played.frameCachedSeconds.size(); ++index)
+        json << (index == 0 ? "" : ",") << played.frameCachedSeconds[index];
+    json << ']';
+}
 
 // Plays from the start for gBenchPlaySeconds and counts what the Viewer really showed.
 BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController& playback,
-                        ui::ViewerEditor& viewer) {
+                        ui::ViewerEditor& viewer, ui::CompositionPreviewController& controller,
+                        const std::function<std::size_t(std::uint64_t)>& widthProvider) {
     double framePeriod = 1.0 / 24.0;
     if (const auto* composition = session.composition(); composition != nullptr) {
         const auto rate = composition->format().frameRate();
@@ -195,6 +227,26 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
     const auto toKey = [](const core::RationalTime& time) {
         return static_cast<std::int64_t>(std::llround(time.toSeconds() * 1e6));
     };
+    // The first frames from the start, as the cache keys the controller would ask for.
+    std::vector<PreviewFrameCacheKeyProbe> startFrames;
+    if (const auto* composition = session.composition(); composition != nullptr) {
+        const auto rate = composition->format().frameRate();
+        if (const auto mapping = core::FrameTimeMapping::create(
+                composition->duration(), rate.numerator(), rate.denominator());
+            mapping.hasValue()) {
+            const auto first = mapping.value()->nearestFrameIndex(area.start);
+            for (std::size_t index = 0; index < kBenchStartFrames; ++index)
+                if (const auto at = mapping.value()->timeForFrame(first + index); at.hasValue())
+                    startFrames.push_back({*at.value(), -1.0});
+        }
+        if (widthProvider)
+            result.readAheadWidth = widthProvider(
+                static_cast<std::uint64_t>(composition->format().width()) *
+                composition->format().height());
+    }
+    const auto startKey = toKey(session.currentTime());
+    std::set<std::int64_t> paintedFirst;
+    bool firstSecondSampled = false;
     const auto started = std::chrono::steady_clock::now();
     playback.play();
     const auto deadline = started + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -216,6 +268,8 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
         else if (loopSeconds > 0) // a loop restart: the run went on to the area start
             result.advancedSeconds += now - previousTime + loopSeconds;
         previousTime = now;
+        const double sinceStart =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         const auto shown = viewer.displayedPreviewState();
         if (shown.freshness == ui::FrameFreshness::Current && shown.frame) {
             const auto key = toKey(shown.frame->desiredIdentity().time);
@@ -223,9 +277,28 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
             if (lastPainted != key)
                 ++result.paintedChanges;
             lastPainted = key;
+            if (key != startKey && result.firstMotionSeconds < 0)
+                result.firstMotionSeconds = sinceStart;
+            if (sinceStart < 1.0)
+                paintedFirst.insert(key);
+        }
+        for (auto& probe : startFrames) {
+            if (probe.cachedSeconds >= 0)
+                continue;
+            if (const auto cacheKey = controller.cacheKeyForTime(probe.time);
+                cacheKey && controller.frameCache().contains(*cacheKey))
+                probe.cachedSeconds = sinceStart;
+        }
+        if (!firstSecondSampled && sinceStart >= 1.0) {
+            firstSecondSampled = true;
+            result.droppedFirstSecond = controller.droppedFrameCount();
+            result.paintedFirstSecond = paintedFirst.size();
         }
         std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
+    result.droppedTotal = controller.droppedFrameCount();
+    for (const auto& probe : startFrames)
+        result.frameCachedSeconds.push_back(probe.cachedSeconds);
     playback.pause();
     std::cout << "BENCH_PLAY_END\n" << std::flush;
     result.seconds =
@@ -528,7 +601,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     json << std::setprecision(15) << ",\"windowStartEpoch\":" << benchEpochSeconds()
          << std::setprecision(6);
     if (gBenchPlayback) {
-        const auto played = benchPlay(session, playback, viewer);
+        const auto played = benchPlay(session, playback, viewer, controller, widthProvider);
+        benchStartJson(json, "play", played);
         json << ",\"playSeconds\":" << played.seconds
              << ",\"transportFrames\":" << played.transportFrames
              << ",\"paintedFrames\":" << played.paintedFrames
@@ -579,8 +653,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             const auto refreshCounter =
                 QObject::connect(&session, &ui::CompositionSession::snapshotChanged,
                                  [&snapshotRefreshes] { ++snapshotRefreshes; });
-            const auto played = benchPlay(session, playback, viewer);
+            const auto played = benchPlay(session, playback, viewer, controller, widthProvider);
             QObject::disconnect(refreshCounter);
+            benchStartJson(json, "cachedPlay", played);
             const auto cacheAfter = frameCache->statistics();
             json << ",\"cachedPlayRevisionChanges\":"
                  << session.snapshot().revision().value() - revisionBefore

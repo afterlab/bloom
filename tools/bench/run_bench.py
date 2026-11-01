@@ -474,8 +474,11 @@ def summarise(measurements):
             rows.append((key, f"fill {m['resolution']} {m['cache']}", detail, m))
         elif m["kind"] == "playback":
             value = m.get("playbackFps")
+            start = (f", first motion {m['playFirstMotionSeconds']:.3f} s, "
+                     f"{m.get('playDroppedFirstSecond')} dropped in the first second"
+                     if m.get("playFirstMotionSeconds") is not None else "")
             rows.append((key, f"playback {m['resolution']} {m['cache']}",
-                         f"{value:.1f} fps" if value is not None else "error", m))
+                         f"{value:.1f} fps{start}" if value is not None else "error", m))
         elif m["kind"] == "build":
             rows.append((key, "project build", f"error: {m.get('error')}", m))
         else:
@@ -580,7 +583,8 @@ def command_run(args):
         out_json.write_text(json.dumps(results, indent=1) + "\n")
         print(f"  {kind:<8} {row.get('resolution', '')} {row.get('cache', '')} "
               f"{row.get('export', '')} -> " + ", ".join(
-                  f"{k}={row[k]}" for k in ("fillFps", "playbackFps", "cachedPlaybackFps",
+                  f"{k}={row[k]}" for k in ("fillFps", "playbackFps", "playFirstMotionSeconds",
+                                            "playDroppedFirstSecond", "cachedPlaybackFps",
                                             "secondsPerFrame", "cpuFallbackFrames",
                                             "gpuBusyPercent", "error") if k in row), flush=True)
 
@@ -593,7 +597,7 @@ def command_run(args):
         if "buildError" in item:
             record(item, "build", {"error": item["buildError"]})
             continue
-        for resolution in resolutions:
+        for resolution in () if args.playback_only else resolutions:
             for cache in caches:
                 dropped = drop_page_cache(files) if cache == "cold" else None
                 values = harness_measure(args, item["project"], resolution, False, log,
@@ -601,10 +605,14 @@ def command_run(args):
                 record(item, "fill", {"resolution": resolution, "cache": cache,
                                       "coldDropped": dropped, **values})
         if playback and not args.no_playback:
-            dropped = drop_page_cache(files)
-            values = harness_measure(args, item["project"], "Full", True, log)
-            record(item, "playback", {"resolution": "Full", "cache": "cold",
-                                      "coldDropped": dropped, **values})
+            for resolution in args.playback_resolution or ("Full",):
+                for _ in range(args.playback_repeat):
+                    dropped = drop_page_cache(files)
+                    values = harness_measure(args, item["project"], resolution, True, log)
+                    record(item, "playback", {"resolution": resolution, "cache": "cold",
+                                              "coldDropped": dropped, **values})
+        if args.playback_only:
+            continue
         if item["variant"] in export_variants and (export_formats is None or
                                                    entry["format"] in export_formats):
             for export in exports:
@@ -741,6 +749,12 @@ def main():
     run.add_argument("--no-export", action="store_true")
     run.add_argument("--no-playback", action="store_true")
     run.add_argument("--play-seconds", type=float, default=6.0)
+    run.add_argument("--playback-only", action="store_true",
+                     help="measure cold playback only: no fills and no exports")
+    run.add_argument("--playback-resolution", action="append", choices=RESOLUTIONS,
+                     help="playback measurement resolution (default Full; repeatable)")
+    run.add_argument("--playback-repeat", type=int, default=1,
+                     help="cold playback measurements per resolution")
     run.add_argument("--timeout", type=int, default=1800, help="per process, seconds")
     run.add_argument("--rebuild-projects", action="store_true")
     run.add_argument("--build-only", action="store_true",
