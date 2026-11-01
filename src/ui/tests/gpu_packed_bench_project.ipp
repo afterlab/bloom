@@ -185,6 +185,13 @@ struct BenchPlayback {
     std::uint64_t readAheadWidth = 0;     // frames the read-ahead may keep in flight at play()
     // When each of the first frames from the start entered the preview cache (-1: never).
     std::vector<double> frameCachedSeconds;
+    // Preroll (#404): how the hold ended, how long it held, the frames it waited for, and the
+    // dropped count one second after the clock started.
+    int prerollOutcome = 0;
+    double prerollHeldSeconds = 0.0;
+    std::uint64_t prerollFrames = 0;
+    double releasedSeconds = -1.0;
+    std::uint64_t droppedFirstSecondAfterRelease = 0;
 };
 
 constexpr std::size_t kBenchStartFrames = 24;
@@ -194,6 +201,22 @@ struct PreviewFrameCacheKeyProbe {
     double cachedSeconds = -1.0;
 };
 
+[[nodiscard]] const char* prerollOutcomeName(const int outcome) {
+    switch (static_cast<ui::PlaybackPreroll::Outcome>(outcome)) {
+    case ui::PlaybackPreroll::Outcome::None:
+        return "none";
+    case ui::PlaybackPreroll::Outcome::Immediate:
+        return "immediate";
+    case ui::PlaybackPreroll::Outcome::Ready:
+        return "ready";
+    case ui::PlaybackPreroll::Outcome::CapReached:
+        return "cap";
+    case ui::PlaybackPreroll::Outcome::Cancelled:
+        return "cancelled";
+    }
+    return "unknown";
+}
+
 // The start-of-playback fields shared by both playback measurements (#404).
 void benchStartJson(std::ostringstream& json, const char* prefix, const BenchPlayback& played) {
     json << ",\"" << prefix << "FirstMotionSeconds\":" << played.firstMotionSeconds << ",\""
@@ -201,6 +224,12 @@ void benchStartJson(std::ostringstream& json, const char* prefix, const BenchPla
          << "PaintedFirstSecond\":" << played.paintedFirstSecond << ",\"" << prefix
          << "DroppedTotal\":" << played.droppedTotal << ",\"" << prefix
          << "ReadAheadWidth\":" << played.readAheadWidth << ",\"" << prefix
+         << "PrerollOutcome\":\"" << prerollOutcomeName(played.prerollOutcome) << "\",\""
+         << prefix << "PrerollHeldSeconds\":" << played.prerollHeldSeconds << ",\"" << prefix
+         << "PrerollFrames\":" << played.prerollFrames << ",\"" << prefix
+         << "ReleasedSeconds\":" << played.releasedSeconds << ",\"" << prefix
+         << "DroppedFirstSecondAfterRelease\":" << played.droppedFirstSecondAfterRelease
+         << ",\"" << prefix
          << "FrameCachedSeconds\":[";
     for (std::size_t index = 0; index < played.frameCachedSeconds.size(); ++index)
         json << (index == 0 ? "" : ",") << played.frameCachedSeconds[index];
@@ -247,6 +276,7 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
     const auto startKey = toKey(session.currentTime());
     std::set<std::int64_t> paintedFirst;
     bool firstSecondSampled = false;
+    bool afterReleaseSampled = false;
     const auto started = std::chrono::steady_clock::now();
     playback.play();
     const auto deadline = started + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -289,6 +319,13 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
                 cacheKey && controller.frameCache().contains(*cacheKey))
                 probe.cachedSeconds = sinceStart;
         }
+        if (result.releasedSeconds < 0 && !playback.isPreparing())
+            result.releasedSeconds = sinceStart;
+        if (!afterReleaseSampled && result.releasedSeconds >= 0 &&
+            sinceStart >= result.releasedSeconds + 1.0) {
+            afterReleaseSampled = true;
+            result.droppedFirstSecondAfterRelease = controller.droppedFrameCount();
+        }
         if (!firstSecondSampled && sinceStart >= 1.0) {
             firstSecondSampled = true;
             result.droppedFirstSecond = controller.droppedFrameCount();
@@ -297,6 +334,10 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
         std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
     result.droppedTotal = controller.droppedFrameCount();
+    result.prerollOutcome = static_cast<int>(playback.lastPreroll().outcome);
+    result.prerollHeldSeconds =
+        std::chrono::duration<double>(playback.lastPreroll().held).count();
+    result.prerollFrames = playback.prerollFrames();
     for (const auto& probe : startFrames)
         result.frameCachedSeconds.push_back(probe.cachedSeconds);
     playback.pause();
@@ -454,6 +495,19 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         ownPlayback.emplace(session, controller);
     ui::PlaybackController& playback =
         gBenchWorkspace ? controller.playbackController() : *ownPlayback;
+    // The application's preroll (#404): the read-ahead window when read-ahead runs; the same
+    // capacity-sized window for the cached run after a fill.
+    playback.setPrerollFrameCountProvider([&background, &session, widthProvider]() -> std::size_t {
+        if (background)
+            return background->prerollFrameCount();
+        const auto* composition = session.composition();
+        if (composition == nullptr)
+            return 1;
+        return std::clamp<std::size_t>(
+            widthProvider(static_cast<std::uint64_t>(composition->format().width()) *
+                          composition->format().height()),
+            1, ui::BackgroundPreviewController::kMaximumPrerollFrames);
+    });
     const auto firstStarted = std::chrono::steady_clock::now();
     std::optional<ui::ViewerEditor> ownViewer;
     std::optional<ui::AssetController> assets;
