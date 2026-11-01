@@ -25,6 +25,7 @@ target_sources(
             include/bloom/runtime/memory_eviction_priority.hpp
             include/bloom/runtime/memory_pressure_monitor.hpp
             include/bloom/runtime/process_memory_sample.hpp
+            include/bloom/runtime/profiler_snapshot.hpp
             include/bloom/runtime/row_band_execution.hpp
             include/bloom/runtime/task_gpu_executor.hpp
             include/bloom/runtime/task_completion.hpp
