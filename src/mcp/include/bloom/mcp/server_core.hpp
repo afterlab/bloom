@@ -22,6 +22,7 @@ class GpuExportProvider;
 } // namespace bloom::host
 namespace bloom::runtime {
 class TaskScheduler;
+struct ProfilerSnapshot;
 } // namespace bloom::runtime
 namespace bloom::scripting {
 class LiveSessionHost;
@@ -91,6 +92,10 @@ struct McpCoreDependencies final {
     // passes the application's bindings; the stdio host binds only projectLifecycle (over its
     // headless session) and every other live-only tool answers bloom.mcp.not-live.
     McpLiveUiPort ui{};
+    // profiler.snapshot: fills the newest ProfilerSnapshot, called through `exports.run` on the
+    // owner thread (the application's sampler and UI-side hook; the stdio host's own sampler).
+    // Empty answers the tool with succeeded=false.
+    std::function<bool(runtime::ProfilerSnapshot&)> profilerSnapshot{};
     // serverInfo.version in initialize.
     std::string serverVersion;
     McpMessageLimits limits = kMcpMessageLimits;

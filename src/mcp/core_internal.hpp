@@ -209,6 +209,9 @@ struct TransientResult final {
                                                         std::uint64_t composition);
 [[nodiscard]] yyjson_mut_val* colorSettingsTool(McpServerCore::State& core, Json& out,
                                                 McpCall& call, yyjson_val* arguments);
+// profiler.snapshot (tools_profiler.cpp): the ProfilerSnapshot as JSON with schemaVersion.
+[[nodiscard]] yyjson_mut_val* profilerSnapshotTool(McpServerCore::State& core, Json& out,
+                                                   const McpRequestControl& control);
 [[nodiscard]] yyjson_mut_val* toolList(Json& out);
 
 } // namespace bloom::mcp

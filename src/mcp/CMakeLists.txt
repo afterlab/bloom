@@ -18,6 +18,7 @@ target_sources(
         streamable_http.cpp
         tool_schemas.cpp
         tools_document.cpp
+        tools_profiler.cpp
         tools_project.cpp
         tools_export.cpp
         tools_render.cpp
@@ -57,7 +58,8 @@ if(BUILD_TESTING)
     )
     # Streamable HTTP framing and admission against a hostile-input corpus (pure, byte strings).
     add_executable(bloom_mcp_core_tools_test tests/core_tools_tests.cpp)
-    target_link_libraries(bloom_mcp_core_tools_test PRIVATE bloom_mcp bloom_host_export_testing)
+    target_link_libraries(bloom_mcp_core_tools_test PRIVATE bloom_mcp bloom_host_export_testing
+                                                    yyjson::yyjson)
     bloom_enable_warnings(bloom_mcp_core_tools_test)
     bloom_add_test(
         NAME bloom.mcp.core-tools

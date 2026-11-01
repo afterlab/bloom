@@ -81,9 +81,12 @@ enum class McpTool : std::uint8_t {
     ViewerSet = 30,
     // Project Settings > Colour (not undoable; marks the project dirty).
     ProjectSetColorSettings = 31,
+    // The runtime telemetry snapshot (#423; docs/architecture/profiler-feed.md). Read-only; holds
+    // no session lease.
+    ProfilerSnapshot = 32,
 };
 
-inline constexpr std::size_t kMcpToolCount = 32;
+inline constexpr std::size_t kMcpToolCount = 33;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -122,6 +125,7 @@ inline constexpr std::size_t kMcpToolCount = 32;
         "transport",
         "viewer.set",
         "project.set-color-settings",
+        "profiler.snapshot",
     };
     // clang-format on
     return names[static_cast<std::size_t>(tool)];

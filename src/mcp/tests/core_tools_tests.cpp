@@ -7,6 +7,7 @@
 #include <bloom/mcp/server_core.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
+#include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/events.hpp>
@@ -25,6 +26,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <yyjson.h>
 
 namespace {
 
@@ -55,7 +57,8 @@ struct Headless final {
     std::unique_ptr<mcp::McpProtocolSession> protocol;
     int nextId = 1;
 
-    explicit Headless(mcp::McpLiveUiPort ui = {}) {
+    explicit Headless(mcp::McpLiveUiPort ui = {},
+                      std::function<bool(runtime::ProfilerSnapshot&)> profiler = {}) {
         core = std::make_unique<mcp::McpServerCore>(mcp::McpCoreDependencies{
             .session = std::ref(*session),
             // No export queue is bound, as in a desktop window that has not created one.
@@ -69,6 +72,7 @@ struct Headless final {
             .gpuProvider = nullptr,
             .captureDirectory = {},
             .ui = std::move(ui),
+            .profilerSnapshot = std::move(profiler),
             .serverVersion = "test",
             .limits = mcp::kMcpMessageLimits});
         protocol = core->openSession();
@@ -500,9 +504,71 @@ void animationReadBack() {
            "the handle mode table is listed: " + enums);
 }
 
+// profiler.snapshot (#423): unbound it says so; bound it returns the snapshot as JSON with
+// schemaVersion, absent values as null, and the fixed histogram and pool shapes.
+void profilerSnapshotTool() {
+    {
+        Headless unbound;
+        const auto result = unbound.call("profiler.snapshot", "{}");
+        expect(contains(result, R"("succeeded":false)") &&
+                   contains(result, "This host has no profiler."),
+               "an unbound profiler answers plainly: " + result);
+    }
+    runtime::TaskScheduler scheduler;
+    runtime::ProfilerSampler sampler({.scheduler = &scheduler, .readGpu = nullptr});
+    int calls = 0;
+    Headless server({}, [&](runtime::ProfilerSnapshot& out) {
+        ++calls;
+        static_cast<void>(sampler.sampleNow());
+        return sampler.readLatest(out, 0);
+    });
+    const auto refused = server.call("profiler.snapshot", R"({"unknown":1})");
+    expect(contains(refused, "Unknown member"), "the tool takes no arguments: " + refused);
+    const auto response = server.call("profiler.snapshot", "{}");
+    expect(calls == 1, "the binding runs once per call");
+    auto* document = yyjson_read(response.data(), response.size(), 0);
+    expect(document != nullptr, "the response is JSON");
+    if (document == nullptr) {
+        scheduler.beginShutdown();
+        return;
+    }
+    auto* root = yyjson_doc_get_root(document);
+    auto* content = yyjson_obj_getn(yyjson_obj_get(root, "result"), "structuredContent", 17);
+    expect(yyjson_is_true(yyjson_obj_get(content, "succeeded")), "the call succeeded: " + response);
+    auto* snapshot = yyjson_obj_get(content, "snapshot");
+    expect(yyjson_get_uint(yyjson_obj_get(snapshot, "schemaVersion")) ==
+               runtime::kProfilerSnapshotSchemaVersion,
+           "the snapshot carries its schema version");
+    expect(yyjson_get_uint(yyjson_obj_get(snapshot, "serial")) >= 1, "a sample was taken");
+    auto* memory = yyjson_obj_get(snapshot, "memory");
+    expect(yyjson_is_arr(yyjson_obj_get(memory, "pools")), "pools are an array");
+    expect(yyjson_is_uint(yyjson_obj_get(memory, "stagingLiveBytes")),
+           "the staging line is always counted");
+    expect(yyjson_is_null(yyjson_obj_get(memory, "admissionClaimBytes")),
+           "claims without an admission source are null, not 0");
+    auto* gpu = yyjson_obj_get(snapshot, "gpu");
+    expect(yyjson_is_null(yyjson_obj_get(gpu, "liveBytes")) &&
+               yyjson_is_null(yyjson_obj_get(gpu, "utilization")),
+           "GPU values without a GPU source are null");
+    auto* stages = yyjson_obj_get(yyjson_obj_get(snapshot, "workload"), "stages");
+    expect(yyjson_get_uint(yyjson_obj_get(stages, "firstEdgeNs")) == 16'000,
+           "the histogram's first edge is 16 us");
+    for (const char* stage : {"decode", "colourConvert", "upload", "render", "transfer", "encode"})
+        expect(yyjson_arr_size(yyjson_obj_get(yyjson_obj_get(stages, stage), "counts")) ==
+                   runtime::kProfilerHistogramBucketCount,
+               std::string("every stage has the fixed buckets: ") + stage);
+    auto* executors = yyjson_obj_get(yyjson_obj_get(snapshot, "cpu"), "executorPools");
+    expect(yyjson_arr_size(executors) >= 3, "executor pools are listed");
+    expect(yyjson_is_arr(yyjson_obj_get(yyjson_obj_get(snapshot, "processes"), "helpers")),
+           "helpers are an array");
+    yyjson_doc_free(document);
+    scheduler.beginShutdown();
+}
+
 int main() {
     try {
         exportWithoutQueue();
+        profilerSnapshotTool();
         unboundSeams();
         liveSeams();
         retiredTransientJobs();

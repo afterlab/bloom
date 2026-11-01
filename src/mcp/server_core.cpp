@@ -45,6 +45,7 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::Transport,
     McpTool::ViewerSet,
     McpTool::ProjectSetColorSettings,
+    McpTool::ProfilerSnapshot,
 };
 // clang-format on
 
@@ -449,7 +450,12 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
             bool failed = false;
             std::vector<yyjson_mut_val*> content;
             try {
-                if (toolUsesLiveUi(*tool)) {
+                if (*tool == McpTool::ProfilerSnapshot) {
+                    // Telemetry holds no lease: it answers while a project opens.
+                    if (auto* arguments = member(params, "arguments"))
+                        members(arguments, {});
+                    value = profilerSnapshotTool(state, out, control);
+                } else if (toolUsesLiveUi(*tool)) {
                     // Window and project-lifecycle tools hold no lease: project.open must work
                     // while the old project is being replaced.
                     std::string summary;

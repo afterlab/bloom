@@ -79,8 +79,12 @@ static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ExportScript));
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectOpen));
 static_assert(mcp::uiRefusalCode(mcp::McpUiRefusal::UnsavedChanges) == "bloom.mcp.unsaved-changes");
 static_assert(mcp::toolName(mcp::McpTool::ProjectSetColorSettings) == "project.set-color-settings");
-static_assert(static_cast<std::size_t>(mcp::McpTool::ProjectSetColorSettings) + 1 ==
-              mcp::kMcpToolCount);
+static_assert(mcp::toolName(mcp::McpTool::ProfilerSnapshot) == "profiler.snapshot");
+static_assert(static_cast<std::size_t>(mcp::McpTool::ProfilerSnapshot) + 1 == mcp::kMcpToolCount);
+// Telemetry is read-only, inline and holds no live-UI lease.
+static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProfilerSnapshot));
+static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ProfilerSnapshot));
+static_assert(mcp::toolExecution(mcp::McpTool::ProfilerSnapshot) == mcp::McpToolExecution::Inline);
 // Project colour settings are project session state, not a document command.
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectSetColorSettings));
 static_assert(mcp::toolExecution(mcp::McpTool::Render) == mcp::McpToolExecution::Task);

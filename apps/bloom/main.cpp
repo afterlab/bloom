@@ -663,10 +663,18 @@ int main(int argc, char* argv[]) try {
         .exportQueue = [&projectHost] { return projectHost.exportQueue(); },
         .scheduler = taskScheduler,
         .liveUi = mcpLiveUi.port(),
-        .tokenFile = mcpDataDirectory ? *mcpDataDirectory / "mcp" / "token"
-                                      : std::filesystem::path{},
-        .captureDirectory = mcpCacheDirectory ? *mcpCacheDirectory / "mcp-captures"
-                                              : std::filesystem::path{},
+        // profiler.snapshot (#423), on the UI thread: publish the UI-owned values, then take a
+        // sample here unless the Profiler's sampler thread is running (then its newest sample).
+        .profilerSnapshot =
+            [&profilerSampler, feed = profilerFeed.get()](bloom::runtime::ProfilerSnapshot& out) {
+                feed->publishUiInputs();
+                static_cast<void>(profilerSampler.sampleNow());
+                return profilerSampler.readLatest(out, 0);
+            },
+        .tokenFile =
+            mcpDataDirectory ? *mcpDataDirectory / "mcp" / "token" : std::filesystem::path{},
+        .captureDirectory =
+            mcpCacheDirectory ? *mcpCacheDirectory / "mcp-captures" : std::filesystem::path{},
         .serverVersion = QCoreApplication::applicationVersion().toStdString(),
         .preferences = mcpPreferences,
         .limits = {},

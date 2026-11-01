@@ -11,6 +11,8 @@
 #include <bloom/platform/owner_only_secret.hpp>
 #include <bloom/platform/user_data_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/profiler_gpu_reader.hpp>
+#include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/scripting/session.hpp>
@@ -181,6 +183,10 @@ int serve(scripting::Session& session) {
     };
     {
         const auto captures = platform::userCacheDirectory();
+        // profiler.snapshot (#423): this process's own telemetry, sampled on request on this
+        // thread (no sampler thread runs in the stdio host).
+        runtime::ProfilerSampler profiler(
+            {.scheduler = &scheduler, .readGpu = &runtime::readProfilerGpuDevice});
         mcp::McpServerCore core(
             {.session = std::ref(session),
              // This thread owns the headless queue: queue calls run inline.
@@ -203,6 +209,11 @@ int serve(scripting::Session& session) {
                     .transport = {},
                     .setViewer = {},
                     .setColorSettings = {}},
+             .profilerSnapshot =
+                 [&profiler](runtime::ProfilerSnapshot& out) {
+                     static_cast<void>(profiler.sampleNow());
+                     return profiler.readLatest(out, 0);
+                 },
              .serverVersion = BLOOM_VERSION,
              .limits = mcp::kMcpMessageLimits});
         corePointer = &core;

@@ -23,6 +23,7 @@ class ExportQueueService;
 } // namespace bloom::host
 namespace bloom::runtime {
 class TaskScheduler;
+struct ProfilerSnapshot;
 } // namespace bloom::runtime
 namespace bloom::scripting {
 class LiveSessionHost;
@@ -527,6 +528,8 @@ struct McpServerServiceDependencies final {
     // selection, active composition, transport and Viewer settings. Called on the owner thread;
     // an empty member answers bloom.mcp.ui-unbound.
     McpLiveUiPort liveUi{};
+    // profiler.snapshot (McpCoreDependencies::profilerSnapshot), called on the owner thread.
+    std::function<bool(runtime::ProfilerSnapshot&)> profilerSnapshot{};
     // platform::userDataDirectory() / "mcp" / "token"; empty makes the token Unavailable with the
     // reason "Bloom can't find a folder to keep the access token in."
     std::filesystem::path tokenFile;
