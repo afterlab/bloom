@@ -136,7 +136,12 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
     connect(&residentRefreshTimer_, &QTimer::timeout, this,
             &PreviewFrameCache::refreshResidentEntries);
     ledger_.registerCache(
-        this, byteBudget, [this] { return residentBytes(); },
+        this, byteBudget,
+        [this] {
+            const auto host = hostBytes();
+            return runtime::MemoryPoolHolding{.hostBytes = host,
+                                              .deviceBytes = residentBytes_ - host};
+        },
         [this](const std::size_t bytes) {
             const bool pressure = ledger_.state().retentionPercent < 100;
             if (pressure)
@@ -274,12 +279,16 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             return report(InsertOutcome::AlreadyPresent, PreviewTraceOutcome::Reused);
         }
         const auto bytes = frameByteCost(*frame);
-        if (bytes != 0 && (residentBytes_ > byteBudget_ || bytes > byteBudget_ - residentBytes_)) {
+        // A device-budgeted resident frame takes nothing from the host byte budget.
+        const bool charged = !resident || !deviceBudgeted();
+        const auto hostCharge = charged ? bytes : 0;
+        const auto host = hostBytes();
+        if (hostCharge != 0 && (host > byteBudget_ || hostCharge > byteBudget_ - host)) {
             // Preview first: during a fill the ledger's Ordinary pools make room for this frame
             // before an earlier finished frame is evicted. Memory-neutral: what they release is
             // what this budget gains. Asked before any staging, with no cache state in flux.
-            const auto need = residentBytes_ > byteBudget_ ? residentBytes_ - byteBudget_ + bytes
-                                                           : bytes - (byteBudget_ - residentBytes_);
+            const auto need = host > byteBudget_ ? host - byteBudget_ + hostCharge
+                                                 : hostCharge - (byteBudget_ - host);
             if (const auto granted = ledger_.yieldToPreview(this, need); granted != 0) {
                 byteBudget_ +=
                     std::min(granted, std::numeric_limits<std::size_t>::max() - byteBudget_);
@@ -289,7 +298,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
                     this, [this] { emit byteBudgetChanged(); }, Qt::QueuedConnection);
             }
         }
-        if (bytes == 0 || bytes > byteBudget_ ||
+        if (bytes == 0 || hostCharge > byteBudget_ ||
             (resident && (bytes > gpuResidentByteLimit_ || gpuResidentEntryLimit_ == 0))) {
             ++statistics_.rejections;
             return report(InsertOutcome::RejectedBudget, PreviewTraceOutcome::OverBudget);
@@ -364,11 +373,14 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             inserted->residentPosition = residentOrder_.begin();
         }
         // Sum only after bounding the old retained set, avoiding size_t overflow at extreme caps.
-        while (residentBytes_ > byteBudget_ - bytes && entries_.size() > 1) {
+        while (charged && hostBytes() > byteBudget_ - bytes) {
+            const auto victim = byteBudgetVictim(inserted);
+            if (victim == entries_.end())
+                break;
             ++statistics_.evictions;
-            if (!entryIsLive(entries_.back()))
+            if (!entryIsLive(*victim))
                 ++statistics_.staleDrops;
-            removeAt(std::prev(entries_.end()));
+            removeAt(victim);
         }
         residentBytes_ += bytes;
         if (resident) {
@@ -412,11 +424,14 @@ void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
     // must survive the pressure that caused this trim, so the cache can fill back up once the
     // machine recovers.
     const auto limit = std::min(bytes, byteBudget_);
-    while (residentBytes_ > limit && !entries_.empty()) {
+    while (hostBytes() > limit) {
+        const auto victim = byteBudgetVictim(entries_.end());
+        if (victim == entries_.end())
+            break;
         ++statistics_.pressureDrops;
-        if (!entryIsLive(entries_.back()))
+        if (!entryIsLive(*victim))
             ++statistics_.staleDrops;
-        removeAt(std::prev(entries_.end()));
+        removeAt(victim);
     }
 }
 
@@ -612,12 +627,28 @@ void PreviewFrameCache::setRetentionRange(std::optional<RetentionRange> range) {
         static_cast<void>(pruneToRange(*retentionRange_));
 }
 
+std::size_t PreviewFrameCache::hostBytes() const noexcept {
+    return deviceBudgeted() ? residentBytes_ - gpuResidentBytes_ : residentBytes_;
+}
+
+PreviewFrameCache::EntryIterator PreviewFrameCache::byteBudgetVictim(const EntryIterator keep) {
+    for (auto position = entries_.end(); position != entries_.begin();) {
+        --position;
+        if (position != keep && chargesByteBudget(*position))
+            return position;
+    }
+    return entries_.end();
+}
+
 void PreviewFrameCache::evictToBudget() {
-    while (residentBytes_ > byteBudget_ && !entries_.empty()) {
+    while (hostBytes() > byteBudget_) {
+        const auto victim = byteBudgetVictim(entries_.end());
+        if (victim == entries_.end())
+            break;
         ++statistics_.evictions;
-        if (!entryIsLive(entries_.back()))
+        if (!entryIsLive(*victim))
             ++statistics_.staleDrops;
-        removeAt(std::prev(entries_.end()));
+        removeAt(victim);
     }
 }
 

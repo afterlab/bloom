@@ -229,6 +229,11 @@ class PreviewFrameCache final : public QObject {
     void trimToBytes(std::size_t bytes);
     [[nodiscard]] std::size_t byteBudget() const noexcept { return byteBudget_; }
     [[nodiscard]] std::size_t residentBytes() const noexcept { return residentBytes_; }
+    // Host bytes: what the byte budget bounds and what the memory ledger counts as host memory.
+    // Every CPU or packed entry, and GPU-resident entries only while no device budget bounds them
+    // (setGpuResidentLimits). Once one does, a resident frame is device memory: the ledger counts
+    // it as device bytes and only the GPU-resident limits evict it.
+    [[nodiscard]] std::size_t hostBytes() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
     [[nodiscard]] Statistics statistics() const noexcept { return statistics_; }
     [[nodiscard]] MetadataWork metadataWork() const noexcept { return metadataWork_; }
@@ -329,6 +334,14 @@ class PreviewFrameCache final : public QObject {
     };
 
     void dropStaleRevisions(const PreviewFrameCacheKey& current);
+    [[nodiscard]] bool deviceBudgeted() const noexcept {
+        return gpuResidentByteLimit_ != std::numeric_limits<std::size_t>::max();
+    }
+    [[nodiscard]] bool chargesByteBudget(const Entry& entry) const noexcept {
+        return entry.resident == nullptr || !deviceBudgeted();
+    }
+    // The least recently used entry charged to the byte budget other than `keep`, or end().
+    [[nodiscard]] EntryIterator byteBudgetVictim(EntryIterator keep);
     void evictToBudget();
     // Evicts the least-recently-used RESIDENT entry (entries_ is MRU-first) while either additive
     // GPU-resident limit is exceeded. It only drops the cache's reference; it never invalidates a
