@@ -314,6 +314,9 @@ class ViewerEditor final : public QWidget,
     // Test/diagnostic seams only (same terms as the accessors above).
     [[nodiscard]] bool residentPresentationActiveForTest() const noexcept;
     [[nodiscard]] bool gpuResidentConfiguredForTest() const noexcept;
+    // The native presenter's lifecycle state (Uninitialized when the Viewer never built one). A
+    // Retained presenter keeps its surface and owner record; soak tests count them.
+    [[nodiscard]] ViewerGpuPresenter::State gpuPresenterStateForTest() const noexcept;
     [[nodiscard]] std::size_t gpuPresentAttemptCountForTest() const noexcept;
     [[nodiscard]] std::size_t gpuPresentAcceptedCountForTest() const noexcept;
     // Genuine owner-observed native present progress (read-only; mailbox admission does not advance

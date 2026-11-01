@@ -578,6 +578,11 @@ std::string ViewerEditor::nativeSurfaceDiagnostic() const {
 
 bool ViewerEditor::residentPresentationActiveForTest() const noexcept { return residentActive_; }
 
+ViewerGpuPresenter::State ViewerEditor::gpuPresenterStateForTest() const noexcept {
+    return gpuResident_ != nullptr ? gpuResident_->presenterState()
+                                   : ViewerGpuPresenter::State::Uninitialized;
+}
+
 bool ViewerEditor::gpuResidentConfiguredForTest() const noexcept {
     return gpuResident_ != nullptr && gpuResident_->configured();
 }

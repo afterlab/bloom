@@ -1974,6 +1974,20 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_packed_viewer_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_packed_viewer_test)
 
+    # Issue #414: window resize / maximize / move-between-screens (1x and 1.5x) / hide-show soak
+    # over the application-shaped workspace and the shipping GPU-prepared packed preview service.
+    # It asserts an RSS, ledger and GPU-image plateau, a bounded per-cycle transient peak, no
+    # re-preparation of the parked frame, and zero retained presenter records. It installs its own
+    # two-screen offscreen layout, uses the GPU device when a loader is pinned, and skips (77) on
+    # any other platform.
+    add_executable(bloom_ui_window_surface_memory_soak_test window_surface_memory_soak_tests.cpp)
+    target_include_directories(bloom_ui_window_surface_memory_soak_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/render" "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_window_surface_memory_soak_test
+        PRIVATE bloom_ui bloom_host bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_package_gpu_shader_tools(bloom_ui_window_surface_memory_soak_test)
+    bloom_enable_warnings(bloom_ui_window_surface_memory_soak_test)
+
     add_executable(bloom_ui_gpu_viewer_service_chain_test
         gpu_viewer_service_chain_tests.cpp
         gpu_service_chain_fixture.hpp
@@ -2018,6 +2032,15 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         set_tests_properties(bloom.ui.gpu_packed_viewer_${packed_case}
             PROPERTIES SKIP_RETURN_CODE 77)
     endforeach()
+
+    bloom_add_test(
+        NAME bloom.ui.window_surface_memory_soak
+        COMMAND bloom_ui_window_surface_memory_soak_test
+                ${bloom_ui_gpu_viewer_service_chain_loader_args}
+        LABELS ui gpu viewer memory soak device
+        TIMEOUT 600
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=generic;BLOOM_REDUCED_MOTION=1")
+    set_tests_properties(bloom.ui.window_surface_memory_soak PROPERTIES SKIP_RETURN_CODE 77)
 
     bloom_add_test(
         NAME bloom.ui.gpu_viewer_service_chain
