@@ -147,7 +147,9 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
                 evictToBudget();
             if (changed)
                 emit byteBudgetChanged();
-        });
+        },
+        runtime::MemoryBudgetOwnerKind::ReusableRetention,
+        runtime::MemoryEvictionPriority::FinishedPreview);
 }
 
 PreviewFrameCache::~PreviewFrameCache() { ledger_.unregisterCache(this); }
@@ -272,6 +274,21 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             return report(InsertOutcome::AlreadyPresent, PreviewTraceOutcome::Reused);
         }
         const auto bytes = frameByteCost(*frame);
+        if (bytes != 0 && (residentBytes_ > byteBudget_ || bytes > byteBudget_ - residentBytes_)) {
+            // Preview first: during a fill the ledger's Ordinary pools make room for this frame
+            // before an earlier finished frame is evicted. Memory-neutral: what they release is
+            // what this budget gains. Asked before any staging, with no cache state in flux.
+            const auto need = residentBytes_ > byteBudget_ ? residentBytes_ - byteBudget_ + bytes
+                                                           : bytes - (byteBudget_ - residentBytes_);
+            if (const auto granted = ledger_.yieldToPreview(this, need); granted != 0) {
+                byteBudget_ +=
+                    std::min(granted, std::numeric_limits<std::size_t>::max() - byteBudget_);
+                statistics_.previewFirstYieldedBytes += granted;
+                // Observers re-enter this cache; tell them after the insert returns.
+                QMetaObject::invokeMethod(
+                    this, [this] { emit byteBudgetChanged(); }, Qt::QueuedConnection);
+            }
+        }
         if (bytes == 0 || bytes > byteBudget_ ||
             (resident && (bytes > gpuResidentByteLimit_ || gpuResidentEntryLimit_ == 0))) {
             ++statistics_.rejections;

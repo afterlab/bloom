@@ -561,7 +561,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
              << ",\"fillCpuSeconds\":" << cpu
              << ",\"fillCoresBusy\":" << (wall > 0 ? cpu / wall : 0.0)
              << ",\"peakInFlight\":" << ram.peakInFlightFrames()
-             << ",\"cacheResidentBytes\":" << frameCache->residentBytes() << std::setprecision(15)
+             << ",\"cacheResidentBytes\":" << frameCache->residentBytes()
+             << ",\"previewFirstYieldedBytes\":"
+             << frameCache->statistics().previewFirstYieldedBytes << std::setprecision(15)
              << ",\"windowEndEpoch\":" << benchEpochSeconds() << std::setprecision(6);
         if (finished && ram.canAutoPlay() && gBenchPlaySeconds > 0) {
             // Why a cached run might not be cached: document revisions, session snapshot

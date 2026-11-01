@@ -126,6 +126,7 @@ void RamPreviewController::start() {
     frameFailures_.clear();
     lossRescans_ = 0;
     caching_ = true;
+    fillRetention_ = previewController_.frameCache().beginFillRetention();
     rangeDirty_ = false;
     rebaseRange();
     if (!caching_)
@@ -551,6 +552,7 @@ void RamPreviewController::finish(const Completion outcome) {
     const auto serial = runSerial_;
     pipeline_.cancelAllAndDetach();
     caching_ = false;
+    fillRetention_.end();
     rangeDirty_ = false;
     pendingRetentionLoss_.clear();
     nextFrameIndex_ = 0;

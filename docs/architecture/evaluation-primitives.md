@@ -895,6 +895,35 @@ the reusable pools (see below), which leaves no room for work. That is what the 
 the other pools about 2.3 GB, the process sat at the limit with under 1 GB outside the pools, and
 2160p video fills stopped at 182–207 of 240 frames waiting for capacity no cache gave back.
 
+#### Eviction priority during RAM Preview
+
+Outside a RAM Preview fill every reusable pool yields in proportion to what it holds, least
+recently used entries first within the pool. While a fill is active, finished preview frames come
+first (owner decision, #413): `RamPreviewController` holds a `MemoryBudgetLedger::PreviewFill`
+scope from `start()` until `finish()` (completion, cancel, failure or shutdown), and each pool is
+registered with a `MemoryEvictionPriority`. `PreviewFrameCache` is `FinishedPreview`; the
+operation cache (operation intermediates, prepared upload host copies, decoded media), the decoded
+video cache, the media disk cache write queue and the asset proxy and decoded-audio pools are
+`Ordinary`. `memoryEvictionShares` is the policy:
+
+- a budget deficit below the headroom and a work reclaim (`MemoryBudgetLedger::reclaim`) are
+  covered by the `Ordinary` pools first, in proportion to what each holds. Finished preview frames
+  give only the remainder, so the frame being prepared is never starved by the frames before it. A
+  reclaim leaves the budget of a pool asked for nothing unchanged during a fill;
+- a preview cache that has no room for a finished frame asks `MemoryBudgetLedger::yieldToPreview`
+  before it evicts one of its own. The `Ordinary` pools give back up to the frame's shortfall and
+  the preview budget rises by what they released (`PreviewFrameCache::Statistics::
+  previewFirstYieldedBytes`). The exchange is memory-neutral: the preview pool never takes free
+  memory or the headroom and pending work claims that the next frame needs this way. It applies
+  only with a RAM headroom (usable-capacity retention); explicit per-pool budgets without a
+  headroom stay exact;
+- growth into free memory beyond headroom plus margin and pending claims is shared as before.
+
+When the `Ordinary` pools hold nothing more, the preview cache evicts its own least recently used
+frames and the fill ends `PartialBudget`. Ending the last fill scope restores proportional yielding.
+The application and the packed RAM-fill benchmark harness share this through the same
+`RamPreviewController` and `PreviewFrameCache`.
+
 ### Actual process constraints and active work
 
 An observed finite OS process/container limit can constrain total reusable retention. Its reusable

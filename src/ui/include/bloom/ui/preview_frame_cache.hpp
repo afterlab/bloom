@@ -142,6 +142,9 @@ class PreviewFrameCache final : public QObject {
         // Legacy direct CPU insertions that copied packed pixels on the owner thread. Production
         // worker-prepared results must leave this at zero, even at Full/Half resolution.
         std::uint64_t uiPixelCopies = 0;
+        // Preview first: bytes other reusable pools gave back so a finished frame was retained
+        // without evicting an earlier one (MemoryBudgetLedger::yieldToPreview, during a fill).
+        std::uint64_t previewFirstYieldedBytes = 0;
 
         friend bool operator==(const Statistics&, const Statistics&) = default;
     };
@@ -197,7 +200,13 @@ class PreviewFrameCache final : public QObject {
     // accounting. Pre-admission refusal also preserves them. A lease that expires after commit
     // may report RejectedStale with actual evictions. Return final retention and the number
     // of actual budget evictions, including eviction of earlier samples (never a promised prefix).
+    // During a RAM Preview fill a frame that does not fit first asks the ledger's Ordinary pools to
+    // yield (preview first); only what they cannot give comes from this cache's own oldest frames.
     InsertResult insert(const PreparedPreviewFrameHandle& frame);
+    // Marks a RAM Preview fill active on this cache's ledger until the returned scope ends.
+    [[nodiscard]] runtime::MemoryBudgetLedger::PreviewFill beginFillRetention() {
+        return ledger_.beginPreviewFill();
+    }
     void setFrameTrace(std::shared_ptr<PreviewFrameTrace> trace) { trace_ = std::move(trace); }
 
     [[nodiscard]] bool contains(const PreviewFrameCacheKey& key) const;

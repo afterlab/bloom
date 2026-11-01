@@ -267,6 +267,9 @@ class RamPreviewController final : public QObject {
     // outgrown the budget.
     std::uint64_t evictionsAtStart_ = 0;
     bool caching_ = false;
+    // Held exactly while caching_: the ledger's Ordinary pools yield before finished preview
+    // frames (preview first). finish() ends it, restoring proportional yielding.
+    runtime::MemoryBudgetLedger::PreviewFill fillRetention_;
     bool shuttingDown_ = false;
     // Set by a range/provenance edit while at least one frame is in flight; the run lands what it
     // has, rebases once the pipeline is empty, and then resubmits only the still-missing frames, so
