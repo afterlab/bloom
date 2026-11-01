@@ -77,6 +77,7 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QGuiApplication>
+#include <QPointer>
 #include <QScreen>
 #include <QStandardPaths>
 #include <QSettings>
@@ -690,6 +691,13 @@ int main(int argc, char* argv[]) try {
                                                          compiledPlanCache, cpuEvaluator);
     audioPlaybackSession.setAudioBufferSource(assetController);
     playback.setAudioDeviceControl(&audioDeviceControl);
+    // #404: Play holds the clock (at most half a second) until the read-ahead window's first
+    // frames are cached; a cached RAM preview starts at once.
+    playback.setPrerollFrameCountProvider(
+        [background = QPointer<bloom::ui::BackgroundPreviewController>(
+             &backgroundPreviewController)]() -> std::size_t {
+            return background ? background->prerollFrameCount() : 1;
+        });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &audioPlaybackSession, &bloom::ui::AudioPlaybackSession::beginShutdown);

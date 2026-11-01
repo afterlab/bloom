@@ -3,11 +3,13 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/ui/playback_preroll.hpp>
 
 #include <QObject>
 #include <QTimer>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -70,6 +72,22 @@ class PlaybackController final : public QObject {
     void setAudioMix(runtime::AudioMixDescription description,
                      std::vector<media::audio::playback::AudioClip> clips);
 
+    // Playback preroll (#404, docs/architecture/animation-and-time.md, "Playback preroll"). The
+    // provider answers, at Play, how many frames from the playhead must be in the preview cache
+    // before the clock starts: the composition root wires the read-ahead window. While those frames
+    // are missing the run is Playing but its clock, its audio and its dropped-frame count wait, for
+    // at most PlaybackPreroll::kMaximumHold. Without a provider, Play starts the clock at once.
+    using PrerollFrameCount = std::function<std::size_t()>;
+    void setPrerollFrameCountProvider(PrerollFrameCount provider);
+    // True while Play holds the clock for the first frames.
+    [[nodiscard]] bool isPreparing() const noexcept { return preroll_.holding(); }
+    // How the last hold ended and how long it held.
+    [[nodiscard]] const PlaybackPreroll::Result& lastPreroll() const noexcept {
+        return preroll_.last();
+    }
+    // Frames the current or last hold waited for.
+    [[nodiscard]] std::size_t prerollFrames() const noexcept { return prerollFrames_; }
+
   public slots:
     // No-op (guarded) if already playing, if no composition is available, or if the composition's
     // duration/frame rate cannot form a valid bloom::core::FrameTimeMapping (covers the
@@ -105,6 +123,13 @@ class PlaybackController final : public QObject {
     void handleWorkAreaChanged();
     void handleSnapshotChanged();
     void handleAudioCompletion(std::uint64_t generation, bool playing, bool transportStarted);
+    void handleInteractiveScrubStarted();
+    // Whether the frames the hold waits for are all in the preview cache.
+    [[nodiscard]] bool prerollReady(const core::FrameTimeMapping& mapping) const;
+    // Starts the run's clocks at its anchor: Play without a hold, or the end of one.
+    void startRunClock(const core::FrameTimeMapping& mapping);
+    // A seek, scrub or work-area change during the hold: hold again at the new position.
+    void restartPreroll();
     void useWallClock();
     // Hands the mixer the work area's frame-grid loop (or no loop) so audio wraps with the video.
     void publishAudioLoop();
@@ -142,6 +167,9 @@ class PlaybackController final : public QObject {
     bool audioEnabled_ = true;
     bool audioClockActive_ = false;
     bool audioStartPending_ = false;
+    PlaybackPreroll preroll_;
+    PrerollFrameCount prerollProvider_;
+    std::size_t prerollFrames_ = 0;
 };
 
 } // namespace bloom::ui

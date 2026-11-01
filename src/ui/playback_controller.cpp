@@ -3,6 +3,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/audio_device_control.hpp>
+#include <bloom/ui/preview_frame_cache.hpp>
 
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/project.hpp>
@@ -135,7 +136,16 @@ PlaybackController::PlaybackController(CompositionSession& session,
     timer_.setInterval(static_cast<int>(wakeCap_.count()));
     connect(&timer_, &QTimer::timeout, this, &PlaybackController::tick);
     connect(&previewController_, &CompositionPreviewController::interactiveScrubStarted, this,
-            &PlaybackController::pause);
+            &PlaybackController::handleInteractiveScrubStarted);
+    // A frame entering the cache may complete the preroll: check on the next turn rather than
+    // waiting for the next wake, and never from inside the cache's own insert.
+    connect(
+        &previewController_.frameCache(), &PreviewFrameCache::entryRetained, this,
+        [this] {
+            if (preroll_.holding())
+                tick();
+        },
+        Qt::QueuedConnection);
 
     // Design decision 2: a composition switch or document rebind stops playback rather than
     // leaving it running against whatever composition happens to be live next.
@@ -237,7 +247,9 @@ void PlaybackController::setAudioMix(runtime::AudioMixDescription description,
             expectedAudioGeneration_ = audioControl_->requestStop();
             audioStartPending_ = false;
             useWallClock();
-        } else if (!hadClips && state_ == PlaybackState::Playing && audioEnabled_) {
+        } else if (!hadClips && state_ == PlaybackState::Playing && audioEnabled_ &&
+                   !preroll_.holding()) {
+            // During a preroll hold the audio starts with the released clock instead.
             audioAlignmentRetried_ = false;
             audioStartPending_ = true;
             expectedAudioGeneration_ = audioControl_->requestSeek(session_.currentTime());
@@ -335,23 +347,114 @@ void PlaybackController::play() {
 
     audioClockActive_ = false;
     audioStartPending_ = false;
+    if (!mapping->timeForFrame(startFrameIndex_))
+        return;
     // Published even before clips exist, so a mix that arrives mid-run starts inside the loop.
     publishAudioLoop();
-    if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
-        const auto anchor = mapping->timeForFrame(startFrameIndex_);
-        if (!anchor)
-            return;
-        // Match the established nearest-grid wall origin while preserving immediate session time.
-        audioAlignmentRetried_ = false;
-        audioStartPending_ = true;
-        expectedAudioGeneration_ = audioControl_->requestPlay(*anchor.value());
-    }
 
+    // Preroll (#404): hold the clock until the first frames are cached. Cached frames (a RAM
+    // preview) are ready at once and start without a hold.
+    prerollFrames_ = prerollProvider_ ? std::max<std::size_t>(1, prerollProvider_()) : 0;
+    const bool hold = prerollFrames_ != 0 && preroll_.begin(clock_(), prerollReady(*mapping));
     state_ = PlaybackState::Playing;
+    if (hold) {
+        // Not yet playback for the preview: a seek or scrub during the hold renders its frame as
+        // it would while stopped, and nothing is counted as dropped. The read-ahead follows the
+        // preparing state.
+        previewController_.setPlaybackPreparing(true);
+        scheduleTick(wakeCap_);
+    } else {
+        startRunClock(*mapping);
+    }
+    emit stateChanged(state_);
+}
+
+void PlaybackController::startRunClock(const core::FrameTimeMapping& mapping) {
+    startClock_ = clock_();
+    appliedOffset_ = 0;
+    completedPassFrames_ = 0;
+    lastAppliedFrameIndex_ = startFrameIndex_;
+    // Audio starts with the clock, never at a Play that is still holding.
+    if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
+        if (const auto anchor = mapping.timeForFrame(startFrameIndex_); anchor) {
+            // Match the established nearest-grid wall origin while preserving immediate session
+            // time.
+            audioAlignmentRetried_ = false;
+            audioStartPending_ = true;
+            expectedAudioGeneration_ = audioControl_->requestPlay(*anchor.value());
+        }
+    }
     previewController_.setPlaybackActive(true);
     previewController_.beginDroppedFrameCounting();
     timer_.start();
-    emit stateChanged(state_);
+}
+
+void PlaybackController::setPrerollFrameCountProvider(PrerollFrameCount provider) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    prerollProvider_ = std::move(provider);
+}
+
+bool PlaybackController::prerollReady(const core::FrameTimeMapping& mapping) const {
+    const auto frames = workAreaFrames(mapping, session_.workArea());
+    if (!frames || startFrameIndex_ < frames->first || startFrameIndex_ > frames->last)
+        return true; // nothing playable to wait for; the run's own checks handle the range
+    const auto count = frames->last - frames->first + 1;
+    const auto wanted = std::min<std::uint64_t>(prerollFrames_, count);
+    const auto& cache = previewController_.frameCache();
+    for (std::uint64_t index = 0; index < wanted; ++index) {
+        auto offset = startFrameIndex_ - frames->first + index;
+        if (offset >= count) {
+            // Past the end the run wraps (looping) or stops on the last frame.
+            if (!looping_)
+                break;
+            offset %= count;
+        }
+        const auto time = mapping.timeForFrame(frames->first + offset);
+        if (!time)
+            return false;
+        const auto key = previewController_.cacheKeyForTime(*time.value());
+        if (!key || !cache.contains(*key))
+            return false;
+    }
+    return true;
+}
+
+void PlaybackController::restartPreroll() {
+    const auto* composition = session_.composition();
+    const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
+    const auto frames = mapping ? workAreaFrames(*mapping, session_.workArea()) : std::nullopt;
+    if (!frames) {
+        pause();
+        return;
+    }
+    const auto range = session_.workArea();
+    startFrameIndex_ =
+        std::clamp(mapping->nearestFrameIndex(session_.currentTime()), frames->first, frames->last);
+    if (session_.currentTime() < range.start || session_.currentTime() >= range.end) {
+        startFrameIndex_ = frames->first;
+        if (const auto time = mapping->timeForFrame(frames->first); time) {
+            applyingOwnTimeChange_ = true;
+            (void)session_.setCurrentTime(*time.value());
+            applyingOwnTimeChange_ = false;
+        }
+    }
+    runRateNumerator_ = mapping->rateNumerator();
+    runRateDenominator_ = mapping->rateDenominator();
+    runRangeStart_ = range.start;
+    runRangeEnd_ = range.end;
+    appliedOffset_ = 0;
+    completedPassFrames_ = 0;
+    lastAppliedFrameIndex_ = startFrameIndex_;
+    publishAudioLoop();
+    preroll_.restart(clock_());
+    scheduleTick(wakeCap_);
+}
+
+void PlaybackController::handleInteractiveScrubStarted() {
+    // A scrub during the hold moves where the run will start (each time change restarts the
+    // hold); during a running clock it pauses, as it always has.
+    if (!preroll_.holding())
+        pause();
 }
 
 void PlaybackController::pause() {
@@ -362,6 +465,11 @@ void PlaybackController::pause() {
     state_ = PlaybackState::Stopped;
     audioStartPending_ = false;
     timer_.stop();
+    if (preroll_.holding()) {
+        // Stop during the hold cancels it: the clock, the audio and the count never started.
+        preroll_.cancel(clock_());
+        previewController_.setPlaybackPreparing(false);
+    }
     if (audioControl_)
         expectedAudioGeneration_ = audioControl_->requestStop();
     audioClockActive_ = false;
@@ -397,6 +505,21 @@ void PlaybackController::tick() {
     if (mapping->rateNumerator() != runRateNumerator_ ||
         mapping->rateDenominator() != runRateDenominator_) {
         handleWorkAreaChanged();
+        return;
+    }
+    if (preroll_.holding()) {
+        const auto now = clock_();
+        if (!preroll_.poll(now, prerollReady(*mapping))) {
+            // Wake no later than the maximum hold; cache insertions also wake the check.
+            scheduleTick(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::max(preroll_.remaining(now), PlaybackPreroll::Clock::duration{1})));
+            return;
+        }
+        // Playback goes active before preparing clears, so the read-ahead sees one continuous
+        // run and keeps the frames it has in flight.
+        startRunClock(*mapping);
+        previewController_.setPlaybackPreparing(false);
+        scheduleTick(wakeCap_);
         return;
     }
     // Every early refusal still rearms a bounded positive wake; no timer spin or missed restart.
@@ -510,6 +633,10 @@ void PlaybackController::scheduleTick(const std::chrono::nanoseconds untilNextFr
 void PlaybackController::handleWorkAreaChanged() {
     if (state_ != PlaybackState::Playing)
         return;
+    if (preroll_.holding()) {
+        restartPreroll();
+        return;
+    }
     const auto* composition = session_.composition();
     const auto mapping = composition ? mappingForComposition(*composition) : std::nullopt;
     if (!mapping) {
@@ -601,7 +728,11 @@ void PlaybackController::handleCompositionChanged() {
 void PlaybackController::handleCurrentTimeChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (state_ == PlaybackState::Playing && !applyingOwnTimeChange_) {
-        pause();
+        // A seek during the preroll hold restarts it at the new position.
+        if (preroll_.holding())
+            restartPreroll();
+        else
+            pause();
     }
 }
 

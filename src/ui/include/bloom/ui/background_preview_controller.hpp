@@ -45,6 +45,11 @@ class BackgroundPreviewController final : public QObject {
         widthProvider_ = std::move(provider);
     }
     [[nodiscard]] std::size_t inFlightCount() const noexcept { return inFlight_.size(); }
+    // #404 preroll: the frames from the playhead a Play hold waits for. It is the read-ahead
+    // window the provider answers for the current composition now (one without a provider),
+    // capped at kMaximumPrerollFrames. Asked at Play, before the read-ahead claims capacity.
+    static constexpr std::size_t kMaximumPrerollFrames = 8;
+    [[nodiscard]] std::size_t prerollFrameCount() const;
 
   public slots:
     void restart();

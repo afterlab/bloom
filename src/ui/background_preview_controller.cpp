@@ -42,8 +42,21 @@ BackgroundPreviewController::BackgroundPreviewController(
                 }
                 restart();
             });
+    // A preroll hold (#404) waits on the read-ahead, so it runs while Play prepares as well as
+    // while the clock runs; the release from one to the other is not a stop.
+    const auto followTransport = [this] {
+        setPlaying(previewController_.playbackActive() || previewController_.playbackPreparing());
+    };
     connect(&previewController_, &CompositionPreviewController::playbackActiveChanged, this,
-            &BackgroundPreviewController::setPlaying);
+            followTransport);
+    connect(&previewController_, &CompositionPreviewController::playbackPreparingChanged, this,
+            [this, followTransport] {
+                followTransport();
+                // Released or cancelled: the next pass anchors with the playing lead.
+                cursor_ = 0;
+                considered_ = 0;
+                exhausted_ = false;
+            });
     connect(&previewController_, &CompositionPreviewController::resolutionChanged, this,
             &BackgroundPreviewController::restart);
     // Pixel work follows the retained evaluation snapshot. A layout-only edit leaves the fill
@@ -121,11 +134,24 @@ void BackgroundPreviewController::setPlaying(const bool playing) {
         playing_ = playing;
         // Stopping playback cancels the read-ahead that is still in flight.
         restart();
-        if (active() && !shuttingDown_)
+        if (active() && !shuttingDown_) {
             idleTimer_.start();
-        else
+            // Fill now rather than on the first idle tick: a preroll hold is waiting for these.
+            if (playing_)
+                fillNextFrame();
+        } else {
             idleTimer_.stop();
+        }
     }
+}
+
+std::size_t BackgroundPreviewController::prerollFrameCount() const {
+    const auto* composition = session_.composition();
+    if (!widthProvider_ || composition == nullptr)
+        return 1;
+    const auto format = composition->format();
+    const auto width = widthProvider_(static_cast<std::uint64_t>(format.width()) * format.height());
+    return std::clamp<std::size_t>(width, 1, kMaximumPrerollFrames);
 }
 
 void BackgroundPreviewController::setIdleFill(const bool enabled) {
@@ -202,8 +228,10 @@ void BackgroundPreviewController::fillNextFrame() {
     // While playing, a frame asked for now lands one preparation latency later, by which time the
     // playhead has moved on. Start the read-ahead that many frames ahead of the playhead, so the
     // frames it caches are still ahead of the playhead when they land.
+    // A preroll hold (#404) keeps the playhead still until the frames from it are cached, so it
+    // asks for exactly those: no lead.
     std::uint64_t lead = 0;
-    if (playing_ && landedLatency_.count() > 0) {
+    if (playing_ && !previewController_.playbackPreparing() && landedLatency_.count() > 0) {
         const auto seconds = std::chrono::duration<double>(landedLatency_).count();
         const auto perSecond =
             static_cast<double>(rate.numerator()) / static_cast<double>(rate.denominator());

@@ -169,6 +169,9 @@ endif()
 add_executable(bloom_playback_controller_test
     playback_controller_tests.cpp
 )
+add_executable(bloom_playback_preroll_test
+    playback_preroll_tests.cpp
+)
 
 # Links ZLIB::ZLIB directly for its own trimmed hand-rolled ZIP-writer fixture (a preserved-
 # read-only archive builder) -- mirroring src/host/CMakeLists.txt's bloom_host_session_open_test,
@@ -371,6 +374,7 @@ target_link_libraries(bloom_gesture_finiteness_test PRIVATE bloom_ui)
 target_link_libraries(bloom_direct_manipulation_test PRIVATE bloom_ui)
 target_link_libraries(bloom_main_window_readonly_placeholder_test PRIVATE bloom_ui ZLIB::ZLIB)
 target_link_libraries(bloom_playback_controller_test PRIVATE bloom_ui Qt6::Test)
+target_link_libraries(bloom_playback_preroll_test PRIVATE bloom_ui)
 target_link_libraries(bloom_timeline_editor_style_test PRIVATE bloom_ui Qt6::Test)
 # Task DRIVE-1's upstream-group pin reads the timeline's own row vocabulary (upstreamGroupKey).
 target_include_directories(bloom_timeline_editor_style_test PRIVATE ..)
@@ -429,6 +433,7 @@ bloom_enable_warnings(bloom_gesture_finiteness_test)
 bloom_enable_warnings(bloom_direct_manipulation_test)
 bloom_enable_warnings(bloom_main_window_readonly_placeholder_test)
 bloom_enable_warnings(bloom_playback_controller_test)
+bloom_enable_warnings(bloom_playback_preroll_test)
 bloom_enable_warnings(bloom_timeline_editor_style_test)
 bloom_enable_warnings(bloom_node_editor_test)
 
@@ -891,6 +896,15 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.playback_controller
     COMMAND bloom_playback_controller_test
+    LABELS ui integration animation
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# #404: the playback preroll hold, its 0.5 s cap, cancel, seek restart, cached start and audio.
+bloom_add_test(
+    NAME bloom.ui.playback_preroll
+    COMMAND bloom_playback_preroll_test
     LABELS ui integration animation
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

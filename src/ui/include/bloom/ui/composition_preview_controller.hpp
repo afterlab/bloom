@@ -197,6 +197,12 @@ class CompositionPreviewController final : public QObject {
     void endDroppedFrameCounting();
     void noteDroppedFrames(std::uint64_t count);
     void setPlaybackActive(bool playing);
+    [[nodiscard]] bool playbackActive() const noexcept { return playbackActive_; }
+    // #404 preroll: set while Play holds the transport clock for the first frames. The activity
+    // surface reports it; the read-ahead runs while it is set, aimed at the frames from the
+    // playhead. It is not playback: no deadline, no dropped-frame count.
+    void setPlaybackPreparing(bool preparing);
+    [[nodiscard]] bool playbackPreparing() const noexcept { return playbackPreparing_; }
     void presentPlaybackFrame(std::chrono::nanoseconds untilNextFrame);
     // Includes admission/queue and UI delivery latency. Only matching live identities contribute.
     void recordPreparationDuration(const runtime::PreviewRequestIdentity& identity,
@@ -291,6 +297,7 @@ class CompositionPreviewController final : public QObject {
     // Synchronous cancellation seam for speculative work, before foreground admission.
     void foregroundWorkRequested();
     void playbackActiveChanged(bool playing);
+    void playbackPreparingChanged(bool preparing);
     void interactiveScrubStarted();
     // Emitted whenever droppedFrameCount() or isCountingDroppedFrames() changes, so a footer
     // reading it never has to poll (the viewer's own refresh idiom is exactly this: connect, then
@@ -405,6 +412,7 @@ class CompositionPreviewController final : public QObject {
     std::optional<QRectF> regionOfInterest_;
     std::unique_ptr<PlaybackController> playbackController_;
     bool playbackActive_ = false;
+    bool playbackPreparing_ = false;
     std::optional<std::chrono::nanoseconds> preparationEstimate_;
 };
 

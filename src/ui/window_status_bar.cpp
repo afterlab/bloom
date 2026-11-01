@@ -103,6 +103,8 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
                 &WindowStatusBar::refreshPreviewCells);
         connect(previewController_, &CompositionPreviewController::ramPreviewProgressChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
+        connect(previewController_, &CompositionPreviewController::playbackPreparingChanged, this,
+                &WindowStatusBar::refreshActivity);
         connect(&previewController_->frameCache(), &PreviewFrameCache::contentsChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
         connect(&previewController_->frameCache(), &PreviewFrameCache::byteBudgetChanged, this,
@@ -538,13 +540,19 @@ void WindowStatusBar::refreshActivity() {
     auto tone = kit::Color::Foreground;
     bool progress = false;
     QString tip = tr("What Bloom is doing now: a saved or exported file, an import, a RAM preview "
-                     "run, or a problem with the preview.");
+                     "run, playback preparing its first frames, or a problem with the preview.");
     if (text.isEmpty() && previewController_ != nullptr) {
         if (const auto& run = previewController_->ramPreviewProgress(); run.has_value()) {
             text = tr("Caching frames for RAM preview · %1 of %2")
                        .arg(run->cachedFrames)
                        .arg(run->totalFrames);
             activityProgress_->setProgress(run->cachedFrames, run->totalFrames);
+            progress = true;
+            tone = kit::Color::Accent;
+        } else if (previewController_->playbackPreparing()) {
+            // #404: Play holds the clock (at most half a second) until its first frames are ready.
+            text = tr("Preparing playback");
+            activityProgress_->setBusy();
             progress = true;
             tone = kit::Color::Accent;
         }
