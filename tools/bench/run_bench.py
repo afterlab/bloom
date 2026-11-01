@@ -341,9 +341,11 @@ def bench_env():
     return env
 
 
-def harness_measure(args, project, resolution, playback, log, always_play=False):
+def harness_measure(args, project, resolution, playback, log, always_play=False, scrub=0):
     command = [str(args.harness), "--loader", str(args.loader), "--require-device",
                "--bench-project", str(project), "--bench-timeout-seconds", str(args.timeout)]
+    if scrub:
+        command += ["--bench-scrub", str(scrub)]
     if resolution == "Half":
         command.append("--cache100-half")
     elif resolution == "Quarter":
@@ -504,6 +506,13 @@ def summarise(measurements):
                      if m.get("playFirstMotionSeconds") is not None else "")
             rows.append((key, f"playback {m['resolution']} {m['cache']}",
                          f"{value:.1f} fps{start}" if value is not None else "error", m))
+        elif m["kind"] == "scrub":
+            value = m.get("scrubUncachedSecondsMedian")
+            rows.append((key, f"scrub {m['resolution']} {m['cache']}",
+                         f"uncached median {value * 1000:.0f} ms, max "
+                         f"{m['scrubUncachedSecondsMax'] * 1000:.0f} ms; revisit median "
+                         f"{m['scrubRevisitSecondsMedian'] * 1000:.0f} ms"
+                         if value is not None else "error", m))
         elif m["kind"] == "build":
             rows.append((key, "project build", f"error: {m.get('error')}", m))
         else:
@@ -608,8 +617,8 @@ def command_run(args):
         out_json.write_text(json.dumps(results, indent=1) + "\n")
         print(f"  {kind:<8} {row.get('resolution', '')} {row.get('cache', '')} "
               f"{row.get('export', '')} -> " + ", ".join(
-                  f"{k}={row[k]}" for k in ("fillFps", "playbackFps", "playFirstMotionSeconds",
-                                            "playDroppedFirstSecond", "cachedPlaybackFps",
+                  f"{k}={row[k]}" for k in ("fillFps", "playbackFps", "scrubUncachedSecondsMedian",
+                                            "playFirstMotionSeconds", "playDroppedFirstSecond", "cachedPlaybackFps",
                                             "secondsPerFrame", "cpuFallbackFrames",
                                             "gpuBusyPercent", "error") if k in row), flush=True)
 
@@ -636,6 +645,11 @@ def command_run(args):
                     values = harness_measure(args, item["project"], resolution, True, log)
                     record(item, "playback", {"resolution": resolution, "cache": "cold",
                                               "coldDropped": dropped, **values})
+        if args.scrub:
+            dropped = drop_page_cache(files)
+            values = harness_measure(args, item["project"], "Full", False, log, scrub=args.scrub)
+            record(item, "scrub", {"resolution": "Full", "cache": "cold",
+                                   "coldDropped": dropped, **values})
         if args.playback_only:
             continue
         if item["variant"] in export_variants and (export_formats is None or
@@ -780,6 +794,9 @@ def main():
                      help="playback measurement resolution (default Full; repeatable)")
     run.add_argument("--playback-repeat", type=int, default=1,
                      help="cold playback measurements per resolution")
+    run.add_argument("--scrub", type=int, default=0, metavar="FRAMES",
+                     help="also time scrubbing to this many uncached frames, then to the same "
+                          "frames again after the preview frame cache is cleared")
     run.add_argument("--timeout", type=int, default=1800, help="per process, seconds")
     run.add_argument("--rebuild-projects", action="store_true")
     run.add_argument("--build-only", action="store_true",

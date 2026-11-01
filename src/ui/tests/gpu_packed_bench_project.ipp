@@ -49,6 +49,9 @@ double gBenchPlaySeconds = 6.0;       // transport run length for either playbac
 bool gBenchWorkspace = false;         // the application's window and editors, not a bare Viewer
 bool gBenchWorkspaceAssets = true;    // the workspace also runs the application's AssetController
 std::chrono::seconds gBenchTimeout{1800};
+// Scrub run (#421): jumps to this many frames spread over the work area, none of them cached, and
+// times each until the Viewer shows it; then clears the preview frame cache and visits them again.
+std::size_t gBenchScrubFrames = 0;
 
 [[nodiscard]] std::string benchJson(const std::string& text) {
     std::ostringstream out;
@@ -113,6 +116,9 @@ struct BenchMemorySample {
     std::uint64_t operationSharedBytes = 0;
     std::uint64_t reusablePendingBytes = 0; // inside reusablePoolBytes
     std::uint64_t reusableDeviceBytes = 0;  // device-resident pool bytes, outside reusablePoolBytes
+    // reusablePoolBytes outside the preview and operation caches: decoded video, the disk-cache
+    // write queue and the asset pools.
+    std::uint64_t otherPoolBytes = 0;
     std::uint64_t hostClaimBytes = 0;
     std::uint64_t hostUsableBytes = 0;
     std::uint64_t deviceClaimBytes = 0;
@@ -156,6 +162,7 @@ void benchReadProcStatus(BenchMemorySample& sample) {
         << ",\"operationSharedBytes\":" << sample.operationSharedBytes
         << ",\"reusablePendingBytes\":" << sample.reusablePendingBytes
         << ",\"reusableDeviceBytes\":" << sample.reusableDeviceBytes
+        << ",\"otherPoolBytes\":" << sample.otherPoolBytes
         << ",\"hostClaimBytes\":" << sample.hostClaimBytes
         << ",\"hostUsableBytes\":" << sample.hostUsableBytes
         << ",\"deviceClaimBytes\":" << sample.deviceClaimBytes << '}';
@@ -364,6 +371,87 @@ BenchPlayback benchPlay(ui::CompositionSession& session, ui::PlaybackController&
     return result;
 }
 
+// Scrub latency (#421): each target is a frame no cache holds, visited out of order and away from
+// the previous one, so read-ahead cannot have prepared it. Seconds from setCurrentTime() until the
+// Viewer shows that frame Current.
+struct BenchScrub {
+    std::vector<double> uncachedSeconds;
+    // The same frames again after the preview frame cache is cleared: what the media caches below
+    // it (decoded video, decoded media) save.
+    std::vector<double> revisitSeconds;
+};
+
+[[nodiscard]] std::vector<double> benchScrubPass(ui::CompositionSession& session,
+                                                 ui::ViewerEditor& viewer,
+                                                 const std::vector<core::RationalTime>& targets) {
+    std::vector<double> seconds;
+    const auto toKey = [](const core::RationalTime& time) {
+        return static_cast<std::int64_t>(std::llround(time.toSeconds() * 1e6));
+    };
+    for (const auto& target : targets) {
+        const auto started = std::chrono::steady_clock::now();
+        static_cast<void>(session.setCurrentTime(target));
+        const bool shown = waitUntil(
+            [&] {
+                const auto state = viewer.displayedPreviewState();
+                return state.freshness == ui::FrameFreshness::Current && state.frame &&
+                       toKey(state.frame->desiredIdentity().time) == toKey(target);
+            },
+            60s);
+        seconds.push_back(
+            shown ? std::chrono::duration<double>(std::chrono::steady_clock::now() - started)
+                        .count()
+                  : -1.0);
+    }
+    return seconds;
+}
+
+BenchScrub benchScrub(ui::CompositionSession& session, ui::ViewerEditor& viewer,
+                      ui::PreviewFrameCache& frameCache) {
+    BenchScrub result;
+    const auto* composition = session.composition();
+    if (composition == nullptr || gBenchScrubFrames == 0)
+        return result;
+    const auto rate = composition->format().frameRate();
+    const auto mapping = core::FrameTimeMapping::create(composition->duration(), rate.numerator(),
+                                                        rate.denominator());
+    if (!mapping.hasValue())
+        return result;
+    const auto area = session.workArea();
+    const auto first = static_cast<std::int64_t>(mapping.value()->nearestFrameIndex(area.start));
+    const auto last = static_cast<std::int64_t>(mapping.value()->nearestFrameIndex(area.end));
+    if (last <= first + 2)
+        return result;
+    // Alternate between the two halves of the area, so consecutive targets are far apart.
+    const auto span = last - first - 1;
+    std::vector<core::RationalTime> targets;
+    for (std::size_t index = 0; index < gBenchScrubFrames; ++index) {
+        const auto step = static_cast<std::int64_t>(index / 2 + 1) * span /
+                          static_cast<std::int64_t>(gBenchScrubFrames / 2 + 2);
+        const auto frame = index % 2 == 0 ? last - 1 - step : first + 1 + step;
+        if (const auto at = mapping.value()->timeForFrame(static_cast<std::uint64_t>(frame));
+            at.hasValue())
+            targets.push_back(*at.value());
+    }
+    std::cout << "BENCH_PLAY_START\n" << std::flush;
+    result.uncachedSeconds = benchScrubPass(session, viewer, targets);
+    frameCache.clear();
+    result.revisitSeconds = benchScrubPass(session, viewer, targets);
+    std::cout << "BENCH_PLAY_END\n" << std::flush;
+    return result;
+}
+
+void benchSecondsJson(std::ostringstream& json, const char* name, std::vector<double> seconds) {
+    json << ",\"" << name << "\":[";
+    for (std::size_t index = 0; index < seconds.size(); ++index)
+        json << (index == 0 ? "" : ",") << seconds[index];
+    json << ']';
+    std::ranges::sort(seconds);
+    const auto median = seconds.empty() ? 0.0 : seconds[seconds.size() / 2];
+    const auto worst = seconds.empty() ? 0.0 : seconds.back();
+    json << ",\"" << name << "Median\":" << median << ",\"" << name << "Max\":" << worst;
+}
+
 int runPackedBenchProject(const TestOptions& options, const bool half) {
     const char* resolution = gQuarter ? "Quarter" : (half ? "Half" : "Full");
     const std::filesystem::path projectPath = std::filesystem::absolute(gBenchProject);
@@ -497,7 +585,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     // Read-ahead also fills while idle, so only the playback measurement has it: a fill run
     // measures the RAM preview alone. The workspace mode always has it, as the application does.
     std::optional<ui::BackgroundPreviewController> background;
-    if (gBenchPlayback || gBenchWorkspace) {
+    if (gBenchPlayback || gBenchWorkspace || gBenchScrubFrames != 0) {
         background.emplace(session, controller, scheduler, bridge, pipeline, nullptr, submitter);
         background->setReadAheadWidthProvider(widthProvider);
     }
@@ -623,7 +711,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         firstFrame ? static_cast<int>(firstFrame->provenance().provider) : -1;
     std::ostringstream json;
     json << std::setprecision(6) << "{\"project\":" << benchJson(projectPath.string())
-         << ",\"mode\":\"" << (gBenchPlayback ? "playback" : "fill") << "\""
+         << ",\"mode\":\""
+         << (gBenchScrubFrames != 0 ? "scrub" : (gBenchPlayback ? "playback" : "fill")) << "\""
          << ",\"resolution\":\"" << resolution << "\""
          << ",\"workspace\":" << (gBenchWorkspace ? "true" : "false")
          << ",\"workspaceAssets\":" << (gBenchWorkspace && gBenchWorkspaceAssets ? "true" : "false")
@@ -656,6 +745,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         sample.preparedUploadBytes = operation.preparedUploadBytes;
         sample.operationPendingBytes = operation.pendingRetirementBytes;
         sample.operationSharedBytes = operation.sharedReferenceBytes;
+        const auto named = sample.previewCacheBytes + sample.operationCacheBytes;
+        sample.otherPoolBytes =
+            sample.reusablePoolBytes > named ? sample.reusablePoolBytes - named : 0;
         const auto capacity = policy->usableCapacity();
         sample.hostClaimBytes = capacity.hostClaimBytes;
         sample.hostUsableBytes = capacity.hostUsableBytes;
@@ -674,7 +766,13 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     memoryTimer.start();
     json << std::setprecision(15) << ",\"windowStartEpoch\":" << benchEpochSeconds()
          << std::setprecision(6);
-    if (gBenchPlayback) {
+    if (gBenchScrubFrames != 0) {
+        const auto scrubbed = benchScrub(session, viewer, *frameCache);
+        benchSecondsJson(json, "scrubUncachedSeconds", scrubbed.uncachedSeconds);
+        benchSecondsJson(json, "scrubRevisitSeconds", scrubbed.revisitSeconds);
+        json << std::setprecision(15) << ",\"windowEndEpoch\":" << benchEpochSeconds()
+             << std::setprecision(6);
+    } else if (gBenchPlayback) {
         const auto played = benchPlay(session, playback, viewer, controller, widthProvider);
         benchStartJson(json, "play", played);
         json << ",\"playSeconds\":" << played.seconds

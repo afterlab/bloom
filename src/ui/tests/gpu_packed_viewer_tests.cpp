@@ -247,6 +247,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             gBenchWorkspaceAssets = false;
         } else if (argument == "--bench-playback") {
             gBenchPlayback = true;
+        } else if (argument == "--bench-scrub") {
+            if (++index >= argc)
+                return 2;
+            gBenchScrubFrames = static_cast<std::size_t>(std::max(1, std::atoi(argv[index])));
         } else if (argument == "--bench-play-seconds") {
             if (++index >= argc)
                 return 2;
