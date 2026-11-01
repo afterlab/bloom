@@ -10,6 +10,7 @@
 
 #include "cpu_composition_evaluator_support.hpp"
 
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/contract.hpp>
 #include <bloom/media/video/colour.hpp>
@@ -69,6 +70,22 @@ void shareUpload(const GpuSceneMediaContext& context, const std::string& key,
                  const std::shared_ptr<const render::Rgba32fImage>& image) {
     if (context.buildUploads)
         context.buildUploads->share(key, image);
+}
+
+// Host upload staging (scratch, ADR 0037): the converted pixels live only while the scene's upload
+// command, or this build's sharing, holds them. The Profiler's staging line counts them from here
+// to their release (#423).
+[[nodiscard]] std::shared_ptr<const render::Rgba32fImage>
+stagingImage(render::Rgba32fImage pixels) {
+    const auto bytes = static_cast<std::uint64_t>(pixels.pixelStorageByteCost());
+    auto* image = new render::Rgba32fImage(std::move(pixels));
+    core::telemetry::stagingAllocated(bytes);
+    // A throwing control-block allocation runs the deleter, which balances the count.
+    return std::shared_ptr<const render::Rgba32fImage>(
+        image, [bytes](const render::Rgba32fImage* released) {
+            delete released;
+            core::telemetry::stagingReleased(bytes);
+        });
 }
 
 void addMediaWork(std::uint64_t& total, const std::uint64_t value) noexcept {
@@ -305,7 +322,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
             image.diagnostic.empty() ? "Image source could not be evaluated" : image.diagnostic;
         return outcome;
     }
-    outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*image.value));
+    outcome.image = stagingImage(std::move(*image.value));
     outcome.converted = true;
     shareUpload(context, outcome.uploadSemanticKey, outcome.image);
     return outcome;
@@ -327,11 +344,16 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
         outcome.image = std::move(shared);
         return outcome;
     }
+    core::telemetry::StageTimer convertTime(core::telemetry::Stage::ColourConvert);
     auto converted =
         convertSelectedVideo(selection, resolved.imageDescriptor, resolved.horizontalScale,
                              resolved.verticalScale, byteBudget(pixelBudget),
                              [&cancellation] { return cancellation.isCancellationRequested(); });
     ++statistics.videoConversions;
+    if (std::holds_alternative<media::provider::Unavailable>(converted))
+        convertTime.cancel();
+    else
+        convertTime.end();
     if (const auto* error = std::get_if<media::provider::Unavailable>(&converted)) {
         outcome.cancelled = error->reason == media::provider::Error::Cancelled;
         if (!outcome.cancelled) {
@@ -343,7 +365,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
         return outcome;
     }
     auto& pixels = std::get<render::Rgba32fImage>(converted);
-    outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(pixels));
+    outcome.image = stagingImage(std::move(pixels));
     outcome.converted = true;
     shareUpload(context, outcome.uploadSemanticKey, outcome.image);
     return outcome;
@@ -742,7 +764,7 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
                 image.diagnostic.empty() ? "Shuffle could not be evaluated" : image.diagnostic;
             return outcome;
         }
-        outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*image.value));
+        outcome.image = stagingImage(std::move(*image.value));
         outcome.converted = true;
         return outcome;
     }
@@ -893,7 +915,7 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
                                                      : stacked.diagnostic;
         return outcome;
     }
-    outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*stacked.value));
+    outcome.image = stagingImage(std::move(*stacked.value));
     outcome.converted = true;
     ids = gather.ids;
     const auto rankCount = static_cast<std::uint32_t>(selection.ranks.size());
@@ -1023,6 +1045,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
             return outcome;
         }
         // #381: a footage pass starts from the stored samples (not premultiplied).
+        core::telemetry::StageTimer convertTime(core::telemetry::Stage::ColourConvert);
         auto prepared =
             selection.footagePass
                 ? media::video::videoToStoredSamples(
@@ -1036,6 +1059,10 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
                       *sourceDescriptor.value(), 1.0, 1.0, byteBudget(pixelBudget),
                       [&cancellation] { return cancellation.isCancellationRequested(); });
         ++statistics.videoConversions;
+        if (std::holds_alternative<media::provider::Unavailable>(prepared))
+            convertTime.cancel();
+        else
+            convertTime.end();
         if (const auto* error = std::get_if<media::provider::Unavailable>(&prepared)) {
             outcome.cancelled = error->reason == media::provider::Error::Cancelled;
             if (!outcome.cancelled) {
@@ -1048,7 +1075,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
             return outcome;
         }
         auto& pixels = std::get<render::Rgba32fImage>(prepared);
-        outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(pixels));
+        outcome.image = stagingImage(std::move(pixels));
         outcome.converted = true;
         shareUpload(context, backingKey, outcome.image);
     }

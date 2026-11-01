@@ -1,4 +1,5 @@
 #include "gpu_cryptomatte_coverage_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <algorithm>
 #include <array>
@@ -586,6 +587,7 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &rawCommandBuffer;
+    core::telemetry::addGpuSubmit();
     const VkResult submitted = dispatcher->vkQueueSubmit(
         static_cast<VkQueue>(*control->computeQueue), 1, &submit, rawFence);
     if (submitted == VK_ERROR_DEVICE_LOST) {

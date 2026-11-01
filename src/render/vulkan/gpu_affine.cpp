@@ -1,3 +1,4 @@
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_affine.hpp>
 
 #include "gpu_affine_fault.hpp"
@@ -533,6 +534,7 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &rawCommandBuffer;
+    core::telemetry::addGpuSubmit();
     const VkResult submitted = dispatcher->vkQueueSubmit(
         static_cast<VkQueue>(*control->computeQueue), 1, &submit, rawFence);
     if (submitted == VK_ERROR_DEVICE_LOST) {

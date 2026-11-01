@@ -1,5 +1,6 @@
 #include "gpu_composite_memory.hpp"
 #include "gpu_ocio_program_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -319,6 +320,7 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &raw;
+    core::telemetry::addGpuSubmit();
     if (dispatcher->vkQueueSubmit(static_cast<VkQueue>(*state.computeQueue), 1, &submit,
                                   rawFence) != VK_SUCCESS) {
         fail(GpuOcioProgramDiagnosticCode::DeviceLost, "the dispatch submission failed");

@@ -1,4 +1,5 @@
 #include "gpu_scene_executor_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <algorithm>
 #include <array>
@@ -181,6 +182,7 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollBatch() {
                 std::min(static_cast<std::uint64_t>(elapsed),
                          std::numeric_limits<std::uint64_t>::max() -
                              counters.processingFenceObservationNanoseconds);
+        core::telemetry::recordStage(core::telemetry::Stage::Render, elapsed);
         auto outputs = operationBatch->takeImages();
         if (outputs.size() != batchStepCount) {
             fail(GpuSceneExecutorDiagnosticCode::InternalInvariant,

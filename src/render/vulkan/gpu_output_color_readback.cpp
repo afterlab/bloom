@@ -1,3 +1,4 @@
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_output_color_readback.hpp>
 
 #include "gpu_device_private.hpp"
@@ -535,6 +536,8 @@ bool GpuOutputColorReadback::begin(std::shared_ptr<const GpuImage> processImage,
                         "the readback submission was forced to fail");
             return false;
         }
+        core::telemetry::addGpuSubmit();
+        core::telemetry::addGpuReadbackBytes(totalBytes);
         const VkResult submittedResult = dispatcher->vkQueueSubmit(
             static_cast<VkQueue>(*state->computeQueue), 1, &submit, rawFence);
         if (submittedResult == VK_ERROR_DEVICE_LOST) {

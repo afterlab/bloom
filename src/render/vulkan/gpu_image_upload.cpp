@@ -1,4 +1,5 @@
 #include "gpu_image_upload_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <bloom/render/image.hpp>
 
@@ -668,6 +669,8 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &rawCommandBuffer;
+        core::telemetry::addGpuSubmit();
+        core::telemetry::addGpuUploadBytes(impl.staging.bytes);
         const VkResult submitted = dispatcher->vkQueueSubmit(
             static_cast<VkQueue>(*impl.control->computeQueue), 1, &submit, rawFence);
         if (submitted == VK_ERROR_DEVICE_LOST) {

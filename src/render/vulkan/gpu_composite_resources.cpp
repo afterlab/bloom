@@ -1,4 +1,5 @@
 #include "gpu_composite_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include "gpu_composite_fault.hpp"
 #include "gpu_composite_offsets_private.hpp"
@@ -493,6 +494,7 @@ GpuCompositeDiagnostic GpuComposite::beginSourceOver(const GpuSourceOverParamete
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &rawCommandBuffer;
+    core::telemetry::addGpuSubmit();
     const VkResult submitted = dispatcher->vkQueueSubmit(
         static_cast<VkQueue>(*impl.control->computeQueue), 1, &submit, rawFence);
     if (submitted == VK_ERROR_DEVICE_LOST) {

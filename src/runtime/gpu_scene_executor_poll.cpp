@@ -1,3 +1,4 @@
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
 #include "gpu_scene_executor_private.hpp"
@@ -269,6 +270,12 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
         const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                  std::chrono::steady_clock::now() - nativeStart)
                                  .count();
+        // The Profiler's upload and GPU render stages: submission to observed fence (#423).
+        if (!cancelRequested)
+            core::telemetry::recordStage(nativeKind == NativeKind::Upload
+                                             ? core::telemetry::Stage::Upload
+                                             : core::telemetry::Stage::Render,
+                                         elapsed);
         if (elapsed > 0)
             fenceTime += std::min(static_cast<std::uint64_t>(elapsed),
                                   std::numeric_limits<std::uint64_t>::max() - fenceTime);

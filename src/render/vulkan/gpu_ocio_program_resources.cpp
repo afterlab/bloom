@@ -1,4 +1,5 @@
 #include "gpu_ocio_program_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
@@ -386,6 +387,7 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &raw;
+    core::telemetry::addGpuSubmit();
     if (dispatcher->vkQueueSubmit(static_cast<VkQueue>(*state.computeQueue), 1, &submit,
                                   rawFence) != VK_SUCCESS) {
         setReasonNoThrow(reason, "the LUT upload submission failed");

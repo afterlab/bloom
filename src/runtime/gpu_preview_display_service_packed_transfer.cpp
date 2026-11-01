@@ -1,5 +1,6 @@
 #include "gpu_preview_display_service_private.hpp"
 
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
 
 #include <algorithm>
@@ -15,19 +16,43 @@ struct PackedSourcePin final {
 } // namespace
 
 void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
-    if (!core->queueTimingRequested())
+    namespace telemetry = bloom::core::telemetry;
+    // A running Profiler also wants the driver's heap budget (#423): the same bounded 1 Hz
+    // owner-thread query, published to the process-wide telemetry counters.
+    const bool timing = core->queueTimingRequested();
+    if (!timing && !telemetry::profilerActive())
         return;
-    const auto graph = core->residentExecutor ? core->residentExecutor->pollQueueTiming()
-                                              : render::GpuQueueTimingSample{};
-    if (core->packedQueueTimingActive && core->packedQueueTiming)
-        core->packedQueueTimingSample = core->packedQueueTiming->poll();
-    const auto transfer = core->packedQueueTimingSample;
     const auto now = std::chrono::steady_clock::now();
     // This helper is owner-only. Published sample fields are read under stateMutex by clients.
     const bool sampleMemory =
         core->device && now - core->allocatorMemorySampledAt >= std::chrono::seconds(1);
     const auto memory = sampleMemory ? core->device->allocatorMemorySnapshot()
                                      : render::GpuAllocatorMemorySnapshot{};
+    if (sampleMemory &&
+        memory.driverBudgetStatus == render::GpuDriverMemoryBudgetStatus::Available) {
+        std::uint64_t budget = 0;
+        std::uint64_t usage = 0;
+        for (std::uint32_t heap = 0; heap < memory.deviceLocalHeapCount; ++heap) {
+            budget += memory.deviceLocalHeaps[heap].budgetBytes;
+            usage += memory.deviceLocalHeaps[heap].usageBytes;
+        }
+        telemetry::publishGpuHeapBudget(
+            budget, usage,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
+    }
+    if (!timing) {
+        if (sampleMemory) {
+            const std::lock_guard lock(core->stateMutex);
+            core->publishedAllocatorMemory = memory;
+            core->allocatorMemorySampledAt = now;
+        }
+        return;
+    }
+    const auto graph = core->residentExecutor ? core->residentExecutor->pollQueueTiming()
+                                              : render::GpuQueueTimingSample{};
+    if (core->packedQueueTimingActive && core->packedQueueTiming)
+        core->packedQueueTimingSample = core->packedQueueTiming->poll();
+    const auto transfer = core->packedQueueTimingSample;
     const std::lock_guard lock(core->stateMutex);
     if (sampleMemory) {
         core->publishedAllocatorMemory = memory;
@@ -140,6 +165,8 @@ residentPackedTransferFinish(const std::shared_ptr<PreviewDisplayServiceCore>& c
     const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                              std::chrono::steady_clock::now() - stage.packedTransferStartedAt)
                              .count();
+    // The Profiler's transfer stage: the packed display transfer, submission to host (#423).
+    bloom::core::telemetry::recordStage(bloom::core::telemetry::Stage::Transfer, elapsed);
     if (elapsed > 0) {
         const auto before = core->counterPackedTransferNanoseconds.load(std::memory_order_relaxed);
         core->counterPackedTransferNanoseconds.store(

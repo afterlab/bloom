@@ -1,6 +1,8 @@
 #include "gpu_image_upload_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
 
+#include <bloom/core/telemetry_counters.hpp>
+
 #include <bit>
 #include <cstdint>
 #include <cstring>
@@ -34,6 +36,8 @@ void UploadStagingBuffer::release() noexcept {
     half.release();
     if (armed && state != nullptr) {
         vmaDestroyBuffer(state->allocator, buffer, allocation);
+        // The host-visible upload staging buffer is scratch (ADR 0037): it leaves the live line.
+        core::telemetry::stagingReleased(bytes);
         if (token.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
             ++state->nativeBufferBackingsDestroyed;
     }
@@ -197,6 +201,7 @@ createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state, const std:
     pending.state = &state;
     pending.bytes = actual.size;
     pending.armed = true;
+    core::telemetry::stagingAllocated(pending.bytes);
     out = std::move(pending);
     return outcome;
 }

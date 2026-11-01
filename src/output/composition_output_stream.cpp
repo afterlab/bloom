@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
@@ -275,6 +276,8 @@ std::optional<Unavailable> CompositionOutputStreamV1::writeFrame(const render::R
                 fraction(frame * static_cast<std::uint64_t>(s.encoding.rate.denominator),
                          static_cast<std::uint64_t>(s.encoding.rate.numerator)),
                 s.cancellation, s.source.display.get()));
+            // The Profiler's encode stage (#423): handing the frame to the encoder worker.
+            core::telemetry::StageTimer encodeTime(core::telemetry::Stage::Encode);
             checked(s.encoder->video(std::move(prepared)));
         }
         s.audio(context, samplesThrough);
@@ -293,7 +296,10 @@ std::optional<Unavailable> CompositionOutputStreamV1::writePreparedFrame(
             s.started = true;
         }
         require(!s.encoding.videoCodec.empty(), "Prepared frames need a video stream");
-        checked(s.encoder->video(std::move(prepared)));
+        {
+            core::telemetry::StageTimer encodeTime(core::telemetry::Stage::Encode);
+            checked(s.encoder->video(std::move(prepared)));
+        }
         s.audio(context, samplesThrough);
         return {};
     } catch (const Unavailable& error) {

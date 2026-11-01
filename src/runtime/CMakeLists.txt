@@ -60,6 +60,7 @@ target_sources(
         cryptomatte_matte_list.cpp
         snapshot_compiler.cpp
         plan_time_scopes.cpp
+        profiler_gpu_reader.cpp
         layer_time_projection.cpp
         snapshot_compiler_layer_time.ipp
         snapshot_compiler_lowering.ipp
@@ -84,6 +85,7 @@ target_sources(
             include/bloom/runtime/curve_compilation.hpp
             include/bloom/runtime/node_definition_registry.hpp
             include/bloom/runtime/snapshot_compiler.hpp
+            include/bloom/runtime/profiler_gpu_reader.hpp
 )
 
 target_compile_features(bloom_runtime_compiler PUBLIC cxx_std_20)

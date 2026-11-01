@@ -1,4 +1,5 @@
 #include "gpu_process_frame_readback_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <cstring>
 #include <thread>
@@ -132,6 +133,9 @@ FinalReadbackOutcome runFinalCombinedReadback(
     outcome.transferNanoseconds = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(publicationStarted - transferStarted)
             .count());
+    // The Profiler's transfer stage: the final render's readback (#423).
+    core::telemetry::recordStage(core::telemetry::Stage::Transfer,
+                                 static_cast<std::int64_t>(outcome.transferNanoseconds));
     auto imageBuilder = phase ? render::Rgba32fImageBuilder::create(
                                     descriptor, static_cast<std::size_t>(readbackByteBudget), phase)
                               : render::Rgba32fImageBuilder::create(

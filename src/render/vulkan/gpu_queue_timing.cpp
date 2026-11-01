@@ -1,4 +1,5 @@
 #include "gpu_queue_timing_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <cmath>
 #include <limits>
@@ -103,6 +104,7 @@ bool State::submit(const std::size_t endpoint) noexcept {
     if (status == VK_SUCCESS) {
         const VkSubmitInfo submitInfo{
             VK_STRUCTURE_TYPE_SUBMIT_INFO, nullptr, 0, nullptr, nullptr, 1, &command, 0, nullptr};
+        core::telemetry::addGpuSubmit();
         status = api->vkQueueSubmit(static_cast<VkQueue>(*control->computeQueue), 1, &submitInfo,
                                     fences[endpoint]);
     }

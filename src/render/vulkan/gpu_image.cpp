@@ -2,6 +2,7 @@
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
 #include "gpu_oracle_readback_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <array>
 #include <atomic>
@@ -442,6 +443,8 @@ GpuImageReadback readbackResidentImage(const GpuImage& image,
         submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &rawCommandBuffer;
+        core::telemetry::addGpuSubmit();
+        core::telemetry::addGpuReadbackBytes(bytes);
         const VkResult submitted = dispatcher->vkQueueSubmit(
             static_cast<VkQueue>(*state.computeQueue), 1, &submit, rawFence);
         if (submitted == VK_ERROR_DEVICE_LOST) {

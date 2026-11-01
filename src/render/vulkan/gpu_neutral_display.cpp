@@ -1,4 +1,5 @@
 #include "gpu_neutral_display_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <array>
 #include <cstdint>
@@ -306,6 +307,7 @@ GpuNeutralDisplayDiagnostic GpuNeutralDisplay::begin(const std::span<const Rgba3
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &rawCommandBuffer;
+    core::telemetry::addGpuSubmit();
     const VkResult submitResult = dispatcher->vkQueueSubmit(
         static_cast<VkQueue>(*impl.state->computeQueue), 1, &submitInfo, rawFence);
     if (submitResult == VK_ERROR_DEVICE_LOST) {

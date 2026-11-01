@@ -1,5 +1,6 @@
 #include "gpu_scene_executor_private.hpp"
 
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_path_coverage.hpp>
 
 #include <algorithm>
@@ -206,6 +207,8 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollPathCoverage() {
     const auto coverageElapsed =
         std::chrono::duration_cast<std::chrono::nanoseconds>(coverageReady - nativeStart).count();
     auto& fenceTime = counters.processingFenceObservationNanoseconds;
+    if (!cancelRequested)
+        core::telemetry::recordStage(core::telemetry::Stage::Render, coverageElapsed);
     if (coverageElapsed > 0)
         fenceTime += std::min(static_cast<std::uint64_t>(coverageElapsed),
                               std::numeric_limits<std::uint64_t>::max() - fenceTime);

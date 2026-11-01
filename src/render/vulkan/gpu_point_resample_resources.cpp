@@ -1,4 +1,5 @@
 #include "gpu_point_resample_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <algorithm>
 #include <array>
@@ -564,6 +565,7 @@ bool GpuPointResample::Impl::launchJob(const std::shared_ptr<const GpuImage>& so
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &rawCommandBuffer;
+    core::telemetry::addGpuSubmit();
     const VkResult submitted = dispatcher->vkQueueSubmit(
         static_cast<VkQueue>(*control->computeQueue), 1, &submit, rawFence);
     if (submitted == VK_ERROR_DEVICE_LOST) {

@@ -9,6 +9,7 @@
 #include <bloom/color/ocio_cpu_input_processor.hpp>
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <cmath>
@@ -657,8 +658,13 @@ decodeImage(const std::filesystem::path& path, const ImageInterpretation& interp
             const CancelImageWork& cancel, const ImageProgress& progress,
             const std::size_t pixelBudget, const std::optional<core::Sha256Digest> expectedDigest,
             const ImageProvider* provider) {
-    return decodeImageImpl(path, nullptr, interpretation, std::move(processor), cancel, progress,
-                           pixelBudget, expectedDigest, provider);
+    // The Profiler's decode stage (#423); a failed or cancelled decode records nothing.
+    core::telemetry::StageTimer decodeTime(core::telemetry::Stage::Decode);
+    auto decoded = decodeImageImpl(path, nullptr, interpretation, std::move(processor), cancel,
+                                   progress, pixelBudget, expectedDigest, provider);
+    if (!decoded.value)
+        decodeTime.cancel();
+    return decoded;
 }
 
 ImageResult<std::shared_ptr<const render::Rgba32fImage>>
@@ -675,12 +681,17 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
                 "Image revision and decode exceed the host byte budget",
                 false,
                 ImageDiagnosticCode::PixelBudgetExceeded};
+    core::telemetry::StageTimer decodeTime(core::telemetry::Stage::Decode);
     auto decoded = [&] {
         const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
         return decodeImageImpl({}, &revision, interpretation, std::move(processor), cancel,
                                progress, hostByteBudget - revision.retainedBytes(),
                                revision.probe().contentDigest, nullptr);
     }();
+    if (!decoded.value)
+        decodeTime.cancel();
+    else
+        decodeTime.end();
     if (statistics)
         statistics->repairedPixels = decoded.repairedPixels;
     return decoded;

@@ -1,4 +1,5 @@
 #include "gpu_solid_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #ifdef BLOOM_GPU_SCENE_EXECUTOR_TEST_FAULT_INJECTION
 #include "gpu_scene_executor_fault_injection.hpp"
@@ -389,6 +390,7 @@ GpuSolidDiagnostic GpuSolid::begin(const GpuSolidParameters& parameters,
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &rawCommandBuffer;
+    core::telemetry::addGpuSubmit();
     const VkResult submitted = dispatcher->vkQueueSubmit(
         static_cast<VkQueue>(*impl.control->computeQueue), 1, &submit, rawFence);
     if (submitted == VK_ERROR_DEVICE_LOST) {

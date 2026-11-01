@@ -1,4 +1,5 @@
 #include "gpu_solid_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_path_coverage_private.hpp"
@@ -593,6 +594,7 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &rawCommandBuffer;
+    core::telemetry::addGpuSubmit();
     const VkResult submitted = dispatcher->vkQueueSubmit(
         static_cast<VkQueue>(*impl.control->computeQueue), 1, &submit, rawFence);
     if (submitted == VK_ERROR_DEVICE_LOST) {

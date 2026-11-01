@@ -1,4 +1,5 @@
 #include "gpu_presentation_target_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -460,6 +461,7 @@ GpuPresentationTargetCode submitAndPresentAcquired(SwapchainResources& resources
     submit.pCommandBuffers = &command;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &render;
+    core::telemetry::addGpuSubmit();
     if (dispatcher->vkQueueSubmit(*presentQueue, 1, &submit, renderFence) != VK_SUCCESS) {
         message = "the presentation command could not be submitted";
         return GpuPresentationTargetCode::DriverUnavailable;

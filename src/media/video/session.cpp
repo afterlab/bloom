@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/provider/ffmpeg_launch.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/media_workers.hpp>
@@ -776,6 +777,8 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
     State::FrameCompletion completion{*state_, *flight};
     try {
         bool usedHardware = hardware;
+        // The Profiler's decode stage: the worker round trip that produces the frame (#423).
+        core::telemetry::StageTimer decodeTime(core::telemetry::Stage::Decode);
         auto decoded = product<FrameProduct>(call(Role::VideoDecode, &source, stream, index, 1,
                                                   cancel, snapshot, retainWorker, hardware));
         if (const auto* error = std::get_if<Unavailable>(&decoded);
@@ -788,6 +791,10 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
             decoded = product<FrameProduct>(call(Role::VideoDecode, &source, stream, index, 1,
                                                  cancel, snapshot, retainWorker, false));
         }
+        if (std::holds_alternative<Unavailable>(decoded))
+            decodeTime.cancel();
+        else
+            decodeTime.end();
         flight->provenance = describe(usedHardware);
         if (const auto* error = std::get_if<Unavailable>(&decoded)) {
             auto failure = *error;

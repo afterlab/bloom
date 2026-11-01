@@ -1,3 +1,4 @@
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_display_transfer.hpp>
 
 #include "gpu_device_private.hpp"
@@ -718,6 +719,8 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
         const bool refuseSubmit =
             display_transfer_detail::transferFault().load() ==
             static_cast<std::uint8_t>(display_transfer_detail::TransferFault::Submit);
+        core::telemetry::addGpuSubmit();
+        core::telemetry::addGpuReadbackBytes(bytes);
         const VkResult submitted =
             refuseSubmit ? VK_ERROR_UNKNOWN
                          : dispatcher->vkQueueSubmit(static_cast<VkQueue>(*state->computeQueue), 1,

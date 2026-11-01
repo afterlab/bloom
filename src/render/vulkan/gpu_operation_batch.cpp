@@ -1,4 +1,5 @@
 #include "gpu_operation_batch_private.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <cstring>
 #include <utility>
@@ -66,6 +67,7 @@ bool State::submit() {
     const auto* api = control->device.getDispatcher();
     const VkSubmitInfo submitInfo{
         VK_STRUCTURE_TYPE_SUBMIT_INFO, nullptr, 0, nullptr, nullptr, 1, &command, 0, nullptr};
+    core::telemetry::addGpuSubmit();
     const auto result =
         api->vkQueueSubmit(static_cast<VkQueue>(*control->computeQueue), 1, &submitInfo, fence);
     if (result != VK_SUCCESS) {
