@@ -1036,6 +1036,57 @@ Cache-independent rational transport and intent-time deadlines are now implement
 Required native Qt present hooks and remaining scheduling/stress qualification remain G4 work;
 sustained render rate and drift remain G10.
 
+### Playback Preroll
+
+An uncached Play used to start the clock before any frame after the playhead existed, so the first
+half second to second of cold playback was all drops (#404). Play now holds the transport clock
+until the first frames are ready, then starts in sync (owner decision, 2026-11-01):
+
+- **Ready** means the frames from the start frame through the read-ahead window are all in the
+  preview frame cache: `BackgroundPreviewController::prerollFrameCount()`, the window the
+  read-ahead's capacity provider answers at Play for the composition's frame size, at least one and
+  at most eight. Past the end of the work area a looping run counts the wrapped frames and a
+  non-looping run counts nothing. The window's frames are prepared in parallel and land together:
+  cold 1080p H.264 cached frame one at 0.27-0.35 s and all eight by 0.35-0.37 s, so waiting for
+  the whole window costs at most about 0.08 s over the first frame and starts the run with eight
+  frames (a third of a second at 24 fps) in hand, more than the 0.05-0.1 s the next wave took to
+  land.
+- **Maximum hold** is 0.5 s (`PlaybackPreroll::kMaximumHold`). If the frames are still not ready
+  the clock starts anyway and the ordinary drop rules above apply from there.
+- **Cached frames start at once.** A RAM preview, or any range whose window is already cached, is
+  ready at Play and starts with no hold.
+- **During the hold** the transport is `Playing` (the button shows Pause), but the preview is not
+  yet in playback: `CompositionPreviewController::playbackPreparing()` is set instead of
+  `playbackActive()`. The read-ahead runs on either; while preparing it asks for exactly the
+  frames from the still playhead, with no latency lead. No playback deadline exists and nothing is
+  counted as dropped. The activity segment of the window status bar reads "Preparing playback"
+  with a busy bar.
+- **Release** (frames ready, or the maximum) starts the wall clock at that instant from the run's
+  anchor frame, starts audio (`requestPlay` at the anchor) when audio drives the clock, sets
+  playback active and arms the dropped-frame count. A mix that arrives during the hold waits for
+  the release instead of starting audio.
+- **Stop or Pause** during the hold cancels it: the clock, the audio and the count never started.
+- **A seek, scrub or work-area change** during the hold restarts it at the new position with a
+  fresh 0.5 s maximum. While stopped-like, the preview renders the seek's frame as it does while
+  stopped; once the clock runs, a seek pauses as before.
+
+Measured in the packed viewer harness (cold, offscreen, six fresh processes per cell, half of
+them interleaved with the previous build under the same load): 1080p H.264 at Full and at Half
+dropped 9-21 frames in the first second before and none after, the clock held 0.27-0.50 s and
+always released on ready frames (once right at 0.5 s), and the first motion came 0.29-0.93 s
+after Play before and 0.31-0.55 s after. At 2160p (PNG16, DNxHR HQX) the first wave lands
+0.5-1.7 s after Play, so every
+run reached the maximum: drops in the first second after Play fell from 22-23 to 9-10, the first
+second after the release still drops 21-23, and first motion is unchanged (bounded by that first
+wave). Preroll removes the start-up loss; it does not raise throughput that is below real time.
+
+`PlaybackPreroll` is the clock-free state machine (Immediate, Ready, CapReached, Cancelled, with
+the time held and the restarts); `PlaybackController` drives it from its injected clock on each wake
+and on each cache insertion. The composition root enables it with
+`setPrerollFrameCountProvider()`; a transport without a provider starts the clock at Play, as
+before. The packed viewer benchmark records each run's outcome, hold and window
+([Benchmarks](../development/benchmarks.md)).
+
 ### Audio Clock Master
 
 When audio is enabled, a revision-valid `AudioMixDescription` has been published, and the audio
@@ -1080,7 +1131,8 @@ elapsed-time catch-up, uncached targets skipped at admission, admitted requests 
 their deadline, and superseded requests. Each playback request contributes at most once. Cached
 frames contribute nothing. The counter is a count, not a measured frame rate.
 
-`play()` arms and resets counting; `pause()` disarms it and retains the last total. Outside a run the
+The clock's start arms and resets counting: `play()`, or the end of a preroll hold (a hold counts
+nothing). `pause()` disarms it and retains the last total. Outside a run the
 footer says nothing; during one it reports zero explicitly. Ordinary scrubbing while stopped does
 not affect the count.
 

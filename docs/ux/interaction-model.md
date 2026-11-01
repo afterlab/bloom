@@ -217,6 +217,15 @@ of the range and pauses there. The choice persists in `playback/loop`.
 RAM Preview stays its own command and its own button: caching a range and starting playback are
 different things. The play button reports whether the range it is about to play is already cached.
 
+Play never starts on frames that do not exist yet. When the frames just after the playhead are not
+cached, Play prepares them first: the button shows Pause at once, the status bar's activity reads
+"Preparing playback" with a busy bar, and the playhead and audio wait together, for at most half a
+second. Playback then starts in sync; if the frames are still not ready after half a second it
+starts anyway and drops frames as it always has. A cached range, such as a finished RAM Preview,
+starts immediately. Pause or `Space` while preparing cancels it, and moving the playhead while
+preparing prepares again from the new position (docs/architecture/animation-and-time.md,
+"Playback Preroll").
+
 | Gesture or control | Action |
 | --- | --- |
 | Click the frame field | Opens an inline editor seeded with the current frame in the field's reading |

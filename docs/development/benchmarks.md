@@ -215,7 +215,11 @@ Every measurement is a fresh process.
   count and the distinct Current frames shown one second after Play; `DroppedTotal` is the dropped
   count at the end of the run; `ReadAheadWidth` is the read-ahead window at Play; and
   `FrameCachedSeconds` lists, for each of the first 24 frames from the start, when it entered the
-  preview cache (-1 when it never did).
+  preview cache (-1 when it never did). The playback preroll (#404) adds `PrerollOutcome`
+  (`immediate`: the frames were cached at Play; `ready`: the hold ended when they were; `cap`: the
+  0.5 s maximum started the clock without them), `PrerollHeldSeconds`, `PrerollFrames` (the window
+  the hold waited for), `ReleasedSeconds` (when the clock started, from Play) and
+  `DroppedFirstSecondAfterRelease`.
 - **Export** (`kind: export`): `bloom-cli export --job <id> --replace`; `secondsPerFrame` = process
   wall time / frames, including start-up. The export's own provenance gives `gpuFrames` and the
   CPU-reference frame count (`cpuFallbackFrames`). An export that cannot run on this
