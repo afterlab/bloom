@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-10-31
+Updated: 2026-11-01
 
 ## Geometry and transform levels
 
@@ -668,7 +668,8 @@ and are labelled CPU presentation; exposure/gamma/OCIO still use genuine GPU dis
 Consumers of scene-linear pixels check `PreparedPreviewFrame::hasProcessFrame()`. The pixel probe
 reads an available bounded process frame or schedules exact one-pixel ROI evaluation for a
 cached display-only frame. It caches that reference result by frame and position, independently
-of display adjustment. Frame and sequence export evaluate their own full-frame requests without
+of display adjustment. The one-pixel evaluation retains only ROI-independent operation entries, so
+probing new positions adds no cache memory (evaluation-primitives.md, ROI). Frame and sequence export evaluate their own full-frame requests without
 ROI or viewer adjustment. The compiled-plan cache is unaffected by either viewer setting.
 
 **Budget.** `playback/ram-preview-memory-bytes` and

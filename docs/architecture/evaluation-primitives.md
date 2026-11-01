@@ -593,11 +593,17 @@ also retains its complete source. This is a correctness fallback, not a claim th
 operation costs one pixel for a one-pixel request. Composition Output stores only the requested
 rectangle. Both display preparers pad the remaining viewport with transparent black.
 
-ROI participates in image-operation and preview-frame keys and process-frame equality. The plan
-cache is unchanged. An absent ROI retains the existing operation-key encoding and raster path;
-primitive, evaluator, animation, and display semantics versions are unchanged. Identity fixtures
-compare ROI pixels bit for bit with full evaluation, retain the same bounds, and restore the
-unchanged full-frame result after clearing ROI.
+ROI participates in preview-frame keys and process-frame equality. In the operation cache it
+participates only where it changes the result: an operation clipped to the ROI, and Composition
+Output. Those ROI-dependent results are recomputed for every request and never retained, because
+they recur only for the identical rectangle; a pixel probe moving across the Viewer would otherwise
+add one set of entries per pixel (issue #414). A full-support operation (a layer's content, the
+input of a gather, media) produces the same image with and without ROI, so it keeps the full-frame
+key: every ROI request, and the full-frame request, share one entry per resolution. The plan cache
+is unchanged. An absent ROI retains the existing operation-key encoding and raster path; primitive,
+evaluator, animation, and display semantics versions are unchanged. Identity fixtures compare ROI
+pixels bit for bit with full evaluation, retain the same bounds, restore the unchanged full-frame
+result after clearing ROI, and show that a further ROI retains no new bytes.
 
 `ViewAdjust{exposure, gamma}` belongs to display preparation and preview display identity. Exposure
 multiplies linear display light by `2^exposure` after the view transform and before sRGB encoding.
@@ -618,7 +624,9 @@ RGBA is the exact premultiplied `lin_rec709_scene` Float32 process value, widene
 a color transform. A retained process image supports a constant-time pixel read. Display-only
 cache hits, or positions outside the preview ROI, request a one-pixel ROI through the evaluator on
 a worker. The probe caches one frame/position result, cancels superseded work, and discards late
-results after leave or frame changes. Exposure, gamma, channel display, and background never change
+results after leave or frame changes. Its evaluation reuses the operation cache's full-support
+entries, so the first probe at a resolution pays for each layer's resampled content once and later
+probes at any pixel of that resolution pay only for the one-pixel layer, merge and output steps. Exposure, gamma, channel display, and background never change
 its reference values. Allocation limits, progress, diagnostics, and shutdown use the existing task
 and evaluation contracts.
 
@@ -1076,8 +1084,11 @@ the next read decodes again; it can never mean incorrect pixels.
 
 No pool above is keyed by window size, screen or device pixel ratio. A resize, a move to another
 screen or virtual desktop, a ratio change or a hide/show re-lays out and repaints the retained
-Viewer frame; it adds no entry to any pool and prepares no frame unless the Auto resolution
-setting needs another of its three divisors, which is prepared once and cached. See
+Viewer frame. Under the Auto resolution setting the displayed scale (which includes the device
+pixel ratio) can select another divisor; that frame is prepared once on the GPU route and then
+served from the preview frame cache. The pixel probe then samples the newly shown frame: the
+first probe at that resolution adds each layer's resampled content to the operation cache, and
+later probes and later window changes add nothing. See
 [Window, screen and pixel-ratio changes](gpu-backend.md#window-screen-and-pixel-ratio-changes)
 for the soak that asserts this.
 

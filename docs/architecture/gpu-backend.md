@@ -1021,24 +1021,45 @@ target. A window resize, maximize, move to another screen or virtual desktop, de
 change or unmap/remap therefore never allocates or retains native presentation state. It only
 re-lays out widgets and repaints the retained packed frame through the window's ordinary backing
 store. The preview identity carries no viewport size or device pixel ratio: under the Full, Half and
-Quarter resolution settings a window change prepares nothing, and under Auto the displayed scale
-selects one of three divisors, each prepared once and then served from the preview cache. The
-only per-ratio cache is the icon pixmap cache, bounded by the icon set times the ratios in use.
+Quarter resolution settings a window change prepares nothing. Under Auto the displayed scale, which
+includes the device pixel ratio, selects the divisor, so a move between a 1x and a 1.5x screen can
+flip Half and Full. Each divisor's frame is prepared once on the GPU-prepared packed route and then
+served from the preview cache; it never takes the CPU fallback. The only per-ratio cache is the icon
+pixmap cache, bounded by the icon set times the ratios in use.
+
+A frame from the packed route carries no Float32 process image, so the pixel probe answers the
+hovered pixel with a one-pixel ROI evaluation through the CPU reference evaluator on a worker. That
+evaluation is analysis for the probe readout, not the Viewer frame. After a window change the probe
+samples the newly shown frame, usually at another pixel. Until issue #414 the operation cache keyed
+every result of that evaluation by the ROI, including each layer's full-frame resampled footage, so
+every probed pixel after a window change retained another full-frame image per layer, about 100 MiB
+per monitor change in the reported 2048x858 project with 16-bit PNG sequence layers. ROI-independent
+results now share the full-frame key and ROI-clipped results are not retained (see
+[evaluation-primitives.md](evaluation-primitives.md), ROI). The first probe at a resolution retains
+each layer's resampled content once; further window changes and pointer positions retain nothing.
 
 The native presenter and coordinator remain the route of the required native fixtures. Their
 retention paths (a silently replaced surface, an unproven retirement, a surface destroyed while a
 target is live) keep at most one record per presenter and at most `kMaxQuarantinedTargets`
 generations per process, and the quarantine fuse then refuses new native targets.
 
-`bloom.ui.window_surface_memory_soak` qualifies this on the application-shaped workspace and the
-GPU-prepared packed service. It moves the window between a 1x and a 1.5x screen, resizes,
-maximizes and hides it in a loop with the pointer over the Viewer, and asserts, after a warm-up:
-RSS within 48 MiB across the measured cycles, the ledger's reusable pools and the preview and
-operation caches within 4 MiB, no growth of GPU image allocation bytes, no new preview preparation
-of the parked frame, a transient peak under 160 MiB per cycle, constant widget and window counts,
-and zero retained presenter records or quarantined generations. The Linux run on 2026-11-01 held
-RSS at 704-716 MiB over 12 measured cycles, the ledger at 184 MiB, GPU images at 162 MiB, the cycle
-peak at 17-22 MiB, with zero preparations and zero retained records.
+`bloom.ui.window_surface_memory_soak` qualifies this on the application-shaped workspace, the
+GPU-prepared packed service and a 2048x858 composition of four 16-bit RGBA PNG sequence layers. Each
+cycle moves the window to a 1.5x screen (Auto selects Full) and back to a 1x screen (Half), then
+resizes, maximizes and hides it, with the pointer resting over the Viewer a few pixels from its
+previous position after every step. After the first round trip it asserts: RSS within 48 MiB across
+the measured cycles, the ledger's reusable pools and the preview and operation caches within 4 MiB,
+no growth of GPU image allocation bytes, no new preview preparation of the parked frame, no Viewer
+frame on the CPU fallback, a transient peak under 160 MiB per cycle, constant widget and window
+counts, and zero retained presenter records or quarantined generations.
+
+The Linux run on 2026-11-01 retained, before the fix, 107 MiB on every move to the 1.5x screen and
+27 MiB on every move back (one full-frame resampled image per layer at Full and at Half), and about
+350 MiB per cycle in all; the ledger grew from 0.7 GiB to 3.4 GiB over 8 measured cycles. After the
+fix the first round trip retained 226 MiB once (both resolutions' GPU uploads, decoded footage and
+resampled layers), and every later move retained 0 MiB: the ledger held 404 MiB, RSS 878-895 MiB,
+GPU images 392 MiB, the cycle peak 35-39 MiB, with zero preparations, zero Viewer CPU fallbacks and
+zero retained records.
 
 The channel presentation scan runs in a cancellable bounded CPU worker, with explicit CPU channel
 provenance. One completed derivative, one active task and one newest intent bound publication;
