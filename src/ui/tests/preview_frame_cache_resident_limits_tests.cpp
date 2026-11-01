@@ -655,7 +655,7 @@ int main(int argc, char** argv) {
         }
 
         // ----------------------------------------------------------------------------------------
-        // clear() and trimToBytes() release the resident accounting; a dead entry's removal
+        // clear() and the device limits release the resident accounting; a dead entry's removal
         // releases it too. These run last because invalidateAll() is registry-wide.
         // ----------------------------------------------------------------------------------------
         cache.clear();
@@ -683,12 +683,18 @@ int main(int argc, char** argv) {
             }
             expectations.expect(trimCache.gpuResidentEntryCount() == 4,
                                 "the trim cache starts with four resident entries");
+            // A host trim frees host memory; device-budgeted resident frames are device memory
+            // (#416), so it leaves them and the device limits release them.
             trimCache.trimToBytes(1);
+            expectations.expect(trimCache.gpuResidentEntryCount() == 4 &&
+                                    trimCache.hostBytes() == 0,
+                                "trimToBytes() leaves device-budgeted resident frames");
+            trimCache.setGpuResidentLimits(0, 0);
             expectations.expect(trimCache.gpuResidentBytes() == 0 &&
                                     trimCache.gpuResidentEntryCount() == 0,
-                                "trimToBytes() releases the resident accounting");
+                                "the device limits release the resident accounting");
             expectations.expect(trimCache.residentBytes() == 0,
-                                "trimToBytes() leaves no negative or residual charge");
+                                "releasing resident frames leaves no negative or residual charge");
         }
 
         {
