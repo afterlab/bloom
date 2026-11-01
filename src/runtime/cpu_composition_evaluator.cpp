@@ -2421,6 +2421,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     opacity ? input.opacity * opacity->value : 0};
                 }
             }
+            // Issue #414: only an operation that clips to the ROI (and Composition Output, which
+            // stores only the requested rectangle) depends on it. A full-support operation -- a
+            // layer's content, a gather's input, media -- produces the same image for every ROI and
+            // for none, so it keeps the full-frame key and every ROI request shares it. An ROI-
+            // dependent result recurs only for the identical rectangle, so a pixel probe moving
+            // over the Viewer would add one set per pixel; it is recomputed instead of retained.
+            const bool roiDependent =
+                request.roi.has_value() && (!fullSupport[index] || index == request.output.value());
             detail::OperationKey key;
             if (cache) {
                 key.add(std::string("image"));
@@ -2430,7 +2438,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 key.add(plan->format().height());
                 key.add(plan->format().pixelAspect());
                 key.add(plan->format().frameRate());
-                if (request.roi) {
+                if (roiDependent) {
                     key.add(std::string("roi"));
                     key.add(request.roi->originX());
                     key.add(request.roi->originY());
@@ -2643,8 +2651,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                              [&](OperationIndex input) { key.add(contentHashes[input.value()]); });
                 contentHashes[index] = key.digest();
             }
-            const auto hit =
-                cache ? cache->find(key.bytes(), plan->sourceRevision()) : std::nullopt;
+            const auto hit = cache && !roiDependent
+                                 ? cache->find(key.bytes(), plan->sourceRevision())
+                                 : std::nullopt;
             if (hit) {
                 const bool alreadyResident =
                     hit->image && std::ranges::any_of(
@@ -4129,9 +4138,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     slots[index] =
                         std::make_shared<const render::Rgba32fImage>(std::move(*produced));
                 }
-                if (cache && !effectApplicationFailed && (!selectedVideo || slots[index]) &&
-                    (!selectedImage || slots[index]) && (!selectedShuffle || slots[index]) &&
-                    (!selectedCryptomatte || slots[index]))
+                if (cache && !roiDependent && !effectApplicationFailed &&
+                    (!selectedVideo || slots[index]) && (!selectedImage || slots[index]) &&
+                    (!selectedShuffle || slots[index]) && (!selectedCryptomatte || slots[index]))
                     cache->store(
                         key.bytes(), plan->sourceRevision(),
                         {.image = index == request.output.value() ? processImage : slots[index],

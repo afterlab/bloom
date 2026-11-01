@@ -2264,9 +2264,25 @@ void testRegionOfInterest(Expectations& expectations) {
                                 cropped.frame()->identity().evaluatorSemanticsVersion ==
                                     bloom::runtime::kCpuCompositionEvaluatorSemanticsVersion,
                             "ROI changes request identity without changing semantics versions");
+        // Issue #414: full-support operations (a layer's content) are ROI-independent and share
+        // the full-frame entries; only the ROI-clipped operations are recomputed, never retained.
+        const auto& croppedStatistics = cropped.frame()->operationCacheStatistics();
+        expectations.expect(croppedStatistics.hits > 0,
+                            "ROI reuses the full-frame entries of its full-support operations");
+        const auto retained = evaluator.operationCache()->retainedBytes();
         const auto again = evaluator.evaluate(plan, request, {});
-        expectations.expect(again.frame() && again.frame()->operationCacheStatistics().misses == 0,
-                            "repeated ROI reuses only matching operation entries");
+        expectations.expect(
+            again.frame() &&
+                again.frame()->operationCacheStatistics().hits == croppedStatistics.hits &&
+                again.frame()->operationCacheStatistics().misses == croppedStatistics.misses,
+            "repeated ROI reuses exactly the ROI-independent entries");
+        const auto moved = render::ImageWindow::create(2, 1, 1, 1);
+        auto probe = request;
+        probe.roi = *moved.value();
+        const auto elsewhere = evaluator.evaluate(plan, probe, {});
+        expectations.expect(elsewhere.frame() &&
+                                evaluator.operationCache()->retainedBytes() == retained,
+                            "ROI-clipped results are recomputed, never retained per rectangle");
         request.roi.reset();
         const auto restored = evaluator.evaluate(plan, request, {});
         expectations.expect(restored.frame() &&
