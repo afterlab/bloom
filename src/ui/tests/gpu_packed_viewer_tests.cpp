@@ -246,6 +246,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             gBenchWorkspaceAssets = false;
         } else if (argument == "--bench-playback") {
             gBenchPlayback = true;
+        } else if (argument == "--bench-profiler") {
+            gBenchProfiler = true;
         } else if (argument == "--bench-scrub") {
             if (++index >= argc)
                 return 2;

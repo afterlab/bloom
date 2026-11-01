@@ -7,8 +7,12 @@
 // route-proof gates do). tools/bench/run_bench.py drives it, one fresh process per measurement.
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/media/video/session.hpp>
-#include <bloom/scripting/live_session_host.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/profiler_gpu_reader.hpp>
+#include <bloom/runtime/profiler_ledger_adapter.hpp>
+#include <bloom/runtime/profiler_sampler.hpp>
+#include <bloom/runtime/profiler_snapshot_json.hpp>
+#include <bloom/scripting/live_session_host.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
@@ -52,6 +56,9 @@ std::chrono::seconds gBenchTimeout{1800};
 // Scrub run (#421): jumps to this many frames spread over the work area, none of them cached, and
 // times each until the Viewer shows it; then clears the preview frame cache and visits them again.
 std::size_t gBenchScrubFrames = 0;
+// Runs the profiler sampler thread over the measured window (an open Profiler) and prints the
+// window's last ProfilerSnapshot as a BENCH_PROFILER line (#423).
+bool gBenchProfiler = false;
 
 [[nodiscard]] std::string benchJson(const std::string& text) {
     std::ostringstream out;
@@ -92,76 +99,114 @@ std::size_t gBenchScrubFrames = 0;
         .count();
 }
 
-// Where the process's memory is, sampled during the measured window. RSS splits come from
-// /proc on Linux (absent elsewhere); the pools are Bloom's own accounting: every reusable pool on
-// the process ledger, the two largest of them by name, and the bytes admitted to active work.
-// Pool bytes are host allocations, each distinct allocation once, pending retirement included;
-// device-resident pool bytes and device claims are separate (#416).
+// Where the process's memory is, sampled during the measured window. Every figure the snapshot
+// carries comes from the one runtime telemetry contract (#423; runtime::ProfilerSnapshot, the
+// same numbers the Profiler and MCP profiler.snapshot show), under the field names earlier results
+// used: RSS and anonymous memory from statm, pools from the ledger's per-pool rows, staging,
+// admission claims and unattributed memory. Absent values print as null, never 0. Four figures
+// the snapshot does not carry are read from their owners as before: the operation cache's shared
+// references and the processing policy's host claims, usable host capacity and device claims.
 struct BenchMemorySample {
     double seconds = 0;
     std::uint64_t preparedFrames = 0;
-    std::uint64_t rssBytes = 0;
-    std::uint64_t anonBytes = 0;
-    std::uint64_t fileBytes = 0;
-    std::uint64_t shmemBytes = 0;
-    std::uint64_t reusablePoolBytes = 0;
-    std::uint64_t previewCacheBytes = 0;
-    std::uint64_t operationCacheBytes = 0;
-    std::uint64_t decodedMediaBytes = 0;   // operation-cache entries of decoded source media
-    // Operation-cache bytes evicted but not yet freed by their retirement worker (inside
-    // operationCacheBytes), and the extra references to storage it counts once (what per-entry
-    // accounting added on top before #416).
-    std::uint64_t operationPendingBytes = 0;
-    std::uint64_t operationSharedBytes = 0;
-    std::uint64_t reusablePendingBytes = 0; // inside reusablePoolBytes
-    std::uint64_t reusableDeviceBytes = 0;  // device-resident pool bytes, outside reusablePoolBytes
+    runtime::ProfilerBytes rssBytes{};
+    runtime::ProfilerBytes anonBytes{};
+    runtime::ProfilerBytes fileBytes{};
+    runtime::ProfilerBytes shmemBytes{};
+    runtime::ProfilerBytes reusablePoolBytes{};
+    runtime::ProfilerBytes previewCacheBytes{};
+    runtime::ProfilerBytes operationCacheBytes{};
+    runtime::ProfilerBytes decodedMediaBytes{}; // operation-cache entries of decoded source media
+    runtime::ProfilerBytes operationPendingBytes{}; // inside operationCacheBytes
+    runtime::ProfilerBytes reusablePendingBytes{};  // inside reusablePoolBytes
+    runtime::ProfilerBytes reusableDeviceBytes{};   // device-resident pool bytes, outside it
     // reusablePoolBytes outside the preview and operation caches: decoded video, the disk-cache
     // write queue and the asset pools.
-    std::uint64_t otherPoolBytes = 0;
+    runtime::ProfilerBytes otherPoolBytes{};
+    runtime::ProfilerBytes stagingLiveBytes{};
+    runtime::ProfilerBytes stagingPeakBytes{};
+    runtime::ProfilerBytes admissionClaimBytes{};
+    runtime::ProfilerMetric<std::int64_t> unattributedBytes{};
+    // Not in the snapshot.
+    std::uint64_t operationSharedBytes = 0;
     std::uint64_t hostClaimBytes = 0;
     std::uint64_t hostUsableBytes = 0;
     std::uint64_t deviceClaimBytes = 0;
 };
 
-void benchReadProcStatus(BenchMemorySample& sample) {
-#if defined(__linux__)
-    std::ifstream status("/proc/self/status");
-    std::string line;
-    const auto read = [&line](const std::string_view key, std::uint64_t& out) {
-        if (!line.starts_with(key))
-            return;
-        std::istringstream value(line.substr(key.size()));
-        std::uint64_t kibibytes = 0;
-        if (value >> kibibytes)
-            out = kibibytes * 1024ULL;
-    };
-    while (std::getline(status, line)) {
-        read("VmRSS:", sample.rssBytes);
-        read("RssAnon:", sample.anonBytes);
-        read("RssFile:", sample.fileBytes);
-        read("RssShmem:", sample.shmemBytes);
+void benchMemoryFromSnapshot(const runtime::ProfilerSnapshot& snapshot, BenchMemorySample& sample) {
+    const auto& memory = snapshot.memory;
+    sample.rssBytes = memory.rssBytes;
+    sample.anonBytes = memory.anonBytes;
+    sample.fileBytes = memory.fileBytes;
+    sample.shmemBytes = memory.shmemBytes;
+    sample.stagingLiveBytes = memory.stagingLiveBytes;
+    sample.stagingPeakBytes = memory.stagingPeakBytes;
+    sample.admissionClaimBytes = memory.admissionClaimBytes;
+    sample.unattributedBytes = memory.unattributedBytes;
+    if (memory.poolCount == 0 && memory.droppedPools == 0)
+        return; // The ledger reading has not been published yet.
+    std::uint64_t all = 0, pending = 0, device = 0, preview = 0, operation = 0, decoded = 0,
+                  operationPending = 0;
+    for (std::size_t index = 0; index < memory.poolCount; ++index) {
+        const auto& pool = memory.pools[index];
+        const auto held = pool.hostBytes + pool.pendingBytes;
+        const auto name = runtime::profilerNameView(pool.name);
+        all += held;
+        pending += pool.pendingBytes;
+        device += pool.deviceBytes;
+        if (name == "Preview frames")
+            preview += held;
+        if (name.starts_with("Operation cache")) {
+            operation += held;
+            operationPending += pool.pendingBytes;
+        }
+        if (name == "Operation cache: decoded media")
+            decoded += held;
     }
-#else
-    static_cast<void>(sample);
-#endif
+    sample.reusablePoolBytes = runtime::ProfilerBytes::of(all);
+    sample.reusablePendingBytes = runtime::ProfilerBytes::of(pending);
+    sample.reusableDeviceBytes = runtime::ProfilerBytes::of(device);
+    sample.previewCacheBytes = runtime::ProfilerBytes::of(preview);
+    sample.operationCacheBytes = runtime::ProfilerBytes::of(operation);
+    sample.decodedMediaBytes = runtime::ProfilerBytes::of(decoded);
+    sample.operationPendingBytes = runtime::ProfilerBytes::of(operationPending);
+    sample.otherPoolBytes =
+        runtime::ProfilerBytes::of(all > preview + operation ? all - preview - operation : 0);
+}
+
+template <typename T>
+void benchMetricJson(std::ostringstream& out, const char* name,
+                     const runtime::ProfilerMetric<T>& value) {
+    out << ",\"" << name << "\":";
+    if (value.present)
+        out << value.value;
+    else
+        out << "null";
 }
 
 [[nodiscard]] std::string benchMemoryJson(const BenchMemorySample& sample) {
     std::ostringstream out;
     out << std::setprecision(6) << "{\"seconds\":" << sample.seconds
-        << ",\"preparedFrames\":" << sample.preparedFrames << ",\"rssBytes\":" << sample.rssBytes
-        << ",\"anonBytes\":" << sample.anonBytes << ",\"fileBytes\":" << sample.fileBytes
-        << ",\"shmemBytes\":" << sample.shmemBytes
-        << ",\"reusablePoolBytes\":" << sample.reusablePoolBytes
-        << ",\"previewCacheBytes\":" << sample.previewCacheBytes
-        << ",\"operationCacheBytes\":" << sample.operationCacheBytes
-        << ",\"decodedMediaBytes\":" << sample.decodedMediaBytes
-        << ",\"operationPendingBytes\":" << sample.operationPendingBytes
-        << ",\"operationSharedBytes\":" << sample.operationSharedBytes
-        << ",\"reusablePendingBytes\":" << sample.reusablePendingBytes
-        << ",\"reusableDeviceBytes\":" << sample.reusableDeviceBytes
-        << ",\"otherPoolBytes\":" << sample.otherPoolBytes
-        << ",\"hostClaimBytes\":" << sample.hostClaimBytes
+        << ",\"preparedFrames\":" << sample.preparedFrames;
+    benchMetricJson(out, "rssBytes", sample.rssBytes);
+    benchMetricJson(out, "anonBytes", sample.anonBytes);
+    benchMetricJson(out, "fileBytes", sample.fileBytes);
+    benchMetricJson(out, "shmemBytes", sample.shmemBytes);
+    benchMetricJson(out, "reusablePoolBytes", sample.reusablePoolBytes);
+    benchMetricJson(out, "previewCacheBytes", sample.previewCacheBytes);
+    benchMetricJson(out, "operationCacheBytes", sample.operationCacheBytes);
+    benchMetricJson(out, "decodedMediaBytes", sample.decodedMediaBytes);
+    benchMetricJson(out, "operationPendingBytes", sample.operationPendingBytes);
+    out << ",\"operationSharedBytes\":" << sample.operationSharedBytes;
+    benchMetricJson(out, "reusablePendingBytes", sample.reusablePendingBytes);
+    benchMetricJson(out, "reusableDeviceBytes", sample.reusableDeviceBytes);
+    benchMetricJson(out, "otherPoolBytes", sample.otherPoolBytes);
+    benchMetricJson(out, "stagingLiveBytes", sample.stagingLiveBytes);
+    benchMetricJson(out, "stagingPeakBytes", sample.stagingPeakBytes);
+    benchMetricJson(out, "admissionClaimBytes", sample.admissionClaimBytes);
+    benchMetricJson(out, "unattributedBytes", sample.unattributedBytes);
+    out << ",\"hostClaimBytes\":" << sample.hostClaimBytes
         << ",\"hostUsableBytes\":" << sample.hostUsableBytes
         << ",\"deviceClaimBytes\":" << sample.deviceClaimBytes << '}';
     return out.str();
@@ -722,6 +767,16 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     // seconds so a run that stops making progress shows where its memory is.
     BenchMemorySample memoryPeak;
     std::chrono::steady_clock::time_point lastMemoryLine{};
+    // The runtime profiler sampler (#423), fed like the application's UI-side hook. Without
+    // --bench-profiler no sampler thread runs (a closed Profiler): each memory tick takes one
+    // sample on this thread. With it the thread runs for the window, as an open Profiler would.
+    runtime::ProfilerSampler profiler(
+        {.scheduler = &scheduler, .readGpu = &runtime::readProfilerGpuDevice});
+    runtime::ProfilerHostInputs profilerInputs{};
+    const auto profilerSnapshot = std::make_unique<runtime::ProfilerSnapshot>();
+    bool ledgerStateRead = false;
+    if (gBenchProfiler)
+        profiler.acquire();
     QTimer memoryTimer;
     memoryTimer.setInterval(250);
     QObject::connect(&memoryTimer, &QTimer::timeout, [&] {
@@ -730,25 +785,23 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
                                                        memoryWindowStarted)
                              .count();
         sample.preparedFrames = ram.preparedFrameCount();
-        benchReadProcStatus(sample);
-        const auto pools = runtime::processMemoryBudgetLedger().reusableHolding();
-        sample.reusablePoolBytes = pools.hostAllocatedBytes();
-        sample.reusablePendingBytes = pools.hostPendingRetirementBytes;
-        sample.reusableDeviceBytes = pools.deviceBytes;
-        sample.previewCacheBytes = frameCache->hostBytes();
-        const auto operation = evaluator.operationCache()->memory();
-        sample.operationCacheBytes = operation.hostBytes;
-        sample.decodedMediaBytes = operation.decodedMediaBytes;
-        sample.operationPendingBytes = operation.pendingRetirementBytes;
-        sample.operationSharedBytes = operation.sharedReferenceBytes;
-        const auto named = sample.previewCacheBytes + sample.operationCacheBytes;
-        sample.otherPoolBytes =
-            sample.reusablePoolBytes > named ? sample.reusablePoolBytes - named : 0;
         const auto capacity = policy->usableCapacity();
+        runtime::readProfilerLedger(runtime::processMemoryBudgetLedger(), profilerInputs.ledger,
+                                    !std::exchange(ledgerStateRead, true));
+        profilerInputs.ledger.admissionClaimBytes =
+            runtime::ProfilerBytes::of(capacity.hostClaimBytes > capacity.hostRetentionBytes
+                                           ? capacity.hostClaimBytes - capacity.hostRetentionBytes
+                                           : 0);
+        profiler.publishHostInputs(profilerInputs);
+        if (!gBenchProfiler)
+            static_cast<void>(profiler.sampleNow());
+        if (profiler.readLatest(*profilerSnapshot, 0))
+            benchMemoryFromSnapshot(*profilerSnapshot, sample);
+        sample.operationSharedBytes = evaluator.operationCache()->memory().sharedReferenceBytes;
         sample.hostClaimBytes = capacity.hostClaimBytes;
         sample.hostUsableBytes = capacity.hostUsableBytes;
         sample.deviceClaimBytes = capacity.deviceClaimBytes;
-        if (sample.rssBytes >= memoryPeak.rssBytes)
+        if (sample.rssBytes.valueOr(0) >= memoryPeak.rssBytes.valueOr(0))
             memoryPeak = sample;
         const auto now = std::chrono::steady_clock::now();
         if (now - lastMemoryLine >= 10s) {
@@ -857,6 +910,14 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         json << ",\"lastFrameDiagnostics\":" << benchJson(codes);
     }
     memoryTimer.stop();
+    if (gBenchProfiler) {
+        // The newest sample of the window, whole: the same JSON MCP profiler.snapshot returns.
+        if (profiler.readLatest(*profilerSnapshot, 0))
+            std::cout << "BENCH_PROFILER " << runtime::profilerSnapshotJson(*profilerSnapshot)
+                      << '\n'
+                      << std::flush;
+        profiler.release();
+    }
     const auto after = service.status().counters;
     const auto claims = policy->snapshot().reservations;
     json << ",\"cpuFallbackFrames\":" << after.cpuFallbacks - before.cpuFallbacks
