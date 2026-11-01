@@ -83,13 +83,23 @@ class Segment final : public QWidget {
     void addGap() { layout_->addSpacing(kit::px(kit::Spacing::S)); }
     void add(QWidget* widget, int stretch = 0) { layout_->addWidget(widget, stretch); }
     // The segment's explanation, set on the whole segment and on every child that has none.
+    //
+    // Only children in the segment's own window take it. Outside Windows, Qt parents the visible
+    // tool tip (a separate tool-tip window) to the widget it explains, so findChildren() reaches
+    // it too. The segments refresh while the tip shows, and a tip given a tool tip of its own
+    // shows that tool tip for itself when the pointer rests on it. Qt then makes the tip its own
+    // style-sheet parent, and QStyleSheetStyle's walk up the parents never ends: its list of
+    // style sheets doubles until the process runs out of memory (#418).
     void setSegmentToolTip(const QString& text) {
         setToolTip(text);
-        for (auto* child : findChildren<QWidget*>())
+        for (auto* child : findChildren<QWidget*>()) {
+            if (child->window() != window())
+                continue;
             if (child->toolTip().isEmpty() || child->property("segmentToolTip").toBool()) {
                 child->setToolTip(text);
                 child->setProperty("segmentToolTip", true);
             }
+        }
     }
 
   private:

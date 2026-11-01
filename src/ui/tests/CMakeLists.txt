@@ -2355,6 +2355,19 @@ foreach(scale IN ITEMS 1 1.5)
         LABELS "ui;unit" TIMEOUT 120)
 endforeach()
 
+# #418: hovering the status bar cells and the kit's tool-tip labels again and again keeps memory
+# bounded; the tool tip never becomes its own style-sheet parent.
+add_executable(bloom_tooltip_memory_test tooltip_memory_tests.cpp)
+target_include_directories(bloom_tooltip_memory_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_tooltip_memory_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_tooltip_memory_test)
+foreach(scale IN ITEMS 1 1.5)
+    add_test(NAME bloom.ui.tooltip_memory.dpr${scale} COMMAND bloom_tooltip_memory_test)
+    set_tests_properties(bloom.ui.tooltip_memory.dpr${scale} PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
+        LABELS "ui;unit" TIMEOUT 120)
+endforeach()
+
 add_executable(bloom_mcp_panel_capture mcp_panel_capture.cpp)
 target_include_directories(bloom_mcp_panel_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_mcp_panel_capture PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
