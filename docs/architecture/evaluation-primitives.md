@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-13
+Updated: 2026-11-01
 
 ## Purpose And Scope
 
@@ -1073,6 +1073,13 @@ saw. It is now bounded by bytes as well, and the byte bound is the binding one -
 payload alone exceeds the capacity is refused at `storeAsync()` rather than staged and then
 discarded by the writer thread. A refused write is counted in `droppedAsyncWrites` and only means
 the next read decodes again; it can never mean incorrect pixels.
+
+No pool above is keyed by window size, screen or device pixel ratio. A resize, a move to another
+screen or virtual desktop, a ratio change or a hide/show re-lays out and repaints the retained
+Viewer frame; it adds no entry to any pool and prepares no frame unless the Auto resolution
+setting needs another of its three divisors, which is prepared once and cached. See
+[Window, screen and pixel-ratio changes](gpu-backend.md#window-screen-and-pixel-ratio-changes)
+for the soak that asserts this.
 
 The shared cache accounts retained image/value storage and entry/key overhead, evicts by
 least-recently-used last use, and refuses an entry larger than the budget without evicting useful

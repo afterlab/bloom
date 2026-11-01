@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-09
+Updated: 2026-11-01
 
 ## Purpose
 
@@ -1012,6 +1012,33 @@ An older coherent image, bounds and channel remain explicitly Stale until replac
 offscreen content advertises no displayed pixels. The cache retains only the sealed host product,
 not a native image, lease or Float32 process frame. Cold preparation costs staging, host storage
 and one final transfer; fitting warm reuse adds none of those preparation steps.
+
+### Window, screen and pixel-ratio changes
+
+The shipping application builds its preview service with native presentation disabled, so no
+Viewer creates a `ViewerGpuPresenter`, a presentation coordinator, a swapchain or a presentation
+target. A window resize, maximize, move to another screen or virtual desktop, device-pixel-ratio
+change or unmap/remap therefore never allocates or retains native presentation state. It only
+re-lays out widgets and repaints the retained packed frame through the window's ordinary backing
+store. The preview identity carries no viewport size or device pixel ratio: under the Full, Half and
+Quarter resolution settings a window change prepares nothing, and under Auto the displayed scale
+selects one of three divisors, each prepared once and then served from the preview cache. The
+only per-ratio cache is the icon pixmap cache, bounded by the icon set times the ratios in use.
+
+The native presenter and coordinator remain the route of the required native fixtures. Their
+retention paths (a silently replaced surface, an unproven retirement, a surface destroyed while a
+target is live) keep at most one record per presenter and at most `kMaxQuarantinedTargets`
+generations per process, and the quarantine fuse then refuses new native targets.
+
+`bloom.ui.window_surface_memory_soak` qualifies this on the application-shaped workspace and the
+GPU-prepared packed service. It moves the window between a 1x and a 1.5x screen, resizes,
+maximizes and hides it in a loop with the pointer over the Viewer, and asserts, after a warm-up:
+RSS within 48 MiB across the measured cycles, the ledger's reusable pools and the preview and
+operation caches within 4 MiB, no growth of GPU image allocation bytes, no new preview preparation
+of the parked frame, a transient peak under 160 MiB per cycle, constant widget and window counts,
+and zero retained presenter records or quarantined generations. The Linux run on 2026-11-01 held
+RSS at 704-716 MiB over 12 measured cycles, the ledger at 184 MiB, GPU images at 162 MiB, the cycle
+peak at 17-22 MiB, with zero preparations and zero retained records.
 
 The channel presentation scan runs in a cancellable bounded CPU worker, with explicit CPU channel
 provenance. One completed derivative, one active task and one newest intent bound publication;
