@@ -12,6 +12,7 @@
 #elif defined(__APPLE__)
 #include <mach/mach.h>
 #include <pthread.h>
+#include <sched.h>
 #include <sys/resource.h>
 #elif defined(_WIN32)
 #ifndef NOMINMAX
@@ -118,7 +119,13 @@ void lowerProfilerThreadPriority() noexcept {
     // Per-thread nice value on Linux.
     static_cast<void>(::setpriority(PRIO_PROCESS, static_cast<id_t>(::syscall(SYS_gettid)), 10));
 #elif defined(__APPLE__)
-    static_cast<void>(pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0));
+    // The lowest priority of the thread's current policy.
+    int policy = 0;
+    sched_param parameters{};
+    if (pthread_getschedparam(pthread_self(), &policy, &parameters) == 0) {
+        parameters.sched_priority = sched_get_priority_min(policy);
+        static_cast<void>(pthread_setschedparam(pthread_self(), policy, &parameters));
+    }
 #elif defined(_WIN32)
     static_cast<void>(SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST));
 #endif

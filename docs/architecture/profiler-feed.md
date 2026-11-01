@@ -40,7 +40,7 @@ the snapshot.
 
 - **One low-priority thread, refcounted.** The first `acquire()` starts it and it samples at once;
   the last `release()` stops and joins it. No thread runs without a subscriber. The thread lowers
-  its own priority (Linux nice 10, macOS utility QoS, Windows lowest).
+  its own priority (Linux nice 10, the lowest priority of its policy on macOS, Windows lowest).
 - **Rate.** 2 Hz by default, clamped to 1–10 Hz; the feed passes its interval on activation.
 - **No allocation after start.** The sampler fills one preallocated snapshot and publishes it
   through `ProfilerSeqlock` (`profiler_seqlock.hpp`), a single-writer, many-reader seqlock over
