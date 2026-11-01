@@ -1,23 +1,33 @@
-// Issue #414 soak: window resizes, maximize, moves between screens with different device pixel
-// ratios, and hide/show must not grow memory per cycle or allocate a large transient peak.
+// Issue #414 soak: moving the window between a 1x and a 1.5x screen, resizing, maximizing and
+// hiding it must not grow memory per cycle or allocate a large transient peak.
 //
 // The harness is wired like the desktop application (apps/bloom/main.cpp): the process memory
 // ledger with the application's MemoryBudgetController wiring, settings-derived cache budgets, the
 // GPU-prepared packed preview service with native presentation disabled (the shipping Viewer
 // path), background read-ahead, the RAM Preview controller, and the application's MainWindow with
-// every foundation editor in the default workspace. One 386-frame composition is open and the
-// Viewer is parked on frame 0, with the pointer resting over it so the pixel probe is live.
+// every foundation editor in the default workspace. The project is shaped like the reported one: a
+// 2048x858, 386-frame composition whose layers are 16-bit RGBA PNG sequences. The Viewer is
+// parked on frame 0 at the shipping Auto resolution, and the pointer rests over it, a few pixels
+// elsewhere after every window change as a hand does, so the pixel probe is live.
 //
-// It runs offscreen only. Before QApplication exists it installs a two-screen offscreen layout
-// whose second screen is scaled by 1.5, so a move between them is a genuine DevicePixelRatioChange
-// and screen change, as a move between a 1x and a 1.5x monitor is. Each cycle samples process RSS
-// (and on Linux the cycle's peak RSS), every reusable pool on the ledger, GPU image allocation
-// bytes, the widget and window counts, preview preparations, and retained presenter records.
-// After a warm-up, the run asserts a plateau: no per-cycle growth beyond the stated tolerances, no
-// new preview preparation for an unchanged frame, and a bounded transient peak per cycle.
+// It runs offscreen only. Before QApplication exists it installs a two-screen offscreen layout: a
+// 1920x1080 screen at 1x and a 3840x2160 screen at 1.5x. The window sizes on each screen are the
+// reported ones, and they put Auto on Half on the first screen and Full on the second, so every
+// move between them is a genuine device-pixel-ratio change, screen change and preview divisor
+// flip. Each cycle samples process RSS (and on Linux the cycle's peak RSS), every reusable pool on
+// the ledger, GPU image allocation bytes, the widget and window counts, preview preparations, and
+// retained presenter records. After the first Full/Half round trip (the warm-up cycle), the run
+// asserts a plateau: no per-cycle growth beyond the stated tolerances, no new preview preparation
+// for an unchanged frame, and a bounded transient peak per cycle.
+//
+// Before the fix the probe's one-pixel CPU analysis stored every layer's full-frame resampled
+// footage in the operation cache under a key that named the probed pixel, so each window change
+// (and each new pointer position) retained another set: about 100 MiB per move here.
 
 #include "gpu_service_chain_fixture.hpp"
 
+#include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -49,6 +59,7 @@
 
 #include <QApplication>
 #include <QFile>
+#include <QImage>
 #include <QMouseEvent>
 #include <QScreen>
 #include <QSettings>
@@ -90,12 +101,18 @@ using namespace std::chrono_literals;
 
 namespace {
 
-constexpr int kWarmupCycles = 3;
-constexpr int kDefaultMeasuredCycles = 12;
+// One warm-up cycle: the first Full/Half round trip prepares and caches both resolutions once.
+constexpr int kWarmupCycles = 1;
+constexpr int kDefaultMeasuredCycles = 8;
+// The reported project: a 2048x858 composition over 16-bit RGBA PNG sequence layers.
+constexpr int kCompositionWidth = 2048;
+constexpr int kCompositionHeight = 858;
+constexpr int kFootageLayers = 4;
+constexpr int kFootageMembers = 4;
 constexpr std::uint64_t kMiB = 1024ULL * 1024ULL;
 // Tolerances, stated once. RSS may wander by allocator reuse and the scheduler's bounded terminal
 // history (256 tasks) filling during the run; it must not trend. Pools and GPU images hold exactly
-// what they held once the warm-up cached every variant.
+// what they held once the warm-up round trip cached both resolutions.
 constexpr std::uint64_t kRssPlateauTolerance = 48 * kMiB;
 constexpr std::uint64_t kPoolPlateauTolerance = 4 * kMiB;
 constexpr std::uint64_t kGpuPlateauTolerance = 0;
@@ -159,6 +176,7 @@ struct Sample final {
     std::uint64_t uploads = 0;
     std::uint64_t gpuImages = 0;
     std::uint64_t preparations = 0;
+    std::uint64_t viewerCpuFallbacks = 0;
     std::size_t widgets = 0;
     std::size_t windows = 0;
     std::size_t retainedPresenters = 0;
@@ -172,8 +190,8 @@ struct Sample final {
         << " previewMiB=" << sample.preview / kMiB << " operationMiB=" << sample.operation / kMiB
         << " decodedMiB=" << sample.decoded / kMiB << " uploadsMiB=" << sample.uploads / kMiB
         << " gpuImageMiB=" << sample.gpuImages / kMiB << " preparations=" << sample.preparations
-        << " widgets=" << sample.widgets << " windows=" << sample.windows
-        << " retainedPresenters=" << sample.retainedPresenters
+        << " viewerCpuFallbacks=" << sample.viewerCpuFallbacks << " widgets=" << sample.widgets
+        << " windows=" << sample.windows << " retainedPresenters=" << sample.retainedPresenters
         << " quarantinedGenerations=" << sample.quarantined;
     return out.str();
 }
@@ -197,19 +215,19 @@ struct Sample final {
     out << R"({"synchronousWindowSystemEvents": false, "windowFrameMargins": false, "screens": [)"
         << R"({"name": "BloomSoakA", "x": 0, "y": 0, "width": 1920, "height": 1080,)"
         << R"( "logicalDpi": 96, "logicalBaseDpi": 96, "dpr": 1},)"
-        << R"({"name": "BloomSoakB", "x": 1920, "y": 0, "width": 2560, "height": 1440,)"
+        << R"({"name": "BloomSoakB", "x": 1920, "y": 0, "width": 3840, "height": 2160,)"
         << R"( "logicalDpi": 96, "logicalBaseDpi": 96, "dpr": 1}]})";
     out.close();
     qputenv("QT_QPA_PLATFORM",
             QByteArray("offscreen:configfile=") + QFile::encodeName(config.string().c_str()));
-    // The second screen is a 1.5x monitor: a move onto it changes every widget's device pixel
-    // ratio.
+    // The second screen is a 3840x2160 monitor at 1.5x (2560x1440 logical): a move onto it changes
+    // every widget's device pixel ratio.
     qputenv("QT_SCREEN_SCALE_FACTORS", "BloomSoakA=1;BloomSoakB=1.5");
     return true;
 }
 
 [[nodiscard]] bool writeProject(const std::filesystem::path& path) {
-    auto format = document::CompositionFormat::create(1920, 1080);
+    auto format = document::CompositionFormat::create(kCompositionWidth, kCompositionHeight);
     const auto duration = core::RationalTime::create(386, 24);
     if (!format || !duration)
         return false;
@@ -222,9 +240,40 @@ struct Sample final {
     return session != nullptr && session->saveAs(path).succeeded();
 }
 
+// Writes one 16-bit RGBA PNG sequence per layer beside the project and returns each sequence's
+// first member. Every member is distinct and partly transparent, so each layer contributes.
+[[nodiscard]] std::vector<std::filesystem::path> writeFootage(const std::filesystem::path& folder) {
+    std::vector<std::filesystem::path> firstMembers;
+    for (int layer = 0; layer < kFootageLayers; ++layer) {
+        for (int member = 0; member < kFootageMembers; ++member) {
+            QImage image(kCompositionWidth, kCompositionHeight, QImage::Format_RGBA64);
+            for (int y = 0; y < kCompositionHeight; ++y) {
+                auto* row = reinterpret_cast<QRgba64*>(image.scanLine(y));
+                for (int x = 0; x < kCompositionWidth; ++x) {
+                    const auto red = static_cast<quint16>((x * 32 + layer * 9001) & 0xFFFF);
+                    const auto green = static_cast<quint16>((y * 64 + member * 4099) & 0xFFFF);
+                    const auto blue = static_cast<quint16>(((x ^ y) * 16 + layer * 777) & 0xFFFF);
+                    row[x] = QRgba64::fromRgba64(red, green, blue, 40000).premultiplied();
+                }
+            }
+            const auto name =
+                "plate" + std::to_string(layer) + "." +
+                QStringLiteral("%1").arg(member, 4, 10, QLatin1Char('0')).toStdString() + ".png";
+            const auto file = folder / name;
+            if (!image.save(QString::fromStdString(file.string()), "PNG"))
+                return {};
+            if (member == 0)
+                firstMembers.push_back(file);
+        }
+    }
+    return firstMembers;
+}
+
 } // namespace
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
+    // Unbuffered, so a cycle's line is in the log the moment it is sampled.
+    std::cout.setf(std::ios::unitbuf);
     // `--cycles N` lengthens the measured window for a manual soak; CTest uses the default.
     int measuredCycles = kDefaultMeasuredCycles;
     std::vector<char*> forwarded{argv[0]};
@@ -292,13 +341,27 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (document == nullptr || commandStack == nullptr)
         return 1;
     ui::CompositionSession session(*document, *commandStack, projectHost.lowestCompositionId());
-    checks.expect(session.addSolidLayer(QStringLiteral("Back"), {0.1, 0.2, 0.5, 1.0}),
-                  "the background solid is authored");
-    checks.expect(session.addSolidLayer(QStringLiteral("Accent"), {0.8, 0.05, 0.02, 1.0}),
-                  "the accent solid is authored");
-    checks.expect(session.setSelectedScale(0.6, 0.6), "the accent leaves the background visible");
-    checks.expect(session.addTextLayer(QStringLiteral("Title"), QStringLiteral("Soak"), 120.0),
-                  "the title text is authored");
+    const auto projectDirectory = projectPath.parent_path();
+    const auto footage = writeFootage(projectDirectory);
+    checks.expect(footage.size() == static_cast<std::size_t>(kFootageLayers),
+                  "the 16-bit PNG sequences are written");
+    commands::Transaction import("Import footage", session.snapshot().revision());
+    import.emplace<commands::ImportAssets>(footage, projectDirectory);
+    checks.expect(session.executeTransaction(std::move(import)).succeeded(),
+                  "the PNG sequences import");
+    const auto assets = session.snapshot().project().assets();
+    for (const auto& asset : assets) {
+        checks.expect(asset.kind == document::AssetKind::Sequence &&
+                          asset.manifest.members.size() ==
+                              static_cast<std::size_t>(kFootageMembers),
+                      "each plate imports as one sequence");
+        commands::Transaction add("Add plate", session.snapshot().revision());
+        add.emplace<commands::AddImageLayer>(session.compositionId(), asset.id);
+        checks.expect(session.executeTransaction(std::move(add)).succeeded(),
+                      "a sequence layer is authored");
+    }
+    checks.expect(assets.size() == static_cast<std::size_t>(kFootageLayers),
+                  "every plate is a layer");
     // A new session already sits on frame 0; setting it again is a no-op.
     static_cast<void>(session.setCurrentTime(core::RationalTime::fromInteger(0)));
 
@@ -308,7 +371,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     definitions.freeze();
     runtime::SnapshotCompiler compiler(definitions);
     runtime::CpuCompositionEvaluator evaluator;
-    evaluator.setAssetBaseDirectory(projectPath.parent_path());
+    evaluator.setAssetBaseDirectory(projectDirectory);
     const QSettings settingsView;
     const auto cacheBudgets = ui::cacheMemoryBudgetsFromSettings(settingsView);
     evaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
@@ -392,7 +455,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto window =
         std::make_unique<ui::MainWindow>(registry, session, projectHost, &ram, &controller, nullptr,
                                          &controller.playbackController());
-    window->resize(1600, 960);
+    window->resize(1700, 960);
     window->show();
 
     const auto shutdown = [&] {
@@ -448,9 +511,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     };
     checks.expect(waitUntil(current, 120s), "the parked frame is painted Current");
 
-    // Rest the pointer over the Viewer, as an artist's hand does while moving the window.
+    // Rest the pointer over the Viewer, as an artist's hand does while moving the window. A hand
+    // never returns to the same pixel, so every rest lands a few pixels from the previous one.
+    int rests = 0;
     const auto restPointer = [&] {
-        const QPointF local(viewer->width() * 0.5, viewer->height() * 0.45);
+        ++rests;
+        const QPointF local(viewer->width() * 0.5 + (rests * 7) % 61,
+                            viewer->height() * 0.45 + (rests * 5) % 37);
         QMouseEvent move(QEvent::MouseMove, local, viewer->mapToGlobal(local), Qt::NoButton,
                          Qt::NoButton, Qt::NoModifier);
         QApplication::sendEvent(viewer, &move);
@@ -466,17 +533,35 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                      [&] { sampledPeak = std::max(sampledPeak, currentRssBytes()); });
     peakTimer.start();
 
+    int slowSettles = 0;
     const auto settle = [&] {
         // Quiescent means: the Viewer shows the parked frame Current and no task is running.
-        static_cast<void>(waitUntil([&] { return current() && scheduler.isQuiescent(); }, 20s));
+        if (!waitUntil([&] { return current() && scheduler.isQuiescent(); }, 20s))
+            ++slowSettles;
         const auto until = std::chrono::steady_clock::now() + 150ms;
         while (std::chrono::steady_clock::now() < until)
             QApplication::processEvents();
     };
-    const auto moveTo = [&](QScreen* screen) {
+    // 2548x1388 on the 1.5x screen is the reported placement. On the 1x screen the reported
+    // session's Viewer showed the composition below half its size; this workspace gives the Viewer
+    // a larger share of the window, so 1700x960 reproduces that Half selection.
+    const QSize firstSize(1700, 960);
+    const QSize secondSize(2548, 1388);
+    // A move places the window on the target screen at its size there, and waits until the window
+    // system has delivered the screen, ratio and size change, as a compositor does after a drag.
+    const auto moveTo = [&](QScreen* screen, const QSize size) {
         if (auto* handle = window->windowHandle())
             handle->setScreen(screen);
-        window->move(screen->geometry().topLeft() + QPoint(40, 40));
+        window->setGeometry(QRect(screen->geometry().topLeft() + QPoint(6, 46), size));
+        if (!waitUntil(
+                [&] {
+                    return window->screen() == screen && window->size() == size &&
+                           viewer->devicePixelRatioF() == screen->devicePixelRatio();
+                },
+                10s))
+            std::cout << "SOAK move did not land: screen=" << window->screen()->name().toStdString()
+                      << " size=" << window->width() << 'x' << window->height()
+                      << " dpr=" << viewer->devicePixelRatioF() << '\n';
     };
     const auto sample = [&](const std::uint64_t cycleStartRss) {
         Sample value;
@@ -495,6 +580,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto counters = service.status().counters;
         value.preparations = counters.residentGraphJobs + counters.cpuFallbacks +
                              frameCache->statistics().insertions;
+        value.viewerCpuFallbacks = counters.cpuFallbacks + counters.gpuAdmissionRefusals;
         value.widgets = static_cast<std::size_t>(QApplication::allWidgets().size());
         value.windows = static_cast<std::size_t>(QGuiApplication::allWindows().size());
         for (auto* editor : window->findChildren<ui::ViewerEditor*>()) {
@@ -505,45 +591,93 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return value;
     };
 
-    // One cycle: four resizes, maximize and restore, a move onto the 1.5x screen and a resize
-    // there, a move back, and hide/show (an unmap and remap, as a virtual-desktop switch can be).
-    const std::vector<QSize> sizes{{1500, 900}, {1320, 820}, {1660, 980}, {1410, 860}};
+    // One cycle: a move onto the 1.5x screen (Auto flips Half to Full) and back (Full to Half),
+    // the reported round trip, then resizes and maximize/restore on the 1x screen and a hide/show
+    // (an unmap and remap, as a virtual-desktop switch can be). The pointer rests over the Viewer
+    // after every step.
+    const std::vector<QSize> sizes{{1640, 940}, {1600, 920}, {1700, 960}};
+    window->showNormal();
+    moveTo(first, firstSize);
+    restPointer();
+    settle();
+    const auto divisorOnFirst = controller.resolutionDivisor();
+    std::cout << "SOAK first screen dpr=" << viewer->devicePixelRatioF()
+              << " viewer=" << viewer->width() << 'x' << viewer->height()
+              << " divisor=" << divisorOnFirst << '\n';
     std::vector<Sample> samples;
+    std::uint32_t divisorOnSecond = 0;
     for (int cycle = 0; cycle < kWarmupCycles + measuredCycles; ++cycle) {
         settle();
+        const auto cycleStarted = std::chrono::steady_clock::now();
         const auto start = currentRssBytes();
         sampledPeak = start;
         resetKernelPeakRss();
+        const auto ledgerBytes = [] {
+            return runtime::processMemoryBudgetLedger().reusableRetainedBytes();
+        };
+        const auto ledgerAtStart = ledgerBytes();
+        moveTo(second, secondSize);
+        restPointer();
+        settle();
+        const auto ledgerAfterSecond = ledgerBytes();
+        checks.expect(viewer->devicePixelRatioF() == 1.5,
+                      "the second screen scales the Viewer to 1.5x");
+        divisorOnSecond = controller.resolutionDivisor();
+        if (cycle == 0)
+            std::cout << "SOAK second screen dpr=" << viewer->devicePixelRatioF()
+                      << " viewer=" << viewer->width() << 'x' << viewer->height()
+                      << " divisor=" << divisorOnSecond << '\n';
+        moveTo(first, firstSize);
+        restPointer();
+        settle();
+        if (viewer->devicePixelRatioF() != 1.0 || controller.resolutionDivisor() != divisorOnFirst)
+            std::cout << "SOAK return dpr=" << viewer->devicePixelRatioF()
+                      << " divisor=" << controller.resolutionDivisor()
+                      << " viewer=" << viewer->width() << 'x' << viewer->height() << '\n';
+        checks.expect(viewer->devicePixelRatioF() == 1.0 &&
+                          controller.resolutionDivisor() == divisorOnFirst,
+                      "the first screen returns the Viewer to 1x and its divisor");
+        const auto ledgerAfterFirst = ledgerBytes();
+        // Per monitor change: what the move to the 1.5x screen and the move back each retained.
+        std::cout << "SOAK cycle=" << cycle << " moveToSecondRetainedMiB="
+                  << (static_cast<double>(ledgerAfterSecond) - static_cast<double>(ledgerAtStart)) /
+                         static_cast<double>(kMiB)
+                  << " moveToFirstRetainedMiB="
+                  << (static_cast<double>(ledgerAfterFirst) -
+                      static_cast<double>(ledgerAfterSecond)) /
+                         static_cast<double>(kMiB)
+                  << '\n';
         for (const auto& size : sizes) {
             window->resize(size);
             restPointer();
             settle();
         }
         window->showMaximized();
+        restPointer();
         settle();
         window->showNormal();
-        settle();
-        moveTo(second);
-        restPointer();
-        settle();
-        checks.expect(viewer->devicePixelRatioF() == 1.5 || cycle > 0,
-                      "the second screen scales the Viewer to 1.5x");
-        window->resize(1700, 1000);
-        restPointer();
-        settle();
-        moveTo(first);
+        moveTo(first, firstSize);
         restPointer();
         settle();
         window->hide();
-        settle();
+        // A hidden Viewer paints nothing, so only the scheduler's quiescence is awaited here.
+        static_cast<void>(waitUntil([&] { return scheduler.isQuiescent(); }, 20s));
         window->show();
         restPointer();
         settle();
         const auto value = sample(start);
-        std::cout << describe(cycle, value) << (cycle < kWarmupCycles ? " (warm-up)" : "") << '\n';
+        std::cout << describe(cycle, value) << " divisorFirst=" << divisorOnFirst
+                  << " divisorSecond=" << divisorOnSecond << " slowSettles=" << slowSettles
+                  << " seconds="
+                  << std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::steady_clock::now() - cycleStarted)
+                         .count()
+                  << (cycle < kWarmupCycles ? " (warm-up)" : "") << '\n';
         if (cycle >= kWarmupCycles)
             samples.push_back(value);
     }
+    checks.expect(divisorOnFirst == 2 && divisorOnSecond == 1,
+                  "Auto previews Half on the 1x screen and Full on the 1.5x screen");
     peakTimer.stop();
 
     // Plateau: the mean of the last third against the first third, and the final sample against
@@ -581,6 +715,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "GPU image allocations do not grow per window change");
     checks.expect(lastSample.preparations == firstSample.preparations,
                   "a window change never re-prepares the unchanged parked frame");
+    // The Viewer frame, at either divisor, is prepared on the production GPU route. Only the pixel
+    // probe's one-pixel analysis evaluates on the CPU, and it is not a Viewer frame.
+    checks.expect(!gpu || lastSample.viewerCpuFallbacks == 0,
+                  "no Viewer frame takes the CPU fallback or an admission refusal");
     for (const auto& value : samples) {
         checks.expect(value.peak <= kCyclePeakTolerance,
                       "a cycle's transient peak stays within 160 MiB of its starting RSS");

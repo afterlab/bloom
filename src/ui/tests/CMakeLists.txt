@@ -1974,12 +1974,14 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_ui_gpu_packed_viewer_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_packed_viewer_test)
 
-    # Issue #414: window resize / maximize / move-between-screens (1x and 1.5x) / hide-show soak
-    # over the application-shaped workspace and the shipping GPU-prepared packed preview service.
-    # It asserts an RSS, ledger and GPU-image plateau, a bounded per-cycle transient peak, no
-    # re-preparation of the parked frame, and zero retained presenter records. It installs its own
-    # two-screen offscreen layout, uses the GPU device when a loader is pinned, and skips (77) on
-    # any other platform.
+    # Issue #414: moves between a 1x and a 1.5x screen that flip the Auto divisor (Half/Full),
+    # resizes, maximize and hide/show, with the pixel probe live over a 2048x858 composition of
+    # 16-bit PNG sequence layers, on the application-shaped workspace and the shipping GPU-prepared
+    # packed preview service. After the first round trip it asserts an RSS, ledger, operation and
+    # preview cache and GPU-image plateau, a bounded per-cycle transient peak, no re-preparation
+    # of the parked frame, no Viewer frame on the CPU fallback, and zero retained presenter
+    # records. It installs its own two-screen offscreen layout, uses the GPU device when a loader
+    # is pinned, and skips (77) on any other platform.
     add_executable(bloom_ui_window_surface_memory_soak_test window_surface_memory_soak_tests.cpp)
     target_include_directories(bloom_ui_window_surface_memory_soak_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src/render" "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
