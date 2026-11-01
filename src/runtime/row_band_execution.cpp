@@ -1,6 +1,7 @@
 #include <bloom/runtime/row_band_execution.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 namespace bloom::runtime {
@@ -99,6 +100,7 @@ bool CpuRowBandExecutor::run(const std::size_t bandCount,
         const std::lock_guard lock(mutex_);
         jobs_.push_back(&job);
     }
+    queuedBands_.fetch_add(bandCount, std::memory_order_relaxed);
     available_.notify_all();
 
     // The calling thread runs bands of its OWN job until none is left, then waits for the bands
@@ -113,6 +115,7 @@ bool CpuRowBandExecutor::run(const std::size_t bandCount,
             }
             bandIndex = job.claimed++;
         }
+        queuedBands_.fetch_sub(1, std::memory_order_relaxed);
         bool threw = false;
         try {
             band(bandIndex);
@@ -167,12 +170,19 @@ void CpuRowBandExecutor::workerLoop() {
             band = job->band;
             bandIndex = job->claimed++;
         }
+        queuedBands_.fetch_sub(1, std::memory_order_relaxed);
+        const auto started = std::chrono::steady_clock::now();
         bool threw = false;
         try {
             (*band)(bandIndex);
         } catch (...) {
             threw = true;
         }
+        busyNs_.fetch_add(
+            static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           std::chrono::steady_clock::now() - started)
+                                           .count()),
+            std::memory_order_relaxed);
         completeBand(*job, threw);
     }
 }

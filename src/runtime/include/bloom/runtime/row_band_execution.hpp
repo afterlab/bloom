@@ -3,6 +3,7 @@
 #include <bloom/runtime/cancellation.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -66,6 +67,16 @@ class CpuRowBandExecutor final {
     // bands too. Never zero.
     [[nodiscard]] std::size_t bandLimit() const noexcept;
     [[nodiscard]] std::size_t workerCount() const noexcept;
+    // What the Profiler reads (#423): bands queued and not yet claimed, and the cumulative
+    // nanoseconds the pool's worker threads spent running bands. Relaxed atomics; no lock.
+    struct Activity final {
+        std::uint64_t queuedBands = 0;
+        std::uint64_t busyNs = 0;
+    };
+    [[nodiscard]] Activity activity() const noexcept {
+        return {queuedBands_.load(std::memory_order_relaxed),
+                busyNs_.load(std::memory_order_relaxed)};
+    }
 
     // Runs band indices [0, bandCount) exactly once each, in an unspecified order, and returns once
     // every one of them has completed. False means at least one band exited by throwing: the caller
@@ -91,6 +102,8 @@ class CpuRowBandExecutor final {
     std::deque<Job*> jobs_;
     std::vector<std::thread> workers_;
     bool stopping_ = false;
+    std::atomic<std::uint64_t> queuedBands_{0};
+    std::atomic<std::uint64_t> busyNs_{0};
 };
 
 // What a banded row pass ended as: the ordinary success, cancellation observed at a row boundary,

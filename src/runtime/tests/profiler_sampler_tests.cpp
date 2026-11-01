@@ -321,15 +321,17 @@ void schedulerCopyRespectsSlots() {
            "long names are truncated into the slot");
     expect(workload.tasks[2].ageNs > workload.tasks[3].ageNs && workload.tasks[2].ageNs > 0,
            "ages are measured from queueing");
-    expect(cpu.executorPoolCount == 3, "CPU, blocking I/O and GPU executors are reported");
+    expect(cpu.executorPoolCount == 3,
+           "CPU, blocking I/O and GPU submit executors are reported (serial row bands: no pool)");
+    expect(profilerNameView(cpu.executorPools[2].name) == "GPU submit", "the GPU submit pool");
     expect(profilerNameView(cpu.executorPools[0].name) == "CPU" &&
                cpu.executorPools[0].workers == 1 && cpu.executorPools[0].queueDepth == 30,
            "the CPU pool has its workers and queue depth");
     expect(cpu.executorPools[1].workers == 1 && cpu.executorPools[1].queueDepth == 0,
            "the blocking I/O pool has its workers and queue depth");
-    expect(std::ranges::none_of(cpu.executorPools,
-                                [](const auto& pool) { return pool.busyNs.present; }),
-           "executor busy time stays absent");
+    expect(std::ranges::all_of(cpu.executorPools.begin(), cpu.executorPools.begin() + 3,
+                               [](const auto& pool) { return pool.busyNs.present; }),
+           "executor busy time is counted");
 }
 
 void ledgerAdapterReadsAccessors() {

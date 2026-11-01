@@ -450,7 +450,7 @@ void testRuntimeFeedDrivesTheSampler(Expectations& expectations) {
                                     snapshot.memory.poolCount == 1 &&
                                     snapshot.memory.pools[0].hostBytes == (std::size_t{256} << 20U),
                                 "the hook's ledger reading reaches the panel");
-            expectations.expect(snapshot.cpu.executorPoolCount == 3 &&
+            expectations.expect(snapshot.cpu.executorPoolCount >= 3 &&
                                     snapshot.cpu.processCpuNs.present,
                                 "CPU figures are live");
             expectations.expect(!snapshot.workload.playbackFps.present &&

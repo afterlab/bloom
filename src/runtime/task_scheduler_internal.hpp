@@ -6,6 +6,7 @@
 
 #include "task_completion_internal.hpp"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -147,6 +148,8 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
         std::size_t active = 0;
         std::size_t capacity = 0;
         std::vector<std::jthread> workers;
+        // Cumulative nanoseconds workers spent running tasks (the Profiler's busy time).
+        std::atomic<std::uint64_t> busyNs{0};
     };
 
     void startExecutor(ExecutorState& target, TaskExecutor kind, std::size_t count,

@@ -225,6 +225,7 @@ void SchedulerState::workerLoop(const TaskExecutor kind) noexcept {
     auto& target = executor(kind);
     while (true) {
         std::shared_ptr<TaskRecord> record;
+        std::chrono::steady_clock::time_point started;
         {
             std::unique_lock lock(mutex);
             target.available.wait(lock, [&] { return stopping || !target.pending.empty(); });
@@ -239,7 +240,8 @@ void SchedulerState::workerLoop(const TaskExecutor kind) noexcept {
             running.push_back(record);
             std::lock_guard recordLock(record->mutex);
             record->snapshot.state = TaskState::Running;
-            record->snapshot.startedAt = std::chrono::steady_clock::now();
+            started = std::chrono::steady_clock::now();
+            record->snapshot.startedAt = started;
             record->snapshot.progress.phase = std::move(record->runningPhase);
         }
 
@@ -257,6 +259,11 @@ void SchedulerState::workerLoop(const TaskExecutor kind) noexcept {
             outcome = TaskState::Failed;
         }
         finishRunning(record, outcome);
+        const auto busy = std::chrono::steady_clock::now() - started;
+        target.busyNs.fetch_add(
+            static_cast<std::uint64_t>(std::max<std::int64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(busy).count(), 0)),
+            std::memory_order_relaxed);
     }
 }
 
@@ -483,7 +490,8 @@ void SchedulerState::copyProfilerTasks(
         std::string_view name;
         const ExecutorState& executor;
     };
-    const std::array<Pool, 3> pools{{{"CPU", cpu}, {"Blocking I/O", blockingIo}, {"GPU", gpu}}};
+    const std::array<Pool, 3> pools{
+        {{"CPU", cpu}, {"Blocking I/O", blockingIo}, {"GPU submit", gpu}}};
     executors.executorPoolCount = 0;
     for (const auto& pool : pools) {
         if (executors.executorPoolCount == executors.executorPools.size())
@@ -492,7 +500,17 @@ void SchedulerState::copyProfilerTasks(
         setProfilerName(out.name, pool.name);
         out.workers = static_cast<std::uint32_t>(pool.executor.workers.size());
         out.queueDepth = static_cast<std::uint32_t>(pool.executor.pending.size());
-        out.busyNs = {};
+        out.busyNs =
+            ProfilerMetric<std::uint64_t>::of(pool.executor.busyNs.load(std::memory_order_relaxed));
+    }
+    // The CPU row-band pool's own workers (the calling thread's bands count as its task's time).
+    if (rowBands.has_value() && executors.executorPoolCount < executors.executorPools.size()) {
+        auto& out = executors.executorPools[executors.executorPoolCount++];
+        setProfilerName(out.name, "Row bands");
+        const auto activity = rowBands->activity();
+        out.workers = static_cast<std::uint32_t>(rowBands->workerCount());
+        out.queueDepth = static_cast<std::uint32_t>(activity.queuedBands);
+        out.busyNs = ProfilerMetric<std::uint64_t>::of(activity.busyNs);
     }
 }
 
