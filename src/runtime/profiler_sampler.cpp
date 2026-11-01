@@ -1,0 +1,160 @@
+#include <bloom/runtime/profiler_process_reads.hpp>
+#include <bloom/runtime/profiler_sampler.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
+
+#include <algorithm>
+
+namespace bloom::runtime {
+namespace {
+
+std::int64_t clampedIntervalNs(const std::chrono::milliseconds interval) noexcept {
+    const auto clamped =
+        std::clamp(interval, ProfilerSampler::kMinimumInterval, ProfilerSampler::kMaximumInterval);
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(clamped).count();
+}
+
+} // namespace
+
+ProfilerSampler::ProfilerSampler(const ProfilerSamplerSources sources)
+    : sources_(sources), intervalNs_(clampedIntervalNs(kDefaultInterval)) {}
+
+ProfilerSampler::~ProfilerSampler() {
+    std::lock_guard lifecycle(lifecycle_);
+    stop();
+}
+
+void ProfilerSampler::stop() {
+    if (!thread_.joinable())
+        return;
+    {
+        std::lock_guard lock(mutex_);
+        stopping_ = true;
+    }
+    wake_.notify_all();
+    thread_.join();
+}
+
+void ProfilerSampler::acquire() {
+    std::lock_guard lifecycle(lifecycle_);
+    if (subscribers_++ > 0)
+        return;
+    {
+        std::lock_guard lock(mutex_);
+        stopping_ = false;
+    }
+    thread_ = std::thread([this] { run(); });
+}
+
+void ProfilerSampler::release() {
+    std::lock_guard lifecycle(lifecycle_);
+    if (subscribers_ == 0 || --subscribers_ > 0)
+        return;
+    stop();
+}
+
+int ProfilerSampler::subscribers() const {
+    std::lock_guard lifecycle(lifecycle_);
+    return subscribers_;
+}
+
+bool ProfilerSampler::running() const {
+    std::lock_guard lifecycle(lifecycle_);
+    return thread_.joinable();
+}
+
+void ProfilerSampler::setInterval(const std::chrono::milliseconds interval) noexcept {
+    intervalNs_.store(clampedIntervalNs(interval), std::memory_order_relaxed);
+    wake_.notify_all();
+}
+
+std::chrono::milliseconds ProfilerSampler::interval() const noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::nanoseconds(intervalNs_.load(std::memory_order_relaxed)));
+}
+
+void ProfilerSampler::publishHostInputs(const ProfilerHostInputs& inputs) noexcept {
+    // The seqlock takes one writer at a time.
+    std::lock_guard lock(inputsWriter_);
+    hostInputs_.store(inputs);
+}
+
+bool ProfilerSampler::readLatest(ProfilerSnapshot& out,
+                                 const std::uint64_t afterSerial) const noexcept {
+    if (published_.writes() == 0)
+        return false;
+    published_.load(out);
+    return out.serial > afterSerial;
+}
+
+bool ProfilerSampler::sampleNow() noexcept {
+    std::lock_guard lifecycle(lifecycle_);
+    if (thread_.joinable())
+        return false;
+    sample();
+    return true;
+}
+
+void ProfilerSampler::run() noexcept {
+    lowerProfilerThreadPriority();
+    std::unique_lock lock(mutex_);
+    while (!stopping_) {
+        lock.unlock();
+        sample();
+        lock.lock();
+        const auto wait = std::chrono::nanoseconds(intervalNs_.load(std::memory_order_relaxed));
+        wake_.wait_for(lock, wait, [this] { return stopping_; });
+    }
+}
+
+void ProfilerSampler::sample() noexcept {
+    const auto now = std::chrono::steady_clock::now();
+    auto& snapshot = work_;
+    snapshot = ProfilerSnapshot{};
+    snapshot.serial = ++serial_;
+    snapshot.steadyTimestampNs =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    snapshot.intervalNs = intervalNs_.load(std::memory_order_relaxed);
+    hostInputs_.load(inputs_);
+
+    // ---- Memory: RSS (and on Linux the anonymous part) from statm; the rest from the ledger.
+    auto& memory = snapshot.memory;
+    if (const auto resident = readProfilerResidentMemory()) {
+        memory.rssBytes = ProfilerBytes::of(resident->residentBytes);
+        // statm's resident is anonymous + file + shmem pages and its shared field is file +
+        // shmem, so the difference is exactly the kernel's anonymous resident count.
+        if (resident->fileAndSharedBytes &&
+            *resident->fileAndSharedBytes <= resident->residentBytes)
+            memory.anonBytes =
+                ProfilerBytes::of(resident->residentBytes - *resident->fileAndSharedBytes);
+    }
+    applyProfilerLedgerReading(inputs_.ledger, memory);
+    memory.unattributedBytes = profilerUnattributedBytes(memory);
+    // The idle baseline is the unattributed gap at the first sample that has both sides.
+    if (!baselineCaptured_ && memory.unattributedBytes.present && inputs_.ledger.holdingPresent) {
+        baselineCaptured_ = true;
+        baselineBytes_ =
+            static_cast<std::uint64_t>(std::max<std::int64_t>(memory.unattributedBytes.value, 0));
+    }
+    if (baselineCaptured_)
+        memory.idleBaselineBytes = ProfilerBytes::of(baselineBytes_);
+
+    // ---- GPU, CPU and tasks.
+    if (sources_.readGpu != nullptr)
+        sources_.readGpu(snapshot.gpu);
+    if (const auto cpuNs = readProfilerProcessCpuNs())
+        snapshot.cpu.processCpuNs = ProfilerMetric<std::uint64_t>::of(*cpuNs);
+    if (sources_.scheduler != nullptr)
+        sources_.scheduler->copyProfilerTasks(snapshot.workload, snapshot.cpu, now);
+
+    // ---- Playback, RAM Preview and export, as the UI-side hook last published them.
+    auto& workload = snapshot.workload;
+    workload.playbackFps = inputs_.playbackFps;
+    workload.droppedFrames = inputs_.droppedFrames;
+    workload.ramPreviewCachedFrames = inputs_.ramPreviewCachedFrames;
+    workload.ramPreviewFillFps = inputs_.ramPreviewFillFps;
+    workload.exportFps = inputs_.exportFps;
+
+    published_.store(snapshot);
+}
+
+} // namespace bloom::runtime

@@ -535,6 +535,12 @@ std::optional<TaskSnapshot> TaskScheduler::snapshot(const TaskId id) const {
     return state_->snapshot(id);
 }
 
+void TaskScheduler::copyProfilerTasks(
+    ProfilerWorkload& workload, ProfilerCpu& cpu,
+    const std::chrono::steady_clock::time_point now) const noexcept {
+    state_->copyProfilerTasks(workload, cpu, now);
+}
+
 TaskCompletionSubscribeResult TaskScheduler::subscribeCompletions() noexcept {
     return state_->subscribeCompletions();
 }

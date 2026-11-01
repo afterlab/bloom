@@ -295,6 +295,14 @@ bloom_enable_warnings(bloom_runtime_memory_pressure_monitor_test)
 bloom_add_test(NAME bloom.runtime.memory_pressure_monitor
               COMMAND bloom_runtime_memory_pressure_monitor_test LABELS unit runtime TIMEOUT 60)
 
+# The profiler sampler (#423): refcounted thread, no allocation per sample, seqlock, statm, the
+# scheduler's fixed-slot copy, the ledger adapter, absent fields and the per-sample cost.
+add_executable(bloom_runtime_profiler_sampler_test profiler_sampler_tests.cpp)
+target_link_libraries(bloom_runtime_profiler_sampler_test PRIVATE bloom_runtime)
+bloom_enable_warnings(bloom_runtime_profiler_sampler_test)
+bloom_add_test(NAME bloom.runtime.profiler_sampler COMMAND bloom_runtime_profiler_sampler_test
+              LABELS unit runtime TIMEOUT 60)
+
 add_executable(bloom_runtime_process_memory_sample_test process_memory_sample_tests.cpp)
 target_link_libraries(bloom_runtime_process_memory_sample_test PRIVATE bloom_runtime)
 bloom_enable_warnings(bloom_runtime_process_memory_sample_test)

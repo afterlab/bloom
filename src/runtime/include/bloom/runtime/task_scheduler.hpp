@@ -4,6 +4,7 @@
 #include <bloom/runtime/task_completion.hpp>
 #include <bloom/runtime/task_types.hpp>
 
+#include <chrono>
 #include <concepts>
 #include <exception>
 #include <functional>
@@ -18,6 +19,8 @@
 namespace bloom::runtime {
 
 class CpuRowBandExecutor;
+struct ProfilerCpu;
+struct ProfilerWorkload;
 
 namespace detail {
 struct SchedulerState;
@@ -432,6 +435,13 @@ class TaskScheduler final {
 
     [[nodiscard]] std::vector<TaskSnapshot> snapshots() const;
     [[nodiscard]] std::optional<TaskSnapshot> snapshot(TaskId id) const;
+    // The profiler's read-only copy (#423), into caller-provided fixed slots: every task record
+    // counted by state, owner kind and executor; up to workload.tasks.size() tasks (running first,
+    // then queued, oldest first; names truncated to the slot); and each executor's worker count and
+    // queue depth in cpu.executorPools (busy time is not measured and stays absent). Holds the
+    // scheduler lock for the copy only; never allocates, formats or changes scheduling.
+    void copyProfilerTasks(ProfilerWorkload& workload, ProfilerCpu& cpu,
+                           std::chrono::steady_clock::time_point now) const noexcept;
 
     // Independent of Jobs/progress polling. Refusal is typed; no polling fallback is implied.
     [[nodiscard]] TaskCompletionSubscribeResult subscribeCompletions() noexcept;

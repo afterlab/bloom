@@ -10,6 +10,9 @@ target_sources(
         memory_eviction_priority.cpp
         memory_pressure_monitor.cpp
         process_memory_sample.cpp
+        profiler_ledger_adapter.cpp
+        profiler_process_reads.cpp
+        profiler_sampler.cpp
         task_primitives.cpp
         task_completion.cpp
         task_gpu_executor.cpp
@@ -25,6 +28,10 @@ target_sources(
             include/bloom/runtime/memory_eviction_priority.hpp
             include/bloom/runtime/memory_pressure_monitor.hpp
             include/bloom/runtime/process_memory_sample.hpp
+            include/bloom/runtime/profiler_ledger_adapter.hpp
+            include/bloom/runtime/profiler_process_reads.hpp
+            include/bloom/runtime/profiler_sampler.hpp
+            include/bloom/runtime/profiler_seqlock.hpp
             include/bloom/runtime/profiler_snapshot.hpp
             include/bloom/runtime/row_band_execution.hpp
             include/bloom/runtime/task_gpu_executor.hpp

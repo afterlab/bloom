@@ -1,13 +1,16 @@
 #include <bloom/runtime/gpu_memory_budget.hpp>
+#include <bloom/runtime/profiler_snapshot.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include "task_scheduler_internal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <limits>
 #include <ranges>
+#include <string_view>
 #include <utility>
 
 namespace bloom::runtime {
@@ -411,6 +414,86 @@ std::vector<TaskSnapshot> SchedulerState::snapshots() const {
     }
     std::ranges::sort(result, {}, &TaskSnapshot::id);
     return result;
+}
+
+void SchedulerState::copyProfilerTasks(
+    ProfilerWorkload& workload, ProfilerCpu& executors,
+    const std::chrono::steady_clock::time_point now) const noexcept {
+    // Top-task candidates by (running before queued, oldest first). Records stay alive while the
+    // scheduler lock is held, so the candidates keep raw pointers and copy fields in a second pass.
+    struct Candidate {
+        const TaskRecord* record = nullptr;
+        int rank = 0;
+        std::chrono::steady_clock::time_point queuedAt;
+    };
+    std::array<Candidate, kProfilerMaximumTasks> top{};
+    std::size_t topCount = 0;
+    const auto before = [](const Candidate& left, const Candidate& right) {
+        return left.rank != right.rank ? left.rank < right.rank : left.queuedAt < right.queuedAt;
+    };
+    workload.tasksByState = {};
+    workload.tasksByOwner = {};
+    workload.tasksByExecutor = {};
+    std::lock_guard lock(mutex);
+    for (const auto& [id, record] : records) {
+        static_cast<void>(id);
+        Candidate candidate{.record = record.get(), .rank = 0, .queuedAt = {}};
+        {
+            std::lock_guard recordLock(record->mutex);
+            const auto& task = record->snapshot;
+            ++workload.tasksByState[static_cast<std::size_t>(task.state)];
+            ++workload.tasksByOwner[static_cast<std::size_t>(task.owner.kind)];
+            ++workload.tasksByExecutor[static_cast<std::size_t>(task.executor)];
+            if (isTerminal(task.state))
+                continue;
+            candidate.rank = task.state == TaskState::Running ? 0 : 1;
+            candidate.queuedAt = task.queuedAt;
+        }
+        if (topCount == top.size() && !before(candidate, top[topCount - 1]))
+            continue;
+        auto slot = topCount < top.size() ? topCount++ : top.size() - 1;
+        while (slot > 0 && before(candidate, top[slot - 1])) {
+            top[slot] = top[slot - 1];
+            --slot;
+        }
+        top[slot] = candidate;
+    }
+    workload.taskCount = static_cast<std::uint32_t>(topCount);
+    for (std::size_t index = 0; index < topCount; ++index) {
+        const auto& record = *top[index].record;
+        auto& out = workload.tasks[index];
+        std::lock_guard recordLock(record.mutex);
+        const auto& task = record.snapshot;
+        setProfilerName(out.name, task.name);
+        out.ownerKind = task.owner.kind;
+        out.ownerId = task.owner.id.value();
+        out.executor = task.executor;
+        out.state = task.state;
+        const auto& progress = task.progress;
+        out.progress =
+            progress.total && *progress.total > 0
+                ? ProfilerRatio::of(static_cast<float>(
+                      static_cast<double>(std::min(progress.completed, *progress.total)) /
+                      static_cast<double>(*progress.total)))
+                : ProfilerRatio{};
+        out.ageNs =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now - task.queuedAt).count();
+    }
+    struct Pool {
+        std::string_view name;
+        const ExecutorState& executor;
+    };
+    const std::array<Pool, 3> pools{{{"CPU", cpu}, {"Blocking I/O", blockingIo}, {"GPU", gpu}}};
+    executors.executorPoolCount = 0;
+    for (const auto& pool : pools) {
+        if (executors.executorPoolCount == executors.executorPools.size())
+            break;
+        auto& out = executors.executorPools[executors.executorPoolCount++];
+        setProfilerName(out.name, pool.name);
+        out.workers = static_cast<std::uint32_t>(pool.executor.workers.size());
+        out.queueDepth = static_cast<std::uint32_t>(pool.executor.pending.size());
+        out.busyNs = {};
+    }
 }
 
 std::optional<TaskSnapshot> SchedulerState::snapshot(const TaskId id) const {

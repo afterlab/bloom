@@ -129,6 +129,8 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     [[nodiscard]] bool reprioritize(TaskId id, TaskPriority priority) noexcept;
     [[nodiscard]] std::vector<TaskSnapshot> snapshots() const;
     [[nodiscard]] std::optional<TaskSnapshot> snapshot(TaskId id) const;
+    void copyProfilerTasks(ProfilerWorkload& workload, ProfilerCpu& executors,
+                           std::chrono::steady_clock::time_point now) const noexcept;
     void requestShutdown() noexcept;
     [[nodiscard]] bool isAccepting() const noexcept;
     [[nodiscard]] bool isQuiescent() const noexcept;
