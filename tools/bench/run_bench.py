@@ -208,7 +208,8 @@ def tree_usage(root_pid):
 
 
 class Sampler:
-    """Samples GPU utilisation (nvidia-smi) and the process tree's CPU/RSS every 200 ms."""
+    """Samples GPU utilisation (nvidia-smi), the process tree's device memory (nvidia-smi compute
+    apps) and the process tree's CPU/RSS every 200 ms."""
 
     def __init__(self, pid):
         self.pid = pid
@@ -216,6 +217,9 @@ class Sampler:
         self.stop = threading.Event()
         self.gpu = None
         self.gpu_value = None
+        self.vram = None
+        self.tree = {pid}
+        self.vram_peak = {}  # pid -> peak device bytes
         self.thread = threading.Thread(target=self.loop, daemon=True)
 
     def start(self):
@@ -224,8 +228,22 @@ class Sampler:
                 ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits",
                  "-lms", "200"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
             threading.Thread(target=self.read_gpu, daemon=True).start()
+            self.vram = subprocess.Popen(
+                ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                 "--format=csv,noheader,nounits", "-lms", "500"], stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True)
+            threading.Thread(target=self.read_vram, daemon=True).start()
         self.thread.start()
         return self
+
+    def read_vram(self):
+        for line in self.vram.stdout:
+            try:
+                pid, mib = (int(field) for field in line.split(","))
+            except ValueError:
+                continue
+            if pid in self.tree:
+                self.vram_peak[pid] = max(self.vram_peak.get(pid, 0), mib * 1024 * 1024)
 
     def read_gpu(self):
         for line in self.gpu.stdout:
@@ -236,6 +254,8 @@ class Sampler:
 
     def loop(self):
         while not self.stop.is_set():
+            if sys.platform.startswith("linux"):
+                self.tree = set(process_tree(self.pid))
             cpu, rss = tree_usage(self.pid)
             self.samples.append((time.time(), self.gpu_value, cpu, rss))
             self.stop.wait(0.2)
@@ -243,15 +263,20 @@ class Sampler:
     def finish(self):
         self.stop.set()
         self.thread.join()
-        if self.gpu:
-            self.gpu.terminate()
-            self.gpu.wait()
+        for monitor in (self.gpu, self.vram):
+            if monitor:
+                monitor.terminate()
+                monitor.wait()
 
     def window(self, start=None, end=None):
         rows = [s for s in self.samples if (start is None or s[0] >= start) and
                 (end is None or s[0] <= end)]
         result = {"peakTreeRssBytes": max((s[3] for s in self.samples if s[3] is not None),
                                           default=None)}
+        if self.vram_peak:
+            # Per-process device memory as the driver reports it (whole run, every process in
+            # the tree), to reconcile with Bloom's device accounting.
+            result["peakDeviceBytes"] = sum(self.vram_peak.values())
         gpu = [s[1] for s in rows if s[1] is not None]
         if gpu:
             result["gpuBusyPercent"] = round(sum(gpu) / len(gpu), 1)

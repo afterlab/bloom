@@ -92,6 +92,8 @@ std::chrono::seconds gBenchTimeout{1800};
 // Where the process's memory is, sampled during the measured window. RSS splits come from
 // /proc on Linux (absent elsewhere); the pools are Bloom's own accounting: every reusable pool on
 // the process ledger, the two largest of them by name, and the bytes admitted to active work.
+// Pool bytes are host allocations, each distinct allocation once, pending retirement included;
+// device-resident pool bytes and device claims are separate (#416).
 struct BenchMemorySample {
     double seconds = 0;
     std::uint64_t preparedFrames = 0;
@@ -104,8 +106,16 @@ struct BenchMemorySample {
     std::uint64_t operationCacheBytes = 0;
     std::uint64_t decodedMediaBytes = 0;   // operation-cache entries of decoded source media
     std::uint64_t preparedUploadBytes = 0; // operation-cache entries of prepared GPU uploads
+    // Operation-cache bytes evicted but not yet freed by their retirement worker (inside
+    // operationCacheBytes), and the extra references to storage it counts once (what per-entry
+    // accounting added on top before #416).
+    std::uint64_t operationPendingBytes = 0;
+    std::uint64_t operationSharedBytes = 0;
+    std::uint64_t reusablePendingBytes = 0; // inside reusablePoolBytes
+    std::uint64_t reusableDeviceBytes = 0;  // device-resident pool bytes, outside reusablePoolBytes
     std::uint64_t hostClaimBytes = 0;
     std::uint64_t hostUsableBytes = 0;
+    std::uint64_t deviceClaimBytes = 0;
 };
 
 void benchReadProcStatus(BenchMemorySample& sample) {
@@ -142,8 +152,13 @@ void benchReadProcStatus(BenchMemorySample& sample) {
         << ",\"operationCacheBytes\":" << sample.operationCacheBytes
         << ",\"decodedMediaBytes\":" << sample.decodedMediaBytes
         << ",\"preparedUploadBytes\":" << sample.preparedUploadBytes
+        << ",\"operationPendingBytes\":" << sample.operationPendingBytes
+        << ",\"operationSharedBytes\":" << sample.operationSharedBytes
+        << ",\"reusablePendingBytes\":" << sample.reusablePendingBytes
+        << ",\"reusableDeviceBytes\":" << sample.reusableDeviceBytes
         << ",\"hostClaimBytes\":" << sample.hostClaimBytes
-        << ",\"hostUsableBytes\":" << sample.hostUsableBytes << '}';
+        << ",\"hostUsableBytes\":" << sample.hostUsableBytes
+        << ",\"deviceClaimBytes\":" << sample.deviceClaimBytes << '}';
     return out.str();
 }
 
@@ -630,16 +645,21 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
                              .count();
         sample.preparedFrames = ram.preparedFrameCount();
         benchReadProcStatus(sample);
-        sample.reusablePoolBytes = runtime::processMemoryBudgetLedger().reusableRetainedBytes();
-        sample.previewCacheBytes = frameCache->residentBytes();
-        sample.operationCacheBytes = evaluator.operationCache()->retainedBytes();
-        sample.decodedMediaBytes = evaluator.operationCache()->retainedBytes(
-            runtime::OperationCacheEntryKind::DecodedMedia);
-        sample.preparedUploadBytes = evaluator.operationCache()->retainedBytes(
-            runtime::OperationCacheEntryKind::PreparedUpload);
+        const auto pools = runtime::processMemoryBudgetLedger().reusableHolding();
+        sample.reusablePoolBytes = pools.hostAllocatedBytes();
+        sample.reusablePendingBytes = pools.hostPendingRetirementBytes;
+        sample.reusableDeviceBytes = pools.deviceBytes;
+        sample.previewCacheBytes = frameCache->hostBytes();
+        const auto operation = evaluator.operationCache()->memory();
+        sample.operationCacheBytes = operation.hostBytes;
+        sample.decodedMediaBytes = operation.decodedMediaBytes;
+        sample.preparedUploadBytes = operation.preparedUploadBytes;
+        sample.operationPendingBytes = operation.pendingRetirementBytes;
+        sample.operationSharedBytes = operation.sharedReferenceBytes;
         const auto capacity = policy->usableCapacity();
         sample.hostClaimBytes = capacity.hostClaimBytes;
         sample.hostUsableBytes = capacity.hostUsableBytes;
+        sample.deviceClaimBytes = capacity.deviceClaimBytes;
         if (sample.rssBytes >= memoryPeak.rssBytes)
             memoryPeak = sample;
         const auto now = std::chrono::steady_clock::now();
