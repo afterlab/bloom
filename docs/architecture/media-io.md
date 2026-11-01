@@ -758,15 +758,14 @@ read ahead (see the linear-pass retention below).
 
 **Linear-pass retention.** An export run owns one `runtime::LinearPassRetention` and carries it on
 every frame's `EvaluationRequest::linearPass`. Each store into the shared operation cache (decoded
-media, source revisions, operation and value results) and into the prepared-upload subset receives
-that pass explicitly; a keyed entry is retained only the second time the pass offers it, so
+media, source revisions, operation and value results) receives that pass explicitly; a keyed entry is retained only the second time the pass offers it, so
 frame-unique footage and results stream through while static layers and held or looped sources stay
 cached. The pass remembers a bounded set of key hashes (metadata only) and is thread-safe across the
 frames in flight; each run starts with an empty one. Viewer, playback and RAM Preview requests carry
 no pass and retain as before. The pass never changes pixels or cache identity.
 
 `EvaluationRequest::mediaSourceRevisionPolicy` defaults to `Revalidate`: source verification
-precedes CPU operation memoization and GPU prepared-upload lookup, including nested evaluation. A
+precedes CPU operation memoization and GPU source preparation, including nested evaluation. A
 retained still revision is reused under `Revalidate` only after an identity observation of the
 original matches the memoized digest; otherwise the source is captured and hashed again. Final/headless requests retain that default. The production GPU final preparation and host output-
 analysis CPU fallback explicitly force `Revalidate`, including when passed a copied interactive
@@ -786,7 +785,7 @@ Encoded bytes, probe strings and entry/key metadata are charged; there is no sep
 Interactive override plans may read an existing ticket but never insert one on a gesture miss;
 uncached captured bytes remain transient. Source tickets are accepted only as typed decoded-media
 entries, so operation purge/retirement cannot fold their debit through the wrong accounting class.
-Rooted tickets use the same explicit host retirement owner as prepared uploads. Eviction and purge
+Rooted tickets use the pool's explicit host retirement owner (`OperationCache::bindHostRetirement`). Eviction and purge
 detach the ticket, then the worker drops its backing and metadata before folding back the decoded
 host charge. Pending tickets cannot donate capacity, and producer close detaches them before host
 owner shutdown. Thus UI sampling callbacks never free a large rooted encoded vector. Standalone
@@ -1735,14 +1734,15 @@ worker per route. Identical frame requests share one decode; other concurrent re
 cancellably, for the decoder rather than receiving `Busy`, and the 30 second watchdog bounds each
 worker exchange rather than the queue. The evaluator admits retained sessions by memory: each is
 charged a conservative worker estimate (64 MiB plus 24 frames of 16-bit 4:4:4 planes, capped at
-the stream's worker address space) against a session budget of a quarter of physical memory, keeping
+the stream's worker address space) against a session budget of usable memory, keeping
 at least two so two sources can alternate and at most the eight files the source-snapshot quota
 can retain. Least-recently-used sessions beyond that are retired. `DecodedVideoCache` has a
 separate LRU byte budget and keys frames by content digest, stream, frame index,
 interpretation, color identity and decode route. Its target is the `playback/decoded-video-cache-bytes`
-setting, or automatically one sixteenth of physical memory between 256 MiB and 4 GiB. It is a
-reusable pool on the process memory ledger, so an observed OS limit constrains it with the other
-reusable caches. A zero budget disables retention.
+setting, or automatically usable memory, the ceiling every automatic reusable pool has (ADR 0037:
+no fixed fraction of physical memory). It is a reusable pool on the process memory ledger: it
+competes with the other pools inside usable memory, and an observed OS limit constrains it with
+them. A zero budget disables retention.
 
 Measured on 2026-10-23 with locally generated files (not committed), 200 frames and 40 seeded
 random scrubs through `bloom_media_video_decode_benchmark` on a 16-thread x86-64 Linux host with

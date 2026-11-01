@@ -831,17 +831,14 @@ host-pressure policy. Nonzero operation and RAM-preview preferences are honored 
 invalid or zero value selects that pool's Automatic default; changing one preference does not
 reduce the other, and decoded-video or other auxiliary pools do not subtract from a named target.
 
-Automatic selects a stable total from physical capacity: 50%, with the historical 3 GiB fallback
-bounded by reported physical memory. The operation/preview split is 60/40, with up to 2 GiB assigned
-to preview at the low-memory floor. Physical capacity is resolved once from the first successful
-worker delivery; subsequent free-memory fluctuations do not rewrite these targets.
-
-| Physical | Automatic total | Operation target | Preview target |
-| --- | --- | --- | --- |
-| 8 GiB | 4 GiB | 2 GiB | 2 GiB |
-| 16 GiB | 8 GiB | 4.8 GiB | 3.2 GiB |
-| 32 GiB | 16 GiB | 9.6 GiB | 6.4 GiB |
-| 60 GiB | 30 GiB | 18 GiB | 12 GiB |
+Automatic is usable memory and nothing else ([ADR 0037](../decisions/0037-memory-follows-the-working-set.md)):
+measured physical capacity minus the RAM headroom preference (its default share of the capacity
+until a preference is applied), or the historical 3 GiB fallback while capacity is unmeasured.
+There is no fixed fraction of physical or available memory and no operation/preview split: each
+automatic pool may use all usable memory, and the pools compete inside it under the eviction
+priority below (finished preview frames are evicted last). An observed OS limit still applies.
+Physical capacity is resolved once from the first successful worker delivery; a headroom change
+re-resolves the total, and free-memory fluctuations do not.
 
 These defaults are optional starting values, not physical-capacity ceilings on explicit preferences.
 Selected targets are lazy retention limits, not preallocations or allocation guarantees. Preferences
@@ -924,15 +921,16 @@ What each pool counts:
 - `OperationCache` charges each distinct allocation once, however many entries reference it, at
   its real size (`Rgba32fImage::pixelStorageByteCost`, the vector capacity, plus the image
   object; an encoded source revision's `retainedBytes`), and per entry only its metadata (the
-  entry, its key and values). An identity effect, a composition output and a prepared upload
-  often publish the same image as another entry; before #416 each entry charged the full pixels,
+  entry, its key and values). An identity effect and a composition output often publish the
+  same image as another entry; before #416 each entry charged the full pixels,
   so the pool reported more than it held. `OperationCache::memory()` splits the total by kind,
   reports the pending part, and reports `sharedReferenceBytes`: the extra references per-entry
   accounting used to add. Shared storage counts under the kind that stored it first. Evicted
   entries of a pool bound to a host retirement owner stay charged as pending until their worker
   frees them; a store of the same image meanwhile takes it back out of pending without charging
-  it again. The cache's budget bounds `hostBytes`, as before. Nothing in it is device memory: a
-  prepared upload is the host copy a later upload reads.
+  it again. The cache's budget bounds `hostBytes`, as before. Nothing in it is device memory, and
+  nothing in it is a host copy of an upload: staging is scratch
+  ([ADR 0037](../decisions/0037-memory-follows-the-working-set.md)).
 - `PreviewFrameCache` counts CPU and packed frames as host bytes. A GPU-resident frame is device
   memory: once `setGpuResidentLimits` gives the cache a device budget, resident frames count as
   `deviceBytes`, only the GPU-resident limits evict them, and they no longer take room from the
@@ -955,7 +953,7 @@ recently used entries first within the pool. While a fill is active, finished pr
 first (owner decision, #413): `RamPreviewController` holds a `MemoryBudgetLedger::PreviewFill`
 scope from `start()` until `finish()` (completion, cancel, failure or shutdown), and each pool is
 registered with a `MemoryEvictionPriority`. `PreviewFrameCache` is `FinishedPreview`; the
-operation cache (operation intermediates, prepared upload host copies, decoded media), the decoded
+operation cache (operation intermediates, decoded media and source revisions), the decoded
 video cache, the media disk cache write queue and the asset proxy and decoded-audio pools are
 `Ordinary`. `memoryEvictionShares` is the policy:
 
@@ -966,8 +964,8 @@ video cache, the media disk cache write queue and the asset proxy and decoded-au
 - a preview cache that has no room for a finished frame asks `MemoryBudgetLedger::yieldToPreview`
   before it evicts one of its own. The `Ordinary` pools evict up to the frame's shortfall and the
   preview budget rises by what they evicted (`PreviewFrameCache::Statistics::
-  previewFirstYieldedBytes`). The operation cache retires evicted prepared uploads after their GPU
-  work, so its retained bytes fall a little later; until the next budget application a pool
+  previewFirstYieldedBytes`). A pool rooted on a host retirement owner frees evicted entries
+  after their GPU work, so its retained bytes fall a little later; until the next budget application a pool
   counts as holding at most the budget it was last given, and the same bytes are never granted
   twice. The exchange is memory-neutral: the preview pool never takes free
   memory or the headroom and pending work claims that the next frame needs this way. It applies
@@ -977,8 +975,9 @@ video cache, the media disk cache write queue and the asset proxy and decoded-au
   the finished frames it becomes: during a fill only `FinishedPreview` pools grow into it, while
   `Ordinary` pools hold what they have and cycle their own least recently used entries. Outside a
   fill every reusable pool takes an equal share, as before. Before this, a 2160p fill let the
-  operation cache take most of the free memory early (prepared uploads 7–8 GB, which a linear
-  fill never reuses), which also narrowed the frames in flight that free capacity sizes.
+  operation cache take most of the free memory early (prepared upload host copies, 7–8 GB, which
+  a linear fill never reused and which ADR 0037 has since removed), which also narrowed the frames
+  in flight that free capacity sizes.
 
 When the `Ordinary` pools hold nothing more, the preview cache evicts its own least recently used
 frames and the fill ends `PartialBudget`. Ending the last fill scope restores proportional yielding.

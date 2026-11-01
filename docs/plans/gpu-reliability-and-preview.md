@@ -1341,8 +1341,8 @@ does not cover the whole app:
   active pins, native scratch, pending retirement, and allocator blocks have different owners and
   lifetimes. On a discrete GPU, VRAM is not reclaimable host RAM. Unified-memory systems need an
   explicit shared-heap model instead of treating both counters as independently available.
-- The real host stores [`GpuPreparedUploadCache`](../../src/runtime/gpu_prepared_upload_cache.cpp)
-  and [`GpuSceneCoverageCache`](../../src/runtime/gpu_scene_coverage_cache.cpp) have local maxima
+- The real host stores `GpuPreparedUploadCache` (since removed: staging is scratch,
+  [ADR 0037](../decisions/0037-memory-follows-the-working-set.md)) and [`GpuSceneCoverageCache`](../../src/runtime/gpu_scene_coverage_cache.cpp) have local maxima
   but do not register with the host ledger. Host pressure can trim the visible caches while these
   stores keep retaining and admitting data outside the reported shared allowance.
 

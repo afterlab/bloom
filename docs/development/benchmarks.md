@@ -209,6 +209,12 @@ Every measurement is a fresh process.
   time by dropping frames rather than slowing down.
 - **Playback** (`kind: playback`): a cold start with background read-ahead and no RAM fill;
   `playbackFps` = distinct frames shown / seconds, next to the frames the transport asked for.
+- **Scrub** (`kind: scrub`, `--scrub N`): after the first frame the harness jumps to N frames
+  spread over the work area, alternating between its two halves so no target is near the last one
+  or inside the read-ahead window, and times each from `setCurrentTime` until the Viewer shows it
+  Current (`scrubUncachedSeconds`, with `Median` and `Max`). It then clears the preview frame cache
+  and visits the same frames again (`scrubRevisitSeconds`): what the media caches below the
+  finished frames (decoded video, decoded media, source revisions) save.
 - **Start of playback** (both playback measurements, prefixed `play` or `cachedPlay`):
   `FirstMotionSeconds` is the time from Play until the Viewer first shows a Current frame other
   than the start frame; `DroppedFirstSecond` and `PaintedFirstSecond` are the footer's dropped
@@ -239,7 +245,8 @@ Every measurement is a fresh process.
   the highest RSS over the measured window, taken every 250 ms: `rssBytes` with `anonBytes`,
   `fileBytes` and `shmemBytes` (Linux `/proc`; zero elsewhere), `reusablePoolBytes` (every reusable
   pool on the process memory ledger), `previewCacheBytes`, `operationCacheBytes` (with its
-  `decodedMediaBytes` and `preparedUploadBytes` entries), and the processing
+  `decodedMediaBytes` entries), `otherPoolBytes` (the reusable pools outside those two: decoded
+  video, the disk-cache write queue and the asset pools), and the processing
   policy's `hostClaimBytes` and `hostUsableBytes` (usable capacity: available memory within the OS
   limit minus the RAM headroom). Pool bytes are host allocations, each distinct allocation counted
   once, including bytes pending asynchronous retirement (`operationPendingBytes`,

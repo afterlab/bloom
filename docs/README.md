@@ -44,7 +44,9 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/profiler-feed.md`](architecture/profiler-feed.md) — execution and platform
    contracts and extension boundaries.
 7. [`roadmap.md`](roadmap.md) — proof-oriented implementation sequence.
-8. [`decisions/`](decisions/) — accepted architecture decision records.
+8. [`decisions/`](decisions/) — accepted architecture decision records, among them the memory
+   design ([ADR 0037](decisions/0037-memory-follows-the-working-set.md): staging is scratch, media
+   stays compact, memory follows the working set).
 
 The issue #304 Linux implementation and local qualification cover processing/presentation allocation
 ownership, immutable source revisions, bounded native command batches, repeated fill/purge and

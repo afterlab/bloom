@@ -99,10 +99,11 @@ migrate them: they were retention sizes, not safety margins, and the caches now 
 from usable memory.
 
 Decoded video frames have their own retention target, read at startup from
-`playback/decoded-video-cache-bytes` (decimal bytes). Missing or zero selects Automatic: one
-sixteenth of physical memory, at least 256 MiB and at most 4 GiB (for example 1 GiB on a 16 GiB
-machine). Like the other reusable caches it shares an observed OS process limit. Missing, zero or
-unreadable settings select Automatic. Explicit settings are not reduced to a fraction of physical
+`playback/decoded-video-cache-bytes` (decimal bytes). Missing or zero selects Automatic: like
+every other cache, it may use usable memory (measured RAM minus the RAM headroom) and competes with
+the other caches inside it; there is no fixed share of physical memory. Like the other reusable
+caches it shares an observed OS process limit. Missing, zero or unreadable settings select
+Automatic. Explicit settings are not reduced to a fraction of physical
 or available RAM. Disk-cache settings still take effect after restart.
 
 ## Actual limits and memory availability
@@ -146,13 +147,13 @@ for confirmation; both clear only rebuildable derived data.
 
 - **Purge preview cache** drops every retained RAM preview frame, including the cache's references
   to GPU-resident frames, the evaluator's cached derived operation results, and the shared GPU-scene
-  coverage, prepared-upload, and resident GPU scene stores. Any preview or RAM preview frame still
+  coverage and resident GPU scene stores. Any preview or RAM preview frame still
   being prepared is retired first. The frame on screen stays valid; the next frame you ask for is
   computed again, so the preview cache's held-bytes reading drops to empty and refills only as you
   work.
 - **Purge media cache** clears the on-disk decoded-frame store, the evaluator's in-memory decoded
   still-image and decoded-video media, retained source revisions and completed RAM preview frames,
-  the prepared-upload store, and the resident GPU scene store
+  and the resident GPU scene store
   (which retains decoded/uploaded media sources). Your source files are never read, written, or
   changed: the caches hold decoded or converted copies only, and the next use decodes again. Derived
   operation results are left alone — those belong to **Purge preview cache**. The next preview

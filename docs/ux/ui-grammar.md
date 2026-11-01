@@ -263,9 +263,8 @@ segments:
   is at the end of this segment. It takes the free width and elides.
 - **Pixel** (`windowStatusBarProbe`): the Viewer's probe readout; shown only while it has one.
 - **RAM**: used/budget of the preview and operation caches together ("2.5/7.7 GB") and Cache, the
-  preview cache's frame count ("385 f"). The tooltip keeps the budget explanation (Bloom reserves
-  `max(8 GiB, 40%)` of memory for the rest of the machine; default caches never exceed half of
-  physical memory) and the hit and miss counters of each cache; it explains where a number came
+  preview cache's frame count ("385 f"). The tooltip keeps the budget explanation (the caches use
+  usable memory, measured RAM minus the RAM headroom) and the hit and miss counters of each cache; it explains where a number came
   from and never becomes a second place to read the numbers themselves.
 - **Disk cache**: "12% hit · 536.3 MB", "off", or a dash before the first lookup; hits, misses and
   entries in the tooltip.
