@@ -1,3 +1,4 @@
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/runtime/profiler_process_reads.hpp>
 #include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -6,6 +7,16 @@
 
 namespace bloom::runtime {
 namespace {
+
+namespace telemetry = core::telemetry;
+static_assert(telemetry::kStageCount == kProfilerStageCount);
+static_assert(telemetry::kHistogramBucketCount == kProfilerHistogramBucketCount);
+static_assert(telemetry::kHistogramFirstEdgeNs == kProfilerHistogramFirstEdgeNs);
+static_assert(static_cast<std::size_t>(telemetry::Stage::Encode) ==
+              static_cast<std::size_t>(ProfilerStage::Encode));
+static_assert(telemetry::histogramBucket(profilerHistogramEdgeNs(18)) ==
+              profilerHistogramBucket(profilerHistogramEdgeNs(18)));
+static_assert(telemetry::kHelperProcessSlots == kProfilerMaximumHelpers);
 
 std::int64_t clampedIntervalNs(const std::chrono::milliseconds interval) noexcept {
     const auto clamped =
@@ -32,6 +43,7 @@ void ProfilerSampler::stop() {
     }
     wake_.notify_all();
     thread_.join();
+    telemetry::setProfilerActive(false);
 }
 
 void ProfilerSampler::acquire() {
@@ -42,6 +54,9 @@ void ProfilerSampler::acquire() {
         std::lock_guard lock(mutex_);
         stopping_ = false;
     }
+    // The staging peak is the peak since sampler start.
+    telemetry::resetStagingPeak();
+    telemetry::setProfilerActive(true);
     thread_ = std::thread([this] { run(); });
 }
 
@@ -128,6 +143,10 @@ void ProfilerSampler::sample() noexcept {
                 ProfilerBytes::of(resident->residentBytes - *resident->fileAndSharedBytes);
     }
     applyProfilerLedgerReading(inputs_.ledger, memory);
+    // The live host-staging scratch line (always counted).
+    const auto staging = telemetry::stagingBytes();
+    memory.stagingLiveBytes = ProfilerBytes::of(staging.liveBytes);
+    memory.stagingPeakBytes = ProfilerBytes::of(staging.peakBytes);
     memory.unattributedBytes = profilerUnattributedBytes(memory);
     // The idle baseline is the unattributed gap at the first sample that has both sides.
     if (!baselineCaptured_ && memory.unattributedBytes.present && inputs_.ledger.holdingPresent) {
@@ -138,9 +157,51 @@ void ProfilerSampler::sample() noexcept {
     if (baselineCaptured_)
         memory.idleBaselineBytes = ProfilerBytes::of(baselineBytes_);
 
-    // ---- GPU, CPU and tasks.
+    // ---- GPU: Bloom's own allocations from the injected reader; transfers and the driver heap
+    // only in a process that has a GPU device (the reader reports its live bytes).
     if (sources_.readGpu != nullptr)
         sources_.readGpu(snapshot.gpu);
+    if (snapshot.gpu.liveBytes.present) {
+        const auto transfers = telemetry::gpuTransferTotals();
+        snapshot.gpu.uploadBytes = ProfilerBytes::of(transfers.uploadBytes);
+        snapshot.gpu.readbackBytes = ProfilerBytes::of(transfers.readbackBytes);
+        snapshot.gpu.submits = ProfilerCount::of(transfers.submits);
+    }
+    if (const auto heap = telemetry::gpuHeapBudget(); heap.present) {
+        snapshot.gpu.heapBudgetBytes = ProfilerBytes::of(heap.budgetBytes);
+        snapshot.gpu.heapUsageBytes = ProfilerBytes::of(heap.usageBytes);
+        snapshot.gpuBudgetQueryAgeNs = ProfilerNanoseconds::of(
+            std::max<std::int64_t>(snapshot.steadyTimestampNs - heap.steadyNs, 0));
+    }
+
+    // ---- Stage histograms (always counted).
+    for (std::size_t stage = 0; stage < kProfilerStageCount; ++stage) {
+        auto& out = snapshot.workload.stages[stage];
+        telemetry::StageHistogram histogram;
+        telemetry::readStage(static_cast<telemetry::Stage>(stage), histogram);
+        out.value.counts = histogram.counts;
+        out.value.totalNs = histogram.totalNs;
+        out.present = true;
+    }
+
+    // ---- Helper processes: the registered pids, read through /proc or the platform calls.
+    std::array<telemetry::HelperProcess, kProfilerMaximumHelpers> helpers{};
+    const auto helperCount = telemetry::readHelperProcesses(helpers);
+    auto& processes = snapshot.processes;
+    processes.helperCount = static_cast<std::uint32_t>(helperCount);
+    for (std::size_t index = 0; index < helperCount; ++index) {
+        auto& out = processes.helpers[index];
+        out.pid = helpers[index].pid;
+        setProfilerName(out.name, helpers[index].name);
+        const auto reading = readProfilerHelperProcess(out.pid);
+        out.alive = reading.alive;
+        if (reading.residentBytes)
+            out.rssBytes = ProfilerBytes::of(*reading.residentBytes);
+        if (reading.cpuNs)
+            out.cpuNs = ProfilerMetric<std::uint64_t>::of(*reading.cpuNs);
+    }
+
+    // ---- CPU and tasks.
     if (const auto cpuNs = readProfilerProcessCpuNs())
         snapshot.cpu.processCpuNs = ProfilerMetric<std::uint64_t>::of(*cpuNs);
     if (sources_.scheduler != nullptr)

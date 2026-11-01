@@ -632,7 +632,8 @@ int main(int argc, char* argv[]) try {
                                      .session = &compositionSession,
                                      .preview = &previewController,
                                      .ramPreview = &ramPreviewController,
-                                     .exportQueue = &exportQueueAdapter});
+                                     .exportQueue = &exportQueueAdapter,
+                                     .admission = processingPhasePolicy.get()});
     bloom::ui::EditorRegistry editorRegistry;
     bloom::app::DeferredEditorTeardown deferredEditorTeardown;
     // Jobs is deliberately NOT registered (task F1, item F6). An editor in this registry is an

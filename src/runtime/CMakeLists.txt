@@ -13,6 +13,7 @@ target_sources(
         profiler_ledger_adapter.cpp
         profiler_process_reads.cpp
         profiler_sampler.cpp
+        profiler_snapshot_json.cpp
         task_primitives.cpp
         task_completion.cpp
         task_gpu_executor.cpp
@@ -34,6 +35,7 @@ target_sources(
             include/bloom/runtime/profiler_sampler.hpp
             include/bloom/runtime/profiler_seqlock.hpp
             include/bloom/runtime/profiler_snapshot.hpp
+            include/bloom/runtime/profiler_snapshot_json.hpp
             include/bloom/runtime/row_band_execution.hpp
             include/bloom/runtime/task_gpu_executor.hpp
             include/bloom/runtime/task_completion.hpp

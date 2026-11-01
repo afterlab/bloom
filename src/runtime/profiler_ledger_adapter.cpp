@@ -1,6 +1,8 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/profiler_ledger_adapter.hpp>
 
+#include <algorithm>
+
 namespace bloom::runtime {
 namespace {
 
@@ -34,11 +36,17 @@ void readProfilerLedger(const MemoryBudgetLedger& ledger, ProfilerLedgerReading&
     const auto capacity = ledger.usableByteBudget();
     reading.usableBytes =
         headroom ? bytes(capacity > *headroom ? capacity - *headroom : 0) : ProfilerBytes{};
-    const auto holding = ledger.reusableHolding();
+    reading.poolCount =
+        static_cast<std::uint32_t>(ledger.copyProfilerPools(reading.pools, reading.droppedPools));
     reading.holdingPresent = true;
-    reading.holdingHostBytes = holding.hostBytes;
-    reading.holdingPendingBytes = holding.hostPendingRetirementBytes;
-    reading.holdingDeviceBytes = holding.deviceBytes;
+    reading.holdingHostBytes = 0;
+    reading.holdingPendingBytes = 0;
+    reading.holdingDeviceBytes = 0;
+    for (std::size_t index = 0; index < reading.poolCount; ++index) {
+        reading.holdingHostBytes += reading.pools[index].hostBytes;
+        reading.holdingPendingBytes += reading.pools[index].pendingBytes;
+        reading.holdingDeviceBytes += reading.pools[index].deviceBytes;
+    }
 }
 
 void applyProfilerLedgerReading(const ProfilerLedgerReading& reading,
@@ -54,17 +62,15 @@ void applyProfilerLedgerReading(const ProfilerLedgerReading& reading,
     memory.ledgerRetainedBytes = reading.retainedBytes;
     memory.memoryPressure = reading.memoryPressure;
     memory.swapPressure = reading.swapPressure;
+    memory.admissionClaimBytes = reading.admissionClaimBytes;
     memory.poolCount = 0;
     memory.droppedPools = 0;
     if (!reading.holdingPresent)
         return;
-    auto& pool = memory.pools[memory.poolCount++];
-    pool = ProfilerPool{};
-    setProfilerName(pool.name, kProfilerReusablePoolName);
-    pool.kind = ProfilerPoolKind::Cache;
-    pool.hostBytes = reading.holdingHostBytes;
-    pool.pendingBytes = reading.holdingPendingBytes;
-    pool.deviceBytes = reading.holdingDeviceBytes;
+    const auto count = std::min<std::size_t>(reading.poolCount, memory.pools.size());
+    std::copy_n(reading.pools.begin(), count, memory.pools.begin());
+    memory.poolCount = static_cast<std::uint32_t>(count);
+    memory.droppedPools = reading.droppedPools;
 }
 
 } // namespace bloom::runtime

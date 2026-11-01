@@ -1,5 +1,6 @@
-#include <bloom/render/gpu_device.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/profiler_gpu_reader.hpp>
 #include <bloom/runtime/profiler_ledger_adapter.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -13,14 +14,7 @@
 namespace bloom::ui {
 
 void readProfilerGpuImageStats(runtime::ProfilerGpu& gpu) noexcept {
-    const auto stats = render::GpuDevice::processImageReclamationStats();
-    // The portable stub reports no capacity: no device module, so nothing is measured.
-    if (stats.capacityPerFamily == 0)
-        return;
-    gpu.liveBytes = runtime::ProfilerBytes::of(stats.liveAllocationBytes);
-    gpu.retiringBytes = runtime::ProfilerBytes::of(stats.retiringAllocationBytes);
-    gpu.refusals = runtime::ProfilerCount::of(stats.admissionRefusals);
-    gpu.reclaims = runtime::ProfilerCount::of(stats.ownerReclaims);
+    runtime::readProfilerGpuDevice(gpu);
 }
 
 RuntimeProfilerFeed::RuntimeProfilerFeed(runtime::ProfilerSampler& sampler,
@@ -86,6 +80,13 @@ void RuntimeProfilerFeed::publishUiInputs() {
     if (sources_.ledger != nullptr) {
         runtime::readProfilerLedger(*sources_.ledger, inputs_.ledger, ledgerStateDirty_);
         ledgerStateDirty_ = false;
+    }
+    if (const auto* admission = sources_.admission) {
+        const auto capacity = admission->usableCapacity();
+        inputs_.ledger.admissionClaimBytes =
+            runtime::ProfilerBytes::of(capacity.hostClaimBytes > capacity.hostRetentionBytes
+                                           ? capacity.hostClaimBytes - capacity.hostRetentionBytes
+                                           : 0);
     }
 
     if (const auto* preview = sources_.preview) {

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 #include <chrono>
 #include <cmath>
@@ -53,6 +54,8 @@ class CpuFileTransformProcessor::Impl final {
   public:
     std::shared_ptr<const detail::LutReservation> reservation;
     std::unique_ptr<platform::ProcessSupervisor> worker;
+    // Listed for the Profiler while the colour worker lives (#423).
+    core::telemetry::HelperProcessRegistration listed;
     mutable std::atomic_flag busy = ATOMIC_FLAG_INIT;
 #ifdef __linux__
     int descriptorSocket = -1;
@@ -143,6 +146,8 @@ CpuFileTransformProcessor::prepare(const LutFile& file, const LutInterpolation i
     if (const auto* failure = std::get_if<platform::ProcessFailure>(&launched))
         return {{}, processError(*failure)};
     impl->worker = std::move(std::get<std::unique_ptr<platform::ProcessSupervisor>>(launched));
+    impl->listed = core::telemetry::HelperProcessRegistration(impl->worker->processId(),
+                                                              "Colour worker", impl.get());
     auto hello = detail::packet(0, impl->nonce++);
     hello[5] = static_cast<std::uint64_t>(::getpid());
     hello[6] = generation;

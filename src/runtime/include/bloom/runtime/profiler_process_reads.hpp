@@ -26,6 +26,27 @@ parseProfilerStatm(std::string_view text, std::uint64_t pageBytes) noexcept;
 // Cumulative user plus system CPU time of this process.
 [[nodiscard]] std::optional<std::uint64_t> readProfilerProcessCpuNs() noexcept;
 
+// One helper process: resident memory and cumulative CPU time, each absent where unreadable, and
+// whether the process still runs (a reaped or zombie process is not alive).
+struct ProfilerHelperReading final {
+    std::optional<std::uint64_t> residentBytes;
+    std::optional<std::uint64_t> cpuNs;
+    bool alive = false;
+};
+
+// Parses /proc/<pid>/stat text: the state after the command's closing parenthesis and utime and
+// stime (fields 14 and 15, in clock ticks). Returns nothing when the fields are not there.
+struct ProfilerProcStat final {
+    char state = '?';
+    std::uint64_t cpuNs = 0;
+};
+[[nodiscard]] std::optional<ProfilerProcStat>
+parseProfilerProcStat(std::string_view text, std::uint64_t ticksPerSecond) noexcept;
+
+// Linux reads /proc/<pid>/statm and /proc/<pid>/stat into fixed buffers, macOS asks
+// proc_pidinfo, Windows GetProcessMemoryInfo, GetProcessTimes and GetExitCodeProcess.
+[[nodiscard]] ProfilerHelperReading readProfilerHelperProcess(std::int64_t pid) noexcept;
+
 // Lowers the calling thread's scheduling priority (best effort).
 void lowerProfilerThreadPriority() noexcept;
 

@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
 #include <mutex>
@@ -120,9 +121,13 @@ class Connection final {
     return Unavailable{Error::UnexpectedMessage, "Worker returned no media product"};
 }
 
+// The Profiler's helper-process names (#423).
+constexpr const char* kMediaWorkerName = "Media worker";
+constexpr const char* kRetainedMediaWorkerName = "Media worker (retained)";
+
 WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request,
                     const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot,
-                    const platform::ProcessCancellation& cancel) {
+                    const platform::ProcessCancellation& cancel, const void* owner) {
     if (cancel())
         return Unavailable{Error::Cancelled, "Worker call cancelled before launch"};
     const auto deadline = Clock::now() + options.timeout;
@@ -136,6 +141,9 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
         return failure(std::get<platform::ProcessFailure>(launched));
     if (options.launched)
         options.launched((*process)->processId());
+    // Listed for the Profiler while this call's process lives.
+    const core::telemetry::HelperProcessRegistration listed((*process)->processId(),
+                                                            kMediaWorkerName, owner);
     const std::uint64_t session = newSessionId();
     HostProtocol host(session, options.expected);
     Connection connection(**process, deadline, cancel);
@@ -202,6 +210,8 @@ struct MediaWorkerPool::State {
             : process(std::move(value)), snapshot(std::move(source)), session(id),
               host(id, expected), started(Clock::now()), lastUsed(started) {}
         std::unique_ptr<platform::ProcessSupervisor> process;
+        // Listed for the Profiler while the retained process lives.
+        core::telemetry::HelperProcessRegistration listed;
         std::shared_ptr<const platform::ReadOnlyFileSnapshot> snapshot;
         std::uint64_t session = 0;
         std::uint64_t sequence = 1;
@@ -221,6 +231,15 @@ MediaWorkerPool::MediaWorkerPool(WorkerPoolOptions options)
     : state_(std::make_shared<State>(std::move(options))) {}
 MediaWorkerPool::~MediaWorkerPool() { shutdown(); }
 void MediaWorkerPool::shutdown() { state_->stopping.store(true); }
+std::size_t MediaWorkerPool::workerProcessIds(const std::span<std::int64_t> out) const noexcept {
+    std::array<core::telemetry::HelperProcess, core::telemetry::kHelperProcessSlots> helpers{};
+    const auto count = core::telemetry::readHelperProcesses(helpers);
+    std::size_t written = 0;
+    for (std::size_t index = 0; index < count && written < out.size(); ++index)
+        if (helpers[index].owner == state_.get())
+            out[written++] = helpers[index].pid;
+    return written;
+}
 void MediaWorkerPool::releaseRetained() {
     const std::lock_guard lock(state_->retainedMutex);
     state_->retained.reset();
@@ -286,7 +305,7 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
     try {
         if (!retain) {
             state_->retained.reset();
-            return execute(state_->options, request, snapshot, cancelled);
+            return execute(state_->options, request, snapshot, cancelled, state_.get());
         }
         // The inherited immutable source handle is fixed at process launch. A newly captured
         // generation, even with the same digest, must get a fresh worker and decoder state.
@@ -314,8 +333,11 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
             if (state_->options.launched)
                 state_->options.launched((*process)->processId());
             const auto id = newSessionId();
+            const auto pid = (*process)->processId();
             state_->retained = std::make_unique<State::Retained>(std::move(*process), snapshot, id,
                                                                  state_->options.expected);
+            state_->retained->listed = core::telemetry::HelperProcessRegistration(
+                pid, kRetainedMediaWorkerName, state_.get());
             state_->retained->addressSpace = addressSpace;
             Connection connection(*state_->retained->process, now + state_->options.timeout,
                                   cancelled);
@@ -455,7 +477,7 @@ MediaWorkerPool::submit(runtime::TaskScheduler& scheduler, runtime::TaskOwner ow
                         reply =
                             Unavailable{Error::Unavailable, "Attempt terminated before execution"};
                     else
-                        reply = execute(state->options, request, snapshot, cancel);
+                        reply = execute(state->options, request, snapshot, cancel, state.get());
                 } catch (const std::bad_alloc&) {
                     reply = Unavailable{Error::Oversized, "Worker allocation budget exhausted"};
                 } catch (const std::exception&) {

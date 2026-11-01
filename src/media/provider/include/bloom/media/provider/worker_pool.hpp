@@ -3,6 +3,7 @@
 #include <bloom/media/provider/protocol.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <span>
 
 namespace bloom::media::provider {
 using WorkerReply = std::variant<ProbeResult, FrameProduct, DemuxIndex, AudioBlock, Unavailable>;
@@ -48,6 +49,10 @@ class MediaWorkerPool final {
          const platform::ProcessCancellation& cancel = {}, bool retainWorker = false);
     // Drop a pinned worker before capturing a fresh source revision. The caller runs off UI.
     void releaseRetained();
+    // Read-only: the process IDs of this pool's live workers (the retained one and any one-call
+    // worker running now), as the Profiler lists them (#423). Fills `out` and returns the count;
+    // never allocates or blocks.
+    [[nodiscard]] std::size_t workerProcessIds(std::span<std::int64_t> out) const noexcept;
     void shutdown();
 
   private:

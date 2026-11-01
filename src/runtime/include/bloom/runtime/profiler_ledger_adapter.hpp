@@ -26,27 +26,31 @@ struct ProfilerLedgerReading final {
     ProfilerBytes retainedBytes{};
     ProfilerMetric<bool> memoryPressure{};
     ProfilerMetric<bool> swapPressure{};
-    // What every reusable pool holds now, in aggregate (the ledger has no per-pool accessor).
+    // One row per registered pool (MemoryBudgetLedger::copyProfilerPools), and their sums.
     bool holdingPresent = false;
     std::uint64_t holdingHostBytes = 0;
     std::uint64_t holdingPendingBytes = 0;
     std::uint64_t holdingDeviceBytes = 0;
+    std::uint32_t poolCount = 0;
+    std::uint32_t droppedPools = 0;
+    std::array<ProfilerPool, kProfilerMaximumPools> pools{};
+    // Bytes admission has granted to running work, outside any pool (UsableCapacity's host claims
+    // minus the retained preview frames they include); absent without an admission policy.
+    ProfilerBytes admissionClaimBytes{};
 };
 static_assert(std::is_trivially_copyable_v<ProfilerLedgerReading>);
 
 // Reads the ledger into `reading`. MemoryBudgetLedger::state() copies the whole process sample
 // (strings and vectors), so it is read only when `refreshState` is set (after the ledger applied a
-// sample); otherwise the state-derived fields keep their previous values. The pool holding asks
-// every registered pool, so this runs on the thread that polls the ledger (the UI thread).
+// sample); otherwise the state-derived fields keep their previous values. The pool rows ask every
+// registered pool what it holds, so this runs on the thread that polls the ledger (the UI thread).
+// It never allocates.
 void readProfilerLedger(const MemoryBudgetLedger& ledger, ProfilerLedgerReading& reading,
                         bool refreshState);
 
-// Copies a reading into the snapshot's memory section: machine and ledger figures, and the
-// aggregate reusable holding as one pool row whose counters stay absent.
+// Copies a reading into the snapshot's memory section: machine and ledger figures, the pool rows
+// and the admission claims.
 void applyProfilerLedgerReading(const ProfilerLedgerReading& reading,
                                 ProfilerMemory& memory) noexcept;
-
-// The pool row's name.
-inline constexpr std::string_view kProfilerReusablePoolName = "Reusable caches (all)";
 
 } // namespace bloom::runtime

@@ -3,6 +3,7 @@
 #include "lut_resource_budget.hpp"
 #include "lut_worker_ipc.hpp"
 #include "lut_worker_protocol.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 
 #include <bloom/platform/process_supervisor.hpp>
 
@@ -59,7 +60,8 @@ using Clock = std::chrono::steady_clock;
 class WorkerGuard final {
   public:
     explicit WorkerGuard(std::unique_ptr<platform::ProcessSupervisor> worker)
-        : worker_(std::move(worker)) {}
+        : worker_(std::move(worker)),
+          listed_(worker_ ? worker_->processId() : 0, "Colour worker", this) {}
     ~WorkerGuard() {
         if (worker_) {
             worker_->stop();
@@ -71,6 +73,8 @@ class WorkerGuard final {
 
   private:
     std::unique_ptr<platform::ProcessSupervisor> worker_;
+    // Listed for the Profiler while the colour worker lives (#423).
+    core::telemetry::HelperProcessRegistration listed_;
 };
 #endif
 } // namespace

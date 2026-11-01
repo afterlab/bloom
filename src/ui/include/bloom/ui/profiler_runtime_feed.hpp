@@ -22,8 +22,9 @@
 #include <optional>
 
 namespace bloom::runtime {
+class GpuProcessingPhasePolicy;
 class MemoryBudgetLedger;
-}
+} // namespace bloom::runtime
 
 namespace bloom::ui {
 
@@ -42,12 +43,14 @@ struct ProfilerUiSources final {
     CompositionPreviewController* preview = nullptr;
     RamPreviewController* ramPreview = nullptr;
     ExportQueueAdapter* exportQueue = nullptr;
+    // Host bytes admission has granted to running work (its claims minus the preview retention
+    // they include); read with the ledger on each tick.
+    const runtime::GpuProcessingPhasePolicy* admission = nullptr;
 };
 
 // The sampler's GPU source: Bloom's own device images from the render module's process-wide
-// reclamation counters (live and retiring bytes, refusals, reclaims). Absent in a build without a
-// GPU device. The driver budget, transfer bytes and submits stay absent until the engine counts
-// them.
+// reclamation counters (live and retiring bytes, refusals, reclaims), through
+// runtime::readProfilerGpuDevice. Absent in a build without a GPU device.
 void readProfilerGpuImageStats(runtime::ProfilerGpu& gpu) noexcept;
 
 class RuntimeProfilerFeed final : public ProfilerFeed {
