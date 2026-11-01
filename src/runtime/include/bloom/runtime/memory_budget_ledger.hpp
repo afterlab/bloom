@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/runtime/memory_eviction_priority.hpp>
 #include <bloom/runtime/process_memory_sample.hpp>
 
 #include <chrono>
@@ -8,6 +9,8 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace bloom::runtime {
 
@@ -101,10 +104,13 @@ class MemoryBudgetLedger final {
     // callback before destruction.
     // Poll on the UI thread when UI-owned pools are registered. Callbacks must not perform I/O,
     // wait for workers, or modify registrations. Cache locks must never enclose ledger calls.
+    // `priority` orders which reusable pools give memory back first while a RAM Preview fill is
+    // active (MemoryEvictionPriority); outside a fill it has no effect.
     void registerCache(const void* owner, std::size_t ceiling,
                        std::function<std::size_t()> retained,
                        std::function<void(std::size_t)> applyBudget,
-                       MemoryBudgetOwnerKind kind = MemoryBudgetOwnerKind::ReusableRetention);
+                       MemoryBudgetOwnerKind kind = MemoryBudgetOwnerKind::ReusableRetention,
+                       MemoryEvictionPriority priority = MemoryEvictionPriority::Ordinary);
     void unregisterCache(const void* owner);
     [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
     [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
@@ -134,9 +140,41 @@ class MemoryBudgetLedger final {
     void requestHostTrim() noexcept;
     // Evict-on-demand for active work: every reusable pool gives back its share of `bytes`
     // (proportional to what it holds, least recently used entries first), below what it holds
-    // now. Caches are never a reason for work to wait. Same thread rules as poll; returns the
-    // bytes the pools released.
+    // now. During a RAM Preview fill the Ordinary pools give first and finished preview frames only
+    // the remainder (memoryEvictionShares). Caches are never a reason for work to wait. Same thread
+    // rules as poll; returns the bytes the pools released.
     std::size_t reclaim(std::size_t bytes);
+
+    // An active RAM Preview fill. While at least one is held, Ordinary pools yield before
+    // FinishedPreview pools in budget deficits, in reclaim() and through yieldToPreview(). Ending
+    // (or destroying) the last one restores proportional yielding. Move-only; must not outlive the
+    // ledger.
+    class PreviewFill final {
+      public:
+        PreviewFill() noexcept = default;
+        PreviewFill(PreviewFill&& other) noexcept;
+        PreviewFill& operator=(PreviewFill&& other) noexcept;
+        PreviewFill(const PreviewFill&) = delete;
+        PreviewFill& operator=(const PreviewFill&) = delete;
+        ~PreviewFill() { end(); }
+        void end() noexcept;
+        [[nodiscard]] bool active() const noexcept { return ledger_ != nullptr; }
+
+      private:
+        friend class MemoryBudgetLedger;
+        explicit PreviewFill(MemoryBudgetLedger& ledger) noexcept : ledger_(&ledger) {}
+        MemoryBudgetLedger* ledger_ = nullptr;
+    };
+    [[nodiscard]] PreviewFill beginPreviewFill();
+    [[nodiscard]] bool previewFillActive() const;
+    // Preview first: a FinishedPreview pool that has no room for a finished frame asks here before
+    // it evicts one of its own. During a fill, with a RAM headroom (usable-capacity retention), the
+    // Ordinary pools give back up to `bytes` (least recently used entries first), and the caller
+    // may raise its own budget by the returned bytes they released. The exchange is memory-neutral:
+    // the preview pool never takes free memory or the headroom the next frame needs this way.
+    // Returns 0 outside a fill, without a headroom, or for any other owner. Same thread rules as
+    // poll; the caller must not hold its own cache lock.
+    std::size_t yieldToPreview(const void* owner, std::size_t bytes);
     // Memory admitted to active work but not yet allocated (processing-phase claims minus their
     // materialized backing, which measured usage already includes) that reusable pools must not
     // grow into; applied with the next budgets. Thread-safe.
@@ -184,6 +222,7 @@ class MemoryBudgetLedger final {
     struct Cache final {
         std::size_t ceiling;
         MemoryBudgetOwnerKind kind;
+        MemoryEvictionPriority priority;
         std::function<std::size_t()> retained;
         std::function<void(std::size_t)> applyBudget;
     };
@@ -212,6 +251,11 @@ class MemoryBudgetLedger final {
     std::optional<std::size_t> ramHeadroom_;
     std::size_t releasedSinceTake_ = 0;
     std::size_t activeWorkClaims_ = 0;
+    std::size_t previewFills_ = 0;
+    void endPreviewFill() noexcept;
+    // What each reusable pool holds now, with its priority, for memoryEvictionShares.
+    [[nodiscard]] std::vector<std::pair<const Cache*, MemoryEvictionHolding>>
+    reusableHoldingsLocked() const;
     // Available memory as reusable pools see it: the machine's available memory minus this
     // process's swapped memory, bounded by the room left in any finite process/cgroup domain.
     [[nodiscard]] std::size_t poolAvailableLocked(const MachineMemorySample& machine) const;

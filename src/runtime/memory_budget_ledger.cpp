@@ -311,12 +311,14 @@ MemoryBudgetLedger::allocate(const std::optional<std::size_t> operationOverride,
 void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceiling,
                                        std::function<std::size_t()> retained,
                                        std::function<void(std::size_t)> applyBudget,
-                                       const MemoryBudgetOwnerKind kind) {
+                                       const MemoryBudgetOwnerKind kind,
+                                       const MemoryEvictionPriority priority) {
     const std::lock_guard lock(mutex_);
-    const auto entry = caches_
-                           .insert_or_assign(owner, Cache{ceiling, kind, std::move(retained),
-                                                          std::move(applyBudget)})
-                           .first;
+    const auto entry =
+        caches_
+            .insert_or_assign(
+                owner, Cache{ceiling, kind, priority, std::move(retained), std::move(applyBudget)})
+            .first;
     // The new owner initialized its storage before registration and is not published yet.
     // A finite shared constraint must also update existing participants immediately.
     if (hasPolled_) {
@@ -376,15 +378,18 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
         // share of the deficit plus the margin, below what it holds now; the caches evict to their
         // new budgets. Between headroom and headroom plus margin, and while the OS reports memory
         // stalls, pools hold and never grow.
-        const auto own = participant.retained ? participant.retained() : 0;
-        std::size_t pools = 0;
+        const auto holdings = reusableHoldingsLocked();
+        std::size_t own = 0;
+        std::size_t index = 0;
         long double retainedTotal = 0;
-        for (const auto& [owner, cache] : caches_) {
-            if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention)
-                continue;
-            ++pools;
-            retainedTotal += static_cast<long double>(cache.retained ? cache.retained() : 0);
+        for (std::size_t at = 0; at < holdings.size(); ++at) {
+            if (holdings[at].first == &participant) {
+                own = holdings[at].second.heldBytes;
+                index = at;
+            }
+            retainedTotal += static_cast<long double>(holdings[at].second.heldBytes);
         }
+        const auto pools = holdings.size();
         const auto available = poolAvailableLocked(state_.machine);
         const auto margin = memoryPressureMarginBytes(*ramHeadroom_);
         const auto restoreFloor = saturatedAdd(*ramHeadroom_, margin);
@@ -400,12 +405,15 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
         } else if ((available < *ramHeadroom_ || stall) && retainedTotal > 0) {
             // Only the deficit: what brings available memory back to headroom plus margin. Each
             // pool gives back its share, least recently used entries first; never a whole pool
-            // (a user purge is the only full clear).
-            const auto deficit = static_cast<long double>(restoreFloor - available);
-            const auto cut = static_cast<std::size_t>(
-                std::min(static_cast<long double>(own),
-                         deficit * static_cast<long double>(own) / retainedTotal));
-            bytes = own - cut;
+            // (a user purge is the only full clear). During a RAM Preview fill the Ordinary pools
+            // cover the deficit before finished preview frames do.
+            std::vector<MemoryEvictionHolding> view;
+            view.reserve(holdings.size());
+            for (const auto& [cache, holding] : holdings)
+                view.push_back(holding);
+            const auto cuts = memoryEvictionShares(
+                view, restoreFloor - available, previewFills_ != 0, MemoryEvictionRounding::Down);
+            bytes = own - cuts[index];
         }
         if (state_.processCacheCeilingBytes)
             bytes = std::min(bytes, *state_.processCacheCeilingBytes);
@@ -600,31 +608,116 @@ std::size_t MemoryBudgetLedger::poolAvailableLocked(const MachineMemorySample& m
     return available;
 }
 
+std::vector<std::pair<const MemoryBudgetLedger::Cache*, MemoryEvictionHolding>>
+MemoryBudgetLedger::reusableHoldingsLocked() const {
+    std::vector<std::pair<const Cache*, MemoryEvictionHolding>> holdings;
+    holdings.reserve(caches_.size());
+    for (const auto& [owner, cache] : caches_) {
+        if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention)
+            continue;
+        holdings.emplace_back(
+            &cache, MemoryEvictionHolding{.priority = cache.priority,
+                                          .heldBytes = cache.retained ? cache.retained() : 0});
+    }
+    return holdings;
+}
+
 std::size_t MemoryBudgetLedger::reclaim(const std::size_t bytes) {
     const std::lock_guard lock(mutex_);
     if (bytes == 0)
         return 0;
-    std::vector<std::pair<const Cache*, std::size_t>> held;
+    auto holdings = reusableHoldingsLocked();
+    std::erase_if(holdings, [](const auto& entry) { return !entry.first->retained; });
+    std::vector<MemoryEvictionHolding> view;
+    view.reserve(holdings.size());
     long double total = 0;
-    for (const auto& [owner, cache] : caches_) {
-        if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention || !cache.retained)
-            continue;
-        const auto own = cache.retained();
-        held.emplace_back(&cache, own);
-        total += static_cast<long double>(own);
+    for (const auto& [cache, holding] : holdings) {
+        view.push_back(holding);
+        total += static_cast<long double>(holding.heldBytes);
     }
     if (total <= 0)
         return 0;
+    const bool fill = previewFills_ != 0;
+    // Round each share up so the pools together give back at least `bytes`.
+    const auto shares = memoryEvictionShares(view, bytes, fill, MemoryEvictionRounding::Up);
     const auto before = reusableRetainedLocked();
-    for (const auto& [cache, own] : held) {
-        // Round each share up so the pools together give back at least `bytes`.
-        const auto share = static_cast<std::size_t>(
-            std::min(static_cast<long double>(own),
-                     std::ceil(static_cast<long double>(bytes) * static_cast<long double>(own) /
-                               total)));
-        cache->applyBudget(own - share);
+    for (std::size_t index = 0; index < holdings.size(); ++index) {
+        // During a fill a pool asked for nothing keeps its budget (a finished-frame pool keeps
+        // the room it was growing into); outside one every pool is bounded to what it holds.
+        if (fill && shares[index] == 0)
+            continue;
+        holdings[index].first->applyBudget(holdings[index].second.heldBytes - shares[index]);
     }
     const auto after = reusableRetainedLocked();
+    const auto released = before > after ? before - after : std::size_t{0};
+    releasedSinceTake_ = saturatedAdd(releasedSinceTake_, released);
+    return released;
+}
+
+MemoryBudgetLedger::PreviewFill::PreviewFill(PreviewFill&& other) noexcept
+    : ledger_(std::exchange(other.ledger_, nullptr)) {}
+
+MemoryBudgetLedger::PreviewFill&
+MemoryBudgetLedger::PreviewFill::operator=(PreviewFill&& other) noexcept {
+    if (this != &other) {
+        end();
+        ledger_ = std::exchange(other.ledger_, nullptr);
+    }
+    return *this;
+}
+
+void MemoryBudgetLedger::PreviewFill::end() noexcept {
+    if (auto* const ledger = std::exchange(ledger_, nullptr))
+        ledger->endPreviewFill();
+}
+
+MemoryBudgetLedger::PreviewFill MemoryBudgetLedger::beginPreviewFill() {
+    const std::lock_guard lock(mutex_);
+    ++previewFills_;
+    return PreviewFill(*this);
+}
+
+void MemoryBudgetLedger::endPreviewFill() noexcept {
+    const std::lock_guard lock(mutex_);
+    if (previewFills_ != 0)
+        --previewFills_;
+}
+
+bool MemoryBudgetLedger::previewFillActive() const {
+    const std::lock_guard lock(mutex_);
+    return previewFills_ != 0;
+}
+
+std::size_t MemoryBudgetLedger::yieldToPreview(const void* owner, const std::size_t bytes) {
+    const std::lock_guard lock(mutex_);
+    if (bytes == 0 || previewFills_ == 0 || !ramHeadroom_)
+        return 0;
+    const auto found = caches_.find(owner);
+    if (found == caches_.end() || found->second.kind != MemoryBudgetOwnerKind::ReusableRetention ||
+        found->second.priority != MemoryEvictionPriority::FinishedPreview)
+        return 0;
+    auto holdings = reusableHoldingsLocked();
+    // Only Ordinary pools give here: finished frames never make room for other finished frames.
+    std::erase_if(holdings, [](const auto& entry) {
+        return entry.second.priority != MemoryEvictionPriority::Ordinary ||
+               !entry.first->retained || entry.second.heldBytes == 0;
+    });
+    std::vector<MemoryEvictionHolding> view;
+    view.reserve(holdings.size());
+    std::size_t before = 0;
+    for (const auto& [cache, holding] : holdings) {
+        view.push_back(holding);
+        before = saturatedAdd(before, holding.heldBytes);
+    }
+    if (before == 0)
+        return 0;
+    const auto shares = memoryEvictionShares(view, bytes, true, MemoryEvictionRounding::Up);
+    for (std::size_t index = 0; index < holdings.size(); ++index)
+        if (shares[index] != 0)
+            holdings[index].first->applyBudget(holdings[index].second.heldBytes - shares[index]);
+    std::size_t after = 0;
+    for (const auto& [cache, holding] : holdings)
+        after = saturatedAdd(after, cache->retained());
     const auto released = before > after ? before - after : std::size_t{0};
     releasedSinceTake_ = saturatedAdd(releasedSinceTake_, released);
     return released;

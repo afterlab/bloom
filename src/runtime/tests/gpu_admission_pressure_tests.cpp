@@ -238,8 +238,8 @@ void retentionIsEvictedBeforeWaiting() {
     const auto free = policy.usableCapacity().hostFreeBytes;
     const auto waiting = policy.reserve(big);
     const auto need = policy.lastAwaitingNeed();
-    require(waiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity && calls == 1 &&
-                need && need->domain == GpuProcessingPhaseDomain::Host &&
+    require(waiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity && calls == 1 && need &&
+                need->domain == GpuProcessingPhaseDomain::Host &&
                 need->bytes >= 3 * big.minimumSourceBytes && asked == need->bytes - free &&
                 need->shortfallBytes == asked,
             "a waiting request first asks reusable retention to release its shortfall");
@@ -311,6 +311,88 @@ void cachesYieldToWork() {
                 cgroupCapped ? "capped: the export frame is admitted at the next sample"
                              : "the export frame is admitted at the next sample");
         ledger.unregisterCache(&cached);
+    }
+}
+
+// Preview first (#413) never starves the frame being prepared. During a RAM Preview fill a frame
+// that waits for host room is given it by the operation cache first, leaving the finished preview
+// frames alone; when the finished frames are all that is left, they still give way, so the frame
+// in flight is admitted at the next sample either way.
+void previewFillWorkIsNotStarved() {
+    for (const bool operationHolds : {true, false}) {
+        MemoryBudgetLedger ledger(64 * kGiB, 64 * kGiB);
+        ledger.setRamHeadroom(2 * kGiB);
+        std::size_t operation = 0;
+        std::size_t preview = 0;
+        std::size_t previewBudget = 0;
+        ledger.registerCache(
+            &operation, 64 * kGiB, [&] { return operation; },
+            [&](const std::size_t bytes) { operation = std::min(operation, bytes); });
+        ledger.registerCache(
+            &preview, 64 * kGiB, [&] { return preview; },
+            [&](const std::size_t bytes) {
+                previewBudget = bytes;
+                preview = std::min(preview, bytes);
+            },
+            MemoryBudgetOwnerKind::ReusableRetention, MemoryEvictionPriority::FinishedPreview);
+        const std::uint64_t room = 24 * kGiB;
+        const auto availableNow = [&] {
+            return room - std::min<std::uint64_t>(room, operation + preview);
+        };
+        // The pools fill the room to just beyond headroom plus margin.
+        preview = operationHolds ? 8 * kGiB : room - 3 * kGiB;
+        operation = operationHolds ? room - 3 * kGiB - preview : 0;
+        MemoryBudgetState state;
+        state.machine.availableBytes = availableNow();
+        static_cast<void>(ledger.poll(state.machine));
+        GpuProcessingPhasePolicy policy(32);
+        policy.setHeadroom({.ramBytes = 2 * kGiB, .vramBytes = 0});
+        std::uint64_t serial = 1;
+        const auto sample = [&] {
+            state.machine.availableBytes = availableNow();
+            state.process.status = ProcessMemoryStatus::Unsupported;
+            state.process.source = ProcessMemorySource::OtherHostOnly;
+            state.process.sampledAt = Clock::now();
+            state.processSampleFresh = true;
+            state.sampleSerial = serial++;
+            policy.applyHostSample(state, 64 * kGiB, state.process.sampledAt);
+        };
+        sample();
+        reportDevice(policy, 1, 22 * kGiB);
+        policy.addRetentionReclaimer(
+            [&](const GpuProcessingPhaseDomain domain, const std::uint64_t shortfall) {
+                return domain == GpuProcessingPhaseDomain::Host
+                           ? ledger.reclaim(static_cast<std::size_t>(shortfall))
+                           : std::uint64_t{0};
+            });
+        auto fill = ledger.beginPreviewFill();
+        auto inFlight = frame();
+        inFlight.minimumSourceBytes = 512 * kMiB; // A 2160p float source.
+        const auto previewBefore = preview;
+        const auto budgetBefore = previewBudget;
+        const auto operationBefore = operation;
+        const auto first = policy.reserve(inFlight);
+        require(first.status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+                "the in-flight frame does not fit before the pools give back");
+        if (operationHolds) {
+            require(operation < operationBefore && preview == previewBefore &&
+                        previewBudget == budgetBefore,
+                    "during a fill the operation cache gives the waiting frame its room and the "
+                    "finished preview frames keep theirs");
+        } else {
+            require(preview < previewBefore,
+                    "with nothing else left the finished preview frames still give way to the "
+                    "frame being prepared");
+        }
+        sample(); // The fresh sample the reclaimer requests.
+        const auto admitted = policy.reserve(inFlight);
+        require(admitted.status == GpuProcessingPhaseAdmission::Accepted,
+                operationHolds ? "the frame in flight is admitted at the next sample"
+                               : "the frame in flight is admitted even when only preview "
+                                 "frames could give");
+        fill.end();
+        ledger.unregisterCache(&operation);
+        ledger.unregisterCache(&preview);
     }
 }
 
@@ -455,6 +537,7 @@ int main() {
         strictViewerPriority();
         retentionIsEvictedBeforeWaiting();
         cachesYieldToWork();
+        previewFillWorkIsNotStarved();
         deviceGrowthBeyondTheClaimUsesLiveRoom();
         pendingClaimsExcludeAllocatedBacking();
     } catch (const std::exception& error) {

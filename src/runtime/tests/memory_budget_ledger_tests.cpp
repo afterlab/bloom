@@ -642,6 +642,112 @@ int liveProcessProbe() {
 
 } // namespace
 
+// Preview first (#413). The policy itself: proportional outside a fill; during one the Ordinary
+// tier covers what it holds and only the remainder falls to finished preview frames.
+void evictionSharesByPriority() {
+    using bloom::runtime::MemoryEvictionHolding;
+    using bloom::runtime::MemoryEvictionPriority;
+    using bloom::runtime::MemoryEvictionRounding;
+    using bloom::runtime::memoryEvictionShares;
+    const std::vector<MemoryEvictionHolding> holdings{
+        {MemoryEvictionPriority::Ordinary, 6 * gib},
+        {MemoryEvictionPriority::FinishedPreview, 4 * gib},
+        {MemoryEvictionPriority::Ordinary, 2 * gib}};
+    auto shares = memoryEvictionShares(holdings, 3 * gib, false, MemoryEvictionRounding::Down);
+    expect(shares == std::vector<std::size_t>{3 * gib / 2, gib, gib / 2},
+           "outside a fill every pool gives in proportion to what it holds");
+    shares = memoryEvictionShares(holdings, 4 * gib, true, MemoryEvictionRounding::Down);
+    expect(shares == std::vector<std::size_t>{3 * gib, 0, gib},
+           "during a fill the Ordinary pools cover the request and preview frames give nothing");
+    shares = memoryEvictionShares(holdings, 10 * gib, true, MemoryEvictionRounding::Up);
+    expect(shares == std::vector<std::size_t>{6 * gib, 2 * gib, 2 * gib},
+           "preview frames give only what the Ordinary pools could not");
+    shares = memoryEvictionShares(holdings, 20 * gib, true, MemoryEvictionRounding::Up);
+    expect(shares == std::vector<std::size_t>{6 * gib, 4 * gib, 2 * gib},
+           "no pool gives more than it holds");
+    shares = memoryEvictionShares(holdings, 1, false, MemoryEvictionRounding::Up);
+    expect(shares == std::vector<std::size_t>{1, 1, 1},
+           "rounding up gives at least the request across the pools");
+}
+
+// The ledger applies preview first only during a fill: budget deficits, work reclaim and the
+// preview pool's own request for room all take from Ordinary pools first; ending the fill
+// restores proportional yielding exactly.
+void previewFirstDuringFill() {
+    MemoryBudgetLedger ledger(64 * gib, 64 * gib);
+    ledger.setRamHeadroom(2 * gib);
+    std::size_t heldOperation = 6 * gib, heldPreview = 3 * gib;
+    std::size_t operation = 0, preview = 0;
+    ledger.registerCache(
+        &operation, gib, [&] { return heldOperation; },
+        [&](std::size_t bytes) {
+            operation = bytes;
+            heldOperation = std::min(heldOperation, bytes);
+        });
+    ledger.registerCache(
+        &preview, gib, [&] { return heldPreview; },
+        [&](std::size_t bytes) {
+            preview = bytes;
+            heldPreview = std::min(heldPreview, bytes);
+        },
+        bloom::runtime::MemoryBudgetOwnerKind::ReusableRetention,
+        bloom::runtime::MemoryEvictionPriority::FinishedPreview);
+    const auto margin = gib / 4;
+
+    // Outside a fill: a 1.5 GiB deficit (to headroom plus margin) is shared 2:1.
+    static_cast<void>(ledger.poll({.availableBytes = 3 * gib / 4}, at(0)));
+    expect(!ledger.previewFillActive() && heldOperation == 5 * gib && heldPreview == 5 * gib / 2,
+           "outside a fill a deficit is shared in proportion to what each pool holds");
+    expect(ledger.yieldToPreview(&preview, gib) == 0 && heldOperation == 5 * gib,
+           "outside a fill the preview pool cannot take room from other pools");
+    expect(ledger.reclaim(3 * gib) >= 3 * gib && heldOperation == 3 * gib &&
+               heldPreview == 3 * gib / 2,
+           "outside a fill work reclaim is proportional");
+
+    heldOperation = 6 * gib;
+    heldPreview = 3 * gib;
+    {
+        auto fill = ledger.beginPreviewFill();
+        expect(fill.active() && ledger.previewFillActive(), "a fill scope marks the fill active");
+        static_cast<void>(ledger.poll({.availableBytes = gib + margin}, at(1)));
+        expect(heldOperation == 5 * gib && heldPreview == 3 * gib && preview == 3 * gib,
+               "during a fill the operation cache covers the deficit and preview frames stay");
+        static_cast<void>(ledger.poll({.availableBytes = 2 * gib + margin}, at(2)));
+        const auto previewBudget = preview;
+        expect(ledger.reclaim(2 * gib) >= 2 * gib && heldOperation == 3 * gib &&
+                   heldPreview == 3 * gib && preview == previewBudget,
+               "during a fill work reclaim takes from the operation cache and leaves the preview "
+               "budget alone");
+        expect(ledger.reclaim(4 * gib) >= 4 * gib && heldOperation == 0 && heldPreview == 2 * gib,
+               "the frame in flight is never starved: preview frames give what is left");
+        heldOperation = 2 * gib;
+        expect(ledger.yieldToPreview(&operation, gib) == 0 && heldOperation == 2 * gib,
+               "only a finished-preview pool may ask for room");
+        const auto released = ledger.yieldToPreview(&preview, gib);
+        expect(released == gib && heldOperation == gib && heldPreview == 2 * gib,
+               "the preview pool's request is met by the operation cache, memory-neutral");
+        expect(ledger.yieldToPreview(&preview, 4 * gib) == gib && heldOperation == 0,
+               "the request is bounded by what the Ordinary pools hold");
+        expect(ledger.yieldToPreview(&preview, gib) == 0,
+               "with nothing left to yield the preview pool evicts its own oldest frames");
+        auto moved = std::move(fill);
+        expect(!fill.active() && moved.active() && ledger.previewFillActive(),
+               "moving a fill scope keeps the fill active");
+        auto second = ledger.beginPreviewFill();
+        moved.end();
+        expect(ledger.previewFillActive(), "concurrent fills each hold the policy");
+    }
+    expect(!ledger.previewFillActive(), "ending every fill restores normal yielding");
+    heldOperation = 6 * gib;
+    heldPreview = 3 * gib;
+    static_cast<void>(ledger.poll({.availableBytes = 3 * gib / 4}, at(3)));
+    expect(heldOperation == 5 * gib && heldPreview == 5 * gib / 2 &&
+               ledger.yieldToPreview(&preview, gib) == 0,
+           "after a fill deficits are proportional again");
+    ledger.unregisterCache(&operation);
+    ledger.unregisterCache(&preview);
+}
+
 int main(int argc, char** argv) try {
     if (argc == 2 && std::string_view(argv[1]) == "--live-process-probe")
         return liveProcessProbe();
@@ -653,6 +759,8 @@ int main(int argc, char** argv) try {
     cgroupRoomReclaimAndActiveClaims();
     verifiedConstraintRemovalRecovery();
     processHierarchyAndStableFill();
+    evictionSharesByPriority();
+    previewFirstDuringFill();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
