@@ -1055,11 +1055,13 @@ counts, and zero retained presenter records or quarantined generations.
 
 The Linux run on 2026-11-01 retained, before the fix, 107 MiB on every move to the 1.5x screen and
 27 MiB on every move back (one full-frame resampled image per layer at Full and at Half), and about
-350 MiB per cycle in all; the ledger grew from 0.7 GiB to 3.4 GiB over 8 measured cycles. After the
-fix the first round trip retained 226 MiB once (both resolutions' GPU uploads, decoded footage and
-resampled layers), and every later move retained 0 MiB: the ledger held 404 MiB, RSS 878-895 MiB,
-GPU images 392 MiB, the cycle peak 35-39 MiB, with zero preparations, zero Viewer CPU fallbacks and
-zero retained records.
+350 MiB per cycle in all; the ledger grew from 0.7 GiB to 3.4 GiB over 8 measured cycles. Every move
+missed the operation cache and added Operation entries, and anonymous RSS rose with the ledger's
+host bytes, so the growth was accounted but never reused. After the fix the first round trip
+retained 226 MiB once (both resolutions' GPU uploads, decoded footage and resampled layers), and
+the 16 later moves retained 0 MiB with zero operation-cache misses: the ledger held 404 MiB,
+anonymous RSS 481-519 MiB, RSS 883-896 MiB, GPU images 392 MiB, the cycle peak 24-39 MiB, with zero
+preparations, zero Viewer CPU fallbacks and zero retained records.
 
 The channel presentation scan runs in a cancellable bounded CPU worker, with explicit CPU channel
 provenance. One completed derivative, one active task and one newest intent bound publication;

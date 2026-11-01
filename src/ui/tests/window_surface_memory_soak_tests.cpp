@@ -141,6 +141,24 @@ constexpr std::uint64_t kCyclePeakTolerance = 160 * kMiB;
 #endif
 }
 
+// Linux only: resident anonymous memory (heap and anonymous mappings), the figure the reported
+// capture tracked. Zero elsewhere.
+[[nodiscard]] std::uint64_t anonymousRssBytes() {
+#if defined(__linux__)
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        if (line.starts_with("RssAnon:")) {
+            std::istringstream value(line.substr(8));
+            std::uint64_t kibibytes = 0;
+            value >> kibibytes;
+            return kibibytes * 1024ULL;
+        }
+    }
+#endif
+    return 0;
+}
+
 // Linux only: the kernel's high-water mark since the last reset. Elsewhere the cycle peak is the
 // highest RSS the harness's own 10 ms sampler observed.
 [[nodiscard]] std::optional<std::uint64_t> kernelPeakRssBytes() {
@@ -606,20 +624,53 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
               << " divisor=" << divisorOnFirst << '\n';
     std::vector<Sample> samples;
     std::uint32_t divisorOnSecond = 0;
+    int moves = 0;
+    auto lastAccess = evaluator.operationCache()->statistics();
+    auto lastOperationBytes =
+        evaluator.operationCache()->retainedBytes(runtime::OperationCacheEntryKind::Operation);
     for (int cycle = 0; cycle < kWarmupCycles + measuredCycles; ++cycle) {
         settle();
         const auto cycleStarted = std::chrono::steady_clock::now();
         const auto start = currentRssBytes();
         sampledPeak = start;
         resetKernelPeakRss();
-        const auto ledgerBytes = [] {
-            return runtime::processMemoryBudgetLedger().reusableRetainedBytes();
+        // Per monitor change: anonymous RSS against the ledger's reusable host bytes and each
+        // pool, and the operation cache's lookups, so a move that adds entries is visible.
+        const auto reportMove = [&](const char* destination) {
+            ++moves;
+            const auto holding = runtime::processMemoryBudgetLedger().reusableHolding();
+            const auto& operations = *evaluator.operationCache();
+            const auto access = operations.statistics();
+            const auto mib = [](const std::uint64_t bytes) {
+                return static_cast<double>(bytes) / static_cast<double>(kMiB);
+            };
+            const auto operationBytes =
+                operations.retainedBytes(runtime::OperationCacheEntryKind::Operation);
+            std::cout
+                << "SOAK move=" << moves << " cycle=" << cycle << " to=" << destination
+                << " divisor=" << controller.resolutionDivisor()
+                << " anonMiB=" << mib(anonymousRssBytes())
+                << " ledgerHostMiB=" << mib(holding.hostBytes)
+                << " ledgerPendingMiB=" << mib(holding.hostPendingRetirementBytes)
+                << " ledgerDeviceMiB=" << mib(holding.deviceBytes)
+                << " operationEntriesMiB=" << mib(operationBytes) << " decodedMiB="
+                << mib(operations.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia))
+                << " uploadsMiB="
+                << mib(operations.retainedBytes(runtime::OperationCacheEntryKind::PreparedUpload))
+                << " previewMiB=" << mib(frameCache->residentBytes())
+                << " cacheHits=" << access.hits - lastAccess.hits
+                << " cacheMisses=" << access.misses - lastAccess.misses << '\n';
+            if (cycle >= kWarmupCycles)
+                checks.expect(
+                    operationBytes == lastOperationBytes,
+                    "a monitor change after the first round trip adds no operation entry");
+            lastAccess = access;
+            lastOperationBytes = operationBytes;
         };
-        const auto ledgerAtStart = ledgerBytes();
         moveTo(second, secondSize);
         restPointer();
         settle();
-        const auto ledgerAfterSecond = ledgerBytes();
+        reportMove("1.5x");
         checks.expect(viewer->devicePixelRatioF() == 1.5,
                       "the second screen scales the Viewer to 1.5x");
         divisorOnSecond = controller.resolutionDivisor();
@@ -637,16 +688,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(viewer->devicePixelRatioF() == 1.0 &&
                           controller.resolutionDivisor() == divisorOnFirst,
                       "the first screen returns the Viewer to 1x and its divisor");
-        const auto ledgerAfterFirst = ledgerBytes();
-        // Per monitor change: what the move to the 1.5x screen and the move back each retained.
-        std::cout << "SOAK cycle=" << cycle << " moveToSecondRetainedMiB="
-                  << (static_cast<double>(ledgerAfterSecond) - static_cast<double>(ledgerAtStart)) /
-                         static_cast<double>(kMiB)
-                  << " moveToFirstRetainedMiB="
-                  << (static_cast<double>(ledgerAfterFirst) -
-                      static_cast<double>(ledgerAfterSecond)) /
-                         static_cast<double>(kMiB)
-                  << '\n';
+        reportMove("1x");
         for (const auto& size : sizes) {
             window->resize(size);
             restPointer();
