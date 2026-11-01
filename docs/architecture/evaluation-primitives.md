@@ -895,6 +895,51 @@ the reusable pools (see below), which leaves no room for work. That is what the 
 the other pools about 2.3 GB, the process sat at the limit with under 1 GB outside the pools, and
 2160p video fills stopped at 182–207 of 240 frames waiting for capacity no cache gave back.
 
+#### What the pools count
+
+Every reusable pool reports a `MemoryPoolHolding` to the ledger (#416):
+
+- `hostBytes`: host bytes the pool retains and can give back by evicting;
+- `hostPendingRetirementBytes`: host bytes already evicted that stay allocated until a retirement
+  worker frees them after the GPU work that reads them;
+- `deviceBytes`: device-resident bytes.
+
+Budgets, deficit and reclaim shares, and `yieldToPreview` grants use `hostBytes` only. Host totals
+(`reusableRetainedBytes`, `MemoryBudgetState::retainedBytes`, the bytes released for a heap trim)
+are `hostBytes` plus pending retirement, so evicted bytes are neither lost before they are freed
+nor reclaimed a second time. Device bytes never reach a host budget; `reusableHolding()` reports
+them for attribution next to the device claims of the processing policy. A pool registered with a
+plain byte callback reports host bytes only.
+
+What each pool counts:
+
+- `OperationCache` charges each distinct allocation once, however many entries reference it, at
+  its real size (`Rgba32fImage::pixelStorageByteCost`, the vector capacity, plus the image
+  object; an encoded source revision's `retainedBytes`), and per entry only its metadata (the
+  entry, its key and values). An identity effect, a composition output and a prepared upload
+  often publish the same image as another entry; before #416 each entry charged the full pixels,
+  so the pool reported more than it held. `OperationCache::memory()` splits the total by kind,
+  reports the pending part, and reports `sharedReferenceBytes`: the extra references per-entry
+  accounting used to add. Shared storage counts under the kind that stored it first. Evicted
+  entries of a pool bound to a host retirement owner stay charged as pending until their worker
+  frees them; a store of the same image meanwhile takes it back out of pending without charging
+  it again. The cache's budget bounds `hostBytes`, as before. Nothing in it is device memory: a
+  prepared upload is the host copy a later upload reads.
+- `PreviewFrameCache` counts CPU and packed frames as host bytes. A GPU-resident frame is device
+  memory: once `setGpuResidentLimits` gives the cache a device budget, resident frames count as
+  `deviceBytes`, only the GPU-resident limits evict them, and they no longer take room from the
+  host byte budget or from the Ordinary pools through `yieldToPreview`. A standalone cache without
+  a device budget charges resident frames to its byte budget, as before.
+- The decoded video cache, the media disk cache write queue and the asset proxy and decoded-audio
+  pools are host-only and report plain host bytes.
+
+No pool counts allocator overhead, freed memory the allocator keeps in its arenas, library and
+driver mappings, or memory held by work in flight; these are the measured remainder between the
+host totals and anonymous RSS. The packed RAM-fill benchmark harness reports the pool split
+(`memoryAtPeak` and `BENCH_MEMORY`: `operationPendingBytes`, `operationSharedBytes`,
+`reusablePendingBytes`, `reusableDeviceBytes`, `deviceClaimBytes`), and `tools/bench/run_bench.py` samples the process tree's device memory
+(`peakDeviceBytes`, from `nvidia-smi --query-compute-apps` where available).
+
 #### Eviction priority during RAM Preview
 
 Outside a RAM Preview fill every reusable pool yields in proportion to what it holds, least

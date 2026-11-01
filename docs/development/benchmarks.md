@@ -241,8 +241,15 @@ Every measurement is a fresh process.
   pool on the process memory ledger), `previewCacheBytes`, `operationCacheBytes` (with its
   `decodedMediaBytes` and `preparedUploadBytes` entries), and the processing
   policy's `hostClaimBytes` and `hostUsableBytes` (usable capacity: available memory within the OS
-  limit minus the RAM headroom). RSS minus `reusablePoolBytes` is the memory outside Bloom's
-  caches. The harness also prints a `BENCH_MEMORY` line with the same fields every ten seconds,
+  limit minus the RAM headroom). Pool bytes are host allocations, each distinct allocation counted
+  once, including bytes pending asynchronous retirement (`operationPendingBytes`,
+  `reusablePendingBytes`); `operationSharedBytes` is what per-entry accounting would have added for
+  storage several entries share, and `reusableDeviceBytes` (device-resident pool bytes) and
+  `deviceClaimBytes` are device memory, outside the host totals
+  ([what the pools count](../architecture/evaluation-primitives.md#what-the-pools-count)). Anonymous
+  RSS minus `reusablePoolBytes` is the memory outside Bloom's caches. `peakDeviceBytes` is the
+  process tree's peak device memory as the driver reports it (`nvidia-smi --query-compute-apps`,
+  NVIDIA only). The harness also prints a `BENCH_MEMORY` line with the same fields every ten seconds,
   which the run log keeps, so a fill that stops making progress shows where its memory is.
   Fills also report `cachedFrames` (frames still retained when the fill ends) and
   `previewFirstYieldedBytes`: bytes the other reusable pools gave back so a finished preview frame

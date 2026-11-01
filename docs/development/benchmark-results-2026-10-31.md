@@ -206,6 +206,65 @@ Keeping all 240 frames of a 2160p fill takes 7.96 GB of preview frames. With the
 the frames in flight, the process now peaks at about 10 GB inside the 20 GiB limit, so this
 profile has room to spare.
 
+### Pool accounting against RSS (#416)
+
+In the #413 before runs the operation cache reported 6.3–9.3 GB of `Operation` entries with no
+prepared uploads in the DNxHR, 1080p and 720p cells, more than the process held: at 1080p the pools
+totaled 8.2 GB against 6.0 GB RSS (5.6 GB anonymous). Those cells ran on the CPU reference route
+(240–457 CPU-fallback frames; that build had no `bloom-media-worker`), where every frame stores
+an `Operation` entry for each operation. The composition output publishes its input image again,
+and each entry charged the full pixels, so every image was counted twice. Device-resident bytes
+and bytes pending retirement were not the cause: the operation cache holds no device memory, and
+pending retirement was 0 at every peak below.
+
+The fix
+([what the pools count](../architecture/evaluation-primitives.md#what-the-pools-count)): pools
+report host bytes, host bytes pending retirement and device bytes separately; the operation cache
+charges each distinct allocation once at its real size; device-budgeted GPU-resident preview
+frames count as device memory. The harness now reports `operationSharedBytes` (what per-entry
+accounting added) and `peakDeviceBytes` (the process tree's device memory from `nvidia-smi
+--query-compute-apps`).
+
+Re-measured on 2026-11-01 inside the same 20G scope, Full cold, A variant. Before: main fd428b7e5.
+After: the #416 branch on the same base. Pools and anonymous RSS are `memoryAtPeak`; the remainder
+is anonymous RSS minus the host pool total.
+
+CPU reference route (the media worker removed, as in the #413 before runs). Cold playback, outside
+a fill, where the operation cache grows:
+
+| Cell | Before: operation cache / anon RSS | After: operation cache (shared references) / anon RSS | After remainder |
+|---|---|---|---|
+| 1080p H.264 | 8.96 / 4.59 GB | 4.51 (4.51) / 4.61 GB | 0.10 GB |
+| 720p H.264 | 4.07 / 2.16 GB | 2.01 (2.01) / 2.08 GB | 0.07 GB |
+
+The shared references equal the pool total: each retained image is referenced by exactly two
+entries. Before, the cache reported twice what it held and evicted against that; after, it tracks
+anonymous RSS within 0.1 GB. During a fill the #413 policy keeps the operation cache at 0.01–0.03
+GB on this route, so fills show no difference.
+
+GPU route, the #413 cells. Before ran twice; after ran once (a first after run that sampled the
+allocator is excluded; see below):
+
+| Cell | Before: kept, fps | After: kept, fps | Before: pools / anon RSS | After: pools / anon RSS | After remainder | After device: pools, peak driver-reported |
+|---|---|---|---|---|---|---|
+| 2160p png16 | 240 and 240, 12.2 and 11.8 | 240, 11.9 | 7.96–8.12 / 9.09–9.15 GB | 7.84 / 8.99 GB | 1.15 GB | 0, 1.03 GB |
+| 2160p DNxHR HQX | 240 and 240, 10.4 and 9.5 | 240, 9.7 | 8.39–8.46 / 8.79–8.84 GB | 8.46 / 8.71 GB | 0.25 GB | 0, 1.03 GB |
+| 1080p H.264 | 240 and 240, 85.2 and 84.2 | 240, 81.9 | 2.09–2.13 / 2.26–2.30 GB | 2.09 / 2.26 GB | 0.17 GB | 0, 0.62 GB |
+| 720p H.264 | 240 and 240, 141.2 and 140.5 | 240, 141.9 | 0.92–0.95 / 1.06–1.07 GB | 0.95 / 1.06 GB | 0.11 GB | 0, 0.83 GB |
+
+On this route nothing was double-counted after #413 (`operationSharedBytes` 0, no pending
+retirement at the peak), so the totals and the frames kept are unchanged; fps is within run-to-run
+variation. The host pool total stayed below anonymous RSS in every sample. The remainder (0.1–1.2
+GB) is memory no pool owns: the frames in flight (eight 2160p frames are about 1 GB at png16),
+libraries and the driver's host heap, and allocator overhead. The packed route keeps no
+GPU-resident preview frames, so the device pool total is 0; the driver reports 0.6–1.0 GB for the
+process (work in flight and upload images). The processing policy's `deviceClaimBytes` at the same
+samples was 0.4–9.3 GB: device admission reserves more than it allocates, so the claims are not a
+measure of device memory.
+
+A first after run that also sampled glibc's `mallinfo2()` every 250 ms lost 5–45% of fill fps
+(720p 79.7 fps): it locks every heap arena. The harness does not sample it.
+
 ## Conditions
 
 - **Host crash, 2026-10-31 16:14 local.** The first after-run queue ran one runner for the whole
