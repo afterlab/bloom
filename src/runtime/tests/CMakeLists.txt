@@ -280,6 +280,15 @@ bloom_enable_warnings(bloom_runtime_operation_cache_linear_pass_test)
 bloom_add_test(NAME bloom.runtime.operation_cache_linear_pass
               COMMAND bloom_runtime_operation_cache_linear_pass_test LABELS unit runtime TIMEOUT 30)
 
+add_executable(bloom_runtime_operation_cache_accounting_test operation_cache_accounting_tests.cpp)
+target_include_directories(bloom_runtime_operation_cache_accounting_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/render)
+target_link_libraries(bloom_runtime_operation_cache_accounting_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+bloom_enable_warnings(bloom_runtime_operation_cache_accounting_test)
+bloom_add_test(NAME bloom.runtime.operation_cache_accounting
+              COMMAND bloom_runtime_operation_cache_accounting_test LABELS unit runtime TIMEOUT 60)
+
 add_executable(bloom_runtime_memory_pressure_monitor_test memory_pressure_monitor_tests.cpp)
 target_link_libraries(bloom_runtime_memory_pressure_monitor_test PRIVATE bloom_runtime)
 bloom_enable_warnings(bloom_runtime_memory_pressure_monitor_test)

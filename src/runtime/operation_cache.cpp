@@ -17,12 +17,28 @@ std::size_t addCharge(const std::size_t left, const std::size_t right) noexcept 
 }
 } // namespace
 struct OperationCache::Accounting {
+    // One distinct allocation referenced by retained (live) or retiring (pending) entries.
+    struct Storage {
+        std::size_t bytes = 0;
+        std::size_t liveReferences = 0;
+        std::size_t pendingReferences = 0;
+        OperationCacheEntryKind kind = OperationCacheEntryKind::Operation;
+    };
+    // What a retiring entry still has charged once its storage references are dropped: returned
+    // only after the entry (and with it, possibly, the last reference to that storage) is freed.
+    struct Release {
+        std::size_t metadataBytes = 0;
+        OperationCacheEntryKind kind = OperationCacheEntryKind::Operation;
+        std::array<std::size_t, 3> freedByKind{};
+    };
     mutable std::mutex mutex;
     std::size_t budget = 0;
+    // Allocated host bytes (retained + pending), each storage once.
     std::size_t bytes = 0;
-    std::size_t decodedBytes = 0;
+    std::array<std::size_t, 3> kindBytes{};
+    std::size_t sharedBytes = 0;
+    std::unordered_map<const void*, Storage> storages;
     std::uint64_t decodedMediaGeneration = 0;
-    std::size_t preparedBytes = 0;
     std::uint64_t preparedPayload = 0;
     std::size_t preparedCount = 0;
     std::size_t pendingCount = 0;
@@ -39,7 +55,115 @@ struct OperationCache::Accounting {
     OperationCacheAccessStatistics preparedStatistics;
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
     std::weak_ptr<detail::VideoSourceContext> videoSources;
+
+    static std::size_t index(const OperationCacheEntryKind kind) noexcept {
+        return static_cast<std::size_t>(kind);
+    }
+    // Retained bytes that storing `entry` adds: its metadata and every storage no retained entry
+    // references yet (storage only pending retirement comes back to the retained side).
+    [[nodiscard]] std::size_t liveIncrement(const Entry& entry) const {
+        auto charge = entry.metadataBytes;
+        for (const auto& reference : entry.storage) {
+            if (reference.key == nullptr)
+                continue;
+            const auto found = storages.find(reference.key);
+            if (found == storages.end())
+                charge = addCharge(charge, reference.bytes);
+            else if (found->second.liveReferences == 0)
+                charge = addCharge(charge, found->second.bytes);
+        }
+        return charge;
+    }
+    void chargeLive(const Entry& entry) {
+        bytes += entry.metadataBytes;
+        kindBytes[index(entry.kind)] += entry.metadataBytes;
+        for (const auto& reference : entry.storage) {
+            if (reference.key == nullptr)
+                continue;
+            auto [found, inserted] = storages.try_emplace(
+                reference.key, Storage{.bytes = reference.bytes, .kind = entry.kind});
+            auto& storage = found->second;
+            if (inserted) {
+                bytes += storage.bytes;
+                kindBytes[index(storage.kind)] += storage.bytes;
+            } else {
+                sharedBytes += storage.bytes;
+                if (storage.liveReferences == 0)
+                    pendingBytes -= storage.bytes; // Back from pending retirement.
+            }
+            ++storage.liveReferences;
+        }
+    }
+    void moveToPending(const Entry& entry) {
+        pendingBytes += entry.metadataBytes;
+        for (const auto& reference : entry.storage) {
+            if (reference.key == nullptr)
+                continue;
+            auto& storage = storages.at(reference.key);
+            --storage.liveReferences;
+            ++storage.pendingReferences;
+            if (storage.liveReferences == 0)
+                pendingBytes += storage.bytes;
+        }
+    }
+    // A synchronous removal: the entry is freed under the same lock.
+    void releaseLive(const Entry& entry) {
+        bytes -= entry.metadataBytes;
+        kindBytes[index(entry.kind)] -= entry.metadataBytes;
+        for (const auto& reference : entry.storage) {
+            if (reference.key == nullptr)
+                continue;
+            const auto found = storages.find(reference.key);
+            auto& storage = found->second;
+            --storage.liveReferences;
+            if (storage.liveReferences + storage.pendingReferences != 0) {
+                sharedBytes -= storage.bytes;
+                if (storage.liveReferences == 0)
+                    pendingBytes += storage.bytes;
+                continue;
+            }
+            bytes -= storage.bytes;
+            kindBytes[index(storage.kind)] -= storage.bytes;
+            storages.erase(found);
+        }
+    }
+    // A retiring entry about to be freed. A storage whose last reference this is leaves the map
+    // now, while the entry still holds it (so its address cannot be reused meanwhile); its bytes
+    // stay charged until finishRelease, after the entry is freed.
+    [[nodiscard]] Release beginRelease(const Entry& entry) {
+        Release release{.metadataBytes = entry.metadataBytes, .kind = entry.kind};
+        for (const auto& reference : entry.storage) {
+            if (reference.key == nullptr)
+                continue;
+            const auto found = storages.find(reference.key);
+            auto& storage = found->second;
+            --storage.pendingReferences;
+            if (storage.liveReferences + storage.pendingReferences != 0) {
+                sharedBytes -= storage.bytes; // Another entry still references it.
+                continue;
+            }
+            release.freedByKind[index(storage.kind)] += storage.bytes;
+            storages.erase(found);
+        }
+        return release;
+    }
+    void finishRelease(const Release& release) {
+        bytes -= release.metadataBytes;
+        pendingBytes -= release.metadataBytes;
+        kindBytes[index(release.kind)] -= release.metadataBytes;
+        for (std::size_t kind = 0; kind < release.freedByKind.size(); ++kind) {
+            bytes -= release.freedByKind[kind];
+            pendingBytes -= release.freedByKind[kind];
+            kindBytes[kind] -= release.freedByKind[kind];
+        }
+    }
 };
+std::size_t OperationCache::Entry::standaloneBytes() const noexcept {
+    auto total = metadataBytes;
+    for (const auto& reference : storage)
+        total = addCharge(total, reference.bytes);
+    return total;
+}
 OperationCache::Entry::~Entry() {
     // Rejected insertion also drops refs before its registration can permit owner exit.
     value.image.reset();
@@ -70,13 +194,20 @@ OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& led
                            MemoryBudgetLedger::Clock::time_point::max() - std::chrono::seconds(15)
                        ? MemoryBudgetLedger::Clock::time_point::max()
                        : delivered.process.sampledAt + std::chrono::seconds(15));
-        if (pressure || (preparedCandidate_ && preparedCandidate_->bytes > bytes))
+        if (pressure || (preparedCandidate_ && preparedCandidate_->standaloneBytes() > bytes))
             retireCandidateLocked();
         std::uint64_t ordinaryDrops = 0;
         evictToLocked(bytes, pressure ? statistics_.pressureDrops : ordinaryDrops);
     };
     apply(budget);
-    ledger_.registerCache(this, budget, [this] { return retainedBytes(); }, apply);
+    ledger_.registerCache(
+        this, budget,
+        [this] {
+            const std::lock_guard lock(accounting_->mutex);
+            return MemoryPoolHolding{.hostBytes = accounting_->bytes - accounting_->pendingBytes,
+                                     .hostPendingRetirementBytes = accounting_->pendingBytes};
+        },
+        apply);
 }
 OperationCache::~OperationCache() {
     closePreparedUploads();
@@ -144,7 +275,7 @@ bool LinearPassRetention::offer(const std::string_view key, const bool prepared)
     return false;
 }
 
-void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
+void OperationCache::insertLocked(std::unique_ptr<Entry>& entry, const bool charge) {
     const bool prepared = entry->kind == OperationCacheEntryKind::PreparedUpload;
     try {
         entries_.push_front(std::move(entry));
@@ -185,16 +316,22 @@ void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
         entries_.pop_front();
         throw;
     }
+    if (!charge)
+        return;
     auto& placed = *entries_.front();
-    accounting_->bytes += placed.bytes;
+    accounting_->chargeLive(placed);
     if (prepared) {
-        accounting_->preparedBytes += placed.bytes;
         accounting_->preparedPayload += placed.value.image->pixels().size_bytes();
         ++accounting_->preparedCount;
-    } else if (placed.kind == OperationCacheEntryKind::DecodedMedia) {
-        accounting_->decodedBytes += placed.bytes;
     }
 }
+namespace {
+// What an entry costs on the host: per-entry metadata, and the storage it references, charged by
+// the cache once per distinct allocation at its real allocation size.
+std::size_t imageObjectBytes(const render::Rgba32fImage& image) noexcept {
+    return addCharge(sizeof(render::Rgba32fImage), image.pixelStorageByteCost());
+}
+} // namespace
 void OperationCache::store(std::string content, const document::Revision revision,
                            OperationCacheValue value, const OperationCacheEntryKind kind,
                            const std::optional<std::uint64_t> decodedMediaGeneration,
@@ -216,18 +353,24 @@ void OperationCache::store(std::string content, const document::Revision revisio
     entry->revision = revision;
     entry->kind = kind;
     entry->value = std::move(value);
-    entry->bytes =
+    entry->metadataBytes =
         addCharge(sizeof(Entry) + sizeof(Address) + sizeof(void*) * 16, entry->content.capacity());
-    if (entry->value.image)
-        entry->bytes =
-            addCharge(entry->bytes, addCharge(sizeof(render::Rgba32fImage),
-                                              entry->value.image->pixels().size_bytes()));
-    entry->bytes = addCharge(entry->bytes, entry->value.values.capacity() * sizeof(CompiledValue));
+    if (entry->value.image) {
+        // Keyed by the pixel allocation: entries that publish the same image share it.
+        const auto* pixels = static_cast<const void*>(entry->value.image->pixels().data());
+        if (pixels != nullptr)
+            entry->storage[0] = {pixels, imageObjectBytes(*entry->value.image)};
+        else
+            entry->metadataBytes = addCharge(entry->metadataBytes, sizeof(render::Rgba32fImage));
+    }
+    entry->metadataBytes =
+        addCharge(entry->metadataBytes, entry->value.values.capacity() * sizeof(CompiledValue));
     if (entry->value.sourceRevision)
-        entry->bytes = addCharge(entry->bytes, entry->value.sourceRevision->retainedBytes());
+        entry->storage[1] = {entry->value.sourceRevision.get(),
+                             entry->value.sourceRevision->retainedBytes()};
     for (const auto& item : entry->value.values)
         if (const auto* string = std::get_if<std::string>(&item))
-            entry->bytes = addCharge(entry->bytes, string->capacity());
+            entry->metadataBytes = addCharge(entry->metadataBytes, string->capacity());
     // Worker-side stores register every payload when this pool has an explicit host owner.
     // Standalone CPU pools preserve their synchronous ownership; rooted image/value and source
     // payloads all use the same admission-independent retirement lane.
@@ -257,7 +400,8 @@ void OperationCache::store(std::string content, const document::Revision revisio
              (entry->registered && (!accounting_->preparedReady ||
                                     MemoryBudgetLedger::Clock::now() > accounting_->validUntil))))
             return;
-        if (entry->bytes > accounting_->budget || index_.contains({entry->content, false}))
+        auto charge = accounting_->liveIncrement(*entry);
+        if (charge > accounting_->budget || index_.contains({entry->content, false}))
             return;
         // A linear pass retains only what recurs: the first offer of a key is not stored.
         if (linearPass && !linearPass->offer(entry->content, false)) {
@@ -270,14 +414,16 @@ void OperationCache::store(std::string content, const document::Revision revisio
                                     : 0;
         std::uint64_t ignored = 0;
         if (accounting_->preparedCount == 0 && accounting_->pendingBytes == 0 &&
-            entry->bytes <= std::numeric_limits<std::size_t>::max() - accounting_->bytes) {
+            charge <= std::numeric_limits<std::size_t>::max() - accounting_->bytes) {
             // Preserve ordinary-only grace: the incoming Operation itself can be the victim.
             insertLocked(entry);
             evictToLocked(accounting_->budget, ignored);
             return;
         }
-        evictToLocked(accounting_->budget - entry->bytes, ignored);
-        if (accounting_->bytes > accounting_->budget - entry->bytes)
+        evictToLocked(accounting_->budget - charge, ignored);
+        // Eviction may have left shared storage only pending; storing revives its charge.
+        charge = accounting_->liveIncrement(*entry);
+        if (charge > accounting_->budget || accounting_->bytes > accounting_->budget - charge)
             return; // Still-charged pending prepared refs cannot donate capacity.
         insertLocked(entry);
     } // Rejected Entry/image/registration destruction is outside the cache mutex.
@@ -285,19 +431,21 @@ void OperationCache::store(std::string content, const document::Revision revisio
 void OperationCache::destroyPreparedEntry(render::detail::PackedHostRetirementNode* node) noexcept {
     auto* entry = static_cast<Entry*>(node);
     const auto accounting = entry->accounting;
-    const auto bytes = entry->bytes;
     const auto payload = entry->value.image->pixels().size_bytes();
     const bool retiredCandidate = entry->retiredCandidate;
+    Accounting::Release release;
+    {
+        const std::lock_guard lock(accounting->mutex);
+        release = accounting->beginRelease(*entry);
+    }
     entry->registered = false; // The generic worker releases its registration after this callback.
     delete entry; // Cache reference and metadata free before returning their logical retention
                   // charge.
     const std::lock_guard lock(accounting->mutex);
-    accounting->bytes -= bytes;
-    accounting->preparedBytes -= bytes;
+    accounting->finishRelease(release);
     accounting->preparedPayload -= payload;
     --accounting->preparedCount;
     --accounting->pendingCount;
-    accounting->pendingBytes -= bytes;
     accounting->pendingPayload -= payload;
     if (retiredCandidate)
         --accounting->pendingCandidates;
@@ -306,26 +454,28 @@ void OperationCache::destroySourceRevisionEntry(
     render::detail::PackedHostRetirementNode* node) noexcept {
     auto* entry = static_cast<Entry*>(node);
     const auto accounting = entry->accounting;
-    const auto bytes = entry->bytes;
+    Accounting::Release release;
+    {
+        const std::lock_guard lock(accounting->mutex);
+        release = accounting->beginRelease(*entry);
+    }
     entry->registered = false; // The generic worker releases registration after this callback.
     delete entry; // Drop encoded backing and metadata before folding back the logical debit.
     const std::lock_guard lock(accounting->mutex);
-    accounting->bytes -= bytes;
-    accounting->decodedBytes -= bytes;
-    accounting->pendingBytes -= bytes;
+    accounting->finishRelease(release);
 }
 void OperationCache::destroyOrdinaryEntry(render::detail::PackedHostRetirementNode* node) noexcept {
     auto* entry = static_cast<Entry*>(node);
     const auto accounting = entry->accounting;
-    const auto bytes = entry->bytes;
-    const auto decoded = entry->kind == OperationCacheEntryKind::DecodedMedia;
+    Accounting::Release release;
+    {
+        const std::lock_guard lock(accounting->mutex);
+        release = accounting->beginRelease(*entry);
+    }
     entry->registered = false;
     delete entry;
     const std::lock_guard lock(accounting->mutex);
-    accounting->bytes -= bytes;
-    if (decoded)
-        accounting->decodedBytes -= bytes;
-    accounting->pendingBytes -= bytes;
+    accounting->finishRelease(release);
 }
 void OperationCache::removeLocked(const Position candidate) {
     auto& entry = **candidate;
@@ -335,22 +485,20 @@ void OperationCache::removeLocked(const Position candidate) {
     index_.erase(key);
     if (prepared) {
         ++accounting_->pendingCount;
-        accounting_->pendingBytes += entry.bytes;
+        accounting_->moveToPending(entry);
         accounting_->pendingPayload += entry.value.image->pixels().size_bytes();
         auto* node = candidate->release();
         entries_.erase(candidate);
         const auto retirement = node->retirement;
         render::detail::enqueuePackedHostRetirement(retirement, node);
     } else if (entry.registered) {
-        accounting_->pendingBytes += entry.bytes;
+        accounting_->moveToPending(entry);
         auto* node = candidate->release();
         entries_.erase(candidate);
         const auto retirement = node->retirement;
         render::detail::enqueuePackedHostRetirement(retirement, node);
     } else {
-        accounting_->bytes -= entry.bytes;
-        if (entry.kind == OperationCacheEntryKind::DecodedMedia)
-            accounting_->decodedBytes -= entry.bytes;
+        accounting_->releaseLive(entry);
         entries_.erase(candidate);
     }
 }
@@ -441,15 +589,18 @@ std::size_t OperationCache::retainedBytes() const {
 }
 std::size_t OperationCache::retainedBytes(const OperationCacheEntryKind kind) const {
     const std::lock_guard lock(accounting_->mutex);
-    switch (kind) {
-    case OperationCacheEntryKind::Operation:
-        return accounting_->bytes - accounting_->decodedBytes - accounting_->preparedBytes;
-    case OperationCacheEntryKind::DecodedMedia:
-        return accounting_->decodedBytes;
-    case OperationCacheEntryKind::PreparedUpload:
-        return accounting_->preparedBytes;
-    }
-    return 0;
+    return accounting_->kindBytes[Accounting::index(kind)];
+}
+OperationCacheMemory OperationCache::memory() const {
+    const std::lock_guard lock(accounting_->mutex);
+    const auto& kinds = accounting_->kindBytes;
+    return {.hostBytes = accounting_->bytes,
+            .pendingRetirementBytes = accounting_->pendingBytes,
+            .operationBytes = kinds[Accounting::index(OperationCacheEntryKind::Operation)],
+            .decodedMediaBytes = kinds[Accounting::index(OperationCacheEntryKind::DecodedMedia)],
+            .preparedUploadBytes =
+                kinds[Accounting::index(OperationCacheEntryKind::PreparedUpload)],
+            .sharedReferenceBytes = accounting_->sharedBytes};
 }
 OperationCacheAccessStatistics OperationCache::statistics() const {
     const std::lock_guard lock(accounting_->mutex);
@@ -518,7 +669,7 @@ void OperationCache::retireCandidateLocked() {
     node->retiredCandidate = true;
     ++accounting_->pendingCount;
     ++accounting_->pendingCandidates;
-    accounting_->pendingBytes += node->bytes;
+    accounting_->moveToPending(*node);
     accounting_->pendingPayload += node->value.image->pixels().size_bytes();
     const auto retirement = node->retirement;
     render::detail::enqueuePackedHostRetirement(retirement, node);
@@ -530,7 +681,7 @@ void OperationCache::promoteCandidateLocked() {
     const auto cap = accounting_->payloadCap.value_or(std::numeric_limits<std::uint64_t>::max());
     if (accounting_->preparedClosed || !accounting_->preparedReady ||
         MemoryBudgetLedger::Clock::now() > accounting_->validUntil ||
-        preparedCandidate_->bytes > accounting_->budget || payload > cap ||
+        preparedCandidate_->standaloneBytes() > accounting_->budget || payload > cap ||
         accounting_->entryCap == 0) {
         retireCandidateLocked();
         return;
@@ -540,22 +691,14 @@ void OperationCache::promoteCandidateLocked() {
     if (accounting_->bytes > accounting_->budget || accounting_->preparedPayload > cap ||
         accounting_->preparedCount > accounting_->entryCap)
         return;
+    // The candidate stays charged as it is: inserting it adds no charge.
     auto candidate = std::move(preparedCandidate_);
-    accounting_->bytes -= candidate->bytes;
-    accounting_->preparedBytes -= candidate->bytes;
-    accounting_->preparedPayload -= payload;
-    --accounting_->preparedCount;
     const auto restoreCandidate = [&] {
-        if (!candidate)
-            return;
-        accounting_->bytes += candidate->bytes;
-        accounting_->preparedBytes += candidate->bytes;
-        accounting_->preparedPayload += payload;
-        ++accounting_->preparedCount;
-        preparedCandidate_ = std::move(candidate);
+        if (candidate)
+            preparedCandidate_ = std::move(candidate);
     };
     try {
-        insertLocked(candidate);
+        insertLocked(candidate, false);
     } catch (...) {
         // An exceptional insertion returns the Entry to candidate. Restore its exact charge and
         // ownership so a later lookup can retry; the cache facade must not expose the failure.
@@ -587,10 +730,11 @@ void OperationCache::storePreparedUpload(std::string content,
     entry->content = std::move(content);
     entry->value.image = std::move(image);
     entry->kind = OperationCacheEntryKind::PreparedUpload;
-    entry->bytes =
+    entry->metadataBytes =
         addCharge(sizeof(Entry) + sizeof(Address) + sizeof(void*) * 16, entry->content.capacity());
     const auto payload = entry->value.image->pixels().size_bytes();
-    entry->bytes = addCharge(entry->bytes, addCharge(sizeof(render::Rgba32fImage), payload));
+    entry->storage[0] = {entry->value.image->pixels().data(),
+                         imageObjectBytes(*entry->value.image)};
     entry->accounting = accounting_;
     entry->retirement = retirement;
     entry->destroy = destroyPreparedEntry;
@@ -604,7 +748,8 @@ void OperationCache::storePreparedUpload(std::string content,
             accounting_->payloadCap.value_or(std::numeric_limits<std::uint64_t>::max());
         if (accounting_->preparedClosed || !accounting_->preparedReady ||
             MemoryBudgetLedger::Clock::now() > accounting_->validUntil ||
-            entry->bytes > accounting_->budget || payload > cap || accounting_->entryCap == 0)
+            accounting_->liveIncrement(*entry) > accounting_->budget || payload > cap ||
+            accounting_->entryCap == 0)
             return;
         if (preparedCandidate_)
             return;
@@ -632,8 +777,10 @@ void OperationCache::storePreparedUpload(std::string content,
             removeLocked(std::prev(victim.base()));
         }
         std::uint64_t ignored = 0;
-        evictToLocked(accounting_->budget - entry->bytes, ignored);
-        if (accounting_->bytes > accounting_->budget - entry->bytes ||
+        evictToLocked(accounting_->budget - accounting_->liveIncrement(*entry), ignored);
+        // Recomputed: eviction may have left storage this entry shares only pending.
+        const auto charge = accounting_->liveIncrement(*entry);
+        if (charge > accounting_->budget || accounting_->bytes > accounting_->budget - charge ||
             accounting_->preparedPayload > cap - payload ||
             accounting_->preparedCount >= accounting_->entryCap) {
             // The producer already owns this decoded image. Retain ONE candidate so the cache
@@ -642,15 +789,13 @@ void OperationCache::storePreparedUpload(std::string content,
             // at most this single individually eligible candidate; it is never reported as free.
             const bool pendingCanMakeRoom =
                 accounting_->pendingBytes > 0 &&
-                accounting_->bytes - accounting_->pendingBytes <=
-                    accounting_->budget - entry->bytes &&
+                accounting_->bytes - accounting_->pendingBytes <= accounting_->budget - charge &&
                 accounting_->preparedPayload - accounting_->pendingPayload <= cap - payload &&
                 accounting_->preparedCount - accounting_->pendingCount < accounting_->entryCap &&
-                entry->bytes <= std::numeric_limits<std::size_t>::max() - accounting_->bytes &&
+                charge <= std::numeric_limits<std::size_t>::max() - accounting_->bytes &&
                 payload <= std::numeric_limits<std::uint64_t>::max() - accounting_->preparedPayload;
             if (pendingCanMakeRoom) {
-                accounting_->bytes += entry->bytes;
-                accounting_->preparedBytes += entry->bytes;
+                accounting_->chargeLive(*entry);
                 accounting_->preparedPayload += payload;
                 ++accounting_->preparedCount;
                 preparedCandidate_ = std::move(entry);

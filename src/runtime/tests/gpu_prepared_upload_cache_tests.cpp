@@ -291,13 +291,17 @@ void testSharedNamespaceAndPolicy(Expectations& checks) {
     prepared.store("same", image);
     checks.expect(pool->find("same", {}).has_value() && prepared.find("same") == image,
                   "identical content is isolated by prepared namespace");
+    // The operation entry and the prepared upload publish the same image: its pixels are charged
+    // once, under the kind that stored them first, and each entry adds only its metadata.
+    const auto memory = pool->memory();
     checks.expect(
         pool->retainedBytes() ==
                 pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::Operation) +
                     pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::PreparedUpload) &&
-            pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::PreparedUpload) >
-                prepared.retainedBytes(),
-        "one combined pool charges prepared payload and key metadata exactly once");
+            pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::Operation) >
+                prepared.retainedBytes() &&
+            memory.sharedReferenceBytes == sizeof(Rgba32fImage) + image->pixelStorageByteCost(),
+        "one combined pool charges shared payload once and key metadata per entry");
     bool rejected = false;
     try {
         GpuPreparedUploadCache incompatible(pool, scope.owner, 0);
@@ -568,37 +572,41 @@ void testProjectedVictimsPreserveWarmEntries(Expectations& checks) {
     bloom::runtime::MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
     auto pool = std::make_shared<bloom::runtime::OperationCache>(1U << 20U, ledger);
     GpuPreparedUploadCache prepared(pool, scope.owner, 3U * 256U, 3);
-    const auto image = makeImage(4, 4);
-    prepared.store("a", image);
-    prepared.store("b", image);
-    prepared.store("c", image);
-    pool->store("operation", {}, {.image = image, .values = {}, .bounds = {}});
+    // Distinct images: storage shared between entries is charged once (#416), so equal per-entry
+    // charges need one image per entry.
+    const auto a = makeImage(4, 4);
+    const auto b = makeImage(4, 4);
+    const auto c = makeImage(4, 4);
+    const auto d = makeImage(4, 4);
+    prepared.store("a", a);
+    prepared.store("b", b);
+    prepared.store("c", c);
+    pool->store("operation", {}, {.image = makeImage(4, 4), .values = {}, .bounds = {}});
     const auto total = pool->retainedBytes();
     const auto preparedCharge =
         pool->retainedBytes(bloom::runtime::OperationCacheEntryKind::PreparedUpload);
-    prepared.store("d", image);
+    prepared.store("d", d);
     checks.expect(until([&] {
                       const std::lock_guard lock(scope.mutex);
                       return scope.entered;
                   }),
                   "subset replacement queues its one LRU victim on actual worker");
     for (int i = 0; i < 16; ++i)
-        prepared.store("d", image);
-    checks.expect(prepared.find("a") == nullptr && prepared.find("b") == image &&
-                      prepared.find("c") == image && prepared.find("d") == nullptr &&
+        prepared.store("d", d);
+    checks.expect(prepared.find("a") == nullptr && prepared.find("b") == b &&
+                      prepared.find("c") == c && prepared.find("d") == nullptr &&
                       pool->find("operation", {}).has_value() &&
                       pool->retainedBytes() == total + preparedCharge / 3,
                   "one charged candidate selects no collateral prepared or ordinary victims");
     pool->trimToBytes(total - preparedCharge / 3);
-    checks.expect(prepared.find("b") == image && prepared.find("c") == image &&
+    checks.expect(prepared.find("b") == b && prepared.find("c") == c &&
                       pool->find("operation", {}).has_value(),
                   "projected global trim recognizes sufficient already-pending victim");
     scope.release();
     checks.expect(until([&] { return prepared.retainedBytes() == 512; }),
                   "only actual worker ref release returns the one victim payload charge");
-    prepared.store("d", image);
-    checks.expect(prepared.find("d") == image && prepared.find("b") == image &&
-                      prepared.find("c") == image,
+    prepared.store("d", d);
+    checks.expect(prepared.find("d") == d && prepared.find("b") == b && prepared.find("c") == c,
                   "released subset occupancy admits newest without further eviction");
     prepared.clear();
 }

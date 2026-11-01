@@ -6,6 +6,7 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/video_source_report.hpp>
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <list>
@@ -56,6 +57,26 @@ struct OperationCacheAccessStatistics final {
                            const OperationCacheAccessStatistics&) = default;
 };
 
+// What the cache holds on the host (docs/architecture/evaluation-primitives.md, "What the pools
+// count"). Each distinct pixel or encoded-source allocation is charged once, at its real
+// allocation size, however many entries reference it (an identity effect or a composition output
+// publishes its input image again); entry metadata is charged per entry. Nothing here is device
+// memory: prepared uploads are the host copies a later upload reads.
+struct OperationCacheMemory final {
+    // Everything allocated: retained entries plus entries pending retirement.
+    std::size_t hostBytes = 0;
+    // Evicted entries a retirement worker frees after the GPU work that reads them. Still
+    // allocated, but already given back: never evicted or granted a second time.
+    std::size_t pendingRetirementBytes = 0;
+    // hostBytes by kind. Storage shared between kinds counts under the kind that stored it first.
+    std::size_t operationBytes = 0;
+    std::size_t decodedMediaBytes = 0;
+    std::size_t preparedUploadBytes = 0;
+    // Extra references to storage already charged: what per-entry accounting would add on top.
+    std::size_t sharedReferenceBytes = 0;
+    friend bool operator==(const OperationCacheMemory&, const OperationCacheMemory&) = default;
+};
+
 struct OperationCacheStatistics final {
     std::size_t hits = 0;
     std::size_t misses = 0;
@@ -103,11 +124,14 @@ class OperationCache final {
                LinearPassRetention* linearPass = nullptr);
     void setByteBudget(std::size_t budget);
     [[nodiscard]] std::size_t byteBudget() const;
+    // Host bytes allocated: retained plus pending retirement (OperationCacheMemory::hostBytes).
+    // The ledger budgets only the retained part; the budget bounds hostBytes minus pending.
     [[nodiscard]] std::size_t retainedBytes() const;
     // CACHEFIX-1 accounting: the same total, split by what is holding it. Decoded media is the
     // expensive half (one 4K RGBA32F frame is 126.6 MiB), and it is the half a grace period keeps
     // alive, so an audit that cannot separate the two cannot say where the bytes went.
     [[nodiscard]] std::size_t retainedBytes(OperationCacheEntryKind kind) const;
+    [[nodiscard]] OperationCacheMemory memory() const;
     // Explicit one-shot trim without changing admission. The ledger pressure callback separately
     // lowers admission and evicts atomically; configured ceilings remain in the ledger.
     void trimToBytes(std::size_t bytes);
@@ -181,12 +205,21 @@ class OperationCache final {
             return KeyHash{}(address.key) ^ std::hash<std::uint64_t>{}(address.revision.value());
         }
     };
+    // One reference from an entry to shared storage: the image's pixels or an encoded source.
+    struct StorageReference {
+        const void* key = nullptr;
+        std::size_t bytes = 0;
+    };
     struct Entry : render::detail::PackedHostRetirementNode {
         ~Entry();
         std::string content;
         document::Revision revision;
         OperationCacheValue value;
-        std::size_t bytes = 0;
+        // Charged per entry: the entry, its key and its values. Storage is charged once.
+        std::size_t metadataBytes = 0;
+        std::array<StorageReference, 2> storage{};
+        // What this entry would cost alone: metadata plus every storage it references.
+        [[nodiscard]] std::size_t standaloneBytes() const noexcept;
         OperationCacheEntryKind kind = OperationCacheEntryKind::Operation;
         std::uint64_t protectedUntil = 0;
         bool registered = false;
@@ -206,7 +239,8 @@ class OperationCache final {
     void removeLocked(Position candidate);
     void removeKindLocked(OperationCacheEntryKind kind);
     [[nodiscard]] Position evictionCandidate();
-    void insertLocked(std::unique_ptr<Entry>& entry);
+    // `charge` false: the entry (the prepared candidate) is already charged.
+    void insertLocked(std::unique_ptr<Entry>& entry, bool charge = true);
 
     MemoryBudgetLedger& ledger_;
     std::shared_ptr<Accounting> accounting_;
