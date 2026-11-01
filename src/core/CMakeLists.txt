@@ -12,6 +12,7 @@ target_sources(
         utf8.cpp
         file_uri.cpp
         safe_parse.cpp
+        telemetry_counters.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -28,6 +29,7 @@ target_sources(
             include/bloom/core/safe_parse.hpp
             include/bloom/core/scalar_primitives.hpp
             include/bloom/core/sha256.hpp
+            include/bloom/core/telemetry_counters.hpp
             include/bloom/core/utf8.hpp
             include/bloom/core/file_uri.hpp
             include/bloom/core/value_primitives.hpp
@@ -48,6 +50,15 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.core.pixel_aspect_ratio
         COMMAND bloom_core_pixel_aspect_ratio_test
+        LABELS unit
+    )
+
+    add_executable(bloom_core_telemetry_counters_test tests/telemetry_counters_tests.cpp)
+    target_link_libraries(bloom_core_telemetry_counters_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_telemetry_counters_test)
+    bloom_add_test(
+        NAME bloom.core.telemetry_counters
+        COMMAND bloom_core_telemetry_counters_test
         LABELS unit
     )
 
