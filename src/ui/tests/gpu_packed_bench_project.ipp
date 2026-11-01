@@ -422,6 +422,10 @@ struct BenchScrub {
     // The same frames again after the preview frame cache is cleared: what the media caches below
     // it (decoded video, decoded media) save.
     std::vector<double> revisitSeconds;
+    // Near scrubs: one frame ahead of a shown target, then back to it, each after the preview
+    // frame cache is cleared so the frame renders again from its source.
+    std::vector<double> nearAheadSeconds;
+    std::vector<double> nearBehindSeconds;
 };
 
 [[nodiscard]] std::vector<double> benchScrubPass(ui::CompositionSession& session,
@@ -480,6 +484,20 @@ BenchScrub benchScrub(ui::CompositionSession& session, ui::ViewerEditor& viewer,
     result.uncachedSeconds = benchScrubPass(session, viewer, targets);
     frameCache.clear();
     result.revisitSeconds = benchScrubPass(session, viewer, targets);
+    for (const auto& target : targets) {
+        const auto index = mapping.value()->nearestFrameIndex(target);
+        const auto next = mapping.value()->timeForFrame(index + 1);
+        if (!next.hasValue())
+            continue;
+        static_cast<void>(benchScrubPass(session, viewer, {target}));
+        frameCache.clear();
+        const auto ahead = benchScrubPass(session, viewer, {*next.value()});
+        frameCache.clear();
+        const auto behind = benchScrubPass(session, viewer, {target});
+        result.nearAheadSeconds.insert(result.nearAheadSeconds.end(), ahead.begin(), ahead.end());
+        result.nearBehindSeconds.insert(result.nearBehindSeconds.end(), behind.begin(),
+                                        behind.end());
+    }
     std::cout << "BENCH_PLAY_END\n" << std::flush;
     return result;
 }
@@ -819,6 +837,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         const auto scrubbed = benchScrub(session, viewer, *frameCache);
         benchSecondsJson(json, "scrubUncachedSeconds", scrubbed.uncachedSeconds);
         benchSecondsJson(json, "scrubRevisitSeconds", scrubbed.revisitSeconds);
+        benchSecondsJson(json, "scrubNearAheadSeconds", scrubbed.nearAheadSeconds);
+        benchSecondsJson(json, "scrubNearBehindSeconds", scrubbed.nearBehindSeconds);
         json << std::setprecision(15) << ",\"windowEndEpoch\":" << benchEpochSeconds()
              << std::setprecision(6);
     } else if (gBenchPlayback) {
