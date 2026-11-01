@@ -67,11 +67,27 @@ memoryBudgetSample(const CancellationToken& cancellation = {}) noexcept;
 
 enum class MemoryBudgetOwnerKind { ReusableRetention, LiveWork };
 
+// What one registered pool holds, by where the bytes live. Each distinct allocation is counted
+// once, however many entries reference it, at its real allocation size.
+struct MemoryPoolHolding final {
+    // Host bytes the pool still retains and can give back by evicting.
+    std::size_t hostBytes = 0;
+    // Host bytes already evicted that stay allocated until their asynchronous retirement (after
+    // the GPU work that reads them). Resident host memory, but not reclaimable a second time.
+    std::size_t hostPendingRetirementBytes = 0;
+    // Device-resident bytes. Reported for attribution; never charged to the host budgets.
+    std::size_t deviceBytes = 0;
+    // Everything the pool has allocated on the host: retained plus pending retirement.
+    [[nodiscard]] std::size_t hostAllocatedBytes() const noexcept;
+    friend bool operator==(const MemoryPoolHolding&, const MemoryPoolHolding&) = default;
+};
+
 struct MemoryBudgetState final {
     // Selected operation/preview total and that total within the observed absolute OS limit.
     // Auxiliary registered pools can share a finite limit; inspect owners for actual pool budgets.
     std::size_t configuredBytes = 0;
     std::size_t effectiveBytes = 0;
+    // Host bytes every registered pool has allocated (MemoryPoolHolding::hostAllocatedBytes).
     std::size_t retainedBytes = 0;
     std::size_t reusableHostCreditBytes = 0;
     // Hardware capacity only. Live phase admission separately checks fresh usage and reservations.
@@ -106,16 +122,28 @@ class MemoryBudgetLedger final {
     // wait for workers, or modify registrations. Cache locks must never enclose ledger calls.
     // `priority` orders which reusable pools give memory back first while a RAM Preview fill is
     // active (MemoryEvictionPriority); outside a fill it has no effect.
+    // `retained` reports host bytes only, all of them reclaimable. A pool that retires evicted
+    // entries asynchronously or holds device memory reports a MemoryPoolHolding instead: budgets,
+    // eviction shares and yieldToPreview see only its reclaimable host bytes, host totals include
+    // its pending retirement once, and device bytes never reach a host budget.
     void registerCache(const void* owner, std::size_t ceiling,
                        std::function<std::size_t()> retained,
+                       std::function<void(std::size_t)> applyBudget,
+                       MemoryBudgetOwnerKind kind = MemoryBudgetOwnerKind::ReusableRetention,
+                       MemoryEvictionPriority priority = MemoryEvictionPriority::Ordinary);
+    void registerCache(const void* owner, std::size_t ceiling,
+                       std::function<MemoryPoolHolding()> holding,
                        std::function<void(std::size_t)> applyBudget,
                        MemoryBudgetOwnerKind kind = MemoryBudgetOwnerKind::ReusableRetention,
                        MemoryEvictionPriority priority = MemoryEvictionPriority::Ordinary);
     void unregisterCache(const void* owner);
     [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
     [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
-    // What every reusable pool holds now (asks each pool; same thread rules as poll).
+    // Host bytes every reusable pool has allocated now, pending retirement included (asks each
+    // pool; same thread rules as poll).
     [[nodiscard]] std::size_t reusableRetainedBytes() const;
+    // The same, split into reclaimable host, pending retirement and device bytes.
+    [[nodiscard]] MemoryPoolHolding reusableHolding() const;
     void setConfiguredTotal(std::size_t bytes);
     // The RAM headroom preference. Once set, each reusable pool may hold what it retains now plus
     // all measured available memory beyond the headroom: caches fill usable memory and are evicted
@@ -224,8 +252,11 @@ class MemoryBudgetLedger final {
         std::size_t ceiling;
         MemoryBudgetOwnerKind kind;
         MemoryEvictionPriority priority;
-        std::function<std::size_t()> retained;
+        std::function<MemoryPoolHolding()> holding;
         std::function<void(std::size_t)> applyBudget;
+        [[nodiscard]] MemoryPoolHolding held() const {
+            return holding ? holding() : MemoryPoolHolding{};
+        }
     };
     [[nodiscard]] std::size_t cacheByteBudgetLocked(const Cache& cache) const;
     // Returns true only while swap is actively growing beyond the entry/sustain threshold. Static

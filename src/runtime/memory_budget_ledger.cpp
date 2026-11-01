@@ -308,8 +308,25 @@ MemoryBudgetLedger::allocate(const std::optional<std::size_t> operationOverride,
             .previewFrameCacheByteBudget = preview};
 }
 
+std::size_t MemoryPoolHolding::hostAllocatedBytes() const noexcept {
+    return saturatedAdd(hostBytes, hostPendingRetirementBytes);
+}
+
 void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceiling,
                                        std::function<std::size_t()> retained,
+                                       std::function<void(std::size_t)> applyBudget,
+                                       const MemoryBudgetOwnerKind kind,
+                                       const MemoryEvictionPriority priority) {
+    std::function<MemoryPoolHolding()> holding;
+    if (retained)
+        holding = [retained = std::move(retained)] {
+            return MemoryPoolHolding{.hostBytes = retained()};
+        };
+    registerCache(owner, ceiling, std::move(holding), std::move(applyBudget), kind, priority);
+}
+
+void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceiling,
+                                       std::function<MemoryPoolHolding()> holding,
                                        std::function<void(std::size_t)> applyBudget,
                                        const MemoryBudgetOwnerKind kind,
                                        const MemoryEvictionPriority priority) {
@@ -317,7 +334,7 @@ void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceil
     const auto entry =
         caches_
             .insert_or_assign(
-                owner, Cache{ceiling, kind, priority, std::move(retained), std::move(applyBudget)})
+                owner, Cache{ceiling, kind, priority, std::move(holding), std::move(applyBudget)})
             .first;
     // The new owner initialized its storage before registration and is not published yet.
     // A finite shared constraint must also update existing participants immediately.
@@ -520,7 +537,7 @@ MemoryBudgetState MemoryBudgetLedger::pollHostLocked(MachineMemorySample sample,
     hasPolled_ = true;
     std::size_t retained = 0;
     for (const auto& [owner, cache] : caches_)
-        retained = saturatedAdd(retained, cache.retained());
+        retained = saturatedAdd(retained, cache.held().hostAllocatedBytes());
     state_.retainedBytes = retained;
     state_.memoryNotice = false;
     const bool wasSwap = state_.swapPressure;
@@ -550,14 +567,29 @@ void MemoryBudgetLedger::setRamHeadroom(const std::size_t bytes) {
 std::size_t MemoryBudgetLedger::reusableRetainedLocked() const {
     std::size_t retained = 0;
     for (const auto& [owner, cache] : caches_)
-        if (cache.kind == MemoryBudgetOwnerKind::ReusableRetention && cache.retained)
-            retained = saturatedAdd(retained, cache.retained());
+        if (cache.kind == MemoryBudgetOwnerKind::ReusableRetention)
+            retained = saturatedAdd(retained, cache.held().hostAllocatedBytes());
     return retained;
 }
 
 std::size_t MemoryBudgetLedger::reusableRetainedBytes() const {
     const std::lock_guard lock(mutex_);
     return reusableRetainedLocked();
+}
+
+MemoryPoolHolding MemoryBudgetLedger::reusableHolding() const {
+    const std::lock_guard lock(mutex_);
+    MemoryPoolHolding total;
+    for (const auto& [owner, cache] : caches_) {
+        if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention)
+            continue;
+        const auto held = cache.held();
+        total.hostBytes = saturatedAdd(total.hostBytes, held.hostBytes);
+        total.hostPendingRetirementBytes =
+            saturatedAdd(total.hostPendingRetirementBytes, held.hostPendingRetirementBytes);
+        total.deviceBytes = saturatedAdd(total.deviceBytes, held.deviceBytes);
+    }
+    return total;
 }
 
 void MemoryBudgetLedger::applyBudgetsLocked() {
@@ -632,9 +664,10 @@ MemoryBudgetLedger::reusableHoldingsLocked() const {
     for (const auto& [owner, cache] : caches_) {
         if (cache.kind != MemoryBudgetOwnerKind::ReusableRetention)
             continue;
-        holdings.emplace_back(
-            &cache, MemoryEvictionHolding{.priority = cache.priority,
-                                          .heldBytes = cache.retained ? cache.retained() : 0});
+        // Only reclaimable host bytes: pending retirement is already given back, and device
+        // bytes are not host memory.
+        holdings.emplace_back(&cache, MemoryEvictionHolding{.priority = cache.priority,
+                                                            .heldBytes = cache.held().hostBytes});
     }
     return holdings;
 }
@@ -644,7 +677,7 @@ std::size_t MemoryBudgetLedger::reclaim(const std::size_t bytes) {
     if (bytes == 0)
         return 0;
     auto holdings = reusableHoldingsLocked();
-    std::erase_if(holdings, [](const auto& entry) { return !entry.first->retained; });
+    std::erase_if(holdings, [](const auto& entry) { return !entry.first->holding; });
     std::vector<MemoryEvictionHolding> view;
     view.reserve(holdings.size());
     long double total = 0;
@@ -723,12 +756,13 @@ std::size_t MemoryBudgetLedger::yieldToPreview(const void* owner, const std::siz
     auto holdings = reusableHoldingsLocked();
     // Only Ordinary pools give here: finished frames never make room for other finished frames.
     std::erase_if(holdings, [](const auto& entry) {
-        return entry.second.priority != MemoryEvictionPriority::Ordinary || !entry.first->retained;
+        return entry.second.priority != MemoryEvictionPriority::Ordinary || !entry.first->holding;
     });
-    // A pool may free evicted entries asynchronously (the operation cache retires prepared
-    // uploads after their GPU work), so what it reports can still include bytes it has already
-    // been told to give back. Since the last budget application, a pool counts as holding at
-    // most the budget it was last given here; the same bytes are never granted twice.
+    // A pool that frees evicted entries asynchronously (the operation cache retires them after
+    // their GPU work) reports them as pending retirement, outside the reclaimable bytes these
+    // shares are taken from. As a second bound, since the last budget application a pool counts
+    // as holding at most the budget it was last given here; the same bytes are never granted
+    // twice.
     std::vector<MemoryEvictionHolding> view;
     view.reserve(holdings.size());
     std::size_t before = 0;
@@ -737,7 +771,7 @@ std::size_t MemoryBudgetLedger::yieldToPreview(const void* owner, const std::siz
         if (const auto target = yieldTargets_.find(cache); target != yieldTargets_.end())
             holding.heldBytes = std::min(holding.heldBytes, target->second);
         view.push_back(holding);
-        before = saturatedAdd(before, cache->retained());
+        before = saturatedAdd(before, cache->held().hostAllocatedBytes());
     }
     const auto shares = memoryEvictionShares(view, bytes, true, MemoryEvictionRounding::Up);
     for (std::size_t index = 0; index < holdings.size(); ++index) {
@@ -751,7 +785,7 @@ std::size_t MemoryBudgetLedger::yieldToPreview(const void* owner, const std::siz
     }
     std::size_t after = 0;
     for (const auto& [cache, holding] : holdings)
-        after = saturatedAdd(after, cache->retained());
+        after = saturatedAdd(after, cache->held().hostAllocatedBytes());
     if (before > after)
         releasedSinceTake_ = saturatedAdd(releasedSinceTake_, before - after);
     return granted;

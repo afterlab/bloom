@@ -772,6 +772,65 @@ void previewFirstDuringFill() {
     ledger.unregisterCache(&preview);
 }
 
+// Pools report where their bytes live (#416). Host totals count retained and pending-retirement
+// host bytes once each; budgets, eviction shares and preview grants take only reclaimable host
+// bytes; device-resident bytes never reach a host budget.
+void hostDeviceAndPendingSeparation() {
+    MemoryBudgetLedger ledger(64 * gib, 64 * gib);
+    ledger.setRamHeadroom(2 * gib);
+    using bloom::runtime::MemoryPoolHolding;
+    MemoryPoolHolding operation{.hostBytes = 4 * gib, .hostPendingRetirementBytes = 2 * gib};
+    MemoryPoolHolding resident{.hostBytes = 4 * gib, .deviceBytes = 100 * gib};
+    std::size_t operationBudget = 0, residentBudget = 0;
+    ledger.registerCache(
+        &operation, gib, [&] { return operation; },
+        [&](const std::size_t bytes) {
+            operationBudget = bytes;
+            // Evicting moves bytes to pending retirement; they stay allocated until freed.
+            const auto evicted = operation.hostBytes - std::min(operation.hostBytes, bytes);
+            operation.hostBytes -= evicted;
+            operation.hostPendingRetirementBytes += evicted;
+        });
+    ledger.registerCache(
+        &resident, gib, [&] { return resident; },
+        [&](const std::size_t bytes) {
+            residentBudget = bytes;
+            resident.hostBytes = std::min(resident.hostBytes, bytes);
+        },
+        bloom::runtime::MemoryBudgetOwnerKind::ReusableRetention,
+        bloom::runtime::MemoryEvictionPriority::FinishedPreview);
+    expect(ledger.reusableRetainedBytes() == 10 * gib,
+           "host totals are retained plus pending host bytes, without device bytes");
+    expect(ledger.reusableHolding() == MemoryPoolHolding{.hostBytes = 8 * gib,
+                                                         .hostPendingRetirementBytes = 2 * gib,
+                                                         .deviceBytes = 100 * gib},
+           "the ledger reports host, pending and device bytes separately");
+    const auto state = ledger.poll({.availableBytes = 3 * gib / 4}, at(0));
+    expect(state.retainedBytes == 10 * gib, "the polled state counts host allocation only");
+    // The 1.5 GiB deficit to headroom plus margin is shared by reclaimable host bytes only: the
+    // 100 GiB of device frames and the 2 GiB already retiring take no share.
+    expect(operationBudget == 4 * gib - 3 * gib / 4 && residentBudget == 4 * gib - 3 * gib / 4,
+           "deficit shares follow reclaimable host bytes, not device or pending bytes");
+    expect(operation.hostPendingRetirementBytes == 2 * gib + 3 * gib / 4,
+           "what a pool evicts is pending, not lost");
+    operation = {.hostBytes = 4 * gib, .hostPendingRetirementBytes = 2 * gib};
+    resident.hostBytes = 4 * gib;
+    // Released is what left host memory: the operation cache's 2 GiB is still retiring.
+    expect(ledger.reclaim(4 * gib) == 2 * gib && operation.hostBytes == 2 * gib &&
+               resident.hostBytes == 2 * gib,
+           "work reclaim splits by reclaimable host bytes and releases only freed bytes");
+    {
+        auto fill = ledger.beginPreviewFill();
+        operation = {.hostBytes = gib, .hostPendingRetirementBytes = 3 * gib};
+        expect(ledger.yieldToPreview(&resident, 2 * gib) == gib && operation.hostBytes == 0,
+               "the preview pool is granted reclaimable bytes only, never bytes already retiring");
+        expect(ledger.yieldToPreview(&resident, gib) == 0,
+               "pending retirement is never granted a second time");
+    }
+    ledger.unregisterCache(&operation);
+    ledger.unregisterCache(&resident);
+}
+
 int main(int argc, char** argv) try {
     if (argc == 2 && std::string_view(argv[1]) == "--live-process-probe")
         return liveProcessProbe();
@@ -785,6 +844,7 @@ int main(int argc, char** argv) try {
     processHierarchyAndStableFill();
     evictionSharesByPriority();
     previewFirstDuringFill();
+    hostDeviceAndPendingSeparation();
     return failures == 0 ? 0 : 1;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
