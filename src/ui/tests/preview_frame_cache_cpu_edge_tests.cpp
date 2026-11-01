@@ -16,12 +16,14 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
 #include <QCoreApplication>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -269,6 +271,45 @@ int main(int argc, char** argv) {
                                 "CACHEFIX-3: same-project older revision is still dropped");
             expectations.expect(!revisionCache.contains(keyA),
                                 "CACHEFIX-3: the superseded same-project entry is gone");
+        }
+
+        // Preview first (#413): during a RAM Preview fill a frame that does not fit takes room
+        // from an Ordinary pool instead of evicting an earlier finished frame; outside a fill the
+        // cache evicts its own oldest frame as before.
+        {
+            const auto costB = PreviewFrameCache::frameByteCost(*frameB);
+            runtime::MemoryBudgetLedger ledger(std::size_t{64} << 30, std::size_t{64} << 30);
+            ledger.setRamHeadroom(std::size_t{2} << 30);
+            std::size_t intermediates = std::size_t{1} << 20;
+            ledger.registerCache(
+                &intermediates, std::size_t{1} << 20, [&] { return intermediates; },
+                [&](const std::size_t bytes) { intermediates = std::min(intermediates, bytes); });
+            {
+                PreviewFrameCache outside(costA + costB - 1, ledger);
+                outside.insert(frameA1);
+                outside.insert(frameB);
+                expectations.expect(outside.size() == 1 && !outside.contains(keyA) &&
+                                        intermediates == std::size_t{1} << 20 &&
+                                        outside.statistics().previewFirstYieldedBytes == 0,
+                                    "outside a fill the preview cache evicts its own oldest frame");
+            }
+            {
+                PreviewFrameCache filling(costA + costB - 1, ledger);
+                auto fill = filling.beginFillRetention();
+                filling.insert(frameA1);
+                const auto inserted = filling.insert(frameB);
+                expectations.expect(
+                    inserted.retained() && inserted.evictions == 0 && filling.size() == 2 &&
+                        filling.contains(keyA) && intermediates < std::size_t{1} << 20 &&
+                        filling.statistics().previewFirstYieldedBytes ==
+                            (std::size_t{1} << 20) - intermediates &&
+                        filling.byteBudget() >= costA + costB,
+                    "during a fill an Ordinary pool yields before a finished frame is evicted");
+                fill.end();
+                expectations.expect(!ledger.previewFillActive(),
+                                    "ending the fill restores normal yielding");
+            }
+            ledger.unregisterCache(&intermediates);
         }
 
         if (expectations.failures() != 0) {
