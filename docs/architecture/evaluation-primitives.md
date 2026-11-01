@@ -911,13 +911,21 @@ video cache, the media disk cache write queue and the asset proxy and decoded-au
   give only the remainder, so the frame being prepared is never starved by the frames before it. A
   reclaim leaves the budget of a pool asked for nothing unchanged during a fill;
 - a preview cache that has no room for a finished frame asks `MemoryBudgetLedger::yieldToPreview`
-  before it evicts one of its own. The `Ordinary` pools give back up to the frame's shortfall and
-  the preview budget rises by what they released (`PreviewFrameCache::Statistics::
-  previewFirstYieldedBytes`). The exchange is memory-neutral: the preview pool never takes free
+  before it evicts one of its own. The `Ordinary` pools evict up to the frame's shortfall and the
+  preview budget rises by what they evicted (`PreviewFrameCache::Statistics::
+  previewFirstYieldedBytes`). The operation cache retires evicted prepared uploads after their GPU
+  work, so its retained bytes fall a little later; until the next budget application a pool
+  counts as holding at most the budget it was last given, and the same bytes are never granted
+  twice. The exchange is memory-neutral: the preview pool never takes free
   memory or the headroom and pending work claims that the next frame needs this way. It applies
   only with a RAM headroom (usable-capacity retention); explicit per-pool budgets without a
   headroom stay exact;
-- growth into free memory beyond headroom plus margin and pending claims is shared as before.
+- free memory beyond headroom plus margin and pending claims is left to the work in flight and
+  the finished frames it becomes: during a fill only `FinishedPreview` pools grow into it, while
+  `Ordinary` pools hold what they have and cycle their own least recently used entries. Outside a
+  fill every reusable pool takes an equal share, as before. Before this, a 2160p fill let the
+  operation cache take most of the free memory early (prepared uploads 7–8 GB, which a linear
+  fill never reuses), which also narrowed the frames in flight that free capacity sizes.
 
 When the `Ordinary` pools hold nothing more, the preview cache evicts its own least recently used
 frames and the fill ends `PartialBudget`. Ending the last fill scope restores proportional yielding.

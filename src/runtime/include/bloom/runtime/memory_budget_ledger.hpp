@@ -147,8 +147,8 @@ class MemoryBudgetLedger final {
 
     // An active RAM Preview fill. While at least one is held, Ordinary pools yield before
     // FinishedPreview pools in budget deficits, in reclaim() and through yieldToPreview(). Ending
-    // (or destroying) the last one restores proportional yielding. Move-only; must not outlive the
-    // ledger.
+    // (or destroying) the last one restores proportional yielding. The first fill applies the
+    // budgets at once (same thread rules as poll). Move-only; must not outlive the ledger.
     class PreviewFill final {
       public:
         PreviewFill() noexcept = default;

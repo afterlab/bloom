@@ -706,9 +706,17 @@ void previewFirstDuringFill() {
 
     heldOperation = 6 * gib;
     heldPreview = 3 * gib;
+    static_cast<void>(ledger.poll({.availableBytes = 2 * gib + margin + 8 * gib}, at(1)));
+    expect(operation == 6 * gib + 4 * gib && preview == 3 * gib + 4 * gib,
+           "outside a fill free memory is shared equally");
     {
         auto fill = ledger.beginPreviewFill();
+        expect(operation == 6 * gib && preview == 11 * gib,
+               "starting a fill applies the budgets at once: Ordinary pools stop growing");
         expect(fill.active() && ledger.previewFillActive(), "a fill scope marks the fill active");
+        static_cast<void>(ledger.poll({.availableBytes = 2 * gib + margin + 8 * gib}, at(1)));
+        expect(operation == 6 * gib && preview == 11 * gib,
+               "during a fill free memory goes to the finished frames, not to Ordinary pools");
         static_cast<void>(ledger.poll({.availableBytes = gib + margin}, at(1)));
         expect(heldOperation == 5 * gib && heldPreview == 3 * gib && preview == 3 * gib,
                "during a fill the operation cache covers the deficit and preview frames stay");

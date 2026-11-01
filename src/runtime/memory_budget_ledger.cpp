@@ -404,7 +404,20 @@ std::size_t MemoryBudgetLedger::cacheByteBudgetLocked(const Cache& participant) 
         const bool stall = state_.machine.memoryStall && available < restoreFloor;
         std::size_t bytes = own;
         if (available >= growthFloor && !stall) {
-            bytes = saturatedAdd(own, (available - growthFloor) / std::max<std::size_t>(1, pools));
+            // During a RAM Preview fill free memory is left to the frames in flight and the
+            // finished frames they become: Ordinary pools hold what they have (cycling their own
+            // least recently used entries) and only FinishedPreview pools grow.
+            std::size_t growing = pools;
+            if (previewFills_ != 0) {
+                growing = static_cast<std::size_t>(
+                    std::count_if(holdings.begin(), holdings.end(), [](const auto& entry) {
+                        return entry.second.priority == MemoryEvictionPriority::FinishedPreview;
+                    }));
+                if (participant.priority != MemoryEvictionPriority::FinishedPreview)
+                    growing = 0;
+            }
+            if (growing != 0)
+                bytes = saturatedAdd(own, (available - growthFloor) / growing);
         } else if ((available < *ramHeadroom_ || stall) && retainedTotal > 0) {
             // Only the deficit: what brings available memory back to headroom plus margin. Each
             // pool gives back its share, least recently used entries first; never a whole pool
@@ -679,6 +692,10 @@ void MemoryBudgetLedger::PreviewFill::end() noexcept {
 MemoryBudgetLedger::PreviewFill MemoryBudgetLedger::beginPreviewFill() {
     const std::lock_guard lock(mutex_);
     ++previewFills_;
+    // Ordinary pools stop growing from the start of the fill, not from the next sample: a budget
+    // granted before the fill would otherwise let them keep filling free memory meanwhile.
+    if (previewFills_ == 1 && hasPolled_ && ramHeadroom_)
+        applyBudgetsLocked();
     return PreviewFill(*this);
 }
 
