@@ -358,6 +358,15 @@ enum class Size : int {
     PickerMarker = 8,
     CheckerCell = 8,
 
+    // The Profiler's chart primitives (#423): a KTimeSeriesChart, a KHistogramChart, and the
+    // KReadoutGrid's label and value columns and the width of one of its columns -- a grid wider
+    // than two of these flows its rows into two columns.
+    ChartHeight = 96,
+    HistogramHeight = 72,
+    ReadoutLabelWidth = 168,
+    ReadoutValueWidth = 112,
+    ReadoutColumnWidth = 400,
+
     // ---- Dialog extents (lane C, kit::KDialog). Kept together for the lane merge. ----
     // The minimum height of a dialog whose body is a long document or a page stack (Open Source
     // Licenses, Preferences), so it opens at a readable size rather than at its smallest layout.
@@ -405,6 +414,9 @@ inline constexpr qreal kFocusRingWidth = 1.5;
 // the colour chip's swap glyph.
 inline constexpr qreal kMarkerStroke = 1.5;
 inline constexpr qreal kWindowBorderWidth = 1.0;
+// A KTimeSeriesChart line series, and the opacity of a stacked band's fill under its edge line.
+inline constexpr qreal kChartLineStroke = 1.5;
+inline constexpr qreal kChartBandOpacity = 0.45;
 
 // A hairline that lands on whole physical pixels at any device pixel ratio: at 1.25x or 1.5x a
 // plain 1.0 logical-pixel pen straddles two physical pixels and reads as a blurred grey line.

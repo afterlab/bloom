@@ -134,6 +134,8 @@ enum class IconId : std::uint8_t {
     LabelFilter,
     // The timeline's keyframes/graph toggle (axes and a plotted line).
     GraphEditor,
+    // The Profiler panel (a gauge).
+    Profiler,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

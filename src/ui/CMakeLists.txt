@@ -17,6 +17,7 @@ target_sources(
     bloom_ui_kit
     PRIVATE
         kit/button.cpp
+        kit/chart.cpp
         kit/color.cpp
         kit/color_chip.cpp
         kit/color_picker.cpp
@@ -35,6 +36,7 @@ target_sources(
         kit/accessibility.cpp
         kit/fonts.cpp
         kit/icons.cpp
+        kit/metrics.cpp
         kit/mnemonic_style.cpp
         kit/painting.cpp
         kit/surfaces.cpp
@@ -43,6 +45,7 @@ target_sources(
         kit/progress_bar.cpp
         kit/radio_group.cpp
         kit/range_selector.cpp
+        kit/readout.cpp
         kit/slider.cpp
         kit/split_handle.cpp
         kit/swatch_button.cpp
@@ -64,6 +67,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/ui/kit/button.hpp
+            include/bloom/ui/kit/chart.hpp
             include/bloom/ui/kit/color.hpp
             include/bloom/ui/kit/color_chip.hpp
             include/bloom/ui/kit/color_picker.hpp
@@ -82,6 +86,7 @@ target_sources(
             include/bloom/ui/kit/accessibility.hpp
             include/bloom/ui/kit/fonts.hpp
             include/bloom/ui/kit/icons.hpp
+            include/bloom/ui/kit/metrics.hpp
             include/bloom/ui/kit/mnemonic_style.hpp
             include/bloom/ui/kit/painting.hpp
             include/bloom/ui/kit/panel_switcher.hpp
@@ -93,6 +98,7 @@ target_sources(
             include/bloom/ui/kit/progress_bar.hpp
             include/bloom/ui/kit/radio_group.hpp
             include/bloom/ui/kit/range_selector.hpp
+            include/bloom/ui/kit/readout.hpp
             include/bloom/ui/kit/slider.hpp
             include/bloom/ui/kit/split_handle.hpp
             include/bloom/ui/kit/inline_edit.hpp
@@ -187,6 +193,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/dots-three-vertical.svg
         kit/third_party/phosphor-icons/regular/eyedropper.svg
         kit/third_party/phosphor-icons/regular/chart-line.svg
+        kit/third_party/phosphor-icons/regular/gauge.svg
         kit/third_party/phosphor-icons/regular/selection.svg
         kit/third_party/phosphor-icons/regular/square-half.svg
         kit/third_party/phosphor-icons/regular/align-left.svg
@@ -273,6 +280,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/eye-bold.svg
         kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
         kit/third_party/phosphor-icons/bold/chart-line-bold.svg
+        kit/third_party/phosphor-icons/bold/gauge-bold.svg
         kit/third_party/phosphor-icons/bold/selection-bold.svg
         kit/third_party/phosphor-icons/bold/square-half-bold.svg
         kit/third_party/phosphor-icons/bold/align-left-bold.svg
@@ -346,6 +354,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/eye-fill.svg
         kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
         kit/third_party/phosphor-icons/fill/chart-line-fill.svg
+        kit/third_party/phosphor-icons/fill/gauge-fill.svg
         kit/third_party/phosphor-icons/fill/selection-fill.svg
         kit/third_party/phosphor-icons/fill/square-half-fill.svg
         kit/third_party/phosphor-icons/fill/align-left-fill.svg
