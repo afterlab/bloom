@@ -519,12 +519,20 @@ void testSequenceReadAhead(Expectations& expectations, const MediaFixture& fixtu
                                 built.scene->mediaStatistics().sourceBytesRead == 0,
                             "a read-ahead member is reused without reading the file again");
     }
-    // A member already cached, queued or in flight is not requested twice.
+    // Back at frame 0 after playing to frame 3 (ADR 0037, the playback window): members 1 and 2
+    // were released behind the playhead and are captured again; member 3, still inside the window
+    // ahead of frame 0, is cached and is not requested twice.
     const auto again = builder.build(plan, request);
     expectations.expect(again.hasValue(), "frame 0 prepares again");
+    const auto againDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (context.sequenceReadAhead->statistics().captured +
+                   context.sequenceReadAhead->statistics().failed <
+               5 &&
+           std::chrono::steady_clock::now() < againDeadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     expectations.expect(context.sequenceReadAhead->statistics().failed == 0 &&
-                            context.sequenceReadAhead->statistics().captured == 3 &&
-                            context.sequenceReadAhead->statistics().queued == 3,
-                        "cached members are not queued or captured again");
+                            context.sequenceReadAhead->statistics().captured == 5 &&
+                            context.sequenceReadAhead->statistics().queued == 5,
+                        "released members are captured again; a cached member is not");
 }
