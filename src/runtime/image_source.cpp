@@ -58,7 +58,10 @@ missingFrameImage(const std::size_t budget) {
         *window.value(), *window.value(), core::PixelAspectRatio::square());
     auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
     if (!builder)
-        return {{}, "Image source exceeds the pixel budget"};
+        return {{},
+                "Image source exceeds the pixel budget",
+                false,
+                media::ImageDiagnosticCode::PixelBudgetExceeded};
     auto row = builder.value()->row(0);
     (*row.value())[0] = render::Rgba32f::transparent();
     auto frozen = std::move(*builder.value()).freeze();
@@ -511,7 +514,10 @@ resampleDecodedImage(const render::Rgba32fImage& decoded,
         return {{}, "Image source descriptor is invalid"};
     auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
     if (!builder)
-        return {{}, "Image source exceeds the pixel budget"};
+        return {{},
+                "Image source exceeds the pixel budget",
+                false,
+                media::ImageDiagnosticCode::PixelBudgetExceeded};
     const auto sourceWidth = source->extent().width();
     const auto sourceHeight = source->extent().height();
     std::vector<std::uint32_t> columns(window->extent().width());

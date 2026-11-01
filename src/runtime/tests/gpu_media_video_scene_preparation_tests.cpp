@@ -191,7 +191,7 @@ void testVideoWarmReuse(Expectations& expectations, const CpuCompositionEvaluato
         return;
     }
     const auto asset = videoAsset(path, 21000);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto planA = videoPlan(format(96, 64), asset,
                                  LayerValues{.position = {48.3, 32.1}, .opacity = 0.9}, 21000);
@@ -206,12 +206,10 @@ void testVideoWarmReuse(Expectations& expectations, const CpuCompositionEvaluato
     if (!a || !b) {
         return;
     }
-    expectations.expect(a.scene->mediaStatistics().videoConversions == 1 &&
-                            a.scene->mediaStatistics().uploadCacheMisses == 1,
+    expectations.expect(a.scene->mediaStatistics().videoConversions == 1,
                         "the cold build decodes and converts once");
-    expectations.expect(b.scene->mediaStatistics().videoConversions == 0 &&
-                            b.scene->mediaStatistics().uploadCacheHits == 1,
-                        "a transform-only update reuses the converted image");
+    expectations.expect(b.scene->mediaStatistics().videoConversions == 1,
+                        "a transform-only update converts the decoded frame again (ADR 0037)");
     const auto* uploadA = firstUpload(*a.scene);
     const auto* uploadB = firstUpload(*b.scene);
     const auto* translationA = firstTranslation(*a.scene);
@@ -223,16 +221,13 @@ void testVideoWarmReuse(Expectations& expectations, const CpuCompositionEvaluato
         translationB == nullptr) {
         return;
     }
-    expectations.expect(uploadA->semanticKey == uploadB->semanticKey &&
-                            uploadA->image.get() == uploadB->image.get(),
-                        "an unchanged source reuses the SAME immutable converted allocation");
+    expectations.expect(uploadA->semanticKey == uploadB->semanticKey,
+                        "an unchanged source keeps one upload semantic key");
     expectations.expect(translationA->semanticKey != translationB->semanticKey,
                         "a changed transform has a different translation pixel key");
     // The evaluator's decoded-frame cache is a separate retained resource; whether a given frame
     // fits its ledger is not this preparation's concern. The only claim made here is that the warm
-    // build did not ADD decoded bytes. selectVideoSource may still decode before the
-    // converted-upload lookup, so a zero-decode claim is deliberately never made from the
-    // conversion counters.
+    // build did not ADD decoded bytes: it converts the compact decoded frame again.
     expectations.expect(residentAfterSecond <= residentAfterFirst &&
                             residentAfterSecond >= residentBefore,
                         "the warm build never grows the decoded frame cache");
@@ -247,13 +242,12 @@ void testVideoBypassMatrix(Expectations& expectations, const CpuCompositionEvalu
         return;
     }
     const auto asset = videoAsset(path, 23000);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = videoPlan(format(96, 64), asset,
                                 LayerValues{.position = {48.3, 32.1}, .opacity = 0.9}, 23000);
     const auto warm = builder.build(plan, requestFor(*plan));
-    expectations.expect(warm.hasValue() && warm.scene->mediaStatistics().videoConversions == 1 &&
-                            warm.scene->mediaStatistics().uploadCacheMisses == 1,
+    expectations.expect(warm.hasValue() && warm.scene->mediaStatistics().videoConversions == 1,
                         "the bypass-matrix warm build converts once");
 
     auto interactiveDefinition = plan->copyDefinition();
@@ -261,33 +255,28 @@ void testVideoBypassMatrix(Expectations& expectations, const CpuCompositionEvalu
     const auto interactive = publish(std::move(interactiveDefinition));
     const auto interactiveHit = builder.build(interactive, requestFor(*interactive));
     expectations.expect(interactiveHit.hasValue() &&
-                            interactiveHit.scene->mediaStatistics().uploadCacheHits == 1 &&
-                            interactiveHit.scene->mediaStatistics().videoConversions == 0,
-                        "an interactive plan reads the warm converted entry");
+                            interactiveHit.scene->mediaStatistics().videoConversions == 1,
+                        "an interactive plan converts the decoded frame");
 
-    // An interactive gesture MISS is decoded and converted but never inserted.
+    // An interactive gesture frame is decoded and converted, and nothing of it is kept.
     const auto frameTwelve = rationalTime(1, 2);
     const auto gestureMiss = builder.build(interactive, requestFor(*interactive, frameTwelve));
     const auto gestureMissAgain = builder.build(interactive, requestFor(*interactive, frameTwelve));
     expectations.expect(gestureMiss.hasValue() && gestureMissAgain.hasValue() &&
-                            gestureMiss.scene->mediaStatistics().uploadCacheMisses == 1 &&
                             gestureMiss.scene->mediaStatistics().videoConversions == 1 &&
-                            gestureMissAgain.scene->mediaStatistics().uploadCacheMisses == 1 &&
                             gestureMissAgain.scene->mediaStatistics().videoConversions == 1,
-                        "an interactive gesture miss is never inserted");
+                        "an interactive gesture frame converts each time");
     const auto normalFrameTwelve = builder.build(plan, requestFor(*plan, frameTwelve));
     expectations.expect(normalFrameTwelve.hasValue() &&
-                            normalFrameTwelve.scene->mediaStatistics().uploadCacheMisses == 1 &&
                             normalFrameTwelve.scene->mediaStatistics().videoConversions == 1,
-                        "the gesture frame was never inserted into the shared upload cache");
+                        "the normal build of the gesture frame converts it");
 
     auto explicitRequest = requestFor(*plan);
     explicitRequest.bypassOperationCache = true;
     const auto explicitBuild = builder.build(plan, explicitRequest);
     expectations.expect(explicitBuild.hasValue() &&
-                            explicitBuild.scene->mediaStatistics().uploadCacheHits == 0 &&
                             explicitBuild.scene->mediaStatistics().videoConversions == 1,
-                        "an explicit bypass reconverts and never reads the prepared-upload cache");
+                        "an explicit bypass reconverts");
 }
 
 // Real affine and all-mode blend coverage on a decoded video source: rotation, nonuniform/signed

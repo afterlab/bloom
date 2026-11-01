@@ -12,7 +12,6 @@
 #include <bloom/output/flat_exr_output_adapter.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_prepared_packed_preview_product.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -359,8 +358,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
     auto gpuStage = ui::makeSessionRefreshingGpuSceneStage(
         fixture.compiler, fixture.evaluator, fixture.provider,
-        std::make_shared<runtime::GpuSceneCoverageCache>(),
-        std::make_shared<runtime::GpuPreparedUploadCache>(), nullptr, resolver, processingPhase);
+        std::make_shared<runtime::GpuSceneCoverageCache>(), nullptr, resolver, processingPhase);
     if (processingPolicy) {
         struct SampleRoot {
             std::mutex mutex;

@@ -1,11 +1,11 @@
-// Cache-identity group: warm upload reuse, changed frame/bypass, the source-key identity contract,
-// per-request statistics, and the gesture cache never touching disk.
+// Cache-identity group: warm rebuilds (staging is scratch, ADR 0037), changed frame/bypass, the
+// source-key identity contract, per-request statistics, and the gesture cache never touching disk.
 // Included by gpu_media_scene_preparation_tests.cpp inside its anonymous namespace.
 
 void testWarmReuseAndChangedSource(Expectations& expectations,
                                    const CpuCompositionEvaluator& evaluator,
                                    const MediaFixture& fixture) {
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto planA = mediaPlan(format(8, 8), fixture.asset,
                                  LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, 1500);
@@ -30,13 +30,10 @@ void testWarmReuseAndChangedSource(Expectations& expectations,
     }
     expectations.expect(uploadA->semanticKey == uploadB->semanticKey,
                         "an unchanged source keeps one upload semantic key across transforms");
-    expectations.expect(uploadA->image.get() == uploadB->image.get(),
-                        "an unchanged source reuses the SAME immutable allocation");
     expectations.expect(translationA->semanticKey != translationB->semanticKey,
                         "a changed transform has a different translation pixel key");
-    expectations.expect(b.scene->mediaStatistics().uploadCacheHits == 1 &&
-                            b.scene->mediaStatistics().imageConversions == 0,
-                        "the warm build serves the source from the prepared-upload cache");
+    expectations.expect(b.scene->mediaStatistics().imageConversions == 1,
+                        "the warm build converts again: no host copy of an upload is kept");
 }
 
 void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionEvaluator& evaluator,
@@ -55,7 +52,7 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
     asset.manifest.members = {sequenceMember(fixture.path, 0, 0), sequenceMember(secondPath, 1, 1)};
     const auto plan = mediaPlan(format(8, 8), asset, LayerValues{.position = {4.3, 3.1}}, 1700);
 
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto frameZero = builder.build(plan, requestFor(*plan, RationalTime::fromInteger(0)));
     const auto frameOne = builder.build(plan, requestFor(*plan, rationalTime(1, 24)));
@@ -72,7 +69,7 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
     expectations.expect(uploadZero->image.get() != uploadOne->image.get(),
                         "a changed selected frame converts a distinct source image");
 
-    // Explicit bypass recalculates the source instead of reading the prepared-upload cache.
+    // Explicit bypass recalculates the source.
     auto bypassRequest = requestFor(*plan, RationalTime::fromInteger(0));
     bypassRequest.bypassOperationCache = true;
     const auto bypassed = builder.build(plan, bypassRequest);
@@ -81,9 +78,8 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
         return;
     }
     const auto* uploadBypass = firstUpload(*bypassed.scene);
-    expectations.expect(bypassed.scene->mediaStatistics().imageConversions == 1 &&
-                            bypassed.scene->mediaStatistics().uploadCacheHits == 0,
-                        "an explicit bypass reconverts and never reads the prepared-upload cache");
+    expectations.expect(bypassed.scene->mediaStatistics().imageConversions == 1,
+                        "an explicit bypass reconverts");
     expectations.expect(uploadBypass != nullptr && uploadZero != nullptr &&
                             uploadBypass->image.get() != uploadZero->image.get(),
                         "an explicit bypass recalculates a distinct source image");
@@ -94,7 +90,7 @@ void testChangedFrameAndBypass(Expectations& expectations, const CpuCompositionE
 void testSourceKeyExcludesIdsAndRevision(Expectations& expectations,
                                          const CpuCompositionEvaluator& evaluator,
                                          const MediaFixture& fixture) {
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto a = mediaPlan(format(8, 8), fixture.asset,
                              LayerValues{.position = {4.3, 3.1}, .opacity = 0.8}, 2700);
@@ -133,7 +129,7 @@ void testSourceKeyExcludesIdsAndRevision(Expectations& expectations,
                             translationA->semanticKey == translationRevised->semanticKey,
                         "node/layer/parameter ids and the revision never enter a derived key");
 
-    // The proxy scale IS part of the converted source identity: a different proxy is a miss.
+    // The proxy scale IS part of the converted source identity.
     const auto proxyPlan = mediaPlan(format(8, 8), fixture.asset,
                                      LayerValues{.position = {4.3, 3.1}, .opacity = 0.8}, 2900);
     const auto extent = bloom::render::ImageExtent::create(5, 4);
@@ -151,15 +147,15 @@ void testSourceKeyExcludesIdsAndRevision(Expectations& expectations,
     const auto* uploadProxy = firstUpload(*proxied.scene);
     expectations.expect(uploadProxy != nullptr &&
                             uploadProxy->semanticKey != uploadA->semanticKey &&
-                            proxied.scene->mediaStatistics().uploadCacheMisses == 1,
-                        "a changed proxy scale changes the source key and is a miss");
+                            proxied.scene->mediaStatistics().imageConversions == 1,
+                        "a changed proxy scale changes the source key and converts");
 }
 
 // Per-build CPU work is reported on the result, never in a shared mutable aggregate.
 void testPerRequestStatisticsAreLocal(Expectations& expectations,
                                       const CpuCompositionEvaluator& evaluator,
                                       const MediaFixture& fixture) {
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 3000);
@@ -169,14 +165,12 @@ void testPerRequestStatisticsAreLocal(Expectations& expectations,
     if (!first || !second) {
         return;
     }
-    expectations.expect(first.scene->mediaStatistics().uploadCacheMisses == 1 &&
-                            first.scene->mediaStatistics().uploadCacheHits == 0 &&
+    expectations.expect(first.scene->mediaStatistics().imageSources == 1 &&
                             first.scene->mediaStatistics().imageConversions == 1,
-                        "the first result reports only its own cold work");
-    expectations.expect(second.scene->mediaStatistics().uploadCacheHits == 1 &&
-                            second.scene->mediaStatistics().uploadCacheMisses == 0 &&
-                            second.scene->mediaStatistics().imageConversions == 0,
-                        "the second result reports only its own warm work");
+                        "the first result reports only its own work");
+    expectations.expect(second.scene->mediaStatistics().imageSources == 1 &&
+                            second.scene->mediaStatistics().imageConversions == 1,
+                        "the second result reports only its own work, not a running total");
 }
 
 // Explicit bypass and the interactive (overridden) plan bypass must not touch the real disk cache.
@@ -188,7 +182,7 @@ void testGestureCacheNeverTouchesDisk(Expectations& expectations,
         bloom::media::cache::MediaDiskCacheConfig{.rootDirectory = diskRoot,
                                                   .byteBudget = std::size_t{1} << 24U});
     evaluator.setMediaDiskCache(disk);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 3100);
@@ -204,9 +198,8 @@ void testGestureCacheNeverTouchesDisk(Expectations& expectations,
     disk->flush();
     const auto afterHit = disk->statistics();
     expectations.expect(gestureHit.hasValue() &&
-                            gestureHit.scene->mediaStatistics().uploadCacheHits == 1 &&
-                            gestureHit.scene->mediaStatistics().imageConversions == 0,
-                        "a gesture hit serves the prepared-upload cache");
+                            gestureHit.scene->mediaStatistics().imageConversions == 1,
+                        "a gesture build of a decoded source converts directly");
     expectations.expect(afterHit.hits == before.hits && afterHit.misses == before.misses &&
                             afterHit.entryCount == before.entryCount &&
                             afterHit.storedBytes == before.storedBytes,
@@ -227,8 +220,6 @@ void testGestureCacheNeverTouchesDisk(Expectations& expectations,
     disk->flush();
     const auto afterMiss = disk->statistics();
     expectations.expect(gestureMiss.hasValue() &&
-                            gestureMiss.scene->mediaStatistics().uploadCacheMisses == 1 &&
-                            gestureMiss.scene->mediaStatistics().uploadCacheHits == 0 &&
                             gestureMiss.scene->mediaStatistics().imageConversions == 1,
                         "a gesture miss converts directly and is not inserted");
     expectations.expect(afterMiss.hits == beforeMiss.hits &&
@@ -244,9 +235,8 @@ void testGestureCacheNeverTouchesDisk(Expectations& expectations,
     disk->flush();
     const auto afterExplicit = disk->statistics();
     expectations.expect(explicitBuild.hasValue() &&
-                            explicitBuild.scene->mediaStatistics().uploadCacheHits == 0 &&
                             explicitBuild.scene->mediaStatistics().imageConversions == 1,
-                        "an explicit bypass reconverts and never reads the prepared-upload cache");
+                        "an explicit bypass reconverts");
     expectations.expect(afterExplicit.hits == beforeExplicit.hits &&
                             afterExplicit.misses == beforeExplicit.misses &&
                             afterExplicit.entryCount == beforeExplicit.entryCount &&
@@ -259,7 +249,7 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
     using bloom::runtime::OperationCacheEntryKind;
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto planA =
         mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {4.3, 3.1}}, 3900);
@@ -293,7 +283,7 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
     } else {
         const auto& work = warm.scene->mediaStatistics();
         if (work.sourceRevisionCacheHits != 1 || work.sourceRevisionCaptures != 0 ||
-            work.imageDecodeNanoseconds != 0 || work.imageConversions != 0) {
+            work.imageConversions != 1) {
             std::cerr << "warm revision work: hits=" << work.sourceRevisionCacheHits
                       << " captures=" << work.sourceRevisionCaptures
                       << " decode-ns=" << work.imageDecodeNanoseconds
@@ -307,9 +297,8 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
                             warm.scene->mediaStatistics().sourceIoNanoseconds == 0 &&
                             warm.scene->mediaStatistics().sourceHashNanoseconds == 0 &&
                             warm.scene->mediaStatistics().sourceProbeNanoseconds == 0 &&
-                            warm.scene->mediaStatistics().imageDecodeNanoseconds == 0 &&
-                            warm.scene->mediaStatistics().imageConversions == 0,
-                        "warm transform edit reuses actual revision with zero probe/hash/decode");
+                            warm.scene->mediaStatistics().imageConversions == 1,
+                        "warm transform edit decodes the retained revision with zero probe/hash");
     auto finalCpuRequest = requestB;
     finalCpuRequest.requireVerifiedMediaSources = true;
     const auto cpuFinal = evaluator.evaluate(planB, finalCpuRequest, {});
@@ -381,7 +370,7 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
         const auto* uploadCold = firstUpload(*cold.scene);
         const auto* uploadWarm = firstUpload(*warm.scene);
         expectations.expect(
-            uploadCold && uploadWarm && uploadCold->image == uploadWarm->image,
+            uploadCold && uploadWarm && uploadCold->image && !uploadCold->image->pixels().empty(),
             "already published immutable upload remains valid after ticket eviction");
     }
 }
@@ -391,7 +380,7 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
 void testRevalidatedFramesReadNothing(Expectations& expectations, const MediaFixture& fixture) {
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = mediaPlan(format(8, 8), fixture.asset, LayerValues{}, 4300);
     auto request = requestFor(*plan);
@@ -435,7 +424,7 @@ void testRevalidatedFramesReadNothing(Expectations& expectations, const MediaFix
 void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixture& fixture) {
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto ordinary =
         mediaPlan(format(8, 8), fixture.asset, LayerValues{.position = {3.0, 3.0}}, 4200);
@@ -447,9 +436,8 @@ void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixtur
     const auto prepared = builder.build(gesture, request);
     checks.expect(prepared.hasValue() &&
                       prepared.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
-                      context.operationCache->retainedBytes() == 0 &&
-                      context.preparedUploadCache->entryCount() == 0,
-                  "cold GPU gesture captures transient source without inserting ticket or upload");
+                      context.operationCache->retainedBytes() == 0,
+                  "cold GPU gesture captures transient source without inserting a ticket");
     const auto cpu = evaluator.evaluate(gesture, request, {});
     checks.expect(cpu.frame() != nullptr && context.operationCache->retainedBytes() == 0,
                   "cold CPU gesture inserts neither source revision nor decoded/derived pixels");
@@ -501,8 +489,6 @@ void testSequenceReadAhead(Expectations& expectations, const MediaFixture& fixtu
     asset.manifest.members = members;
     const auto plan = mediaPlan(format(8, 8), asset, LayerValues{}, 1800);
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
-    context.preparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>(
-        bloom::runtime::kDefaultPreparedUploadCacheBytes);
     expectations.expect(context.sequenceReadAhead != nullptr,
                         "the evaluator's media context carries its sequence read-ahead");
     const CpuGpuSceneBuilder builder(nullptr, context);

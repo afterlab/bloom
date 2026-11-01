@@ -15,7 +15,6 @@
 
 #include "gpu_media_executor_test_support.hpp"
 
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
@@ -654,8 +653,6 @@ void testLargeSourceNative(Expectations& expectations, GpuDevice& device,
     }
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     context.assetBaseDirectory = directory;
-    context.preparedUploadCache =
-        std::make_shared<bloom::runtime::GpuPreparedUploadCache>(kCacheBudget);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto plan = largeSourcePlan(format(1920, 1080), asset, 5000);
     auto request = requestFor(*plan);
@@ -689,8 +686,7 @@ void testLargeSourceNative(Expectations& expectations, GpuDevice& device,
         std::cerr << "LARGE_TERMINAL code="
                   << static_cast<int>(executor.executor->diagnostic().code)
                   << " message=" << executor.executor->diagnostic().message
-                  << " producer=" << kSceneBudget
-                  << " preparedUploadCache=" << context.preparedUploadCache->maxBytes() << '\n';
+                  << " producer=" << kSceneBudget << '\n';
         return;
     }
     if (run.ready && run.image != nullptr && frame.frame() != nullptr) {
@@ -705,13 +701,11 @@ void testLargeSourceNative(Expectations& expectations, GpuDevice& device,
     expectations.expect(executor.executor->counters().uploads >= 1,
                         "large: a real native upload ran for the 233 MB source");
 
-    // Warm identical request: the prepared-upload cache retains the full source, so the rebuild
-    // re-decodes zero frames, and the unchanged output performs zero native dispatches.
+    // Warm identical request: no host copy of the 233 MB upload is kept (ADR 0037), so the rebuild
+    // converts the source again, and the unchanged output performs zero native dispatches.
     const auto second = builder.build(plan, request);
-    expectations.expect(second.hasValue() &&
-                            second.scene->mediaStatistics().imageConversions == 0 &&
-                            second.scene->mediaStatistics().uploadCacheHits == 1,
-                        "large: an identical rebuild re-decodes zero frames (upload cache hit)");
+    expectations.expect(second.hasValue() && second.scene->mediaStatistics().imageConversions == 1,
+                        "large: an identical rebuild converts again; no upload copy is kept");
     if (!second) {
         return;
     }

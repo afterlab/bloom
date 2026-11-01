@@ -255,7 +255,13 @@ struct GpuPreviewDisplayServiceOptions final {
     GpuResidentFrameLeaseBudgets residentLeaseBudgets{};
     // Bounded resident content-cache budget (retained intermediate GpuImages, actual VMA bytes).
     // This is a separate ledger from the lease registry and the executor's per-request budget.
-    GpuSceneCacheBudgets residentSceneCacheBudgets{};
+    // Without an explicit plan it is the resident partition's scene share of the pool the default
+    // lease registry implies; never a fraction of host memory (ADR 0037). The owner clamps it to
+    // the device.
+    GpuSceneCacheBudgets residentSceneCacheBudgets{
+        gpuResidentCapacityPlanConfigured(GpuResidentFrameLeaseBudgets{}.maxBytes /
+                                          kResidentLeaseNumerator * kResidentLeaseDenominator)
+            .sceneCacheBytes};
     // Explicit producer/structural ceilings are honored verbatim, including combined image and
     // staging peaks. A rooted omitted producer limit follows the explicit preview ceiling, or
     // the finite owner-resolved physical request ceiling when a live default view is injected.

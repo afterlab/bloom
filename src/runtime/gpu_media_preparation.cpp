@@ -16,7 +16,6 @@
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -34,18 +33,43 @@ GpuSceneMediaContext GpuSceneMediaContext::fromEvaluator(const CpuCompositionEva
     context.assetBaseDirectory = evaluator.assetBaseDirectory();
     context.mediaDiskCache = evaluator.mediaDiskCache();
     context.sequenceReadAhead = evaluator.sequenceReadAhead();
-    // Only an explicitly bound pool supplies rooted retention. Unbound legacy evaluators
-    // render normally without optional preparation retention.
-    if (context.operationCache && context.operationCache->preparedUploadsBound())
-        context.preparedUploadCache =
-            std::make_shared<GpuPreparedUploadCache>(context.operationCache);
     return context;
+}
+
+std::shared_ptr<const render::Rgba32fImage>
+GpuSceneBuildUploads::find(const std::string& key) const {
+    const std::lock_guard lock(mutex_);
+    const auto found = images_.find(key);
+    return found == images_.end() ? nullptr : found->second;
+}
+
+void GpuSceneBuildUploads::share(const std::string& key,
+                                 std::shared_ptr<const render::Rgba32fImage> image) {
+    if (!image)
+        return;
+    try {
+        const std::lock_guard lock(mutex_);
+        images_.try_emplace(key, std::move(image));
+    } catch (const std::bad_alloc&) {
+        // Sharing is an optimization inside one build; a later leaf converts its own copy.
+    }
 }
 
 } // namespace bloom::runtime
 
 namespace bloom::runtime::detail {
 namespace {
+
+[[nodiscard]] std::shared_ptr<const render::Rgba32fImage>
+findSharedUpload(const GpuSceneMediaContext& context, const std::string& key) {
+    return context.buildUploads ? context.buildUploads->find(key) : nullptr;
+}
+
+void shareUpload(const GpuSceneMediaContext& context, const std::string& key,
+                 const std::shared_ptr<const render::Rgba32fImage>& image) {
+    if (context.buildUploads)
+        context.buildUploads->share(key, image);
+}
 
 void addMediaWork(std::uint64_t& total, const std::uint64_t value) noexcept {
     total += std::min(value, std::numeric_limits<std::uint64_t>::max() - total);
@@ -242,14 +266,9 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     outcome.semanticKey = uploadSemanticKey("image", selection.cacheKey, resolved);
     outcome.uploadSemanticKey = outcome.semanticKey;
     ++statistics.uploadKeyConstructions;
-    if (!explicitBypass && context.preparedUploadCache != nullptr) {
-        if (auto cached = context.preparedUploadCache->find(outcome.uploadSemanticKey)) {
-            outcome.image = std::move(cached);
-            outcome.cacheHit = true;
-            ++statistics.uploadCacheHits;
-            return outcome;
-        }
-        ++statistics.uploadCacheMisses;
+    if (auto shared = findSharedUpload(context, outcome.uploadSemanticKey)) {
+        outcome.image = std::move(shared);
+        return outcome;
     }
     if (pixelBudget == 0) {
         outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
@@ -288,29 +307,25 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     }
     outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*image.value));
     outcome.converted = true;
-    if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-        context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image, linearPass);
-    }
+    shareUpload(context, outcome.uploadSemanticKey, outcome.image);
     return outcome;
 }
 
-[[nodiscard]] MediaUploadOutcome evaluateConvertedVideoUpload(
-    const VideoSourceSelection& selection, const ResolvedEvaluation& resolved,
-    const GpuSceneMediaContext& context, const std::uint64_t pixelBudget, const bool explicitBypass,
-    const bool planBypass, const CancellationToken& cancellation,
-    GpuSceneMediaStatistics& statistics, LinearPassRetention* const linearPass) {
+// The converted frame lives only until its upload completes: the scene's command holds it (and,
+// during the build, the build's upload scratch), and nothing keeps a host copy afterwards.
+[[nodiscard]] MediaUploadOutcome evaluateConvertedVideoUpload(const VideoSourceSelection& selection,
+                                                              const ResolvedEvaluation& resolved,
+                                                              const GpuSceneMediaContext& context,
+                                                              const std::uint64_t pixelBudget,
+                                                              const CancellationToken& cancellation,
+                                                              GpuSceneMediaStatistics& statistics) {
     MediaUploadOutcome outcome;
     outcome.semanticKey = uploadSemanticKey("video", selection.cacheKey, resolved);
     outcome.uploadSemanticKey = outcome.semanticKey;
     ++statistics.uploadKeyConstructions;
-    if (!explicitBypass && context.preparedUploadCache != nullptr) {
-        if (auto cached = context.preparedUploadCache->find(outcome.uploadSemanticKey)) {
-            outcome.image = std::move(cached);
-            outcome.cacheHit = true;
-            ++statistics.uploadCacheHits;
-            return outcome;
-        }
-        ++statistics.uploadCacheMisses;
+    if (auto shared = findSharedUpload(context, outcome.uploadSemanticKey)) {
+        outcome.image = std::move(shared);
+        return outcome;
     }
     auto converted =
         convertSelectedVideo(selection, resolved.imageDescriptor, resolved.horizontalScale,
@@ -330,9 +345,7 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
     auto& pixels = std::get<render::Rgba32fImage>(converted);
     outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(pixels));
     outcome.converted = true;
-    if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-        context.preparedUploadCache->store(outcome.uploadSemanticKey, outcome.image, linearPass);
-    }
+    shareUpload(context, outcome.uploadSemanticKey, outcome.image);
     return outcome;
 }
 
@@ -498,9 +511,8 @@ prepareVideoUpload(const CompiledVideoSource& source, const EvaluationRequest& r
             selection.warning.empty() ? "Video source is unavailable" : selection.warning;
         return outcome;
     }
-    return evaluateConvertedVideoUpload(selection, resolved, context, pixelBudget, explicitBypass,
-                                        planBypass, cancellation, statistics,
-                                        request.linearPass.get());
+    return evaluateConvertedVideoUpload(selection, resolved, context, pixelBudget, cancellation,
+                                        statistics);
 }
 
 MediaUploadOutcome
@@ -576,15 +588,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     outcome.frameBounds = imageSourceFrameBounds(selection);
     const auto backingKey = rawDecodeUploadKey("image-raw", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
-    if (!explicitBypass && context.preparedUploadCache != nullptr) {
-        if (auto cached = context.preparedUploadCache->find(backingKey)) {
-            outcome.image = std::move(cached);
-            outcome.cacheHit = true;
-            ++statistics.uploadCacheHits;
-        } else {
-            ++statistics.uploadCacheMisses;
-        }
-    }
+    outcome.image = findSharedUpload(context, backingKey);
     if (outcome.image == nullptr) {
         if (pixelBudget == 0) {
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
@@ -610,6 +614,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             return outcome;
         }
         if (!decoded.value.has_value()) {
+            if (decoded.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
             outcome.failure = decoded.diagnostic.empty() ? "Image source could not be decoded"
                                                          : decoded.diagnostic;
             return outcome;
@@ -618,9 +624,7 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         // command below; rebasing it here would copy every source pixel only to change metadata.
         outcome.image = std::move(*decoded.value);
         outcome.converted = true;
-        if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
-        }
+        shareUpload(context, backingKey, outcome.image);
     }
     if (outcome.image->descriptor() == nullptr) {
         outcome.failure = "Raw image upload has no descriptor";
@@ -752,15 +756,7 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
     }
     const auto backingKey = rawDecodeUploadKey("channel-shuffle-raw", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
-    if (!explicitBypass && context.preparedUploadCache != nullptr) {
-        if (auto cached = context.preparedUploadCache->find(backingKey)) {
-            outcome.image = std::move(cached);
-            outcome.cacheHit = true;
-            ++statistics.uploadCacheHits;
-        } else {
-            ++statistics.uploadCacheMisses;
-        }
-    }
+    outcome.image = findSharedUpload(context, backingKey);
     if (outcome.image == nullptr) {
         if (pixelBudget == 0) {
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
@@ -784,8 +780,7 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         }
         outcome.image = std::move(*gathered.value);
         outcome.converted = true;
-        if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr)
-            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
+        shareUpload(context, backingKey, outcome.image);
     }
     if (outcome.image->descriptor() == nullptr) {
         outcome.failure = "Raw shuffle upload has no descriptor";
@@ -865,84 +860,42 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
     // through the manifest the decode carries) are kept beside them under the selection identity,
     // which covers the sources' content, the layer and the matte list.
     const auto backingKey = rawDecodeUploadKey("cryptomatte-raw", selection.gatherKey);
-    OperationKey idsKeyBuilder;
-    idsKeyBuilder.add(std::string{"cryptomatte-ids-v1"});
-    idsKeyBuilder.add(selection.cacheKey);
-    const auto idsKey = idsKeyBuilder.digest();
     ++statistics.uploadKeyConstructions;
     std::optional<std::vector<std::uint32_t>> ids;
-    const bool cacheable = !explicitBypass && context.preparedUploadCache != nullptr;
-    if (cacheable) {
-        if (auto cached = context.preparedUploadCache->find(backingKey)) {
-            if (const auto stored = context.operationCache->find(idsKey, document::Revision{})) {
-                std::vector<std::uint32_t> resolvedIds;
-                bool valid = true;
-                for (const auto& value : stored->values) {
-                    const auto* id = std::get_if<std::int64_t>(&value);
-                    valid = valid && id != nullptr && *id >= 0 &&
-                            *id <= std::numeric_limits<std::uint32_t>::max();
-                    if (valid)
-                        resolvedIds.push_back(static_cast<std::uint32_t>(*id));
-                }
-                if (valid) {
-                    ids = std::move(resolvedIds);
-                    outcome.image = std::move(cached);
-                    outcome.cacheHit = true;
-                }
-            }
-        }
-        if (outcome.cacheHit)
-            ++statistics.uploadCacheHits;
-        else
-            ++statistics.uploadCacheMisses;
+    if (pixelBudget == 0) {
+        outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+        outcome.failure = "A new Cryptomatte backing exceeds the remaining source allowance";
+        return outcome;
     }
-    if (outcome.image == nullptr) {
-        if (pixelBudget == 0) {
+    const auto gather = gatherCryptomatte(selection, byteBudget(pixelBudget), cancellation);
+    addMediaWork(statistics.imageRepairedPixels, gather.repairedPixels);
+    ++statistics.imageConversions;
+    if (gather.cancelled) {
+        outcome.cancelled = true;
+        return outcome;
+    }
+    if (gather.ranks.empty()) {
+        if (gather.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
-            outcome.failure = "A new Cryptomatte backing exceeds the remaining source allowance";
-            return outcome;
-        }
-        const auto gather = gatherCryptomatte(selection, byteBudget(pixelBudget), cancellation);
-        addMediaWork(statistics.imageRepairedPixels, gather.repairedPixels);
-        ++statistics.imageConversions;
-        if (gather.cancelled) {
-            outcome.cancelled = true;
-            return outcome;
-        }
-        if (gather.ranks.empty()) {
-            if (gather.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
-                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
-            outcome.failure = gather.diagnostic.empty() ? "Cryptomatte ranks could not be decoded"
-                                                        : gather.diagnostic;
-            return outcome;
-        }
-        auto stacked = stackCryptomatteRanks(gather, byteBudget(pixelBudget), cancellation);
-        if (stacked.cancelled) {
-            outcome.cancelled = true;
-            return outcome;
-        }
-        if (!stacked.value.has_value()) {
-            if (stacked.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
-                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
-            outcome.failure = stacked.diagnostic.empty() ? "Cryptomatte ranks could not be stacked"
-                                                         : stacked.diagnostic;
-            return outcome;
-        }
-        outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*stacked.value));
-        outcome.converted = true;
-        ids = gather.ids;
-        if (cacheable && !planBypass) {
-            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
-            std::vector<CompiledValue> values;
-            values.reserve(gather.ids.size());
-            for (const auto id : gather.ids)
-                values.emplace_back(static_cast<std::int64_t>(id));
-            context.operationCache->store(idsKey, document::Revision{},
-                                          {.image = {}, .values = std::move(values), .bounds = {}},
-                                          OperationCacheEntryKind::Operation, {},
-                                          request.linearPass.get());
-        }
+        outcome.failure = gather.diagnostic.empty() ? "Cryptomatte ranks could not be decoded"
+                                                    : gather.diagnostic;
+        return outcome;
     }
+    auto stacked = stackCryptomatteRanks(gather, byteBudget(pixelBudget), cancellation);
+    if (stacked.cancelled) {
+        outcome.cancelled = true;
+        return outcome;
+    }
+    if (!stacked.value.has_value()) {
+        if (stacked.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+        outcome.failure = stacked.diagnostic.empty() ? "Cryptomatte ranks could not be stacked"
+                                                     : stacked.diagnostic;
+        return outcome;
+    }
+    outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(*stacked.value));
+    outcome.converted = true;
+    ids = gather.ids;
     const auto rankCount = static_cast<std::uint32_t>(selection.ranks.size());
     const auto* stackedDescriptor = outcome.image->descriptor();
     if (stackedDescriptor == nullptr || rankCount == 0 ||
@@ -1031,9 +984,8 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
     // to the connected CPU path (the exact evaluator conversion). A GPU colour context is the
     // caller's opt-in to the raw-upload + native-PointResample (+ optional OCIO) split.
     if (ocioContext.preparer == nullptr) {
-        return evaluateConvertedVideoUpload(selection, resolved, context, pixelBudget,
-                                            explicitBypass, planBypass, cancellation, statistics,
-                                            request.linearPass.get());
+        return evaluateConvertedVideoUpload(selection, resolved, context, pixelBudget, cancellation,
+                                            statistics);
     }
     std::optional<color::ResolvedBloomNeutralConfig> config;
     if (!identityTransform || selection.footagePass) {
@@ -1050,15 +1002,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
     // identity transform is the same raw frame with no OCIO pass, never treated as raw codec data.
     const auto backingKey = rawDecodeUploadKey("video-raw", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
-    if (!explicitBypass && context.preparedUploadCache != nullptr) {
-        if (auto cached = context.preparedUploadCache->find(backingKey)) {
-            outcome.image = std::move(cached);
-            outcome.cacheHit = true;
-            ++statistics.uploadCacheHits;
-        } else {
-            ++statistics.uploadCacheMisses;
-        }
-    }
+    outcome.image = findSharedUpload(context, backingKey);
     if (outcome.image == nullptr) {
         // Codec-side preparation only: no OCIO processor runs here. The output is premultiplied
         // pre-OCIO RGB at the full frame resolution, exactly the CPU's pre-OCIO state.
@@ -1106,9 +1050,7 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         auto& pixels = std::get<render::Rgba32fImage>(prepared);
         outcome.image = std::make_shared<const render::Rgba32fImage>(std::move(pixels));
         outcome.converted = true;
-        if (!explicitBypass && !planBypass && context.preparedUploadCache != nullptr) {
-            context.preparedUploadCache->store(backingKey, outcome.image, request.linearPass.get());
-        }
+        shareUpload(context, backingKey, outcome.image);
     }
     if (outcome.image->descriptor() == nullptr) {
         outcome.failure = "Raw video upload has no descriptor";

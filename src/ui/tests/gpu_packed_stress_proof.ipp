@@ -99,7 +99,6 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
                           runtime::GpuPreviewDisplayService& service,
                           const std::shared_ptr<runtime::GpuProcessingPhasePolicy>& policy,
                           const std::shared_ptr<runtime::GpuSceneCoverageCache>& coverage,
-                          const std::shared_ptr<runtime::GpuPreparedUploadCache>& prepared,
                           const std::vector<core::RationalTime>& retainedTimes,
                           const std::uint32_t rate, const std::size_t processingBudget,
                           const std::size_t preparationWidth, document::Document& originalDocument,
@@ -115,9 +114,7 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
         auto cleared = std::async(std::launch::async, [&] {
             fixture.evaluator.operationCache()->clearOperations();
             fixture.evaluator.operationCache()->clearDecodedMedia();
-            fixture.evaluator.operationCache()->clearPreparedUploads();
             coverage->clear();
-            prepared->clear();
             return service.purgeRetainedCaches(5s);
         });
         checks.expect(packedStressWorkerResult(cleared, 10s),

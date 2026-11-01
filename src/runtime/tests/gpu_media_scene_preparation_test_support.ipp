@@ -4,7 +4,6 @@
 // genuine decode/colour-conversion behaviour. Included by gpu_media_scene_preparation_tests.cpp
 // inside its anonymous namespace.
 
-using bloom::runtime::GpuPreparedUploadCache;
 using bloom::runtime::GpuSceneMediaContext;
 using bloom::runtime::GpuSceneMediaStatistics;
 using bloom::runtime::GpuSceneUploadCommand;

@@ -11,7 +11,7 @@
 //   * decides whether the Wayland-only presentation capability may be requested at all;
 //   * rebuilds the evaluator-owned GpuSceneMediaContext per GPU-scene request so a relative media
 //     path follows the live session base directory (Open/SaveAs) instead of a stale startup copy,
-//     while sharing the coverage cache and the prepared-upload cache across requests;
+//     while sharing the coverage cache across requests;
 //   * caches the service's presentation client/availability and hands every current/future
 //     ViewerEditor one typed ViewerGpuDependencies context.
 //
@@ -21,7 +21,6 @@
 #include <bloom/render/gpu_presentation_types.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_display_arm.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -115,16 +114,15 @@ gpuPresentationAvailable(render::GpuPresentationAvailability availability) noexc
 gpuViewerClientUsable(const std::shared_ptr<runtime::GpuPresentationClient>& client,
                       render::GpuPresentationAvailability availability) noexcept;
 
-// A fresh, thread-safe copy of the evaluator's media context with the shared prepared-upload cache
-// installed. Re-call it per GPU-scene request: fromEvaluator() copies assetBaseDirectory, so a
-// cached startup copy would keep resolving relative media against the pre-Open/SaveAs directory.
+// A fresh, thread-safe copy of the evaluator's media context. Re-call it per GPU-scene request:
+// fromEvaluator() copies assetBaseDirectory, so a cached startup copy would keep resolving relative
+// media against the pre-Open/SaveAs directory.
 [[nodiscard]] runtime::GpuSceneMediaContext
-gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
-                        const std::shared_ptr<runtime::GpuPreparedUploadCache>& uploadCache);
+gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator);
 
 // The GPU-scene stage factory. Unlike makeCompositionPreviewGpuSceneStage, it does NOT capture one
 // builder for the process lifetime: each invocation constructs a local CpuGpuSceneBuilder over a
-// freshly copied media context (sharing the coverage + prepared-upload caches) and immediately
+// freshly copied media context (sharing the coverage cache) and immediately
 // invokes the existing stage function while that builder is alive. This is the
 // media-follows-session seam; the evaluator's canonical accessors are internally locked.
 //
@@ -139,7 +137,6 @@ gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedDisplayProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
-    std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache,
     CompiledPlanCacheHandle planCache = nullptr,
     std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver = nullptr,
     runtime::GpuScenePreparationPhase processingPhase = {});

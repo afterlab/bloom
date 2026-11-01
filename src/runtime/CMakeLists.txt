@@ -134,7 +134,6 @@ target_sources(
         gpu_media_preparation.hpp
         gpu_scene_media_layer.cpp
         gpu_scene_media_layer.hpp
-        gpu_prepared_upload_cache.cpp
         image_effect.cpp
         layer_mask_coverage.cpp
         separable_image_effect.cpp
@@ -236,7 +235,6 @@ target_sources(
             include/bloom/runtime/gpu_resident_frame_lease.hpp
             include/bloom/runtime/gpu_scene_cache.hpp
             include/bloom/runtime/gpu_scene_coverage_cache.hpp
-            include/bloom/runtime/gpu_prepared_upload_cache.hpp
             include/bloom/runtime/image_sequence_read_ahead.hpp
             include/bloom/runtime/gpu_scene_executor.hpp
             include/bloom/runtime/gpu_process_frame.hpp

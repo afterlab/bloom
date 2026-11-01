@@ -3,7 +3,6 @@
 #include "gpu_export_provider_test_access.hpp"
 
 #include <bloom/runtime/gpu_ocio_context.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
@@ -111,30 +110,20 @@ struct GpuExportProvider::State final {
             auto& processLedger = runtime::processMemoryBudgetLedger();
             auto pool = std::make_shared<runtime::OperationCache>(
                 processLedger.allocate().operationCacheByteBudget, processLedger);
+            pool->bindHostRetirement(packedHostOwner);
             const auto originalProvider = options.mediaContextProvider;
             const auto originalContext = options.mediaContext;
-            const auto initial = originalProvider ? originalProvider() : originalContext;
-            const auto policy = initial.preparedUploadCache
-                                    ? initial.preparedUploadCache->configuredPolicy()
-                                    : runtime::PreparedUploadRetentionPolicy{};
-            auto prepared = std::make_shared<runtime::GpuPreparedUploadCache>(
-                pool, packedHostOwner, policy.payloadBytes, policy.entries);
-            // Capture the retention bundle, never State: contexts may outlive this provider.
-            std::function<runtime::GpuSceneMediaContext()> wrapped = [pool, prepared,
-                                                                      originalProvider,
-                                                                      originalContext, policy] {
+            // Capture the pool, never State: contexts may outlive this provider.
+            std::function<runtime::GpuSceneMediaContext()> wrapped = [pool, originalProvider,
+                                                                      originalContext] {
                 auto context = originalProvider ? originalProvider() : originalContext;
-                if (context.preparedUploadCache &&
-                    context.preparedUploadCache->configuredPolicy() != policy)
-                    throw std::invalid_argument("incompatible provider prepared retention policy");
                 context.operationCache = pool;
-                context.preparedUploadCache = prepared;
                 return context;
             };
             {
                 const std::lock_guard stateLock(mutex);
                 if (stopping) {
-                    pool->closePreparedUploads();
+                    pool->close();
                     return;
                 }
                 samplingLedger = ledger;
@@ -370,7 +359,7 @@ void GpuExportProvider::beginShutdown() noexcept {
         handle->beginShutdown();
     }
     if (sourcePool)
-        sourcePool->closePreparedUploads();
+        sourcePool->close();
     if (state_->packedHostOwner)
         state_->packedHostOwner->beginShutdown();
 }

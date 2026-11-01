@@ -199,7 +199,7 @@ void testMediaRoiEditReuse(Expectations& expectations, GpuDevice& device,
                            const GpuSceneOcioContext& ocioContext) {
     // An unbound fromEvaluator context is uncached; this upload-reuse proof opts into the
     // standalone prepared-upload arm explicitly.
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     context.assetBaseDirectory = directory;
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan =
@@ -221,8 +221,8 @@ void testMediaRoiEditReuse(Expectations& expectations, GpuDevice& device,
     expectations.expect(fullUpload != nullptr && croppedUpload != nullptr &&
                             fullUpload->semanticKey == croppedUpload->semanticKey,
                         "media ROI edit: the raw source upload identity is unchanged");
-    expectations.expect(cropped.scene->mediaStatistics().uploadCacheHits == 1,
-                        "media ROI edit: the unchanged source is served from the upload cache");
+    expectations.expect(cropped.scene->mediaStatistics().sourceBytesRead == 0,
+                        "media ROI edit: the unchanged source is decoded from retained bytes");
 
     auto oracleRequest = acesRequest(*plan);
     oracleRequest.bypassOperationCache = true;

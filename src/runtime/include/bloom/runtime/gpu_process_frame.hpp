@@ -174,7 +174,9 @@ struct GpuProcessFrameEvaluatorOptions final {
     // Bounded admission: the maximum number of admitted-but-not-yet-running requests. A request
     // beyond this is refused with a typed OverBudget and no frame.
     std::size_t maxQueuedRequests = 16;
-    GpuSceneCacheBudgets cacheBudgets{};
+    // Without an override the scene cache gets its share of this evaluator's own device, as the
+    // preview route's resident capacity plan sizes it; never a fraction of host memory.
+    std::optional<GpuSceneCacheBudgets> cacheBudgets;
     // Explicit producer overrides are honored verbatim. Without an override, a rooted evaluator
     // uses the stable device-local heap size as the producer image upper ceiling; actual work
     // remains bounded by the admitted phase, live-pin accounting and native resource limits.

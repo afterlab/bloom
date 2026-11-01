@@ -22,7 +22,7 @@ class PackedHostProcessTeardown final {
         : scheduler_(scheduler), owner_(std::move(owner)), sourcePool_(std::move(sourcePool)) {}
     ~PackedHostProcessTeardown() {
         scheduler_.beginShutdown();
-        sourcePool_->closePreparedUploads();
+        sourcePool_->close();
         owner_->beginShutdown();
         auto diagnosticAt = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (!scheduler_.isQuiescent() || !owner_->exitAcknowledged()) {

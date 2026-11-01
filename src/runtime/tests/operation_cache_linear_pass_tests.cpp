@@ -84,15 +84,13 @@ int main() {
 
     // The remembered keys are bounded: the oldest offer is forgotten first.
     runtime::LinearPassRetention bounded;
-    expect(!bounded.offer("oldest", false), "a first offer is not admitted");
+    expect(!bounded.offer("oldest"), "a first offer is not admitted");
     for (std::size_t index = 0; index < runtime::LinearPassRetention::kRememberedKeys; ++index)
-        static_cast<void>(bounded.offer("key-" + std::to_string(index), false));
-    expect(!bounded.offer("oldest", false), "the oldest remembered key is forgotten");
-    expect(bounded.offer("key-" + std::to_string(runtime::LinearPassRetention::kRememberedKeys - 1),
-                         false),
-           "a recent key is still remembered");
-    expect(!bounded.offer("prepared", false) && !bounded.offer("prepared", true),
-           "prepared and ordinary namespaces are offered separately");
+        static_cast<void>(bounded.offer("key-" + std::to_string(index)));
+    expect(!bounded.offer("oldest"), "the oldest remembered key is forgotten");
+    expect(
+        bounded.offer("key-" + std::to_string(runtime::LinearPassRetention::kRememberedKeys - 1)),
+        "a recent key is still remembered");
 
     store(cache, "after", nullptr);
     expect(retained(cache, "after"), "stores without a pass are retained");

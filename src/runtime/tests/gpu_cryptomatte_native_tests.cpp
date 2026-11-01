@@ -252,7 +252,7 @@ void testParity(Expectations& expectations, Harness& harness,
 // re-dispatches the coverage pass; the IDs from that cache hit still give the exact matte.
 void testSelectionEdit(Expectations& expectations, Harness& harness,
                        const bloom::document::AssetRecord& asset) {
-    auto context = legacyPreparedMediaContext(harness.evaluator);
+    auto context = deterministicMediaContext(harness.evaluator);
     context.assetBaseDirectory = harness.directory;
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto cube = cryptomattePlan(asset, {"cube"}, false, 96000);
@@ -276,9 +276,9 @@ void testSelectionEdit(Expectations& expectations, Harness& harness,
                             firstCoverage->semanticKey != secondCoverage->semanticKey &&
                             firstCoverage->semanticKey == againCoverage->semanticKey,
                         "selection edit: the coverage identity carries the selected IDs");
-    expectations.expect(second.scene->mediaStatistics().uploadCacheMisses == 1 &&
-                            again.scene->mediaStatistics().uploadCacheHits == 1,
-                        "selection edit: a new selection resolves its IDs once; a repeat is a hit");
+    expectations.expect(second.scene->mediaStatistics().imageConversions == 1 &&
+                            again.scene->mediaStatistics().imageConversions == 1,
+                        "selection edit: each build gathers scratch ranks; none is kept");
 
     auto cache = GpuSceneCache::create(harness.device, GpuSceneCacheBudgets{});
     auto executor = cache ? GpuSceneExecutor::create(harness.device, *cache.cache)

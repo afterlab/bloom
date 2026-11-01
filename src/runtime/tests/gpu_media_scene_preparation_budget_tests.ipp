@@ -69,21 +69,15 @@ void testSharedSourceBackingCharge(Expectations& expectations,
     writeExrRgba(secondPath, 16, 16, pixels);
     const auto firstAsset = imageAsset(firstPath, "shared-a", 53000);
     const auto secondAsset = imageAsset(secondPath, "shared-b", 53001);
-    const CpuGpuSceneBuilder builder(nullptr, legacyPreparedMediaContext(evaluator));
-    // Derive the immutable source once with enough room for EXR bytes, decoder staging and the
-    // output. The narrow request below tests retained backing accounting, not decode workspace.
-    const auto warmPlan = sharedSourcePlan({firstAsset}, 53500);
-    const auto warm = builder.build(warmPlan, requestFor(*warmPlan));
-    expectations.expect(warm.hasValue(), "source backing warms within the ordinary work budget");
-    if (!warm) {
-        return;
-    }
+    const CpuGpuSceneBuilder builder(nullptr, deterministicMediaContext(evaluator));
+    // Nothing is retained between builds (ADR 0037): the aliases share one backing inside the
+    // build, decoded once within the ordinary work budget and charged once.
     const auto aliases = sharedSourcePlan({firstAsset, firstAsset, firstAsset}, 54000);
     auto request = requestFor(*aliases);
-    request.pixelStorageByteLimit = oneSourceBytes;
     request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto shared = builder.build(aliases, request);
-    expectations.expect(shared.hasValue(), "three source aliases fit one backing charge");
+    expectations.expect(shared.hasValue() && shared.scene->mediaStatistics().imageConversions == 1,
+                        "three source aliases decode once and fit one backing charge");
     if (shared) {
         const Rgba32fImage* backing = nullptr;
         std::size_t uploads = 0;
@@ -141,11 +135,10 @@ void testSharedSourceBackingCharge(Expectations& expectations,
     parentDefinition.nestedPlans.push_back(child);
     const auto parent = publish(std::move(parentDefinition));
     request = requestFor(*parent);
-    request.pixelStorageByteLimit = oneSourceBytes;
     request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
     const auto nested = builder.build(parent, request);
     expectations.expect(nested.hasValue(),
-                        "parent and nested child share one source backing charge");
+                        "parent and nested child share one source backing inside the build");
 }
 
 // The reported failure: a large EXR source (4608x3164, ~233 MB as RGBA32F) composited over an FHD
@@ -239,8 +232,6 @@ void testCapacityAwareProducerPolicy(Expectations& expectations) {
     expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(kTiny) <
                             std::size_t{256} * 1024U * 1024U,
                         "the producer ceiling does not floor a tiny budget up to 256 MiB");
-    expectations.expect(bloom::runtime::gpuPreparedUploadCacheByteBudgetFor(kTiny) == kTiny / 16,
-                        "a tiny assigned budget yields a tiny upload-cache ceiling");
     expectations.expect(bloom::runtime::gpuPreviewRequestByteAllowanceFor(kTiny) == kTiny / 4,
                         "a tiny assigned preview budget yields a tiny request allowance");
 
@@ -249,17 +240,11 @@ void testCapacityAwareProducerPolicy(Expectations& expectations) {
                         "an ample assigned operation budget admits a 6000x4000 RGBA32F source");
     expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(kAmple) <= kAmple,
                         "the producer ceiling never exceeds the assigned operation budget");
-    expectations.expect(bloom::runtime::gpuPreparedUploadCacheByteBudgetFor(kAmple) >=
-                            std::size_t{233} * 1024U * 1024U,
-                        "an ample assigned budget retains the 233 MB source");
 
     // Overflow-safe: the largest representable budget still divides before multiplying.
     const std::size_t maximum = std::numeric_limits<std::size_t>::max();
     expectations.expect(bloom::runtime::gpuProducerMaxImageBytesFor(maximum) == (maximum / 4),
                         "the largest budget does not overflow the producer ceiling");
-    expectations.expect(bloom::runtime::gpuPreparedUploadCacheByteBudgetFor(maximum) ==
-                            (maximum / 16),
-                        "the largest budget does not overflow the upload-cache ceiling");
     expectations.expect(bloom::runtime::gpuPreviewRequestByteAllowanceFor(maximum) == (maximum / 4),
                         "the largest budget does not overflow the request allowance");
 }

@@ -1,6 +1,5 @@
 #include <bloom/ui/cache_purge_controller.hpp>
 
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
@@ -24,13 +23,12 @@ constexpr auto kGpuPurgeTimeout = std::chrono::seconds(2);
 CachePurgeController::CachePurgeController(
     runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
     media::cache::MediaDiskCache* const diskCache, runtime::OperationCache* const operationCache,
-    runtime::GpuPreparedUploadCache* const preparedUploadCache,
     runtime::GpuSceneCoverageCache* const coverageCache,
     std::function<void()> clearDecodedVideoMemory, std::function<void(bool)> setProducerGate,
     std::function<bool(std::chrono::milliseconds)> purgeGpuRetainedCaches, QObject* parent)
     : QObject(parent), scheduler_(scheduler), bridge_(bridge), diskCache_(diskCache),
-      operationCache_(operationCache), preparedUploadCache_(preparedUploadCache),
-      coverageCache_(coverageCache), clearDecodedVideoMemory_(std::move(clearDecodedVideoMemory)),
+      operationCache_(operationCache), coverageCache_(coverageCache),
+      clearDecodedVideoMemory_(std::move(clearDecodedVideoMemory)),
       setProducerGate_(std::move(setProducerGate)),
       purgeGpuRetainedCaches_(std::move(purgeGpuRetainedCaches)) {
     connect(&bridge_, &TaskUiBridge::snapshotsPolled, this, &CachePurgeController::poll);
@@ -122,13 +120,12 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
     // still running when they are destroyed.
     auto* const disk = diskCache_;
     auto* const operation = operationCache_;
-    auto* const prepared = preparedUploadCache_;
     auto* const coverage = coverageCache_;
     auto clearVideo = clearDecodedVideoMemory_;
     auto purgeGpu = purgeGpuRetainedCaches_;
     auto submission = scheduler_.submit<std::uint64_t>(
         std::move(request),
-        [mode, disk, operation, prepared, coverage, clearVideo, purgeGpu](runtime::TaskContext&) {
+        [mode, disk, operation, coverage, clearVideo, purgeGpu](runtime::TaskContext&) {
             if (mode == Mode::Media) {
                 // Off the UI thread: flush the cache's own writer and remove every on-disk entry.
                 // The source files are never opened for writing.
@@ -139,10 +136,7 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
             } else if (operation != nullptr) {
                 operation->clearOperations();
             }
-            // The GPU scene's derived CPU stores belong to both paths.
-            if (prepared != nullptr) {
-                prepared->clear();
-            }
+            // The GPU scene's derived CPU store belongs to both paths.
             if (coverage != nullptr) {
                 coverage->clear();
             }

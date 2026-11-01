@@ -362,7 +362,7 @@ void testMixedAces(Expectations& expectations, GpuDevice& device,
     }
     // An unbound fromEvaluator context is uncached; this upload-reuse proof opts into the
     // standalone prepared-upload arm explicitly.
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mixedPlan(format(8, 8), fixture.asset, Color4d{-0.2, 1.6, 0.35, 0.5}, 5000);
     const auto request = acesRequest(*plan, kAcesWorking);
@@ -419,14 +419,14 @@ void testMixedAces(Expectations& expectations, GpuDevice& device,
     expectations.expect(pixelsClose(readback.pixels, cpuImage.pixels()),
                         "mixed ACES: every pixel is within the strict 2e-6 process gate");
 
-    // Colour identity invalidation: a changed working space keeps the decoded raw upload cached
-    // while the media input->working OCIO transform identity changes. (An explicit CST has a fixed
-    // from/to and is intentionally invariant across working spaces.)
+    // Colour identity invalidation: a changed working space decodes the raw upload again (no
+    // upload copy is kept) while the media input->working OCIO transform identity changes. (An
+    // explicit CST has a fixed from/to and is intentionally invariant across working spaces.)
     const auto alternate = builder.build(plan, acesRequest(*plan, kAcesAlternate));
     expectations.expect(alternate.hasValue(), "mixed ACES alternate: the changed space prepares");
     if (alternate) {
-        expectations.expect(alternate.scene->mediaStatistics().uploadCacheHits == 1,
-                            "mixed ACES alternate: the decoded raw upload is reused");
+        expectations.expect(alternate.scene->mediaStatistics().imageConversions == 1,
+                            "mixed ACES alternate: the raw upload is decoded again");
         const auto* uploadFirst = firstUpload(*prepared.scene);
         const auto* uploadSecond = firstUpload(*alternate.scene);
         expectations.expect(uploadFirst != nullptr && uploadSecond != nullptr &&

@@ -18,7 +18,6 @@
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
@@ -190,15 +189,16 @@ int main(int argc, char* argv[]) try {
     const QSettings playbackSettings;
     const auto cacheBudgets = bloom::ui::cacheMemoryBudgetsFromSettings(playbackSettings);
     // Decoded-video retention: `playback/decoded-video-cache-bytes` selects an exact target; a
-    // missing, zero or unreadable value selects the automatic share of physical memory. The
-    // cache is a reusable pool on the process memory ledger, so observed OS limits still apply.
+    // missing, zero or unreadable value selects the automatic ceiling every reusable pool has,
+    // usable memory (ADR 0037). The cache is a reusable pool on the process memory ledger, so it
+    // competes with the others inside that and observed OS limits still apply.
     const auto decodedVideoCacheBytes =
         playbackSettings.value(QStringLiteral("playback/decoded-video-cache-bytes"), 0)
             .toULongLong();
-    cpuEvaluator.setVideoCacheByteBudget(decodedVideoCacheBytes != 0
-                                             ? static_cast<std::size_t>(decodedVideoCacheBytes)
-                                             : bloom::media::video::automaticDecodedVideoCacheBytes(
-                                                   bloom::runtime::physicalMemoryBytes()));
+    cpuEvaluator.setVideoCacheByteBudget(
+        decodedVideoCacheBytes != 0
+            ? static_cast<std::size_t>(decodedVideoCacheBytes)
+            : bloom::runtime::processMemoryBudgetLedger().allocate().operationCacheByteBudget);
     cpuEvaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
     // CACHE-2 (docs/architecture/media-io.md "Disk cache"): one instance shared by the evaluator
     // and the Asset Controller's proxy/thumbnail decodes below -- "the same store". Built from
@@ -337,13 +337,14 @@ int main(int argc, char* argv[]) try {
     // resident entries (dropping the cache's reference only) before the registry can refuse a
     // publishable lease. No live lease is invalidated.
     bloom::ui::applyGpuResidentCacheLimits(*previewFrameCache, gpuResidentBudgetPlan);
-    // The coverage cache and the prepared-upload cache are shared across every GPU-scene request.
-    // The media context is NOT captured once here: makeSessionRefreshingGpuSceneStage copies the
-    // evaluator's current assetBaseDirectory per request, so a relative media path follows an
-    // Open/SaveAs that changes the session base directory.
+    // The coverage cache is shared across every GPU-scene request. The media context is NOT
+    // captured once here: makeSessionRefreshingGpuSceneStage copies the evaluator's current
+    // assetBaseDirectory per request, so a relative media path follows an Open/SaveAs that changes
+    // the session base directory. The shared operation cache is rooted on the packed host owner,
+    // so its evicted entries free after the GPU work that may read them. Nothing keeps a host copy
+    // of an upload (ADR 0037).
     auto gpuSceneCoverageCache = std::make_shared<bloom::runtime::GpuSceneCoverageCache>();
-    auto gpuPreparedUploadCache = std::make_shared<bloom::runtime::GpuPreparedUploadCache>(
-        cpuEvaluator.operationCache(), packedHostRetirement);
+    cpuEvaluator.operationCache()->bindHostRetirement(packedHostRetirement);
     // The ONE shared runtime OCIO context resolver. It is INERT to construct (no hash/fs/OCIO/
     // process work); the packaged glslangValidator/spirv-val paths come from the application's OWN
     // packaging macros (never PATH, never a manual setup) and are qualified lazily on the GPU-scene
@@ -363,7 +364,7 @@ int main(int argc, char* argv[]) try {
     }
     auto gpuPreviewGpuSceneStage = bloom::ui::makeSessionRefreshingGpuSceneStage(
         snapshotCompiler, cpuEvaluator, qualifiedDisplayProcessorProvider, gpuSceneCoverageCache,
-        gpuPreparedUploadCache, compiledPlanCache, gpuOcioContextResolver,
+        compiledPlanCache, gpuOcioContextResolver,
         {.policy = processingPhasePolicy,
          .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
                       .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
@@ -492,10 +493,8 @@ int main(int argc, char* argv[]) try {
     // refreshed per request on the calling CPU worker. Final requests override the live base with
     // the source directory captured beside their own immutable snapshot, including across Save As.
     gpuExportOptions.ocioResolver = gpuOcioContextResolver;
-    gpuExportOptions.mediaContextProvider = [&cpuEvaluator, gpuPreparedUploadCache] {
-        auto context = bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
-        context.preparedUploadCache = gpuPreparedUploadCache;
-        return context;
+    gpuExportOptions.mediaContextProvider = [&cpuEvaluator] {
+        return bloom::runtime::GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
     };
     auto gpuExportProvider = bloom::host::GpuExportProvider::create(gpuExportOptions);
     gpuExportProvider->prepare(taskScheduler);
@@ -538,7 +537,7 @@ int main(int argc, char* argv[]) try {
         [&] {
             gpuPreviewDisplayService.beginShutdown();
             previewController.releasePublishedFramesForShutdown();
-            cpuEvaluator.operationCache()->closePreparedUploads();
+            cpuEvaluator.operationCache()->close();
             packedHostRetirement->beginShutdown();
         },
         [&] { return packedHostRetirement->exitAcknowledged(); });
@@ -754,12 +753,12 @@ int main(int argc, char* argv[]) try {
     // probe. Declared before the window so it outlives the borrowed pointer the window holds.
     bloom::ui::CachedAccelerationStatusProvider accelerationStatus;
     // Edit | Purge…: the async, off-UI purge of derived caches. It shares the one scheduler and
-    // TaskUiBridge the rest of the application already polls, clears the GPU-scene and prepared-
-    // upload stores the preview and media paths share, and reaches the evaluator's decoded-video
-    // cache through its narrow owning API. Declared before the window so it outlives it.
+    // TaskUiBridge the rest of the application already polls, clears the GPU-scene coverage store
+    // the preview and media paths share, and reaches the evaluator's decoded-video cache through
+    // its narrow owning API. Declared before the window so it outlives it.
     bloom::ui::CachePurgeController cachePurgeController(
         taskScheduler, taskUiBridge, mediaDiskCache.get(), cpuEvaluator.operationCache().get(),
-        gpuPreparedUploadCache.get(), gpuSceneCoverageCache.get(),
+        gpuSceneCoverageCache.get(),
         [&cpuEvaluator] {
             cpuEvaluator.clearDecodedVideoCache();
             bloom::media::video::releaseRetainedSourceSnapshots();
@@ -936,7 +935,7 @@ int main(int argc, char* argv[]) try {
             gpuPreviewDisplayService.beginShutdown();
             window.workspaceHost()->releasePackedFramesForShutdown();
             previewController.releasePublishedFramesForShutdown();
-            cpuEvaluator.operationCache()->closePreparedUploads();
+            cpuEvaluator.operationCache()->close();
             packedHostRetirement->beginShutdown();
         },
         [&] {

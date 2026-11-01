@@ -845,18 +845,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang|GNU)$")
     )
 endif()
 
-# Bounded prepared-upload cache: node lifetime under replacement/eviction, byte and entry ceilings,
-# zero-budget disable, and per-entry accounting. CPU-only; no loader and no device.
-add_executable(bloom_runtime_gpu_prepared_upload_cache_test gpu_prepared_upload_cache_tests.cpp)
-target_include_directories(bloom_runtime_gpu_prepared_upload_cache_test PRIVATE
+# Operation-cache host retirement: one explicit host owner roots the pool, evicted entries free on
+# its worker, a closed pool refuses stores, and rooted source revisions need a fresh sample. Also
+# the coverage cache's byte ceiling. CPU-only; no loader and no device.
+add_executable(bloom_runtime_operation_cache_host_retirement_test
+    operation_cache_host_retirement_tests.cpp)
+target_include_directories(bloom_runtime_operation_cache_host_retirement_test PRIVATE
     ${PROJECT_SOURCE_DIR}/src/render ${PROJECT_SOURCE_DIR}/src/media/image/tests)
-target_link_libraries(bloom_runtime_gpu_prepared_upload_cache_test
+target_link_libraries(bloom_runtime_operation_cache_host_retirement_test
     PRIVATE bloom_runtime_evaluator bloom_render)
-bloom_enable_warnings(bloom_runtime_gpu_prepared_upload_cache_test)
-bloom_enable_strict_floating_point(bloom_runtime_gpu_prepared_upload_cache_test)
+bloom_enable_warnings(bloom_runtime_operation_cache_host_retirement_test)
+bloom_enable_strict_floating_point(bloom_runtime_operation_cache_host_retirement_test)
 bloom_add_test(
-    NAME bloom.runtime.gpu_prepared_upload_cache
-    COMMAND bloom_runtime_gpu_prepared_upload_cache_test
+    NAME bloom.runtime.operation_cache_host_retirement
+    COMMAND bloom_runtime_operation_cache_host_retirement_test
     LABELS unit gpu runtime)
 
 # The media still-image test writes REAL OpenEXR fixtures to a temporary directory and resolves them

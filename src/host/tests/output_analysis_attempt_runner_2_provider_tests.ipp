@@ -455,14 +455,13 @@ void testGpuExportProviderFactoryDisplayPreparation(Expectations& expectations) 
 #endif
 }
 
-// Root-local optional retention survives escaped contexts safely, but never survives owner close
-// as an active store. Reusing the same CPU evaluator cannot bind it to a closed private root.
-void testOwnedPreparedRetentionSessions(Expectations& checks) {
+// A provider's private pool is rooted on its own host owner, survives escaped contexts safely, and
+// never survives owner close as an active store. Reusing the same CPU evaluator cannot bind it to
+// a closed private root. No pool keeps a host copy of an upload (ADR 0037).
+void testOwnedPoolRetentionSessions(Expectations& checks) {
     runtime::CpuCompositionEvaluator cpu;
-    checks.expect(!cpu.operationCache()->preparedUploadsBound(),
+    checks.expect(!cpu.operationCache()->sourceRetirementState(),
                   "owned-retention: shared legacy evaluator remains unbound");
-    checks.expect(!runtime::GpuSceneMediaContext::fromEvaluator(cpu).preparedUploadCache,
-                  "owned-retention: unbound context has no numeric fallback authority");
     const auto window = bloom::render::ImageWindow::create(0, 0, 4, 4);
     if (!window) {
         checks.expect(false, "owned-retention: image window");
@@ -496,17 +495,19 @@ void testOwnedPreparedRetentionSessions(Expectations& checks) {
         return runtime::GpuSceneMediaContext{};
     };
     auto retried = host::GpuExportProvider::create(std::move(retryOptions));
+    // Setup binds the private pool without asking the caller's provider for a context; the
+    // provider's first refusal surfaces explicitly on the first context it is asked for.
+    retried->refreshProcessingCapacity();
     bool setupRefused = false;
     try {
-        retried->refreshProcessingCapacity();
+        static_cast<void>(host::detail::GpuExportProviderTestAccess::mediaContext(*retried));
     } catch (const std::invalid_argument&) {
         setupRefused = true;
     }
-    checks.expect(setupRefused, "owned-retention: initial setup refusal remains explicit");
-    retried->refreshProcessingCapacity();
+    checks.expect(setupRefused, "owned-retention: a provider refusal remains explicit");
     auto recoveredContext = host::detail::GpuExportProviderTestAccess::mediaContext(*retried);
-    checks.expect(recoveredContext.preparedUploadCache && recoveredContext.operationCache &&
-                      recoveredContext.operationCache->preparedUploadsBound(),
+    checks.expect(recoveredContext.operationCache &&
+                      recoveredContext.operationCache->sourceRetirementState(),
                   "owned-retention: failed setup publishes neither ledger nor unrelated fallback");
     retried->prepare(scheduler);
     const auto retryDeadline = std::chrono::steady_clock::now() + 30s;
@@ -516,16 +517,11 @@ void testOwnedPreparedRetentionSessions(Expectations& checks) {
                   "owned-retention: recovered setup bootstraps and shuts down normally");
     retried.reset();
     recoveredContext = {};
-    for (int session = 0; session < 4; ++session) {
-        const auto explicitCache =
-            session == 2   ? std::make_shared<runtime::GpuPreparedUploadCache>(0, 0)
-            : session == 3 ? std::make_shared<runtime::GpuPreparedUploadCache>(256, 1)
-                           : nullptr;
+    for (int session = 0; session < 2; ++session) {
         auto options = gpuOptions(false);
-        options.mediaContextProvider = [&cpu, explicitCache] {
+        options.mediaContextProvider = [&cpu] {
             auto context = runtime::GpuSceneMediaContext::fromEvaluator(cpu);
             context.assetBaseDirectory = "/retained/context/identity";
-            context.preparedUploadCache = explicitCache;
             return context;
         };
         auto provider = host::GpuExportProvider::create(std::move(options));
@@ -537,43 +533,35 @@ void testOwnedPreparedRetentionSessions(Expectations& checks) {
                       "owned-retention: real disabled-device evaluator bootstrap completes");
         auto context = host::detail::GpuExportProviderTestAccess::mediaContext(*provider);
         checks.expect(context.operationCache && context.operationCache != cpu.operationCache() &&
-                          context.preparedUploadCache &&
                           context.assetBaseDirectory == "/retained/context/identity",
                       "owned-retention: private same-ledger pool preserves source context");
-        if (!context.operationCache || !context.preparedUploadCache) {
+        if (!context.operationCache) {
             checks.expect(false, "owned-retention: required context missing");
             return;
         }
-        context.preparedUploadCache->store("source", image);
-        checks.expect(context.preparedUploadCache->configuredPolicy() ==
-                          (explicitCache ? explicitCache->configuredPolicy()
-                                         : runtime::PreparedUploadRetentionPolicy{}),
-                      "owned-retention: omitted/explicit byte and count policies are preserved");
-        checks.expect(
-            session == 2
-                ? !context.preparedUploadCache->find("source")
-                : context.preparedUploadCache->find("source") == image &&
-                      context.operationCache->retainedBytes() > image->pixels().size_bytes(),
-            "owned-retention: zero disables and valid live retention charges payload+metadata");
+        const runtime::OperationCacheValue value{.image = image, .values = {}, .bounds = {}};
+        context.operationCache->store("source", {}, value);
+        checks.expect(context.operationCache->find("source", {}).has_value() &&
+                          context.operationCache->retainedBytes() > image->pixels().size_bytes(),
+                      "owned-retention: live retention charges payload+metadata");
         const auto owner = provider->ownedPackedHostRetirementOwner();
         checks.expect(provider->shutdownAndWait(15s),
                       "owned-retention: pool detach precedes actual existing host exit");
         provider.reset();
-        checks.expect(context.operationCache->preparedUploadsBound() &&
-                          context.preparedUploadCache->entryCount() == 0 &&
+        checks.expect(context.operationCache->sourceRetirementState() &&
                           context.operationCache->retainedBytes() == 0 &&
                           owner->snapshot().allocations == 0,
                       "owned-retention: escaped pool remains rooted and fully retired");
-        context.preparedUploadCache->store("closed", image);
-        checks.expect(!context.preparedUploadCache->find("closed"),
-                      "owned-retention: closed escaped context cannot reopen optional storage");
+        context.operationCache->store("closed", {}, value);
+        checks.expect(!context.operationCache->find("closed", {}).has_value(),
+                      "owned-retention: closed escaped context cannot reopen storage");
         if (session == 0)
             escaped = std::move(context);
         else
             checks.expect(context.operationCache != escaped.operationCache,
                           "owned-retention: fresh provider has a fresh usable pool");
     }
-    checks.expect(!cpu.operationCache()->preparedUploadsBound(),
+    checks.expect(!cpu.operationCache()->sourceRetirementState(),
                   "owned-retention: providers never rebind shared global evaluator cache");
     escaped = {}; // Pool unregisters after Provider State died; captured ledger remains alive.
 
@@ -581,13 +569,11 @@ void testOwnedPreparedRetentionSessions(Expectations& checks) {
     runtime::MemoryBudgetLedger commonLedger(64ULL << 30U, 48ULL << 30U);
     const auto commonOwner = runtime::PackedHostRetirementOwner::create();
     const auto commonPool = std::make_shared<runtime::OperationCache>(1U << 20U, commonLedger);
-    auto commonPrepared =
-        std::make_shared<runtime::GpuPreparedUploadCache>(commonPool, commonOwner);
+    commonPool->bindHostRetirement(commonOwner);
     auto borrowedOptions = gpuOptions(false);
     borrowedOptions.processingPhasePolicy =
         std::make_shared<runtime::GpuProcessingPhasePolicy>(32, commonOwner);
     borrowedOptions.mediaContext.operationCache = commonPool;
-    borrowedOptions.mediaContext.preparedUploadCache = commonPrepared;
     auto borrowed = host::GpuExportProvider::create(std::move(borrowedOptions));
     borrowed->prepare(scheduler);
     const auto borrowedDeadline = std::chrono::steady_clock::now() + 30s;
@@ -596,11 +582,11 @@ void testOwnedPreparedRetentionSessions(Expectations& checks) {
     checks.expect(borrowed->prepared() && borrowed->shutdownAndWait(15s),
                   "borrowed-retention: provider evaluator bootstraps and retires");
     borrowed.reset();
-    commonPrepared->store("after-provider", image);
+    commonPool->store("after-provider", {}, {.image = image, .values = {}, .bounds = {}});
     checks.expect(
-        commonPrepared->find("after-provider") == image,
+        commonPool->find("after-provider", {}).has_value(),
         "borrowed-retention: common application pool remains reusable after provider shutdown");
-    commonPool->closePreparedUploads();
+    commonPool->close();
     commonOwner->beginShutdown();
     const auto closeDeadline = std::chrono::steady_clock::now() + 15s;
     while (!commonOwner->exitAcknowledged() && std::chrono::steady_clock::now() < closeDeadline)

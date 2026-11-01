@@ -99,15 +99,10 @@ int main() {
                           << " conversions=" << first.scene->mediaStatistics().imageConversions
                           << " keyConstructions="
                           << first.scene->mediaStatistics().uploadKeyConstructions
-                          << " hits=" << first.scene->mediaStatistics().uploadCacheHits
-                          << " misses=" << first.scene->mediaStatistics().uploadCacheMisses
                           << "; warm imageSources=" << second.scene->mediaStatistics().imageSources
                           << " conversions=" << second.scene->mediaStatistics().imageConversions
                           << " keyConstructions="
-                          << second.scene->mediaStatistics().uploadKeyConstructions
-                          << " hits=" << second.scene->mediaStatistics().uploadCacheHits
-                          << " misses=" << second.scene->mediaStatistics().uploadCacheMisses
-                          << "\n";
+                          << second.scene->mediaStatistics().uploadKeyConstructions << "\n";
             }
         }
         std::cout << "PASS: CPU GPU media scene preparation\n";

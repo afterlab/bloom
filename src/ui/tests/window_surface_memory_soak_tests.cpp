@@ -33,7 +33,6 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_presentation_coordinator.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -191,7 +190,6 @@ struct Sample final {
     std::uint64_t preview = 0;
     std::uint64_t operation = 0;
     std::uint64_t decoded = 0;
-    std::uint64_t uploads = 0;
     std::uint64_t gpuImages = 0;
     std::uint64_t preparations = 0;
     std::uint64_t viewerCpuFallbacks = 0;
@@ -206,8 +204,8 @@ struct Sample final {
     out << "SOAK cycle=" << cycle << " rssMiB=" << sample.rss / kMiB
         << " cyclePeakMiB=" << sample.peak / kMiB << " ledgerMiB=" << sample.ledger / kMiB
         << " previewMiB=" << sample.preview / kMiB << " operationMiB=" << sample.operation / kMiB
-        << " decodedMiB=" << sample.decoded / kMiB << " uploadsMiB=" << sample.uploads / kMiB
-        << " gpuImageMiB=" << sample.gpuImages / kMiB << " preparations=" << sample.preparations
+        << " decodedMiB=" << sample.decoded / kMiB << " gpuImageMiB=" << sample.gpuImages / kMiB
+        << " preparations=" << sample.preparations
         << " viewerCpuFallbacks=" << sample.viewerCpuFallbacks << " widgets=" << sample.widgets
         << " windows=" << sample.windows << " retainedPresenters=" << sample.retainedPresenters
         << " quarantinedGenerations=" << sample.quarantined;
@@ -423,8 +421,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     ui::applyGpuResidentBudgetPlan(serviceOptionsApp, residentPlan);
     serviceOptionsApp.previewByteAllowance.reset();
     ui::applyGpuResidentCacheLimits(*frameCache, residentPlan);
-    auto preparedCache = std::make_shared<runtime::GpuPreparedUploadCache>(
-        evaluator.operationCache(), retirementOwner);
+    evaluator.operationCache()->bindHostRetirement(retirementOwner);
     std::shared_ptr<runtime::GpuOcioContextResolver> resolver =
         host::makePackagedGpuOcioResolver(QCoreApplication::applicationFilePath().toStdString());
     if (resolver == nullptr)
@@ -432,7 +429,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto deviceWorkingBytes = (512ULL << 20) + serviceOptionsApp.packedTransferByteAllowance;
     auto gpuStage = ui::makeSessionRefreshingGpuSceneStage(
         compiler, evaluator, qualifiedProvider, std::make_shared<runtime::GpuSceneCoverageCache>(),
-        preparedCache, planCache, resolver,
+        planCache, resolver,
         {.policy = policy,
          .envelope = {.metadataBytes = 16ULL << 20,
                       .retainedCoverageByteLimit = 16ULL << 20,
@@ -495,7 +492,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         window.reset();
         controller.releasePublishedFramesForShutdown();
         frameCache->clear();
-        evaluator.operationCache()->closePreparedUploads();
+        evaluator.operationCache()->close();
         retirementOwner->beginShutdown();
         const bool retired = waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 15s);
         while (retired && !retirementOwner->collect())
@@ -591,8 +588,6 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         value.operation = evaluator.operationCache()->retainedBytes();
         value.decoded = evaluator.operationCache()->retainedBytes(
             runtime::OperationCacheEntryKind::DecodedMedia);
-        value.uploads = evaluator.operationCache()->retainedBytes(
-            runtime::OperationCacheEntryKind::PreparedUpload);
         const auto images = render::GpuDevice::processImageReclamationStats();
         value.gpuImages = images.liveAllocationBytes + images.retiringAllocationBytes;
         const auto counters = service.status().counters;
@@ -646,20 +641,18 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             };
             const auto operationBytes =
                 operations.retainedBytes(runtime::OperationCacheEntryKind::Operation);
-            std::cout
-                << "SOAK move=" << moves << " cycle=" << cycle << " to=" << destination
-                << " divisor=" << controller.resolutionDivisor()
-                << " anonMiB=" << mib(anonymousRssBytes())
-                << " ledgerHostMiB=" << mib(holding.hostBytes)
-                << " ledgerPendingMiB=" << mib(holding.hostPendingRetirementBytes)
-                << " ledgerDeviceMiB=" << mib(holding.deviceBytes)
-                << " operationEntriesMiB=" << mib(operationBytes) << " decodedMiB="
-                << mib(operations.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia))
-                << " uploadsMiB="
-                << mib(operations.retainedBytes(runtime::OperationCacheEntryKind::PreparedUpload))
-                << " previewMiB=" << mib(frameCache->residentBytes())
-                << " cacheHits=" << access.hits - lastAccess.hits
-                << " cacheMisses=" << access.misses - lastAccess.misses << '\n';
+            std::cout << "SOAK move=" << moves << " cycle=" << cycle << " to=" << destination
+                      << " divisor=" << controller.resolutionDivisor()
+                      << " anonMiB=" << mib(anonymousRssBytes())
+                      << " ledgerHostMiB=" << mib(holding.hostBytes)
+                      << " ledgerPendingMiB=" << mib(holding.hostPendingRetirementBytes)
+                      << " ledgerDeviceMiB=" << mib(holding.deviceBytes)
+                      << " operationEntriesMiB=" << mib(operationBytes) << " decodedMiB="
+                      << mib(operations.retainedBytes(
+                             runtime::OperationCacheEntryKind::DecodedMedia))
+                      << " previewMiB=" << mib(frameCache->residentBytes())
+                      << " cacheHits=" << access.hits - lastAccess.hits
+                      << " cacheMisses=" << access.misses - lastAccess.misses << '\n';
             if (cycle >= kWarmupCycles)
                 checks.expect(
                     operationBytes == lastOperationBytes,

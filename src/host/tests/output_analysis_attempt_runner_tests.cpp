@@ -3,7 +3,6 @@
 
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
@@ -86,7 +85,7 @@ int main(const int argc, char** argv) {
     testCancellationBeforeResolvingCompletes(expectations);
     testResourceExhaustionIsTypedWithZeroLeak(expectations);
     testGpuExportProviderDisabledFallback(expectations);
-    testOwnedPreparedRetentionSessions(expectations);
+    testOwnedPoolRetentionSessions(expectations);
     testGpuExportProviderAsyncRetirement(expectations, requireDevice);
     testGpuExportProviderRetirementAfterAdmissionClosed(expectations);
     testGpuExportProviderShutdownDuringBootstrap(expectations);

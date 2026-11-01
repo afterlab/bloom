@@ -144,7 +144,7 @@ runStage(Fixture& fixture, std::shared_ptr<bloom::runtime::GpuOcioContextResolve
          const bloom::document::Snapshot& snapshot, Expectations& expectations,
          const std::string& label) {
     auto function = bloom::ui::makeSessionRefreshingGpuSceneStage(
-        fixture.compiler, fixture.evaluator, fixture.provider, nullptr, nullptr, fixture.planCache,
+        fixture.compiler, fixture.evaluator, fixture.provider, nullptr, fixture.planCache,
         std::move(resolver));
     auto submission = fixture.scheduler.submit<StageValue>(
         bloom::runtime::TaskRequest("general stage",

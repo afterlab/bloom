@@ -3,7 +3,6 @@
 #include <bloom/render/image.hpp>
 #include <bloom/render/image_types.hpp>
 #include <bloom/render/path_raster.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -225,9 +224,9 @@ void testPurgeMediaCachesClearsDiskAndDecodedMemory(Expectations& check) {
 
 // CACHE-PURGE: the asynchronous controller runs the clears only after marked cache consumers
 // retire and does them on a worker lane. Preview purge drops derived operation results and the
-// shared GPU-scene/prepared-upload stores while leaving decoded media and the disk store for the
-// media purge; media purge clears the disk store, decoded still-image memory, the decoded-video
-// memory and the prepared uploads. A caller-held image is never invalidated.
+// shared GPU-scene coverage store while leaving decoded media and the disk store for the media
+// purge; media purge clears the disk store, decoded still-image memory and the decoded-video
+// memory. A caller-held image is never invalidated.
 void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
     QTemporaryDir directory;
     check.expect(directory.isValid(), "cache purge: temp directory is available");
@@ -243,7 +242,6 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
     config.byteBudget = 4ULL * 1024ULL * 1024ULL;
     cache::MediaDiskCache disk(config);
     runtime::OperationCache operationCache(std::size_t{1} << 20U);
-    runtime::GpuPreparedUploadCache uploads(std::size_t{1} << 20U);
     runtime::GpuSceneCoverageCache coverage;
 
     const auto image = makeTestImage();
@@ -253,7 +251,6 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
     operationCache.store("decoded", bloom::document::Revision::fromRaw(1),
                          {.image = image, .values = {}, .bounds = {}},
                          runtime::OperationCacheEntryKind::DecodedMedia);
-    uploads.store("upload", image);
     auto geometry = std::make_shared<bloom::render::PathRasterCoverageGeometry>();
     geometry->width = 1;
     geometry->height = 1;
@@ -261,7 +258,7 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
     geometry->spans.push_back({0, 0});
     coverage.store("geometry", geometry);
     check.expect(disk.statistics().entryCount == 1 && operationCache.retainedBytes() > 0 &&
-                     uploads.entryCount() == 1 && coverage.entryCount() == 1,
+                     coverage.entryCount() == 1,
                  "cache purge: every store holds an entry before the purges");
 
     std::atomic<bool> videoCleared{false};
@@ -269,7 +266,7 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
     std::atomic<int> gateOffCalls{0};
     std::atomic<int> gpuPurgeCalls{0};
     ui::CachePurgeController controller(
-        scheduler, bridge, &disk, &operationCache, &uploads, &coverage,
+        scheduler, bridge, &disk, &operationCache, &coverage,
         [&videoCleared] { videoCleared.store(true); },
         [&gateOnCalls, &gateOffCalls](const bool gated) {
             (gated ? gateOnCalls : gateOffCalls).fetch_add(1);
@@ -298,8 +295,8 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
                  "cache purge: preview purge drops derived operation results");
     check.expect(operationCache.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia) > 0,
                  "cache purge: preview purge leaves decoded media for the media purge");
-    check.expect(uploads.entryCount() == 0 && coverage.entryCount() == 0,
-                 "cache purge: preview purge clears the shared GPU-scene and upload stores");
+    check.expect(coverage.entryCount() == 0,
+                 "cache purge: preview purge clears the shared GPU-scene coverage store");
     check.expect(disk.statistics().entryCount == 1,
                  "cache purge: preview purge leaves the disk store for the media purge");
 
@@ -372,8 +369,7 @@ void testCachePurgeWaitsForInFlightProducerThenClears(Expectations& check) {
     }
     check.expect(producerGate.entered(), "cache purge wait: the producer is in flight");
 
-    ui::CachePurgeController controller(scheduler, bridge, nullptr, &operationCache, nullptr,
-                                        nullptr);
+    ui::CachePurgeController controller(scheduler, bridge, nullptr, &operationCache, nullptr);
     check.expect(controller.requestPreviewPurge(), "cache purge wait: the purge starts");
     submission.handle.cancel();
     for (int turn = 0; turn < 20; ++turn) {
@@ -432,8 +428,7 @@ void testCachePurgeProceedsWhileSaveIsHeld(Expectations& check) {
     }
     check.expect(saveGate.entered(), "cache purge scope: Save is genuinely in flight");
 
-    ui::CachePurgeController controller(scheduler, bridge, &disk, &operationCache, nullptr,
-                                        nullptr);
+    ui::CachePurgeController controller(scheduler, bridge, &disk, &operationCache, nullptr);
     const auto drain = [&] {
         for (int turn = 0; turn < 4000 && controller.isPurging(); ++turn) {
             QCoreApplication::processEvents(QEventLoop::AllEvents, 5);

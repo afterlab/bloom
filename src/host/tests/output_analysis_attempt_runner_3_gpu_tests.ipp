@@ -21,14 +21,8 @@ void testGpuEvaluatorHostPath(Expectations& expectations, const bool requireDevi
         return;
     }
     runtime::TaskScheduler scheduler;
-    auto preparedPolicy = std::make_shared<std::shared_ptr<runtime::GpuPreparedUploadCache>>(
-        std::make_shared<runtime::GpuPreparedUploadCache>(0, 0));
     auto options = gpuOptions(true, std::filesystem::path(loader));
-    options.mediaContextProvider = [preparedPolicy] {
-        runtime::GpuSceneMediaContext context;
-        context.preparedUploadCache = *preparedPolicy;
-        return context;
-    };
+    options.mediaContextProvider = [] { return runtime::GpuSceneMediaContext{}; };
     auto provider = host::GpuExportProvider::create(std::move(options));
     provider->prepare(scheduler);
     // Test convenience only: wait for the provider's off-thread bootstrap to terminal. Production
@@ -59,17 +53,6 @@ void testGpuEvaluatorHostPath(Expectations& expectations, const bool requireDevi
     auto coordinator = std::move(artifacts).takeCoordinator();
     output::ExportResourceLedgerV1 ledger;
 
-    *preparedPolicy = std::make_shared<runtime::GpuPreparedUploadCache>(256, 1);
-    const auto mismatchRequest = requestFor(directory.path() / "policy-refusal.exr");
-    const auto refused =
-        provider->evaluator()->evaluate(mismatchRequest.plan, mismatchRequest.evaluation);
-    expectations.expect(
-        refused.status == runtime::GpuProcessFrameStatus::Failed && !refused.frame &&
-            refused.diagnostic.code == runtime::GpuProcessFrameDiagnosticCode::InternalInvariant &&
-            refused.diagnostic.message == "GPU media context configuration refused: incompatible "
-                                          "provider prepared retention policy",
-        "gpu host path: changed explicit subset receives recognizable configuration refusal");
-    *preparedPolicy = std::make_shared<runtime::GpuPreparedUploadCache>(0, 0);
     auto request = requestFor(directory.path() / "gpu-attempt.exr");
     request.gpuProvider = provider;
     auto begin =

@@ -15,7 +15,6 @@ class MediaDiskCache;
 } // namespace bloom::media::cache
 
 namespace bloom::runtime {
-class GpuPreparedUploadCache;
 class GpuSceneCoverageCache;
 class OperationCache;
 } // namespace bloom::runtime
@@ -55,7 +54,6 @@ class CachePurgeController final : public QObject {
     CachePurgeController(runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
                          media::cache::MediaDiskCache* diskCache,
                          runtime::OperationCache* operationCache,
-                         runtime::GpuPreparedUploadCache* preparedUploadCache,
                          runtime::GpuSceneCoverageCache* coverageCache,
                          std::function<void()> clearDecodedVideoMemory = {},
                          std::function<void(bool)> setProducerGate = {},
@@ -95,7 +93,6 @@ class CachePurgeController final : public QObject {
     TaskUiBridge& bridge_;
     media::cache::MediaDiskCache* diskCache_ = nullptr;
     runtime::OperationCache* operationCache_ = nullptr;
-    runtime::GpuPreparedUploadCache* preparedUploadCache_ = nullptr;
     runtime::GpuSceneCoverageCache* coverageCache_ = nullptr;
     std::function<void()> clearDecodedVideoMemory_;
     std::function<void(bool)> setProducerGate_;

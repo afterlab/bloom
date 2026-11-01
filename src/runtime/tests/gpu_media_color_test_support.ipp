@@ -122,9 +122,7 @@ firstResample(const PreparedGpuScene& scene) {
     if (upload == nullptr || ocio == nullptr) {
         return false;
     }
-    expectations.expect(prepared.scene->mediaStatistics().ocioCommandPreparations == 1 &&
-                            prepared.scene->mediaStatistics().uploadCacheMisses == 1 &&
-                            prepared.scene->mediaStatistics().uploadCacheHits == 0,
+    expectations.expect(prepared.scene->mediaStatistics().ocioCommandPreparations == 1,
                         label + ": the cold build decodes raw and prepares one OCIO command");
     const auto sourceWindow = ImageWindow::create(0, 0, sourceWidth, sourceHeight);
     expectations.expect(sourceWindow && upload->descriptor.dataWindow() == *sourceWindow.value(),

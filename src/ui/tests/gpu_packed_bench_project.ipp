@@ -108,7 +108,6 @@ struct BenchMemorySample {
     std::uint64_t previewCacheBytes = 0;
     std::uint64_t operationCacheBytes = 0;
     std::uint64_t decodedMediaBytes = 0;   // operation-cache entries of decoded source media
-    std::uint64_t preparedUploadBytes = 0; // operation-cache entries of prepared GPU uploads
     // Operation-cache bytes evicted but not yet freed by their retirement worker (inside
     // operationCacheBytes), and the extra references to storage it counts once (what per-entry
     // accounting added on top before #416).
@@ -157,7 +156,6 @@ void benchReadProcStatus(BenchMemorySample& sample) {
         << ",\"previewCacheBytes\":" << sample.previewCacheBytes
         << ",\"operationCacheBytes\":" << sample.operationCacheBytes
         << ",\"decodedMediaBytes\":" << sample.decodedMediaBytes
-        << ",\"preparedUploadBytes\":" << sample.preparedUploadBytes
         << ",\"operationPendingBytes\":" << sample.operationPendingBytes
         << ",\"operationSharedBytes\":" << sample.operationSharedBytes
         << ",\"reusablePendingBytes\":" << sample.reusablePendingBytes
@@ -500,7 +498,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     const QSettings playbackSettings;
     const auto cacheBudgets = ui::cacheMemoryBudgetsFromSettings(playbackSettings);
     evaluator.setVideoCacheByteBudget(
-        media::video::automaticDecodedVideoCacheBytes(runtime::physicalMemoryBytes()));
+        runtime::processMemoryBudgetLedger().allocate().operationCacheByteBudget);
     evaluator.operationCache()->setByteBudget(cacheBudgets.operationCacheByteBudget);
     runtime::CpuReferenceDisplayPreparer referenceDisplayPreparer;
     runtime::QualifiedDisplayProcessorProvider qualifiedProvider;
@@ -542,15 +540,14 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     serviceOptionsApp.previewByteAllowance.reset();
     ui::applyGpuResidentCacheLimits(*frameCache, residentPlan);
     auto coverageCache = std::make_shared<runtime::GpuSceneCoverageCache>();
-    auto preparedCache = std::make_shared<runtime::GpuPreparedUploadCache>(
-        evaluator.operationCache(), retirementOwner);
+    evaluator.operationCache()->bindHostRetirement(retirementOwner);
     std::shared_ptr<runtime::GpuOcioContextResolver> resolver =
         host::makePackagedGpuOcioResolver(QCoreApplication::applicationFilePath().toStdString());
     if (resolver == nullptr)
         resolver = std::make_shared<runtime::GpuOcioContextResolver>();
     const auto deviceWorkingBytes = (512ULL << 20) + serviceOptionsApp.packedTransferByteAllowance;
     auto gpuStage = ui::makeSessionRefreshingGpuSceneStage(
-        compiler, evaluator, qualifiedProvider, coverageCache, preparedCache, planCache, resolver,
+        compiler, evaluator, qualifiedProvider, coverageCache, planCache, resolver,
         {.policy = policy,
          .envelope = {.metadataBytes = 16ULL << 20,
                       .retainedCoverageByteLimit = 16ULL << 20,
@@ -678,7 +675,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         }
         controller.releasePublishedFramesForShutdown();
         frameCache->clear();
-        evaluator.operationCache()->closePreparedUploads();
+        evaluator.operationCache()->close();
         retirementOwner->beginShutdown();
         const bool retired = waitUntil([&] { return retirementOwner->exitAcknowledged(); }, 15s);
         if (!stopped || !retired) {
@@ -742,7 +739,6 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         const auto operation = evaluator.operationCache()->memory();
         sample.operationCacheBytes = operation.hostBytes;
         sample.decodedMediaBytes = operation.decodedMediaBytes;
-        sample.preparedUploadBytes = operation.preparedUploadBytes;
         sample.operationPendingBytes = operation.pendingRetirementBytes;
         sample.operationSharedBytes = operation.sharedReferenceBytes;
         const auto named = sample.previewCacheBytes + sample.operationCacheBytes;

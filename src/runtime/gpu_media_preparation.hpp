@@ -26,7 +26,7 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <cstdint>
@@ -34,12 +34,33 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace bloom::render {
 class Rgba32fImage;
 } // namespace bloom::render
+
+namespace bloom::runtime {
+
+// One scene build's upload scratch (ADR 0037): leaves of the same build that need the same decoded
+// backing (a source used by several layers, or by a parent and its nested composition) share one
+// host allocation instead of converting it again. It lives only as long as the build that created
+// it; afterwards the scene's upload commands hold the pixels until their upload completes, and
+// nothing keeps them. Thread-safe.
+class GpuSceneBuildUploads final {
+  public:
+    [[nodiscard]] std::shared_ptr<const render::Rgba32fImage> find(const std::string& key) const;
+    void share(const std::string& key, std::shared_ptr<const render::Rgba32fImage> image);
+
+  private:
+    mutable std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_ptr<const render::Rgba32fImage>> images_;
+};
+
+} // namespace bloom::runtime
 
 namespace bloom::runtime::detail {
 
@@ -48,7 +69,7 @@ namespace bloom::runtime::detail {
 // turning a missing or malformed source into a different warning.
 //
 // `uploadSemanticKey` is the emitted GPU resident identity: decoded bytes plus the request upload
-// descriptor. Raw backing reuse uses a separate decode-only key in the prepared-upload cache.
+// descriptor. Raw backing sharing within one build uses a separate decode-only key.
 // `program` is null exactly
 // when the resolved input->working transform is exact identity, in which case `semanticKey` equals
 // `uploadSemanticKey`; otherwise `semanticKey` is the OCIO effect identity over the upload key and
@@ -93,7 +114,6 @@ struct MediaUploadOutcome final {
     // imageSourceFrameBounds); otherwise the leaf bounds follow its output window.
     std::optional<ContentBounds> frameBounds;
     bool cancelled = false;
-    bool cacheHit = false;
     bool converted = false;
     // ADR 0026 Q1: the selected part and layer have no color channels. The source has no Image
     // output, so the leaf publishes nothing; this is not a failure.

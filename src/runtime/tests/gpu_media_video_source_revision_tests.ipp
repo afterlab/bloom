@@ -17,7 +17,7 @@ void testVideoSourceRevisionBoundary(Expectations& expectations,
     const CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixtures);
     evaluator.setVideoCacheByteBudget(1U << 20U);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     auto request = requestFor(*plan);
     request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Retained;
@@ -48,8 +48,7 @@ void testVideoSourceRevisionBoundary(Expectations& expectations,
                             warm.scene->mediaStatistics().sourceBytesRead == 0 &&
                             warm.scene->mediaStatistics().sourceRevisionBytesHashed == 0 &&
                             warm.scene->mediaStatistics().sourceIoNanoseconds == 0 &&
-                            warm.scene->mediaStatistics().sourceHashNanoseconds == 0 &&
-                            warm.scene->mediaStatistics().uploadCacheHits == 1,
+                            warm.scene->mediaStatistics().sourceHashNanoseconds == 0,
                         "warm video edit uses owned bytes with zero source I/O and hash work");
     bloom::runtime::GpuProcessFrameEvaluatorOptions finalOptions;
     finalOptions.mediaContext = context;
@@ -140,7 +139,7 @@ void testRootedVideoSourceClosure(Expectations& expectations,
     const CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixtures);
     const auto& pool = evaluator.operationCache();
-    bloom::runtime::GpuPreparedUploadCache rooted(pool, owner);
+    pool->bindHostRetirement(owner);
     const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     const auto asset = videoAsset(fixtures / "numbered-h264.mp4", 34000);
     const auto plan = videoPlan(format(96, 64), asset, LayerValues{}, 34000);
@@ -150,7 +149,7 @@ void testRootedVideoSourceClosure(Expectations& expectations,
     const auto prepared = builder.build(plan, request);
     expectations.expect(prepared && context.videoContext->sourceSnapshotCount() == 1,
                         "rooted video producer retains one owned source snapshot");
-    pool->closePreparedUploads();
+    pool->close();
     owner->beginShutdown();
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!owner->exitAcknowledged() && std::chrono::steady_clock::now() < deadline)

@@ -21,7 +21,6 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -50,7 +49,6 @@ namespace {
 using bloom::render::GpuPresentationAvailability;
 using bloom::runtime::CompiledCompositionPlan;
 using bloom::runtime::CpuCompositionEvaluator;
-using bloom::runtime::GpuPreparedUploadCache;
 using bloom::runtime::GpuPreviewDisplayServiceStatus;
 using bloom::runtime::GpuSceneCoverageCache;
 using bloom::runtime::PreparedPreviewFrame;
@@ -468,29 +466,24 @@ void testCapabilityFallback() {
 
 void testMediaContextFollowsSessionBaseDirectory() {
     CpuCompositionEvaluator evaluator;
-    auto uploadCache = std::make_shared<GpuPreparedUploadCache>();
     const auto directoryA = std::filesystem::temp_directory_path() / "bloom_wiring_media_a";
     const auto directoryB = std::filesystem::temp_directory_path() / "bloom_wiring_media_b";
 
     evaluator.setAssetBaseDirectory(directoryA);
-    const auto before = bloom::ui::gpuSceneMediaContextFor(evaluator, uploadCache);
+    const auto before = bloom::ui::gpuSceneMediaContextFor(evaluator);
     expect(before.assetBaseDirectory == directoryA,
            "the context copies the live session base directory");
-    expect(before.preparedUploadCache.get() == uploadCache.get(),
-           "the shared prepared-upload cache is installed");
     expect(before.operationCache.get() == evaluator.operationCache().get(),
            "the evaluator operation cache is shared");
 
     // Simulate Open/SaveAs moving the session base directory. A startup-captured context would keep
     // resolving relative media against directoryA; the per-request refresh must follow directoryB.
     evaluator.setAssetBaseDirectory(directoryB);
-    const auto after = bloom::ui::gpuSceneMediaContextFor(evaluator, uploadCache);
+    const auto after = bloom::ui::gpuSceneMediaContextFor(evaluator);
     expect(after.assetBaseDirectory == directoryB,
            "the refreshed context follows the Open/SaveAs base directory");
     expect(before.assetBaseDirectory == directoryA,
            "the earlier context is an immutable copy, not a live view");
-    expect(after.preparedUploadCache.get() == before.preparedUploadCache.get(),
-           "the prepared-upload cache is shared across requests");
     expect(after.operationCache.get() == before.operationCache.get(),
            "the operation cache is shared across requests");
 }
@@ -504,9 +497,8 @@ void testRefreshingStageIsConstructible() {
     bloom::runtime::QualifiedDisplayProcessorProvider provider;
     CpuCompositionEvaluator evaluator;
     auto coverage = std::make_shared<GpuSceneCoverageCache>();
-    auto upload = std::make_shared<GpuPreparedUploadCache>();
-    auto stage = bloom::ui::makeSessionRefreshingGpuSceneStage(compiler, evaluator, provider,
-                                                               coverage, upload);
+    auto stage =
+        bloom::ui::makeSessionRefreshingGpuSceneStage(compiler, evaluator, provider, coverage);
     expect(static_cast<bool>(stage), "the session-refreshing GPU scene stage is constructible");
 }
 

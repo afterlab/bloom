@@ -940,8 +940,7 @@ void testMediaPurgeDropsCompletedSourceFrames(Expectations& expectations) {
     fixture.window.reset();
     CachePurgeController purge(
         fixture.scheduler, fixture.bridge, nullptr, fixture.evaluator.operationCache().get(),
-        nullptr, nullptr, {},
-        [&fixture](const bool gated) { fixture.preview->setCachePurgeGate(gated); });
+        nullptr, {}, [&fixture](const bool gated) { fixture.preview->setCachePurgeGate(gated); });
     fixture.window = std::make_unique<MainWindow>(
         fixture.registry, fixture.session, fixture.projectHost, nullptr,
         fixture.preview.get(), nullptr, nullptr, fixture.evaluator.operationCache().get(), nullptr,

@@ -40,10 +40,8 @@ void requireWarm(const GpuSceneMediaStatistics& stats) {
     require(stats.sourceRevisionCacheHits == 1 && stats.sourceRevisionCaptures == 0 &&
                 stats.sourceBytesRead == 0 && stats.sourceRevisionBytesHashed == 0 &&
                 stats.sourceIoNanoseconds == 0 && stats.sourceHashNanoseconds == 0 &&
-                stats.sourceProbeNanoseconds == 0 && stats.imageDecodeNanoseconds == 0 &&
-                stats.imageConversions == 0 && stats.videoConversions == 0 &&
-                stats.uploadCacheHits == 1,
-            "retained warm production preparation performs no original I/O/hash/probe/decode");
+                stats.sourceProbeNanoseconds == 0,
+            "retained warm production preparation performs no original I/O/hash/probe");
 }
 
 void prepare(const std::filesystem::path& served, const std::filesystem::path& videoFixtures) {
@@ -61,7 +59,7 @@ void exercise(const std::filesystem::path& mounted, const std::filesystem::path&
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(mounted);
     evaluator.setVideoCacheByteBudget(16U << 20U);
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto stillAsset = imageAsset(mounted / "still.exr", "Private still", 7300);
     const auto videoAssetRecord = videoAsset(mounted / "video.mov", 7400);
@@ -168,7 +166,6 @@ void exercise(const std::filesystem::path& mounted, const std::filesystem::path&
         "production final preparation revalidates even explicitly Retained preview requests");
     context.operationCache->clearDecodedMedia();
     evaluator.clearDecodedVideoCache();
-    context.preparedUploadCache->clear();
     require(context.operationCache->decodedMediaGeneration() > oldGeneration &&
                 !builder.build(still, stillRequest) && !builder.build(video, videoRequest),
             "Refresh invalidates both retained authorities during actual outage");

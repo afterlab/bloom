@@ -245,10 +245,9 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                          deliveredDefaults ? std::optional<std::uint64_t>{} : processingBudget,
                      .deviceWorkingBytes = (512ULL << 20) + transferBudget}};
     const auto coverageCache = std::make_shared<runtime::GpuSceneCoverageCache>();
-    const auto preparedCache = std::make_shared<runtime::GpuPreparedUploadCache>();
-    auto stage = ui::makeSessionRefreshingGpuSceneStage(
-        fixture.compiler, fixture.evaluator, fixture.provider, coverageCache, preparedCache,
-        nullptr, resolver, processingPhase);
+    auto stage = ui::makeSessionRefreshingGpuSceneStage(fixture.compiler, fixture.evaluator,
+                                                        fixture.provider, coverageCache, nullptr,
+                                                        resolver, processingPhase);
     runtime::MemoryBudgetLedger ledger(0, 0);
     ledger.beginProcessSampling();
     ui::TaskUiBridge bridge(scheduler);
@@ -865,9 +864,9 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
               << " transferHost=" << afterWarm.packedRetainedHostBytes << '\n';
     if (sustained && !partial)
         exercisePackedStress(checks, fixture, options, temporary, viewer, session, controller, ram,
-                             scheduler, service, processingPolicy, coverageCache, preparedCache,
-                             retainedTimes, controlledRate, processingBudget, preparationWidth,
-                             document, commands);
+                             scheduler, service, processingPolicy, coverageCache, retainedTimes,
+                             controlledRate, processingBudget, preparationWidth, document,
+                             commands);
     ram.beginShutdown();
     controller.beginShutdown();
     memoryController.beginShutdown();

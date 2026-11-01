@@ -12,7 +12,6 @@
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -545,7 +544,6 @@ void mixedAndNestedQuotas() {
                  std::vector<ExrPixel>(256, ExrPixel{0.25F, 0.5F, 0.75F, 1.0F}));
     const auto legacyAsset = imageAsset(legacyPath, "legacy-source", 900001);
     auto legacyMedia = GpuSceneMediaContext::fromEvaluator(evaluator);
-    legacyMedia.preparedUploadCache = std::make_shared<GpuPreparedUploadCache>(1024ULL * 1024, 16);
     const CpuGpuSceneBuilder legacy(nullptr, legacyMedia);
     for (const bool textFirst : {true, false}) {
         auto definition = base->copyDefinition();
@@ -557,7 +555,7 @@ void mixedAndNestedQuotas() {
         legacyRequest.pixelStorageByteLimit = gib;
         {
             auto warm = legacy.build(plan, legacyRequest);
-            require(warm.scene != nullptr, "legacy mixed source prewarms genuine upload cache");
+            require(warm.scene != nullptr, "legacy mixed source prepares within an ample cap");
         }
         legacyRequest.pixelStorageByteLimit = 4096;
         auto limited = legacy.build(plan, legacyRequest);

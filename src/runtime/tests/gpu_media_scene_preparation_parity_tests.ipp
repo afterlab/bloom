@@ -104,14 +104,13 @@ void testAffineAndBlendMedia(Expectations& expectations, const CpuCompositionEva
 void testChangedColourInterpretation(Expectations& expectations,
                                      const CpuCompositionEvaluator& evaluator,
                                      const MediaFixture& fixture) {
-    auto context = legacyPreparedMediaContext(evaluator);
+    auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context);
     const auto base = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.8}, 2100);
     const auto first = builder.build(base, requestFor(*base));
-    expectations.expect(first.hasValue() && first.scene->mediaStatistics().imageConversions == 1 &&
-                            first.scene->mediaStatistics().uploadCacheMisses == 1,
-                        "the base build converts once and misses the upload cache");
+    expectations.expect(first.hasValue() && first.scene->mediaStatistics().imageConversions == 1,
+                        "the base build converts once");
 
     auto definition = base->copyDefinition();
     auto* source = std::get_if<bloom::runtime::CompiledImageSource>(&definition.operations[0]);
@@ -125,11 +124,8 @@ void testChangedColourInterpretation(Expectations& expectations,
     checkMediaParity(expectations, evaluator, reinterpreted, requestFor(*reinterpreted),
                      "changed input color interpretation");
     const auto second = builder.build(reinterpreted, requestFor(*reinterpreted));
-    expectations.expect(second.hasValue() &&
-                            second.scene->mediaStatistics().imageConversions == 1 &&
-                            second.scene->mediaStatistics().uploadCacheHits == 0 &&
-                            second.scene->mediaStatistics().uploadCacheMisses == 1,
-                        "a changed input color interpretation is an upload cache miss");
+    expectations.expect(second.hasValue() && second.scene->mediaStatistics().imageConversions == 1,
+                        "a changed input color interpretation converts again");
     const auto* uploadFirst = firstUpload(*first.scene);
     const auto* uploadSecond = firstUpload(*second.scene);
     expectations.expect(uploadFirst != nullptr && uploadSecond != nullptr &&

@@ -12,7 +12,7 @@ void testColdBuilderToExecutor(Expectations& expectations, bloom::render::GpuDev
     if (!cache || !executor) {
         return;
     }
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(8, 8), fixture.asset,
                                 LayerValues{.position = {4.3, 3.1}, .opacity = 0.9}, 4100);
@@ -32,16 +32,14 @@ void testColdBuilderToExecutor(Expectations& expectations, bloom::render::GpuDev
     std::filesystem::rename(held, fixture.path);
     expectations.expect(warm.hasValue(), "warm: rebuild prepares");
     if (warm) {
-        expectations.expect(warm.scene->mediaStatistics().uploadCacheHits == 1 &&
-                                warm.scene->mediaStatistics().imageConversions == 0 &&
+        expectations.expect(warm.scene->mediaStatistics().imageConversions == 1 &&
                                 warm.scene->mediaStatistics().sourceRevisionCacheHits == 1 &&
                                 warm.scene->mediaStatistics().sourceRevisionBytesHashed == 0 &&
                                 warm.scene->mediaStatistics().sourceBytesRead == 0 &&
                                 warm.scene->mediaStatistics().sourceIoNanoseconds == 0 &&
                                 warm.scene->mediaStatistics().sourceHashNanoseconds == 0 &&
-                                warm.scene->mediaStatistics().sourceProbeNanoseconds == 0 &&
-                                warm.scene->mediaStatistics().imageDecodeNanoseconds == 0,
-                            "warm: the decoded raw upload is reused without a re-decode");
+                                warm.scene->mediaStatistics().sourceProbeNanoseconds == 0,
+                            "warm: the retained source decodes again with no I/O, hash or probe");
         const auto run = runScene(*executor.executor, warm.scene, kSceneBudget);
         const auto counters = executor.executor->counters();
         expectations.expect(run.ready, "warm: the executor serves the cached scene");
@@ -62,7 +60,7 @@ void testProxiedStill(Expectations& expectations, bloom::render::GpuDevice& devi
     if (!cache || !executor) {
         return;
     }
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(9, 6), fixture.asset,
                                 LayerValues{.position = {4.5, 3.0}, .opacity = 0.9}, 4600);
@@ -116,13 +114,12 @@ void testProxiedStill(Expectations& expectations, bloom::render::GpuDevice& devi
                 otherPrepared ? firstResample(*otherPrepared.scene) : nullptr;
             expectations.expect(
                 otherPrepared && otherUpload != nullptr && otherResample != nullptr &&
-                    otherUpload->image == upload->image &&
+                    otherUpload->image != nullptr &&
                     otherUpload->semanticKey != upload->semanticKey &&
-                    otherPrepared.scene->mediaStatistics().uploadCacheHits == 1 &&
-                    otherPrepared.scene->mediaStatistics().uploadCacheMisses == 0 &&
-                    otherPrepared.scene->mediaStatistics().imageConversions == 0 &&
+                    otherPrepared.scene->mediaStatistics().imageConversions == 1 &&
+                    otherPrepared.scene->mediaStatistics().sourceBytesRead == 0 &&
                     otherResample->semanticKey != resample->semanticKey,
-                "proxy: a changed proxy reuses the decoded raw upload without a re-decode");
+                "proxy: a changed proxy decodes the retained source again; no upload is kept");
         }
     }
     expectations.expect(ocio->inputKey == resample->semanticKey &&
@@ -220,7 +217,7 @@ void testRawBackingAcrossRequestGeometry(Expectations& expectations,
     expectations.expect(executor.hasValue(), "raw geometry: executor host");
     if (!executor)
         return;
-    const CpuGpuSceneBuilder builder(nullptr, legacyPreparedMediaContext(evaluator), ocioContext);
+    const CpuGpuSceneBuilder builder(nullptr, deterministicMediaContext(evaluator), ocioContext);
     const auto square =
         mediaPlan(format(9, 7), fixture.asset, LayerValues{.position = {4.5, 3.5}}, 48100);
     const auto wide = mediaPlan(format(9, 7, pixelAspect(4, 3)), fixture.asset,
@@ -236,7 +233,6 @@ void testRawBackingAcrossRequestGeometry(Expectations& expectations,
     auto changedPar = acesRequest(*wide, kAcesWorking);
     const std::array requests{std::pair{square, full}, std::pair{square, half},
                               std::pair{square, full}, std::pair{wide, changedPar}};
-    const Rgba32fImage* sourceBacking = nullptr;
     std::string squareUploadKey;
     std::string proxyUploadKey;
     for (std::size_t index = 0; index < requests.size(); ++index) {
@@ -246,14 +242,10 @@ void testRawBackingAcrossRequestGeometry(Expectations& expectations,
         expectations.expect(upload != nullptr, "raw geometry: each request prepares an upload");
         if (upload == nullptr)
             return;
-        if (index == 0) {
-            sourceBacking = upload->image.get();
+        if (index == 0)
             squareUploadKey = upload->semanticKey;
-        } else {
-            expectations.expect(upload->image.get() == sourceBacking &&
-                                    prepared.scene->mediaStatistics().uploadCacheHits == 1,
-                                "raw geometry: all requests share one decoded allocation");
-        }
+        expectations.expect(prepared.scene->mediaStatistics().imageConversions == 1,
+                            "raw geometry: each request decodes its own scratch upload");
         if (index == 1) {
             proxyUploadKey = upload->semanticKey;
             expectations.expect(proxyUploadKey != squareUploadKey,
@@ -299,7 +291,7 @@ void testProxiedIdentityStill(Expectations& expectations, bloom::render::GpuDevi
     if (!cache || !executor) {
         return;
     }
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     document::AssetRecord asset = fixture.asset;
     // Explicit input == working space: the resolved transform is exact identity, so no OCIO command
@@ -388,7 +380,7 @@ void testProxiedIdentityStill(Expectations& expectations, bloom::render::GpuDevi
 
 void testProxyCancellation(Expectations& expectations, const CpuCompositionEvaluator& evaluator,
                            const Fixture& fixture, const GpuSceneOcioContext& ocioContext) {
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(9, 6), fixture.asset,
                                 LayerValues{.position = {4.5, 3.0}, .opacity = 0.9}, 4700);
@@ -411,7 +403,7 @@ void testChangedWorkingSpaceReusesDecode(Expectations& expectations,
                                          const CpuCompositionEvaluator& evaluator,
                                          const Fixture& fixture,
                                          const GpuSceneOcioContext& ocioContext) {
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     // An explicit texture input keeps the transform non-identity for both working spaces, so the
     // comparison isolates the working space (the decoded bytes are identical).
@@ -438,9 +430,8 @@ void testChangedWorkingSpaceReusesDecode(Expectations& expectations,
         return;
     }
     expectations.expect(uploadFirst->semanticKey == uploadSecond->semanticKey &&
-                            second.scene->mediaStatistics().uploadCacheHits == 1 &&
-                            second.scene->mediaStatistics().uploadCacheMisses == 0,
-                        "working space: a changed working space reuses the decoded raw upload");
+                            second.scene->mediaStatistics().imageConversions == 1,
+                        "working space: a changed working space decodes the raw upload again");
     expectations.expect(ocioFirst->semanticKey != ocioSecond->semanticKey,
                         "working space: the changed transform has a distinct effect identity");
 }

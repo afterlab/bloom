@@ -19,7 +19,6 @@
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
@@ -332,11 +331,7 @@ std::shared_ptr<host::GpuExportProvider> exportProvider(Expectations& checks, De
     options.enabled = true;
     options.loaderPath = loader;
     options.processingPhasePolicy = root.policy;
-    options.mediaContextProvider = [] {
-        runtime::GpuSceneMediaContext context;
-        context.preparedUploadCache = std::make_shared<runtime::GpuPreparedUploadCache>(0, 0);
-        return context;
-    };
+    options.mediaContextProvider = [] { return runtime::GpuSceneMediaContext{}; };
     auto provider = host::GpuExportProvider::create(std::move(options));
     provider->prepare(scheduler);
     const auto deadline = std::chrono::steady_clock::now() + 60s;

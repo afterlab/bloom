@@ -19,7 +19,7 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
     }
     evaluator.setAssetBaseDirectory(fixtures);
     evaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const std::array<std::pair<std::string_view, std::string_view>, 2> cases{
         std::pair<std::string_view, std::string_view>{"numbered-prores.mov", "planar8"},
@@ -52,9 +52,8 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
                             tag + ": video input-to-working parity");
 
         const auto warm = builder.build(plan, request);
-        expectations.expect(warm.hasValue() && warm.scene->mediaStatistics().uploadCacheHits == 1 &&
-                                warm.scene->mediaStatistics().videoConversions == 0,
-                            tag + ": the decoded video frame is reused without a re-decode");
+        expectations.expect(warm.hasValue() && warm.scene->mediaStatistics().videoConversions == 1,
+                            tag + ": the decoded frame is converted again; no upload is kept");
 
         // A proxied video frame: the raw upload stays full-resolution, and the GPU gathers the
         // proxy before the OCIO transform. The CPU proxy oracle is the unchanged evaluator frame.
@@ -157,7 +156,7 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
         expectations.expect(
             uploadFirst != nullptr && uploadSecond != nullptr &&
                 uploadFirst->semanticKey == uploadSecond->semanticKey && second.hasValue() &&
-                second.scene->mediaStatistics().uploadCacheHits == 1 && ocioFirst != nullptr &&
+                ocioFirst != nullptr &&
                 ocioSecond != nullptr && ocioFirst->semanticKey != ocioSecond->semanticKey,
             tag + ": a changed working space reuses the decoded video frame");
 
@@ -232,7 +231,8 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
         // Its own cache, declared first so it outlives the executor bound to it.
         decltype(GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget})) largeCache;
         decltype(GpuSceneExecutor::create(device, *cache.cache, GpuSceneExecutorBudgets{})) large;
-        if (frameBytes > GpuSceneExecutorBudgets{}.maxImageBytes) {
+        // The image plus its staging peak must fit the executor's per-image ceiling.
+        if (frameBytes * 4U > GpuSceneExecutorBudgets{}.maxImageBytes) {
             largeCache = GpuSceneCache::create(device, GpuSceneCacheBudgets{kCacheBudget});
             GpuSceneExecutorBudgets budgets;
             budgets.maxImageBytes = frameBytes * 4U;
@@ -270,7 +270,7 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
         CpuCompositionEvaluator hlgEvaluator;
         hlgEvaluator.setAssetBaseDirectory(fixtures);
         hlgEvaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
-        const auto hlgContext = legacyPreparedMediaContext(hlgEvaluator);
+        const auto hlgContext = deterministicMediaContext(hlgEvaluator);
         const CpuGpuSceneBuilder hlgBuilder(nullptr, hlgContext, ocioContext);
         const auto request = aces ? acesRequest(*plan, kAcesWorking) : requestFor(*plan);
         expectations.expect(expectMediaParity(expectations, *executor.executor, hlgEvaluator,
@@ -317,7 +317,7 @@ void testPlayerReferenceVideo(Expectations& expectations, bloom::render::GpuDevi
         CpuCompositionEvaluator evaluator;
         evaluator.setAssetBaseDirectory(fixtures);
         evaluator.setVideoCacheByteBudget(std::size_t{64} << 20U);
-        const auto context = legacyPreparedMediaContext(evaluator);
+        const auto context = deterministicMediaContext(evaluator);
         const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
         const auto request = requestFor(*plan);
         expectations.expect(expectMediaParity(expectations, *executor.executor, evaluator, builder,
@@ -356,7 +356,7 @@ void testVideoCancellation(Expectations& expectations, const std::filesystem::pa
     }
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixtures);
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     document::AssetRecord asset;
     try {
@@ -382,7 +382,7 @@ void testMissingAndCorruptMedia(Expectations& expectations, const Fixture& fixtu
                                 const GpuSceneOcioContext& ocioContext) {
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
 
     // Missing file: a valid asset record whose locator points at a file that is not there.
@@ -441,7 +441,7 @@ void testPqInputSweep(Expectations& expectations, bloom::render::GpuDevice& devi
     auto asset = imageAsset(path, "pq_sweep", 9100);
     asset.interpretation.inputColorSpaceId = std::string{"Rec.2100-PQ - Display"};
     evaluator.setAssetBaseDirectory(directory);
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
     const auto plan = mediaPlan(format(width, height), asset,
                                 LayerValues{.position = {width * 0.5, height * 0.5}}, 9100);

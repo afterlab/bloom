@@ -9,6 +9,7 @@
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/gpu_image_upload.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/runtime/gpu_preview_resident_capacity.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
@@ -557,7 +558,22 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                                                              device->availableAllocationBudget())) {
                 throw std::runtime_error("The shared processing device-report slots are exhausted");
             }
-            auto createdCache = GpuSceneCache::create(*device, options.cacheBudgets);
+            auto cacheBudgets = options.cacheBudgets.value_or(GpuSceneCacheBudgets{});
+            if (!options.cacheBudgets) {
+                // The resident partition's proportions over this device's construction capacity,
+                // exactly as the preview route clamps its scene cache.
+                const auto partition =
+                    gpuResidentCapacityPlanConfigured(std::numeric_limits<std::uint64_t>::max());
+                cacheBudgets.maxRetainedBytes =
+                    gpuResidentCapacityPlanFor(
+                        {.leaseBytes = partition.leaseBytes,
+                         .sceneCacheBytes = partition.sceneCacheBytes,
+                         .requestBytes = partition.requestBytes},
+                        gpuResidentConstructionCapacity(gpuResidentCapacityFromAllocationBudget(
+                            device->availableAllocationBudget())))
+                        .sceneCacheBytes;
+            }
+            auto createdCache = GpuSceneCache::create(*device, cacheBudgets);
             if (!createdCache) {
                 availability = {GpuProcessFrameDiagnosticCode::CacheUnavailable,
                                 createdCache.diagnostic.message};

@@ -71,8 +71,8 @@ namespace bloom::runtime {
 
 class OperationCache;
 class CpuCompositionEvaluator;
-class GpuPreparedUploadCache;
 class ImageSequenceReadAhead;
+class GpuSceneBuildUploads;
 
 namespace detail {
 class VideoSourceContext;
@@ -111,11 +111,8 @@ struct GpuSceneMediaStatistics final {
     std::uint64_t imageConversions = 0;
     std::uint64_t videoConversions = 0;
     // Native (GPU) colour-transform commands successfully prepared through the injected OCIO
-    // preparer. A warm build serves the same program from the preparer's own content cache; the
-    // upload cache hit is what suppresses the decode/convert entirely.
+    // preparer. A warm build serves the same program from the preparer's own content cache.
     std::uint64_t ocioCommandPreparations = 0;
-    std::uint64_t uploadCacheHits = 0;
-    std::uint64_t uploadCacheMisses = 0;
     std::uint64_t uploadKeyConstructions = 0;
     std::uint64_t sourceRevisionCacheHits = 0;
     std::uint64_t sourceRevisionCaptures = 0;
@@ -587,19 +584,11 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     return key;
 }
 
-// Shared, bounded CPU-side store of already converted and frozen source uploads. It keys ONLY on
-// the source semantic key -- validated source identity, interpretation/colour configuration, and
-// the proxy/composition descriptor -- so an unchanged source is never decoded or converted twice
-// while a changed source, frame, colour interpretation or proxy is a miss. The evaluator's own
-// media caches retain the DECODED native image, not the converted/premultiplied one, which is why
-// this narrow store exists. A null store means every build converts its own source.
-class GpuPreparedUploadCache;
-
 // The evaluator-owned media context the builder needs to resolve and convert
 // ImageSource/VideoSource leaves. Construction from an evaluator shares its operation cache, video
-// decode context, asset base directory and disk cache. Prepared retention attaches only to an
-// explicitly bound shared pool; an unbound evaluator has no optional prepared store. A
-// default context has no caches and an empty base directory, so a scene containing media fails
+// decode context, asset base directory and disk cache. There is no store of converted uploads:
+// the host buffer that carries pixels to the GPU lives only until its upload completes (ADR 0037).
+// A default context has no caches and an empty base directory, so a scene containing media fails
 // closed rather than decoding with different semantics.
 //
 // Counters are deliberately NOT shared here: a build keeps its own local GpuSceneMediaStatistics
@@ -611,9 +600,11 @@ struct GpuSceneMediaContext final {
     std::shared_ptr<detail::VideoSourceContext> videoContext;
     std::filesystem::path assetBaseDirectory;
     std::shared_ptr<media::cache::MediaDiskCache> mediaDiskCache;
-    std::shared_ptr<GpuPreparedUploadCache> preparedUploadCache;
     // Captures upcoming image-sequence files into `operationCache` ahead of need (null disables).
     std::shared_ptr<ImageSequenceReadAhead> sequenceReadAhead;
+    // Set by the builder for the duration of one build only: identical uploads inside that build
+    // share one host backing. Never set on a context that outlives a build.
+    std::shared_ptr<GpuSceneBuildUploads> buildUploads;
 
     [[nodiscard]] static GpuSceneMediaContext
     fromEvaluator(const CpuCompositionEvaluator& evaluator);

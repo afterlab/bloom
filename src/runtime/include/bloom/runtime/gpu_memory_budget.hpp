@@ -1,23 +1,22 @@
 #pragma once
 
-// Capacity-aware ceilings for the GPU production path.
+// Per-request ceilings for the GPU production path.
 //
-// Every value is a conservative fraction of the budget the process memory ledger actually ASSIGNED
-// (which already honours the operator's operation/preview overrides and the live host cap). There
-// is deliberately no floor and no arbitrary replacement cutoff: an explicitly tiny assigned budget
-// yields a tiny ceiling, so a deliberate limit is never silently defeated, and a large assigned
-// budget admits a large source. The fraction is computed with integer division before any
-// multiplication, so the arithmetic cannot overflow.
+// These size ONE piece of in-flight work, never retention: a single native image and the live set
+// of one preview request (ADR 0037). Retention has no fixed fraction anywhere; reusable pools share
+// usable memory (measured RAM minus the headroom preference) under the ledger. Each value is a
+// fraction of the budget the process memory ledger actually ASSIGNED (which honours the
+// operation/preview overrides and the live host cap). There is deliberately no floor: an
+// explicitly tiny assigned budget yields a tiny ceiling, so a deliberate limit is never silently
+// defeated. The fraction is computed with integer division before any multiplication, so the
+// arithmetic cannot overflow.
 //
-// Host and device budgets stay distinct:
-//  * the prepared-upload cache is HOST-retained (decoded/converted images);
-//  * the scene cache and the per-request executor allowance are DEVICE admission bounds. They are
-//    host-derived here because the policy is host-side, and the native primitives additionally
-//    clamp every per-resource request to the device's real limits: a VkImage request is bounded by
-//    the format's maxResourceSize (querySolidImageSupport), and a buffer-backed request (coverage
-//    mask, affine coordinate buffer) by the device's storage-buffer range. The effective device
-//    limit is therefore min(host-derived bound, device limit), and a device that cannot allocate
-//    refuses honestly and takes the CPU fallback.
+// They are DEVICE admission bounds derived host-side, and the native primitives additionally clamp
+// every per-resource request to the device's real limits: a VkImage request is bounded by the
+// format's maxResourceSize (querySolidImageSupport), and a buffer-backed request (coverage mask,
+// affine coordinate buffer) by the device's storage-buffer range. The effective device limit is
+// therefore min(host-derived bound, device limit), and a device that cannot allocate refuses
+// honestly and takes the CPU fallback.
 //
 // The `...For` overloads are pure functions of an assigned budget so a policy test can prove the
 // tiny-budget and high-capacity cases without a device or the process ledger.
@@ -46,29 +45,6 @@ gpuProducerMaxImageBytesFor(const std::size_t operationCacheByteBudget) noexcept
 }
 [[nodiscard]] inline std::size_t gpuProducerMaxImageBytes() noexcept {
     return gpuProducerMaxImageBytesFor(
-        processMemoryBudgetLedger().allocate().operationCacheByteBudget);
-}
-
-// The converted-upload cache: a HOST-retained derived cache, one sixteenth of the assigned
-// operation-cache budget. At a large assigned budget a 4608x3164 source (~233 MB) is retained
-// instead of re-decoded every request; at a small one it is bounded accordingly.
-[[nodiscard]] inline std::size_t
-gpuPreparedUploadCacheByteBudgetFor(const std::size_t operationCacheByteBudget) noexcept {
-    return gpu_memory_budget_detail::fraction(operationCacheByteBudget, 1, 16);
-}
-[[nodiscard]] inline std::size_t gpuPreparedUploadCacheByteBudget() noexcept {
-    return gpuPreparedUploadCacheByteBudgetFor(
-        processMemoryBudgetLedger().allocate().operationCacheByteBudget);
-}
-
-// The resident retained scene cache: one eighth of the assigned operation-cache budget. The cache
-// still evicts unpinned entries and never invalidates a live pin.
-[[nodiscard]] inline std::size_t
-gpuSceneCacheRetainedByteBudgetFor(const std::size_t operationCacheByteBudget) noexcept {
-    return gpu_memory_budget_detail::fraction(operationCacheByteBudget, 1, 8);
-}
-[[nodiscard]] inline std::size_t gpuSceneCacheRetainedByteBudget() noexcept {
-    return gpuSceneCacheRetainedByteBudgetFor(
         processMemoryBudgetLedger().allocate().operationCacheByteBudget);
 }
 

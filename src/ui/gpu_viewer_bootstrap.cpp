@@ -74,20 +74,15 @@ bool gpuViewerClientUsable(const std::shared_ptr<runtime::GpuPresentationClient>
 }
 
 runtime::GpuSceneMediaContext
-gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator,
-                        const std::shared_ptr<runtime::GpuPreparedUploadCache>& uploadCache) {
-    auto context = runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
-    if (uploadCache != nullptr) {
-        context.preparedUploadCache = uploadCache;
-    }
-    return context;
+gpuSceneMediaContextFor(const runtime::CpuCompositionEvaluator& evaluator) {
+    return runtime::GpuSceneMediaContext::fromEvaluator(evaluator);
 }
 
 runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     const runtime::SnapshotCompiler& compiler, const runtime::CpuCompositionEvaluator& evaluator,
     const runtime::QualifiedDisplayProcessorProvider& qualifiedProcessorProvider,
     std::shared_ptr<runtime::GpuSceneCoverageCache> coverageCache,
-    std::shared_ptr<runtime::GpuPreparedUploadCache> uploadCache, CompiledPlanCacheHandle planCache,
+    CompiledPlanCacheHandle planCache,
     std::shared_ptr<runtime::GpuOcioContextResolver> ocioContextResolver,
     runtime::GpuScenePreparationPhase processingPhase) {
     // The one general-display service is created ONCE and consumes the shared resolver, so the
@@ -95,8 +90,8 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
     auto displayProgramService =
         std::make_shared<const runtime::GpuDisplayProgramService>(ocioContextResolver);
     return [&compiler, &evaluator, &qualifiedProcessorProvider,
-            coverageCache = std::move(coverageCache), uploadCache = std::move(uploadCache),
-            planCache = std::move(planCache), ocioContextResolver = std::move(ocioContextResolver),
+            coverageCache = std::move(coverageCache), planCache = std::move(planCache),
+            ocioContextResolver = std::move(ocioContextResolver),
             displayProgramService = std::move(displayProgramService),
             processingPhase = std::move(processingPhase)](
                const document::Snapshot& snapshot,
@@ -109,7 +104,7 @@ runtime::PreviewGpuSceneStageFunction makeSessionRefreshingGpuSceneStage(
         // The local builder owns the copied media context for exactly this invocation. The
         // evaluator's getters are internally locked, so a concurrent Open/SaveAs base-directory
         // update is observed as a whole, never as a torn path.
-        auto mediaContext = gpuSceneMediaContextFor(evaluator, uploadCache);
+        auto mediaContext = gpuSceneMediaContextFor(evaluator);
         // Off-UI shared-tool resolution. The one resolver is idempotent: the first request
         // qualifies the packaged tools and every later/concurrent request reuses the same context +
         // preparer. A failed resolve leaves the builder's fail-closed default context so

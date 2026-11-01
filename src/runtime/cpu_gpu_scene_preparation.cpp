@@ -109,6 +109,11 @@ PreparedGpuSceneBuildResult
 CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                               const EvaluationRequest& request,
                               const CancellationToken& cancellation) const {
+    // This build's upload scratch (ADR 0037): identical uploads share one backing inside the
+    // build, a nested child joins its parent's, and nothing of it survives the build.
+    auto media = mediaContext_;
+    if (!media.buildUploads)
+        media.buildUploads = std::make_shared<GpuSceneBuildUploads>();
     auto phaseLease = phase_.admittedLease;
     std::optional<TaskAdmissionRetry> refusalRetry;
     std::optional<TaskDefaultBudgetRetry> defaultBudgetRetry;
@@ -595,7 +600,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     : remainingSource;
             detail::GpuSceneUploadLeafResult leaf;
             const auto error = detail::buildAndEmitMediaLeaf(
-                operation, operationIndex, clockRequest, *plan, resolved, mediaContext_, ocioContext_,
+                operation, operationIndex, clockRequest, *plan, resolved, media, ocioContext_,
                 remainingBudget, hScale, vScale, chargeRetained, chargeTransient, cancellation,
                 mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
                 keyOf[index], leaf);
@@ -637,7 +642,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 .hScale = hScale,
                 .vScale = vScale,
                 .allowance = allowance,
-                .assetBaseDirectory = mediaContext_.assetBaseDirectory,
+                .assetBaseDirectory = media.assetBaseDirectory,
                 .coverageCache = coverageCache_,
             };
             if (const auto error = detail::emitImageEffectOperation(
@@ -660,7 +665,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto error = detail::prepareNestedComposition(
                 *source, *plan, clockRequest, resolved, hScale, vScale, detail::nestedCompositionDepth(),
                 allowance, retainedBytes, cancellation,
-                [this, &phaseLease, &sourceBackings, sourceAllowance, coverageAllowance,
+                [this, &media, &phaseLease, &sourceBackings, sourceAllowance, coverageAllowance,
                  coverageBytes, foregroundLimit = request.pixelStorageByteLimit](
                     const std::shared_ptr<const CompiledCompositionPlan>& childPlan,
                     const EvaluationRequest& childRequest, const CancellationToken& cancel) {
@@ -672,7 +677,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     childPhase.remainingSourceBytes = sourceAllowance;
                     childPhase.remainingCoverageBytes =
                         coverageAllowance > coverageBytes ? coverageAllowance - coverageBytes : 0;
-                    const CpuGpuSceneBuilder child(coverageCache_, mediaContext_, ocioContext_,
+                    const CpuGpuSceneBuilder child(coverageCache_, media, ocioContext_,
                                                    std::move(childPhase));
                     auto admittedRequest = childRequest;
                     // Retained quotas are carried separately. They must not become the child's

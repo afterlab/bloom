@@ -22,7 +22,7 @@ void testMultilayerNoColourLayerNative(Expectations& expectations,
         std::filesystem::remove_all(directory);
         return;
     }
-    const auto context = legacyPreparedMediaContext(evaluator);
+    const auto context = deterministicMediaContext(evaluator);
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
 
     const auto root =

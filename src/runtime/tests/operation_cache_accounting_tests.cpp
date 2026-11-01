@@ -2,7 +2,6 @@
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/render/image.hpp>
-#include <bloom/runtime/gpu_prepared_upload_cache.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
@@ -224,21 +223,22 @@ void pendingRetirementIsNeitherLostNorDoubled() {
     scope.blocked = true;
     MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
     auto pool = std::make_shared<OperationCache>(1U << 30U, ledger);
-    bloom::runtime::GpuPreparedUploadCache prepared(pool, scope.owner);
+    pool->bindHostRetirement(scope.owner);
     auto image = makeImage(64, 64);
     const std::weak_ptr<const Rgba32fImage> backing = image;
     const auto pixels = storageBytes(*image);
-    prepared.store("upload", image);
+    pool->store("decoded", {}, imageValue(image), OperationCacheEntryKind::DecodedMedia,
+                pool->decodedMediaGeneration());
     pool->store("operation", {}, imageValue(image));
     const auto charged = pool->memory();
-    expect(charged.preparedUploadBytes > pixels && charged.operationBytes < pixels / 8,
-           "an upload and an operation share one charge, under the kind that stored it first");
+    expect(charged.decodedMediaBytes > pixels && charged.operationBytes < pixels / 8,
+           "decoded media and an operation share one charge, under the kind that stored it first");
 
-    prepared.clear();
-    const auto uploadEvicted = pool->memory();
-    expect(uploadEvicted.hostBytes == charged.hostBytes &&
-               uploadEvicted.pendingRetirementBytes > 0 &&
-               uploadEvicted.pendingRetirementBytes < pixels / 8,
+    pool->clearDecodedMedia();
+    const auto decodedEvicted = pool->memory();
+    expect(decodedEvicted.hostBytes == charged.hostBytes &&
+               decodedEvicted.pendingRetirementBytes > 0 &&
+               decodedEvicted.pendingRetirementBytes < pixels / 8,
            "an evicted reference to pixels another entry retains is pending only its metadata");
 
     pool->clearOperations();
@@ -272,9 +272,9 @@ void pendingRetirementIsNeitherLostNorDoubled() {
 }
 
 // A synthetic fill shaped like a CPU fallback frame: a decoded source, an identity effect and the
-// composition output share one image; a processed image is uploaded and retained twice. The
-// budget forces eviction and part of it retires on a held worker. At every step what the ledger
-// counts as host memory never exceeds what the process actually holds allocated for the pool.
+// composition output share one image; a processed image is retained once (no upload copy is kept,
+// ADR 0037). The budget forces eviction and part of it retires on a held worker. At every step
+// what the ledger counts as host memory never exceeds what the process holds allocated for it.
 void ledgerHostTotalsNeverExceedAllocation() {
     RetirementScope scope;
     MemoryBudgetLedger ledger(64ULL << 30U, 48ULL << 30U);
@@ -283,7 +283,7 @@ void ledgerHostTotalsNeverExceedAllocation() {
     std::int64_t perEntryExcess = std::numeric_limits<std::int64_t>::min();
     {
         auto pool = std::make_shared<OperationCache>(12 * frameBytes, ledger);
-        bloom::runtime::GpuPreparedUploadCache prepared(pool, scope.owner);
+        pool->bindHostRetirement(scope.owner);
         bool overcounted = false;
         bool anyShared = false;
         for (int frame = 0; frame < 40; ++frame) {
@@ -300,7 +300,6 @@ void ledgerHostTotalsNeverExceedAllocation() {
                 pool->store("identity-" + tag, {}, imageValue(decoded));
                 pool->store("output-" + tag, {}, imageValue(decoded));
                 auto processed = makeImage(128, 128);
-                prepared.store("upload-" + tag, processed);
                 pool->store("processed-" + tag, {}, imageValue(processed));
             }
             // A free returns its charge just after the memory (never before), so measure while
@@ -330,7 +329,7 @@ void ledgerHostTotalsNeverExceedAllocation() {
         expect(static_cast<std::int64_t>(ledger.reusableRetainedBytes()) <=
                    gLiveHeapBytes.load() - baseline,
                "after retirement the host total is still within the allocation");
-        pool->closePreparedUploads();
+        pool->close();
     }
     expect(until([&] { return ledger.reusableRetainedBytes() == 0; }),
            "a destroyed pool leaves nothing on the ledger");
