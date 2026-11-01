@@ -187,8 +187,10 @@ void addPixelAspect(OperationKey& key, const core::PixelAspectRatio ratio) {
         std::min<std::uint64_t>(pixels, std::numeric_limits<std::size_t>::max()));
 }
 
-// Composition frames of image-sequence files captured ahead of the frame being prepared.
-constexpr std::size_t kSequenceReadAheadFrames = 8;
+// Composition frames of image-sequence files captured ahead of the frame being prepared: the
+// source working set's read-ahead width (ADR 0037).
+constexpr auto kSequenceReadAheadFrames =
+    static_cast<std::size_t>(SourceWorkingSet::kReadAheadFrames);
 
 // Queues the next sequence members after a verified selection, so their reads overlap this frame.
 void requestSequenceReadAhead(const CompiledImageSource& source, const EvaluationRequest& request,
@@ -207,11 +209,17 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                                       context.assetBaseDirectory, kSequenceReadAheadFrames);
     std::vector<ImageSequenceReadAhead::Request> requests;
     requests.reserve(targets.size());
-    for (auto& target : targets)
+    // Target i is the composition frame i + 1 after this request's.
+    auto use = SourceWorkingSet::current();
+    for (auto& target : targets) {
+        if (use.tracked)
+            ++use.frame;
         requests.push_back({.path = std::move(target.path),
                             .digest = target.digest,
                             .revisionKey = std::move(target.revisionKey),
-                            .byteBudget = byteBudget(request.pixelStorageByteLimit)});
+                            .byteBudget = byteBudget(request.pixelStorageByteLimit),
+                            .use = use});
+    }
     context.sequenceReadAhead->request(context.operationCache, std::move(requests));
 }
 

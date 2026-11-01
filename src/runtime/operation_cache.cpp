@@ -210,6 +210,7 @@ OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& led
                                      .hostPendingRetirementBytes = accounting_->pendingBytes};
         },
         apply);
+    sourceWindow_->addTrimmer(this, [this] { releaseSourcesOutsideWindow(); });
     // Two Profiler rows, one per entry kind, sharing the cache's one ceiling.
     ledger_.setPoolProfile(
         this, {.name = {},
@@ -234,6 +235,7 @@ OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& led
                }});
 }
 OperationCache::~OperationCache() {
+    sourceWindow_->removeTrimmer(this);
     close();
     ledger_.unregisterCache(this);
     // Rooted refs never free on this caller. The explicit host owner outlives queued callbacks.
@@ -264,6 +266,7 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
         if (!sourceUsable(exact->second))
             return std::nullopt;
         touch(exact->second);
+        retag(**exact->second);
         ++statistics_.hits;
         accounting_->counters[Accounting::index((*exact->second)->kind)].hit();
         return (*exact->second)->value;
@@ -281,6 +284,7 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
     addresses_.erase({entry.revision, key});
     entry.revision = revision;
     touch(found->second);
+    retag(entry);
     ++statistics_.hits;
     accounting_->counters[Accounting::index(entry.kind)].hit();
     return entry.value;
@@ -373,6 +377,8 @@ void OperationCache::store(std::string content, const document::Revision revisio
     entry->content = std::move(content);
     entry->revision = revision;
     entry->kind = kind;
+    if (kind == OperationCacheEntryKind::DecodedMedia)
+        entry->use = SourceWorkingSet::current();
     entry->value = std::move(value);
     entry->metadataBytes =
         addCharge(sizeof(Entry) + sizeof(Address) + sizeof(void*) * 16, entry->content.capacity());
@@ -514,6 +520,27 @@ void OperationCache::evictToLocked(const std::size_t limit, std::uint64_t& count
             (*victim)->standaloneBytes());
         removeLocked(victim);
         ++counter;
+    }
+}
+void OperationCache::retag(Entry& entry) noexcept {
+    if (entry.kind != OperationCacheEntryKind::DecodedMedia)
+        return;
+    if (const auto use = SourceWorkingSet::current(); use.tracked)
+        entry.use = use;
+}
+void OperationCache::releaseSourcesOutsideWindow() {
+    const std::lock_guard lock(accounting_->mutex);
+    if (accounting_->closed)
+        return;
+    for (auto position = entries_.begin(); position != entries_.end();) {
+        const auto next = std::next(position);
+        const auto& entry = **position;
+        if (entry.kind == OperationCacheEntryKind::DecodedMedia && entry.use.tracked &&
+            !sourceWindow_->retains(entry.use)) {
+            accounting_->counters[Accounting::index(entry.kind)].evicted(entry.standaloneBytes());
+            removeLocked(position);
+        }
+        position = next;
     }
 }
 void OperationCache::trimToBytes(const std::size_t bytes) {

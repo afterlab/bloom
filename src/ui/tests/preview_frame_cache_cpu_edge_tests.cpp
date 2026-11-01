@@ -17,6 +17,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
@@ -310,6 +311,31 @@ int main(int argc, char** argv) {
                                     "ending the fill restores normal yielding");
             }
             ledger.unregisterCache(&intermediates);
+        }
+
+        // ADR 0037 rule 3: the source working set releases decoded sources outside the playback
+        // window; finished frames are not part of it. Playback far ahead of a cached frame, with
+        // every request ending and its release pass running, leaves the finished frame cached.
+        {
+            runtime::MemoryBudgetLedger ledger(std::size_t{16} << 30U);
+            PreviewFrameCache finished(kBudget, ledger);
+            runtime::OperationCache operations(kBudget, ledger);
+            expectations.expect(finished.insert(frameA1).retained(), "a finished frame is cached");
+            const auto window = operations.sourceWindow();
+            for (std::int64_t frame = 0; frame < 200; ++frame) {
+                const runtime::SourceWorkingSet::Request request(window, kCompositionId.value(),
+                                                                 frame);
+                operations.store("source:" + std::to_string(frame), {},
+                                 {.image = {}, .values = {1.0}, .bounds = {}},
+                                 runtime::OperationCacheEntryKind::DecodedMedia);
+            }
+            expectations.expect(
+                operations.statistics().hits == 0 &&
+                    operations.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia) > 0,
+                "sources inside the window stay");
+            expectations.expect(finished.size() == 1 && finished.contains(keyA) &&
+                                    finished.statistics().evictions == 0,
+                                "finished frames are untouched by the source working set");
         }
 
         if (expectations.failures() != 0) {

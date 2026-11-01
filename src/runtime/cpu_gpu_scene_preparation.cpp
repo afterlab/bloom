@@ -160,6 +160,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     if (cancellation.isCancellationRequested()) {
         return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
     }
+    // This build is a render request in the playback working set (ADR 0037): the sources it uses
+    // are tagged with its frame and stay while that frame is in the window. A nested build joins
+    // its parent's request.
+    SourceWorkingSet::Request sourceRequest;
+    if (media.operationCache && !SourceWorkingSet::current().tracked) {
+        const auto rate = plan->format().frameRate();
+        sourceRequest = SourceWorkingSet::Request(
+            media.operationCache->sourceWindow(), plan->compositionId().value(),
+            SourceWorkingSet::frameAt(request.time.numerator(), request.time.denominator(),
+                                      rate.numerator(), rate.denominator()));
+    }
 
     const std::size_t operationCount = plan->operations().size();
     // The reachable-operation subset classifier is extracted to gpu_scene_preparation_builders.hpp.

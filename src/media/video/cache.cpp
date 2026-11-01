@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <bloom/media/video/session.hpp>
+#include <utility>
+#include <vector>
 namespace bloom::media::video {
 DecodedVideoCache::DecodedVideoCache(const std::size_t budget, runtime::MemoryBudgetLedger& ledger)
     : ledger_(ledger), budget_(budget) {
@@ -19,7 +21,50 @@ DecodedVideoCache::DecodedVideoCache(const std::size_t budget, runtime::MemoryBu
                                   .counters = &counters_,
                                   .rows = {}});
 }
-DecodedVideoCache::~DecodedVideoCache() { ledger_.unregisterCache(this); }
+DecodedVideoCache::~DecodedVideoCache() {
+    std::shared_ptr<runtime::SourceWorkingSet> window;
+    {
+        std::lock_guard lock(mutex_);
+        window = window_;
+    }
+    if (window)
+        window->removeTrimmer(this);
+    ledger_.unregisterCache(this);
+}
+
+void DecodedVideoCache::bindSourceWindow(std::shared_ptr<runtime::SourceWorkingSet> window) {
+    std::shared_ptr<runtime::SourceWorkingSet> previous;
+    {
+        std::lock_guard lock(mutex_);
+        if (window_ == window)
+            return;
+        previous = std::exchange(window_, window);
+    }
+    if (previous)
+        previous->removeTrimmer(this);
+    if (window)
+        window->addTrimmer(this, [this] { releaseOutsideWindow(); });
+}
+
+void DecodedVideoCache::releaseOutsideWindow() {
+    std::vector<std::shared_ptr<const provider::FrameProduct>> released;
+    {
+        std::lock_guard lock(mutex_);
+        if (!window_)
+            return;
+        for (auto position = entries_.begin(); position != entries_.end();) {
+            if (position->use.tracked && !window_->retains(position->use)) {
+                resident_ -= position->bytes;
+                counters_.evicted(position->bytes);
+                released.push_back(std::move(position->frame));
+                position = entries_.erase(position);
+            } else {
+                ++position;
+            }
+        }
+    }
+    // The planes are freed here, outside the cache lock.
+}
 
 std::shared_ptr<const provider::FrameProduct> DecodedVideoCache::find(const FrameKey& key) {
     std::lock_guard lock(mutex_);
@@ -29,6 +74,8 @@ std::shared_ptr<const provider::FrameProduct> DecodedVideoCache::find(const Fram
         return {};
     }
     counters_.hit();
+    if (const auto use = runtime::SourceWorkingSet::current(); use.tracked)
+        found->use = use;
     entries_.splice(entries_.begin(), entries_, found);
     return entries_.front().frame;
 }
@@ -55,7 +102,7 @@ void DecodedVideoCache::store(const FrameKey& key,
         counters_.evicted(entries_.back().bytes);
         entries_.pop_back();
     }
-    entries_.push_front({key, std::move(frame), bytes});
+    entries_.push_front({key, std::move(frame), bytes, runtime::SourceWorkingSet::current()});
     resident_ += bytes;
     counters_.store();
 }

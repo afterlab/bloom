@@ -53,6 +53,7 @@ struct ImageSequenceReadAhead::State final {
         const auto cache = job.cache.lock();
         if (!cache || stopping.load())
             return false;
+        const SourceWorkingSet::UseScope use(job.request.use);
         if (cache->find(job.request.revisionKey, document::Revision{},
                         OperationCacheEntryKind::DecodedMedia))
             return true;
@@ -105,6 +106,8 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
         if (state_->stopping.load())
             return;
         for (auto& request : requests) {
+            // A probe that finds the file re-tags it for the frame it is captured for.
+            const SourceWorkingSet::UseScope use(request.use);
             if (state_->queue.size() >= state_->queueLimit ||
                 state_->pending.contains(request.revisionKey) ||
                 cache->find(request.revisionKey, document::Revision{},

@@ -412,6 +412,8 @@ std::shared_ptr<detail::VideoSourceContext> CpuCompositionEvaluator::videoContex
         assetContext_->video = std::make_shared<detail::VideoSourceContext>();
     assetContext_->video->bindRetirement(cache_->sourceRetirementState());
     cache_->bindVideoSources(assetContext_->video);
+    // Decoded frames follow the same playback working set as the decoded-media entries.
+    assetContext_->video->cache.bindSourceWindow(cache_->sourceWindow());
     return assetContext_->video;
 }
 void CpuCompositionEvaluator::setVideoCacheByteBudget(std::size_t budget) const {

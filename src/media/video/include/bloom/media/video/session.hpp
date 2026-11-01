@@ -1,9 +1,10 @@
 #pragma once
-#include <chrono>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/source_working_set.hpp>
+#include <chrono>
 #include <filesystem>
 #include <list>
 #include <mutex>
@@ -97,18 +98,25 @@ class DecodedVideoCache final {
     void clear();
     [[nodiscard]] std::size_t residentBytes() const;
     [[nodiscard]] std::size_t byteBudget() const;
+    // Follows the playback working set (ADR 0037, rule 3): a frame is tagged with the composition
+    // frame of the request that last used it, and frames outside the window are released after
+    // each request. Frames used outside any request keep the ordinary budget retention.
+    void bindSourceWindow(std::shared_ptr<runtime::SourceWorkingSet> window);
+    void releaseOutsideWindow();
 
   private:
     struct Entry {
         FrameKey key;
         std::shared_ptr<const provider::FrameProduct> frame;
         std::size_t bytes;
+        runtime::SourceUse use{};
     };
     runtime::MemoryBudgetLedger& ledger_;
     mutable std::mutex mutex_;
     std::list<Entry> entries_;
     std::size_t budget_ = 0, resident_ = 0;
     runtime::MemoryPoolCounters counters_;
+    std::shared_ptr<runtime::SourceWorkingSet> window_;
 };
 // Issue #402: a caller waiting for a session's one retained decoder. Concurrent preparation asks
 // for neighbouring frames at once; serving them in wake-up order made a long-GOP decoder seek back

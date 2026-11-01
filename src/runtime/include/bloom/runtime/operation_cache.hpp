@@ -4,6 +4,7 @@
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/source_working_set.hpp>
 #include <bloom/runtime/video_source_report.hpp>
 
 #include <array>
@@ -158,6 +159,14 @@ class OperationCache final {
     void bindVideoSources(const std::shared_ptr<detail::VideoSourceContext>& sources);
     // The bound video sources' decode route and colour-note reports (most recent first).
     [[nodiscard]] std::vector<VideoSourceReport> videoSourceReports() const;
+    // The playback working set this cache's source entries follow (ADR 0037, rule 3): decoded
+    // media entries outside it are released after each render request; Operation entries are not
+    // affected. The evaluator's requests and its decoded-video cache share it.
+    [[nodiscard]] const std::shared_ptr<SourceWorkingSet>& sourceWindow() const noexcept {
+        return sourceWindow_;
+    }
+    // Releases decoded-media entries outside the window now (the working set calls this).
+    void releaseSourcesOutsideWindow();
 
   private:
     static constexpr std::uint64_t kDecodedMediaGraceAccesses = 8;
@@ -198,6 +207,8 @@ class OperationCache final {
         [[nodiscard]] std::size_t standaloneBytes() const noexcept;
         OperationCacheEntryKind kind = OperationCacheEntryKind::Operation;
         std::uint64_t protectedUntil = 0;
+        // Where a decoded-media entry was last used (the playback working set).
+        SourceUse use{};
         bool registered = false;
         std::shared_ptr<Accounting> accounting;
         std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
@@ -207,6 +218,8 @@ class OperationCache final {
     static void destroySourceRevisionEntry(render::detail::PackedHostRetirementNode*) noexcept;
     static void destroyOrdinaryEntry(render::detail::PackedHostRetirementNode*) noexcept;
     void touch(Position entry);
+    // Tags a decoded-media entry with the calling thread's source use, when it has one.
+    static void retag(Entry& entry) noexcept;
     void evictToLocked(std::size_t limit, std::uint64_t& counter);
     void removeLocked(Position candidate);
     void removeKindLocked(OperationCacheEntryKind kind);
@@ -214,6 +227,7 @@ class OperationCache final {
     void insertLocked(std::unique_ptr<Entry>& entry);
 
     MemoryBudgetLedger& ledger_;
+    std::shared_ptr<SourceWorkingSet> sourceWindow_ = std::make_shared<SourceWorkingSet>();
     std::shared_ptr<Accounting> accounting_;
     std::uint64_t accessEpoch_ = 0;
     OperationCacheAccessStatistics statistics_;

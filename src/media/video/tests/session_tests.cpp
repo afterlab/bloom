@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -59,6 +60,49 @@ void run(const std::filesystem::path& directory) {
           "a changed config revision misses the video frame cache");
     cache.setByteBudget(0);
     check(cache.residentBytes() == 0, "budget shrink releases resident frames");
+    // ADR 0037 rule 3: decoded frames hold the playback window, not every frame played.
+    {
+        using bloom::runtime::SourceWorkingSet;
+        const auto window = std::make_shared<SourceWorkingSet>();
+        video::DecodedVideoCache windowed(std::size_t{4608} * 64);
+        windowed.bindSourceWindow(window);
+        const auto key = [&](const std::uint64_t index) {
+            return video::FrameKey{probe.sourceDigest, 0, index, 0, {}, {}, {}};
+        };
+        const auto decodeAt = [&](const std::int64_t frame) {
+            const SourceWorkingSet::Request request(window, 1, frame);
+            static_cast<void>(
+                session.frame(probe, 0, static_cast<std::uint64_t>(frame), 0, &windowed));
+        };
+        for (std::int64_t frame = 0; frame <= 4; ++frame)
+            decodeAt(frame);
+        check(!windowed.find(key(0)) && !windowed.find(key(3)) && windowed.find(key(4)),
+              "decoded frames behind the playhead are released; the playhead's stays");
+        {
+            // The render in flight runs on its own thread, as a render task does.
+            std::promise<void> decoded;
+            std::promise<void> finish;
+            std::thread renderer([&] {
+                const SourceWorkingSet::Request inFlight(window, 1, 5);
+                static_cast<void>(session.frame(probe, 0, 5, 0, &windowed));
+                decoded.set_value();
+                finish.get_future().wait();
+            });
+            decoded.get_future().wait();
+            for (std::int64_t frame = 6; frame <= 9; ++frame)
+                decodeAt(frame);
+            const bool kept = windowed.find(key(5)) && windowed.find(key(7));
+            finish.set_value();
+            renderer.join();
+            check(kept, "a frame a render in flight still needs is kept");
+        }
+        check(!windowed.find(key(5)) && windowed.find(key(9)) && windowed.residentBytes() == 4608,
+              "released when the render ends: the cache holds the window only");
+        static_cast<void>(session.frame(probe, 0, 2, 0, &windowed));
+        window->trim();
+        check(windowed.find(key(2)) != nullptr,
+              "a frame decoded outside any request keeps ordinary retention");
+    }
     const auto window = bloom::render::ImageWindow::create(0, 0, 64, 48);
     check(static_cast<bool>(window), "test image extent");
     const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(

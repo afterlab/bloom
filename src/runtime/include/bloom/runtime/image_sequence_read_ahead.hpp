@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/runtime/source_working_set.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +28,9 @@ class ImageSequenceReadAhead final {
         core::Sha256Digest digest;
         std::string revisionKey;
         std::size_t byteBudget = 0;
+        // The composition frame the capture is for (ADR 0037): its entry is tagged with it, so it
+        // stays while that frame is in the playback window.
+        SourceUse use{};
     };
     struct Statistics final {
         std::uint64_t queued = 0;

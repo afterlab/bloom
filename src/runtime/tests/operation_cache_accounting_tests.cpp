@@ -385,11 +385,102 @@ void profilerRowsCountPerKind() {
            "the rows add up to the cache's host bytes");
 }
 
+// ADR 0037 rule 3: decoded-media entries hold the playback window. Behind the oldest request in
+// flight they are released; an entry a request in flight still needs is kept; Operation entries
+// and entries used outside any request keep the ordinary retention.
+void sourceEntriesFollowThePlaybackWindow() {
+    using bloom::runtime::SourceWorkingSet;
+    MemoryBudgetLedger ledger(16ULL << 30U);
+    OperationCache cache(64ULL << 20U, ledger);
+    const auto window = cache.sourceWindow();
+    constexpr std::uint64_t kComposition = 5;
+    const auto storeAt = [&](const std::int64_t frame) {
+        const SourceWorkingSet::Request request(window, kComposition, frame);
+        cache.store("source:" + std::to_string(frame), {}, imageValue(makeImage(8, 8)),
+                    OperationCacheEntryKind::DecodedMedia);
+        cache.store("result:" + std::to_string(frame), {}, imageValue(makeImage(8, 8)));
+    };
+    const auto has = [&](const std::string& key) {
+        // A find outside any request does not re-tag the entry.
+        return cache.find(key, {}, OperationCacheEntryKind::DecodedMedia).has_value();
+    };
+    cache.store("untracked", {}, imageValue(makeImage(8, 8)),
+                OperationCacheEntryKind::DecodedMedia);
+    for (std::int64_t frame = 0; frame <= 20; ++frame)
+        storeAt(frame);
+    expect(!has("source:0") && !has("source:19"), "sources behind the playhead are released");
+    expect(has("source:20"), "the playhead's source stays while paused");
+    expect(has("result:0") && has("result:19"), "Operation entries are not affected");
+    expect(has("untracked"), "a source used outside any request keeps ordinary retention");
+
+    // A request in flight at frame 21, on its own thread as a render task is, keeps its source
+    // while later frames render and end.
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool stored = false;
+        bool release = false;
+        std::thread renderer([&] {
+            const SourceWorkingSet::Request inFlight(window, kComposition, 21);
+            cache.store("source:21", {}, imageValue(makeImage(8, 8)),
+                        OperationCacheEntryKind::DecodedMedia);
+            std::unique_lock lock(mutex);
+            stored = true;
+            changed.notify_all();
+            changed.wait(lock, [&] { return release; });
+        });
+        {
+            std::unique_lock lock(mutex);
+            changed.wait(lock, [&] { return stored; });
+        }
+        for (std::int64_t frame = 22; frame <= 40; ++frame)
+            storeAt(frame);
+        expect(has("source:21") && has("source:30"),
+               "entries a request in flight still needs are kept, with everything after it");
+        {
+            const std::lock_guard lock(mutex);
+            release = true;
+        }
+        changed.notify_all();
+        renderer.join();
+    }
+    expect(!has("source:21") && !has("source:39") && has("source:40"),
+           "once the request ends its frame leaves the window");
+
+    // Ahead: captures for the next frames (read-ahead) stay inside the read-ahead width.
+    {
+        const SourceWorkingSet::UseScope ahead(
+            {kComposition, 40 + SourceWorkingSet::kReadAheadFrames, true});
+        cache.store("ahead:inside", {}, imageValue(makeImage(8, 8)),
+                    OperationCacheEntryKind::DecodedMedia);
+    }
+    {
+        const SourceWorkingSet::UseScope ahead(
+            {kComposition, 41 + SourceWorkingSet::kReadAheadFrames, true});
+        cache.store("ahead:outside", {}, imageValue(makeImage(8, 8)),
+                    OperationCacheEntryKind::DecodedMedia);
+    }
+    window->trim();
+    expect(has("ahead:inside"), "a capture inside the read-ahead width stays");
+    expect(!has("ahead:outside"), "a capture beyond it is released");
+
+    // Composition frames come from the request time at the composition rate.
+    expect(SourceWorkingSet::frameAt(1001, 24000, 24000, 1001) == 1 &&
+               SourceWorkingSet::frameAt(-1, 48, 24, 1) == -1,
+           "composition frames floor the time");
+    std::array<bloom::runtime::ProfilerPool, 4> rows{};
+    std::uint32_t dropped = 0;
+    const auto count = ledger.copyProfilerPools(rows, dropped);
+    expect(count == 2 && rows[1].evictions.valueOr(0) >= 40,
+           "window releases count as decoded-media evictions");
+}
+
 int main() try {
     sharedStorageIsChargedOnce();
     pendingRetirementIsNeitherLostNorDoubled();
     ledgerHostTotalsNeverExceedAllocation();
     profilerRowsCountPerKind();
+    sourceEntriesFollowThePlaybackWindow();
     if (failures != 0) {
         std::cerr << "FAIL: operation cache accounting expectations failed\n";
         return 1;

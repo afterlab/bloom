@@ -2016,6 +2016,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      : detail::ImageSourceMemoryCacheAccess::ReadWrite);
     std::vector<EvaluationDiagnostic> imageWarnings;
     const auto mediaBase = assetBaseDirectory();
+    // This evaluation is a render request in the playback working set (ADR 0037).
+    SourceWorkingSet::Request sourceRequest;
+    if (plan != nullptr && !SourceWorkingSet::current().tracked) {
+        const auto rate = plan->format().frameRate();
+        sourceRequest = SourceWorkingSet::Request(
+            cache_->sourceWindow(), plan->compositionId().value(),
+            SourceWorkingSet::frameAt(request.time.numerator(), request.time.denominator(),
+                                      rate.numerator(), rate.denominator()));
+    }
     try {
         auto checked = preflight(plan, request, cancellation, progress, cache, &frameStatistics);
         if (checked.cancelled || cancellation.isCancellationRequested()) {
