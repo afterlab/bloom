@@ -36,8 +36,9 @@ backed and shared memory on top. The dashed **Idle baseline** line marks how muc
 memory an idle Bloom with an empty project has.
 
 - **Resident (RSS)**: the memory the operating system has given Bloom, read twice a second.
-- **Anonymous**, **File-backed**, **Shared memory**: RSS broken down by kind, from Bloom's slower
-  memory sample (every five seconds); their age is shown.
+- **Anonymous**, **File-backed**, **Shared memory**: RSS broken down by kind. On Linux, anonymous
+  memory is read with RSS, twice a second; file-backed and shared memory are not yet told apart
+  and read Unavailable. A value that comes from a slower memory sample shows its age.
 - **RSS growth**: how much RSS changed across the graph. Memory that keeps climbing and never comes
   back down while you work points to a leak.
 - **Unattributed**: anonymous memory that no pool, staging or claim accounts for, and how far it
@@ -107,7 +108,25 @@ evictions and helper processes exiting.
 Bloom's helper processes (such as the media worker) with their process ID, resident memory, CPU
 time and whether they are still running.
 
-## Before the runtime sampler arrives
+## What is measured today
 
-The Profiler is built against Bloom's runtime telemetry contract. Until Bloom's sampler is
-connected, a Profiler shows "No profiler source is connected" and every value reads Unavailable.
+The Profiler reads Bloom's runtime sampler. These values are live now:
+
+- **Memory**: RSS on every platform; anonymous memory, unattributed memory and its idle baseline
+  on Linux; the computer's physical, available and swap memory; the RAM headroom and usable
+  capacity; the ledger's configured, effective and retained memory; memory and swap pressure; and
+  one **Reusable caches (all)** pool row with what every reusable cache holds on the host, pending
+  release and on the GPU. The idle baseline is the unattributed memory when the Profiler first
+  sampled in this session.
+- **GPU**: Bloom's own live and retiring GPU images, admission refusals and reclaims.
+- **CPU**: Bloom's process CPU use, and each worker pool's workers and queued tasks.
+- **Workload**: task counts by state, owner and executor, and the top 16 tasks; playback frames per
+  second and dropped frames while playing; RAM Preview cached frames and fill rate; export frames
+  per second.
+
+These read Unavailable until Bloom's engine counts them: file-backed and shared memory, the age of
+the slower memory sample, per-pool rows with entries, ceilings and hit, miss, store, eviction and
+refusal counts, staging and admission claims, the driver's GPU heap budget and use, upload and
+readback traffic, queue submits and utilization, how busy each worker pool is, stage timings,
+admission waits and refusals and eviction totals by reason, and helper processes. On macOS and
+Windows, anonymous and unattributed memory also read Unavailable.

@@ -1,6 +1,7 @@
 # Profiler Telemetry Feed
 
-Status: working. Owner: `src/runtime` (the contract), `src/ui` (the feed and the Profiler panel).
+Status: working. Owner: `src/runtime` (the contract and the sampler), `src/ui` (the feed, the
+UI-side hook and the Profiler panel).
 Issue #423. The user-facing panel is described in [The Profiler panel](../user-guide/profiler.md).
 
 ## Contract
@@ -28,13 +29,53 @@ The Profiler panel, the benchmark harness (BENCH_MEMORY) and the agent surfaces 
   bucket below the first edge, one above the last.
 
 The header is data only, apart from small inline helpers (the unattributed math, name copying,
-the bucket index). The runtime sampler that fills it belongs to the runtime: one low-priority
-sampler thread, refcounted and running only while something subscribes, 2 Hz by default (1–10 Hz),
-publishing through a seqlock or triple buffer with no per-sample allocation, and never mutating
-budgets, caches or scheduling. Its cheap-read rules are part of the contract: RSS from `statm` or the
-platform equivalent at the sampler rate; anonymous, file-backed and shared memory and helper
-processes from the ledger's existing five-second process sample, never `smaps` at the sampler
-rate.
+the bucket index). Schema 2 made pool counters (entries, hits, misses, stores, evictions,
+refusals) and executor busy time `ProfilerMetric`s, so a source that does not count them reports
+them absent rather than zero.
+
+## Sampler
+
+`bloom::runtime::ProfilerSampler` (`src/runtime/include/bloom/runtime/profiler_sampler.hpp`) fills
+the snapshot.
+
+- **One low-priority thread, refcounted.** The first `acquire()` starts it and it samples at once;
+  the last `release()` stops and joins it. No thread runs without a subscriber. The thread lowers
+  its own priority (Linux nice 10, macOS utility QoS, Windows lowest).
+- **Rate.** 2 Hz by default, clamped to 1–10 Hz; the feed passes its interval on activation.
+- **No allocation after start.** The sampler fills one preallocated snapshot and publishes it
+  through `ProfilerSeqlock` (`profiler_seqlock.hpp`), a single-writer, many-reader seqlock over
+  relaxed atomic words, so a reader racing the writer retries instead of racing. OS reads use fixed
+  buffers. Tested over 10,000 samples with a counted `operator new`; one sample costs well under a
+  millisecond on Linux (tested).
+- **Read only.** It never mutates budgets, caches or scheduling and never triggers ledger process
+  sampling (`memoryBudgetSample()` or anything that walks `/proc`).
+
+Sources, each read at the sampler rate unless noted:
+
+| Snapshot part | Source |
+| --- | --- |
+| RSS | Linux `/proc/self/statm` (O(1), never `smaps`), macOS `task_info`, Windows `GetProcessMemoryInfo` |
+| Anonymous | Linux statm `resident - shared` (the kernel's anonymous resident pages); absent elsewhere |
+| Machine, headroom, usable, ledger totals, pressure flags, the aggregate pool row | the memory budget ledger, through `readProfilerLedger()` (below) |
+| Unattributed, idle baseline | computed from what is present; the baseline is the unattributed gap at the first sample that has the pool holding |
+| GPU live/retiring bytes, refusals, reclaims | the render module's process-wide `GpuImageReclamationStats`, read-only, through an injected function pointer (absent in a build without a GPU device) |
+| Process CPU time | `getrusage` (Linux, macOS), `GetProcessTimes` (Windows) |
+| Tasks and executor pools | `TaskScheduler::copyProfilerTasks()`: counts and the top 16 tasks copied into the snapshot's fixed slots under the scheduler lock, names truncated, no allocation or formatting under the lock; worker counts and queue depths per executor |
+| Playback fps, dropped frames, RAM Preview cached frames and fill rate, export fps | the UI-side hook (below) |
+
+Absent until the engine's counter work lands: file-backed and shared memory and the ledger sample's
+age (the ledger's process sample carries cgroup figures, not a memory breakdown), per-pool rows and
+their counters and ceilings (the ledger exposes only the aggregate holding), staging and admission
+claims, the driver heap figures, upload and readback bytes, submits, utilization, executor busy
+time, stage histograms, pressure counters and helper processes (their process IDs are not
+reachable outside the media provider).
+
+**The ledger adapter.** `readProfilerLedger()` (`profiler_ledger_adapter.hpp`) is the one place
+that reads the ledger, through existing const accessors only: `state()`, `reusableHolding()`,
+`ramHeadroom()`, `usableByteBudget()` and `physicalByteBudget()`. `state()` copies the whole
+process sample (strings and vectors), so the hook refreshes it only after the ledger applied a
+sample or a pressure sample; `reusableHolding()` asks every registered pool and follows the
+ledger's thread rule, so it runs on the UI thread.
 
 ## Feed
 
@@ -51,11 +92,18 @@ rate.
 - **No sampling on the UI thread.** A real source's `readLatest()` only copies the sampler's
   published buffer.
 
-`FakeProfilerFeed` (`profiler_fake_feed.hpp`) is a deterministic source for tests and development:
+`RuntimeProfilerFeed` (`profiler_runtime_feed.hpp`) is the application's source. Activation
+acquires the sampler and deactivation releases it; `readLatest()` copies the published snapshot.
+It is also the UI-side hook: on each feed tick, on the UI thread, it reads the ledger through the
+adapter and the playback, RAM Preview and export controllers, and publishes those values into the
+sampler with `publishHostInputs()` (a second seqlock), which the next sample merges. Playback fps
+is the rate of playhead advances while playing, the RAM Preview fill rate the rate of newly cached
+frames while caching, and export fps the rate of completed frames of the running job. No Qt object
+is read off the UI thread.
+
+`FakeProfilerFeed` (`profiler_fake_feed.hpp`) is a deterministic source for tests and captures:
 sample n is a pure function of n, with growth, plateaus, eviction drops, absent fields and stale
-ages. The application uses it only when `BLOOM_PROFILER_FAKE_FEED` is set; it is not offered in the
-interface. Without it the application has no source yet and every metric reads absent; wiring the
-runtime sampler replaces `makeDevelopmentProfilerFeed()` in the composition root.
+ages. The application does not use it.
 
 ## Panel cost rules
 

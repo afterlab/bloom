@@ -1,12 +1,19 @@
-// Captures of the Profiler panel (#423) over the deterministic fake feed, for visual review: a
-// wide and a narrow panel after five minutes of history, and a panel with no source. Writes
+// Captures of the Profiler panel (#423) for visual review: over the deterministic fake feed, a
+// wide and a narrow panel after five minutes of history; over the real runtime sampler in an
+// app-shaped setup (a scheduler with running and queued work, a ledger with a reusable pool, the
+// GPU image counters, memory that grows while it samples), a wide live panel; and a panel with no
+// source. Writes
 // <dir>/profiler-<state>-dpr<scale>.png, where <dir> is BLOOM_PROFILER_CAPTURE_DIR (or the first
 // argument) and the scale follows QT_SCALE_FACTOR. Without either it captures into a temporary
 // directory and only checks that each capture rendered.
+#include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/profiler_sampler.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/profiler_editor.hpp>
 #include <bloom/ui/profiler_fake_feed.hpp>
 #include <bloom/ui/profiler_history.hpp>
+#include <bloom/ui/profiler_runtime_feed.hpp>
 
 #include <QApplication>
 #include <QDir>
@@ -15,7 +22,15 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
+#include <chrono>
+#include <cstring>
 #include <iostream>
+#include <memory>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <vector>
 
 namespace {
 
@@ -57,6 +72,93 @@ int captureWithHistory(const QString& directory, const QString& scale, const QSt
     return save(grabWhole(panel, width), directory, name, scale);
 }
 
+// The real sampler at 10 Hz for about six seconds while work runs and memory grows.
+int captureLive(const QString& directory, const QString& scale) {
+    namespace runtime = bloom::runtime;
+    auto config = runtime::TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 2;
+    config.blockingIoWorkerCount = 1;
+    runtime::TaskScheduler scheduler(config);
+    std::atomic<bool> released{false};
+    const auto work = [&released](runtime::TaskContext& context) {
+        for (std::uint64_t step = 0; !released.load() && !context.isCancellationRequested();
+             ++step) {
+            context.reportProgress(
+                {.phase = "Render", .subphase = {}, .completed = step % 100, .total = 100});
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        return runtime::TaskResult<void>::succeeded();
+    };
+    const auto owner = [](const runtime::TaskOwnerKind kind, const std::uint64_t id) {
+        return runtime::TaskOwner{.kind = kind, .id = runtime::TaskOwnerId::fromRaw(id)};
+    };
+    std::vector<runtime::TaskHandle<void>> handles;
+    for (const auto& [name, kind, executor] :
+         {std::tuple{"Viewer frame 0412", runtime::TaskOwnerKind::Composition,
+                     runtime::TaskExecutor::Cpu},
+          std::tuple{"RAM Preview fill", runtime::TaskOwnerKind::Composition,
+                     runtime::TaskExecutor::Cpu},
+          std::tuple{"Decode clip_A012.mov", runtime::TaskOwnerKind::Project,
+                     runtime::TaskExecutor::BlockingIo},
+          std::tuple{"Export frame 0098", runtime::TaskOwnerKind::Export,
+                     runtime::TaskExecutor::Cpu},
+          std::tuple{"Thumbnail strip", runtime::TaskOwnerKind::PanelRequest,
+                     runtime::TaskExecutor::Cpu}})
+        handles.push_back(
+            scheduler
+                .submit<void>(runtime::TaskRequest(name, owner(kind, 1),
+                                                   runtime::TaskPriority::Visible, executor),
+                              work)
+                .handle);
+
+    runtime::MemoryBudgetLedger ledger(runtime::physicalMemoryBytes());
+    ledger.setRamHeadroom(runtime::physicalMemoryBytes() / 10);
+    std::atomic<std::size_t> cached{0};
+    const int cacheOwner = 0;
+    ledger.registerCache(
+        &cacheOwner, std::size_t{2} << 30U,
+        [&cached] {
+            return runtime::MemoryPoolHolding{
+                .hostBytes = cached.load(), .hostPendingRetirementBytes = 0, .deviceBytes = 0};
+        },
+        [](std::size_t) {});
+
+    int failures = 0;
+    {
+        runtime::ProfilerSampler sampler(
+            {.scheduler = &scheduler, .readGpu = &ui::readProfilerGpuImageStats});
+        ui::ProfilerUiSources sources;
+        sources.ledger = &ledger;
+        ui::RuntimeProfilerFeed feed(sampler, sources);
+        feed.setInterval(std::chrono::milliseconds(100));
+        ui::ProfilerEditor panel(&feed);
+        panel.resize(960, 960);
+        panel.show();
+        // Grow a "cache" of touched pages and some unattributed memory while sampling.
+        std::vector<std::unique_ptr<char[]>> blocks;
+        constexpr std::size_t kBlock = std::size_t{8} << 20U;
+        for (int tick = 0; tick < 60; ++tick) {
+            auto block = std::make_unique<char[]>(kBlock);
+            std::memset(block.get(), tick + 1, kBlock);
+            blocks.push_back(std::move(block));
+            if (tick % 3 != 0)
+                cached.fetch_add(kBlock);
+            QTest::qWait(100);
+        }
+        if (!sampler.running() || panel.current().serial < 30) {
+            std::cerr << "the live sampler did not deliver\n";
+            ++failures;
+        }
+        failures += save(grabWhole(panel, 960), directory, QStringLiteral("live-wide"), scale);
+    }
+    released.store(true);
+    ledger.unregisterCache(&cacheOwner);
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent())
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    return failures;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -75,6 +177,7 @@ int main(int argc, char** argv) {
     int failures = 0;
     failures += captureWithHistory(directory, scale, QStringLiteral("wide"), 960);
     failures += captureWithHistory(directory, scale, QStringLiteral("narrow"), 380);
+    failures += captureLive(directory, scale);
     {
         ui::ProfilerEditor panel(nullptr);
         panel.show();

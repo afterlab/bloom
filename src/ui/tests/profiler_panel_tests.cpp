@@ -1,7 +1,10 @@
 // The Profiler panel (#423): registration and switcher glyph, feed subscription on show/hide/close
 // with a refcount across panels, fixed history rings that wrap at 600 without allocating, absent
 // versus zero, stale ages, the unattributed math, and the snapshot's trivial copyability.
+#include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/profiler_snapshot.hpp>
+#include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/chart.hpp>
@@ -13,11 +16,13 @@
 #include <bloom/ui/profiler_editor.hpp>
 #include <bloom/ui/profiler_fake_feed.hpp>
 #include <bloom/ui/profiler_history.hpp>
+#include <bloom/ui/profiler_runtime_feed.hpp>
 
 #include <QAbstractItemModel>
 #include <QApplication>
 #include <QImage>
 #include <QTableView>
+#include <QTest>
 
 #include <atomic>
 #include <cmath>
@@ -406,6 +411,63 @@ void testSampleRingAndFormatting(Expectations& expectations) {
 
 } // namespace
 
+// The real source: the panel's visibility acquires and releases the runtime sampler, so no
+// sampler thread runs while no Profiler is shown, and the UI-side hook's ledger values arrive.
+void testRuntimeFeedDrivesTheSampler(Expectations& expectations) {
+    auto config = runtime::TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    runtime::TaskScheduler scheduler(config);
+    runtime::MemoryBudgetLedger ledger(std::size_t{32} * 1024U * 1024U * 1024U);
+    const int cacheOwner = 0;
+    ledger.registerCache(
+        &cacheOwner, std::size_t{1} << 30U,
+        [] {
+            return runtime::MemoryPoolHolding{.hostBytes = std::size_t{256} << 20U,
+                                              .hostPendingRetirementBytes = 0,
+                                              .deviceBytes = 0};
+        },
+        [](std::size_t) {});
+    {
+        runtime::ProfilerSampler sampler(
+            {.scheduler = &scheduler, .readGpu = &readProfilerGpuImageStats});
+        ProfilerUiSources sources;
+        sources.ledger = &ledger;
+        RuntimeProfilerFeed feed(sampler, sources);
+        expectations.expect(!sampler.running(), "no sampler thread before a Profiler is shown");
+        {
+            ProfilerEditor panel(&feed);
+            panel.resize(640, 480);
+            panel.show();
+            expectations.expect(sampler.running() && sampler.subscribers() == 1,
+                                "showing the Profiler starts the sampler");
+            const bool delivered =
+                QTest::qWaitFor([&] { return panel.current().serial >= 2; }, 5000);
+            expectations.expect(delivered, "the panel receives live samples");
+            const auto& snapshot = panel.current();
+            expectations.expect(snapshot.memory.rssBytes.present, "RSS is live");
+            expectations.expect(snapshot.memory.physicalBytes.present &&
+                                    snapshot.memory.poolCount == 1 &&
+                                    snapshot.memory.pools[0].hostBytes == (std::size_t{256} << 20U),
+                                "the hook's ledger reading reaches the panel");
+            expectations.expect(snapshot.cpu.executorPoolCount == 3 &&
+                                    snapshot.cpu.processCpuNs.present,
+                                "CPU figures are live");
+            expectations.expect(!snapshot.workload.playbackFps.present &&
+                                    !snapshot.workload.exportFps.present,
+                                "controllers that are not connected stay absent");
+            panel.hide();
+            expectations.expect(!sampler.running(), "hiding the Profiler stops the sampler");
+            panel.show();
+            expectations.expect(sampler.running(), "showing it again restarts the sampler");
+        }
+        expectations.expect(!sampler.running() && sampler.subscribers() == 0,
+                            "destroying the Profiler releases the sampler");
+    }
+    ledger.unregisterCache(&cacheOwner);
+    scheduler.beginShutdown();
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     application.setOrganizationName(QStringLiteral("BloomProfilerPanelTests"));
@@ -420,6 +482,7 @@ int main(int argc, char** argv) {
     testUnattributedMath(expectations);
     testSnapshotIsTriviallyCopyable(expectations);
     testSampleRingAndFormatting(expectations);
+    testRuntimeFeedDrivesTheSampler(expectations);
     if (expectations.failures() != 0) {
         std::cerr << expectations.failures() << " Profiler expectation(s) failed\n";
         return 1;

@@ -7,15 +7,13 @@
 // utilization, one helper's CPU time and the encode stage stay absent; playback and export
 // alternate, so their rates are absent half the time.
 //
-// The application uses it only when BLOOM_PROFILER_FAKE_FEED is set (see
-// makeDevelopmentProfilerFeed()); otherwise the Profiler has no source until the runtime sampler
-// is wired, and every metric reads absent.
+// Tests and captures use it; the application's source is RuntimeProfilerFeed
+// (profiler_runtime_feed.hpp) over the runtime sampler.
 
 #include <bloom/ui/profiler_feed.hpp>
 
 #include <chrono>
 #include <cstdint>
-#include <memory>
 
 namespace bloom::ui {
 
@@ -41,12 +39,5 @@ class FakeProfilerFeed final : public ProfilerFeed {
   private:
     std::uint64_t next_ = 1;
 };
-
-// The environment variable that selects the fake feed for development.
-inline constexpr const char* kProfilerFakeFeedVariable = "BLOOM_PROFILER_FAKE_FEED";
-
-// The feed the application hands the Profiler today: the fake feed when kProfilerFakeFeedVariable
-// is set to anything but empty or "0", otherwise none.
-[[nodiscard]] std::unique_ptr<ProfilerFeed> makeDevelopmentProfilerFeed(QObject* parent = nullptr);
 
 } // namespace bloom::ui

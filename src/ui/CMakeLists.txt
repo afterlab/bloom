@@ -521,6 +521,7 @@ target_sources(
         profiler_fake_feed.cpp
         profiler_feed.cpp
         profiler_history.cpp
+        profiler_runtime_feed.cpp
         profiler_rows.hpp
         profiler_table_model.cpp
         profiler_table_model.hpp
@@ -711,6 +712,7 @@ target_sources(
             include/bloom/ui/profiler_fake_feed.hpp
             include/bloom/ui/profiler_feed.hpp
             include/bloom/ui/profiler_history.hpp
+            include/bloom/ui/profiler_runtime_feed.hpp
             include/bloom/ui/mcp_server_service_port.hpp
             include/bloom/ui/mcp_server_text.hpp
             include/bloom/ui/interaction_sounds.hpp
