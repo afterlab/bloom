@@ -88,8 +88,8 @@ registration. A registered pool without a profile is one "Unnamed pool" row with
 | Row (kind) | Hit / miss | Store | Eviction (bytes) | Refusal |
 | --- | --- | --- | --- | --- |
 | Preview frames (cache) | `PreviewFrameCache::take` | an inserted frame | budget, pressure and GPU-resident evictions (the frame's charge) | a rejected or unallocatable frame |
-| Operation cache: operations, Operation cache: decoded media (cache) | `OperationCache::find`: a hit under the found entry's kind, a miss under the kind the caller asked for | an inserted entry | LRU eviction (the entry's standalone charge) | over the budget, or allocation failure |
-| Decoded video (cache) | `DecodedVideoCache::find` | `store` | budget eviction (plane bytes) | a frame larger than the budget |
+| Operation cache: operations, Operation cache: decoded media (cache) | `OperationCache::find`: a hit under the found entry's kind, a miss under the kind the caller asked for | an inserted entry | LRU eviction and, for decoded media, release outside the playback window (the entry's standalone charge) | over the budget, or allocation failure |
+| Decoded video (cache) | `DecodedVideoCache::find` | `store` | budget eviction and release outside the playback window (plane bytes) | a frame larger than the budget |
 | Proxies (cache) | the thumbnail lookups of the asset preview worker | a kept thumbnail | trimming (thumbnail bytes) | a thumbnail larger than the allowance |
 | Decoded audio (cache) | reusing a cached buffer | a kept buffer | trimming (buffer bytes) | a buffer sent for delivery only |
 | Media disk cache write queue (scratch) | disk-cache lookups | disk writes | disk entries evicted (bytes on disk) | writes the queue refused |

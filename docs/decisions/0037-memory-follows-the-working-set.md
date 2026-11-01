@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Date: 2026-11-01
+Date: 2026-11-01; amended 2026-11-02 (source caches hold the playback window)
 
 Issues: #421 (supersedes #419 and #420); #413 (finished frames evicted last); #386 (headroom);
 #422 (GPU-side colour conversion, separate)
@@ -36,8 +36,12 @@ Three rules govern every store that holds pixels:
    (YUV, half, 8/16-bit) where scrubbing needs them, never expanded float32 copies.
 3. **Memory follows the working set.** Playback holds its read-ahead window. Intermediates are
    retained only where reuse is measured.
-   - **Finished frames are the exception:** RAM Preview and frames kept from playback stay cached
-     within the headroom, evicted last (#413).
+   - **Finished frames are the exception** (the owner's After Effects model): frames rendered during
+     playback and RAM Preview stay cached up to the headroom and are evicted last (#413).
+   - **Source caches hold the playback window**, not every frame played: the decoded video frames
+     and the image-sequence source revisions keep a frame's source only while that frame is inside
+     the window around the playhead (below), or while a render in flight still needs it. Finished
+     frames cover replays; re-rendering an evicted finished frame decodes its source again.
    - Free memory is room for what the user keeps, not a target to fill.
    - The headroom preference is the only ceiling: usable = measured RAM − headroom (#386).
 
@@ -71,6 +75,23 @@ What changed:
   pressure hysteresis margin (an eighth of the headroom) are the headroom itself, not a fraction of
   physical memory.
 
+### The playback window (amendment, 2026-11-02)
+
+`SourceWorkingSet` (`src/runtime/include/bloom/runtime/source_working_set.hpp`), owned by the
+evaluator's operation cache and shared with its decoded-video cache:
+
+- Every render request (a GPU scene build or a CPU evaluation; a nested build joins its parent's)
+  registers its composition frame for its lifetime and tags the sources it stores or finds with
+  that frame.
+- A composition's window spans its requests in flight and the most recently started one, plus the
+  image-sequence read-ahead's width ahead (eight frames, the existing constant, now
+  `SourceWorkingSet::kReadAheadFrames`). Behind the playhead it reaches only the frames still in
+  flight. Read-ahead captures are tagged with the frame they are captured for.
+- When a request ends, both caches release tracked entries outside the window (counted as
+  evictions in the Profiler's pool rows). Operation-kind entries, finished frames and sources used
+  outside any request (tools, tests) keep their ordinary retention. There is no new limit,
+  preference or fraction; the budgets above are unchanged.
+
 ## Audit of pixel-holding stores
 
 Bytes per frame are measured at 720p (1280×720) on the GPU route unless noted. "Reuse measured"
@@ -79,9 +100,9 @@ names the measurement that shows a later read of the retained bytes.
 | Store | Form held | Bytes per frame | Scratch or cache | Reuse measured | Origin | Outcome |
 |---|---|---|---|---|---|---|
 | Prepared uploads (`GpuPreparedUploadCache`) | RGBA32F, full resolution | 14.7 MB | was cache | none: 3.52 GB per 10 s pass, never read by linear playback | 919d5f55b (#299); bound uncapped in ecf3bab3b | removed: scratch, held only by the scene's upload command (and shared inside one build) |
-| Decoded video (`DecodedVideoCache`) | decoded planes | H.264 1.38 MB; ProRes 422 HQ 7.4 MB | cache | scrub revisit after a preview purge: H.264 40 ms against 107 ms uncached, ProRes 30 against 43 ms (medians); none in linear playback | 17b43cf24 | kept, compact (rule 2); its 1/16-of-physical target removed. Populated on the GPU route; holds every frame played (see below) |
+| Decoded video (`DecodedVideoCache`) | decoded planes | H.264 1.38 MB; ProRes 422 HQ 7.4 MB | playback window | scrub revisit after a preview purge: H.264 29 ms against 69 ms uncached, ProRes 27 against 39 ms (medians) while it held every frame; none in linear playback | 17b43cf24 | kept, compact (rule 2); its 1/16-of-physical target removed. Since the 2026-11-02 amendment it holds the playback window only (H.264 0.33 → 0.001 GB, ProRes 1.77 → 0.007 GB after 10 s; flat in clip length) |
 | Operation-cache intermediates (`Operation` kind) | values, metadata; RGBA32F only on the CPU route | 0.06 GB total, flat in clip length (GPU route) | cache | static layers and value results across frames; an export's linear pass keeps only keys that recur | f5be51089 | kept |
-| Image-sequence source revisions (`DecodedMedia` kind) | encoded file bytes | PNG16 4.6 MB; EXR half PIZ 2.5 MB | cache | warm edit decodes with zero I/O, hash and probe (tests); none in linear playback | a7d693d88 (#305) | kept, compact; holds every frame played (see below) |
+| Image-sequence source revisions (`DecodedMedia` kind) | encoded file bytes | PNG16 4.6 MB; EXR half PIZ 2.5 MB | playback window | warm edit decodes with zero I/O, hash and probe at the playhead (tests); none in linear playback | a7d693d88 (#305) | kept, compact. Since the 2026-11-02 amendment it holds the playback window and the read-ahead captures ahead of it only (PNG16 1.11 → 0.06 GB, EXR half 0.60 → 0.003 GB after 10 s; flat in clip length) |
 | Image-sequence read-ahead (`ImageSequenceReadAhead`) | encoded file bytes | next 8 members | scratch window | consumed by the next frames | f23c0cdc3 | kept: holds its window; captures land in the source-revision row above |
 | Preview frames (`PreviewFrameCache`) | display-packed RGBA8 | 3.7 MB | cache: finished frames | cached playback | 80024f837 (#139) | kept: the exception, evicted last |
 | GPU scene cache (`GpuSceneCache`) | device images | device memory only | cache | an unchanged warm rebuild dispatches nothing (native tests) | 919d5f55b (#299); 1/8 share 04ca9ef2d | kept; the host-derived 1/8 share removed, device plan sizes it |
@@ -131,15 +152,49 @@ row reports 0 CPU-fallback frames.
   (4.6 MB source revision each). The L10 stack's higher peak is the same retention at three times
   the frame rate.
 
+### Amendment measurements (2026-11-02)
+
+Same machine and harness, inside a 20 GiB cgroup; before is main with the Profiler counters
+(3bfc954f8), after adds the playback window. Peak anonymous RSS and source-cache bytes (decoded
+video for H.264 and ProRes, decoded-media entries for PNG16 and EXR) are the harness sample with the
+highest RSS; finished frames are the frames the Viewer painted (every one stays cached). The media
+is 10 s, so sequences compare 2.5 s and 10 s, and the 40 s video rows use a 40 s file. Every row
+has 0 CPU-fallback frames and 0 dropped frames.
+
+| Workflow | Peak anon | Source cache | Painted (all cached) | fps |
+|---|---|---|---|---|
+| H.264 10 s | 1.40 → 1.05 GB | 0.33 → 0.001 GB | 234 / 235 | 23.4 / 23.5 |
+| H.264 40 s | 5.06 → 3.73 GB | 1.33 → 0.004 GB | 955 / 954 | 23.9 / 23.8 |
+| ProRes 422 HQ 10 s | 2.82 → 1.08 GB | 1.77 → 0.007 GB | 234 / 234 | 23.4 / 23.4 |
+| ProRes 422 HQ 40 s | 10.80 → 3.71 GB | 7.08 → 0.007 GB | 954 / 954 | 23.8 / 23.8 |
+| PNG16 2.5 s | 0.70 → 0.48 GB | 0.28 → 0.03 GB | 53 / 53 | 21.2 / 21.2 |
+| PNG16 10 s | 2.17 → 1.11 GB | 1.11 → 0.05 GB | 233 / 233 | 23.3 / 23.3 |
+| EXR half 2.5 s | 0.57 → 0.47 GB | 0.15 → 0.03 GB | 56 / 56 | 22.4 / 22.4 |
+| EXR half 10 s | 1.74 → 1.09 GB | 0.60 → 0.003 GB | 235 / 236 | 23.5 / 23.6 |
+
+- Source-cache bytes are flat in clip length; what remains of playback memory is the finished
+  frames (3.5 GB for about 955 frames at 40 s) and the process base.
+- Scrub medians, 12 targets, preview frame cache cleared before each revisit:
+
+| Scrub | H.264 | ProRes | PNG16 | EXR half |
+|---|---|---|---|---|
+| Far, uncached | 69 → 72 ms | 39 → 39 ms | 90 → 87 ms | 86 → 55 ms |
+| Far revisit (source decoded earlier) | 29 → 65 ms | 27 → 36 ms | 59 → 62 ms | 47 → 40 ms |
+| Near, one frame ahead | 70 → 40 ms | 39 → 38 ms | 63 → 63 ms | 56 → 41 ms |
+| Near, one frame back | 30 → 148 ms | 27 → 36 ms | 61 → 64 ms | 53 → 40 ms |
+
+  A far revisit and a step back now decode the source again when the finished frame is gone, as
+  decided; in normal use the finished frame is still cached and serves both. Stepping back one
+  H.264 frame without its finished frame re-decodes from the previous keyframe.
+
 ## Not done in this decision
 
 - GPU-side colour conversion (uploading native YUV or 16-bit samples instead of a converted
   float image) is #422. Until then the per-frame RGBA32F conversion still runs; it is scratch.
 - Device-memory partition fractions of the resident route (`gpu_preview_resident_capacity.hpp`)
   are device policy, not host retention, and are unchanged.
-- The decoded video frames and the sequence source revisions are compact and have measured reuse
-  when scrubbing back, so they stay; they still keep every frame played rather than a working-set
-  window. Bounding them to a window is a separate owner decision, not made here.
+- Device-side caches (the GPU scene cache) are sized by the device plan and are not part of the
+  playback window.
 
 ## Consequences
 
