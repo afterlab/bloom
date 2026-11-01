@@ -2039,7 +2039,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 ${bloom_ui_gpu_viewer_service_chain_loader_args}
         LABELS ui gpu viewer memory soak device
         TIMEOUT 600
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=generic;BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic BLOOM_REDUCED_MOTION=1)
     set_tests_properties(bloom.ui.window_surface_memory_soak PROPERTIES SKIP_RETURN_CODE 77)
 
     bloom_add_test(
