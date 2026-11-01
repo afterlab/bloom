@@ -167,6 +167,18 @@ class ParityOperations(unittest.TestCase):
         self.assertEqual(self.server.revision(), revision,
                          'colour settings are not a document edit and make no history step')
 
+    def test_profiler_snapshot(self):
+        # #423: bloom-mcp samples its own process; absent values are null, never 0.
+        result = self.server.tool('profiler.snapshot', {})
+        self.assertTrue(result['succeeded'], result)
+        snapshot = result['snapshot']
+        self.assertEqual(snapshot['schemaVersion'], 3)
+        self.assertGreaterEqual(snapshot['serial'], 1)
+        self.assertIsInstance(snapshot['memory']['pools'], list)
+        self.assertIsNone(snapshot['gpu']['utilization'])
+        self.assertEqual(len(snapshot['workload']['stages']['decode']['counts']), 20)
+        self.assertGreaterEqual(len(snapshot['cpu']['executorPools']), 3)
+
     def test_parity_operations_are_described(self):
         records = self.server.tool('query', {'kind': 'operations'})['records']
         described = {record['id']: record['description'] for record in records}
