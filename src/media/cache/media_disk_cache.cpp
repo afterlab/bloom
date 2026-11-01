@@ -293,6 +293,12 @@ MediaDiskCache::MediaDiskCache(MediaDiskCacheConfig config, runtime::MemoryBudge
                 if (queue_.empty() && inFlight_ == 0)
                     idleCv_.notify_all();
             });
+        // Host memory is the write queue (scratch); the counters are the disk cache's lookups,
+        // writes and evictions (bytes on disk) and the writes the queue refused.
+        ledger_.setPoolProfile(this, {.name = "Media disk cache write queue",
+                                      .kind = runtime::ProfilerPoolKind::Scratch,
+                                      .counters = &counters_,
+                                      .rows = {}});
     } catch (...) {
         {
             std::lock_guard lock(queueMutex_);
@@ -406,6 +412,7 @@ void MediaDiskCache::evictLocked() {
         std::error_code removeError;
         std::filesystem::remove(entryPath(victim), removeError);
         storedBytes_ -= index_.at(victim).first.bytes;
+        counters_.evicted(index_.at(victim).first.bytes);
         index_.erase(victim);
         lru_.pop_back();
         ++statistics_.evictions;
@@ -426,6 +433,7 @@ std::shared_ptr<const render::Rgba32fImage> MediaDiskCache::find(const std::stri
     const auto found = index_.find(key);
     if (found == index_.end()) {
         ++statistics_.misses;
+        counters_.miss();
         return nullptr;
     }
     const auto expectedBytes = kHeaderBytes + found->second.first.bytes;
@@ -434,6 +442,7 @@ std::shared_ptr<const render::Rgba32fImage> MediaDiskCache::find(const std::stri
         removeEntryLocked(key, true);
         ++statistics_.corruptDropped;
         ++statistics_.misses;
+        counters_.miss();
         rewriteIndexLocked();
         return nullptr;
     }
@@ -442,6 +451,7 @@ std::shared_ptr<const render::Rgba32fImage> MediaDiskCache::find(const std::stri
         removeEntryLocked(key, true);
         ++statistics_.corruptDropped;
         ++statistics_.misses;
+        counters_.miss();
         rewriteIndexLocked();
         return nullptr;
     }
@@ -452,6 +462,7 @@ std::shared_ptr<const render::Rgba32fImage> MediaDiskCache::find(const std::stri
         removeEntryLocked(key, true);
         ++statistics_.corruptDropped;
         ++statistics_.misses;
+        counters_.miss();
         rewriteIndexLocked();
         return nullptr;
     }
@@ -460,11 +471,13 @@ std::shared_ptr<const render::Rgba32fImage> MediaDiskCache::find(const std::stri
         removeEntryLocked(key, true);
         ++statistics_.corruptDropped;
         ++statistics_.misses;
+        counters_.miss();
         rewriteIndexLocked();
         return nullptr;
     }
     touchLocked(key, found->second.first.bytes);
     ++statistics_.hits;
+    counters_.hit();
     return std::make_shared<const render::Rgba32fImage>(std::move(*rebuilt));
 }
 
@@ -484,6 +497,7 @@ void MediaDiskCache::storeOnCallingThread(
     std::lock_guard lock(mutex_);
     loadIndexLocked();
     touchLocked(key, payload.size_bytes());
+    counters_.store();
     evictLocked();
     rewriteIndexLocked();
 }
@@ -510,6 +524,7 @@ void MediaDiskCache::storeAsync(std::string key,
         if (queue_.size() >= kMediaDiskCacheAsyncQueueCapacity ||
             bytes > asyncQueueByteCapacity() - std::min(queuedBytes_, asyncQueueByteCapacity())) {
             ++droppedAsyncWrites_;
+            counters_.refused();
             return;
         }
         queue_.push_back({std::move(key), std::move(image), bytes});

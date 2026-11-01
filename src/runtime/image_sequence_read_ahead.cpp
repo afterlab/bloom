@@ -53,7 +53,8 @@ struct ImageSequenceReadAhead::State final {
         const auto cache = job.cache.lock();
         if (!cache || stopping.load())
             return false;
-        if (cache->find(job.request.revisionKey, document::Revision{}))
+        if (cache->find(job.request.revisionKey, document::Revision{},
+                        OperationCacheEntryKind::DecodedMedia))
             return true;
         // Never evict for a guess: the file must fit the cache's free budget as it stands.
         std::error_code error;
@@ -106,7 +107,8 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
         for (auto& request : requests) {
             if (state_->queue.size() >= state_->queueLimit ||
                 state_->pending.contains(request.revisionKey) ||
-                cache->find(request.revisionKey, document::Revision{})) {
+                cache->find(request.revisionKey, document::Revision{},
+                            OperationCacheEntryKind::DecodedMedia)) {
                 ++state_->statistics.skipped;
                 continue;
             }

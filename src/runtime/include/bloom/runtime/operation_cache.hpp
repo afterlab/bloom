@@ -107,8 +107,11 @@ class OperationCache final {
     explicit OperationCache(std::size_t budget = defaultOperationCacheByteBudget(),
                             MemoryBudgetLedger& ledger = processMemoryBudgetLedger());
     ~OperationCache();
-    [[nodiscard]] std::optional<OperationCacheValue> find(const std::string& content,
-                                                          document::Revision revision);
+    // `kind` only attributes a miss to the Profiler row of the kind the caller looks for; a hit
+    // counts under the found entry's kind.
+    [[nodiscard]] std::optional<OperationCacheValue>
+    find(const std::string& content, document::Revision revision,
+         OperationCacheEntryKind kind = OperationCacheEntryKind::Operation);
     void store(std::string content, document::Revision revision, OperationCacheValue value,
                OperationCacheEntryKind kind = OperationCacheEntryKind::Operation,
                std::optional<std::uint64_t> decodedMediaGeneration = {},

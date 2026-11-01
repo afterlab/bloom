@@ -40,6 +40,10 @@ struct OperationCache::Accounting {
     std::unordered_map<const void*, Storage> storages;
     std::uint64_t decodedMediaGeneration = 0;
     std::size_t pendingBytes = 0;
+    // pendingBytes by kind, for the Profiler's per-kind rows.
+    std::array<std::size_t, 2> pendingKindBytes{};
+    // The Profiler's cumulative counters per kind (#423); relaxed atomics.
+    std::array<MemoryPoolCounters, 2> counters{};
     bool closed = false;
     // A complete, fresh process sample has been delivered: rooted source revisions may be kept.
     bool sampleReady = false;
@@ -79,22 +83,27 @@ struct OperationCache::Accounting {
                 kindBytes[index(storage.kind)] += storage.bytes;
             } else {
                 sharedBytes += storage.bytes;
-                if (storage.liveReferences == 0)
+                if (storage.liveReferences == 0) {
                     pendingBytes -= storage.bytes; // Back from pending retirement.
+                    pendingKindBytes[index(storage.kind)] -= storage.bytes;
+                }
             }
             ++storage.liveReferences;
         }
     }
     void moveToPending(const Entry& entry) {
         pendingBytes += entry.metadataBytes;
+        pendingKindBytes[index(entry.kind)] += entry.metadataBytes;
         for (const auto& reference : entry.storage) {
             if (reference.key == nullptr)
                 continue;
             auto& storage = storages.at(reference.key);
             --storage.liveReferences;
             ++storage.pendingReferences;
-            if (storage.liveReferences == 0)
+            if (storage.liveReferences == 0) {
                 pendingBytes += storage.bytes;
+                pendingKindBytes[index(storage.kind)] += storage.bytes;
+            }
         }
     }
     // A synchronous removal: the entry is freed under the same lock.
@@ -109,8 +118,10 @@ struct OperationCache::Accounting {
             --storage.liveReferences;
             if (storage.liveReferences + storage.pendingReferences != 0) {
                 sharedBytes -= storage.bytes;
-                if (storage.liveReferences == 0)
+                if (storage.liveReferences == 0) {
                     pendingBytes += storage.bytes;
+                    pendingKindBytes[index(storage.kind)] += storage.bytes;
+                }
                 continue;
             }
             bytes -= storage.bytes;
@@ -141,10 +152,12 @@ struct OperationCache::Accounting {
     void finishRelease(const Release& release) {
         bytes -= release.metadataBytes;
         pendingBytes -= release.metadataBytes;
+        pendingKindBytes[index(release.kind)] -= release.metadataBytes;
         kindBytes[index(release.kind)] -= release.metadataBytes;
         for (std::size_t kind = 0; kind < release.freedByKind.size(); ++kind) {
             bytes -= release.freedByKind[kind];
             pendingBytes -= release.freedByKind[kind];
+            pendingKindBytes[kind] -= release.freedByKind[kind];
             kindBytes[kind] -= release.freedByKind[kind];
         }
     }
@@ -197,6 +210,28 @@ OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& led
                                      .hostPendingRetirementBytes = accounting_->pendingBytes};
         },
         apply);
+    // Two Profiler rows, one per entry kind, sharing the cache's one ceiling.
+    ledger_.setPoolProfile(
+        this, {.name = {},
+               .kind = ProfilerPoolKind::Cache,
+               .counters = nullptr,
+               .rows = [accounting = accounting_](const std::span<ProfilerPool> out) {
+                   static constexpr std::array<std::string_view, 2> names{
+                       "Operation cache: operations", "Operation cache: decoded media"};
+                   const std::lock_guard lock(accounting->mutex);
+                   const auto count = std::min(out.size(), names.size());
+                   for (std::size_t kind = 0; kind < count; ++kind) {
+                       auto& row = out[kind];
+                       row = ProfilerPool{};
+                       setProfilerName(row.name, names[kind]);
+                       row.kind = ProfilerPoolKind::Cache;
+                       row.pendingBytes = accounting->pendingKindBytes[kind];
+                       row.hostBytes = accounting->kindBytes[kind] - row.pendingBytes;
+                       row.ceilingBytes = ProfilerBytes::of(accounting->budget);
+                       accounting->counters[kind].copyTo(row);
+                   }
+                   return count;
+               }});
 }
 OperationCache::~OperationCache() {
     close();
@@ -207,8 +242,10 @@ OperationCache::~OperationCache() {
     removeKindLocked(OperationCacheEntryKind::DecodedMedia);
 }
 std::optional<OperationCacheValue> OperationCache::find(const std::string& content,
-                                                        const document::Revision revision) {
+                                                        const document::Revision revision,
+                                                        const OperationCacheEntryKind kind) {
     const std::lock_guard lock(accounting_->mutex);
+    auto& missed = accounting_->counters[Accounting::index(kind)];
     const Key key{content};
     const auto sourceUsable = [&](const Position position) {
         const auto& entry = **position;
@@ -217,6 +254,7 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
              MemoryBudgetLedger::Clock::now() > accounting_->validUntil)) {
             removeLocked(position);
             ++statistics_.misses;
+            missed.miss();
             return false;
         }
         return true;
@@ -227,11 +265,13 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
             return std::nullopt;
         touch(exact->second);
         ++statistics_.hits;
+        accounting_->counters[Accounting::index((*exact->second)->kind)].hit();
         return (*exact->second)->value;
     }
     const auto found = index_.find(key);
     if (found == index_.end()) {
         ++statistics_.misses;
+        missed.miss();
         return std::nullopt;
     }
     if (!sourceUsable(found->second))
@@ -242,6 +282,7 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
     entry.revision = revision;
     touch(found->second);
     ++statistics_.hits;
+    accounting_->counters[Accounting::index(entry.kind)].hit();
     return entry.value;
 }
 bool LinearPassRetention::offer(const std::string_view key) {
@@ -267,6 +308,7 @@ void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
         entries_.push_front(std::move(entry));
     } catch (const std::bad_alloc&) {
         ++statistics_.allocationFailures;
+        accounting_->counters[Accounting::index(entry->kind)].refused();
         return;
     }
     bool indexed = false;
@@ -294,6 +336,7 @@ void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
         entry = std::move(entries_.front());
         entries_.pop_front();
         ++statistics_.allocationFailures;
+        accounting_->counters[Accounting::index(entry->kind)].refused();
         return;
     } catch (...) {
         if (indexed)
@@ -303,6 +346,7 @@ void OperationCache::insertLocked(std::unique_ptr<Entry>& entry) {
         throw;
     }
     accounting_->chargeLive(*entries_.front());
+    accounting_->counters[Accounting::index(entries_.front()->kind)].store();
 }
 namespace {
 // What an entry costs on the host: per-entry metadata, and the storage it references, charged by
@@ -323,6 +367,7 @@ void OperationCache::store(std::string content, const document::Revision revisio
     } catch (const std::bad_alloc&) {
         const std::lock_guard lock(accounting_->mutex);
         ++statistics_.allocationFailures;
+        accounting_->counters[Accounting::index(kind)].refused();
         return;
     }
     entry->content = std::move(content);
@@ -377,8 +422,12 @@ void OperationCache::store(std::string content, const document::Revision revisio
                                     MemoryBudgetLedger::Clock::now() > accounting_->validUntil))))
             return;
         auto charge = accounting_->liveIncrement(*entry);
-        if (charge > accounting_->budget || index_.contains({entry->content}))
+        if (index_.contains({entry->content}))
             return;
+        if (charge > accounting_->budget) {
+            accounting_->counters[Accounting::index(kind)].refused();
+            return;
+        }
         // A linear pass retains only what recurs: the first offer of a key is not stored.
         if (linearPass && !linearPass->offer(entry->content)) {
             ++statistics_.linearPassDeferrals;
@@ -399,8 +448,10 @@ void OperationCache::store(std::string content, const document::Revision revisio
         evictToLocked(accounting_->budget - charge, ignored);
         // Eviction may have left shared storage only pending; storing revives its charge.
         charge = accounting_->liveIncrement(*entry);
-        if (charge > accounting_->budget || accounting_->bytes > accounting_->budget - charge)
+        if (charge > accounting_->budget || accounting_->bytes > accounting_->budget - charge) {
+            accounting_->counters[Accounting::index(kind)].refused();
             return; // Still-charged pending refs cannot donate capacity.
+        }
         insertLocked(entry);
     } // Rejected Entry/image/registration destruction is outside the cache mutex.
 }
@@ -457,7 +508,11 @@ void OperationCache::removeKindLocked(const OperationCacheEntryKind kind) {
 }
 void OperationCache::evictToLocked(const std::size_t limit, std::uint64_t& counter) {
     while (accounting_->bytes - accounting_->pendingBytes > limit && !entries_.empty()) {
-        removeLocked(evictionCandidate());
+        const auto victim = evictionCandidate();
+        // The entry's standalone charge: its metadata and the storage it references.
+        accounting_->counters[Accounting::index((*victim)->kind)].evicted(
+            (*victim)->standaloneBytes());
+        removeLocked(victim);
         ++counter;
     }
 }

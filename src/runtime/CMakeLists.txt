@@ -26,6 +26,7 @@ target_sources(
             include/bloom/runtime/cancellation.hpp
             include/bloom/runtime/memory_budget_ledger.hpp
             include/bloom/runtime/memory_eviction_priority.hpp
+            include/bloom/runtime/memory_pool_counters.hpp
             include/bloom/runtime/memory_pressure_monitor.hpp
             include/bloom/runtime/process_memory_sample.hpp
             include/bloom/runtime/profiler_ledger_adapter.hpp

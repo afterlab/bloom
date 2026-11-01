@@ -191,7 +191,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
         return selected;
     }
     if (revisionCache) {
-        if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{});
+        if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{},
+                                                    OperationCacheEntryKind::DecodedMedia);
             cached && cached->sourceRevision &&
             cached->sourceRevision->retainedBytes() < hostByteBudget) {
             if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
@@ -371,7 +372,8 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
         // #381: stored samples -> footage pass -> input color, then the proxy resample. The disk
         // cache holds ordinary decodes only; the memory cache keeps the interpreted image.
         if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr)
-            if (auto cached = memoryCache->find(selected.cacheKey, document::Revision{}))
+            if (auto cached = memoryCache->find(selected.cacheKey, document::Revision{},
+                                                OperationCacheEntryKind::DecodedMedia))
                 image = cached->image;
         if (!image) {
             auto stored = decodeRawImageSource(selected, budget, cancel, decodeStatistics);
@@ -401,7 +403,8 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
                                     cancel);
     }
     if (memoryAccess != ImageSourceMemoryCacheAccess::Disabled && memoryCache != nullptr) {
-        auto cached = memoryCache->find(selected.cacheKey, document::Revision{});
+        auto cached = memoryCache->find(selected.cacheKey, document::Revision{},
+                                        OperationCacheEntryKind::DecodedMedia);
         if (cached)
             image = cached->image;
     }

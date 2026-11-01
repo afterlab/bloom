@@ -184,6 +184,7 @@ class MediaDiskCache final {
     std::unordered_map<std::string, std::pair<IndexEntry, Lru::iterator>> index_;
     std::uint64_t storedBytes_ = 0;
     MediaDiskCacheStatistics statistics_;
+    runtime::MemoryPoolCounters counters_;
     bool indexLoaded_ = false;
 
     mutable std::mutex queueMutex_;

@@ -559,6 +559,49 @@ std::size_t MemoryBudgetLedger::reusableRetainedBytes() const {
     return reusableRetainedLocked();
 }
 
+void MemoryBudgetLedger::setPoolProfile(const void* owner, MemoryPoolProfile profile) {
+    const std::lock_guard lock(mutex_);
+    if (const auto found = caches_.find(owner); found != caches_.end())
+        found->second.profile = std::move(profile);
+}
+
+std::size_t MemoryBudgetLedger::copyProfilerPools(const std::span<ProfilerPool> out,
+                                                  std::uint32_t& dropped) const {
+    static constexpr std::string_view kUnnamedPool = "Unnamed pool";
+    const std::lock_guard lock(mutex_);
+    std::size_t count = 0;
+    dropped = 0;
+    for (const auto& [owner, cache] : caches_) {
+        static_cast<void>(owner);
+        if (cache.profile.rows) {
+            const auto room = out.subspan(count);
+            const auto filled = std::min(cache.profile.rows(room), room.size());
+            count += filled;
+            // A pool that had more rows than room reports filling all of it.
+            if (room.empty())
+                ++dropped;
+            continue;
+        }
+        if (count == out.size()) {
+            ++dropped;
+            continue;
+        }
+        auto& row = out[count++];
+        row = ProfilerPool{};
+        setProfilerName(row.name, cache.profile.name.empty() ? kUnnamedPool : cache.profile.name);
+        row.kind = cache.profile.kind;
+        const auto held = cache.held();
+        row.hostBytes = held.hostBytes;
+        row.pendingBytes = held.hostPendingRetirementBytes;
+        row.deviceBytes = held.deviceBytes;
+        if (cache.ceiling != 0 && cache.ceiling != std::numeric_limits<std::size_t>::max())
+            row.ceilingBytes = ProfilerBytes::of(cache.ceiling);
+        if (cache.profile.counters != nullptr)
+            cache.profile.counters->copyTo(row);
+    }
+    return count;
+}
+
 MemoryPoolHolding MemoryBudgetLedger::reusableHolding() const {
     const std::lock_guard lock(mutex_);
     MemoryPoolHolding total;

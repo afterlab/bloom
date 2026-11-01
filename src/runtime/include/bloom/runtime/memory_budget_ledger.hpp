@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/runtime/memory_eviction_priority.hpp>
+#include <bloom/runtime/memory_pool_counters.hpp>
 #include <bloom/runtime/process_memory_sample.hpp>
 
 #include <chrono>
@@ -9,6 +10,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -135,6 +137,15 @@ class MemoryBudgetLedger final {
                        MemoryBudgetOwnerKind kind = MemoryBudgetOwnerKind::ReusableRetention,
                        MemoryEvictionPriority priority = MemoryEvictionPriority::Ordinary);
     void unregisterCache(const void* owner);
+    // How a registered pool appears in the Profiler (#423): its name, kind and counters, or its
+    // rows. Read only by copyProfilerPools; budgets never see it. Unregistering drops it.
+    void setPoolProfile(const void* owner, MemoryPoolProfile profile);
+    // One row per registered pool (or per row a pool supplies): name, kind, host, pending and
+    // device bytes, the registered ceiling and the pool's counters. A pool without a profile is
+    // one unnamed row whose counters stay absent. Rows beyond `out` are counted in `dropped`.
+    // Never allocates; same thread rules as poll (it asks every pool what it holds).
+    [[nodiscard]] std::size_t copyProfilerPools(std::span<ProfilerPool> out,
+                                                std::uint32_t& dropped) const;
     [[nodiscard]] std::size_t setCacheCeiling(const void* owner, std::size_t ceiling);
     [[nodiscard]] std::size_t cacheByteBudget(const void* owner) const;
     // Host bytes every reusable pool has allocated now, pending retirement included (asks each
@@ -255,6 +266,7 @@ class MemoryBudgetLedger final {
         MemoryEvictionPriority priority;
         std::function<MemoryPoolHolding()> holding;
         std::function<void(std::size_t)> applyBudget;
+        MemoryPoolProfile profile{};
         [[nodiscard]] MemoryPoolHolding held() const {
             return holding ? holding() : MemoryPoolHolding{};
         }

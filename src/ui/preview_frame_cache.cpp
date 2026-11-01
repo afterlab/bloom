@@ -155,6 +155,10 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
         },
         runtime::MemoryBudgetOwnerKind::ReusableRetention,
         runtime::MemoryEvictionPriority::FinishedPreview);
+    ledger_.setPoolProfile(this, {.name = "Preview frames",
+                                  .kind = runtime::ProfilerPoolKind::Cache,
+                                  .counters = &counters_,
+                                  .rows = {}});
 }
 
 PreviewFrameCache::~PreviewFrameCache() { ledger_.unregisterCache(this); }
@@ -198,6 +202,7 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
         if (found != exactIndex_.end())
             removeAt(found->second);
         ++statistics_.misses;
+        counters_.miss();
         if (trace_)
             trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Miss);
         return nullptr;
@@ -220,6 +225,7 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
         // identity it does not have.
         removeAt(position);
         ++statistics_.misses;
+        counters_.miss();
         if (trace_)
             trace_->record(identity, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Invalid);
         return nullptr;
@@ -228,6 +234,7 @@ PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
     if (position->residentPosition)
         residentOrder_.splice(residentOrder_.begin(), residentOrder_, *position->residentPosition);
     ++statistics_.hits;
+    counters_.hit();
     if (trace_)
         trace_->record(*frame, PreviewTraceStage::CacheLookup, PreviewTraceOutcome::Hit);
     return frame;
@@ -253,6 +260,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
         frame->provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
     if (!frame->isDisplayValid()) {
         ++statistics_.rejections;
+        counters_.refused();
         return report(InsertOutcome::RejectedStale, PreviewTraceOutcome::Invalid);
     }
     try {
@@ -301,6 +309,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
         if (bytes == 0 || hostCharge > byteBudget_ ||
             (resident && (bytes > gpuResidentByteLimit_ || gpuResidentEntryLimit_ == 0))) {
             ++statistics_.rejections;
+            counters_.refused();
             return report(InsertOutcome::RejectedBudget, PreviewTraceOutcome::OverBudget);
         }
         // Prepare every allocating part before changing qualification, revisions or ownership.
@@ -378,6 +387,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
             if (victim == entries_.end())
                 break;
             ++statistics_.evictions;
+            counters_.evicted(victim->bytes);
             if (!entryIsLive(*victim))
                 ++statistics_.staleDrops;
             removeAt(victim);
@@ -390,6 +400,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
                 residentRefreshTimer_.start();
         }
         ++statistics_.insertions;
+        counters_.store();
         scheduleNotification();
         evictToBudget();
         if (resident)
@@ -403,6 +414,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
                       statistics_.evictions - evictionsBefore);
     } catch (const std::bad_alloc&) {
         ++statistics_.allocationFailures;
+        counters_.refused();
         return report(InsertOutcome::AllocationFailure, PreviewTraceOutcome::AllocationFailure);
     }
 }
@@ -429,6 +441,7 @@ void PreviewFrameCache::trimToBytes(const std::size_t bytes) {
         if (victim == entries_.end())
             break;
         ++statistics_.pressureDrops;
+        counters_.evicted(victim->bytes);
         if (!entryIsLive(*victim))
             ++statistics_.staleDrops;
         removeAt(victim);
@@ -646,6 +659,7 @@ void PreviewFrameCache::evictToBudget() {
         if (victim == entries_.end())
             break;
         ++statistics_.evictions;
+        counters_.evicted(victim->bytes);
         if (!entryIsLive(*victim))
             ++statistics_.staleDrops;
         removeAt(victim);
@@ -704,6 +718,7 @@ void PreviewFrameCache::evictGpuResidentToLimits() {
         // churning every frame against the cap instead of stopping at the prefix that fits.
         ++statistics_.gpuResidentEvictions;
         ++statistics_.evictions;
+        counters_.evicted(victim->bytes);
         if (!entryIsLive(*victim))
             ++statistics_.staleDrops;
         removeAt(victim);

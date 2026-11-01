@@ -6,6 +6,7 @@
 #include <bloom/runtime/operation_cache.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -336,10 +337,59 @@ void ledgerHostTotalsNeverExceedAllocation() {
 }
 } // namespace
 
+// The Profiler's per-kind rows (#423): hits under the found entry's kind, misses under the kind the
+// caller looked for, stores, evictions with their bytes, and refusals over the budget, read
+// through the ledger without the cache's lock order changing.
+void profilerRowsCountPerKind() {
+    MemoryBudgetLedger ledger(16ULL << 30U);
+    const auto image = makeImage(16, 16);
+    const auto entry = storageBytes(*image);
+    OperationCache cache(entry * 4, ledger);
+    cache.store("a", {}, imageValue(image));
+    cache.store("b", {}, imageValue(makeImage(16, 16)), OperationCacheEntryKind::DecodedMedia);
+    expect(cache.find("a", {}).has_value(), "a stored operation is found");
+    expect(cache.find("b", {}).has_value(), "a stored decoded frame is found");
+    expect(!cache.find("missing", {}).has_value(), "an operation miss");
+    expect(!cache.find("missing", {}, OperationCacheEntryKind::DecodedMedia).has_value(),
+           "a decoded-media miss");
+    cache.store("huge", {}, imageValue(makeImage(64, 64)));
+    for (int index = 0; index < 6; ++index)
+        cache.store("fill" + std::to_string(index), {}, imageValue(makeImage(16, 16)));
+
+    std::array<bloom::runtime::ProfilerPool, 4> rows{};
+    std::uint32_t dropped = 7;
+    const auto count = ledger.copyProfilerPools(rows, dropped);
+    expect(count == 2 && dropped == 0, "the cache is two rows");
+    const auto& operations = rows[0];
+    const auto& decoded = rows[1];
+    expect(bloom::runtime::profilerNameView(operations.name) == "Operation cache: operations" &&
+               bloom::runtime::profilerNameView(decoded.name) == "Operation cache: decoded media",
+           "rows are named by kind");
+    expect(operations.hits.valueOr(0) == 1 && decoded.hits.valueOr(0) == 1, "hits per kind");
+    expect(operations.misses.valueOr(0) == 1 && decoded.misses.valueOr(0) == 1,
+           "misses under the kind looked for");
+    expect(operations.stores.valueOr(0) == 7 && decoded.stores.valueOr(0) == 1, "stores per kind");
+    expect(operations.refusals.valueOr(0) == 1, "the over-budget store is refused");
+    // Four entries' storage is the budget and each entry also charges its metadata, so at most
+    // three of the eight stored entries stay.
+    const auto evictions = operations.evictions.valueOr(0) + decoded.evictions.valueOr(0);
+    expect(evictions >= 5 && evictions <= 8, "filling past the budget evicts");
+    const auto evictedBytes = operations.evictedBytes.valueOr(0) + decoded.evictedBytes.valueOr(0);
+    expect(evictedBytes >= evictions * entry && evictedBytes < evictions * (entry + 4096),
+           "evicted bytes are the entries' standalone charges");
+    expect(operations.ceilingBytes.valueOr(0) == entry * 4, "the cache's one ceiling");
+    const auto memory = cache.memory();
+    expect(operations.hostBytes + operations.pendingBytes + decoded.hostBytes +
+                   decoded.pendingBytes ==
+               memory.hostBytes,
+           "the rows add up to the cache's host bytes");
+}
+
 int main() try {
     sharedStorageIsChargedOnce();
     pendingRetirementIsNeitherLostNorDoubled();
     ledgerHostTotalsNeverExceedAllocation();
+    profilerRowsCountPerKind();
     if (failures != 0) {
         std::cerr << "FAIL: operation cache accounting expectations failed\n";
         return 1;

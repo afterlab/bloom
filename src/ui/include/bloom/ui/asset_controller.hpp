@@ -11,6 +11,7 @@
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/audio_stream_key.hpp>
+#include <bloom/runtime/memory_pool_counters.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -300,6 +301,11 @@ class AssetController final : public QObject {
         adoptedAudioBuffers_;
     std::size_t proxyCacheBytes_ = 0;
     std::size_t decodedAudioBytes_ = 0;
+    // The Profiler's counters for the two pools (#423); shared with the preview worker.
+    std::shared_ptr<runtime::MemoryPoolCounters> proxyCounters_ =
+        std::make_shared<runtime::MemoryPoolCounters>();
+    std::shared_ptr<runtime::MemoryPoolCounters> audioCounters_ =
+        std::make_shared<runtime::MemoryPoolCounters>();
     QByteArray dragToken_;
     bool busy_ = false;
     bool previewPending_ = false;

@@ -108,6 +108,7 @@ class DecodedVideoCache final {
     mutable std::mutex mutex_;
     std::list<Entry> entries_;
     std::size_t budget_ = 0, resident_ = 0;
+    runtime::MemoryPoolCounters counters_;
 };
 // Issue #402: a caller waiting for a session's one retained decoder. Concurrent preparation asks
 // for neighbouring frames at once; serving them in wake-up order made a long-GOP decoder seek back

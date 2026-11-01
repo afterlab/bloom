@@ -10,17 +10,25 @@ DecodedVideoCache::DecodedVideoCache(const std::size_t budget, runtime::MemoryBu
             budget_ = bytes;
             while (!entries_.empty() && resident_ > budget_) {
                 resident_ -= entries_.back().bytes;
+                counters_.evicted(entries_.back().bytes);
                 entries_.pop_back();
             }
         });
+    ledger_.setPoolProfile(this, {.name = "Decoded video",
+                                  .kind = runtime::ProfilerPoolKind::Cache,
+                                  .counters = &counters_,
+                                  .rows = {}});
 }
 DecodedVideoCache::~DecodedVideoCache() { ledger_.unregisterCache(this); }
 
 std::shared_ptr<const provider::FrameProduct> DecodedVideoCache::find(const FrameKey& key) {
     std::lock_guard lock(mutex_);
     auto found = std::ranges::find(entries_, key, &Entry::key);
-    if (found == entries_.end())
+    if (found == entries_.end()) {
+        counters_.miss();
         return {};
+    }
+    counters_.hit();
     entries_.splice(entries_.begin(), entries_, found);
     return entries_.front().frame;
 }
@@ -33,8 +41,10 @@ void DecodedVideoCache::store(const FrameKey& key,
     for (const auto& plane : frame->planes)
         bytes += plane.bytes.size();
     std::lock_guard lock(mutex_);
-    if (bytes > budget_)
+    if (bytes > budget_) {
+        counters_.refused();
         return;
+    }
     const auto existing = std::ranges::find(entries_, key, &Entry::key);
     if (existing != entries_.end()) {
         resident_ -= existing->bytes;
@@ -42,10 +52,12 @@ void DecodedVideoCache::store(const FrameKey& key,
     }
     while (!entries_.empty() && resident_ > budget_ - bytes) {
         resident_ -= entries_.back().bytes;
+        counters_.evicted(entries_.back().bytes);
         entries_.pop_back();
     }
     entries_.push_front({key, std::move(frame), bytes});
     resident_ += bytes;
+    counters_.store();
 }
 void DecodedVideoCache::setByteBudget(const std::size_t budget) {
     static_cast<void>(ledger_.setCacheCeiling(this, budget));

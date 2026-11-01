@@ -384,6 +384,8 @@ class PreviewFrameCache final : public QObject {
     std::optional<RetentionRange> retentionRange_;
     std::vector<RetentionSnapshot> retentionSnapshots_;
     Statistics statistics_;
+    // The Profiler's cumulative counters (#423), next to statistics_.
+    runtime::MemoryPoolCounters counters_;
     mutable MetadataWork metadataWork_;
 };
 

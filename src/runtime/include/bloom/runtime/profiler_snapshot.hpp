@@ -31,7 +31,8 @@
 namespace bloom::runtime {
 
 // 2: pool counters and executor busy time can be absent (a source that does not count them).
-inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 2;
+// 3: pools report cumulative evicted bytes (ProfilerPool::evictedBytes).
+inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 3;
 
 inline constexpr std::size_t kProfilerNameCapacity = 48;
 inline constexpr std::size_t kProfilerMaximumPools = 32;
@@ -96,6 +97,7 @@ struct ProfilerPool final {
     ProfilerCount misses{};
     ProfilerCount stores{};
     ProfilerCount evictions{};
+    ProfilerBytes evictedBytes{};
     ProfilerCount refusals{};
 };
 
