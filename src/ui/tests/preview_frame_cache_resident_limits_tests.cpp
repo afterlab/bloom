@@ -33,6 +33,7 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/gpu_resident_preview_product.hpp>
 #include <bloom/runtime/gpu_resident_preview_qualification.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 
 #include <QCoreApplication>
@@ -535,6 +536,15 @@ int main(int argc, char** argv) {
                             "the cache never exceeds its resident entry cap during the run");
         expectations.expect(cache.gpuResidentEntryCount() == kCacheEntries,
                             "the cache holds exactly its resident entry cap");
+        // #416: with a device budget, resident frames are device memory. They take nothing from
+        // the host byte budget and reach the memory ledger as device bytes, never as host bytes.
+        expectations.expect(cache.hostBytes() == 0 &&
+                                cache.residentBytes() == cache.gpuResidentBytes(),
+                            "device-budgeted resident frames count no host bytes");
+        expectations.expect(
+            bloom::runtime::processMemoryBudgetLedger().reusableHolding().deviceBytes >=
+                cache.gpuResidentBytes(),
+            "the ledger reports resident frames as device bytes");
         expectations.expect(cache.statistics().gpuResidentEvictions >= kFrameCount - kCacheEntries,
                             "the cache evicted the LRU resident entries as it filled");
         expectations.expect(cache.statistics().evictions == cache.statistics().gpuResidentEvictions,
