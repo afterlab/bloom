@@ -51,10 +51,6 @@ struct FrameKey {
     bool hardware = false;
     friend bool operator==(const FrameKey&, const FrameKey&) = default;
 };
-// Automatic decoded-video retention target: one sixteenth of reported physical memory, between
-// 256 MiB and 4 GiB. Zero physical capacity selects the 256 MiB floor. The cache registers with
-// the process memory ledger, so an observed OS limit still constrains it.
-[[nodiscard]] std::size_t automaticDecodedVideoCacheBytes(std::size_t physicalBytes) noexcept;
 // Conservative resident estimate for one retained decode worker of a stream: decoder base plus
 // 24 frames of 16-bit 4:4:4 planes (reference set, frame threads and the product), capped at the
 // stream's media-v1 worker address space (provider::workerAddressSpaceBytes, issue #352). Used to

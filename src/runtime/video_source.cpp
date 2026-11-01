@@ -66,8 +66,7 @@ std::size_t VideoSourceContext::retainedSessionCount() {
 }
 void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
     if (sessionByteBudget_ == 0)
-        sessionByteBudget_ =
-            std::max<std::size_t>(physicalMemoryBytes() / 4U, std::size_t{2} << 30U);
+        sessionByteBudget_ = processMemoryBudgetLedger().defaultTotalByteBudget();
     std::size_t total = 0;
     std::size_t kept = 0;
     for (auto it = sessions_.begin(); it != sessions_.end();) {

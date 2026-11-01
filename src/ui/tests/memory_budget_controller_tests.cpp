@@ -168,6 +168,8 @@ void teardown() {
 }
 void liveSettingsAndDeliveredCapacity() {
     runtime::MemoryBudgetLedger ledger(60 * gib, 22 * gib);
+    // Automatic is usable memory, unsplit (ADR 0037): capacity minus the default headroom.
+    const auto usable = 60 * gib - runtime::defaultHeadroomForCapacity(60 * gib);
     QTemporaryDir directory;
     QSettings settings(directory.filePath("live-budgets.ini"), QSettings::IniFormat);
     // Retired cache-target keys: present in old settings files, ignored by the headroom model.
@@ -191,8 +193,8 @@ void liveSettingsAndDeliveredCapacity() {
         const auto applied = ledger.applySample(std::move(measured), now);
         const auto allocation = ui::cacheMemoryBudgetAllocationFromSettings(settings, ledger);
         expect(
-            allocation == configured && ledger.state().configuredBytes == 30 * gib &&
-                operations.byteBudget() == 18 * gib && preview.byteBudget() == 12 * gib &&
+            allocation == configured && ledger.state().configuredBytes == usable &&
+                operations.byteBudget() == usable && preview.byteBudget() == usable &&
                 applied.processingEffectiveBytes == 60 * gib && applied.retentionPercent == 100 &&
                 !applied.memoryPressure,
             "delivered free-memory changes keep the automatic pool budgets; retired keys ignored");
@@ -200,8 +202,8 @@ void liveSettingsAndDeliveredCapacity() {
         const auto published = view->load();
         expect(
             published && published->sampleSerial == applied.sampleSerial &&
-                published->assignedOperationBytes == 18 * gib &&
-                published->assignedPreviewBytes == 12 * gib &&
+                published->assignedOperationBytes == usable &&
+                published->assignedPreviewBytes == usable &&
                 published->aggregateGpuBytes == available &&
                 published->previewRequestBytes == available,
             "fresh phase capacity follows actual host availability independently of cache targets");
@@ -214,23 +216,23 @@ void liveSettingsAndDeliveredCapacity() {
     settings.setValue("playback/ram-preview-memory-bytes", QString::number(2 * gib));
     const auto changed =
         ui::applyCacheMemoryBudgetsFromSettings(settings, operations, preview, ledger);
-    expect(changed == configured && operations.byteBudget() == 18 * gib &&
-               preview.byteBudget() == 12 * gib && ledger.state().configuredBytes == 30 * gib &&
+    expect(changed == configured && operations.byteBudget() == usable &&
+               preview.byteBudget() == usable && ledger.state().configuredBytes == usable &&
                ledger.state().sampleSerial == deliveredSerial,
            "edited retired cache-target keys do not change either owner");
     settings.remove("playback/operation-cache-bytes");
     settings.remove("playback/ram-preview-memory-bytes");
     const auto automatic =
         ui::applyCacheMemoryBudgetsFromSettings(settings, operations, preview, ledger);
-    expect(automatic == configured && operations.byteBudget() == 18 * gib &&
-               preview.byteBudget() == 12 * gib,
+    expect(automatic == configured && operations.byteBudget() == usable &&
+               preview.byteBudget() == usable,
            "removing overrides restores the stable hardware-based Automatic targets");
     std::size_t auxiliary = 0;
     ledger.registerCache(
         &auxiliary, 100 * gib, [] { return 0; },
         [&](const std::size_t bytes) { auxiliary = bytes; });
-    expect(auxiliary == 100 * gib && operations.byteBudget() == 18 * gib &&
-               preview.byteBudget() == 12 * gib,
+    expect(auxiliary == 100 * gib && operations.byteBudget() == usable &&
+               preview.byteBudget() == usable,
            "an auxiliary cache cannot steal selected operation or RAM-preview budgets");
     auto finite = sample();
     finite.machine.availableBytes = 22 * gib;
@@ -241,7 +243,7 @@ void liveSettingsAndDeliveredCapacity() {
     expect(constrained.processCacheCeilingBytes == 8 * gib &&
                operations.byteBudget() + preview.byteBudget() + auxiliary <= 8 * gib &&
                operations.byteBudget() > 0 && preview.byteBudget() > 0 &&
-               ledger.state().configuredBytes == 30 * gib &&
+               ledger.state().configuredBytes == usable &&
                settings.value("playback/operation-cache-bytes").isNull() &&
                settings.value("playback/ram-preview-memory-bytes").isNull() && published &&
                published->previewRequestBytes == 2 * gib && published->aggregateGpuBytes == 2 * gib,

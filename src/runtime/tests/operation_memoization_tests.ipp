@@ -220,33 +220,35 @@ void testMemoryBudgetLedger(Expectations& expectations) {
 
     const runtime::MemoryBudgetLedger sixteen(std::size_t{16} * gibibyte, plentiful);
     const auto defaults = sixteen.allocate();
-    const auto expectedOperation = std::size_t{8} * gibibyte * 3 / 5;
+    // Automatic is usable memory: capacity minus the default headroom (ADR 0037).
+    const auto usableOf = [](const std::size_t capacity) {
+        return capacity - static_cast<std::size_t>(runtime::defaultHeadroomForCapacity(capacity));
+    };
     expectations.expect(sixteen.reserveByteBudget() == 0 &&
                             defaults.usableByteBudget == std::size_t{16} * gibibyte &&
-                            sixteen.defaultTotalByteBudget() == std::size_t{8} * gibibyte,
-                        "hardware capacity and the automatic total have no host reserve");
-    expectations.expect(defaults.operationCacheByteBudget == expectedOperation &&
+                            sixteen.defaultTotalByteBudget() == usableOf(16 * gibibyte),
+                        "the automatic total is capacity minus the headroom, nothing else");
+    expectations.expect(defaults.operationCacheByteBudget == sixteen.defaultTotalByteBudget() &&
                             defaults.previewFrameCacheByteBudget ==
-                                sixteen.defaultTotalByteBudget() - expectedOperation,
-                        "the automatic total splits 60/40 operation/preview");
+                                sixteen.defaultTotalByteBudget(),
+                        "automatic pools are not split by a fixed fraction");
 
     const runtime::MemoryBudgetLedger sixty(std::size_t{60} * gibibyte, plentiful);
     const auto sixtyDefaults = sixty.allocate();
     expectations.expect(
-        sixtyDefaults.operationCacheByteBudget == std::size_t{18} * gibibyte &&
-            sixtyDefaults.previewFrameCacheByteBudget == std::size_t{12} * gibibyte,
-        "a 60 GiB machine automatically selects 18 GiB operation and 12 GiB preview");
+        sixtyDefaults.operationCacheByteBudget == usableOf(60 * gibibyte) &&
+            sixtyDefaults.previewFrameCacheByteBudget == usableOf(60 * gibibyte),
+        "a 60 GiB machine automatically lets both pools use its usable memory");
     const runtime::MemoryBudgetLedger busy(std::size_t{60} * gibibyte, std::size_t{12} * gibibyte);
     expectations.expect(busy.allocate() == sixtyDefaults,
                         "launch-time free memory never rewrites automatic cache selections");
 
     const runtime::MemoryBudgetLedger small(std::size_t{4} * gibibyte, plentiful);
     const auto smallDefaults = small.allocate();
-    expectations.expect(small.defaultTotalByteBudget() == runtime::kFallbackUsableMemoryBudget &&
-                            smallDefaults.operationCacheByteBudget == gibibyte &&
-                            smallDefaults.previewFrameCacheByteBudget ==
-                                runtime::kMinimumPreviewFrameCacheByteBudget,
-                        "small hardware uses the bounded automatic fallback and preview minimum");
+    expectations.expect(small.defaultTotalByteBudget() == usableOf(4 * gibibyte) &&
+                            smallDefaults.operationCacheByteBudget == usableOf(4 * gibibyte) &&
+                            smallDefaults.previewFrameCacheByteBudget == usableOf(4 * gibibyte),
+                        "small hardware follows the same rule, with no fixed floor or split");
     const runtime::MemoryBudgetLedger unknown(0, 0);
     expectations.expect(unknown.usableByteBudget() == runtime::kFallbackUsableMemoryBudget &&
                             unknown.reserveByteBudget() == 0,

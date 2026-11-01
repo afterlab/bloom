@@ -32,13 +32,6 @@
 namespace bloom::runtime {
 namespace {
 
-[[nodiscard]] std::size_t fraction(const std::size_t value, const std::size_t numerator,
-                                   const std::size_t denominator) noexcept {
-    const auto whole = value / denominator;
-    const auto remainder = value % denominator;
-    return whole * numerator + remainder * numerator / denominator;
-}
-
 [[nodiscard]] std::size_t saturatedAdd(const std::size_t left, const std::size_t right) noexcept {
     return left + std::min(right, std::numeric_limits<std::size_t>::max() - left);
 }
@@ -258,15 +251,9 @@ MemoryBudgetLedger::MemoryBudgetLedger(const std::size_t physicalMemory,
                                        const std::size_t availableMemory) noexcept
     : physicalMemory_(physicalMemory), defaultsResolved_(physicalMemory != 0),
       usableByteBudget_(usableByteBudgetForPhysicalMemory(physicalMemory)) {
-    // Automatic budgets are selected from hardware capacity, independent of how much other work
-    // happens to be resident at startup. Only actual preferences change a resolved selection.
-    auto total = usableByteBudget_;
-    if (physicalMemory != 0)
-        total = std::min(total, fraction(physicalMemory, kDefaultTotalPhysicalPercent, 100));
-    const auto floor = physicalMemory == 0 ? kFallbackUsableMemoryBudget
-                                           : std::min(physicalMemory, kFallbackUsableMemoryBudget);
-    defaultTotalByteBudget_ = std::min(usableByteBudget_, std::max(total, floor));
-    state_.configuredBytes = defaultTotalByteBudget_;
+    // Automatic budgets are selected from hardware capacity and the headroom preference,
+    // independent of how much other work happens to be resident at startup.
+    resolveAutomaticTotalLocked();
     state_.effectiveBytes = defaultTotalByteBudget_;
     state_.processingEffectiveBytes = usableByteBudget_;
     if (availableMemory != 0)
@@ -287,21 +274,15 @@ MemoryBudgetAllocation
 MemoryBudgetLedger::allocate(const std::optional<std::size_t> operationOverride,
                              const std::optional<std::size_t> previewOverride) const noexcept {
     const std::lock_guard lock(mutex_);
-    const auto defaultOperation = fraction(defaultTotalByteBudget_, 3, 5);
-    const auto defaultPreview =
-        std::max(defaultTotalByteBudget_ - defaultOperation, kMinimumPreviewFrameCacheByteBudget);
-
     // Preferences name independent pools. A nonzero value is the selected budget, even when the
-    // two selections exceed the automatic total or physical capacity. A real process constraint
-    // can separately reduce reusable admission; it never rewrites this selection.
+    // two selections exceed the automatic total or physical capacity. Automatic pools are not
+    // split by a fixed fraction: each may use all usable memory and they compete inside it
+    // (finished preview frames evicted last). A real process constraint can separately reduce
+    // reusable admission; it never rewrites this selection.
     const auto operation =
-        operationOverride.value_or(0) != 0
-            ? *operationOverride
-            : std::min(defaultOperation,
-                       defaultTotalByteBudget_ - std::min(defaultPreview, defaultTotalByteBudget_));
-    const auto preview = previewOverride.value_or(0) != 0
-                             ? *previewOverride
-                             : std::min(defaultPreview, defaultTotalByteBudget_);
+        operationOverride.value_or(0) != 0 ? *operationOverride : defaultTotalByteBudget_;
+    const auto preview =
+        previewOverride.value_or(0) != 0 ? *previewOverride : defaultTotalByteBudget_;
 
     return {.usableByteBudget = usableByteBudget_,
             .operationCacheByteBudget = operation,
@@ -561,6 +542,7 @@ void MemoryBudgetLedger::setRamHeadroom(const std::size_t bytes) {
     if (ramHeadroom_ == bytes)
         return;
     ramHeadroom_ = bytes;
+    resolveAutomaticTotalLocked();
     applyBudgetsLocked();
 }
 
@@ -821,12 +803,21 @@ void MemoryBudgetLedger::updatePhysicalCapacity(const std::size_t physical) {
     usableByteBudget_ = usableByteBudgetForPhysicalMemory(physical);
     state_.processingEffectiveBytes = usableByteBudget_;
     if (!defaultsResolved_) {
-        const auto total = fraction(physical, kDefaultTotalPhysicalPercent, 100);
-        defaultTotalByteBudget_ = std::max(total, std::min(physical, kFallbackUsableMemoryBudget));
         defaultsResolved_ = true;
-        if (!configuredTotalSet_)
-            state_.configuredBytes = defaultTotalByteBudget_;
+        resolveAutomaticTotalLocked();
     }
+}
+
+void MemoryBudgetLedger::resolveAutomaticTotalLocked() noexcept {
+    if (physicalMemory_ == 0) {
+        defaultTotalByteBudget_ = kFallbackUsableMemoryBudget;
+    } else {
+        const auto headroom = ramHeadroom_.value_or(static_cast<std::size_t>(
+            defaultHeadroomForCapacity(static_cast<std::uint64_t>(physicalMemory_))));
+        defaultTotalByteBudget_ = physicalMemory_ - std::min(headroom, physicalMemory_);
+    }
+    if (!configuredTotalSet_)
+        state_.configuredBytes = defaultTotalByteBudget_;
 }
 
 void MemoryBudgetLedger::applyProcessCeilingLocked() {

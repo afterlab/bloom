@@ -722,21 +722,17 @@ runtime::MemoryBudgetAllocation
 cacheMemoryBudgetAllocationFromSettings(const QSettings& settings,
                                         const runtime::MemoryBudgetLedger& ledger) {
     // The playback/operation-cache-bytes and playback/ram-preview-memory-bytes targets are
-    // retired: reusable caches fill measured available memory beyond the RAM headroom preference
-    // (MemoryBudgetLedger::setRamHeadroom) and are evicted on demand. Saved values are ignored.
+    // retired: reusable caches compete inside usable memory, measured RAM minus the RAM headroom
+    // preference (MemoryBudgetLedger::setRamHeadroom), and are evicted on demand. Saved values are
+    // ignored.
     static_cast<void>(settings);
     return ledger.allocate();
 }
 
+// The pools share usable memory rather than splitting it (ADR 0037), so the ledger's configured
+// total stays its own automatic total; it is not the sum of the pool ceilings.
 runtime::MemoryBudgetAllocation cacheMemoryBudgetsFromSettings(const QSettings& settings) {
-    const auto allocation =
-        cacheMemoryBudgetAllocationFromSettings(settings, runtime::processMemoryBudgetLedger());
-    const auto maximum = std::numeric_limits<std::size_t>::max();
-    runtime::processMemoryBudgetLedger().setConfiguredTotal(
-        allocation.operationCacheByteBudget > maximum - allocation.previewFrameCacheByteBudget
-            ? maximum
-            : allocation.operationCacheByteBudget + allocation.previewFrameCacheByteBudget);
-    return allocation;
+    return cacheMemoryBudgetAllocationFromSettings(settings, runtime::processMemoryBudgetLedger());
 }
 
 runtime::MemoryBudgetAllocation
@@ -744,11 +740,6 @@ applyCacheMemoryBudgetsFromSettings(const QSettings& settings, runtime::Operatio
                                     PreviewFrameCache& preview,
                                     runtime::MemoryBudgetLedger& ledger) {
     const auto allocation = cacheMemoryBudgetAllocationFromSettings(settings, ledger);
-    const auto maximum = std::numeric_limits<std::size_t>::max();
-    ledger.setConfiguredTotal(
-        allocation.operationCacheByteBudget > maximum - allocation.previewFrameCacheByteBudget
-            ? maximum
-            : allocation.operationCacheByteBudget + allocation.previewFrameCacheByteBudget);
     operations.setByteBudget(allocation.operationCacheByteBudget);
     preview.setByteBudget(allocation.previewFrameCacheByteBudget);
     return allocation;

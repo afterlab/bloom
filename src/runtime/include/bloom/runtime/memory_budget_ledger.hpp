@@ -17,12 +17,10 @@ namespace bloom::runtime {
 inline constexpr std::size_t kDefaultOperationCacheBytes = std::size_t{1} * 1024U * 1024U * 1024U;
 inline constexpr std::size_t kMinimumPreviewFrameCacheByteBudget =
     std::size_t{2} * 1024U * 1024U * 1024U;
-// Automatic defaults use this total when physical capacity is unavailable, bounded by reported
-// physical capacity on smaller machines. Explicit preferences never inherit this floor.
+// The automatic total while physical capacity is still unmeasured. Explicit preferences never
+// inherit it.
 inline constexpr std::size_t kFallbackUsableMemoryBudget =
     kMinimumPreviewFrameCacheByteBudget + kDefaultOperationCacheBytes;
-
-inline constexpr std::size_t kDefaultTotalPhysicalPercent = 50;
 
 // Selected per-pool budgets. Real process constraints can separately reduce reusable admission.
 struct MemoryBudgetAllocation final {
@@ -220,7 +218,10 @@ class MemoryBudgetLedger final {
         return usableByteBudget_;
     }
 
-    // The automatic split is chosen from physical capacity once, independently of free RAM.
+    // Usable memory (ADR 0037): measured physical capacity minus the RAM headroom preference (its
+    // default share of the capacity until a preference is applied); the fallback total while
+    // capacity is unmeasured. There is no other fraction. Each automatic pool may use all of it;
+    // the pools compete inside it, and an observed OS limit still applies.
     [[nodiscard]] std::size_t defaultTotalByteBudget() const noexcept {
         const std::lock_guard lock(mutex_);
         return defaultTotalByteBudget_;
@@ -265,6 +266,7 @@ class MemoryBudgetLedger final {
     [[nodiscard]] bool observeSwapActivity(const MachineMemorySample& sample, Clock::time_point now,
                                            bool wasSwapPressure) noexcept;
     void updatePhysicalCapacity(std::size_t physical);
+    void resolveAutomaticTotalLocked() noexcept;
     void applyBudgetsLocked();
     [[nodiscard]] std::size_t reusableRetainedLocked() const;
     void applyProcessCeilingLocked();

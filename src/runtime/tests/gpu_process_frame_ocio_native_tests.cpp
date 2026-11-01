@@ -633,9 +633,11 @@ int run(int argc, char** argv) {
             // CPU oracle/shader preparation may take longer than the ten-second admission age.
             // Refresh the same ledger/root from the actual process before heavy GPU admission.
             refreshLivePolicy();
-            const auto legacyBudgets = bloom::runtime::GpuSceneExecutorBudgets{};
-            expectations.expect(legacyBudgets.maxImageBytes < 384ULL * 1000 * 1000 &&
-                                    !evaluatorOptions.executorBudgets,
+            // An explicit producer ceiling below the 384 MB output. (The cold legacy default is a
+            // share of usable memory with no fixed split, ADR 0037, so it is no longer small.)
+            auto legacyBudgets = bloom::runtime::GpuSceneExecutorBudgets{};
+            legacyBudgets.maxImageBytes = 256ULL << 20U;
+            expectations.expect(!evaluatorOptions.executorBudgets,
                                 "a cold reusable-cache ceiling cannot override the rooted default");
             auto explicitOptions = evaluatorOptions;
             explicitOptions.executorBudgets = legacyBudgets;

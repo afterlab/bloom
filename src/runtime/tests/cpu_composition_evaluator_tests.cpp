@@ -1,4 +1,5 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/runtime/task_scheduler.hpp>

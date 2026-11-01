@@ -1,4 +1,5 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -192,7 +193,9 @@ void swapActivityPolicy() {
 
 void selectedTotalsAndHardwareDefaults() {
     MemoryBudgetLedger small(16 * gib, 16 * gib);
-    expect(small.state().effectiveBytes == 8 * gib &&
+    // Automatic is usable memory: capacity minus the default headroom, no fixed fraction.
+    expect(small.state().effectiveBytes ==
+                   16 * gib - bloom::runtime::defaultHeadroomForCapacity(16 * gib) &&
                small.state().processingEffectiveBytes == 16 * gib,
            "automatic retention selection and independent processing capacity remain distinct");
     small.setConfiguredTotal(std::numeric_limits<std::size_t>::max());
@@ -212,9 +215,10 @@ void selectedTotalsAndHardwareDefaults() {
         .machine = {.availableBytes = gib}, .physicalBytes = 60 * gib, .process = {}};
     state = unresolved.applySample(sample, at(0));
     const auto selected = unresolved.allocate();
-    expect(selected.operationCacheByteBudget == 18 * gib &&
-               selected.previewFrameCacheByteBudget == 12 * gib && selected != fallback,
-           "the first verified hardware sample resolves automatic preferences");
+    const auto usable = 60 * gib - bloom::runtime::defaultHeadroomForCapacity(60 * gib);
+    expect(selected.operationCacheByteBudget == usable &&
+               selected.previewFrameCacheByteBudget == usable && selected != fallback,
+           "the first verified hardware sample resolves automatic preferences, unsplit");
     sample.machine.availableBytes = 0;
     sample.physicalBytes = 64 * gib;
     state = unresolved.applySample(sample, at(5));
@@ -224,6 +228,11 @@ void selectedTotalsAndHardwareDefaults() {
             later.previewFrameCacheByteBudget == selected.previewFrameCacheByteBudget &&
             state.processingEffectiveBytes == 64 * gib,
         "resolved defaults stay stable while current hardware capacity remains separately visible");
+    MemoryBudgetLedger preference(60 * gib, 60 * gib);
+    preference.setRamHeadroom(4 * gib);
+    expect(preference.allocate().operationCacheByteBudget == 56 * gib &&
+               preference.allocate().previewFrameCacheByteBudget == 56 * gib,
+           "the headroom preference is the only ceiling on the automatic total");
 
     constexpr auto maximum = std::numeric_limits<std::size_t>::max();
     MemoryBudgetLedger huge(60 * gib, 60 * gib);
@@ -292,8 +301,9 @@ void cgroupRoomReclaimAndActiveClaims() {
 void processAdmissionAndFailures() {
     MemoryBudgetLedger legacy(60 * gib, 60 * gib);
     const auto legacyState = legacy.applySample(processSample(0, 0, 0), at(0));
-    expect(legacyState.effectiveBytes == 30 * gib && !legacyState.processCacheCeilingBytes &&
-               !legacyState.awaitingProcessSample,
+    expect(legacyState.effectiveBytes ==
+                   60 * gib - bloom::runtime::defaultHeadroomForCapacity(60 * gib) &&
+               !legacyState.processCacheCeilingBytes && !legacyState.awaitingProcessSample,
            "unactivated standalone policy ignores process constraints until explicit activation");
     MemoryBudgetLedger ledger(60 * gib, 60 * gib);
     std::size_t cache = 0, live = 0;

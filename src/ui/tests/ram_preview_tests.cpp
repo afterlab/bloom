@@ -1059,10 +1059,9 @@ void testDefaultBudgetFollowsPhysicalMemory(Expectations& expectations) {
                         "the default RAM preview budget never drops below the floor");
     expectations.expect(budget == allocation.previewFrameCacheByteBudget,
                         "the preview cache uses the ledger's stable automatic selection");
-    expectations.expect(allocation.operationCacheByteBudget +
-                                allocation.previewFrameCacheByteBudget <=
-                            allocation.usableByteBudget,
-                        "the two default caches stay within the usable budget");
+    expectations.expect(allocation.operationCacheByteBudget <= allocation.usableByteBudget &&
+                            allocation.previewFrameCacheByteBudget <= allocation.usableByteBudget,
+                        "each default cache stays within the usable budget the caches share");
     if (physical != 0)
         expectations.expect(allocation.usableByteBudget <= physical,
                             "the machine-derived budget never exceeds physical memory");

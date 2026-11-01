@@ -50,8 +50,9 @@ class VideoSourceContext final {
     [[nodiscard]] std::uint64_t sourceSnapshotBytes() const { return quota_->residentBytes(); }
     [[nodiscard]] std::size_t sourceSnapshotCount() const { return quota_->residentFiles(); }
     // Retained sessions are admitted by memory, not a fixed count: their estimated worker bytes
-    // must fit this budget (default a quarter of physical memory). At least two are kept so two
-    // sources can alternate, and never more than the source-snapshot file quota can retain.
+    // must fit this budget (default usable memory, the ledger's automatic total: no fixed fraction,
+    // ADR 0037). At least two are kept so two sources can alternate, and never more than the
+    // source-snapshot file quota can retain.
     void setSessionByteBudget(std::size_t bytes);
     [[nodiscard]] std::size_t retainedSessionCount();
     // Decode route and colour note of the most recently selected sources (most recent first, at

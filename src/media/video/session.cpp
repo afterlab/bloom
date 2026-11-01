@@ -30,11 +30,6 @@ bool isVideoExtension(const std::filesystem::path& path) {
            extension == ".ts" || extension == ".m4v" || extension == ".webm";
 }
 
-std::size_t automaticDecodedVideoCacheBytes(const std::size_t physicalBytes) noexcept {
-    constexpr std::size_t floor = std::size_t{256} << 20U;
-    constexpr std::size_t ceiling = std::size_t{4} << 30U;
-    return std::clamp(physicalBytes / 16U, floor, ceiling);
-}
 std::size_t estimatedDecodeWorkerBytes(const std::uint32_t width,
                                        const std::uint32_t height) noexcept {
     constexpr std::uint64_t base = 64ULL << 20U;

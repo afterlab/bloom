@@ -218,13 +218,6 @@ void retainedRouting(const std::filesystem::path& directory) {
                                                      preview, {true, &intra})) &&
               intra.description == "software" && !intra.fallback,
           "codecs without hardware declarations decode in software");
-    // Decoded-video retention defaults scale with physical memory inside fixed bounds.
-    check(video::automaticDecodedVideoCacheBytes(0) == std::size_t{256} << 20U &&
-              video::automaticDecodedVideoCacheBytes(std::size_t{16} << 30U) == std::size_t{1}
-                                                                                    << 30U &&
-              video::automaticDecodedVideoCacheBytes(std::size_t{256} << 30U) == std::size_t{4}
-                                                                                     << 30U,
-          "automatic decoded-video cache share");
     check(video::estimatedDecodeWorkerBytes(1920, 1080) <
                   video::estimatedDecodeWorkerBytes(3840, 2160) &&
               video::estimatedDecodeWorkerBytes(16384, 16384) ==
