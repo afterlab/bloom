@@ -744,6 +744,22 @@ void previewFirstDuringFill() {
     expect(heldOperation == 5 * gib && heldPreview == 5 * gib / 2 &&
                ledger.yieldToPreview(&preview, gib) == 0,
            "after a fill deficits are proportional again");
+    // A pool that frees evicted entries asynchronously (prepared uploads retire after their GPU
+    // work) still reports them for a while: they are granted once, never twice.
+    std::size_t retiring = 2 * gib, retiringBudget = 0;
+    ledger.registerCache(
+        &retiring, gib, [&] { return retiring; },
+        [&](std::size_t bytes) { retiringBudget = bytes; });
+    heldOperation = 0;
+    {
+        auto fill = ledger.beginPreviewFill();
+        expect(ledger.yieldToPreview(&preview, gib) == gib && retiringBudget == gib &&
+                   ledger.yieldToPreview(&preview, gib) == gib && retiringBudget == 0,
+               "evicted bytes a pool is still retiring are granted to the preview pool");
+        expect(ledger.yieldToPreview(&preview, gib) == 0,
+               "bytes already on their way out are never granted twice");
+    }
+    ledger.unregisterCache(&retiring);
     ledger.unregisterCache(&operation);
     ledger.unregisterCache(&preview);
 }

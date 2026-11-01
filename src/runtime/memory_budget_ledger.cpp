@@ -338,7 +338,10 @@ void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceil
 
 void MemoryBudgetLedger::unregisterCache(const void* owner) {
     const std::lock_guard lock(mutex_);
-    caches_.erase(owner);
+    if (const auto found = caches_.find(owner); found != caches_.end()) {
+        yieldTargets_.erase(&found->second);
+        caches_.erase(found);
+    }
     if (hasPolled_ && state_.processCacheCeilingBytes) {
         applyProcessCeilingLocked();
         applyBudgetsLocked();
@@ -551,6 +554,7 @@ void MemoryBudgetLedger::applyBudgetsLocked() {
     budgets.reserve(caches_.size());
     for (const auto& [owner, cache] : caches_)
         budgets.emplace_back(&cache, cacheByteBudgetLocked(cache));
+    yieldTargets_.clear();
     const auto before = reusableRetainedLocked();
     for (const auto& [cache, bytes] : budgets)
         cache->applyBudget(bytes);
@@ -651,6 +655,7 @@ std::size_t MemoryBudgetLedger::reclaim(const std::size_t bytes) {
     const auto after = reusableRetainedLocked();
     const auto released = before > after ? before - after : std::size_t{0};
     releasedSinceTake_ = saturatedAdd(releasedSinceTake_, released);
+    yieldTargets_.clear();
     return released;
 }
 
@@ -681,6 +686,8 @@ void MemoryBudgetLedger::endPreviewFill() noexcept {
     const std::lock_guard lock(mutex_);
     if (previewFills_ != 0)
         --previewFills_;
+    if (previewFills_ == 0)
+        yieldTargets_.clear();
 }
 
 bool MemoryBudgetLedger::previewFillActive() const {
@@ -699,28 +706,38 @@ std::size_t MemoryBudgetLedger::yieldToPreview(const void* owner, const std::siz
     auto holdings = reusableHoldingsLocked();
     // Only Ordinary pools give here: finished frames never make room for other finished frames.
     std::erase_if(holdings, [](const auto& entry) {
-        return entry.second.priority != MemoryEvictionPriority::Ordinary ||
-               !entry.first->retained || entry.second.heldBytes == 0;
+        return entry.second.priority != MemoryEvictionPriority::Ordinary || !entry.first->retained;
     });
+    // A pool may free evicted entries asynchronously (the operation cache retires prepared
+    // uploads after their GPU work), so what it reports can still include bytes it has already
+    // been told to give back. Since the last budget application, a pool counts as holding at
+    // most the budget it was last given here; the same bytes are never granted twice.
     std::vector<MemoryEvictionHolding> view;
     view.reserve(holdings.size());
     std::size_t before = 0;
-    for (const auto& [cache, holding] : holdings) {
+    std::size_t granted = 0;
+    for (auto& [cache, holding] : holdings) {
+        if (const auto target = yieldTargets_.find(cache); target != yieldTargets_.end())
+            holding.heldBytes = std::min(holding.heldBytes, target->second);
         view.push_back(holding);
-        before = saturatedAdd(before, holding.heldBytes);
+        before = saturatedAdd(before, cache->retained());
     }
-    if (before == 0)
-        return 0;
     const auto shares = memoryEvictionShares(view, bytes, true, MemoryEvictionRounding::Up);
-    for (std::size_t index = 0; index < holdings.size(); ++index)
-        if (shares[index] != 0)
-            holdings[index].first->applyBudget(holdings[index].second.heldBytes - shares[index]);
+    for (std::size_t index = 0; index < holdings.size(); ++index) {
+        if (shares[index] == 0)
+            continue;
+        // The pool evicts to this budget now; entries it retires asynchronously free shortly.
+        const auto target = holdings[index].second.heldBytes - shares[index];
+        yieldTargets_[holdings[index].first] = target;
+        holdings[index].first->applyBudget(target);
+        granted = saturatedAdd(granted, shares[index]);
+    }
     std::size_t after = 0;
     for (const auto& [cache, holding] : holdings)
         after = saturatedAdd(after, cache->retained());
-    const auto released = before > after ? before - after : std::size_t{0};
-    releasedSinceTake_ = saturatedAdd(releasedSinceTake_, released);
-    return released;
+    if (before > after)
+        releasedSinceTake_ = saturatedAdd(releasedSinceTake_, before - after);
+    return granted;
 }
 
 void MemoryBudgetLedger::setActiveWorkClaims(const std::size_t bytes) {

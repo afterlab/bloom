@@ -170,7 +170,8 @@ class MemoryBudgetLedger final {
     // Preview first: a FinishedPreview pool that has no room for a finished frame asks here before
     // it evicts one of its own. During a fill, with a RAM headroom (usable-capacity retention), the
     // Ordinary pools give back up to `bytes` (least recently used entries first), and the caller
-    // may raise its own budget by the returned bytes they released. The exchange is memory-neutral:
+    // may raise its own budget by the returned bytes: what they evicted, including entries a pool
+    // retires asynchronously, never the same bytes twice. The exchange is memory-neutral:
     // the preview pool never takes free memory or the headroom the next frame needs this way.
     // Returns 0 outside a fill, without a headroom, or for any other owner. Same thread rules as
     // poll; the caller must not hold its own cache lock.
@@ -252,6 +253,9 @@ class MemoryBudgetLedger final {
     std::size_t releasedSinceTake_ = 0;
     std::size_t activeWorkClaims_ = 0;
     std::size_t previewFills_ = 0;
+    // The budget each Ordinary pool was last given by yieldToPreview, until budgets are applied
+    // again: what it may still report beyond this is already on its way out.
+    std::map<const Cache*, std::size_t> yieldTargets_;
     void endPreviewFill() noexcept;
     // What each reusable pool holds now, with its priority, for memoryEvictionShares.
     [[nodiscard]] std::vector<std::pair<const Cache*, MemoryEvictionHolding>>
