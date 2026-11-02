@@ -217,7 +217,15 @@ struct detail::SequenceExportWorkV1 {
                 "Invalid composition frame range");
         auto compiled = compiler.compile(request.composition, context.cancellation());
         checkpoint();
-        require(compiled.plan != nullptr, "Composition could not be compiled");
+        if (compiled.plan == nullptr) {
+            // #431: the detail names the failure's subject and the compiler's own sentence.
+            const auto subject =
+                runtime::describeCompileFailure(compiled, request.composition.snapshot.project(),
+                                                request.composition.compositionId);
+            throw Unavailable{Error::InvalidValue,
+                              subject.empty() ? "Composition could not be compiled"
+                                              : "Composition could not be compiled: " + subject};
+        }
         plan = std::move(compiled.plan);
         require(plan->duration() == range.duration && plan->format().frameRate() == range.frameRate,
                 "Range timebase differs from the captured composition");

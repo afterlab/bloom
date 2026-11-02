@@ -338,9 +338,18 @@ class ImageDriver final : public DriverBase {
             if (result->state() == runtime::TaskState::Cancelled || stopRequested_)
                 return finishStopped();
             if (result->state() != runtime::TaskState::Succeeded || !result->value() ||
-                !*result->value())
-                return fail(failure(ExportFailureCode::CompileFailed, "export.compile.failed",
-                                    "The composition could not be compiled for export"));
+                !*result->value()) {
+                // #431: the reason names the failure's subject (composition, layer, node,
+                // parameter) and the compiler's own sentence.
+                const auto& diagnostics = result->diagnostics();
+                const auto subject =
+                    diagnostics.empty() ? std::string{} : diagnostics.front().detail;
+                return fail(
+                    failure(ExportFailureCode::CompileFailed, "export.compile.failed",
+                            subject.empty()
+                                ? "The composition could not be compiled for export"
+                                : "The composition could not be compiled for export. " + subject));
+            }
             plan_ = *result->value();
             mediaDisplay_ = std::move(*mediaDisplaySlot_);
             compiled_ = true;
@@ -550,7 +559,8 @@ class ImageDriver final : public DriverBase {
                         .code = "bloom.host.export.compile-failed",
                         .severity = runtime::DiagnosticSeverity::Error,
                         .summary = "The composition could not be compiled for export",
-                        .detail = {},
+                        .detail = runtime::describeCompileFailure(compiled, snapshot.project(),
+                                                                  composition),
                         .suggestedAction = "Review the composition graph."});
                 if (tiff) {
                     if (auto display = output::PreparedOutputDisplayV1::prepare(intent))

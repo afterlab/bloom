@@ -418,6 +418,56 @@ void disabledRemappedLayers() {
            "the Solid enables again");
     expect(fixture.covered(at(1, 2)) == shown, "the re-enabled remapped Solid renders again");
 }
+// #431: a real compile failure names its subject in the description an export failure carries.
+// A stale Time Remap override (a parameter-only subject) names the composition, the layer whose
+// Layer Output binds it and the parameter; an unknown node type names the node.
+void compileFailureNamesItsSubject() {
+    Fixture fixture;
+    const auto composition = fixture.initial.initialCompositionId;
+    expect(execute<commands::EnableLayerTimeRemap>(fixture.document, fixture.commands, composition,
+                                                   fixture.layer),
+           "the Solid's Time Remap enables");
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    auto snapshot = fixture.document.snapshot();
+    const auto& graph = snapshot.project().findComposition(composition)->graph();
+    const auto& bindings = graph.findNode(graph.findLayer(fixture.layer)->nodeId)->parameters;
+    const auto remap = std::ranges::find(bindings, document::kTimeRemapParameterRole,
+                                         &document::ParameterBinding::role);
+    expect(remap != bindings.end(), "the Solid has a Time Remap parameter");
+    if (remap == bindings.end())
+        return;
+    runtime::SnapshotCompileRequest stale{snapshot, composition};
+    stale.parameterOverrides.push_back({document::Revision{}, remap->parameterId, 1.0});
+    const auto overridden = compiler.compile(stale, {});
+    const auto overrideText =
+        runtime::describeCompileFailure(overridden, snapshot.project(), composition);
+    expect(overridden.status == runtime::SnapshotCompileStatus::Failed &&
+               overrideText.starts_with(
+                   R"(Composition "Main", layer "Solid", parameter "timeRemap": )"),
+           ("a parameter failure names its composition, layer and parameter: " + overrideText)
+               .c_str());
+
+    const auto base = fixture.document.snapshot();
+    auto draft = fixture.document.draft(base);
+    draft.project().findComposition(composition)->graph().findNode(fixture.solid)->typeId =
+        "example.unknown";
+    expect(fixture.document.commit(base.revision(), std::move(draft)).committed(),
+           "the document holds an unknown node type");
+    snapshot = fixture.document.snapshot();
+    const auto unknown = compiler.compile({snapshot, composition}, {});
+    const auto unknownText =
+        runtime::describeCompileFailure(unknown, snapshot.project(), composition);
+    expect(unknown.status != runtime::SnapshotCompileStatus::Compiled &&
+               unknownText.starts_with(R"(Composition "Main", node )" +
+                                       std::to_string(fixture.solid.value()) +
+                                       " (example.unknown): "),
+           ("a node failure names its composition and node: " + unknownText).c_str());
+    expect(runtime::describeCompileFailure(
+               runtime::SnapshotCompileResult{runtime::SnapshotCompileStatus::Compiled, {}, {}},
+               snapshot.project(), composition)
+               .empty(),
+           "a compiled result has no failure to describe");
+}
 } // namespace
 
 int main() {
@@ -427,6 +477,7 @@ int main() {
         audio();
         identityRemap();
         disabledRemappedLayers();
+        compileFailureNamesItsSubject();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

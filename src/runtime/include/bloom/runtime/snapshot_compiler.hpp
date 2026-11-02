@@ -121,6 +121,14 @@ struct CompileFailureSummary final {
 [[nodiscard]] std::optional<CompileFailureSummary>
 compileFailureSummary(const SnapshotCompileResult& result, document::CompositionId composition);
 
+// The same first error as one sentence that names its subject, for text that leaves the compiler
+// (an export failure): `Composition "Main", layer "Clip", parameter "timeRemap": <detail>`. Names
+// come from `project`; a subject it no longer resolves is named by its id. Empty for Compiled and
+// Cancelled.
+[[nodiscard]] std::string describeCompileFailure(const SnapshotCompileResult& result,
+                                                 const document::Project& project,
+                                                 document::CompositionId composition);
+
 class SnapshotCompiler final {
   public:
     explicit SnapshotCompiler(const NodeDefinitionRegistry& registry) noexcept

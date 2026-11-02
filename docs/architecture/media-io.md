@@ -2098,3 +2098,11 @@ encoder.
   with the check's detail). A failed run also keeps its frames' route provenance (GPU-evaluated
   frames and the GPU or CPU display transform) instead of counting every encoded frame as CPU
   reference (#424).
+- **Compile failures name their subject.** When the export's composition does not compile, the
+  failure names the first error's subject and the compiler's own sentence through
+  `runtime::describeCompileFailure`: the composition, then the layer, node and parameter when the
+  diagnostic has them (a Layer Output node or a parameter it binds is named by its layer), for
+  example `The composition could not be compiled for export. Composition "Main", layer "Clip":
+  ...`. Stills and image sequences fail with `CompileFailed` and the diagnostic code
+  `export.compile.failed` carrying that sentence as the reason (#431); a movie or WAV run carries it
+  in the detail it logs.

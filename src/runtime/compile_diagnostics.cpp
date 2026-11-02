@@ -1,6 +1,8 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <string>
 
 namespace bloom::runtime {
 
@@ -83,6 +85,58 @@ compileFailureSummary(const SnapshotCompileResult& result,
     summary.nodeId = error->subject.nodeId;
     summary.parameterId = error->subject.parameterId;
     return summary;
+}
+
+std::string describeCompileFailure(const SnapshotCompileResult& result,
+                                   const document::Project& project,
+                                   const document::CompositionId composition) {
+    const auto summary = compileFailureSummary(result, composition);
+    if (!summary)
+        return {};
+    const auto error = std::ranges::find(result.diagnostics, DiagnosticSeverity::Error,
+                                         &CompileDiagnostic::severity);
+    const auto quoted = [](const std::string& name) { return '"' + name + '"'; };
+    std::string subject = "composition ";
+    const auto* owner = project.findComposition(summary->compositionId);
+    subject += owner != nullptr && !owner->name().empty()
+                   ? quoted(owner->name())
+                   : std::to_string(summary->compositionId.value());
+    if (owner != nullptr && error != result.diagnostics.end()) {
+        const auto& graph = owner->graph();
+        const auto& named = error->subject;
+        // A parameter-only subject names the node that binds the parameter.
+        const document::NodeRecord* node = named.nodeId ? graph.findNode(*named.nodeId) : nullptr;
+        const document::ParameterBinding* binding = nullptr;
+        for (const auto& candidate : graph.nodes()) {
+            if (!named.parameterId || (node != nullptr && &candidate != node))
+                continue;
+            const auto found = std::ranges::find(candidate.parameters, *named.parameterId,
+                                                 &document::ParameterBinding::parameterId);
+            if (found != candidate.parameters.end()) {
+                node = &candidate;
+                binding = &*found;
+                break;
+            }
+        }
+        const auto nodeId = node != nullptr ? std::optional(node->id) : named.nodeId;
+        // A Layer Output's diagnostics name its node; the layer is what the artist sees.
+        const auto boundary =
+            std::ranges::find_if(graph.layerOutputs(), [&](const auto& candidate) {
+                return named.layerId ? candidate.layerId == *named.layerId
+                                     : nodeId && candidate.nodeId == *nodeId;
+            });
+        if (boundary != graph.layerOutputs().end())
+            subject += ", layer " + quoted(boundary->name);
+        if (nodeId && (boundary == graph.layerOutputs().end() || boundary->nodeId != *nodeId))
+            subject += ", node " + std::to_string(nodeId->value()) +
+                       (node != nullptr ? " (" + node->typeId + ")" : std::string{});
+        if (named.parameterId)
+            subject +=
+                ", parameter " + (binding != nullptr ? quoted(binding->role)
+                                                     : std::to_string(named.parameterId->value()));
+    }
+    subject.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(subject.front())));
+    return subject + ": " + summary->detail;
 }
 
 } // namespace bloom::runtime
