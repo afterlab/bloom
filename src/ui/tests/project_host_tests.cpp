@@ -894,8 +894,11 @@ void testSaveCopyUnavailableOnEditableContent(Expectations& expectations) {
 // ADR 0032 / issue #381: a project saved before document 1.28 whose video asset relied on the
 // previous Auto colour default shows the one-time note when opened. Saving it records 1.28, so
 // reopening shows no note, and an asset with an explicit input colour never triggers it.
-[[nodiscard]] std::string encodeVideoProjectAtMinor(const bool explicitInputColour,
-                                                    const std::uint32_t minor) {
+// `hlg` tags the stream as Rec.2100 HLG (BT.2020 primaries and matrix, transfer 18); an empty
+// `inputColour` leaves the asset in Auto.
+[[nodiscard]] std::string encodeVideoProjectAtMinor(const std::string_view inputColour,
+                                                    const std::uint32_t minor,
+                                                    const bool hlg = false) {
     auto seed = bloom::document::makeNewProject("Older video", "Main",
                                                 bloom::core::RationalTime::fromInteger(2));
     bloom::document::AssetRecord asset;
@@ -907,8 +910,7 @@ void testSaveCopyUnavailableOnEditableContent(Expectations& expectations) {
     asset.frames = 48;
     asset.duration = *bloom::core::RationalTime::create(2, 1);
     asset.name = "clip";
-    if (explicitInputColour)
-        asset.interpretation.inputColorSpaceId = "lin_rec709_scene";
+    asset.interpretation.inputColorSpaceId = std::string(inputColour);
     bloom::document::AssetVideoStream stream;
     stream.kind = 1;
     stream.codec = "h264";
@@ -918,6 +920,12 @@ void testSaveCopyUnavailableOnEditableContent(Expectations& expectations) {
     stream.width = 1280;
     stream.height = 720;
     // An untagged phone clip: no primaries, transfer, matrix or range.
+    if (hlg) {
+        stream.primaries = 9;
+        stream.transfer = 18;
+        stream.matrix = 9;
+        stream.range = 1;
+    }
     asset.videoStreams = {stream};
     if (!seed.project.addAsset(std::move(asset)))
         throw std::logic_error("older video asset");
@@ -979,8 +987,8 @@ void testOlderProjectVideoColourNotice(Expectations& expectations) {
     const auto older = directory.path() / "older.bloom";
     const auto overridden = directory.path() / "overridden.bloom";
     const auto resaved = directory.path() / "resaved.bloom";
-    writeArchiveAtMinor(older, encodeVideoProjectAtMinor(false, 27), 27);
-    writeArchiveAtMinor(overridden, encodeVideoProjectAtMinor(true, 27), 27);
+    writeArchiveAtMinor(older, encodeVideoProjectAtMinor({}, 27), 27);
+    writeArchiveAtMinor(overridden, encodeVideoProjectAtMinor("lin_rec709_scene", 27), 27);
 
     bloom::runtime::TaskScheduler scheduler;
     ProjectHost host(scheduler);
@@ -1029,6 +1037,86 @@ void testOlderProjectVideoColourNotice(Expectations& expectations) {
             document->snapshot().project().assets().front().interpretation.inputColorSpaceId ==
                 "lin_rec709_scene",
         "video color notice: the explicit input color opens exactly as saved");
+}
+
+// Issue #407: HLG input follows BT.2408 since shortly before document 1.32. A project saved
+// below 1.32 with HLG footage (Auto from the stream's transfer tag, or the HLG space chosen
+// explicitly) shows the one-time note once; saving records the current version. A project without
+// HLG footage, one saved at 1.32 or later, and a new project show nothing.
+void testOlderProjectHlgNotice(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "HLG notice: temp directory is available");
+        return;
+    }
+    const auto current = bloom::project::kCanonicalDocumentSchemaVersionV1.minor;
+    const auto boundary = bloom::project::kHlgReferenceWhiteDocumentVersionV1.minor;
+    const auto hlgAuto = directory.path() / "hlg-auto.bloom";
+    const auto hlgChosen = directory.path() / "hlg-chosen.bloom";
+    const auto hlgOld = directory.path() / "hlg-1.27.bloom";
+    const auto hlgAtBoundary = directory.path() / "hlg-boundary.bloom";
+    const auto sdrOnly = directory.path() / "sdr.bloom";
+    const auto hlgNew = directory.path() / "hlg-new.bloom";
+    const auto resaved = directory.path() / "hlg-resaved.bloom";
+    writeArchiveAtMinor(hlgAuto, encodeVideoProjectAtMinor({}, boundary - 1, true), boundary - 1);
+    writeArchiveAtMinor(hlgChosen, encodeVideoProjectAtMinor("Rec.2100-HLG (Bloom)", boundary - 1),
+                        boundary - 1);
+    writeArchiveAtMinor(hlgOld, encodeVideoProjectAtMinor({}, 27, true), 27);
+    writeArchiveAtMinor(hlgAtBoundary, encodeVideoProjectAtMinor({}, boundary, true), boundary);
+    writeArchiveAtMinor(sdrOnly, encodeVideoProjectAtMinor({}, boundary - 1), boundary - 1);
+    writeArchiveAtMinor(hlgNew, encodeVideoProjectAtMinor({}, current, true), current);
+
+    bloom::runtime::TaskScheduler scheduler;
+    ProjectHost host(scheduler);
+    OutcomeCapture openCapture;
+    OutcomeCapture saveCapture;
+    connectOpenCapture(host, openCapture);
+    connectSaveCapture(host, saveCapture);
+    QString noticeAtSignal;
+    QObject::connect(&host, &ProjectHost::openFinished,
+                     [&] { noticeAtSignal = host.openNotice(); });
+    int opens = 0;
+    const auto open = [&](const std::filesystem::path& path, const std::string& label) {
+        host.beginOpen(path);
+        ++opens;
+        expectations.expect(waitUntilIdle(host) && openCapture.count == opens &&
+                                openCapture.outcome == ProjectHostOperationOutcome::Published,
+                            "HLG notice: " + label + " opens");
+    };
+    const auto isHlgNotice = [](const QString& notice) {
+        return notice.startsWith("This project was saved by an earlier version of Bloom.") &&
+               notice.contains("HLG footage now follows the BT.2408 standard") &&
+               notice.contains("about 1.26 times brighter") &&
+               notice.contains("affects 1 asset in this project");
+    };
+
+    open(hlgAuto, "an older project with an Auto HLG video");
+    expectations.expect(isHlgNotice(noticeAtSignal) && !noticeAtSignal.contains("less pale"),
+                        "HLG notice: an Auto HLG video before 1.32 shows the note, got: " +
+                            noticeAtSignal.toStdString());
+    host.beginSaveAs(resaved);
+    expectations.expect(waitUntilIdle(host) && saveCapture.count == 1 &&
+                            saveCapture.outcome == ProjectHostOperationOutcome::Published,
+                        "HLG notice: the older project saves");
+    open(resaved, "the resaved project");
+    expectations.expect(noticeAtSignal.isEmpty() && host.openNotice().isEmpty(),
+                        "HLG notice: a resaved project shows the note no more");
+
+    open(hlgChosen, "an older project with the HLG space chosen");
+    expectations.expect(isHlgNotice(noticeAtSignal),
+                        "HLG notice: an explicitly chosen HLG space before 1.32 shows the note");
+    open(hlgOld, "a 1.27 project with an Auto HLG video");
+    expectations.expect(isHlgNotice(noticeAtSignal) && !noticeAtSignal.contains("less pale"),
+                        "HLG notice: a 1.27 HLG video shows only the HLG note");
+    open(hlgAtBoundary, "an HLG project saved at 1.32");
+    expectations.expect(noticeAtSignal.isEmpty(),
+                        "HLG notice: a project saved at 1.32 already follows BT.2408");
+    open(sdrOnly, "an older project without HLG footage");
+    expectations.expect(noticeAtSignal.isEmpty(),
+                        "HLG notice: a project without HLG footage shows nothing");
+    open(hlgNew, "a project saved by this version");
+    expectations.expect(noticeAtSignal.isEmpty() && host.openNotice().isEmpty(),
+                        "HLG notice: a project saved by this version shows nothing");
 }
 
 } // namespace
@@ -1124,5 +1212,6 @@ int main(int argc, char** argv) {
     testDefaultSaveAsAddsBloomSuffix(expectations);
     testDefaultUnsavedPromptNamesTheAction(expectations);
     testOlderProjectVideoColourNotice(expectations);
+    testOlderProjectHlgNotice(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }

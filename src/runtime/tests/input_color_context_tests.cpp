@@ -440,9 +440,63 @@ void testSdrVideoColourDefaultAssets(Expectations& expectations) {
         "HDR, sRGB, linear and Rec.2020 tags, explicit or legacy choices and stills are unaffected");
 }
 
+// Issue #407: exactly the assets Bloom interprets through the synthesized Rec.2100 HLG space (an
+// explicit choice, or Auto video whose stored transfer is HLG) trigger the BT.2408 open note, and
+// the Auto classification agrees with what video resolution picks for the same tags.
+void testHlgInputAssets(Expectations& expectations) {
+    const auto video = [](const std::int64_t primaries, const std::int64_t transfer,
+                          const std::int64_t matrix, const std::int64_t range) {
+        bloom::document::AssetRecord asset;
+        asset.kind = bloom::document::AssetKind::Video;
+        bloom::document::AssetVideoStream stream;
+        stream.kind = 1;
+        stream.width = 1920;
+        stream.height = 1080;
+        stream.framePeriod = *bloom::core::RationalTime::create(1, 25);
+        stream.primaries = primaries;
+        stream.transfer = transfer;
+        stream.matrix = matrix;
+        stream.range = range;
+        asset.videoStreams = {stream};
+        return asset;
+    };
+    using bloom::runtime::detail::assetUsesHlgInput;
+    auto chosenImage = video(1, 1, 1, 1);
+    chosenImage.kind = bloom::document::AssetKind::Image;
+    chosenImage.interpretation.inputColorSpaceId =
+        std::string(bloom::color::kBloomRec2100HlgColorSpaceId);
+    expectations.expect(assetUsesHlgInput(video(9, 18, 9, 1)) &&
+                            assetUsesHlgInput(video(9, 18, -1, 1)) &&
+                            assetUsesHlgInput(chosenImage),
+                        "Auto HLG video and an explicitly chosen HLG space use the HLG input");
+    auto otherChoice = video(9, 18, 9, 1);
+    otherChoice.interpretation.inputColorSpaceId = "lin_rec709_scene";
+    auto legacyChoice = video(9, 18, 9, 1);
+    legacyChoice.interpretation.colorSpace = bloom::document::AssetColorSpace::Linear;
+    auto image = video(9, 18, 9, 1);
+    image.kind = bloom::document::AssetKind::Image;
+    expectations.expect(!assetUsesHlgInput(video(9, 16, 9, 1)) &&
+                            !assetUsesHlgInput(video(1, 1, 1, 1)) &&
+                            !assetUsesHlgInput(video(-1, -1, -1, -1)) &&
+                            !assetUsesHlgInput(video(9, 18, 10, 1)) &&
+                            !assetUsesHlgInput(otherChoice) && !assetUsesHlgInput(legacyChoice) &&
+                            !assetUsesHlgInput(image),
+                        "PQ, SDR, untagged and refused BT.2020 CL video, other explicit or legacy "
+                        "choices and untagged stills do not use the HLG input");
+    auto config = neutralConfig();
+    if (!config)
+        return;
+    const auto hlg =
+        bloom::media::video::resolveVideoInputColorSpace(*config, ColourTags{9, 18, 9, 1}, 0, {});
+    expectations.expect(hlg.automatic && hlg.id == config->rec2100HlgColorSpaceId() &&
+                            hlg.id == bloom::color::kBloomRec2100HlgColorSpaceId,
+                        "Auto resolves the HLG tags the classification counts to the HLG space");
+}
+
 int main() {
     Expectations expectations;
     testSdrVideoColourDefaultAssets(expectations);
+    testHlgInputAssets(expectations);
     testImageRules(expectations);
     testVideoRules(expectations);
     testSourcePrecedenceAndCache(expectations);

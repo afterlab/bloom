@@ -33,6 +33,11 @@ inline constexpr std::uint32_t kLayerNameFollowsSourceMinor = 30;
 // video through the sRGB texture space. Opening an older project that relied on the previous
 // Auto default shows a one-time note.
 inline constexpr document::SchemaVersion kSdrVideoColourDefaultDocumentVersionV1{1, 28};
+// Issue #407: the first document version every build saved after HLG input began following BT.2408
+// (reference white at 1.0). Document 1.31 was current on both sides of that change, so 1.32 is the
+// first version that is never older than it; opening a project below it that has HLG footage shows
+// a one-time note.
+inline constexpr document::SchemaVersion kHlgReferenceWhiteDocumentVersionV1{1, 32};
 // The v1 expanded document.json resource limit from docs/architecture/project-format.md.
 inline constexpr std::size_t kCanonicalDocumentMaximumBytes = 268'435'456;
 // Deepest canonical document emission is nine containers (root through a vec2 keyframe value

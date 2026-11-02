@@ -38,4 +38,11 @@ prepareInputColorProcessor(const color::ResolvedBloomNeutralConfig& config,
 // assets through the Rec.709 video space, so opening one shows a one-time note.
 [[nodiscard]] bool assetUsesSdrVideoColourDefault(const document::AssetRecord& asset);
 
+// Issue #407: true for an asset Bloom interprets through the synthesized Rec.2100 HLG input space,
+// chosen explicitly or, for a video in Auto, from its HLG transfer tag. That space used to keep
+// OCIO's scale and now follows BT.2408 (the 75% signal is 1.0), so the same footage looks about
+// 1.26 times brighter; opening a project saved before document 1.32 with such an asset shows a
+// one-time note.
+[[nodiscard]] bool assetUsesHlgInput(const document::AssetRecord& asset);
+
 } // namespace bloom::runtime::detail

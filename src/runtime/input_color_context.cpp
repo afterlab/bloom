@@ -1,6 +1,7 @@
 #include "input_color_context.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/media/video/colour.hpp>
 
 #include <algorithm>
@@ -168,6 +169,23 @@ bool assetUsesSdrVideoColourDefault(const document::AssetRecord& asset) {
                period.numerator() > 0 ? static_cast<double>(period.denominator()) /
                                             static_cast<double>(period.numerator())
                                       : 0.0});
+}
+
+bool assetUsesHlgInput(const document::AssetRecord& asset) {
+    // The resolution order of resolveVideoInputColorSpace and resolveImageInputColorSpace: an
+    // explicit id first, then a legacy choice, then the stream tags.
+    const auto& interpretation = asset.interpretation;
+    if (!interpretation.inputColorSpaceId.empty())
+        return interpretation.inputColorSpaceId == color::kBloomRec2100HlgColorSpaceId;
+    if (asset.kind != document::AssetKind::Video ||
+        interpretation.colorSpace != document::AssetColorSpace::Auto)
+        return false;
+    // Auto resolves H.273 transfer 18 (ARIB STD-B67) to the Rec.2100 HLG space, except a BT.2020
+    // constant-luminance stream (matrix 10), which it refuses.
+    constexpr std::int64_t kTransferHlg = 18, kMatrixBt2020Cl = 10;
+    const auto stream = std::ranges::find(asset.videoStreams, 1U, &document::AssetVideoStream::kind);
+    return stream != asset.videoStreams.end() && stream->transfer == kTransferHlg &&
+           stream->matrix != kMatrixBt2020Cl;
 }
 
 } // namespace bloom::runtime::detail

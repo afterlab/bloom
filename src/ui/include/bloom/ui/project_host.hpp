@@ -201,7 +201,9 @@ class ProjectHost final : public QObject {
     [[nodiscard]] document::CompositionId lowestCompositionId() const;
     // A one-time note for the last successful Open, empty when there is none. ADR 0032: a project
     // saved before document 1.28 whose video assets relied on the previous Auto colour default
-    // says that they are now shown as players show them. Set before openFinished() fires.
+    // says that they are now shown as players show them. Issue #407: a project saved before
+    // document 1.32 with HLG footage says that it now follows BT.2408 and looks brighter. Set
+    // before openFinished() fires.
     [[nodiscard]] const QString& openNotice() const noexcept { return openNotice_; }
 
     // Seam setters (decision 4). Defaults are installed at construction (kit prompts,
@@ -316,7 +318,7 @@ class ProjectHost final : public QObject {
     void recoveryDiagnostic(QString message);
 
   private:
-    [[nodiscard]] QString videoColourDefaultNotice(const host::SessionOpenResult& result) const;
+    [[nodiscard]] QString colourChangeNotice(const host::SessionOpenResult& result) const;
     void poll();
     void scheduleNextPoll();
     void setActivity(ProjectHostActivity activity);
