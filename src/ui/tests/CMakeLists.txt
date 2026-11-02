@@ -2360,7 +2360,7 @@ bloom_add_test(
 
 # Compile-failure details: status bar disclosure, popup, Select, Copy details; DPR captures.
 add_executable(bloom_compile_failure_test compile_failure_tests.cpp)
-target_link_libraries(bloom_compile_failure_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
+target_link_libraries(bloom_compile_failure_test PRIVATE bloom_ui bloom_runtime_compiler bloom_runtime Qt6::Test)
 bloom_enable_warnings(bloom_compile_failure_test)
 foreach(scale IN ITEMS 1 1.5)
     add_test(NAME bloom.ui.compile_failure.dpr${scale} COMMAND bloom_compile_failure_test)

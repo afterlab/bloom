@@ -169,6 +169,8 @@ class WindowStatusBar final : public kit::KSurface {
     [[nodiscard]] QString videoToolTipForTest() const;
     // Re-reads the video decode reports now (the bar otherwise follows its 250 ms cadence).
     void refreshVideoCellForTest() { refreshVideoCell(); }
+    // Whether the 250 ms preview/cache poll is currently running.
+    [[nodiscard]] bool cachePollActiveForTest() const;
     [[nodiscard]] QString messageTextForTest() const;
     [[nodiscard]] QString versionTextForTest() const;
     [[nodiscard]] ViewerEditor* displayedViewerForTest() const noexcept;
@@ -176,9 +178,14 @@ class WindowStatusBar final : public kit::KSurface {
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
   private:
+    // The 250 ms poll only has an audience while the bar is on screen: it stops when the bar is
+    // hidden or its window is minimised and refreshes once when it resumes.
+    void updateCachePoll();
     void buildSegments();
     void refreshActivity();
     void setPreviewNotice(const CompositionPreviewState& preview);

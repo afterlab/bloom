@@ -5,6 +5,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/runtime/operation_cache.hpp>
 #include <bloom/ui/compile_failure.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -201,6 +202,21 @@ void testStatusBarPopup() {
     expect(!bar.compileDetailsVisibleForTest(), "recovered: the disclosure goes away");
 }
 
+// The 250 ms preview/cache poll has no audience while the bar is hidden: it stops on hide and runs
+// again, refreshing once, on show.
+void testCachePollFollowsVisibility() {
+    Fixture f;
+    bloom::runtime::OperationCache cache;
+    ui::WindowStatusBar bar(f.session, nullptr, nullptr, &cache);
+    expect(bar.cachePollActiveForTest(), "a bar that has not been shown still polls");
+    bar.show();
+    expect(bar.cachePollActiveForTest(), "a shown bar polls");
+    bar.hide();
+    expect(!bar.cachePollActiveForTest(), "a hidden bar does not poll");
+    bar.show();
+    expect(bar.cachePollActiveForTest(), "showing the bar again resumes the poll");
+}
+
 void testGoneSubject() {
     Fixture f;
     auto state = f.failedState();
@@ -223,6 +239,7 @@ int main(int argc, char** argv) {
     testAdapter();
     testStatusBarPopup();
     testGoneSubject();
+    testCachePollFollowsVisibility();
     if (gFailures != 0)
         std::cerr << gFailures << " failure(s)\n";
     return gFailures == 0 ? 0 : 1;

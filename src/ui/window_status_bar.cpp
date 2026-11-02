@@ -32,6 +32,7 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QShowEvent>
 #include <QTimer>
 
 namespace bloom::ui {
@@ -865,7 +866,39 @@ void WindowStatusBar::refreshProbeCell(const ProbeReadout& readout) {
     applyNarrowLayout();
 }
 
+bool WindowStatusBar::cachePollActiveForTest() const {
+    return cacheRefreshTimer_ != nullptr && cacheRefreshTimer_->isActive();
+}
+
+void WindowStatusBar::updateCachePoll() {
+    if (cacheRefreshTimer_ == nullptr)
+        return;
+    const bool wanted = isVisible() && (window() == nullptr || !window()->isMinimized());
+    if (wanted == cacheRefreshTimer_->isActive())
+        return;
+    if (wanted) {
+        refreshPreviewCells();
+        cacheRefreshTimer_->start();
+    } else {
+        cacheRefreshTimer_->stop();
+    }
+}
+
+void WindowStatusBar::showEvent(QShowEvent* event) {
+    KSurface::showEvent(event);
+    if (window() != nullptr && window() != this)
+        window()->installEventFilter(this); // a repeated install is a no-op
+    updateCachePoll();
+}
+
+void WindowStatusBar::hideEvent(QHideEvent* event) {
+    KSurface::hideEvent(event);
+    updateCachePoll();
+}
+
 bool WindowStatusBar::eventFilter(QObject* watched, QEvent* event) {
+    if (watched != probe_ && event->type() == QEvent::WindowStateChange)
+        updateCachePoll();
     if (watched == probe_ && event->type() == QEvent::MouseButtonPress) {
         const auto* mouse = static_cast<const QMouseEvent*>(event);
         if (mouse->button() == Qt::LeftButton && mouse->modifiers().testFlag(Qt::ControlModifier)) {
