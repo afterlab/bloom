@@ -184,6 +184,49 @@ class AgentFeedback(unittest.TestCase):
         position = server.role('position')
         self.assertEqual(self.constant(position), [960.0, 540.0])
 
+    def test_text_font_takes_a_font_asset_id_and_says_which(self):
+        # #432, from a blind field test: unknown fonts were stored and rendered in the fallback
+        # face, and the refusal listed legacy face numbers it then refused.
+        server = self.server
+        server.transact(('bloom.layer.add-text', {'composition': 1, 'name': 'T', 'text': 'Hi'}))
+        font = server.role('font')
+        default = self.constant(font)
+        listed = f'"{default}" (DejaVu Sans Book)'
+        for value in (2, 'Inter Medium', 'Nonexistent Face', '999'):
+            refused = server.transact(set_source(font, value=value))
+            self.assertFalse(refused['succeeded'], value)
+            message = refused['diagnostics'][0]['message']
+            self.assertIn('the id of a Font asset in this project, as a string: ' + listed,
+                          message)
+            self.assertNotIn('Inter', message.partition('; it takes ')[2])
+            self.assertEqual(self.constant(font), default)
+        self.assertTrue(server.transact(set_source(font, value=default))['succeeded'])
+        # ensure-font names the argument constraint a refused face broke.
+        with tempfile.TemporaryDirectory() as directory:
+            face = os.path.join(directory, 'Face.ttf')
+            refused = server.transact(('bloom.asset.ensure-font', {
+                'path': face, 'digest': '3' * 64, 'family': 'Face', 'style': 'Regular'}))
+            self.assertFalse(refused['succeeded'])
+            self.assertIn('relinkHint to start with "file:"',
+                          refused['diagnostics'][0]['message'])
+            # Re-importing a file returns the asset that already holds it.
+            image = os.path.join(directory, 'still.png')
+            rows = zlib.compress(b'\x00\xff\x00\x00\xff')
+            chunk = lambda kind, body: (struct.pack('>I', len(body)) + kind + body +
+                                        struct.pack('>I', zlib.crc32(kind + body)))
+            with open(image, 'wb') as out:
+                out.write(b'\x89PNG\r\n\x1a\n' +
+                          chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 6, 0, 0, 0)) +
+                          chunk(b'IDAT', rows) + chunk(b'IEND', b''))
+            arguments = {'paths': [image], 'projectDirectory': directory, 'asSequence': False}
+            first = server.transact(('bloom.asset.import', arguments))
+            again = server.transact(('bloom.asset.import', arguments))
+            self.assertTrue(first['succeeded'] and again['succeeded'], (first, again))
+            ids = [[output['id'] for output in result['outputs'] if output['name'] == 'asset']
+                   for result in (first, again)]
+            self.assertEqual(len(ids[0]), 1)
+            self.assertEqual(ids[1], ids[0])
+
     def test_rejections_carry_operation_index_and_reason(self):
         server = self.server
         server.transact(('bloom.layer.add-solid', {'composition': 1, 'name': 'S',

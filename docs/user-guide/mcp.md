@@ -308,7 +308,16 @@ accepts, for example "Parameter 31 (points of node 7, bloom.shape) cannot take 2
 number in 3..64." A Boolean parameter such as a shape's `fillEnabled` or `strokeEnabled` can be
 driven by a Boolean value node: `{"driverNode": <id>, "driverPort": "result"}` with
 `bloom.scalar-to-boolean`, for example. A driver naming an output the node does not have, or one of
-the wrong kind, is refused with the node's outputs. `bloom.animation.set-keyframe-at-time-for-parameter`
+the wrong kind, is refused with the node's outputs. A text layer's `font` takes one value form:
+the id of a Font asset in the project, as a string (`"3"`). A family name, a number or an id that
+names no Font asset is refused, and the refusal lists every Font asset the project holds, for
+example `it takes the id of a Font asset in this project, as a string: "1" (DejaVu Sans Book)`.
+`query` `kind` `assets` lists them too, and `bloom.asset.ensure-font` adds a face and returns its
+id. ensure-font's `portability` is `"system"`, with `path` an absolute file path and `relinkHint`
+that path's `file:` URI, or `"builtin"`, with a `relinkHint` starting `font:`; a face that breaks
+one of these is refused with the constraint it broke. `bloom.asset.import` of a file the project
+already holds adds nothing and returns the existing asset's id as its `asset` output, one id per
+imported file. `bloom.animation.set-keyframe-at-time-for-parameter`
 on a constant parameter makes it animated in the same undo step, its constant becoming the first
 key.
 
