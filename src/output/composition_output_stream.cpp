@@ -384,9 +384,9 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
             };
             auto found = std::ranges::find_if(hello.declarations,
                                               [&](const auto& d) { return matches(d, false); });
-            // ADR 0036: when the serving encoder delivered something other than the request (the
-            // bundled 8-bit Kvazaar serving HEVC Main 10), the component that served is the
-            // codec's declaration at the delivered bit depth; the adjustment is in the evidence.
+            // ADR 0036: when the serving encoder delivered something other than the request, the
+            // component that served is the codec's declaration at the delivered bit depth; the
+            // adjustment is in the evidence.
             if (found == hello.declarations.end() && role == Role::VideoEncode &&
                 !qc.adjustment.empty())
                 found = std::ranges::find_if(hello.declarations,

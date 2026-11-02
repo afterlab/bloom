@@ -203,12 +203,16 @@ bool hardwareCodec(const EncodeSettingsV1& s) {
 }
 // The bundled web encoders: libvpx (VP9) and SVT-AV1 (AV1), software only.
 bool webCodec(const EncodeSettingsV1& s) { return s.videoCodec == "vp9" || s.videoCodec == "av1"; }
-// The FFmpeg encoder that serves a provider-neutral codec name.
+// The FFmpeg encoder that serves a provider-neutral codec name. Software HEVC follows the
+// requested profile (#408): the bundled Kvazaar's 8-bit build encodes Main, its 10-bit build
+// (FFmpeg's libkvazaar10) Main 10.
 std::string encoderName(const EncodeSettingsV1& s, const bool hardware, const bool nvenc) {
     if (s.videoCodec == "h264")
         return nvenc ? "h264_nvenc" : hardware ? "h264_vaapi" : "libopenh264";
     if (s.videoCodec == "hevc")
-        return nvenc ? "hevc_nvenc" : hardware ? "hevc_vaapi" : "libkvazaar";
+        return nvenc      ? "hevc_nvenc"
+               : hardware ? "hevc_vaapi"
+                          : (s.profile == "main10" ? "libkvazaar10" : "libkvazaar");
     if (s.videoCodec == "vp9")
         return "libvpx-vp9";
     if (s.videoCodec == "av1")
@@ -362,6 +366,8 @@ struct Encoder::State {
                         : hardwareCodec(settings) && hardware ? AV_PIX_FMT_VAAPI
                         : hardwareCodec(settings) && nvenc && settings.profile == "main10"
                             ? AV_PIX_FMT_P010LE
+                        : settings.videoCodec == "hevc" && settings.profile == "main10"
+                            ? AV_PIX_FMT_YUV420P10LE
                         : hardwareCodec(settings) ? AV_PIX_FMT_YUV420P
                         : webCodec(settings) ? (settings.profile == "10bit" ? AV_PIX_FMT_YUV420P10LE
                                                                             : AV_PIX_FMT_YUV420P)
@@ -375,10 +381,6 @@ struct Encoder::State {
                 if (c.profile == 0)
                     c.bit_rate = 120000000;
             }
-            // The bundled Kvazaar is an 8-bit encoder: a Main 10 request without VA-API is served
-            // as Main (8-bit 4:2:0), and the stream declares what it carries.
-            if (settings.videoCodec == "hevc" && !hardware && !nvenc)
-                c.profile = AV_PROFILE_HEVC_MAIN;
             if (hardwareCodec(settings)) {
                 c.bit_rate = settings.videoBitrateKbps != 0
                                  ? std::int64_t{settings.videoBitrateKbps} * 1000
@@ -462,7 +464,7 @@ struct Encoder::State {
             av_dict_set(&options, "profile", settings.profile.c_str(), 0);
             av_dict_set_int(&options, "delay", 0, 0);
         }
-        if (video && name == "libkvazaar") {
+        if (video && (name == "libkvazaar" || name == "libkvazaar10")) {
             // One-second intra period like the other delivery encoders, the session's thread
             // budget, and Kvazaar's fast preset (an export, not an archival master).
             const auto period = std::max<std::int64_t>(
@@ -817,9 +819,11 @@ struct Encoder::State {
             qc.profile = name;
         if (const auto* layout = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(parameters.format)))
             qc.bitDepth = static_cast<std::uint32_t>(layout->comp[0].depth);
-        if (settings.videoCodec == "hevc" && settings.profile == "main10" && qc.bitDepth == 8)
-            qc.adjustment = "HEVC Main 10 was requested; no 10-bit HEVC encoder answered, so the "
-                            "bundled 8-bit Kvazaar delivered HEVC Main (8-bit)";
+        // #408: every HEVC encoder delivers the requested depth (Main 10 through NVENC, VA-API
+        // or the bundled 10-bit Kvazaar); a stream at another depth is refused, never relabeled.
+        require(settings.videoCodec != "hevc" ||
+                    qc.bitDepth == (settings.profile == "main10" ? 10U : 8U),
+                "Reopened HEVC bit depth differs from the requested profile");
         const DeclaredSampling declared{parameters.color_space, parameters.color_range,
                                         parameters.chroma_location};
         decoder(input, stream, nullptr);

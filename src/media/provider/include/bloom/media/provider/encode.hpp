@@ -66,10 +66,10 @@ struct EncodeQcV1 {
     // Issue #369: read back from the reopened artifact.
     ColourTags colour;
     std::string container;
-    // The video profile and bit depth the reopened stream actually carries ("main", 8), and,
-    // when the serving encoder delivered something other than the request (the bundled 8-bit
-    // Kvazaar serving a Main 10 request), the reason. Never silent: the host logs it and the
-    // export evidence states it.
+    // The video profile and bit depth the reopened stream actually carries ("Main 10", 10), and,
+    // when the serving encoder delivered something other than the request, the reason. Never
+    // silent: the host logs it and the export evidence states it. HEVC is always delivered at the
+    // requested depth (#408); a stream at another depth fails the reopen check instead.
     std::string profile;
     std::uint32_t bitDepth = 0;
     std::string adjustment;

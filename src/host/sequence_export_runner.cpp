@@ -436,8 +436,8 @@ struct detail::SequenceExportWorkV1 {
         // providers ahead of it in the platform chain did not serve (ADR 0035).
         const auto served = encoder->handshake();
         auto provenance = encoder->provenance();
-        // ADR 0036: a delivery that differs from the request (an 8-bit HEVC Main for a Main 10
-        // request) is recorded in provenance, logged and stated in the evidence; never silent.
+        // ADR 0036: a delivery that differs from the request is recorded in provenance, logged and
+        // stated in the evidence; never silent.
         provenance.adjustment = qc.adjustment;
         if (provenance.fellBack() || !provenance.adjustment.empty())
             std::cerr << "Bloom export: media provider " << provenance.diagnostic() << '\n';

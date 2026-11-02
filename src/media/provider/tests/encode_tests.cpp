@@ -30,6 +30,9 @@ bool redSquare = false;
 // Issue #406: a full-width alpha ramp (0 at the left edge, opaque at the right) in place of the
 // two-step 4444 alpha, so every 10-bit alpha code the worker converts is exercised.
 bool alphaRamp = false;
+// Issue #408: an opaque grey ramp from black at the left edge to white at the right, so a 10-bit
+// stream carries more distinct luma codes than 8 bits can (bloom.media.hevc-depth reads them).
+bool lumaRamp = false;
 FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
     FrameProduct frame;
     frame.format = PixelFormat::Rgba16;
@@ -50,7 +53,8 @@ FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
                                     y + 5 >= settings.height / 2 && y < settings.height / 2 + 5;
                 const auto ramp = static_cast<std::uint32_t>(
                     static_cast<std::uint64_t>(x) * 65535U / std::max(1U, settings.width - 1));
-                const auto value = c == 3 && alphaRamp ? ramp
+                const auto value = lumaRamp ? (c == 3 ? 65535U : ramp)
+                                   : c == 3 && alphaRamp ? ramp
                                    : c == 3    ? (settings.profile.starts_with("4444") && !redSquare
                                                       ? (x < settings.width / 2 ? 20000U : 50000U)
                                                       : 65535U)
@@ -274,9 +278,10 @@ void tests(const std::filesystem::path& directory) {
                         served.fallbacks.front().provider == kFfmpegVaapiProviderId,
                     "H.264 falls back from VA-API to the bundled OpenH264 silently");
     }
-    // HEVC ships with Bloom too: the bundled Kvazaar encodes Main in MOV and MP4, serves a Main 10
-    // request as 8-bit Main, pads an extent that is not whole 8x8 blocks (cropped again by the
-    // conformance window), and is VA-API's silent fallback.
+    // HEVC ships with Bloom too: the bundled Kvazaar encodes Main in MOV and MP4 with its 8-bit
+    // build and Main 10 with its 10-bit build (#408), the requested profile choosing the build. It
+    // pads an extent that is not whole 8x8 blocks (cropped again by the conformance window), and is
+    // VA-API's silent fallback.
     {
         auto hevc = settings;
         hevc.videoCodec = "hevc";
@@ -294,13 +299,45 @@ void tests(const std::filesystem::path& directory) {
         test::check(delivered.profile == "Main" && delivered.bitDepth == 8 &&
                         delivered.adjustment.empty(),
                     "an HEVC Main request reports the Main 8-bit stream it delivered");
+        // #408: a Main 10 request with no hardware encoder is real Main 10 from the 10-bit
+        // Kvazaar, in MOV and MP4, tagged as requested and passing the unchanged reopen check.
         auto main10 = hevc;
         main10.profile = "main10";
-        (void)run(main10, directory / "export-hevc-main10.mov", {}, nullptr, &delivered);
-        test::check(
-            delivered.profile == "Main" && delivered.bitDepth == 8 &&
-                delivered.adjustment.find("Main 10") != std::string::npos,
-            "a Main 10 request served by Kvazaar reports 8-bit Main and why, never silently");
+        for (const auto* container : {"mov", "mp4"}) {
+            auto request = main10;
+            request.container = container;
+            request.audioCodec = std::string_view(container) == "mp4" ? "aac" : "pcm_s16le";
+            MediaProviderProvenanceV1 tenServed;
+            (void)run(request, directory / (std::string("export-hevc-main10.") + container), {},
+                      &tenServed, &delivered);
+            test::check(tenServed.provider == kFfmpegProviderId && !tenServed.fellBack() &&
+                            delivered.profile == "Main 10" && delivered.bitDepth == 10 &&
+                            delivered.adjustment.empty() &&
+                            delivered.container == std::string(container) + "/hevc" &&
+                            delivered.colour == ColourTags{1, 1, 1, 1},
+                        "software HEVC Main 10 is delivered as 10-bit Main 10 by the bundled "
+                        "10-bit Kvazaar");
+        }
+        // The same session settings with only the profile changed: the request picks the build.
+        (void)run(hevc, directory / "export-hevc-main-again.mov", {}, nullptr, &delivered);
+        test::check(delivered.profile == "Main" && delivered.bitDepth == 8,
+                    "an HEVC Main request still uses the 8-bit Kvazaar");
+        // Grey ramps across 1280 columns for bloom.media.hevc-depth, which counts the distinct
+        // decoded luma codes: more than 256 only when the stream really carries 10 bits.
+        lumaRamp = true;
+        for (const auto* profile : {"main", "main10"}) {
+            auto ramp = hevc;
+            ramp.profile = profile;
+            ramp.width = 1280;
+            ramp.height = 72;
+            ramp.frames = 4;
+            ramp.audioCodec.clear();
+            ramp.audioSamples = 0;
+            (void)run(ramp, directory / ("export-hevc-" + std::string(profile) + "-ramp.mov"));
+            ramp.container = "mp4";
+            (void)run(ramp, directory / ("export-hevc-" + std::string(profile) + "-ramp.mp4"));
+        }
+        lumaRamp = false;
         // 1918x1078 is not whole 8x8 blocks: Kvazaar codes the padded picture and crops it with
         // the conformance window, and the reopen check sees the exact extent.
         auto unaligned = hevc;
@@ -310,6 +347,8 @@ void tests(const std::filesystem::path& directory) {
         unaligned.audioCodec.clear();
         unaligned.audioSamples = 0;
         (void)run(unaligned, directory / "export-hevc-1918x1078.mov");
+        unaligned.profile = "main10";
+        (void)run(unaligned, directory / "export-hevc-main10-1918x1078.mov");
         auto absent = hevc;
         absent.vaapiDevice = "/dev/dri/renderD-absent";
         EncodeSessionOptionsV1 vaapi;
@@ -319,6 +358,15 @@ void tests(const std::filesystem::path& directory) {
         test::check(fell.provider == kFfmpegProviderId && fell.fellBack() &&
                         fell.fallbacks.front().provider == kFfmpegVaapiProviderId,
                     "HEVC falls back from VA-API to the bundled Kvazaar silently");
+        // A Main 10 request falls back to the 10-bit Kvazaar and is still Main 10.
+        absent.profile = "main10";
+        EncodeSessionOptionsV1 vaapi10;
+        vaapi10.vaapi = true;
+        (void)run(absent, directory / "export-hevc-main10-fallback.mov", std::move(vaapi10), &fell,
+                  &delivered);
+        test::check(fell.provider == kFfmpegProviderId && fell.fellBack() &&
+                        delivered.profile == "Main 10" && delivered.bitDepth == 10,
+                    "HEVC Main 10 falls back from VA-API to the 10-bit Kvazaar as Main 10");
     }
     // ADR 0036: VP9 (libvpx) and AV1 (SVT-AV1) with Opus (libopus) in WebM, and AV1 with AAC in
     // MP4, at 8 and 10 bits, each delivering exactly the profile and depth requested. 64x48 is

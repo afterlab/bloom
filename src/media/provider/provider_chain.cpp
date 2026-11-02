@@ -36,7 +36,7 @@ std::string mediaCodecFamilyV1(const std::string_view codec) {
         return "vp9";
     if (codec == "libopus")
         return "opus";
-    if (codec == "libkvazaar" || codec == "hevc_nvenc" || codec == "hevc_vaapi" ||
+    if (codec == "libkvazaar" || codec == "libkvazaar10" || codec == "hevc_nvenc" || codec == "hevc_vaapi" ||
         codec == "hevc_videotoolbox" || codec == "hevc_mf")
         return "hevc";
     return std::string(codec);

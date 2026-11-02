@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
+#include <bloom/media/provider/provider_chain.hpp>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
 #include <chrono>
@@ -92,6 +93,26 @@ void run(const std::filesystem::path& directory) {
                     h264->capability.range == "limited" &&
                     h264->execution.entitlement.find("openh264") == std::string::npos,
                 "the software handshake always declares the bundled H.264 encoder");
+    // #408: the software generation declares HEVC Main (8-bit Kvazaar) and HEVC Main 10 (10-bit
+    // Kvazaar), each at its own depth, so dispatch and evidence follow the requested profile.
+    const auto softwareHevc = [&](std::string_view profile) {
+        return std::ranges::find_if(software.declarations, [&](const auto& declaration) {
+            return declaration.capability.role == Role::VideoEncode &&
+                   declaration.capability.codec == "hevc" &&
+                   declaration.capability.profile == profile;
+        });
+    };
+    const auto hevcMain = softwareHevc("main");
+    const auto hevcMain10 = softwareHevc("main10");
+    test::check(hevcMain != software.declarations.end() && hevcMain->capability.bitDepth == 8 &&
+                    hevcMain->capability.chroma == "yuv420p" &&
+                    hevcMain10 != software.declarations.end() &&
+                    hevcMain10->capability.bitDepth == 10 &&
+                    hevcMain10->capability.chroma == "yuv420p10" &&
+                    hevcMain10->capability.range == "limited" &&
+                    mediaCodecFamilyV1("libkvazaar10") == "hevc" &&
+                    mediaCodecFamilyV1("libkvazaar") == "hevc",
+                "the software handshake declares HEVC Main and Main 10 from the bundled Kvazaar");
     for (const auto& handshake : {software, ffmpegHandshake(true)})
         test::check(std::ranges::count_if(handshake.declarations,
                                           [](const auto& declaration) {

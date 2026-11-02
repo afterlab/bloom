@@ -32,7 +32,7 @@ worker's shared `libavcodec` through FFmpeg's LGPL wrappers, on Linux, macOS and
 | Library | License | Role | FFmpeg component |
 | --- | --- | --- | --- |
 | OpenH264 2.6.0 | BSD-2-Clause | H.264 software encode | `libopenh264` encoder |
-| Kvazaar 2.3.2 | BSD-3-Clause | HEVC software encode (8-bit Main) | `libkvazaar` encoder |
+| Kvazaar 2.3.2 | BSD-3-Clause | HEVC software encode: an 8-bit build (Main) and a 10-bit build (Main 10) | `libkvazaar` and `libkvazaar10` encoders |
 | dav1d 1.5.4 | BSD-2-Clause | AV1 decode | `libdav1d` decoder, `av1` parser |
 | SVT-AV1 4.2.0 | BSD-3-Clause-Clear, AOM Patent License 1.0 | AV1 software encode (8-bit and 10-bit) | `libsvtav1` encoder |
 | libvpx 1.17.0 | BSD-3-Clause, Google VP8/VP9 patent grant | VP9 software encode (Profile 0 and 2) | `libvpx_vp9` encoder |
@@ -61,11 +61,16 @@ needs a Linux driver 530.41.03 or newer (Windows 531.61); an older driver simply
 in `MediaProviderProvenanceV1` and the export evidence names the encoder that served; no artist
 text reports it.
 
-Kvazaar is an 8-bit encoder. An HEVC Main 10 request that no 10-bit encoder serves is delivered as
-8-bit HEVC Main rather than refused, and never silently: the worker's reopen QC reports the
-delivered profile and bit depth with the reason (`EncodeQcV1::profile`, `bitDepth`,
-`adjustment`), the host copies the reason into `MediaProviderProvenanceV1::adjustment`, logs it,
-and the export evidence states the delivered profile. FFmpeg's `libkvazaar` wrapper refused
+Kvazaar fixes its sample depth at compile time. Amendment (owner decision, 2026-11-01, issue
+#408): Bloom bundles a second, 10-bit Kvazaar build and dispatches on the requested profile, so a
+software HEVC Main 10 export is real Main 10 on every platform. The 8-bit build serves Main through
+`libkvazaar`; the 10-bit build, whose external symbols carry a `kvz10_` prefix so both archives link
+into one `libavcodec`, serves Main 10 through `libkvazaar10` (reviewed patch
+`dependencies/patches/ffmpeg/0002-libkvazaar10-hevc-main10-encoder.patch`). The earlier recorded
+fallback, which delivered a Main 10 request as 8-bit Main, is removed: the worker's reopen QC still
+reports the delivered profile and bit depth (`EncodeQcV1::profile`, `bitDepth`), and an HEVC
+stream at a depth other than the requested profile's fails the reopen check instead of being
+relabeled. FFmpeg's `libkvazaar` wrapper refused
 extents that are not multiples of eight; the reviewed patch
 `dependencies/patches/ffmpeg/0001-libkvazaar-pad-frames-to-whole-blocks.patch` pads frames to
 whole blocks so Kvazaar's conformance window crops them, and every even extent encodes.

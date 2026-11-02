@@ -103,9 +103,8 @@ edit them.
   VideoToolbox encodes first.
 - **HEVC** is encoded by Kvazaar, which ships with Bloom on Linux, macOS and Windows. An NVIDIA GPU
   (NVENC) encodes first when its driver answers, then on Linux a VA-API render node that encodes
-  HEVC, and Bloom falls back to Kvazaar without asking. NVENC writes real 10-bit **Main 10**.
-  Kvazaar writes 8-bit HEVC: a **Main 10** output with no 10-bit GPU encoder is written as
-  **Main**, and the export's log and verification report say so.
+  HEVC, and Bloom falls back to Kvazaar without asking. Every encoder writes the profile you choose:
+  **Main** is 8-bit and **Main 10** is real 10-bit, whether a GPU or Kvazaar encodes it.
 - **AV1** is encoded by SVT-AV1 and **VP9** by libvpx, both shipped with Bloom on Linux, macOS and
   Windows. Each has an **8-bit** and a **10-bit** profile, and both write real 10-bit. They are
   encoded on the processor at a fixed quality for web delivery; the bit rate and the encoder choice

@@ -267,6 +267,19 @@ if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_dependencies(bloom_media_encode_test bloom-media-worker)
     bloom_add_test(NAME bloom.media.encode COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 120)
+    set_tests_properties(bloom.media.encode PROPERTIES FIXTURES_SETUP media-encode)
+    # Issue #408: reads the software HEVC grey ramps bloom.media.encode writes, through FFmpeg
+    # directly: Main 10 profile, 10-bit samples, tags, and more luma codes than 8 bits hold.
+    add_executable(bloom_media_hevc_depth_test tests/hevc_depth_tests.cpp)
+    target_link_libraries(bloom_media_hevc_depth_test PRIVATE FFmpeg::avformat FFmpeg::avcodec
+                          FFmpeg::avutil)
+    target_compile_features(bloom_media_hevc_depth_test PRIVATE cxx_std_20)
+    set_target_properties(bloom_media_hevc_depth_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_hevc_depth_test)
+    bloom_add_test(NAME bloom.media.hevc-depth COMMAND bloom_media_hevc_depth_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 60)
+    set_tests_properties(bloom.media.hevc-depth PROPERTIES FIXTURES_REQUIRED media-encode)
     # NVIDIA NVENC needs the device: hold the machine GPU lock. Skipped (77) without a driver.
     bloom_add_test(NAME bloom.media.encode-nvenc COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" --nvenc

@@ -94,12 +94,20 @@ Handshake ffmpegHandshake(const bool hardware) {
             encode(Role::ReopenDecode, "intake-encoders-v1", container, "first-last-pcm-v1");
         }
         // Software H.264 and HEVC encode: the bundled OpenH264 and Kvazaar, linked into
-        // libavcodec on every platform. Kvazaar is 8-bit: a Main 10 request is served as Main.
-        for (const auto [codec, profile] : {std::pair{"h264", "high"}, std::pair{"hevc", "main"}}) {
+        // libavcodec on every platform. Kvazaar is built twice (#408): 8-bit for HEVC Main and
+        // 10-bit for HEVC Main 10.
+        struct SoftwareEncode {
+            const char* codec;
+            const char* profile;
+            std::uint32_t depth;
+        };
+        for (const auto [codec, profile, depth] :
+             {SoftwareEncode{"h264", "high", 8}, SoftwareEncode{"hevc", "main", 8},
+              SoftwareEncode{"hevc", "main10", 10}}) {
             encode(Role::VideoEncode, codec, "mov", profile);
             auto& d = h.declarations.back();
-            d.capability.bitDepth = 8;
-            d.capability.chroma = "yuv420p";
+            d.capability.bitDepth = depth;
+            d.capability.chroma = depth == 8U ? "yuv420p" : "yuv420p10";
             d.capability.range = "limited";
             d.capability.colorFeatures = "rec709-display-referred";
         }

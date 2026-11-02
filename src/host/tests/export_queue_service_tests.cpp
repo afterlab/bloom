@@ -965,8 +965,8 @@ int main() {
         testFreeTextWorkingSpace("Linear P3-D65");
         // H.264 MP4 end to end on the bundled OpenH264, with nothing installed.
         testVideoEndToEnd(document::ExportFormat::H264Mp4, linuxEncoders(), "h264-mp4");
-        // HEVC Main 10 without a 10-bit encoder: the bundled Kvazaar delivers 8-bit Main, recorded
-        // in provenance, and the export still publishes.
+        // HEVC Main 10 without a hardware encoder: the bundled 10-bit Kvazaar delivers Main 10
+        // (#408), which passes the reopen, container and color checks and publishes.
         testVideoEndToEnd(document::ExportFormat::HevcMp4, linuxEncoders(), "hevc-mp4-main10",
                           "main10");
         // ADR 0036: VP9 and AV1 with Opus in WebM and AV1 with AAC in MP4 on the bundled libvpx,

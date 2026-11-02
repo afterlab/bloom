@@ -174,8 +174,8 @@ system reports, with the build-tree worker as the development fallback. A macOS 
 developer build without an FFmpeg package builds no FFmpeg worker; Linux and qualified builds
 require it.
 
-Not done: a Media Foundation provider (Windows therefore has no H.264/HEVC encoder until a bundled
-software encoder lands), the Windows staged-artifact publication provider, mid-stream encode
+Not done: a Media Foundation provider (Windows encodes H.264 and HEVC with NVENC or the bundled
+OpenH264 and Kvazaar), the Windows staged-artifact publication provider, mid-stream encode
 fallback, and VideoToolbox HEVC encode. The Windows and macOS branches are not compiled or run in
 Linux validation.
 
@@ -212,8 +212,10 @@ authorization, certification, patent clearance, or delivery qualification. The w
 own bundled shared libraries privately (Linux `$ORIGIN/lib`, macOS `@loader_path/lib` with
 `@rpath` install names, Windows DLLs beside the worker); the desktop binary receives no FFmpeg
 search path. VA-API is Linux-only. The bundled permissive codec libraries (ADR 0036) are static
-archives inside `libavcodec` on every platform, and Windows builds use FFmpeg's MSVC toolchain from
-an MSYS2 shell. Source, license, security, and review
+archives inside `libavcodec` on every platform: OpenH264 2.6.0, Kvazaar 2.3.2 (an 8-bit archive for
+HEVC Main and a 10-bit archive with `kvz10_`-prefixed symbols for HEVC Main 10), dav1d 1.5.4,
+SVT-AV1 4.2.0, libvpx 1.17.0 and Opus 1.5.2, with the MIT nv-codec-headers 12.1.14.1 compiled in
+for NVENC. Windows builds use FFmpeg's MSVC toolchain from an MSYS2 shell. Source, license, security, and review
 records remain under `dependencies/licenses/ffmpeg/` and the lock is the authority for the exact
 configuration.
 
@@ -1879,7 +1881,7 @@ host. Strict delivery and Apple authorization remain gated by ADR 0020.
 | H.264 hardware encode | H.264 High MOV or MP4 via VA-API when the worker creates an encode context | Hardware execution key; no determinism claim; a refused or absent device falls back to OpenH264 inside the encode chain, recorded in provenance |
 | `Vp9WebmV1` | VP9 Profile 0 (8-bit) or Profile 2 (10-bit) via the bundled libvpx 1.17.0 (`libvpx-vp9`) with Opus via the bundled libopus 1.5.2 in WebM; constant quality (CRF 28) | 4:2:0, one-second keyframe interval, Rec.709 limited range; software only, never refused; Opus at 48 kHz; reopened on WebM's millisecond grid; lossy `DecodedSemanticTolerance`; not for archival |
 | `Av1WebmV1` / `Av1Mp4V1` | AV1 Main 8-bit or 10-bit via the bundled SVT-AV1 4.2.0 (`libsvtav1`, preset 8, CRF 28); WebM carries Opus, MP4 AAC; reopened through the bundled dav1d | As VP9; MP4 timing is exact |
-| `HevcMovV1` / `HevcMp4V1` | HEVC Main via the bundled Kvazaar 2.3.2 (`libkvazaar`, tagged `hvc1`), or VA-API HEVC Main/Main 10 when requested and a render node encodes; 20 Mbps default | 8-bit 4:2:0 in software (a Main 10 request without a 10-bit encoder is served as Main; the reopen QC, provenance, export log and evidence state the delivered profile and why); frames padded to whole 8x8 blocks and cropped by the conformance window; lossy `DecodedSemanticTolerance`; not for archival |
+| `HevcMovV1` / `HevcMp4V1` | HEVC Main or Main 10 in MOV or MP4 through the encode chain NVENC → VA-API (when requested, or Automatic with a render node that encodes HEVC) → software. Software is the bundled Kvazaar 2.3.2, built twice and chosen by the requested profile: Main through the 8-bit build (`libkvazaar`, `yuv420p`), Main 10 through the 10-bit build (`libkvazaar10`, `yuv420p10le`); software streams are tagged `hvc1`; 20 Mbps default | 4:2:0 at the requested depth on every route, Rec.709 limited range unless the output color intent says otherwise; the reopen QC, provenance and evidence state the delivered profile and bit depth, and an HEVC stream at a depth other than the request's fails the reopen check (#408); frames padded to whole 8x8 blocks and cropped by the conformance window; lossy `DecodedSemanticTolerance` (tolerance profile v3); not for archival |
 
 The ProRes dialog, approval text, MOV comment and `MediaQcEvidenceV1` carry:
 
@@ -2070,9 +2072,10 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
 
 - **MP4.** The encode worker writes H.264 and HEVC into MP4 (`H264Mp4V1`, `HevcMp4V1`) as well as
   MOV. MP4 movies carry AAC audio; MOV and MXF carry PCM.
-- **HEVC** is VA-API only (`hevc_vaapi`, Main and Main 10). There is no software HEVC encoder:
-  without a VA-API render node that opens HEVC encode, HEVC presets report
-  `HardwareEncoderMissing`.
+- **HEVC** was VA-API only (`hevc_vaapi`, Main and Main 10) when #369 shipped. ADR 0036 since
+  added NVENC and the bundled Kvazaar, whose 8-bit and 10-bit builds serve Main and Main 10 in
+  software (#408); HEVC presets are never refused for a missing hardware encoder (see the
+  `HevcMovV1` row above).
 - **VA-API render-node discovery** is part of the encoder probe. The worker's `--probe-vaapi` mode
   opens the H.264 and HEVC encode entry points on every render node and prints the answer;
   `output::probeVaapiEncodeV1()` reads it, so no driver code loads into the application. Encoding
