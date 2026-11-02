@@ -40,7 +40,9 @@ namespace bloom::runtime {
 // Semantics 10 evaluates pointwise affine RGB directly in premultiplied space.
 // Semantics 12 (#429) places a Composition Source by its nested frame instead of its nested
 // content bounds, so a nested composition with off-centre content renders in a new place.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 12;
+// Semantics 13 (#460) reads a Luma matte from premultiplied colour, so its alpha feathers the
+// coverage, and weights a fractional Box Blur radius's outermost taps by its fraction.
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 13;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,

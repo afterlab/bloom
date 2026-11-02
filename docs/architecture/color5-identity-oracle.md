@@ -146,6 +146,12 @@ Nested composition placement by frame (#429) then advanced CPU evaluator semanti
 EXR output `e8dd79e0...` (567); the C++ implementation matches all of them and every preimage
 length is unchanged.
 
+Premultiplied Luma mattes and fractional Box Blur weights (#460) then advanced CPU evaluator
+semantics 12 -> 13. With `10 3 12 7` the oracle reproduces the pins above; with `10 3 13 7` it
+derives PNG analysis `f24c5b56...` (1961 bytes), EXR analysis `7dd1fb5a...` (1521), PNG output
+`9878ea6e...` (669) and EXR output `0f54a1fd...` (567); the C++ implementation matches all of them
+and every preimage length is unchanged.
+
 ```python
 """Independent output-identity oracle (no Bloom code imported). Usage: oracle.py PLAN ANIM EVAL PRIM"""
 import hashlib, struct, sys
