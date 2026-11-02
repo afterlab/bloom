@@ -115,6 +115,13 @@ primitive-semantics versions, and process cache identity. Its color identity is 
 working-space id plus the qualified OCIO config revision. A config alias, role, display name, or
 approximate transform does not reinterpret that process frame.
 
+The composition Background Color is not a process input: it is Viewer presentation
+(`docs/ux/ui-grammar.md`, "Viewer canvas and empty state") and is classified as such in
+`sameEvaluationInputs`, so it never enters the process frame or a cache identity. No frame output
+route composites it: the still, the sequence/range and a video format that carries alpha all keep
+the process frame's alpha. The scripted still route pins this on the CPU reference and
+the GPU route with a non-black background (`bloom.scripting.render-injected-provider`).
+
 The frame presets are closed, versioned contracts:
 
 - `PngRgba8SrgbV1`
