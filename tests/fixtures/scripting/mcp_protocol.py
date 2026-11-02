@@ -53,6 +53,15 @@ class Protocol(unittest.TestCase):
         self.assertEqual(responses[2]['result']['structuredContent']['revision'], 1)
         self.assertEqual(responses[2]['result']['structuredContent']['project']['name'], 'Many')
 
+    def test_long_id_list_in_one_command_reaches_the_document(self):
+        transaction = tool(2, 'transact', {'expectedRevision': 0, 'operations': [
+            {'op': 'bloom.asset.set-tags',
+             'args': {'assets': list(range(1, 5002)), 'tags': ['plate']}}]})
+        responses = exchange([INIT, READY, transaction])
+        text = json.dumps(responses[1])
+        self.assertNotIn('expects at least one stable id', text)
+        self.assertNotIn('4096', text)
+
     def test_parameter_cursor_cannot_cross_sessions(self):
         add = tool(2, 'transact', {'expectedRevision': 0, 'operations': [
             {'op': 'bloom.layer.add-solid', 'args': {'composition': 1, 'name': 'One',

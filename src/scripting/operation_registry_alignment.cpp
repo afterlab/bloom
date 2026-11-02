@@ -68,12 +68,12 @@ namespace {
 
     std::vector<document::LayerId> layers;
     const auto* list = std::get_if<ValueArray>(&find(args, "layers")->storage);
-    if (list == nullptr || list->empty() || list->size() > 4096)
-        return argumentFailure(op, "layers", "expects 1..4096 stable ids or live proxies");
+    if (list == nullptr || list->empty())
+        return argumentFailure(op, "layers", "expects at least one stable id or live proxies");
     for (const auto& entry : *list) {
         const auto layer = idOf(entry);
         if (!layer)
-            return argumentFailure(op, "layers", "expects 1..4096 stable ids or live proxies");
+            return argumentFailure(op, "layers", "expects at least one stable id or live proxies");
         layers.push_back(document::LayerId::fromRaw(*layer));
     }
 

@@ -381,7 +381,7 @@ strings(const Arguments& arguments, const std::string& operationId, const std::s
     return read(arguments, operationId, name, error, required, "expects a list of text values",
                 [](const Value& value) -> std::optional<std::vector<std::string>> {
                     const auto* array = std::get_if<ValueArray>(&value.storage);
-                    if (array == nullptr || array->size() > 4096) {
+                    if (array == nullptr) {
                         return std::nullopt;
                     }
                     std::vector<std::string> result;
@@ -401,10 +401,10 @@ strings(const Arguments& arguments, const std::string& operationId, const std::s
 identities(const Arguments& arguments, const std::string& operationId, const std::string& name,
            OperationCreateResult& error, const bool required = true) {
     return read(arguments, operationId, name, error, required,
-                "expects 1..4096 stable ids or live proxies",
+                "expects at least one stable id or live proxies",
                 [](const Value& value) -> std::optional<std::vector<std::uint64_t>> {
                     const auto* array = std::get_if<ValueArray>(&value.storage);
-                    if (array == nullptr || array->empty() || array->size() > 4096) {
+                    if (array == nullptr || array->empty()) {
                         return std::nullopt;
                     }
                     std::vector<std::uint64_t> result;
@@ -444,7 +444,7 @@ identities(const Arguments& arguments, const std::string& operationId, const std
 [[nodiscard]] std::optional<std::vector<commands::KeyframeAddress>>
 keyframeAddressesOf(const Value& value) {
     const auto* array = std::get_if<ValueArray>(&value.storage);
-    if (array == nullptr || array->empty() || array->size() > 4096) {
+    if (array == nullptr || array->empty()) {
         return std::nullopt;
     }
     std::vector<commands::KeyframeAddress> result;
@@ -462,7 +462,7 @@ keyframeAddressesOf(const Value& value) {
 [[nodiscard]] std::optional<std::vector<commands::KeyframeMove>>
 keyframeMovesOf(const Value& value) {
     const auto* array = std::get_if<ValueArray>(&value.storage);
-    if (array == nullptr || array->empty() || array->size() > 4096) {
+    if (array == nullptr || array->empty()) {
         return std::nullopt;
     }
     std::vector<commands::KeyframeMove> result;
@@ -493,7 +493,7 @@ keyframeMovesOf(const Value& value) {
 [[nodiscard]] std::optional<std::vector<commands::KeyframeValueEdit>>
 keyframeValuesOf(const Value& value) {
     const auto* array = std::get_if<ValueArray>(&value.storage);
-    if (array == nullptr || array->empty() || array->size() > 4096) {
+    if (array == nullptr || array->empty()) {
         return std::nullopt;
     }
     std::vector<commands::KeyframeValueEdit> result;
@@ -526,7 +526,7 @@ keyframeValuesOf(const Value& value) {
 // One side of an ease. `(curve, keyframe, time, value)`, optionally with a trailing component.
 [[nodiscard]] bool mergeHandles(const ValueArray& array, const bool outgoing,
                                 std::vector<commands::KeyframeHandleEdit>& edits) {
-    if (array.empty() || array.size() > 4096) {
+    if (array.empty()) {
         return false;
     }
     for (const auto& item : array) {
@@ -566,7 +566,7 @@ keyframeValuesOf(const Value& value) {
 [[nodiscard]] std::optional<std::vector<commands::KeyframePaste>>
 keyframePastesOf(const Value& value) {
     const auto* array = std::get_if<ValueArray>(&value.storage);
-    if (array == nullptr || array->empty() || array->size() > 4096) {
+    if (array == nullptr || array->empty()) {
         return std::nullopt;
     }
     std::vector<commands::KeyframePaste> result;
@@ -2571,8 +2571,8 @@ OperationRegistry OperationRegistry::builtIn() {
             }
             if (const auto* anchors = findArgument(args, "path")) {
                 const auto* array = std::get_if<ValueArray>(&anchors->storage);
-                if (array == nullptr || array->empty() || array->size() > 4096) {
-                    return failure(op, "path", "expects 1..4096 anchors");
+                if (array == nullptr || array->empty()) {
+                    return failure(op, "path", "expects at least one anchor");
                 }
                 document::PathValue value;
                 for (const auto& item : *array) {
@@ -3435,8 +3435,8 @@ OperationRegistry OperationRegistry::builtIn() {
             if (!composition || !positions) {
                 return error;
             }
-            if (positions->empty() || positions->size() > 4096) {
-                return failure(op, "positions", "expects 1..4096 entries");
+            if (positions->empty()) {
+                return failure(op, "positions", "expects at least one entry");
             }
             std::map<document::NodeId, document::Vec2d> layout;
             for (const auto& item : *positions) {
@@ -3456,7 +3456,7 @@ OperationRegistry OperationRegistry::builtIn() {
             commands::NodeGroupMembershipDelta membership;
             if (const auto* groups = findArgument(args, "groups")) {
                 const auto* array = std::get_if<ValueArray>(&groups->storage);
-                if (array == nullptr || array->size() > 4096) {
+                if (array == nullptr) {
                     return failure(op, "groups", "expects (node, group) entries");
                 }
                 for (const auto& item : *array) {
