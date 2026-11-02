@@ -219,7 +219,7 @@ void parityTools() {
               "cache.purge", "jobs.list", "jobs.cancel", "asset.reveal", "composition.presets",
               "composition.save-preset", "composition.rename-preset",
               "composition.delete-preset"})
-            expect(contains(listed, std::string(R"("name":")") + name + """),
+            expect(contains(listed, std::string(R"("name":")") + name + "\""),
                    std::string("tools/list lists ") + name);
         expect(contains(listed, R"("regionOfInterest")") && contains(listed, R"("gamma")"),
                "viewer.set lists its new fields");
