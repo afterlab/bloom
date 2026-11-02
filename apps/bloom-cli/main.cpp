@@ -17,6 +17,7 @@
 #include <bloom/host/export_queue.hpp>
 #include <thread>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -251,6 +252,18 @@ frameRange(std::string_view value) {
         return 3;
     }
     auto session = std::move(opened).takeSession();
+    // Every named job must exist: a missing one would otherwise be skipped while the rest run and
+    // the command would still report success.
+    const auto opening = session->snapshot();
+    for (const auto id : jobs) {
+        const auto saved = opening.project().exportJobs();
+        if (std::ranges::none_of(saved, [id](const auto& job) { return job.id == id; })) {
+            std::cerr << "error[bloom-cli.export."
+                      << static_cast<int>(bloom::host::ExportUnavailableCode::UnknownJob)
+                      << "]: The job does not exist: " << id.value() << '\n';
+            return 5;
+        }
+    }
     int status = 0;
     {
         scripting::HeadlessExportQueue exports(*session, packagedOcioResolver());

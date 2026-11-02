@@ -388,6 +388,12 @@ class PythonApi(unittest.TestCase):
             unknown = subprocess.run([CLI, 'export', '--project', str(project), '--job', '999'],
                                      capture_output=True, timeout=180)
             self.assertNotEqual(unknown.returncode, 0)
+            # A missing job named beside a real one is refused, not skipped while the rest run.
+            job = next(o['id'] for o in added['outputs'] if o['name'] == 'exportJob')
+            mixed = subprocess.run([CLI, 'export', '--project', str(project), '--job', str(job),
+                                    '--job', '999'], capture_output=True, timeout=180)
+            self.assertNotEqual(mixed.returncode, 0)
+            self.assertIn(b'The job does not exist: 999', mixed.stderr)
 
     def test_layer_masks_take_path_values(self):
         """ADR 0028: a path is a value kind; masks are added, edited and keyed from Python and the CLI."""
