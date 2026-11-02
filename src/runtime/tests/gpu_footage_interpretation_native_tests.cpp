@@ -5,7 +5,8 @@
 // The production CpuGpuSceneBuilder emits the stored-samples upload, the footage pass as a native
 // ProcessNeighborhood program and (under ACEScg) the input->working OCIO transform; the prepared
 // scene runs through the production GpuSceneExecutor on a real device and must match the
-// unchanged CpuCompositionEvaluator oracle (2e-6), with a warm rerun served from the cache.
+// unchanged CpuCompositionEvaluator oracle (2e-6), with a warm rerun served from the cache. Every
+// synthesized camera log input also runs a negative and an over-range code ramp (#412).
 //
 // Without the pinned shader tools the test SKIPs; without a device it SKIPs (exit 77) unless
 // --require-device is passed.
@@ -23,9 +24,14 @@
 #include <bloom/runtime/gpu_scene_executor.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -34,6 +40,7 @@ namespace {
 using bloom::render::GpuDevice;
 using bloom::render::GpuDeviceCreationOptions;
 using bloom::render::readbackResidentImage;
+using bloom::render::Rgba32f;
 using bloom::runtime::CpuGpuSceneBuilder;
 using bloom::runtime::EvaluationColorIntent;
 using bloom::runtime::GpuOcioCompileOptions;
@@ -58,6 +65,30 @@ using bloom::runtime::media_executor_test::runScene;
             ocio->program->program().semanticsId == "bloom.render.footage-interpretation.v1")
             ++count;
     return count;
+}
+
+// The parity measure pixelsClose() gates: |a - b| / max(1, |a|, |b|) over every channel.
+[[nodiscard]] double maxRelativeDifference(const std::span<const Rgba32f> lhs,
+                                           const std::span<const Rgba32f> rhs) noexcept {
+    if (lhs.size() != rhs.size())
+        return std::numeric_limits<double>::infinity();
+    double worst = 0.0;
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+        const std::array<float, 4> a{lhs[i].red(), lhs[i].green(), lhs[i].blue(), lhs[i].alpha()};
+        const std::array<float, 4> b{rhs[i].red(), rhs[i].green(), rhs[i].blue(), rhs[i].alpha()};
+        for (std::size_t c = 0; c < 4; ++c) {
+            if (!std::isfinite(a[c]) || !std::isfinite(b[c])) {
+                if (a[c] != b[c])
+                    return std::numeric_limits<double>::infinity();
+                continue;
+            }
+            const double scale = std::max(
+                {1.0, std::abs(static_cast<double>(a[c])), std::abs(static_cast<double>(b[c]))});
+            worst = std::max(
+                worst, std::abs(static_cast<double>(a[c]) - static_cast<double>(b[c])) / scale);
+        }
+    }
+    return worst;
 }
 
 void check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluator& evaluator,
@@ -109,6 +140,10 @@ void check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluato
         return;
     }
     const auto readback = readbackResidentImage(*cold.image, kSceneBudget);
+    if (readback.hasValue())
+        std::cout << name << ": max relative difference "
+                  << maxRelativeDifference(readback.pixels, frame.frame()->processImage().pixels())
+                  << "\n";
     expectations.expect(expectedPasses == 0 || cold.countersAtReady.ocioEffectDispatches > 0,
                         (name + ": the pass dispatched natively").c_str());
     expectations.expect(readback.hasValue() &&
@@ -222,7 +257,7 @@ int main(const int argc, char** argv) {
               "pixel aspect 10:11 with a matte", false, {}, 1, 10.0 / 11.0);
         // Camera log inputs Bloom synthesizes (#381): the input->working OCIO transform runs as a
         // native program with CPU parity, with no footage pass.
-        // Log plates carry code values in [0, 1]; the signed/HDR still's 4.0 is no camera code.
+        // Nominal log plates carry code values in [0, 1]; out-of-range codes follow below.
         const auto logPlate = directory / "log.exr";
         writeExrRgba(logPlate, 3, 2,
                      {ExrPixel{0.1F, 0.4F, 0.7F, 1.0F}, ExrPixel{0.9F, 0.5F, 0.2F, 1.0F},
@@ -239,6 +274,35 @@ int main(const int argc, char** argv) {
                   std::string("camera log ") + space, false, {}, 0);
             check(expectations, *device.device, evaluator, directory, camera, ocioContext,
                   base + 50, std::string("camera log under ACEScg ") + space, true, {}, 0);
+            base += 100;
+        }
+        // Out-of-range camera code values (#412): a negative ramp (below the encoding's black)
+        // and an over-range ramp up to 4.0 (beyond the encoding's white), opaque and translucent
+        // (premultiplied 2.0 at alpha 0.5 is the straight code 4.0). Every synthesized camera log
+        // space must render them natively with the same CPU-oracle parity as in-range codes; the
+        // GPU program is never refused and never replaced by a CPU frame.
+        const auto rangePlate = directory / "log_out_of_range.exr";
+        writeExrRgba(rangePlate, 4, 3,
+                     {ExrPixel{-0.5F, -0.25F, -1.0F, 1.0F}, ExrPixel{-0.25F, -0.1F, -0.5F, 1.0F},
+                      ExrPixel{-0.1F, -0.02F, -0.05F, 1.0F}, ExrPixel{-0.02F, 0.1F, -0.25F, 1.0F},
+                      ExrPixel{1.0F, 1.05F, 0.9F, 1.0F}, ExrPixel{1.5F, 1.25F, 1.1F, 1.0F},
+                      ExrPixel{2.5F, 2.0F, 3.0F, 1.0F}, ExrPixel{4.0F, 3.5F, 0.5F, 1.0F},
+                      ExrPixel{2.0F, -0.125F, 1.0F, 0.5F}, ExrPixel{-0.25F, 0.75F, 0.6F, 0.5F},
+                      ExrPixel{4.0F, 4.0F, 4.0F, 1.0F}, ExrPixel{-1.0F, -1.0F, -1.0F, 1.0F}});
+        const auto rangeImage = imageAsset(rangePlate, "log_out_of_range", 703);
+        base = 96000;
+        for (const auto* space :
+             {"S-Log3 SGamut3 (Bloom)", "S-Log3 SG3.Cine (Bloom)", "Venice SG3 (Bloom)",
+              "Venice SG3.Cine (Bloom)", "LogC3 AWG3 (Bloom)", "LogC4 AWG4 (Bloom)",
+              "V-Log V-Gamut (Bloom)", "Log3G10 RWG (Bloom)", "C-Log2 CGamut (Bloom)",
+              "C-Log3 CGamut (Bloom)", "Apple Log (Bloom)"}) {
+            auto camera = rangeImage;
+            camera.interpretation.inputColorSpaceId = space;
+            check(expectations, *device.device, evaluator, directory, camera, ocioContext, base,
+                  std::string("out-of-range camera log ") + space, false, {}, 0);
+            check(expectations, *device.device, evaluator, directory, camera, ocioContext,
+                  base + 50, std::string("out-of-range camera log under ACEScg ") + space, true, {},
+                  0);
             base += 100;
         }
         if (!expectations.ok()) {
