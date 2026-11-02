@@ -407,6 +407,56 @@ void testInclusiveAllocatorState(ExpectationContext& expectations) {
         "the maximum ID is issued once before the namespace becomes exhausted");
 }
 
+void testLayerMaskIdsAreInventoried(ExpectationContext& expectations) {
+    auto project = makePersistedAllocatorProject();
+    auto* composition = project.findComposition(id<CompositionId>(1));
+    auto* layer =
+        composition == nullptr ? nullptr : composition->graph().findLayer(id<LayerId>(100));
+    if (!expectations.expect(layer != nullptr, "the allocator fixture has a layer boundary")) {
+        return;
+    }
+    bloom::document::LayerMask mask{};
+    mask.id = id<bloom::document::LayerMaskId>(7);
+    mask.name = "Mask";
+    mask.path = id<ParameterId>(300);
+    mask.feather = id<ParameterId>(301);
+    mask.expansion = id<ParameterId>(302);
+    mask.opacity = id<ParameterId>(303);
+    const bool maskParameters =
+        composition->parameters().insert({mask.path,
+                                          std::string(bloom::document::kLayerMaskPathSchemaKey),
+                                          ConstantValueSource{bloom::document::PathValue{}}}) &&
+        composition->parameters().insert({mask.feather,
+                                          std::string(bloom::document::kLayerMaskFeatherSchemaKey),
+                                          ConstantValueSource{0.0}}) &&
+        composition->parameters().insert(
+            {mask.expansion, std::string(bloom::document::kLayerMaskExpansionSchemaKey),
+             ConstantValueSource{0.0}}) &&
+        composition->parameters().insert({mask.opacity,
+                                          std::string(bloom::document::kLayerMaskOpacitySchemaKey),
+                                          ConstantValueSource{1.0}});
+    if (!expectations.expect(maskParameters, "the mask parameters insert")) {
+        return;
+    }
+    layer->masks.push_back(mask);
+
+    const auto declared = project;
+    Document inventoried{Project(declared)};
+    expectations.expect(inventoried.snapshot().ids().highWater().layerMask == 7,
+                        "ordinary construction inventories layer mask IDs");
+
+    auto belowDeclaration = persistedAllocatorHighWater();
+    belowDeclaration.layerMask = 6;
+    bool rejected = false;
+    try {
+        [[maybe_unused]] Document invalid{Project(declared), belowDeclaration};
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    expectations.expect(rejected,
+                        "persisted construction rejects a watermark below a live layer mask ID");
+}
+
 void testPersistedAllocatorConstruction(ExpectationContext& expectations) {
     Document inventoried(makePersistedAllocatorProject());
     const IdAllocatorHighWater declarations{
@@ -917,6 +967,7 @@ int main() {
         ExpectationContext expectations;
         testInclusiveAllocatorState(expectations);
         testPersistedAllocatorConstruction(expectations);
+        testLayerMaskIdsAreInventoried(expectations);
         testProjectGlobalDeclarationIds(expectations);
         testPublicationReconcilesAllocatorHighWater(expectations);
         testAllocatorExhaustionSurvivesRestore(expectations);

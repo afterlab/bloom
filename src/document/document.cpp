@@ -66,6 +66,11 @@ template <typename Visitor>
         if (!visitor(boundary.layerId)) {
             return false;
         }
+        for (const auto& mask : boundary.masks) {
+            if (!visitor(mask.id)) {
+                return false;
+            }
+        }
     }
     for (const auto& stack : composition.graph().merges())
         for (const auto& entry : stack.entries()) {

@@ -2,6 +2,7 @@
 #include <bloom/document/render_reachability.hpp>
 #include <bloom/document/value_nodes.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -441,6 +442,25 @@ int runBenchmark() {
 
 } // namespace
 
+// A loaded project is held to the command path's rule: a driver reads a declared output of a node
+// that has outputs. The fixture graph carries unrelated issues, so only driver issues are counted.
+void testDriverSourceValidation() {
+    Fixture fixture;
+    auto composition = fixture.build(true);
+    const auto driverIssues = [&](const NodeId source, const std::string& port) {
+        require(composition.parameters().setSource(kRadius, DriverBindingSource{source, port}),
+                "retarget driver");
+        const auto result = composition.graph().validate(composition.parameters());
+        return std::ranges::count_if(result.issues(), [](const ValidationIssue& issue) {
+            return issue.path.find(".driver") != std::string::npos;
+        });
+    };
+    expect(driverIssues(kValue, std::string(kValuePortName)) == 0,
+           "a driver from a declared output validates");
+    expect(driverIssues(kValue, "nope") != 0, "a driver from an undeclared output port is refused");
+    expect(driverIssues(kOutput, "image") != 0, "a driver from a sink node is refused");
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--benchmark") == 0)
         return runBenchmark();
@@ -452,6 +472,7 @@ int main(int argc, char** argv) {
         testParentsAndReadouts();
         testNestedDependencies();
         testNormalizationAndWork();
+        testDriverSourceValidation();
     } catch (const std::exception& error) {
         std::cerr << "fixture failure: " << error.what() << '\n';
         return 1;

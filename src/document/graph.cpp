@@ -696,6 +696,21 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             }
             const auto sourceKind =
                 outputKind(OutputPortRef{driver->sourceNodeId, driver->outputPort}, registry);
+            // The command path refuses a driver from a sink or from an undeclared output port;
+            // a loaded project is held to the same rule.
+            const auto* sourceNode = findNode(driver->sourceNodeId);
+            const auto* sourceDefinition =
+                sourceNode == nullptr
+                    ? nullptr
+                    : registry.find(sourceNode->typeId, sourceNode->schemaVersion);
+            if (sourceDefinition != nullptr && sourceDefinition->outputs.empty()) {
+                result.add(ValidationCode::InvalidValue, path + ".sourceNodeId",
+                           "This node is a sink and declares no output to drive from");
+            } else if (sourceDefinition != nullptr && !sourceKind.has_value() &&
+                       !isRerouteNodeType(sourceNode->typeId)) {
+                result.add(ValidationCode::MissingReference, path + ".outputPort",
+                           "Driver binding references an undeclared output port");
+            }
             const InputPortDefinition* socket = nullptr;
             if (definition != nullptr) {
                 const auto match =
