@@ -145,7 +145,7 @@ interpolationDisplayName(const document::KeyframeInterpolation interpolation) {
         return QStringLiteral("Linear");
     case document::KeyframeInterpolation::EaseInOut:
         return QStringLiteral("Ease In-Out");
-    // Document 1.30 easing equations (labels as in Blender).
+    // Document 1.30 easing equations (labels as in common 3D animation tools).
     case document::KeyframeInterpolation::Sine:
         return QStringLiteral("Sinusoidal");
     case document::KeyframeInterpolation::Quad:

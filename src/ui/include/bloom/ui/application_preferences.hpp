@@ -98,8 +98,8 @@ struct ApplicationPreferences final {
     // Viewer.
     ViewerResolutionPreference viewerResolution = ViewerResolutionPreference::Auto;
     ViewerBackgroundPreference viewerBackground = ViewerBackgroundPreference::Solid;
-    // The checkerboard inside the composition frame. Off by default (After Effects), so the
-    // composition's own background colour shows.
+    // The checkerboard inside the composition frame. Off by default (as in a layer-based
+    // compositor), so the composition's own background colour shows.
     bool viewerTransparencyGrid = false;
     bool viewerSafeAreas = false;
     bool viewerCentreCross = false;

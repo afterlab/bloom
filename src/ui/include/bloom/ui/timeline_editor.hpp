@@ -157,13 +157,15 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     void setKeyframesVisible(bool visible);
     void setSnappingEnabled(bool enabled);
     void setGraphEditorEnabled(bool enabled);
-    // The master Shy toggle: hides layers whose Shy switch is on from the layer list (After
-    // Effects' Hide Shy Layers). Layout only; per composition, under timeline/hide-shy-layers/<id>.
+    // The master Shy toggle: hides layers whose Shy switch is on from the layer list (a
+    // compositor's Hide Shy Layers). Layout only; per composition, under
+    // timeline/hide-shy-layers/<id>.
     void setHideShyLayers(bool hide);
     void loadHideShyLayers();
     [[nodiscard]] static QString hideShySetting(document::CompositionId composition);
     void setLabelFilter(std::set<int> labels);
-    // timeline_editor_keys.cpp: After Effects' Timeline keys (property reveals, J/K, [ and ]).
+    // timeline_editor_keys.cpp: the compositor-standard Timeline keys (property reveals, J/K, [ and
+    // ]).
     void createTimelineKeys();
     void revealProperties(int reveal, bool additive);
     void stepToKeyframe(bool forward);
@@ -206,8 +208,8 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     QAction* keyframesAction_ = nullptr;
     QAction* graphAction_ = nullptr;
     QAction* snapAction_ = nullptr;
-    // T1: the right pane's keyframes/graph switch (Shift+F3, After Effects) behind the header
-    // toggle beside Fullscreen, and Easy Ease / In / Out (F9, Shift+F9, Ctrl+Shift+F9).
+    // T1: the right pane's keyframes/graph switch (Shift+F3, as in a layer-based compositor) behind
+    // the header toggle beside Fullscreen, and Easy Ease / In / Out (F9, Shift+F9, Ctrl+Shift+F9).
     QAction* graphPaneAction_ = nullptr;
     std::array<QAction*, 3> easeActions_{};
     QWidget* footerLeft_ = nullptr;

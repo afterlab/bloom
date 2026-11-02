@@ -215,7 +215,7 @@ void ContextBar::buildTools() {
     addGap();
 
     // Rectangle, Ellipse, Polygon and Star share one slot showing the last one chosen; a press and
-    // hold, or a right-click, offers all four (After Effects' shape tool slot).
+    // hold, or a right-click, offers all four (a compositor's shape tool slot).
     shapeSlot_ = new kit::KIconToggle(toolIcon(ViewerTool::Rectangle), tools_);
     shapeSlot_->setObjectName(QStringLiteral("contextBarToolShape"));
     shapeSlot_->setFocusPolicy(Qt::NoFocus);

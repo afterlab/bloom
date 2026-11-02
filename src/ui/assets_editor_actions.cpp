@@ -342,9 +342,9 @@ void AssetsEditor::newCompositionFromSelection() {
             footage.push_back(id);
     if (footage.empty())
         return;
-    // Sized from the first visual footage item, like After Effects; the active composition (or
-    // the defaults) supplies what the footage does not state. The command is shared with
-    // bloom.composition.add-from-assets.
+    // Sized from the first visual footage item, like a layer-based compositor; the active
+    // composition (or the defaults) supplies what the footage does not state. The command is shared
+    // with bloom.composition.add-from-assets.
     commands::Transaction transaction("New Composition from Selection", snapshot.revision());
     const auto* current = session_.composition();
     transaction.emplace<commands::AddCompositionFromFootage>(

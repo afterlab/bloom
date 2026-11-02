@@ -580,9 +580,9 @@ void Evaluator::evaluateScalarMath(const runtime::CompiledValueOperation& operat
         }
         inputs[index] = *value;
     }
-    // Zero is the documented fallback for every scalar domain failure, which is also Blender's
-    // divide-by-zero answer -- so the most common failure an artist will actually hit behaves the
-    // way they expect, and the rest behave consistently with it.
+    // Zero is the documented fallback for every scalar domain failure, which is also the usual
+    // node-graph divide-by-zero answer -- so the most common failure an artist will actually hit
+    // behaves the way they expect, and the rest behave consistently with it.
     auto outcome =
         evaluate(kernel.operation, std::span(inputs.data(), kernel.operands.size()), 0.0);
     if (outcome.failed) {

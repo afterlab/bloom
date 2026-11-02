@@ -311,7 +311,7 @@ CompositionSettingsDialog::CompositionSettingsDialog(
         userPresets_ = loadUserCompositionPresets(store);
     }
 
-    // Two tabs, After Effects style: Basic holds what most compositions change, Advanced the
+    // Two tabs, compositor style: Basic holds what most compositions change, Advanced the
     // rarely changed values. Both are forms of this one dialog, so they share ONE label column and
     // every field starts at the same x; the dialog is as tall as its taller tab, so switching never
     // resizes it.
@@ -672,8 +672,7 @@ void CompositionSettingsDialog::buildBasic(kit::KForm& form, kit::KForm& advance
     background_->setAccessibleName(tr("Background Color"));
     // The same words on the chip and its hex: a pointer over either gets the render rule.
     const QString backgroundTip =
-        tr("Shown in the Viewer behind the composition. Renders keep transparency, like After "
-           "Effects.");
+        tr("Shown in the Viewer behind the composition. Renders keep transparency.");
     background_->setToolTip(backgroundTip);
     backgroundHex_ = new kit::KLabel(QString{}, body, kit::TypeRole::Value);
     backgroundHex_->setObjectName(QStringLiteral("compositionSettingsBackgroundHex"));

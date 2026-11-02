@@ -1,6 +1,7 @@
 #pragma once
 
-// The cells and lines of the Export render list, as After Effects draws them under a job:
+// The cells and lines of the Export render list, as a compositor's render queue draws them under a
+// job:
 //
 //   ▸ Render Settings:  ▾ Work area · 0–239
 //   ▸ Output Module:    ▾ ProRes 422 HQ      + −   Output To: ▾ Exports/SC020.mov

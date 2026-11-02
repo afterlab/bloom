@@ -86,8 +86,8 @@ AssetsEditor::AssetsEditor(CompositionSession& session, QWidget* parent)
     find->setObjectName(QStringLiteral("assetsFindShortcut"));
     find->setContext(Qt::WidgetWithChildrenShortcut);
     connect(find, &QShortcut::activated, this, &AssetsEditor::openSearch);
-    // Double-click opens a composition only, as in After Effects; Composition Settings is the
-    // context menu, the Composition menu and Ctrl+Alt+K (#376). Folders expand.
+    // Double-click opens a composition only, as in a layer-based compositor; Composition Settings
+    // is the context menu, the Composition menu and Ctrl+Alt+K (#376). Folders expand.
     connect(tree_, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem* item, int) { openComposition(compositionId(item)); });
     // A tag cell filters by its first tag, as the tag chips did.
@@ -221,7 +221,8 @@ void AssetsEditor::addCommonActions(QMenu& menu) {
 
 void AssetsEditor::showContextMenu(const QPoint position) {
     auto* item = tree_->itemAt(position);
-    // As in After Effects, a right-click acts on the clicked row; empty space on the root.
+    // As in a layer-based compositor, a right-click acts on the clicked row; empty space on the
+    // root.
     if (item == nullptr)
         tree_->clearSelection();
     else if (!item->isSelected()) {

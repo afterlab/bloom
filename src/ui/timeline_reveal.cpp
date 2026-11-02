@@ -41,7 +41,8 @@ namespace {
 }
 
 // A constant that differs from what a new layer starts with: the node definition's own default,
-// except Position, which a new layer takes at the composition centre (as in After Effects).
+// except Position, which a new layer takes at the composition centre (as in a layer-based
+// compositor).
 [[nodiscard]] bool differsFromDefault(const document::Composition& composition,
                                       const document::ParameterId parameter,
                                       const std::string& role) {

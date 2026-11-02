@@ -1,7 +1,8 @@
 #pragma once
-// ADR 0030: footage and compositions become layers, as in After Effects. AddDroppedLayers is the
-// one undoable step behind a drop on the Timeline or the Viewer, the Viewer's Add > Import and
-// Add…, and bloom.layer.add-from-assets; the UI only works out where the pointer is.
+// ADR 0030: footage and compositions become layers, as in a layer-based compositor.
+// AddDroppedLayers is the one undoable step behind a drop on the Timeline or the Viewer, the
+// Viewer's Add > Import and Add…, and bloom.layer.add-from-assets; the UI only works out where the
+// pointer is.
 #include <bloom/commands/operation.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>
@@ -28,7 +29,8 @@ struct LayerDropPlacement final {
     document::LayerSlotId before{};
     // The first layer's in point, on the composition frame grid.
     core::RationalTime start{};
-    // End to end (After Effects' Sequence Layers): each layer starts where the one before ends.
+    // End to end (a compositor's sequence-layers command): each layer starts where the one before
+    // ends.
     bool sequence = false;
     // For Before, when `before` is not given: the layer whose stack slot the new layers go above.
     // Scripts and agents name layers, not slots.

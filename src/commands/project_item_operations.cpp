@@ -93,8 +93,8 @@ OperationResult AddCompositionFromFootage::apply(document::Draft& draft) const {
     if (footage.empty())
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Name at least one image, sequence, video or audio asset");
-    // Sized from the first visual footage item, like After Effects; the template composition (or
-    // the defaults) supplies what the footage does not state.
+    // Sized from the first visual footage item, like a layer-based compositor; the template
+    // composition (or the defaults) supplies what the footage does not state.
     CompositionSettings base;
     base.name = fallbackName_.empty()
                     ? "Composition " + std::to_string(project.compositions().size() + 1)

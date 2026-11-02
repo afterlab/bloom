@@ -49,8 +49,8 @@ std::vector<LayerDropItem> layerDropItems(const QMimeData& mime,
 }
 
 namespace {
-// As in After Effects, the new layers end up selected (a session change, not a document edit),
-// the uppermost one primary, so Properties shows it at once.
+// As in a layer-based compositor, the new layers end up selected (a session change, not a document
+// edit), the uppermost one primary, so Properties shows it at once.
 void selectDroppedLayers(CompositionSession& session, const commands::CommandResult& result) {
     std::vector<document::LayerId> layers;
     for (const auto& output : result.outputs)

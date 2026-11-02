@@ -30,10 +30,11 @@ namespace bloom::document {
 // key whose handles are both bitwise default therefore samples exactly as it always did. See
 // docs/architecture/animation-and-time.md, "Ease In-Out" and "Ease handles".
 //
-// The artist-facing names follow Blender: Hold is "Constant" and EaseInOut is "Bezier". Their
-// enumerator names and values are part of the persisted vocabulary and never move.
+// The artist-facing names follow common 3D animation conventions: Hold is "Constant" and EaseInOut
+// is "Bezier". Their enumerator names and values are part of the persisted vocabulary and never
+// move.
 //
-// Document 1.30 appends Blender's easing equations (Robert Penner's, in Blender's own forms,
+// Document 1.30 appends Robert Penner's easing equations (in the reference implementation's forms,
 // including its exact-endpoint Expo and its blended Elastic). Each reads the segment's LEFT key's
 // KeyframeEasingParameters below: which end eases, Back's overshoot, and Elastic's amplitude and
 // period. See docs/architecture/animation-and-time.md, "Easing equations".
@@ -64,8 +65,8 @@ enum class KeyframeInterpolation : std::uint8_t {
     return mode >= KeyframeInterpolation::Sine && mode <= KeyframeInterpolation::Elastic;
 }
 
-// Which end of the segment an easing equation applies to. Auto is Blender's default: Out for the
-// "dynamic" equations (Back, Bounce, Elastic) and In for every other one.
+// Which end of the segment an easing equation applies to. Auto is the reference default: Out for
+// the "dynamic" equations (Back, Bounce, Elastic) and In for every other one.
 enum class KeyframeEasing : std::uint8_t {
     Auto,
     In,
@@ -77,12 +78,12 @@ enum class KeyframeEasing : std::uint8_t {
     return static_cast<std::uint8_t>(easing) <= static_cast<std::uint8_t>(KeyframeEasing::InOut);
 }
 
-// Blender's defaults for a new key (BKE initialize_bezt). Back's overshoot is a factor of the
-// segment's change; Elastic's amplitude is in the curve's own value units (a Path key's progress
-// runs 0 -> 1). Elastic's period is in SECONDS, because Bloom key times are rational seconds and
-// a composition's frame rate can change under its keys: the default is Blender's 4.1 frames at
-// Blender's default 24 fps. A period of exactly zero is Blender's automatic period (0.3 of the
-// segment, 0.45 for In-Out).
+// The reference implementation's defaults for a new key (BKE initialize_bezt). Back's overshoot is
+// a factor of the segment's change; Elastic's amplitude is in the curve's own value units (a Path
+// key's progress runs 0 -> 1). Elastic's period is in SECONDS, because Bloom key times are rational
+// seconds and a composition's frame rate can change under its keys: the default is the reference's
+// 4.1 frames at its default 24 fps. A period of exactly zero is the reference's automatic period
+// (0.3 of the segment, 0.45 for In-Out).
 inline constexpr double kDefaultKeyframeBack = 1.70158;
 inline constexpr double kDefaultKeyframeAmplitude = 0.8;
 inline constexpr double kDefaultKeyframePeriod = 4.1 / 24.0;
@@ -110,8 +111,9 @@ isDefaultKeyframeEasing(const KeyframeEasingParameters& parameters) noexcept {
                std::bit_cast<std::uint64_t>(kDefaultKeyframePeriod);
 }
 
-// Blender's own domain: the mode is known, every number finite, and the amplitude non-negative.
-// Back and period may be any finite value (Blender leaves both unbounded).
+// The reference implementation's own domain: the mode is known, every number finite, and the
+// amplitude non-negative. Back and period may be any finite value (the reference leaves both
+// unbounded).
 [[nodiscard]] bool isValidKeyframeEasing(const KeyframeEasingParameters& parameters) noexcept;
 
 // The stable lowercase tokens shared by the project format, Python and MCP: "hold", "linear",
@@ -130,8 +132,9 @@ keyframeEasingFromToken(std::string_view token) noexcept;
 //   Free     the handles are independent (the behavior of every earlier document).
 //   Aligned  editing one handle keeps the other collinear through the key: its length is kept
 //            and its direction follows.
-//   Auto     Blender's Auto Clamped handles, computed from the neighboring keys and recomputed
-//            whenever a neighbor's time or value changes (see document/keyframe_handles.hpp).
+//   Auto     the reference implementation's Auto Clamped handles, computed from the neighboring
+//            keys and recomputed whenever a neighbor's time or value changes (see
+//            document/keyframe_handles.hpp).
 // The enumerator values are part of the persisted vocabulary and never move.
 enum class KeyframeHandleMode : std::uint8_t {
     Free = 0,
@@ -196,7 +199,8 @@ struct ScalarKeyframe {
     KeyframeHandle outgoingHandle{};
     KeyframeHandle incomingHandle{};
     // The easing equation's parameters for this key's OUTGOING segment (document 1.30). Kept on
-    // every key, like Blender's BezTriple, so switching a key between modes never loses them.
+    // every key, like the reference implementation's BezTriple, so switching a key between modes
+    // never loses them.
     KeyframeEasingParameters easing{};
     // Document 1.32. Presentation metadata; see KeyframeHandleMode.
     KeyframeHandleMode handleMode = KeyframeHandleMode::Free;

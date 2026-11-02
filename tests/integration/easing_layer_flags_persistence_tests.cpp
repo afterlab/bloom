@@ -1,5 +1,5 @@
-// Document 1.30 persistence: Blender's easing equations with their per-key parameters, and the
-// presentation-only layer flags `shy` and `nameFollowsSource`, save and reopen exactly; a 1.29
+// Document 1.30 persistence: Robert Penner's easing equations with their per-key parameters, and
+// the presentation-only layer flags `shy` and `nameFollowsSource`, save and reopen exactly; a 1.29
 // document opens unchanged, and its layers follow their source exactly when their name already is
 // the source's name.
 

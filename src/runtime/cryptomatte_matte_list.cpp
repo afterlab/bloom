@@ -135,7 +135,8 @@ std::optional<std::uint32_t> parseCryptomatteRawId(const std::string_view entry)
 }
 
 std::string formatCryptomatteRawId(const std::uint32_t id) {
-    // Nuke writes raw IDs as their float value; nine significant digits round-trip binary32.
+    // Compositing readers write raw IDs as their float value; nine significant digits round-trip
+    // binary32.
     std::array<char, 48> buffer{};
     const auto written = std::snprintf(buffer.data(), buffer.size(), "<%.9g>",
                                        static_cast<double>(std::bit_cast<float>(id)));

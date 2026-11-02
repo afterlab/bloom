@@ -28,9 +28,9 @@ class SummaryStrip;
 class CompositionSession;
 class ExportQueueAdapter;
 
-// The project's assets, compositions and folders as one sortable tree with columns, after the After
-// Effects Project panel (#378): a compact summary strip of the selection above it, and a search row
-// that opens from the header's Search toggle or Ctrl+F.
+// The project's assets, compositions and folders as one sortable tree with columns, modelled on
+// a compositor's project panel (#378): a compact summary strip of the selection above it, and a
+// search row that opens from the header's Search toggle or Ctrl+F.
 class AssetsEditor final : public QWidget, public EditorChromeProvider {
     Q_OBJECT
 

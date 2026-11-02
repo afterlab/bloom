@@ -61,7 +61,7 @@ inline constexpr auto kSizedColumnsKey = "assets/sized-columns";
 // View > Show Info: whether the summary strip shows (a per-user setting).
 inline constexpr auto kShowInfoKey = "assets/show-info";
 
-// One tree with After Effects Project panel columns (#378). Name always shows and takes the slack.
+// One tree with a compositor's project panel columns (#378). Name always shows and takes the slack.
 enum Column : int {
     NameColumn,
     TypeColumn,
@@ -109,7 +109,8 @@ struct Usage final {
 [[nodiscard]] QString frameRateText(document::FrameRate rate);
 // A video's first picture stream rate, when it states one.
 [[nodiscard]] std::optional<document::FrameRate> videoFrameRate(const document::AssetRecord& asset);
-// After Effects style H:MM:SS:FF at `rate` (frames counted with the rate rounded up, as AE does).
+// Compositor-style H:MM:SS:FF at `rate` (frames counted with the rate rounded up, as compositors
+// do).
 [[nodiscard]] QString timecodeText(core::RationalTime time, document::FrameRate rate);
 [[nodiscard]] QString timecodeForFrames(std::uint64_t frames, document::FrameRate rate);
 // The whole frames `time` spans at `rate`, counted down as the timecode counts them.

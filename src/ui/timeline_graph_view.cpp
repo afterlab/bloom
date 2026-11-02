@@ -706,7 +706,7 @@ TimelineGraphView::handlePoint(const GraphCurveId& curve,
         return QPointF(axis->pixelForSeconds(control.time), lens.pixelFor(control.value));
     }
     // The Speed Graph's handle: horizontal at the key's speed on that side, as long as its
-    // influence -- After Effects' influence/speed handle, exact in the same Bezier.
+    // influence -- a compositor's influence/speed handle, exact in the same Bezier.
     const double duration = std::abs(neighbour.time.toSeconds() - key.time.toSeconds());
     const auto handle = outgoing ? key.outgoingHandle : key.incomingHandle;
     const double speed = handleSpeed(handle, duration, outgoing).value_or(0.0);
@@ -717,7 +717,7 @@ TimelineGraphView::handlePoint(const GraphCurveId& curve,
 
 void TimelineGraphView::paintGrid(QPainter& painter,
                                   const std::optional<GraphCurveId>& active) const {
-    // After Effects' grid: horizontal value lines at the gutter's own ticks, vertical frame lines
+    // A compositor's grid: horizontal value lines at the gutter's own ticks, vertical frame lines
     // at the ruler's own labelled ticks, so both line up with the numbers beside them.
     kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
     const double top = kit::px(kit::Size::HeaderRow);

@@ -209,7 +209,8 @@ void testSetPreferencesRoundTripsControls(Expectations& check) {
 // draft, and nothing is persisted until OK or Apply.
 void testRestoreDefaults(Expectations& check) {
     ui::PreferencesWindow window(owner(), samplePreferences());
-    // Restore Defaults lives in the sidebar's action menu, as Blender's Load Factory does.
+    // Restore Defaults lives in the sidebar's action menu, as a 3D application's factory-settings
+    // reset does.
     auto* restore = window.findChild<QAction*>(QStringLiteral("preferencesRestoreDefaultsAction"));
     check.expect(restore != nullptr && window.findChild<QAbstractButton*>(QStringLiteral(
                                            "preferencesRestoreDefaultsButton")) == nullptr,

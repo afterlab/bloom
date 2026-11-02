@@ -1,7 +1,8 @@
-// Keyframe handle modes (document 1.32): Blender's Auto Clamped handles against reference values
-// produced by Blender itself, Aligned collinearity after edits, Auto recomputation when a neighbor
-// changes, the Auto-to-Aligned conversion, Free sequences left bit-for-bit untouched, and the
-// classification of the mode as presentation.
+// Keyframe handle modes (document 1.32): Auto Clamped handles against reference values produced
+// by the reference implementation itself (keyframe_handle_blender_reference.inc), Aligned
+// collinearity after edits, Auto recomputation when a neighbor changes, the Auto-to-Aligned
+// conversion, Free sequences left bit-for-bit untouched, and the classification of the mode as
+// presentation.
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
@@ -110,14 +111,14 @@ void testBlenderReference() {
             if (reference.hasOut && computed[index].outgoing) {
                 expect(near(computed[index].outgoing->time, reference.outTime) &&
                            near(computed[index].outgoing->value, reference.outValue),
-                       where + ": outgoing handle matches Blender");
+                       where + ": outgoing handle matches the reference");
                 expect(bitEqual(curve->keyframes[index].outgoingHandle, *computed[index].outgoing),
                        where + ": the store settles to the computed outgoing handle");
             }
             if (reference.hasIn && computed[index].incoming) {
                 expect(near(computed[index].incoming->time, reference.inTime) &&
                            near(computed[index].incoming->value, reference.inValue),
-                       where + ": incoming handle matches Blender");
+                       where + ": incoming handle matches the reference");
                 expect(bitEqual(curve->keyframes[index].incomingHandle, *computed[index].incoming),
                        where + ": the store settles to the computed incoming handle");
             }

@@ -305,7 +305,7 @@ class SocketItem final : public QGraphicsItem {
     std::optional<document::InputPortRef> input;
     std::optional<document::OutputPortRef> output;
     // True when a link (an edge or a driver binding) ends or starts here. A collapsed card keeps
-    // only its linked sockets, as a folded Blender node does.
+    // only its linked sockets, as a folded node in a node editor does.
     bool linked = false;
 
   protected:
@@ -2122,7 +2122,7 @@ class NodeItem final : public QGraphicsObject {
                     outputHeight += socket->rowHeight();
             }
         parameterRowsTop_ = kCardHeaderHeight + socketHeight;
-        // A collapsed card (task N1, item 6) is its header alone, as a Blender node folded with
+        // A collapsed card (task N1, item 6) is its header alone, as a node-editor node folded with
         // its disclosure caret: only the sockets that carry a link stay, spread along its two
         // edges, and the card grows past the band only when those need the room.
         const qreal collapsedPitch = kit::px(kit::Spacing::XS);

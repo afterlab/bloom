@@ -1,4 +1,4 @@
-// Real-widget captures of the Export panel (the After Effects Render Queue layout) from hand-built
+// Real-widget captures of the Export panel (a compositor's render queue layout) from hand-built
 // snapshots, at three panel widths: the empty list, three queued jobs with one open on two outputs,
 // a rendering job, a failed job, and the Render Settings, Output Module (ProRes and OpenEXR, and
 // Save as preset with its name prompt) and replace dialogs over the panel. Writes PNGs named <state>-<width>-<dpr>.png to the directory given

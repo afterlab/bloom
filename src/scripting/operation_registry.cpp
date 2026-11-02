@@ -154,8 +154,8 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     if (name == nullptr) {
         return std::nullopt;
     }
-    // The persisted tokens, plus Blender's names for the two that differ: "constant" is Hold and
-    // "bezier" the handle-driven ease-in-out.
+    // The persisted tokens, plus the common 3D animation names for the two that differ: "constant"
+    // is Hold and "bezier" the handle-driven ease-in-out.
     if (*name == "constant") {
         return document::KeyframeInterpolation::Hold;
     }
@@ -884,7 +884,7 @@ locator(const Arguments& arguments, const std::string& operationId, OperationCre
 [[nodiscard]] ArgumentSchema interpolationArgument() {
     return maybe(
         "interpolation", ValueKind::String, "linear",
-        R"(Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Blender's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce", "elastic". Defaults to "linear".)");
+        R"(Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce", "elastic". Defaults to "linear".)");
 }
 
 [[nodiscard]] ArgumentSchema componentArgument() {
@@ -1527,13 +1527,13 @@ OperationRegistry OperationRegistry::builtIn() {
                R"(Also switch the keys' outgoing interpolation, e.g. "elastic". Omit to keep it.)"),
          maybe(
              "ease", ValueKind::String, "out",
-             R"(Which end the easing equation applies to: "auto" (Blender's default: out for back, bounce and elastic, in otherwise), "in", "out" or "in-out".)"),
+             R"(Which end the easing equation applies to: "auto" (the usual default: out for back, bounce and elastic, in otherwise), "in", "out" or "in-out".)"),
          maybe("back", ValueKind::Double, 1.70158,
-               "Back's overshoot (Blender's default 1.70158). Any finite number."),
+               "Back's overshoot (the usual default 1.70158). Any finite number."),
          maybe("amplitude", ValueKind::Double, 0.8,
                "Elastic's amplitude in the curve's value units (default 0.8); zero or more."),
          maybe("period", ValueKind::Double, 4.1 / 24.0,
-               "Elastic's period in seconds (default 4.1 frames at 24 fps); 0 is Blender's "
+               "Elastic's period in seconds (default 4.1 frames at 24 fps); 0 is the usual "
                "automatic period.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -1565,7 +1565,7 @@ OperationRegistry OperationRegistry::builtIn() {
               "Key addresses as (curve, keyframe) or (curve, keyframe, component)."),
          need(
              "mode", ValueKind::String, "auto",
-             R"(How the keys' two handles relate: "free" (independent), "aligned" (editing one keeps the other collinear) or "auto" (Blender's Auto Clamped handles, recomputed from the neighboring keys). Free and aligned move no handle and never change the render; auto recomputes the handles in the same undo step.)")},
+             R"(How the keys' two handles relate: "free" (independent), "aligned" (editing one keeps the other collinear) or "auto" (the usual Auto Clamped handles, recomputed from the neighboring keys). Free and aligned move no handle and never change the render; auto recomputes the handles in the same undo step.)")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -1591,7 +1591,7 @@ OperationRegistry OperationRegistry::builtIn() {
               "Key addresses as (curve, keyframe) or (curve, keyframe, component)."),
          maybe(
              "side", ValueKind::String, "both",
-             R"(After Effects' Easy Ease: "both" (F9, the default), "in" (Shift+F9) or "out" (Ctrl+Shift+F9). The eased side gets a Bezier handle of 33.33% influence and zero speed.)")},
+             R"(Easy Ease, as in a layer-based compositor: "both" (F9, the default), "in" (Shift+F9) or "out" (Ctrl+Shift+F9). The eased side gets a Bezier handle of 33.33% influence and zero speed.)")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);

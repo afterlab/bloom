@@ -14,8 +14,8 @@
 
 namespace bloom::ui {
 
-// The one app-wide active tool (ADR 0031, the After Effects model). Every Viewer reads it and acts
-// on the gestures it receives with it; the context bar shows and chooses it.
+// The one app-wide active tool (ADR 0031, the layer-based compositor model). Every Viewer reads it
+// and acts on the gestures it receives with it; the context bar shows and chooses it.
 enum class ViewerTool : std::uint8_t {
     Select,
     Hand,

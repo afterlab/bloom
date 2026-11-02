@@ -96,11 +96,11 @@ namespace {
 // also the x origin of the ruler, of every lane, and of the work-area strip.
 constexpr int kCellGap = kit::px(kit::Spacing::XS);
 constexpr int kToggleCellWidth = kit::px(kit::Size::ToggleCell);
-// Video, Audio, Solo and Lock (After Effects' A/V Features), then the Label square.
+// Video, Audio, Solo and Lock (a compositor's A/V Features), then the Label square.
 constexpr int kToggleCellCount = 4;
 constexpr int kLabelCellIndex = kToggleCellCount;
 constexpr int kToggleColumnWidth = kit::px(kit::Size::TimelineToggleColumn);
-// The switch cells after the name: Shy (After Effects' Switches column).
+// The switch cells after the name: Shy (a compositor's Switches column).
 constexpr int kSwitchColumnWidth = kit::px(kit::Size::TimelineSwitchColumn);
 constexpr int kNameCellMinWidth = kit::px(kit::Size::TimelineNameMin);
 constexpr int kColumnWidth = kit::px(kit::Size::TimelineColumn);
@@ -1246,8 +1246,8 @@ void TimelineLayerStack::commitLabelColor() {
     (void)session_.executeTransaction(std::move(transaction));
 }
 
-// A switch or label edit on a selected layer applies to the whole selection, as in After
-// Effects; on any other layer it applies to that layer alone.
+// A switch or label edit on a selected layer applies to the whole selection, as in a
+// layer-based compositor; on any other layer it applies to that layer alone.
 std::vector<document::LayerId>
 TimelineLayerStack::actionLayers(const document::LayerId layer) const {
     if (!isLayerSelected(session_, layer))
@@ -2339,8 +2339,8 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     lanes_->setGraphEaseActions(easeActions_);
     setGraphEditorEnabled(graphEditor_);
     const auto toggleExpansion = [this](document::LayerId layer) {
-        // A revealed layer's twirl closes it and drops the reveal, as in After Effects; the next
-        // twirl shows every property again.
+        // A revealed layer's twirl closes it and drops the reveal, as in a layer-based compositor;
+        // the next twirl shows every property again.
         if (revealed_.erase(layer) > 0)
             expandedLayers_.erase(layer);
         else if (!expandedLayers_.erase(layer))
@@ -2444,8 +2444,9 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     updateHistoryActions();
 }
 
-// Hide Shy Layers is per-composition session state (as in After Effects, where each composition
-// has its own switch), persisted with the workspace UI state rather than in the project.
+// Hide Shy Layers is per-composition session state (as in a layer-based compositor, where each
+// composition has its own switch), persisted with the workspace UI state rather than in the
+// project.
 QString TimelineEditor::hideShySetting(const document::CompositionId composition) {
     return QStringLiteral("timeline/hide-shy-layers/%1").arg(composition.value());
 }

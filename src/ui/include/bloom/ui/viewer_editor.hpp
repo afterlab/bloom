@@ -89,8 +89,8 @@ class ViewerTimecodeReadout;
 //   Red / Green / Blue -- that one channel as grey.
 //   Alpha -- the alpha channel as luminance.
 
-// The Viewer's surround: the canvas OUTSIDE the composition frame (View > Background, the After
-// Effects model). Persisted under "viewer/background" by name; Solid is the default.
+// The Viewer's surround: the canvas OUTSIDE the composition frame (View > Background, the
+// layer-based compositor model). Persisted under "viewer/background" by name; Solid is the default.
 //
 // Solid fills with the panel Canvas token, so the surround blends with the panel chrome rather
 // than reading as a separate rectangle. Grey is a neutral mid grey for judging colour against, and
@@ -876,7 +876,8 @@ class ViewerEditor final : public QWidget,
     QMetaObject::Connection focusConnection_;
     ViewerChannel channel_ = ViewerChannel::Rgba;
     ViewerBackground background_ = ViewerBackground::Solid;
-    // Off by default (After Effects): the composition's background colour shows in the frame.
+    // Off by default (as in a layer-based compositor): the composition's background colour shows in
+    // the frame.
     bool transparencyGrid_ = false;
     // The composition background last presented, so a non-render-affecting background edit
     // re-presents (CPU repaint and native present) without any re-evaluation.

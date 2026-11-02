@@ -238,7 +238,7 @@ void testLegacyCheckerboardMigrates(Expectations& check) {
     const auto defaults = ui::loadApplicationPreferences(empty);
     check.expect(defaults.viewerBackground == ui::ViewerBackgroundPreference::Solid &&
                      !defaults.viewerTransparencyGrid,
-                 "the defaults are the Solid surround with the grid off (After Effects)");
+                 "the defaults are the Solid surround with the grid off (as in a compositor)");
 }
 
 void testNonFiniteGridSizeFallsBack(Expectations& check) {

@@ -173,8 +173,9 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
         return rows;
     for (auto layer : layers) {
         const auto revealFound = revealed.find(layer.layerId);
-        // After Effects' property reveal (A, P, S, R, T, U, UU, M, E): only these parameters show,
-        // every group they sit in opens, and Object/Transform rows stand directly under the layer.
+        // The compositor-standard property reveal (A, P, S, R, T, U, UU, M, E): only these
+        // parameters show, every group they sit in opens, and Object/Transform rows stand directly
+        // under the layer.
         const auto* reveal = revealFound == revealed.end() ? nullptr : &revealFound->second;
         layer.expanded =
             !layer.imageNodeId.isValid() && (expanded.contains(layer.layerId) || reveal != nullptr);

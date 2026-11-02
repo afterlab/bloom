@@ -1112,8 +1112,8 @@ target_link_libraries(bloom_timeline_row_controls_test PRIVATE bloom_ui bloom_ru
 bloom_enable_warnings(bloom_timeline_row_controls_test)
 bloom_add_test(NAME bloom.ui.timeline-row-controls COMMAND bloom_timeline_row_controls_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Lane T2: the Timeline layer table -- labels, switches, sizing, expanded rows, After Effects'
-# Timeline keys, names that follow their source, and #401's per-tick cost.
+# Lane T2: the Timeline layer table -- labels, switches, sizing, expanded rows, the
+# compositor-standard Timeline keys, names that follow their source, and #401's per-tick cost.
 add_executable(bloom_timeline_layer_table_test timeline_layer_table_tests.cpp)
 target_include_directories(bloom_timeline_layer_table_test PRIVATE ..)
 target_link_libraries(bloom_timeline_layer_table_test PRIVATE bloom_ui bloom_runtime bloom_render Qt6::Test)
@@ -2264,7 +2264,8 @@ target_include_directories(bloom_ui_timeline_key_projection_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_timeline_key_projection_test)
 bloom_add_test(NAME bloom.ui.timeline-key-projection COMMAND bloom_ui_timeline_key_projection_test LABELS ui unit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# #380: Assets and file drops on the Timeline and the Viewer create layers, as in After Effects.
+# #380: Assets and file drops on the Timeline and the Viewer create layers, as in a layer-based
+# compositor.
 add_executable(bloom_ui_layer_drop_test layer_drop_tests.cpp)
 target_link_libraries(bloom_ui_layer_drop_test PRIVATE bloom_ui bloom_commands)
 target_include_directories(bloom_ui_layer_drop_test PRIVATE ..)

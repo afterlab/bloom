@@ -86,7 +86,7 @@ void writeExrRgbaWithChromaticities(const std::filesystem::path& path, const int
     file.writePixels(height);
 }
 
-// ADR 0026: a Blender-style multilayer EXR with no root color channels. Its color lives in the
+// ADR 0026: a 3D-renderer-style multilayer EXR with no root color channels. Its color lives in the
 // `Composite.Combined` layer, next to a data-only `Depth.Z` channel.
 inline void writeMultilayerExr(const std::filesystem::path& path, const int width, const int height,
                                const std::vector<ExrPixel>& pixels,

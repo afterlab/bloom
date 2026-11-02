@@ -202,9 +202,9 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
     auto* body = new QHBoxLayout;
     body->setSpacing(kit::px(kit::Spacing::L));
 
-    // The sidebar, Blender style: one category per row at the list pitch, grouped by small gaps,
-    // the kit's selected-row recipe (wash and Accent edge) on the current one and a hover wash;
-    // Up/Down, Home/End and type-ahead move through it. The page actions sit at its foot.
+    // The sidebar, 3D-application style: one category per row at the list pitch, grouped by small
+    // gaps, the kit's selected-row recipe (wash and Accent edge) on the current one and a hover
+    // wash; Up/Down, Home/End and type-ahead move through it. The page actions sit at its foot.
     auto* sidebar = new QWidget(this);
     sidebar->setFixedWidth(kit::px(kit::Size::PreferencesRailWidth));
     auto* sidebarLayout = new QVBoxLayout(sidebar);
@@ -241,9 +241,9 @@ PreferencesWindow::PreferencesWindow(QWidget& owner, const ApplicationPreference
     const auto pages = buildPages();
     for (const auto& page : pages)
         pages_->addWidget(page.widget);
-    // Grouped as Blender groups its categories: what everything uses, the editors, the machine.
-    // A page whose id no group names (a later page such as Sounds, until it is listed) still
-    // appears, in a group of its own after these.
+    // Grouped as a 3D application groups its preference categories: what everything uses, the
+    // editors, the machine. A page whose id no group names (a later page such as Sounds, until it
+    // is listed) still appears, in a group of its own after these.
     std::vector<std::vector<QString>> groups{
         {QStringLiteral("general"), QStringLiteral("import"), QStringLiteral("sounds")},
         {QStringLiteral("viewer"), QStringLiteral("timeline"), QStringLiteral("nodes")},

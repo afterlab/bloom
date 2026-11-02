@@ -3,7 +3,7 @@
 // The Timeline's reads and writes of the two document 1.30 layer fields the layer table needs:
 // Shy (presentation only; never part of rendering or cache identity) and "name follows source" (a
 // layer made from an asset or a composition shows that source's name until the artist renames
-// the layer, as in After Effects). The one place the Timeline touches either field.
+// the layer, as in a layer-based compositor). The one place the Timeline touches either field.
 
 #include <bloom/document/ids.hpp>
 

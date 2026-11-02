@@ -248,7 +248,7 @@ void sortingAndColumns(TestContext& context) {
     QSettings().remove(QString::fromLatin1(assets::kHeaderStateKey));
 }
 
-// After Effects style context menus on each kind of row and on empty space.
+// Compositor-style context menus on each kind of row and on empty space.
 void contextMenus(TestContext& context) {
     auto seed = document::makeNewProject("Menus", "Main", core::RationalTime::fromInteger(2));
     context.expect(seed.project.addAssetFolder({document::AssetFolderId::fromRaw(1), "Bin", {}}) &&

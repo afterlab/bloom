@@ -28,8 +28,8 @@ class KRow : public QWidget {
     Q_OBJECT
   public:
     explicit KRow(QWidget* parent = nullptr);
-    // `switches` are ToggleCell cells right after the name (the timeline's Shy switch, After
-    // Effects' Switches column), each preceded by `toggleGap`; the name keeps the extra width.
+    // `switches` are ToggleCell cells right after the name (the timeline's Shy switch, a
+    // compositor's Switches column), each preceded by `toggleGap`; the name keeps the extra width.
     void setCells(const QList<QWidget*>& toggles, QWidget* name, const QList<QWidget*>& columns,
                   QWidget* trailing = nullptr, int toggleGap = 0,
                   const QList<QWidget*>& switches = {});

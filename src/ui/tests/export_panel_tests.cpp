@@ -1,4 +1,4 @@
-// The Export panel (ADR 0033) as After Effects' Render Queue, from hand-built snapshots: the
+// The Export panel (ADR 0033) as a compositor's render queue, from hand-built snapshots: the
 // adapter's single drain and its sounds, the render list's columns and order, the Render check box
 // and Start All, the Render Settings and Output Module links and their dialogs (OK is one edit,
 // Cancel nothing), + and −, the ▾ quick picks, the replace question, drag to reorder, drops from
@@ -785,7 +785,7 @@ void renderSettingsDialog(TestContext& context) {
     context.expect(dialog->windowTitle() == "Render Settings", "it is called Render Settings");
     auto* group = dialog->findChild<kit::KSection*>("exportRenderSettingsComposition");
     context.expect(group != nullptr && group->title() == QStringLiteral("Composition “Main”"),
-                   "its group names the composition, as After Effects does");
+                   "its group names the composition, as a layer-based compositor does");
     context.expect(dialog->startText().startsWith("0:00:00:00") && dialog->durationText().contains("240 frames"),
                    "it reads where the range starts and how long it is");
     context.expect(!dialog->startField()->isVisibleTo(dialog), "a work area has no frame fields");
@@ -1231,7 +1231,7 @@ void rowMenu(TestContext& context) {
     context.expect(texts.indexOf("Duplicate") < texts.indexOf("Remove") &&
                        texts.indexOf("Remove") < texts.indexOf("Move up") &&
                        texts.indexOf("Move down") < texts.indexOf("Copy as bloom-cli command"),
-                   "in the After Effects order");
+                   "in the compositor order");
     rig.port.calls.clear();
     actionNamed(*menu, "Move up")->trigger();
     actionNamed(*menu, "Duplicate")->trigger();

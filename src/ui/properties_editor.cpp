@@ -499,7 +499,8 @@ void PropertiesEditor::configurePosition() {
     const auto* position = session_.parameterForSelection(document::kPositionParameterRole);
     // effectiveVec2Value(), not constantVec2Value(): an ANIMATED parameter's row must stay live and
     // show the curve's exactly sampled value at the current time, because editing it there is how
-    // AE inserts a key. A driven source still yields nullopt and still disables the field.
+    // a layer-based compositor inserts a key. A driven source still yields nullopt and still
+    // disables the field.
     const auto positionValue = session_.effectiveVec2Value(document::kPositionParameterRole);
     const bool canEditPosition = positionValue.has_value();
     positionX_->setEnabled(canEditPosition);

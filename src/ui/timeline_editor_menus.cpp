@@ -188,9 +188,9 @@ void TimelineEditor::createHeaderMenus() {
     bar->setCollapse(bar->entries.back().control, 1, select->menuAction());
     bar->setCollapse(addButton_, 3, add->menuAction());
 
-    // T1, item 6: the right pane's keyframes/graph switch, as in After Effects (Shift+F3). It is a
-    // switch, not a third state: turning the graph off shows the keyframes. The View menu keeps
-    // its own Keyframes and Graph Editor choices.
+    // T1, item 6: the right pane's keyframes/graph switch, as in a layer-based compositor
+    // (Shift+F3). It is a switch, not a third state: turning the graph off shows the keyframes. The
+    // View menu keeps its own Keyframes and Graph Editor choices.
     graphPaneAction_ = new QAction(tr("Graph Editor"), this);
     graphPaneAction_->setObjectName(QStringLiteral("timelineGraphPaneAction"));
     graphPaneAction_->setCheckable(true);

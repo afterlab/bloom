@@ -1,19 +1,20 @@
 #pragma once
 
-// Blender's keyframe easing equations (Robert Penner's, in the forms Blender's BLI_easing
-// implements, including its exact-endpoint Expo and its blended Elastic), evaluated in double with
-// a fixed operation order and no libm transcendental call. The animation sampler is the only
-// production caller; every route that resolves a parameter -- viewer, RAM preview, still, range
-// and video export, headless render -- samples curves through it on the host, so one function
-// defines every route's value. See docs/architecture/animation-and-time.md, "Easing equations".
+// Robert Penner's keyframe easing equations, in the forms the reference implementation's
+// BLI_easing implements (see tests/keyframe_easing_reference.inc), including its exact-endpoint
+// Expo and its blended Elastic), evaluated in double with a fixed operation order and no libm
+// transcendental call. The animation sampler is the only production caller; every route that
+// resolves a parameter -- viewer, RAM preview, still, range and video export, headless render --
+// samples curves through it on the host, so one function defines every route's value. See
+// docs/architecture/animation-and-time.md, "Easing equations".
 
 #include <bloom/document/animation.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
 
 namespace bloom::runtime {
 
-// Resolves Auto the way Blender's fcurve evaluation does: Out for Back, Bounce and Elastic, In for
-// every other equation. An explicit mode is returned unchanged.
+// Resolves Auto the way the reference fcurve evaluation does: Out for Back, Bounce and Elastic, In
+// for every other equation. An explicit mode is returned unchanged.
 [[nodiscard]] document::KeyframeEasing
 resolveKeyframeEasing(CompiledKeyframeInterpolation mode, document::KeyframeEasing easing) noexcept;
 
@@ -25,7 +26,7 @@ isEasingInterpolation(const CompiledKeyframeInterpolation mode) noexcept {
 
 // The value of one eased segment. `factor` is the segment's exact interval factor in [0, 1],
 // `begin` and `end` are the two keys' values, and `durationSeconds` (> 0) is the segment length,
-// which only Elastic reads (its period and blend window are absolute times, as in Blender). A
+// which only Elastic reads (its period and blend window are absolute times, as in the reference). A
 // non-easing `mode` returns `begin`.
 [[nodiscard]] double sampleEasingEquation(CompiledKeyframeInterpolation mode,
                                           const document::KeyframeEasingParameters& parameters,

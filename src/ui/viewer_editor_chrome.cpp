@@ -395,7 +395,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     connect(channelDropdown_, &kit::KDropdown::currentIndexChanged, this,
             [this](const int index) { chooseChannelDropdownIndex(index); });
 
-    // The Transparency Grid (After Effects' Toggle Transparency Grid): one action behind the
+    // The Transparency Grid (a compositor's Toggle Transparency Grid): one action behind the
     // footer toggle, View and the overflow menu. Its checked state is restored with the surround in
     // the Background block below, before anything can present.
     transparencyGridAction_ = new QAction(tr("Transparency Grid"), this);

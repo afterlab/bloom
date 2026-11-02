@@ -554,7 +554,7 @@ inline constexpr std::uint32_t kKeyframeHandleModeMinor = 32;
         out = KeyframeInterpolation::EaseInOut;
         return true;
     }
-    // Document 1.30: Blender's easing equations, gated on the minor that declares them.
+    // Document 1.30: Robert Penner's easing equations, gated on the minor that declares them.
     if (const auto easing = document::keyframeInterpolationFromToken(text);
         easing && document::isEasingInterpolation(*easing) &&
         state.documentMinor >= kKeyframeEasingMinor) {

@@ -46,7 +46,7 @@ struct ValueFieldPresentation {
 // uses the Value role, so a column of them stays aligned and a digit changing does not reflow the
 // text beside it.
 //
-// Interaction is After Effects' (ui-grammar.md, "Live Value Editing"). Press and drag
+// Interaction is a layer-based compositor's (ui-grammar.md, "Live Value Editing"). Press and drag
 // horizontally anywhere on the control -- the label is a scrub handle too -- and the value follows
 // the pointer at one step per pixel, ten times that with Shift and a tenth with Ctrl. The platform
 // drag threshold is a dead zone, so crossing it never jumps the value, and changing a modifier

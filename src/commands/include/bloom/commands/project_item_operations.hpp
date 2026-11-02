@@ -43,11 +43,11 @@ class DeleteProjectItems final : public Operation {
 [[nodiscard]] ProjectItems folderContents(const document::Project& project,
                                           document::AssetFolderId folder);
 
-// New Composition from Selection (After Effects' rule): a composition sized, timed and named from
-// the first visual footage asset (the first asset when all are audio), with what the footage does
-// not state taken from `templateComposition` when given (the composition the artist is looking
-// at) or the defaults with `fallbackName`, filed in `folder`, holding every footage asset as a
-// layer. Fonts and LUTs are skipped. Outputs "composition" and one "layer" per asset.
+// New Composition from Selection (the layer-based compositor rule): a composition sized, timed and
+// named from the first visual footage asset (the first asset when all are audio), with what the
+// footage does not state taken from `templateComposition` when given (the composition the artist is
+// looking at) or the defaults with `fallbackName`, filed in `folder`, holding every footage asset
+// as a layer. Fonts and LUTs are skipped. Outputs "composition" and one "layer" per asset.
 class AddCompositionFromFootage final : public Operation {
   public:
     AddCompositionFromFootage(std::vector<document::AssetId> assets,

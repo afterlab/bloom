@@ -209,8 +209,8 @@ inline constexpr std::array<CompareOperation, 6> kCompareOperations{
 
 inline constexpr CompareOperation kDefaultCompareOperation = CompareOperation::Greater;
 
-// Blender's own default equality tolerance, kept rather than invented so a comparison authored in
-// Bloom behaves the way an artist coming from a geometry-nodes graph expects.
+// The usual geometry-nodes default equality tolerance, kept rather than invented so a comparison
+// authored in Bloom behaves the way an artist coming from a geometry-nodes graph expects.
 inline constexpr double kDefaultCompareEpsilon = 0.0001;
 
 [[nodiscard]] constexpr std::int64_t

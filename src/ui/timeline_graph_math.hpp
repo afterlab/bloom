@@ -84,13 +84,13 @@ inline constexpr double kGraphViewportPadding = 0.1;
                                                   document::KeyframeHandle outgoing,
                                                   document::KeyframeHandle incoming);
 
-// What the canvas plots for a curve (After Effects' graph types). The Value Graph is the curve
+// What the canvas plots for a curve (a compositor's graph types). The Value Graph is the curve
 // itself; the Speed Graph is its rate of change in value units per second, read off the sampler
 // rather than re-derived from the handles, so it stays right for every interpolation the engine
 // evaluates.
 enum class GraphType : std::uint8_t { Value, Speed };
 
-// Blender's Normalize: a curve's plotted quantity drawn scaled into -1...1 by its own extent. It
+// Normalize: a curve's plotted quantity drawn scaled into -1...1 by its own extent. It
 // is a DISPLAY transform only -- edits are converted back to real units before anything is
 // written -- and it is the identity when normalization is off.
 struct GraphNormalization final {
@@ -130,8 +130,9 @@ struct GraphLens final {
 // The window that shows -1...1 with the same padding auto-fit gives a real-unit curve.
 [[nodiscard]] GraphValueViewport normalizedViewport();
 
-// Shift-drag (After Effects): a key locks to time-only or value-only, whichever axis dominates the
-// whole displacement so far, decided per move from the total rather than the last step.
+// Shift-drag (as in a layer-based compositor): a key locks to time-only or value-only, whichever
+// axis dominates the whole displacement so far, decided per move from the total rather than the
+// last step.
 enum class GraphDragAxis : std::uint8_t { Both, TimeOnly, ValueOnly };
 [[nodiscard]] GraphDragAxis dragAxis(double dx, double dy, bool locked) noexcept;
 
@@ -164,7 +165,7 @@ struct GraphPixelVector final {
                                                 bool outgoing) noexcept;
 [[nodiscard]] double handleValueForSpeed(double speed, double handleTime, double duration,
                                          bool outgoing) noexcept;
-// The smallest influence a Speed Graph handle drag writes (After Effects' 0.1%): at zero a handle's
+// The smallest influence a Speed Graph handle drag writes (a compositor's 0.1%): at zero a handle's
 // speed is undefined, so the drag stops just short of it.
 inline constexpr double kMinimumHandleInfluence = 0.001;
 

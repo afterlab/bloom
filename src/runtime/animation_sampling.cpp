@@ -288,7 +288,7 @@ AnimationSampleResult<double> sampleCurve(const Curve& curve, const core::Ration
     }
     double shared = *factor.value();
     if (equation) {
-        // Blender's easing equations (sampling semantics 3). The exact interval factor is the
+        // Robert Penner's easing equations (sampling semantics 3). The exact interval factor is the
         // equation's normalized time; only Elastic reads the segment's length in seconds.
         const double duration = right->time.toSeconds() - leftKeyframe.time.toSeconds();
         const double value = sampleEasingEquation(mode, leftKeyframe.easing, leftKeyframe.value,

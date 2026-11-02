@@ -1,8 +1,9 @@
 // The Timeline layer table (lane T2): the Label column and its menu, Select Label Group and the
 // label filter; the Shy switch and the master Shy toggle beside Solo, Lock, Video and Audio; one
 // row height and icon-sized switch cells with the name taking the extra width; one hover and
-// selection highlight on every expanded row, a property row selecting its keys; After Effects'
-// Timeline keys; layer names that follow their source; and #401's bounded per-tick cost.
+// selection highlight on every expanded row, a property row selecting its keys; the
+// compositor-standard Timeline keys; layer names that follow their source; and #401's bounded
+// per-tick cost.
 //
 // Review captures: BLOOM_TIMELINE_LAYERS_CAPTURE_DIR saves each state at 2000 and 900 pixels wide,
 // suffixed with the device pixel ratio (run once with QT_SCALE_FACTOR=1.5 for the second ratio).
@@ -441,7 +442,7 @@ void testExpandedRows() {
     expect(!table.rows().rowHighlighted(transform), "a selection made elsewhere clears it");
 }
 
-// Item 5: After Effects' Timeline keys.
+// Item 5: the compositor-standard Timeline keys.
 void testKeys() {
     Table table;
     addSolids(table, 2);

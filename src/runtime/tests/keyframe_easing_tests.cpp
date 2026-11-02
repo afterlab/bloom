@@ -133,7 +133,7 @@ void testReferenceRows(Expectations& expectations) {
             runtime::sampleAnimationCurve(curve, time(row.numerator, row.denominator));
         expectations.expect(sampled.value.has_value() &&
                                 std::fabs(*sampled.value - row.value) <= 1e-12,
-                            "Blender reference value for " + label(row));
+                            "reference value for " + label(row));
     }
 }
 
@@ -152,7 +152,7 @@ void testElasticRows(Expectations& expectations) {
         expectations.expect(sampled.value.has_value() &&
                                 std::fabs(*sampled.value - row.value) <=
                                     1e-12 * std::fmax(1.0, std::fabs(row.value)),
-                            "Blender elastic reference row " + std::to_string(index));
+                            "elastic reference row " + std::to_string(index));
         ++index;
     }
 }
@@ -165,7 +165,7 @@ void testAutoAndEndpoints(Expectations& expectations) {
                             runtime::resolveKeyframeEasing(Mode::Sine, Ease::Auto) == Ease::In &&
                             runtime::resolveKeyframeEasing(Mode::Expo, Ease::Auto) == Ease::In &&
                             runtime::resolveKeyframeEasing(Mode::Quad, Ease::InOut) == Ease::InOut,
-                        "Auto resolves as Blender's fcurve evaluation does");
+                        "Auto resolves as the reference fcurve evaluation does");
     // Auto samples exactly as the mode it resolves to.
     for (const auto mode : {Mode::Sine, Mode::Quad, Mode::Cubic, Mode::Quart, Mode::Quint,
                             Mode::Expo, Mode::Circ, Mode::Back, Mode::Bounce, Mode::Elastic}) {

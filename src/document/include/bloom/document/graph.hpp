@@ -182,8 +182,8 @@ struct LayerOutputBoundary {
     std::vector<LayerMask> masks{};
     std::optional<TrackMatte> trackMatte{};
     // Document 1.30, both presentation only (never an evaluation input):
-    // `shy` hides the layer from the layer table while the table's shy filter is on, like After
-    // Effects' Shy switch; it changes no pixel and no cache identity.
+    // `shy` hides the layer from the layer table while the table's shy filter is on, like the
+    // compositor-standard Shy switch; it changes no pixel and no cache identity.
     bool shy = false;
     // The layer shows its source's name (an asset's or a nested composition's) and follows it when
     // the source is renamed or replaced; renaming the layer clears it. Layers made from a source

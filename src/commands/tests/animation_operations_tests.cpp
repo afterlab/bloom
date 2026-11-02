@@ -1054,8 +1054,8 @@ void testKeyframeHandleAndValueOperations(TestContext& test) {
                 "the pasted key lands at its destination time with the handles it was copied with");
 }
 
-// Document 1.30: Blender's easing equations and their per-key parameters, through one undoable
-// batch, and After Effects' Easy Ease mapped onto Bloom's handle model.
+// Document 1.30: Robert Penner's easing equations and their per-key parameters, through one
+// undoable batch, and the compositor-standard Easy Ease mapped onto Bloom's handle model.
 void testKeyframeEasingOperations(TestContext& test) {
     Document document(makeSourceProject());
     CommandStack stack(document);
@@ -1221,7 +1221,7 @@ void testKeyframeHandleModes(TestContext& test) {
         if (expected[index].incoming)
             matches = matches && autoKeys[index].incomingHandle == *expected[index].incoming;
     }
-    test.expect(matches, "Auto stores Blender's Auto Clamped handles");
+    test.expect(matches, "Auto stores the reference Auto Clamped handles");
     test.expect(autoKeys[1].outgoingHandle.value == 0.0 && autoKeys[2].incomingHandle.value == 0.0,
                 "the peak and the valley are clamped flat");
     test.expect(stack.undo().changed() && keysOf() == original,

@@ -469,8 +469,8 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     if (!layout_.collapsed)
         painter->drawLine(QPointF(0.0, band), QPointF(bounds.width(), band));
 
-    // The collapse toggle (task N1, item 6): Blender's disclosure caret at the head of the title --
-    // down while the card is open, right while it is folded to its header.
+    // The collapse toggle (task N1, item 6): a node editor's disclosure caret at the head of the
+    // title -- down while the card is open, right while it is folded to its header.
     const auto caret =
         kit::iconPixmap(layout_.collapsed ? kit::IconId::CaretRight : kit::IconId::CaretDown,
                         kit::Size::IconSmall, kit::Color::Muted);

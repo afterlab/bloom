@@ -1,5 +1,5 @@
 // Task N1 (node canvas): cursor placement, overlap-free adds and layer adds, a layer-stack Arrange,
-// Blender-style collapse, coloured frames, constant-width links, Merge's per-slot sockets, the
+// node-editor-style collapse, coloured frames, constant-width links, Merge's per-slot sockets, the
 // footer's Arrange button, source cards without previews and the Nodes icon.
 
 #include "node_interaction_test_support.hpp"

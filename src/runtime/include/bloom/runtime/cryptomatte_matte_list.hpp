@@ -1,10 +1,10 @@
 #pragma once
 
-// #364 Cryptomatte matte names and IDs (Cryptomatte specification v1.2, as Nuke reads it): an
-// object name's ID is MurmurHash3_x86_32(name, seed 0) used as float32 bits, with bit 23 flipped
-// when the exponent bits are 0 or 255 so every ID is a finite normal float. The matte list is the
-// Nuke syntax: comma-separated entries, `\,` for a literal comma, surrounding spaces ignored, and
-// `<float>` or `<0xHEX>` for a raw ID.
+// #364 Cryptomatte matte names and IDs (Cryptomatte specification v1.2, as compositing applications
+// read it): an object name's ID is MurmurHash3_x86_32(name, seed 0) used as float32 bits, with bit
+// 23 flipped when the exponent bits are 0 or 255 so every ID is a finite normal float. The matte
+// list is the common syntax: comma-separated entries, `\,` for a literal comma, surrounding spaces
+// ignored, and `<float>` or `<0xHEX>` for a raw ID.
 
 #include <array>
 #include <cstdint>

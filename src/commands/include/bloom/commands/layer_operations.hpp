@@ -79,8 +79,9 @@ class SetLayerLocked final : public Operation {
     document::LayerId layer_;
     bool value_;
 };
-// Document 1.30: the After Effects Shy switch. It only decides whether the layer table lists the
-// layer while its shy filter is on, so it is presentation and never invalidates a render or cache.
+// Document 1.30: the compositor-standard Shy switch. It only decides whether the layer table lists
+// the layer while its shy filter is on, so it is presentation and never invalidates a render or
+// cache.
 class SetLayerShy final : public Operation {
   public:
     SetLayerShy(document::CompositionId composition, document::LayerId layer, bool value)

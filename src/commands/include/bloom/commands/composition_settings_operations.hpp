@@ -123,9 +123,9 @@ class UpdateCompositionSettings final : public Operation {
     ResizeAnchor anchor_;
 };
 
-// New Composition from Selection (#378), as in After Effects: the composition takes the footage's
-// name and size, a video's frame rate and duration, a sequence's frame count at that rate and an
-// audio file's duration. Whatever the footage does not state comes from `base`.
+// New Composition from Selection (#378), as in a layer-based compositor: the composition takes the
+// footage's name and size, a video's frame rate and duration, a sequence's frame count at that rate
+// and an audio file's duration. Whatever the footage does not state comes from `base`.
 [[nodiscard]] CompositionSettings compositionSettingsForAsset(const document::AssetRecord& asset,
                                                               CompositionSettings base);
 

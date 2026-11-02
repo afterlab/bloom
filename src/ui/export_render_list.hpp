@@ -1,6 +1,6 @@
 #pragma once
 
-// The Export panel's render list: the After Effects Render Queue order on Bloom's Assets row
+// The Export panel's render list: a compositor's render queue order on Bloom's Assets row
 // system. One QTreeWidget with real column headers (Render, #, Composition, Status, Started,
 // Render Time) whose rows are painted exactly as an Assets row is (one Size::AssetRow, the
 // alternation, hover and selected recipe across the whole viewport). A job is a top-level row;

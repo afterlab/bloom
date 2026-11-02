@@ -1,8 +1,8 @@
 #pragma once
-// Dropping footage and compositions onto the Timeline or the Viewer creates layers, as in After
-// Effects. AddDroppedLayers (bloom/commands) is the one undoable drop; the drop target reads the
-// drag, asks the host panel where the pointer is, shows its insertion indicator, and submits the
-// operation (after an import, for files from the file manager).
+// Dropping footage and compositions onto the Timeline or the Viewer creates layers, as in a
+// layer-based compositor. AddDroppedLayers (bloom/commands) is the one undoable drop; the drop
+// target reads the drag, asks the host panel where the pointer is, shows its insertion indicator,
+// and submits the operation (after an import, for files from the file manager).
 #include <QPoint>
 #include <bloom/commands/layer_drop_operations.hpp>
 #include <bloom/core/rational_time.hpp>

@@ -1,6 +1,6 @@
 #pragma once
 
-// The layer table's labels (After Effects' Label column): the label menu a label square and the
+// The layer table's labels (a compositor's Label column): the label menu a label square and the
 // row context menu open, Select Label Group, and the header's label filter.
 //
 // A label is the layer's stored label colour, or none (the kind default the clip bar falls back

@@ -26,7 +26,7 @@ enum class AssetAlphaMode : std::uint8_t { Guess, Ignore, Straight, Premultiplie
 // The field order the asset is read with. File uses the order captured at import.
 enum class AssetFieldOrder : std::uint8_t { File, Progressive, UpperFirst, LowerFirst };
 // What a sequence shows for a frame its manifest does not have. Skip plays the frames it has back
-// to back, as if the missing ones had never been numbered (After Effects' "Force alphabetical
+// to back, as if the missing ones had never been numbered (a compositor's "Force alphabetical
 // order"), so the sequence is as long as the frames it holds.
 enum class AssetMissingFrames : std::uint8_t { HoldPrevious, Nothing, Skip };
 inline constexpr std::uint32_t kMaxAssetLoopCount = 1000;

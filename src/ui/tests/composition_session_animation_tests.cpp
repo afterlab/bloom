@@ -615,8 +615,8 @@ void testKeyframeGestureReachesEveryAnimatableSchema() {
     require(seededColor,
             "a color parameter gets a COLOR curve seeded with its own authored color");
 
-    // An animated parameter's value edit at a time with no key inserts one (the AE rule), through
-    // the same write path a constant edit uses.
+    // An animated parameter's value edit at a time with no key inserts one (the compositor rule),
+    // through the same write path a constant edit uses.
     require(session.setCurrentTime(time(4, 1)), "the session moves off every key");
     require(session.keyframeDiamondState(document::kOpacityParameterRole) ==
                 ui::KeyframeDiamondState::AnimatedWithoutKey,
@@ -627,7 +627,7 @@ void testKeyframeGestureReachesEveryAnimatableSchema() {
     require(session.setSelectedOpacity(0.5), "editing an animated value commits");
     require(session.keyframeDiamondState(document::kOpacityParameterRole) ==
                 ui::KeyframeDiamondState::AnimatedWithKey,
-            "and inserts a key at the current time, which is the AE behavior");
+            "and inserts a key at the current time, which is the compositor behavior");
 }
 
 // Task S5, item 2: the selected key's interpolation, through the session path the timeline menu

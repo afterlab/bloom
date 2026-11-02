@@ -545,8 +545,8 @@ void ViewerEditor::showCustomSafeAreaDialog() {
 std::unique_ptr<QMenu> ViewerEditor::canvasContextMenu(const QPointF point) {
     std::unique_ptr<QMenu> menu(kit::makeMenu(this));
     menu->setObjectName(QStringLiteral("viewerCanvasContextMenu"));
-    // The layer under the pointer first, as in After Effects: select it, or duplicate or delete it
-    // through the same commands as the Timeline's layer menu.
+    // The layer under the pointer first, as in a layer-based compositor: select it, or duplicate or
+    // delete it through the same commands as the Timeline's layer menu.
     const auto* composition = session_.composition();
     if (const auto mapping = currentMapping(); mapping && composition != nullptr) {
         const auto hit = hitAt(*mapping, point);

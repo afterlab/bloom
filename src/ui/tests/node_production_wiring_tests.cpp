@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
                "a production socket drag connects through the session");
 
         // One Ctrl+D: duplicates the selection through the session (task S1, item 8 moved duplicate
-        // from Shift+D to the Adobe-standard Ctrl+D).
+        // from Shift+D to the industry-standard Ctrl+D).
         a.session.selectNodes({solid}, solid);
         QCoreApplication::processEvents();
         const auto nodesBefore = a.session.composition()->graph().nodes().size();

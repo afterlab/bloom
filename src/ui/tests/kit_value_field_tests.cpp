@@ -408,8 +408,8 @@ void testTheStateMachineAndDisabledField(Expectations& expectations) {
     field.setEnabled(true);
 }
 
-// Task F1, item F4: After Effects' scrub. One pixel is one step, Shift is ten of them, Ctrl is a
-// tenth, and the displacement is measured from the press so a drag that returns lands exactly
+// Task F1, item F4: the compositor-style scrub. One pixel is one step, Shift is ten of them, Ctrl
+// is a tenth, and the displacement is measured from the press so a drag that returns lands exactly
 // where it started.
 void testDraggingScrubsTheValue(Expectations& expectations) {
     QWidget host;

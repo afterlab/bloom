@@ -1,6 +1,7 @@
 #pragma once
 
-// Keyframe handle modes (document 1.32): Blender's Auto Clamped handle computation and the
+// Keyframe handle modes (document 1.32): the reference implementation's Auto Clamped handle
+// computation (see tests/keyframe_handle_blender_reference.inc) and the
 // Aligned/Auto bookkeeping that keeps stored handles consistent with each key's mode.
 //
 // The mode never reaches the sampler. Auto and Aligned are maintained by rewriting the STORED
@@ -30,8 +31,8 @@ struct AutoHandles {
     std::optional<KeyframeHandle> incoming;
 };
 
-// Blender's Auto Clamped handles (BKE_nurb_handle_calc_ex for F-Curves with auto-handle smoothing
-// off, plus the first/last-key flattening of BKE_fcurve_handles_recalc under constant
+// The reference Auto Clamped handles (BKE_nurb_handle_calc_ex for F-Curves with auto-handle
+// smoothing off, plus the first/last-key flattening of BKE_fcurve_handles_recalc under constant
 // extrapolation), transcribed in double. The handle direction follows the average of the two
 // adjacent slopes, an interior extremum and any handle that would pass a neighbour's value are
 // clamped flat so the curve never overshoots, and the opposite handle is re-aligned when only one
@@ -42,8 +43,8 @@ computeAutoClampedHandles(std::span<const AutoHandleKey> keys);
 // Re-establishes the handle-mode invariants of one key sequence after an edit. `after` is the
 // sequence as the edit left it; `before` is the sequence before the edit (empty when it is new).
 // Keys are matched by id. In order:
-//   1. An Auto key whose handle was changed by the edit becomes Aligned (Blender: dragging an Auto
-//      handle converts the key).
+//   1. An Auto key whose handle was changed by the edit becomes Aligned (as in the reference:
+//      dragging an Auto handle converts the key).
 //   2. An Aligned key whose one handle was changed gets the other handle made collinear (its length
 //      is kept, its direction follows). If the key was collinear before and its adjacent segments
 //      changed length, its incoming handle follows its outgoing one again.

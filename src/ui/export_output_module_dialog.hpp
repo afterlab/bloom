@@ -1,7 +1,7 @@
 #pragma once
 
-// Output Module, opened from an output's "Output Module" link (After Effects' Output Module
-// Settings, with only what an export output carries). Grouped like After Effects:
+// Output Module, opened from an output's "Output Module" link (a compositor's output module
+// settings, with only what an export output carries). Grouped like a compositor's:
 //
 //   “ProRes 422 HQ”  Format, If a file is there       | Post-render, Cached frames
 //   Quality          the format's profile or compression,| its colour space, or display and view

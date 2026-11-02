@@ -383,8 +383,9 @@ void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expe
     }
 }
 
-// Numpad 0 is the RAM Preview key (After Effects): a window shortcut on the Composition menu's
-// action, which a keypad digit typed into a text field overrides (it is text input there).
+// Numpad 0 is the RAM Preview key (as in a layer-based compositor): a window shortcut on the
+// Composition menu's action, which a keypad digit typed into a text field overrides (it is text
+// input there).
 void testNumpadZeroIsTheRamPreviewShortcut(Expectations& expectations) {
     bool ok = false;
     Fixture fixture(&ok);

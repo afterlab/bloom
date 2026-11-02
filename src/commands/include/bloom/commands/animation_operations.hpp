@@ -315,7 +315,7 @@ class SetKeyframeAtTime final : public Operation {
 // AnimationCurveSource at APPLY time and then does exactly what SetKeyframeAtTime does, which is
 // the one thing a curve-keyed operation cannot do: sit in the same transaction as
 // CreateAnimationForParameter, whose curve id does not exist until that earlier operation runs
-// against the same draft. That is precisely the AE keyframe gesture -- "make this parameter
+// against the same draft. That is precisely the compositor keyframe gesture -- "make this parameter
 // animated AND put a key at the current time" is one undo step, not two.
 //
 // Every admission rule is the curve-keyed operation's, reached through the same helper: a
@@ -550,11 +550,12 @@ struct KeyframeEasingEdit {
     std::optional<double> period{};
     friend bool operator==(const KeyframeEasingEdit&, const KeyframeEasingEdit&) = default;
 };
-// Writes Blender's easing parameters -- ease mode, Back's overshoot, Elastic's amplitude and period
+// Writes the easing parameters -- ease mode, Back's overshoot, Elastic's amplitude and period
 // -- on addressed keys, optionally switching their outgoing interpolation in the same step (so a
 // menu pick of "Elastic, Ease Out" is one undo). A component-less vector or colour address edits
 // every component's key at that time, as SetKeyframesInterpolation does. Parameters outside
-// Blender's domain (non-finite, or a negative amplitude) refuse the whole batch.
+// the reference implementation's domain (non-finite, or a negative amplitude) refuse the whole
+// batch.
 class SetKeyframesEasing final : public Operation {
   public:
     SetKeyframesEasing(document::CompositionId composition, std::vector<KeyframeAddress> keys,
@@ -575,12 +576,12 @@ class SetKeyframesEasing final : public Operation {
     KeyframeEasingEdit edit_;
     std::optional<document::KeyframeInterpolation> interpolation_;
 };
-// After Effects' Easy Ease (F9), Easy Ease In (Shift+F9) and Easy Ease Out (Ctrl+Shift+F9) on
-// addressed keys. AE gives the eased side 33.33% influence and zero speed; in Bloom's handle model
-// that is a handle of time 1/3 (exactly the default handle) and value offset 0, on a Bezier
-// segment. In eases each key's incoming side, Out its outgoing side, Both both. The far side of a
-// segment that was not already Bezier gets the linear-speed handle (1/3, +-change/3), so it keeps
-// the speed it had; an existing Bezier far side keeps its handle. See
+// Easy Ease (F9), Easy Ease In (Shift+F9) and Easy Ease Out (Ctrl+Shift+F9), as in a layer-based
+// compositor, on addressed keys. Easy Ease gives the eased side 33.33% influence and zero speed; in
+// Bloom's handle model that is a handle of time 1/3 (exactly the default handle) and value offset
+// 0, on a Bezier segment. In eases each key's incoming side, Out its outgoing side, Both both. The
+// far side of a segment that was not already Bezier gets the linear-speed handle (1/3, +-change/3),
+// so it keeps the speed it had; an existing Bezier far side keeps its handle. See
 // docs/architecture/animation-and-time.md, "Easy Ease".
 enum class EasyEase : std::uint8_t { Both, In, Out };
 class ApplyEasyEase final : public Operation {

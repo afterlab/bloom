@@ -402,7 +402,7 @@ void TimelineGraphView::updateHandleDrag(const QMouseEvent& event) {
 }
 
 void TimelineGraphView::updateSpeedHandleDrag(const QMouseEvent& event) {
-    // The Speed Graph's handle is After Effects' influence/speed handle: horizontal travel is
+    // The Speed Graph's handle is a compositor's influence/speed handle: horizontal travel is
     // influence, vertical travel is speed, both written back as the same Bezier handle the Value
     // Graph edits. Shift locks to whichever of the two dominates.
     const auto axis = ruler_.axisForWidth(width());

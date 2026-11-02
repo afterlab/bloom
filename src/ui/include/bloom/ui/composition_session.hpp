@@ -153,9 +153,9 @@ struct UpstreamNode final {
 
 // What a keyframe diamond shows for one parameter at the session's current time (task S5, item 0;
 // docs/architecture/animation-and-time.md, "The Keyframe Gesture"). The three authored states are
-// exactly the three AE diamond shapes -- empty, outlined, filled -- and Unsupported is the fourth,
-// honest case: the selection exposes no such parameter, or its schema declares no animation at all,
-// so there is no diamond to click.
+// exactly the three compositor diamond shapes -- empty, outlined, filled -- and Unsupported is the
+// fourth, honest case: the selection exposes no such parameter, or its schema declares no animation
+// at all, so there is no diamond to click.
 enum class KeyframeDiamondState : std::uint8_t {
     Unsupported,
     Constant,
@@ -294,7 +294,7 @@ class CompositionSession final : public QObject {
     // to Ease In-Out and refuses the final key's outgoing and the first key's incoming handle.
     [[nodiscard]] bool setKeyframeHandles(std::vector<commands::KeyframeHandleEdit> edits,
                                           document::Revision revision);
-    // After Effects' Easy Ease (F9), Easy Ease In (Shift+F9) and Easy Ease Out (Ctrl+Shift+F9)
+    // Easy Ease (F9), Easy Ease In (Shift+F9) and Easy Ease Out (Ctrl+Shift+F9)
     // over the current selection, as ONE commands::ApplyEasyEase transaction: each eased side of a
     // selected key takes 33.33% influence and zero speed on a Bezier segment, and the side of that
     // segment which is not eased keeps its speed (docs/architecture/animation-and-time.md,
@@ -443,7 +443,7 @@ class CompositionSession final : public QObject {
                                                             core::RationalTime time) const;
     [[nodiscard]] KeyframeParameterState keyframeParameterState(document::ParameterId parameterId,
                                                                 core::RationalTime time) const;
-    // The AE diamond click, end to end, as exactly ONE undoable transaction per call:
+    // The compositor diamond click, end to end, as exactly ONE undoable transaction per call:
     //   * a constant parameter becomes a curve with one key at the current value and time
     //     (CreateAnimationForParameter + SetKeyframeAtTimeForParameter together -- the second
     //     operation is parameter-keyed precisely so it can see the curve the first one created);

@@ -213,7 +213,7 @@ void testFitFramesTheGraphAndActualSizeIsExactlyOneHundredPercent(Expectations& 
                         "Fit leaves the canvas following the graph until the artist moves it");
 
     // Actual size, through the real key event, not the method. Task S1, item 8 retired Z in favour
-    // of the Adobe-standard Ctrl+1, in this canvas and in the Viewer alike.
+    // of the industry-standard Ctrl+1, in this canvas and in the Viewer alike.
     sendKey(fixture.view(), QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     expectations.expect(near(fixture.view()->zoomFactor(), 1.0),
                         "Ctrl+1 is exactly 100%, one scene unit per screen pixel");

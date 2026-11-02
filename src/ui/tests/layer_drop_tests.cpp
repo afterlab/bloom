@@ -1,8 +1,9 @@
-// #380: dropping Assets items or files on the Timeline or the Viewer creates layers, as in After
-// Effects. Over the layer stack the drop inserts at the row; over the lanes it starts at the frame
-// under the pointer; elsewhere it goes on top at the playhead. Several items stack in selection
-// order (Alt sequences them end to end), compositions become nested layers, and each drop is one
-// undo step. Files are imported first and become layers in a second step once the import commits.
+// #380: dropping Assets items or files on the Timeline or the Viewer creates layers, as in a
+// layer-based compositor. Over the layer stack the drop inserts at the row; over the lanes it
+// starts at the frame under the pointer; elsewhere it goes on top at the playhead. Several items
+// stack in selection order (Alt sequences them end to end), compositions become nested layers, and
+// each drop is one undo step. Files are imported first and become layers in a second step once the
+// import commits.
 
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"

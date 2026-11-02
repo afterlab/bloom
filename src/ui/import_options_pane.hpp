@@ -1,6 +1,6 @@
 #pragma once
 
-// Import's options (#381), the pane under the Import Media dialog's file type row, After Effects'
+// Import's options (#381), the pane under the Import Media dialog's file type row, a compositor's
 // import options: import numbered images as one sequence or each as a still, only a frame range of
 // each sequence, skip a sequence's missing frames, and make a composition from what was imported.
 // The pane only edits values; AssetController turns them into the ImportAssets command and the

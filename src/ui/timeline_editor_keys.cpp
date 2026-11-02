@@ -1,9 +1,9 @@
-// After Effects' Timeline keys (docs/ux/interaction-model.md, "Timeline"). They are Timeline
-// keys, not window shortcuts: Qt::WidgetWithChildrenShortcut actions on the panel, so they answer
-// while the layer table, the lanes or the graph have focus, and a focused text or value field keeps
-// its own typing (Qt hands it the ShortcutOverride first). The Viewer and the context bar keep the
-// tool letters R, E, P and T, which they read only while they hold focus; the eventFilter below
-// adds the same keys when no widget in the window has focus at all.
+// The compositor-standard Timeline keys (docs/ux/interaction-model.md, "Timeline"). They are
+// Timeline keys, not window shortcuts: Qt::WidgetWithChildrenShortcut actions on the panel, so they
+// answer while the layer table, the lanes or the graph have focus, and a focused text or value
+// field keeps its own typing (Qt hands it the ShortcutOverride first). The Viewer and the context
+// bar keep the tool letters R, E, P and T, which they read only while they hold focus; the
+// eventFilter below adds the same keys when no widget in the window has focus at all.
 #include <bloom/ui/timeline_editor.hpp>
 
 #include "timeline_reveal.hpp"
@@ -70,7 +70,8 @@ void TimelineEditor::createTimelineKeys() {
         [this] { editTimingAtPlayhead(static_cast<int>(PlayheadEdit::TrimOut)); });
 }
 
-// The selected layers, or every listed layer when none is selected (as in After Effects).
+// The selected layers, or every listed layer when none is selected (as in a layer-based
+// compositor).
 std::vector<document::LayerId> TimelineEditor::keyTargetLayers() const {
     std::vector<document::LayerId> all;
     std::vector<document::LayerId> selected;

@@ -55,9 +55,9 @@ namespace bloom::runtime {
 inline constexpr std::uint32_t kCompiledCompositionPlanSemanticsVersion = 10;
 // Task S5 bumped this 1 -> 2: KeyframeInterpolation gained EaseInOut, so sampling can now produce a
 // value no version-1 sampler could, and the Color4 curve table added a third sampled value kind.
-// Easing equations advance it 2 -> 3: KeyframeInterpolation gained Blender's ten easing equations
-// and keys carry their parameters, so a sampler can now produce values no version-2 sampler could.
-// Every version-2 key (Hold, Linear, Bezier) samples bit-for-bit as before.
+// Easing equations advance it 2 -> 3: KeyframeInterpolation gained Robert Penner's ten easing
+// equations and keys carry their parameters, so a sampler can now produce values no version-2
+// sampler could. Every version-2 key (Hold, Linear, Bezier) samples bit-for-bit as before.
 inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 3;
 
 // Each of the three typed operands gained ONE more alternative in task S7: a value-graph output,

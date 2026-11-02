@@ -36,7 +36,7 @@ namespace {
     return label;
 }
 
-// ▾: the quick picks behind a value, plate-less as After Effects draws it.
+// ▾: the quick picks behind a value, plate-less as a compositor's render queue draws it.
 [[nodiscard]] kit::KIconButton* picksButton(const QString& name, const QString& accessible,
                                             QWidget* parent) {
     auto* button = new kit::KIconButton(parent);

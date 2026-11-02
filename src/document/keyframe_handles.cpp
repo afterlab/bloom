@@ -8,11 +8,12 @@
 namespace bloom::document {
 namespace {
 
-// Blender's `2.5614f` handle-length divisor (curve.cc, calchandleNurb_intern). It is the factor
-// that makes a Catmull-Rom-like auto handle on a straight run land one third along its segment.
+// The reference implementation's `2.5614f` handle-length divisor (curve.cc, calchandleNurb_intern).
+// It is the factor that makes a Catmull-Rom-like auto handle on a straight run land one third along
+// its segment.
 constexpr double kAutoHandleDivisor = 2.5614;
-// Blender caps one side of a key at five times the other so a short segment next to a long one
-// does not get a handle that dwarfs it.
+// The reference implementation caps one side of a key at five times the other so a short segment
+// next to a long one does not get a handle that dwarfs it.
 constexpr double kAutoLengthRatio = 5.0;
 // Two handles are "collinear" when the cross product of their vectors is within this fraction of
 // the product of their lengths.
@@ -155,7 +156,7 @@ std::vector<AutoHandles> computeAutoClampedHandles(const std::span<const AutoHan
         const bool hasNext = index + 1 < keys.size();
         const double x2 = keys[index].time;
         const double y2 = keys[index].value;
-        // A missing neighbor is the mirror of the present one, as in Blender.
+        // A missing neighbor is the mirror of the present one, as in the reference.
         const double x3 = hasNext ? keys[index + 1].time : 2.0 * x2 - keys[index - 1].time;
         const double y3 = hasNext ? keys[index + 1].value : 2.0 * y2 - keys[index - 1].value;
         const double x1 = hasPrevious ? keys[index - 1].time : 2.0 * x2 - x3;

@@ -1,6 +1,6 @@
 #pragma once
 
-// The Export panel: the ADR 0033 render queue as After Effects' Render Queue, built from Bloom's
+// The Export panel: the ADR 0033 render queue as a compositor's render queue, built from Bloom's
 // own components. Top to bottom:
 //
 // - the panel header: the editor picker, Add composition (Secondary); on the right Start All (the

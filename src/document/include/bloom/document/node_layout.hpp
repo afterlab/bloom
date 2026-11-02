@@ -58,8 +58,8 @@ inline constexpr double kDefaultNodeGroupPadding = 24.0;
 // One node group: a named frame drawn behind a set of member cards. This is LAYOUT, not graph
 // semantics -- a group carries no ports, no encapsulation and no evaluation meaning, and the
 // compiler never sees it. (`Node Group` in docs/architecture/layer-graph-model.md's terminology
-// means the deferred encapsulation feature; this record is the Blender-Frame-shaped organizer the
-// "Node groups" section of that document defines.)
+// means the deferred encapsulation feature; this record is the node-editor-Frame-shaped organizer
+// the "Node groups" section of that document defines.)
 struct NodeGroupRecord {
     NodeGroupId id;
     std::string name;

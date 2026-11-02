@@ -16,9 +16,9 @@
 #include <unordered_map>
 #include <vector>
 
-// Scene-referred composite frames that export, RAM preview and playback share, as After Effects
-// reuses its disk cache: a frame rendered once at full resolution and Reference quality is not
-// rendered again while its render identity holds.
+// Scene-referred composite frames that export, RAM preview and playback share, as a layer-based
+// compositor reuses its disk cache: a frame rendered once at full resolution and Reference quality
+// is not rendered again while its render identity holds.
 //
 // A frame is the composition output in the working space, before any display/view transform,
 // Viewer adjustment or ROI, stored as premultiplied RGBA half floats (8 bytes a pixel, about 14 MB

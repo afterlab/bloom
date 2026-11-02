@@ -384,8 +384,8 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
             (void)compositionSession_.setComposition(*id);
         }
     });
-    // #376: the shared modal in settings mode. After Effects' Ctrl+K already splits layers here, so
-    // it takes Ctrl+Alt+K beside New Composition's Ctrl+Alt+N.
+    // #376: the shared modal in settings mode. The compositor-standard Ctrl+K already splits layers
+    // here, so it takes Ctrl+Alt+K beside New Composition's Ctrl+Alt+N.
     compositionSettingsAction_ = compositionMenu.addAction("Composition Settings…");
     compositionSettingsAction_->setObjectName("compositionSettingsAction");
     compositionSettingsAction_->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_K));
@@ -432,9 +432,10 @@ void MainWindow::createCompositionMenu(QMenu& compositionMenu) {
     // would give one key two owners.
     ramPreviewAction_ = compositionMenu.addAction("&RAM Preview");
     ramPreviewAction_->setObjectName("compositionRamPreviewAction");
-    // Numpad 0 is After Effects' RAM Preview key. With Num Lock off the same key reports Insert, so
-    // both keypad forms are bound. A keypad digit typed into a text or value field is text input,
-    // which Qt delivers as a ShortcutOverride to the field first, so it never fires here.
+    // Numpad 0 is the compositor-standard RAM Preview key. With Num Lock off the same key reports
+    // Insert, so both keypad forms are bound. A keypad digit typed into a text or value field is
+    // text input, which Qt delivers as a ShortcutOverride to the field first, so it never fires
+    // here.
     ramPreviewAction_->setShortcuts({QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Space),
                                      QKeySequence(Qt::KeypadModifier | Qt::Key_0),
                                      QKeySequence(Qt::KeypadModifier | Qt::Key_Insert)});

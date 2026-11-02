@@ -78,9 +78,9 @@ parseTimelineFrameLabel(const QString& text, document::FrameRate rate, bool time
 [[nodiscard]] std::int64_t timecodeStartFrame(document::FrameRate rate,
                                               const document::CompositionTimecode& labels);
 
-// The timeline panel's shared row pitch (task T1): the AE-style layer rows, their lanes, and the
-// keyframe lanes underneath them all step by exactly this much, so the left column's rows, the
-// clip bars beside them, and the key rows below read as one grid.
+// The timeline panel's shared row pitch (task T1): the compositor-style layer rows, their lanes,
+// and the keyframe lanes underneath them all step by exactly this much, so the left column's rows,
+// the clip bars beside them, and the key rows below read as one grid.
 //
 inline constexpr int kTimelineRowHeight = kit::px(kit::Size::ListRow);
 

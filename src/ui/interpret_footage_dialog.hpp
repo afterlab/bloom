@@ -1,9 +1,9 @@
 #pragma once
 
-// Interpret Footage (#381): the one dialog for an asset's interpretation, after After Effects. It
-// edits the interpretation of the asset it opened on and reports only the members the artist
-// changed, so applying it to a multi-selection changes exactly those members on every selected
-// footage item. The caller turns the change into one SetAssetInterpretation command.
+// Interpret Footage (#381): the one dialog for an asset's interpretation, modelled on a layer-based
+// compositor. It edits the interpretation of the asset it opened on and reports only the members
+// the artist changed, so applying it to a multi-selection changes exactly those members on every
+// selected footage item. The caller turns the change into one SetAssetInterpretation command.
 
 #include <bloom/commands/footage_interpretation_operations.hpp>
 #include <bloom/document/asset.hpp>

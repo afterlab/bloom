@@ -128,8 +128,8 @@ enum class IconId : std::uint8_t {
     ExportPanel,
     // The Node editor footer's Arrange (a broom: tidy the graph).
     Arrange,
-    // The Timeline's Shy switch and master Shy toggle (a ghost: the pinned set has no After
-    // Effects style "peeking" glyph), and its label filter (a funnel).
+    // The Timeline's Shy switch and master Shy toggle (a ghost: the pinned set has no
+    // compositor-style "peeking" glyph), and its label filter (a funnel).
     Shy,
     LabelFilter,
     // The timeline's keyframes/graph toggle (axes and a plotted line).

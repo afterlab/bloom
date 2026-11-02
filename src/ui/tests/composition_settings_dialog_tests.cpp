@@ -371,7 +371,7 @@ void testDialogPresentation() {
            "the dialog is the wide dialog width");
     expect(create.summary() ==
                QStringLiteral("1920 × 1080 · 16:9 · Square pixels · 24 fps · 10 s (240 frames)"),
-           "the summary reads like After Effects'");
+           "the summary reads like a compositor's");
     expect(child<QLabel>(create, "compositionSettingsSummary")->text() == create.summary(),
            "the summary is shown under the preset");
     expect(child<QLabel>(create, "compositionSettingsBackgroundHex")->text() ==

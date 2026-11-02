@@ -835,7 +835,7 @@ void AssetController::requestImport(QWidget* parent, ImportFollowUp followUp) {
     // Every file dialog has an owner; a request without one opens nothing.
     if (parent == nullptr)
         return;
-    // #381: the import options sit under the file list, as in After Effects.
+    // #381: the import options sit under the file list, as in a layer-based compositor.
     const bool offerComposition = !followUp;
     commands::ImportOptions options;
     bool createComposition = false;

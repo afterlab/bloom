@@ -692,7 +692,7 @@ void testHandlesSubmenu() {
            "the pasted key keeps its handle mode");
 }
 
-// T1, item 9: the Easing list offers Linear and Constant, then every Blender function as Ease In /
+// T1, item 9: the Easing list offers Linear and Constant, then every Penner function as Ease In /
 // Ease Out / Ease In-Out, and a pick writes the equation and its ease end as ONE undo entry.
 void testEasingPresets() {
     GraphFixture fixture(makeProject("Graph easing"));
@@ -724,7 +724,7 @@ void testEasingPresets() {
            "Linear and Constant lead the Easing list");
     expect(families == QStringList({"Sine", "Quad", "Cubic", "Quart", "Quint", "Expo", "Circ",
                                     "Back", "Bounce", "Elastic"}),
-           "then Blender's ten easing functions, in Blender's order");
+           "then Robert Penner's ten easing functions, in the reference order");
     QAction* out = nullptr;
     if (elastic != nullptr && elastic->actions().size() == 3) {
         expect(elastic->actions()[0]->text() == QStringLiteral("Ease In") &&
@@ -798,7 +798,7 @@ void testEasyEaseActions() {
                shortcut("timelineEasyEaseInAction") == QKeySequence(Qt::SHIFT | Qt::Key_F9) &&
                shortcut("timelineEasyEaseOutAction") ==
                    QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F9),
-           "F9, Shift+F9 and Ctrl+Shift+F9, as in After Effects");
+           "F9, Shift+F9 and Ctrl+Shift+F9, as in a layer-based compositor");
 }
 
 // 8. Keys hidden means nothing key-coloured is painted in the lane.
@@ -1021,7 +1021,7 @@ void testGraphToggleSwitchesThePane() {
     if (toggle == nullptr || action == nullptr)
         fail("the graph toggle and its action must exist");
     expect(action->shortcut() == QKeySequence(Qt::SHIFT | Qt::Key_F3),
-           "the switch is Shift+F3, as in After Effects");
+           "the switch is Shift+F3, as in a layer-based compositor");
     toggle->click();
     QCoreApplication::processEvents();
     expect(fixture.editor.laneRegionForTest()->graphEditorEnabled() && toggle->isChecked(),

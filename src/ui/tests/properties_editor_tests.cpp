@@ -767,9 +767,10 @@ void testTransformRowsShowTheirOwnKeyframeIndicators(Expectations& expectations)
                             !indicatorLooksAnimated(*rotationIndicator),
                         "only the animated transform parameter's own indicator reads as animated");
     // Task S5, item 0 inverted this: an animated row stays EDITABLE and shows the curve's exactly
-    // sampled value at the current time, because typing into it at a time with no key is how AE
-    // inserts one (CompositionSession::effectiveVec2Value() + the existing SetKeyframeAtTime write
-    // path). Before this task the field was disabled, which made that gesture unreachable.
+    // sampled value at the current time, because typing into it at a time with no key is how a
+    // layer-based compositor inserts one (CompositionSession::effectiveVec2Value() + the existing
+    // SetKeyframeAtTime write path). Before this task the field was disabled, which made that
+    // gesture unreachable.
     expectations.expect(scaleX->isEnabled() && rotation->isEnabled() && anchorX->isEnabled(),
                         "an animated transform row stays editable so editing it can insert a key");
 }

@@ -111,10 +111,10 @@ class TimelineGraphView final : public QWidget {
     // Lane snapping's own rule, on the graph's own canvas: the Snap to Frames toggle.
     void setSnappingEnabled(bool enabled) noexcept { snapping_ = enabled; }
     [[nodiscard]] bool snappingEnabled() const noexcept { return snapping_; }
-    // After Effects' graph types, switched in the graph header; persisted.
+    // A compositor's graph types, switched in the graph header; persisted.
     void setGraphType(GraphType type);
     [[nodiscard]] GraphType graphType() const noexcept { return graphType_; }
-    // Blender's Normalize, toggled in the graph header; persisted.
+    // Normalize, toggled in the graph header; persisted.
     void setNormalized(bool normalized);
     [[nodiscard]] bool normalized() const noexcept { return normalized_; }
     // The timeline's Easy Ease / In / Out actions (they carry F9, Shift+F9 and Ctrl+Shift+F9 for the

@@ -1,6 +1,6 @@
 #pragma once
 
-// After Effects' Timeline keys, as Qt-free decisions the TimelineEditor's actions apply
+// The compositor-standard Timeline keys, as Qt-free decisions the TimelineEditor's actions apply
 // (docs/ux/interaction-model.md, "Timeline"): the property reveals (A anchor, P position, S scale,
 // R rotation, T opacity, U keyed, UU modified, M masks, E effects; Shift adds), J/K keyframe
 // navigation, and [ / ] / Alt+[ / Alt+] moving or trimming a layer to the playhead.

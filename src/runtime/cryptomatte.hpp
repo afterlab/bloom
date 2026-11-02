@@ -1,6 +1,7 @@
 #pragma once
 
-// #364 Cryptomatte, following the Cryptomatte specification (Psyop, v1.2) as Nuke reads it:
+// #364 Cryptomatte, following the Cryptomatte specification (Psyop, v1.2) as compositing
+// applications read it:
 //  - an object name's ID is MurmurHash3_x86_32(name, seed 0) whose bits are used as a float32;
 //    when the exponent bits are 0 or 255 bit 23 is flipped so every ID is a finite normal float;
 //  - a layer type `<name>` is stored as rank layers `<name>00`, `<name>01`, ..., each holding two

@@ -56,8 +56,8 @@ KValueField::KValueField(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::TabFocus);
     setAttribute(Qt::WA_Hover, true);
     setFont(kit::font(TypeRole::Ui));
-    // The whole control is a scrub handle, label included -- exactly as in After Effects, where
-    // dragging the parameter's name drags its value.
+    // The whole control is a scrub handle, label included -- exactly as in a layer-based
+    // compositor, where dragging the parameter's name drags its value.
     setCursor(Qt::SizeHorCursor);
     resetText_ = tr("Reset");
 

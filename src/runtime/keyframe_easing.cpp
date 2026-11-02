@@ -5,9 +5,10 @@
 #include <cstddef>
 #include <limits>
 
-// Blender's formulas are float; these are the same expressions in double, in the same operation
-// order, with `time / duration` already reduced to the exact interval factor `u`. Only Elastic
-// needs the absolute segment duration back, exactly where Blender multiplies `time * duration`.
+// The reference implementation's formulas are float; these are the same expressions in double, in
+// the same operation order, with `time / duration` already reduced to the exact interval factor
+// `u`. Only Elastic needs the absolute segment duration back, exactly where the reference
+// multiplies `time * duration`.
 
 namespace bloom::runtime {
 namespace detail {
@@ -153,8 +154,8 @@ namespace {
 
 using document::KeyframeEasing;
 
-// Blender's pow_min / pow_scale: the Expo curve is shifted and rescaled so it starts and ends
-// exactly on its keys.
+// The reference implementation's pow_min / pow_scale: the Expo curve is shifted and rescaled so it
+// starts and ends exactly on its keys.
 inline constexpr double kExpoMinimum = 0.0009765625; // 2^-10
 inline constexpr double kExpoScale = 1.0 / (1.0 - 0.0009765625);
 
@@ -187,8 +188,8 @@ inline constexpr double kExpoScale = 1.0 / (1.0 - 0.0009765625);
     return change - bounceOut(1.0 - u, 0.0, change) + begin;
 }
 
-// Blender's elastic_blend(): below |change| the amplitude scales the swing, faded in over the
-// first quarter period so the curve does not jump where it leaves the key.
+// The reference implementation's elastic_blend(): below |change| the amplitude scales the swing,
+// faded in over the first quarter period so the curve does not jump where it leaves the key.
 [[nodiscard]] double elasticBlend(const double time, const double change, const double duration,
                                   const double amplitude, const double s, double f) noexcept {
     if (change != 0.0) {
@@ -205,8 +206,8 @@ inline constexpr double kExpoScale = 1.0 / (1.0 - 0.0009765625);
     return f;
 }
 
-// Shared setup of Blender's three elastic forms: the period, phase offset `s`, blend factor `f`
-// and effective amplitude.
+// Shared setup of the reference implementation's three elastic forms: the period, phase offset `s`,
+// blend factor `f` and effective amplitude.
 struct ElasticShape {
     double period;
     double s;

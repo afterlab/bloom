@@ -1,10 +1,10 @@
 #include "editor_chrome_test_support.hpp"
 #include "timeline_property_rows.hpp"
 
-// Task T1: the timeline's AE-style layer stack and lane region. This file owns the layer-row
-// chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp owns the
-// ruler's own tick-density/scrub contract and the keyframe panel's gestures. Offscreen, matching
-// every other widget test in this suite.
+// Task T1: the timeline's compositor-style layer stack and lane region. This file owns the
+// layer-row chrome, the two-region geometry, and the transport restyle; timeline_ruler_tests.cpp
+// owns the ruler's own tick-density/scrub contract and the keyframe panel's gestures. Offscreen,
+// matching every other widget test in this suite.
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>

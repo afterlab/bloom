@@ -4,8 +4,8 @@
 #include <string>
 
 namespace bloom::quality {
-// Document 1.30 adds Blender's keyframe easing equations (ten interpolation tokens and the optional
-// keyframe `easing` member) and the optional presentation-only layer members `shy` and
+// Document 1.30 adds Robert Penner's keyframe easing equations (ten interpolation tokens and the
+// optional keyframe `easing` member) and the optional presentation-only layer members `shy` and
 // `nameFollowsSource`. Removing them and the version must give back the 1.29 artifact exactly.
 namespace {
 void erase(json::Value& object, std::string_view key) {

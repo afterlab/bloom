@@ -1,6 +1,6 @@
 // #380 in the whole window: the Assets selection header for a video (plain colour name, the
 // assumed-colour note once, one duration format) and for a composition (its rendered frame), and
-// After Effects style drags from Assets onto the Timeline (the row insertion line, the time
+// Compositor-style drags from Assets onto the Timeline (the row insertion line, the time
 // marker, a sequenced multi-item drop). Set BLOOM_LAYER_DROP_CAPTURE_DIR to save each state, and
 // BLOOM_LAYER_DROP_CAPTURE_SCREEN to a command that saves the screen to its argument (for example
 // a compositor screenshot on a private headless session) to capture the window with its title.

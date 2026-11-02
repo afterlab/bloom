@@ -12,7 +12,7 @@ class QStackedWidget;
 
 namespace bloom::ui::kit {
 
-// The kit tab bar (lane C, for the Composition dialog's Basic / Advanced, After Effects style).
+// The kit tab bar (lane C, for the Composition dialog's Basic / Advanced, compositor style).
 // Tabs are Ui text in a row; the current tab is Foreground ink over a Size::SelectionEdge Accent
 // underline, the others Muted (Foreground under the pointer). A tab can carry an alert: a small
 // Error dot after its text, for a refused value the tab hides. Keyboard: the bar takes focus and

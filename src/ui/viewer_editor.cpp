@@ -1710,7 +1710,7 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
         }
 
         // Ctrl+0 fits and Ctrl+1 is actual size, in this canvas and in the node canvas alike (task
-        // S1, item 8). F and Z are retired in both: the Adobe-standard pair is what an artist
+        // S1, item 8). F and Z are retired in both: the industry-standard pair is what an artist
         // arriving from another compositor reaches for, and a single-letter binding that far up the
         // alphabet is needed for tools. The other two ways to reach either are still the context
         // menu and the zoom dropdown (decision 2/4).

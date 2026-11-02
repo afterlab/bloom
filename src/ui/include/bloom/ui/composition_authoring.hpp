@@ -66,10 +66,10 @@ class CompositionSession;
 // what "Add > Rectangle" means.
 [[nodiscard]] bool addDefaultShapeLayer(CompositionSession& session, document::ShapeKind kind);
 
-// The AE keyframe diamond (task S5, item 0), shared by the Properties rows and the node card's
-// parameter rows for the same reason parameterSourceDescription() is shared: the gesture, the three
-// painted states, and the tooltip wording are one decision, and a second copy on the canvas would
-// be free to drift from the panel's.
+// The compositor keyframe diamond (task S5, item 0), shared by the Properties rows and the node
+// card's parameter rows for the same reason parameterSourceDescription() is shared: the gesture,
+// the three painted states, and the tooltip wording are one decision, and a second copy on the
+// canvas would be free to drift from the panel's.
 //
 // It is a real clickable control, not the indicating QLabel it replaces: clicking it calls
 // CompositionSession::toggleKeyframe() for its role and nothing else -- no command construction

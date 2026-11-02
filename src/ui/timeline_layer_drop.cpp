@@ -1,7 +1,7 @@
-// #380: where an Assets or file drop on the Timeline lands, as in After Effects. Over the layer
-// stack a drop inserts at the row under the pointer and starts at the playhead; over the lanes it
-// inserts at that row and starts at the frame under the pointer; anywhere else in the panel it
-// goes on top at the playhead.
+// #380: where an Assets or file drop on the Timeline lands, as in a layer-based compositor. Over
+// the layer stack a drop inserts at the row under the pointer and starts at the playhead; over the
+// lanes it inserts at that row and starts at the frame under the pointer; anywhere else in the
+// panel it goes on top at the playhead.
 #include "layer_drop.hpp"
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>

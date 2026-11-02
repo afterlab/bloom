@@ -274,7 +274,7 @@ enum class Size : int {
     TitleBar = 34,
     TimelineBar = 20,
     // The layer table's leading switch strip: Video, Audio, Solo and Lock, then the Label square
-    // (After Effects' A/V Features and Label columns), five ToggleCells with XS gaps.
+    // (a compositor's A/V Features and Label columns), five ToggleCells with XS gaps.
     TimelineToggleColumn = 5 * ToggleCell + 4 * static_cast<int>(Spacing::XS),
     // The switch cells after the name (Shy): one ToggleCell and its XS gap.
     TimelineSwitchColumn = ToggleCell + static_cast<int>(Spacing::XS),
@@ -311,7 +311,7 @@ enum class Size : int {
     // task WIDTH-1 (owner: "min width of something like 300px in figma pixel, so ... users can
     // compromise to also have that strict min width instead of kicking borders around"). Every
     // EditorArea reports exactly this as its own minimumSizeHint() width, independent of whatever
-    // the hosted editor's own content demands -- see editor_area.cpp. Figma design px, through
+    // the hosted editor's own content demands -- see editor_area.cpp. Design-mockup px, through
     // kit::px() like every other Size token.
     PanelMinWidth = 300,
     // task WIDTH-1: the floor a Properties value cell (kit::KValueField) may shrink its own width
@@ -327,7 +327,7 @@ enum class Size : int {
     PropertiesComponentMinWidth = 48,
     PropertiesDropdownWidth = 108,
     // The Settings window's category rail: wide enough for the longest category label plus its
-    // selection bar, sized in Figma design px through kit::px() like every other Size token.
+    // selection bar, sized in design-mockup px through kit::px() like every other Size token.
     PreferencesRailWidth = 180,
     PreferencesLabelWidth = 184,
     PropertiesCheckBox = 12,

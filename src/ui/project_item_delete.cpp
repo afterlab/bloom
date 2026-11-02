@@ -95,7 +95,7 @@ void requestDeleteProjectItems(CompositionSession& session, QWidget& owner,
         return;
     }
 
-    // As After Effects does, a used item is never deleted without saying so first.
+    // As a layer-based compositor does, a used item is never deleted without saying so first.
     QString heading;
     const auto single =
         selection.assets.size() + selection.compositions.size() == 1 && selection.folders.empty();

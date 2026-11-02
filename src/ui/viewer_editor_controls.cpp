@@ -178,8 +178,8 @@ QColor compositionFrameColor(const document::Composition* const composition) {
         return kit::color(kit::Color::Canvas);
     const auto authored = composition->backgroundColor();
     // The same quantization the Composition Settings chip and its hex label use, so the frame
-    // shows exactly the colour the chip shows. A background is opaque in the Viewer (as in After
-    // Effects); its alpha is never presented and never fills export alpha.
+    // shows exactly the colour the chip shows. A background is opaque in the Viewer (as in a
+    // layer-based compositor); its alpha is never presented and never fills export alpha.
     return kit::KColor{static_cast<float>(authored.red), static_cast<float>(authored.green),
                        static_cast<float>(authored.blue), 1.0F}
         .toQColor();
