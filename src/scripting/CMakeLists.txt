@@ -84,6 +84,8 @@ if(BUILD_TESTING)
     # MCP parity operations: every UI edit that had no op runs through the registry, makes one
     # undo step and undoes/redoes.
     # #389: asset reload, anchor presets and Cryptomatte picks read media or evaluate when created.
+    # Imported targets are directory-scoped: find OpenEXR here instead of relying on configure order.
+    bloom_find_dependency(OpenEXR)
     add_executable(bloom_scripting_evaluated_operations_test tests/evaluated_operations_tests.cpp)
     target_include_directories(bloom_scripting_evaluated_operations_test PRIVATE
         "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
