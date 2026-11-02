@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <string_view>
 #include <utility>
 
 namespace bloom::commands {
@@ -117,6 +118,40 @@ media::audio::AudioResult<core::Sha256Digest> digestFile(const std::filesystem::
             media::audio::AudioError::codeOnly(media::audio::AudioErrorCode::FileReadFailed));
     return media::audio::AudioResult<core::Sha256Digest>::success(hashed.digest);
 }
+// A refused font face says which of its fields is wrong and what that field must hold, in the
+// terms bloom.asset.ensure-font's arguments use, so a caller can correct it without reading the
+// document format. The constraints are the ones AssetRecord::validate() applies to a Font asset.
+std::string fontFaceRefusal(const std::string_view prefix, const document::AssetRecord& asset,
+                            const document::ValidationResult& validation) {
+    std::vector<std::string> problems;
+    const auto note = [&](std::string problem) {
+        if (std::ranges::find(problems, problem) == problems.end())
+            problems.push_back(std::move(problem));
+    };
+    for (const auto& issue : validation.issues()) {
+        if (issue.severity != document::ValidationSeverity::Error)
+            continue;
+        if (issue.path == "locator") {
+            if (asset.locator.portability == "system")
+                note("portability \"system\" needs path to be an absolute file path of at most "
+                     "4096 bytes and relinkHint to start with \"file:\" (the path's file:// URI)");
+            else if (asset.locator.portability == "builtin")
+                note("portability \"builtin\" needs relinkHint to start with \"font:\" (for "
+                     "example \"font:embedded:DejaVu Sans|Book\")");
+            else
+                note("portability must be \"system\" or \"builtin\", not \"" +
+                     asset.locator.portability + "\"");
+        } else if (issue.path == "font") {
+            note("family and style must each be 1 to 1024 bytes of UTF-8 text");
+        } else {
+            note(issue.path + ": " + issue.message);
+        }
+    }
+    std::string text(prefix);
+    for (std::size_t index = 0; index < problems.size(); ++index)
+        text += (index == 0 ? ": " : "; ") + problems[index];
+    return text + ".";
+}
 } // namespace
 OperationResult RelinkFontAsset::apply(document::Draft& draft) const {
     auto* target = draft.project().findAsset(id_);
@@ -129,9 +164,10 @@ OperationResult RelinkFontAsset::apply(document::Draft& draft) const {
     replacement.folder = target->folder;
     replacement.tags = target->tags;
     replacement.order = target->order;
-    if (!replacement.validate().ok())
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Invalid relinked font face");
+    if (const auto validation = replacement.validate(); !validation.ok())
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidValue,
+            fontFaceRefusal("Invalid relinked font face", replacement, validation));
     *target = std::move(replacement);
     return OperationResult::applied({{"asset", id_}});
 }
@@ -160,9 +196,10 @@ OperationResult EnsureFontAsset::apply(document::Draft& draft) const {
                                    (existingAsset.order == std::numeric_limits<std::uint64_t>::max()
                                         ? existingAsset.order
                                         : existingAsset.order + 1));
-    if (!asset.validate().ok())
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "Invalid font face reference");
+    if (const auto validation = asset.validate(); !validation.ok())
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidValue,
+            fontFaceRefusal("Invalid font face reference", asset, validation));
     if (!draft.project().addAsset(std::move(asset)))
         return OperationResult::rejected(OperationIssueCode::InvalidValue, "Invalid font asset");
     return OperationResult::applied({{"asset", *id}});

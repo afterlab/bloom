@@ -1409,8 +1409,9 @@ it does not change Merge membership, stack order, opacity or visibility.
 Document `1.15` adds the `Font` asset kind and the text capability fields. A Font asset carries
 the shared `id`, `kind`, `locator`, `contentDigest`, `interpretation`, `width`, `height`, `manifest`
 envelope followed by `font`; 1.16 appends organization metadata afterward. Its closed `font`
-object stores `family`, `style`, and `faceIndex`; its locator uses `kind: "font"`, a project-relative
-or system path, and an optional RFC 8089 relink hint. Font bytes are never written into the project.
+object stores `family`, `style`, and `faceIndex`; its locator uses `kind: "font"` with portability
+`system` (an absolute path and a relink hint that is its RFC 8089 `file:` URI) or `builtin` (an
+embedded face and a relink hint starting `font:`). Font bytes are never written into the project.
 The catalogue records the digest at pick time, and the compiler accepts the asset only when the
 resolved bytes hash to that digest. Removing an asset keeps text references intact so Assets can
 show a missing-font warning and the artist can replace or relink it.

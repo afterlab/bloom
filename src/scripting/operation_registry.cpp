@@ -1739,10 +1739,12 @@ OperationRegistry OperationRegistry::builtIn() {
         leading.push_back(maybe("style", ValueKind::String, "Book", "The style name."));
         leading.push_back(maybe("index", ValueKind::Integer, std::int64_t{0},
                                 "The face index inside a collection file."));
-        leading.push_back(
-            maybe("portability", ValueKind::String, "system",
-                  R"(Locator portability: "system", "builtin" or "project-relative".)"));
-        leading.push_back(maybe("relinkHint", ValueKind::String, "", "A relink hint to remember."));
+        leading.push_back(maybe(
+            "portability", ValueKind::String, "system",
+            R"(Locator portability: "system" (path is an absolute file path) or "builtin" (an embedded face).)"));
+        leading.push_back(maybe(
+            "relinkHint", ValueKind::String, "",
+            R"(Required: for "system", the path's file:// URI (it must start with "file:"); for "builtin", "font:" followed by a face name.)"));
         leading.push_back(maybe("name", ValueKind::String, "DejaVu Sans", "The asset name."));
         leading.push_back(
             maybe("tags", ValueKind::Array, ValueArray{Value("title")}, "Asset tags."));
