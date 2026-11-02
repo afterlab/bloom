@@ -10,10 +10,15 @@
 // coverage), and the warm pass over the same range dispatches nothing and is served by the output
 // cache. Without a device the preparation half still runs and the native half reports SKIP (77),
 // or FAIL under --require-device.
+//
+// The same harness covers a stack whose masks are all None (ADR 0028: unmasked): the shared
+// reference coverage is 1 everywhere, the CPU oracle equals the unmasked layer, and the GPU route
+// prepares no mask command and reads back the same visible layer.
 
 #include "gpu_coverage_contract_plans.hpp"
 #include "gpu_coverage_native_support.hpp"
 #include "gpu_coverage_ocio_support.hpp"
+#include "layer_mask_coverage.hpp"
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
@@ -82,6 +87,41 @@ void expect(const bool condition, const std::string& message) {
     return bloom::gpu_coverage_plans::effectPlan(kernel, kIdBase);
 }
 
+// The coverage fixture's full mask stack with every mode set to None.
+[[nodiscard]] std::shared_ptr<const bloom::runtime::CompiledCompositionPlan> allNonePlan() {
+    auto kernel = bloom::gpu_coverage_plans::layerMaskKernel(kIdBase + 500);
+    for (auto& mask : kernel.masks)
+        mask.mode = bloom::document::LayerMaskMode::None;
+    return bloom::gpu_coverage_plans::effectPlan(kernel, kIdBase + 500);
+}
+
+// The shared reference itself: no mask left after dropping None is coverage 1, not 0.
+void allNoneReference() {
+    using bloom::runtime::detail::SampledLayerMask;
+    const auto expectUnmasked = [](const std::vector<SampledLayerMask>& masks,
+                                   const std::string& label) {
+        const auto prepared = bloom::runtime::detail::prepareLayerMasks(masks, 1.0, 1.0);
+        expect(prepared.has_value() && prepared->masks.empty(), label + " prepares no mask");
+        if (!prepared)
+            return;
+        bool unmasked = true;
+        for (const float y : {-3.5F, 0.5F, 2.5F, 40.5F})
+            for (const float x : {-3.5F, 0.5F, 2.5F, 40.5F})
+                unmasked =
+                    unmasked && bloom::runtime::detail::layerMaskCoverage(*prepared, x, y) == 1.0F;
+        expect(unmasked, label + " has reference coverage 1 everywhere");
+    };
+    expectUnmasked({}, "an empty mask stack");
+    const auto kernel = bloom::gpu_coverage_plans::layerMaskKernel(kIdBase + 500);
+    std::vector<SampledLayerMask> masks;
+    for (const auto& mask : kernel.masks)
+        masks.push_back(SampledLayerMask{
+            bloom::document::LayerMaskMode::None, mask.inverted,
+            std::get<PathValue>(mask.path.source), std::get<double>(mask.feather.source),
+            std::get<double>(mask.expansion.source), std::get<double>(mask.opacity.source)});
+    expectUnmasked(masks, "an all-None mask stack");
+}
+
 [[nodiscard]] bloom::runtime::EvaluationRequest
 requestAt(const bloom::runtime::CompiledCompositionPlan& plan, const std::int64_t frame) {
     auto request = bloom::gpu_coverage_fixtures::requestFor(plan);
@@ -141,6 +181,7 @@ int main(int argc, char** argv) {
                   << bloom::gpu_coverage_ocio::unavailableReason() << '\n';
         return 77;
     }
+    allNoneReference();
     const auto plan = animatedPlan();
     const bloom::runtime::CpuGpuSceneBuilder builder(nullptr, {}, *context);
     auto& preparer = *context->preparer;
@@ -296,6 +337,74 @@ int main(int argc, char** argv) {
     expect(warmCompiles == 0, "the warm pass compiled nothing");
     expect(afterWarm.ocioProgramCreations == afterCold.ocioProgramCreations,
            "the warm pass created no native program");
+
+    // All None: the GPU route prepares no mask command and matches the CPU oracle, which is the
+    // unmasked layer (the same plan with an identity effect), visibly covered.
+    {
+        const auto nonePlan = allNonePlan();
+        auto unmaskedPlan = bloom::gpu_coverage_plans::effectPlan(
+            bloom::runtime::IdentityImageKernel{}, kIdBase + 500);
+        const auto prepared = builder.build(nonePlan, requestAt(*nonePlan, 0));
+        expect(static_cast<bool>(prepared),
+               "the all-None stack prepares on the GPU route: " + prepared.diagnostic.message);
+        bool hasMaskCommand = false;
+        if (prepared)
+            for (const auto& command : prepared.scene->commands())
+                hasMaskCommand =
+                    hasMaskCommand ||
+                    std::holds_alternative<bloom::runtime::GpuSceneOcioEffectCommand>(command);
+        expect(!hasMaskCommand, "the all-None stack prepares no mask command (unmasked)");
+        auto noneRequest = requestAt(*nonePlan, 0);
+        noneRequest.bypassOperationCache = true;
+        auto unmaskedRequest = requestAt(*unmaskedPlan, 0);
+        unmaskedRequest.bypassOperationCache = true;
+        const auto cpu = oracle.evaluate(nonePlan, noneRequest, {});
+        const auto unmasked = oracle.evaluate(unmaskedPlan, unmaskedRequest, {});
+        expect(cpu.frame() != nullptr && unmasked.frame() != nullptr,
+               "the all-None and unmasked CPU oracles evaluate");
+        if (prepared && cpu.frame() != nullptr && unmasked.frame() != nullptr) {
+            const auto& pixels = cpu.frame()->processImage().pixels();
+            const auto& reference = unmasked.frame()->processImage().pixels();
+            bool visible = false;
+            for (const auto& pixel : pixels)
+                visible = visible || pixel.alpha() > 0.5F;
+            expect(visible, "the all-None layer is visible on the CPU reference");
+            expect(pixels.size() == reference.size() &&
+                       bloom::gpu_coverage_native::pixelsClose(pixels, reference),
+                   "the all-None CPU oracle equals the unmasked layer" +
+                       bloom::gpu_coverage_native::pixelParityDetail(pixels, reference));
+            if (const auto diagnostic = executor.begin(prepared.scene, kSceneBudget);
+                diagnostic.code != bloom::runtime::GpuSceneExecutorDiagnosticCode::None) {
+                expect(false, "the all-None stack begins: " + diagnostic.message);
+            } else {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+                auto poll = executor.poll();
+                while (poll == bloom::runtime::GpuSceneExecutorPollResult::Pending &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                    poll = executor.poll();
+                }
+                expect(poll == bloom::runtime::GpuSceneExecutorPollResult::Ready,
+                       "the all-None stack reaches Ready: " + executor.diagnostic().message);
+                const auto* image = poll == bloom::runtime::GpuSceneExecutorPollResult::Ready
+                                        ? executor.image()
+                                        : nullptr;
+                expect(image != nullptr, "the all-None stack publishes a resident image");
+                if (image != nullptr) {
+                    const auto readback =
+                        bloom::render::readbackResidentImage(*image, kSceneBudget);
+                    expect(static_cast<bool>(readback) && readback.pixels.size() == pixels.size() &&
+                               bloom::gpu_coverage_native::pixelsClose(readback.pixels, pixels),
+                           "the all-None GPU route matches the CPU oracle (layer shown)" +
+                               (readback ? bloom::gpu_coverage_native::pixelParityDetail(
+                                               readback.pixels, pixels)
+                                         : std::string{}));
+                }
+                (void)executor.takeImage();
+            }
+        }
+        std::cout << "NONE maskCommands=" << (hasMaskCommand ? 1 : 0) << '\n';
+    }
 
     std::cout << "COLD frames=" << kFrames << " maskDispatches=" << coldOcio
               << " dispatches=" << (afterCold.dispatches - beforeCold.dispatches)

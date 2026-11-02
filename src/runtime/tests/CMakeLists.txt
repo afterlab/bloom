@@ -711,7 +711,8 @@ set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
 # ADR 0028 animated masks: a path keyed on 24 frames is prepared by the production builder through
 # the shared preparer from THIS target's packaged shader tools and must compile at most one shader
 # module and one native program; the native half runs the range cold (CPU-oracle parity, exact
-# coverage) and warm (zero dispatch, output-cache hits). Skips (77) without tools or a device.
+# coverage) and warm (zero dispatch, output-cache hits). An all-None stack is unmasked on the shared
+# reference, the CPU oracle and the GPU route. Skips (77) without tools or a device.
 add_executable(bloom_runtime_gpu_layer_mask_animation_native_test
     gpu_layer_mask_animation_native_tests.cpp)
 target_link_libraries(bloom_runtime_gpu_layer_mask_animation_native_test
