@@ -148,6 +148,12 @@ class ExportQueuePort {
                                         const ExportOutputEdit& edit) = 0;
     virtual ExportEditResult removeOutput(document::ExportJobId job,
                                           document::ExportOutputId output) = 0;
+
+    // ---- The artist's own presets (host::ExportPresetCatalogue::saveUserPreset): a per-user
+    // preference, outside the project and its undo history. The store file is written off the
+    // UI thread. An accepted save is in catalogue() at once and the queue republishes.
+    virtual host::ExportUserPresetStatus
+    saveUserPreset(const std::string& name, const document::ExportOutputSettings& settings) = 0;
 };
 
 class ExportQueueAdapter final : public QObject {
@@ -211,6 +217,11 @@ class ExportQueueAdapter final : public QObject {
     ExportEditResult editOutput(document::ExportJobId job, document::ExportOutputId output,
                                 const ExportOutputEdit& edit);
     ExportEditResult removeOutput(document::ExportJobId job, document::ExportOutputId output);
+
+    // Output Module > Save as preset: `settings` become the artist's own preset `name`, listed
+    // under My presets. Not undoable and never saved in the project.
+    host::ExportUserPresetStatus saveUserPreset(const std::string& name,
+                                                const document::ExportOutputSettings& settings);
 
     // Export > Add to Export Queue, the Assets context menu and the panel's own button. On
     // success it asks for the Export panel to be revealed and announces the new job so a panel

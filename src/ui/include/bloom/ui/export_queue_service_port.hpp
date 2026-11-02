@@ -53,6 +53,8 @@ class ServiceExportQueuePort final : public ExportQueuePort {
                                 const ExportOutputEdit& edit) override;
     ExportEditResult removeOutput(document::ExportJobId job,
                                   document::ExportOutputId output) override;
+    host::ExportUserPresetStatus saveUserPreset(const std::string& name,
+                                                const document::ExportOutputSettings& settings) override;
 
   private:
     ExportEditResult published(ExportEditResult result);

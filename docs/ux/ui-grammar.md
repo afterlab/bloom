@@ -229,7 +229,13 @@ frame, readouts otherwise) and Duration on the right. Output Module has the pres
 (`“ProRes 422 HQ”`: Format, If a file is there | Post-render, Cached frames), **Quality** (Profile,
 Compression, Look, Audio | Color space, or Display and View; only what applies to the format) and,
 for image sequences, **Numbering** (Start number or Use the frame numbers | Digits). OK writes
-every change as one undoable edit; Cancel writes nothing.
+every change as one undoable edit; Cancel writes nothing. Beside Format, a plus `KIconButton`
+(`exportSavePreset`, "Save as preset…") opens a `kit::promptText` name prompt
+(`exportSavePresetPrompt`, Save | Cancel) whose inline refusal keeps Save disabled for an empty
+name or one the Format list already has (ignoring case). Save stores the current settings with
+`ExportPresetCatalogue::saveUserPreset`, a per-user setting outside Undo that never replaces a
+preset; the new preset is listed under My presets and chosen in Format, so OK applies it. A save
+the catalogue refuses is reported under Format (`exportSavePresetError`).
 
 When an output's file exists under Ask first, the job reads **Waiting for your OK**, and Start
 (in the ⋯ menu) or Start All asks once with `kit::confirm` (`exportReplaceConfirm`): "Replace

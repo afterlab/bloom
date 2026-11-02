@@ -10,6 +10,11 @@
 //
 // Only the settings that apply to the chosen format show, and every format is offered alike.
 // Choosing another format takes that preset's settings. OK writes every change as one undoable edit; Cancel changes nothing.
+//
+// Save as preset (the button beside Format) names the settings the fields describe and saves them
+// as the artist's own preset through the queue adapter's catalogue. It is a per-user preference,
+// outside Undo and the project: Cancel keeps the preset but leaves the output alone. The new
+// preset is listed under My presets and chosen in Format, so OK gives the output that preset.
 
 #include "export_colour_choices.hpp"
 
@@ -17,13 +22,18 @@
 #include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 
+#include <QPointer>
+
 #include <functional>
 #include <optional>
 
 namespace bloom::ui::kit {
 class KButton;
 class KCheckBox;
+class KDialog;
 class KDropdown;
+class KIconButton;
+class KLabel;
 class KSection;
 class KValueField;
 } // namespace bloom::ui::kit
@@ -34,15 +44,26 @@ class OutputModuleDialog final : public kit::KDialog {
     Q_OBJECT
 
   public:
+    // `presets` saves user presets (Save as preset); without it the button is not offered.
     OutputModuleDialog(const host::ExportOutputView& output,
                        std::shared_ptr<const host::ExportPresetCatalogueSnapshot> catalogue,
-                       ExportColourChoices colours, QWidget& owner);
+                       ExportColourChoices colours, QWidget& owner,
+                       ExportQueueAdapter* presets = nullptr);
 
     // Every change the fields make, as one edit; nullopt when nothing changed.
     [[nodiscard]] std::optional<ExportOutputEdit> edit() const;
     // The settings the fields describe.
     [[nodiscard]] document::ExportOutputSettings settings() const;
     [[nodiscard]] QString presetId() const;
+
+    // Save as preset: opens the name prompt (asynchronous, over this dialog) and returns it.
+    kit::KDialog* promptPresetName();
+    // Why `name` cannot be a new preset's name (empty, too long, a line break, or a name the
+    // Format list already has, ignoring case); nullopt when it can.
+    [[nodiscard]] std::optional<QString> presetNameIssue(const QString& name) const;
+    // Saves the current settings as the preset `name` and chooses it in Format. Returns the reason
+    // when it could not be saved (also shown under Format).
+    std::optional<QString> saveAsPreset(const QString& name);
 
     // Test seams.
     [[nodiscard]] kit::KDropdown* format() const noexcept { return format_; }
@@ -60,6 +81,8 @@ class OutputModuleDialog final : public kit::KDialog {
     [[nodiscard]] kit::KCheckBox* frameNumbers() const noexcept { return frameNumbers_; }
     [[nodiscard]] kit::KValueField* padding() const noexcept { return padding_; }
     [[nodiscard]] kit::KSection* mainSection() const noexcept { return main_; }
+    [[nodiscard]] kit::KIconButton* savePresetButton() const noexcept { return savePreset_; }
+    [[nodiscard]] kit::KLabel* presetError() const noexcept { return presetError_; }
     // Whether the row holding `field` shows.
     [[nodiscard]] bool shows(QWidget* field) const;
 
@@ -68,11 +91,13 @@ class OutputModuleDialog final : public kit::KDialog {
     void showSettings(const document::ExportOutputSettings& settings);
     void fillColour(const document::ExportOutputSettings& settings);
     void formatChosen();
+    void showPresetRefusal(const QString& reason);
     [[nodiscard]] const host::ExportPreset* preset(const QString& id) const;
 
     host::ExportOutputView output_;
     std::shared_ptr<const host::ExportPresetCatalogueSnapshot> catalogue_;
     ExportColourChoices colours_;
+    QPointer<ExportQueueAdapter> presets_;
     // The settings the dialog started from for the current format (the output's own, or the chosen
     // preset's after a format change); the fields override what applies.
     document::ExportOutputSettings base_;
@@ -83,6 +108,8 @@ class OutputModuleDialog final : public kit::KDialog {
     kit::KForm* qualityLeft_ = nullptr;
     kit::KForm* qualityRight_ = nullptr;
     kit::KDropdown* format_ = nullptr;
+    kit::KIconButton* savePreset_ = nullptr;
+    kit::KLabel* presetError_ = nullptr;
     kit::KDropdown* overwrite_ = nullptr;
     kit::KCheckBox* import_ = nullptr;
     kit::KCheckBox* cachedFrames_ = nullptr;

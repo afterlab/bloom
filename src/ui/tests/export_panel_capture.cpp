@@ -1,7 +1,7 @@
 // Real-widget captures of the Export panel (the After Effects Render Queue layout) from hand-built
 // snapshots, at three panel widths: the empty list, three queued jobs with one open on two outputs,
-// a rendering job, a failed job, and the Render Settings, Output Module (ProRes and OpenEXR) and
-// replace dialogs over the panel. Writes PNGs named <state>-<width>-<dpr>.png to the directory given
+// a rendering job, a failed job, and the Render Settings, Output Module (ProRes and OpenEXR, and
+// Save as preset with its name prompt) and replace dialogs over the panel. Writes PNGs named <state>-<width>-<dpr>.png to the directory given
 // as the first argument (or BLOOM_GRAMMAR_ARTIFACT_DIR) and prints their names.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "export_job_lines.hpp"
@@ -18,6 +18,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
 
 #include <QApplication>
@@ -101,8 +102,10 @@ int main(int argc, char** argv) {
             ++failures;
         std::cout << name.toStdString() << ' ' << image.width() << 'x' << image.height() << '\n';
     };
-    // The panel, with a dialog over it when one is open, as the artist sees them.
-    const auto shot = [&](const QString& state, kit::KDialog* dialog = nullptr) {
+    // The panel, with a dialog (and a prompt over that dialog) when one is open, as the artist sees
+    // them.
+    const auto shot = [&](const QString& state, kit::KDialog* dialog = nullptr,
+                          kit::KDialog* prompt = nullptr) {
         for (const auto& [width, size] : widths) {
             area.resize(size);
             QTest::qWait(80);
@@ -122,6 +125,13 @@ int main(int argc, char** argv) {
                 painter.drawImage(QPoint((logical.width() - overSize.width()) / 2,
                                          (logical.height() - overSize.height()) / 2),
                                   over);
+                if (prompt != nullptr) {
+                    const auto top = prompt->grab().toImage();
+                    const QSize topSize(qRound(top.width() / ratio), qRound(top.height() / ratio));
+                    painter.drawImage(QPoint((logical.width() - topSize.width()) / 2,
+                                             (logical.height() - topSize.height()) / 2),
+                                      top);
+                }
                 painter.end();
                 image = combined;
             }
@@ -222,6 +232,34 @@ int main(int argc, char** argv) {
     QTest::qWait(60);
     shot("output-module-exr", exr);
     exr->reject();
+    QTest::qWait(40);
+
+    // Save as preset (#382): the button beside Format, its name prompt (empty, then a taken name,
+    // then a new one) and the dialog with the saved preset chosen under My presets.
+    auto* saving = editor->openOutputModule(document::ExportJobId::fromRaw(1), document::ExportOutputId::fromRaw(11));
+    QTest::qWait(60);
+    shot("output-module-save-preset", saving);
+    auto* namePrompt = saving->promptPresetName();
+    QTest::qWait(60);
+    auto* nameField = namePrompt->findChild<kit::KLineEdit*>(QStringLiteral("exportSavePresetPromptField"));
+    if (nameField == nullptr)
+        ++failures;
+    shot("output-module-preset-name-empty", saving, namePrompt);
+    if (nameField != nullptr) {
+        nameField->setText(QStringLiteral("ProRes 422 HQ"));
+        QTest::qWait(40);
+        shot("output-module-preset-name-taken", saving, namePrompt);
+        nameField->setText(QStringLiteral("Client review"));
+        QTest::qWait(40);
+        shot("output-module-preset-name", saving, namePrompt);
+    }
+    namePrompt->button(kit::KDialog::Role::Accept)->click();
+    QTest::qWait(60);
+    if (saving->format()->currentData().toString().isEmpty() ||
+        !saving->format()->currentData().toString().startsWith(QStringLiteral("user:")))
+        ++failures;
+    shot("output-module-preset-saved", saving);
+    saving->reject();
     QTest::qWait(40);
 
     // The replace question Start All asks.

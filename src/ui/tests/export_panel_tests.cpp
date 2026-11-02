@@ -28,10 +28,12 @@
 #include <bloom/ui/export_queue_edits.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/progress_bar.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -65,6 +67,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <filesystem>
 #include <thread>
 
 namespace {
@@ -893,6 +896,159 @@ void outputModuleDialog(TestContext& context) {
     context.expect(rig.port.calls.empty(), "OK without a change writes nothing");
 }
 
+// Output Module > Save as preset (#382): the settings become a named preset under My presets,
+// chosen for the output; empty and duplicate names are refused inline; it persists in the store.
+void saveAsPreset(TestContext& context) {
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        snapshot.jobs = {makeJob(1, "Shot 010", rig.composition(),
+                                 {makeOutput(12, "builtin:prores-422hq-mov", document::ExportFormat::ProResMov,
+                                             "Exports/Shot 010.mov")})};
+    });
+    rig.openJob(1);
+    auto* dialog = rig.editor->openOutputModule(J(1), O(12));
+    QApplication::processEvents();
+    context.expect(dialog != nullptr && dialog->savePresetButton() != nullptr &&
+                       dialog->shows(dialog->savePresetButton()),
+                   "Save as preset sits beside Format");
+    if (dialog == nullptr)
+        return;
+    dialog->includeAudio()->setChecked(false);
+    dialog->bakeLook()->setChecked(true);
+    const auto current = dialog->settings();
+    rig.port.calls.clear();
+    QTest::mouseClick(dialog->savePresetButton(), Qt::LeftButton);
+    auto* prompt = openPrompt(rig, "exportSavePresetPrompt");
+    context.expect(prompt != nullptr, "the button asks for a name");
+    if (prompt == nullptr)
+        return;
+    auto* field = prompt->findChild<kit::KLineEdit*>("exportSavePresetPromptField");
+    const auto refusedWith = [&](const QString& text) {
+        field->setText(text);
+        QApplication::processEvents();
+        return prompt->refusal().has_value() ? prompt->refusal()->reason : QString{};
+    };
+    context.expect(field != nullptr, "the prompt has a name field");
+    if (field == nullptr)
+        return;
+    context.expect(refusedWith(QString{}) == "Enter a preset name." &&
+                       !prompt->button(kit::KDialog::Role::Accept)->isEnabled(),
+                   "an empty name is refused inline and Save stays disabled");
+    context.expect(refusedWith(QStringLiteral("   ")) == "Enter a preset name.", "a blank name too");
+    context.expect(refusedWith(QStringLiteral("prores 422 hq")) == "A preset with this name already exists.",
+                   "a name the Format list has, ignoring case, is refused");
+    context.expect(refusedWith(QStringLiteral(" Client review ")).isEmpty() &&
+                       prompt->button(kit::KDialog::Role::Accept)->isEnabled(),
+                   "a new name is accepted");
+    prompt->button(kit::KDialog::Role::Accept)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls == std::vector<std::string>{"saveUserPreset Client review"},
+                   "Save saves the trimmed name through the catalogue, and edits nothing");
+    const auto catalogue = rig.port.catalogue();
+    const host::ExportPreset* saved = nullptr;
+    for (const auto& preset : catalogue->presets)
+        if (preset.category == host::ExportPresetCategory::User && preset.displayName == "Client review")
+            saved = &preset;
+    context.expect(saved != nullptr && saved->settings == current, "the preset holds the current settings");
+    if (saved == nullptr)
+        return;
+    const auto indexOfText = [](const kit::KDropdown& field, const QString& text) {
+        for (int index = 0; index < field.count(); ++index)
+            if (field.itemText(index) == text)
+                return index;
+        return -1;
+    };
+    const auto mine = indexOfText(*dialog->format(), QStringLiteral("My presets"));
+    const auto listed = dialog->format()->findData(QString::fromStdString(saved->id));
+    context.expect(mine >= 0 && !dialog->format()->isItemEnabled(mine) && listed == mine + 1,
+                   "it is listed under My presets");
+    context.expect(dialog->format()->currentIndex() == listed &&
+                       dialog->mainSection()->title() == QStringLiteral("“Client review”") &&
+                       dialog->settings() == current,
+                   "and chosen for the output, with every field kept");
+    context.expect(dialog->saveAsPreset(QStringLiteral("Client Review")) ==
+                       std::optional<QString>(QStringLiteral("A preset with this name already exists.")) &&
+                       dialog->presetError()->isVisibleTo(dialog),
+                   "saving the same name again is refused, never replaced");
+    dialog->button(kit::KDialog::Role::Accept)->click();
+    QApplication::processEvents();
+    context.expect(rig.port.calls.size() == 2 &&
+                       rig.port.calls.back() == "editOutput 1 12 preset=" + saved->id + " settings",
+                   "OK gives the output the new preset as one edit");
+    // The panel's own preset menus list it too.
+    rig.adapter->drain();
+    QApplication::processEvents();
+    dialog = rig.editor->openOutputModule(J(1), O(12));
+    QApplication::processEvents();
+    context.expect(dialog != nullptr && indexOfText(*dialog->format(), QStringLiteral("Client review")) >= 0,
+                   "a dialog opened later lists the preset");
+    if (dialog != nullptr)
+        dialog->reject();
+
+    // The real catalogue: the store saves it, refuses a taken name, and a reload lists it again.
+    QTemporaryDir folder;
+    const auto store = std::filesystem::path(folder.path().toStdString());
+    {
+        runtime::TaskScheduler scheduler;
+        auto real = host::ExportPresetCatalogue::create({.userDataDirectory = store, .initialEncoders = {}});
+        const auto before = real->snapshot()->revision;
+        real->loadUserPresets(scheduler);
+        QElapsedTimer timer;
+        timer.start();
+        while (real->snapshot()->revision == before && timer.elapsed() < 10000)
+            QTest::qWait(5);
+        rig.port.presets = real;
+        dialog = rig.editor->openOutputModule(J(1), O(12));
+        QApplication::processEvents();
+        if (dialog != nullptr) {
+            context.expect(!dialog->saveAsPreset(QStringLiteral("Alpha master")).has_value(),
+                           "the real catalogue saves the preset");
+            context.expect(real->saveUserPreset("Alpha master", {}) == host::ExportUserPresetStatus::NameTaken,
+                           "the catalogue refuses a taken name (saving never replaces)");
+            dialog->reject();
+        }
+        rig.port.presets.reset();
+        scheduler.beginShutdown();
+        while (!scheduler.isQuiescent())
+            QTest::qWait(1);
+    }
+    runtime::TaskScheduler second;
+    auto reloaded = host::ExportPresetCatalogue::create({.userDataDirectory = store, .initialEncoders = {}});
+    reloaded->loadUserPresets(second);
+    const auto findSaved = [](const host::ExportPresetCatalogueSnapshot& snapshot) -> const host::ExportPreset* {
+        for (const auto& preset : snapshot.presets)
+            if (preset.origin == host::ExportPresetOrigin::User && preset.displayName == "Alpha master")
+                return &preset;
+        return nullptr;
+    };
+    QElapsedTimer timer;
+    timer.start();
+    while (findSaved(*reloaded->snapshot()) == nullptr && timer.elapsed() < 10000)
+        QTest::qWait(5);
+    const auto snapshot = reloaded->snapshot();
+    const auto* persisted = findSaved(*snapshot);
+    context.expect(persisted != nullptr && persisted->category == host::ExportPresetCategory::User &&
+                       persisted->settings.format == document::ExportFormat::ProResMov,
+                   "the saved preset persists across a catalogue reload");
+    second.beginShutdown();
+    while (!second.isQuiescent())
+        QTest::qWait(1);
+
+    // Without a store the catalogue refuses, and the dialog says so under Format.
+    auto none = host::ExportPresetCatalogue::create({.userDataDirectory = std::nullopt, .initialEncoders = {}});
+    rig.port.presets = none;
+    dialog = rig.editor->openOutputModule(J(1), O(12));
+    QApplication::processEvents();
+    if (dialog != nullptr) {
+        const auto refused = dialog->saveAsPreset(QStringLiteral("Nowhere"));
+        context.expect(refused.has_value() && refused->contains("cannot be saved right now") &&
+                           dialog->presetError()->isVisibleTo(dialog),
+                       "an unavailable store is a plain refusal under Format");
+        dialog->reject();
+    }
+    rig.port.presets.reset();
+}
+
 void everyFormatIsOffered(TestContext& context) {
     Rig rig;
     auto catalogue = makeCatalogue();
@@ -1394,6 +1550,7 @@ int main(int argc, char** argv) {
     renderCheckAndStartAll(context);
     renderSettingsDialog(context);
     outputModuleDialog(context);
+    saveAsPreset(context);
     everyFormatIsOffered(context);
     addAndRemoveOutputs(context);
     quickPickMenus(context);

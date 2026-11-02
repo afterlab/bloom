@@ -4,7 +4,11 @@
 #include "export_panel_text.hpp"
 
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dialog_prompts.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/icons.hpp>
+#include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -57,11 +61,12 @@ using document::ExportFormat;
 
 OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
                                        std::shared_ptr<const host::ExportPresetCatalogueSnapshot> catalogue,
-                                       ExportColourChoices colours, QWidget& owner)
+                                       ExportColourChoices colours, QWidget& owner,
+                                       ExportQueueAdapter* const presets)
     : kit::KDialog(tr("Output Module"), QStringLiteral("exportOutputModuleDialog"), owner,
                    Qt::WindowModal, Width::Wide),
       output_(output), catalogue_(std::move(catalogue)), colours_(std::move(colours)),
-      base_(output.record.settings) {
+      presets_(presets), base_(output.record.settings) {
     // One group, two columns side by side; every form of the dialog shares one label column.
     const auto group = [this](const QString& title, const QString& name) {
         auto* section = new kit::KSection(title, this);
@@ -94,7 +99,26 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
     main_ = mainGroup;
     mainLeft_ = mainLeft;
     format_ = dropdown(this, QStringLiteral("exportFormat"), tr("Format"));
-    (void)mainLeft->addRow(tr("Format"), fieldRow(this, {format_}));
+    // Save as preset sits beside Format, as Composition Settings offers it beside Preset; a save
+    // that could not complete says why under the row.
+    savePreset_ = new kit::KIconButton(this);
+    savePreset_->setObjectName(QStringLiteral("exportSavePreset"));
+    savePreset_->setIcon(kit::icon(kit::IconId::Add, kit::IconRole::Chrome));
+    savePreset_->setToolTip(tr("Save as preset…"));
+    savePreset_->setAccessibleName(tr("Save as preset…"));
+    savePreset_->setVisible(presets_ != nullptr);
+    auto* formatHolder = new QWidget(this);
+    auto* formatColumn = new QVBoxLayout(formatHolder);
+    formatColumn->setContentsMargins(0, 0, 0, 0);
+    formatColumn->setSpacing(kit::px(kit::Spacing::XXS));
+    formatColumn->addWidget(fieldRow(formatHolder, {format_, savePreset_}));
+    presetError_ = new kit::KLabel(QString{}, formatHolder, kit::TypeRole::UiSmall);
+    presetError_->setObjectName(QStringLiteral("exportSavePresetError"));
+    presetError_->setWordWrap(true);
+    presetError_->setTone(kit::Color::Error);
+    presetError_->hide();
+    formatColumn->addWidget(presetError_);
+    (void)mainLeft->addRow(tr("Format"), formatHolder);
     overwrite_ = dropdown(this, QStringLiteral("exportOverwrite"), tr("If a file is there"));
     overwrite_->addItem(tr("Ask first"), static_cast<int>(document::ExportOverwritePolicy::AskBeforeReplacing));
     overwrite_->addItem(tr("Replace"), static_cast<int>(document::ExportOverwritePolicy::Replace));
@@ -166,6 +190,7 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
     showSettings(base_);
 
     connect(format_, &kit::KDropdown::activated, this, [this](int) { formatChosen(); });
+    connect(savePreset_, &QAbstractButton::clicked, this, [this] { (void)promptPresetName(); });
     connect(frameNumbers_, &QAbstractButton::toggled, this,
             [this](const bool on) { startNumber_->setEnabled(!on); });
     connect(display_, &kit::KDropdown::activated, this, [this](int) {
@@ -232,7 +257,95 @@ void OutputModuleDialog::formatChosen() {
     base_ = chosen->id == output_.record.presetId ? output_.record.settings : chosen->settings;
     format_->setMutedValue(false);
     main_->setTitle(quoted(qs(chosen->displayName)));
+    showPresetRefusal({});
     showSettings(base_);
+}
+
+void OutputModuleDialog::showPresetRefusal(const QString& reason) {
+    presetError_->setText(reason);
+    presetError_->setVisible(!reason.isEmpty());
+}
+
+std::optional<QString> OutputModuleDialog::presetNameIssue(const QString& name) const {
+    const auto trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return tr("Enter a preset name.");
+    // The catalogue's own limits: at most 256 UTF-8 bytes, no control characters.
+    if (trimmed.toUtf8().size() > 256)
+        return tr("A preset name is at most 256 UTF-8 bytes.");
+    if (std::ranges::any_of(trimmed, [](const QChar c) { return c.unicode() < 0x20 || c.unicode() == 0x7f; }))
+        return tr("A preset name cannot contain tabs or line breaks.");
+    // Saving never replaces a preset: a name already in the Format list, built-in or the artist's
+    // own, is refused rather than listed twice.
+    if (catalogue_ != nullptr)
+        for (const auto& candidate : catalogue_->presets)
+            if (qs(candidate.displayName).compare(trimmed, Qt::CaseInsensitive) == 0)
+                return tr("A preset with this name already exists.");
+    return std::nullopt;
+}
+
+kit::KDialog* OutputModuleDialog::promptPresetName() {
+    showPresetRefusal({});
+    kit::KTextPromptSpec spec;
+    spec.title = tr("Save as Preset");
+    spec.objectName = QStringLiteral("exportSavePresetPrompt");
+    spec.label = tr("Preset name");
+    spec.acceptText = tr("Save");
+    spec.validate = [this](const QString& name) { return presetNameIssue(name); };
+    auto* prompt = kit::buildTextPrompt(*this, spec);
+    auto* field = prompt->findChild<kit::KLineEdit*>(spec.objectName + QStringLiteral("Field"));
+    QPointer<OutputModuleDialog> self(this);
+    QPointer<kit::KLineEdit> text(field);
+    prompt->open([self, text](const Role role) {
+        if (self != nullptr && text != nullptr && role == Role::Accept)
+            (void)self->saveAsPreset(text->text());
+    });
+    return prompt;
+}
+
+std::optional<QString> OutputModuleDialog::saveAsPreset(const QString& name) {
+    const auto refuse = [this](const QString& reason) {
+        showPresetRefusal(reason);
+        return std::optional(reason);
+    };
+    if (presets_ == nullptr)
+        return refuse(tr("Presets cannot be saved in this window."));
+    if (const auto issue = presetNameIssue(name))
+        return refuse(*issue);
+    const auto trimmed = name.trimmed();
+    const auto settings = this->settings();
+    switch (presets_->saveUserPreset(trimmed.toStdString(), settings)) {
+    case host::ExportUserPresetStatus::Accepted:
+        break;
+    case host::ExportUserPresetStatus::NameTaken:
+        return refuse(tr("A preset with this name already exists."));
+    case host::ExportUserPresetStatus::NameInvalid:
+        return refuse(tr("Enter a preset name without tabs or line breaks."));
+    case host::ExportUserPresetStatus::StoreUnavailable:
+        return refuse(tr("Presets cannot be saved right now: Bloom could not read or write your "
+                         "saved presets."));
+    default:
+        return refuse(tr("The preset could not be saved."));
+    }
+    // The catalogue lists the new preset at once: choose it, keeping every field as it is.
+    catalogue_ = presets_->catalogue();
+    const host::ExportPreset* saved = nullptr;
+    if (catalogue_ != nullptr)
+        for (const auto& candidate : catalogue_->presets)
+            if (candidate.category == host::ExportPresetCategory::User && qs(candidate.displayName) == trimmed)
+                saved = &candidate;
+    fillFormats();
+    if (saved == nullptr)
+        return refuse(tr("The preset was saved but is not listed yet; choose it from My presets."));
+    {
+        const QSignalBlocker block(format_);
+        format_->setCurrentIndex(format_->findData(qs(saved->id)));
+    }
+    format_->setMutedValue(false);
+    base_ = settings;
+    main_->setTitle(quoted(trimmed));
+    showPresetRefusal({});
+    return std::nullopt;
 }
 
 void OutputModuleDialog::fillColour(const document::ExportOutputSettings& settings) {

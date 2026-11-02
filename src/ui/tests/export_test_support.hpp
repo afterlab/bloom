@@ -169,13 +169,15 @@ class FakeExportPort final : public ExportQueuePort {
     std::string script = "bloom-cli export-script";
     std::uint64_t nextJobRaw = 100;
     std::uint64_t nextOutputRaw = 5000;
+    // A real catalogue behind the fake queue, for the user-preset store.
+    std::shared_ptr<host::ExportPresetCatalogue> presets;
 
     [[nodiscard]] std::shared_ptr<const host::ExportQueueSnapshot> snapshot() const override {
         return snap_;
     }
     [[nodiscard]] std::shared_ptr<const host::ExportPresetCatalogueSnapshot>
     catalogue() const override {
-        return catalogue_;
+        return presets ? presets->snapshot() : catalogue_;
     }
     [[nodiscard]] host::ExportQueueEventBatch events(const std::uint64_t after) const override {
         host::ExportQueueEventBatch batch;
@@ -338,6 +340,25 @@ class FakeExportPort final : public ExportQueuePort {
         return edit("removeOutput " + std::to_string(job.value()) + " " +
                     std::to_string(output.value()));
     }
+    // With `presets` set, saves go to that real catalogue and catalogue() reads it; otherwise
+    // the fake's own catalogue gains a My presets entry, refusing a name it already has.
+    host::ExportUserPresetStatus saveUserPreset(const std::string& name,
+                                                const document::ExportOutputSettings& settings) override {
+        calls.push_back("saveUserPreset " + name);
+        if (presets)
+            return presets->saveUserPreset(name, settings);
+        for (const auto& preset : catalogue_->presets)
+            if (preset.category == host::ExportPresetCategory::User && preset.displayName == name)
+                return host::ExportUserPresetStatus::NameTaken;
+        auto next = std::make_shared<host::ExportPresetCatalogueSnapshot>(*catalogue_);
+        auto& added = next->presets.emplace_back(makePreset("user:fake-" + std::to_string(++userPresets_), name,
+                                                            host::ExportPresetCategory::User, settings.format));
+        added.origin = host::ExportPresetOrigin::User;
+        added.settings = settings;
+        ++next->revision;
+        catalogue_ = std::move(next);
+        return host::ExportUserPresetStatus::Accepted;
+    }
 
   private:
     host::ExportCommandResult session(const std::string& what) {
@@ -356,6 +377,7 @@ class FakeExportPort final : public ExportQueuePort {
     std::shared_ptr<host::ExportPresetCatalogueSnapshot> catalogue_;
     std::vector<host::ExportQueueEvent> events_;
     std::uint64_t lastEvent_ = 0;
+    int userPresets_ = 0;
 };
 
 } // namespace bloom::ui::test

@@ -254,6 +254,14 @@ ExportEditResult ExportQueueAdapter::addCompositionsToQueue(
     return result;
 }
 
+host::ExportUserPresetStatus
+ExportQueueAdapter::saveUserPreset(const std::string& name,
+                                   const document::ExportOutputSettings& settings) {
+    const auto status = port_.saveUserPreset(name, settings);
+    observe();
+    return status;
+}
+
 void ExportQueueAdapter::showJob(const document::ExportJobId job) {
     pendingSelection_ = job;
     Q_EMIT revealRequested();

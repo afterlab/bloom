@@ -69,7 +69,16 @@ Formats are listed in four groups:
 - **Image sequences**: VFX handoff EXR (ACES2065-1, PIZ, from 1001, `####`), OpenEXR, DPX, PNG
   and TIFF sequences.
 - **Audio**: PCM WAV/BWF (RF64 when large).
-- **User**: your own presets, saved per computer outside any project.
+- **My presets**: your own presets, saved per computer outside any project.
+
+To make one, open an output's **Output Module**, set it up, and click **+** beside **Format**
+(**Save as preset…**). Name the preset and choose **Save**. A name must not be empty or match a
+preset already in the list (ignoring case); saving never replaces a preset. The preset holds the
+output's format and its **Quality**, **Numbering** and **Cached frames** settings; the destination,
+**If a file is there** and **Post-render** stay with the output.
+It is listed under **My presets** in every Format list and chosen for the output you were editing;
+**OK** gives the output that preset, and **Cancel** leaves the output as it was but keeps the
+preset. Saving a preset is not undoable and does not change the project.
 
 Choosing a format copies its settings into the output, so a project exports the same way on a
 computer that lacks the user preset it came from. Every format is listed and chosen the same way;

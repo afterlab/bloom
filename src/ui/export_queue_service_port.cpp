@@ -147,4 +147,17 @@ ExportEditResult ServiceExportQueuePort::removeOutput(const document::ExportJobI
     return published(edits_.removeOutput(output));
 }
 
+host::ExportUserPresetStatus
+ServiceExportQueuePort::saveUserPreset(const std::string& name,
+                                       const document::ExportOutputSettings& settings) {
+    auto* s = service();
+    if (s == nullptr)
+        return host::ExportUserPresetStatus::StoreUnavailable;
+    const auto status = s->presets().saveUserPreset(name, settings);
+    // The queue snapshot carries the catalogue revision: pump so every panel's menus list it.
+    if (status == host::ExportUserPresetStatus::Accepted)
+        s->pump();
+    return status;
+}
+
 } // namespace bloom::ui

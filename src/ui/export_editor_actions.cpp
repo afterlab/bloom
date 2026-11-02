@@ -238,7 +238,8 @@ exportpanel::OutputModuleDialog* ExportEditor::openOutputModule(const document::
     if (view == nullptr)
         return nullptr;
     QPointer<ExportEditor> self(this);
-    auto* dialog = new exportpanel::OutputModuleDialog(*view, adapter_->catalogue(), *colours_, *this);
+    auto* dialog =
+        new exportpanel::OutputModuleDialog(*view, adapter_->catalogue(), *colours_, *this, adapter_);
     QPointer<exportpanel::OutputModuleDialog> shown(dialog);
     dialog->open([self, shown, job, output](const kit::KDialog::Role role) {
         if (self == nullptr || shown == nullptr || role != kit::KDialog::Role::Accept)
