@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/rational_time.hpp>
+#include <bloom/media/audio/channel_layout.hpp>
 
 #include <atomic>
 #include <cstddef>
@@ -113,6 +114,8 @@ struct AudioProbe final {
     std::uint32_t channels = 0;
     std::uint64_t frames = 0;
     core::RationalTime duration{};
+    // Declared speaker roles, all Unknown when the container declares none.
+    AudioChannelLayout channelLayout{};
 };
 
 // Owns one persistent decoder and a bounded interleaved PCM window. Calls may perform file I/O
@@ -158,6 +161,9 @@ struct AudioBuffer final {
     std::vector<std::vector<float>> planes;
     // When present, frames is the full source duration while planes stays empty.
     std::shared_ptr<AudioStream> stream{};
+    // Declared speaker roles in plane order, all Unknown when the source declares none. The
+    // mixer resolves it with resolvedAudioChannelLayout and downmixes through channelMixMatrix.
+    AudioChannelLayout channelLayout{};
 };
 
 struct WaveformRange final {

@@ -205,6 +205,8 @@ class AudioEngine final {
     [[nodiscard]] std::int64_t loopedFrame(std::int64_t absoluteFrame) const noexcept;
     void resetTransportLocked() noexcept;
     void mixBlock(std::uint64_t firstProducedFrame, std::span<float> output) noexcept;
+    // The clip's source-to-output channel mix (see channelMixMatrix); empty without a buffer.
+    [[nodiscard]] std::vector<float> clipGains(const AudioClip& clip) const;
     void joinMixer() noexcept;
 
     std::unique_ptr<Backend> backend_;
@@ -213,6 +215,8 @@ class AudioEngine final {
     std::vector<float> mixScratch_;
     mutable std::mutex controlMutex_;
     std::vector<AudioClip> clips_;
+    // Parallel to clips_, guarded by controlMutex_.
+    std::vector<std::vector<float>> clipGains_;
     std::atomic<bool> playing_{false};
     std::atomic<std::uint64_t> mixGeneration_{0};
     // Low bit is callback silence; high bits are the UI request generation.

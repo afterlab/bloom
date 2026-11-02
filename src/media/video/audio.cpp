@@ -46,6 +46,7 @@ provider::Result<audio::AudioBuffer> decodeAudioClip(VideoDecodeSession& session
     buffer.rate = stream->sampleRate;
     buffer.channels = static_cast<std::uint32_t>(stream->channelLayout.size());
     buffer.frames = *frames;
+    buffer.channelLayout = audio::audioChannelLayout(stream->channelLayout);
     buffer.planes.resize(buffer.channels);
     for (auto& channel : buffer.planes)
         channel.reserve(static_cast<std::size_t>(buffer.frames));

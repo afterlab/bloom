@@ -1,4 +1,5 @@
 #include <bloom/core/frame_time_mapping.hpp>
+#include <bloom/media/audio/channel_layout.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 
 #include <chrono>
@@ -9,6 +10,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -90,6 +92,78 @@ void testSampleAccurateMixing(Expectations& expectations) {
                   "mixing preserves sample order, level, and mono-to-stereo routing");
     expectations.expect(engine.positionNow() == time(3, 4),
                         "audio clock is exactly six written frames at 8 Hz");
+}
+
+void expectNear(Expectations& expectations, const std::span<const float> actual,
+                const std::vector<double>& expected, const std::string_view message) {
+    expectations.expect(actual.size() == expected.size(), message);
+    if (actual.size() != expected.size())
+        return;
+    for (std::size_t index = 0; index < actual.size(); ++index)
+        expectations.expect(std::abs(static_cast<double>(actual[index]) - expected[index]) < 1e-5,
+                            message);
+}
+
+// Six frames of constant per-channel values: FL 1, FR 2, FC 4, LFE 8, surround-left 16,
+// surround-right 32.
+[[nodiscard]] std::shared_ptr<const AudioBuffer>
+surroundBuffer(const std::vector<std::string>& names) {
+    AudioBuffer buffer{8, 6, 6, {}};
+    for (const float value : {1.0F, 2.0F, 4.0F, 8.0F, 16.0F, 32.0F})
+        buffer.planes.emplace_back(6, value);
+    buffer.channelLayout = bloom::media::audio::audioChannelLayout(names);
+    return std::make_shared<const AudioBuffer>(std::move(buffer));
+}
+
+// #450: a 5.1 source in a stereo mix keeps centre dialogue and its surrounds through the
+// ITU-R BS.775 downmix (centre and surrounds at -3 dB, LFE dropped), for declared and
+// undeclared layouts, through addClip, replaceClips and removeClip alike.
+void testSurroundDownmix(Expectations& expectations) {
+    constexpr double h = 0.70710678118654752440;
+    // Lo = FL + h FC + h Ls; Ro = FR + h FC + h Rs. LFE (8) never reaches the mix.
+    const auto left = 1.0 + h * 4.0 + h * 16.0;
+    const auto right = 2.0 + h * 4.0 + h * 32.0;
+    {
+        auto backend = std::make_unique<NullBackend>();
+        auto* captured = backend.get();
+        AudioEngine engine(std::move(backend), AudioEngine::Config{8, 2, 32});
+        const auto decoy = engine.addClip(
+            AudioClip{stereoBuffer({100, 100, 100, 100, 100, 100}, {100, 100, 100, 100, 100, 100}),
+                      time(0), 1.0F, false, false});
+        static_cast<void>(engine.addClip(AudioClip{
+            surroundBuffer({"FL", "FR", "FC", "LFE", "SL", "SR"}), time(0), 0.5F, false, false}));
+        expectations.expect(engine.removeClip(decoy), "the stereo decoy clip is removed");
+        engine.play(time(0));
+        engine.renderForTesting(2);
+        expectNear(expectations, captured->captured(),
+                   {0.5 * left, 0.5 * right, 0.5 * left, 0.5 * right},
+                   "a declared 5.1(side) clip downmixes to stereo at its level");
+    }
+    {
+        auto backend = std::make_unique<NullBackend>();
+        auto* captured = backend.get();
+        AudioEngine engine(std::move(backend), AudioEngine::Config{8, 2, 32});
+        std::vector<AudioClip> clips;
+        clips.push_back(AudioClip{surroundBuffer({"channel-0", "channel-1", "channel-2",
+                                                  "channel-3", "channel-4", "channel-5"}),
+                                  time(0), 1.0F, false, false});
+        engine.replaceClips(std::move(clips));
+        engine.play(time(0));
+        engine.renderForTesting(1);
+        expectNear(expectations, captured->captured(), {left, right},
+                   "an undeclared six-channel clip downmixes as default 5.1");
+    }
+    {
+        auto backend = std::make_unique<NullBackend>();
+        auto* captured = backend.get();
+        AudioEngine engine(std::move(backend), AudioEngine::Config{8, 1, 32});
+        static_cast<void>(
+            engine.addClip(AudioClip{stereoBuffer({1, 1}, {3, 3}), time(0), 1.0F, false, false}));
+        engine.play(time(0));
+        engine.renderForTesting(1);
+        expectNear(expectations, captured->captured(), {h * (1.0 + 3.0)},
+                   "a stereo clip in a mono mix keeps both channels at -3 dB");
+    }
 }
 
 void testSoloMuteAndSeek(Expectations& expectations) {
@@ -442,6 +516,7 @@ void testMidPlayLoopChangeRewindsQueuedAudio(Expectations& expectations) {
 int main() {
     Expectations expectations;
     testSampleAccurateMixing(expectations);
+    testSurroundDownmix(expectations);
     testSoloMuteAndSeek(expectations);
     testRateAndClockMonotonicity(expectations);
     testPlaySeekStopKeepsFrameAndAudioClock(expectations);

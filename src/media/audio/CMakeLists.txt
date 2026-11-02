@@ -49,7 +49,7 @@ else()
 endif()
 bloom_enable_strict_floating_point(bloom_media_miniaudio)
 
-add_library(bloom_media_audio STATIC audio.cpp playback/audio_engine.cpp)
+add_library(bloom_media_audio STATIC audio.cpp channel_layout.cpp playback/audio_engine.cpp)
 target_sources(
     bloom_media_audio
     PUBLIC
@@ -57,6 +57,7 @@ target_sources(
         BASE_DIRS include playback/include
         FILES
             include/bloom/media/audio/audio.hpp
+            include/bloom/media/audio/channel_layout.hpp
             playback/include/bloom/media/audio/playback/audio_engine.hpp
 )
 target_compile_features(bloom_media_audio PUBLIC cxx_std_20)

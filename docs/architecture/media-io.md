@@ -565,6 +565,36 @@ underrun; neither side allocates, locks, decodes, or performs file I/O on the ca
 `NullBackend` pulls the same callback contract for deterministic tests. `MiniaudioBackend` adapts
 the contract to the platform playback device without leaking miniaudio types.
 
+#### Channel Layout And Downmix
+
+Every `AudioBuffer` carries the speaker role of each plane (`AudioChannelLayout`,
+`bloom/media/audio/channel_layout.hpp`). Media-worker audio takes it from the provider's channel
+names, which follow FFmpeg's spelling (`FL`, `FR`, `FC`, `LFE`, `BL`, `SL`, ...; bare `L`/`R`/`C`
+are accepted). In-process WAV takes it from the `WAVE_FORMAT_EXTENSIBLE` channel mask when the
+mask's speaker count equals the channel count. A layout with any unnamed or unrecognized channel
+is undeclared and resolves to the FLAC / WAVE default for its channel count: mono, stereo, 3.0
+(FL FR FC), quad (FL FR BL BR), 5.0, 5.1 (FL FR FC LFE BL BR), 6.1 (FL FR FC LFE BC SL SR) and
+7.1 (FL FR FC LFE BL BR SL SR). Past eight undeclared channels only the first two are placed as
+front left and right; the rest are not mixed.
+
+`AudioEngine` resolves each clip's source-to-output gain matrix with `channelMixMatrix` when the
+clip is added or replaced, never on the mixer, and mixes through it. Playback and the export's
+offline mix both run this engine, so they downmix identically (#450):
+
+- Stereo output uses the ITU-R BS.775 downmix at FFmpeg's default levels:
+  Lo = L + 0.7071 C + 0.7071 Ls and Ro = R + 0.7071 C + 0.7071 Rs. Centre and surrounds are at
+  -3 dB and LFE is dropped. The matrix is not normalized (FFmpeg's float default), so a hot
+  multichannel source can exceed full scale in the stereo mix.
+- Back, side, wide, surround-direct and height channels the standard does not name fold into their
+  own side at -3 dB. Centre-line channels other than front centre (back centre and the top and
+  bottom centres) reach each side at -6 dB, as FFmpeg folds back centre. Front left/right of
+  centre, the downmix pair and the binaural pair pass at unity on their side.
+- Mono output sums the stereo downmix at -3 dB: 0.7071 (Lo + Ro).
+- A mono source feeds every output channel at unity, and a stereo source into stereo output is the
+  identity.
+- Output layouts other than mono and stereo map source channel i to output channel i. Bloom's
+  playback device and export mix are stereo today.
+
 While playing, the audio clock is the master clock. `positionNow()` is derived from the number of
 frames actually written by the backend callback, the output rate, the rational play origin, and the
 transport rate; it does not advance from wall-clock guesses. The transport follows this clock, so

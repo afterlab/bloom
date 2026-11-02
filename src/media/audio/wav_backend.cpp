@@ -62,6 +62,7 @@ bool cancelled(FileReader& reader) noexcept {
         wav.channels,
         wav.totalPCMFrameCount,
         duration(wav.totalPCMFrameCount, wav.sampleRate),
+        bloom::media::audio::waveChannelLayout(wav.fmt.channelMask, wav.channels),
     });
 }
 
@@ -118,6 +119,8 @@ drwav_bool32 seekFile(void* user, int offset, drwav_seek_origin origin) {
         buffer.rate = wav.sampleRate;
         buffer.channels = wav.channels;
         buffer.frames = wav.totalPCMFrameCount;
+        buffer.channelLayout =
+            bloom::media::audio::waveChannelLayout(wav.fmt.channelMask, wav.channels);
         buffer.planes.resize(channels);
         for (auto& plane : buffer.planes)
             plane.resize(frames);
@@ -279,7 +282,8 @@ AudioResult<AudioBuffer> openWindowedWavFile(const std::filesystem::path& path,
                                                              probe.value()->channels,
                                                              probe.value()->frames,
                                                              {},
-                                                             std::move(stream)});
+                                                             std::move(stream),
+                                                             probe.value()->channelLayout});
     } catch (const std::bad_alloc&) {
         return AudioResult<AudioBuffer>::failure(
             AudioError::codeOnly(AudioErrorCode::AllocationFailure));

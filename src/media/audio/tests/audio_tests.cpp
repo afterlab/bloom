@@ -1,6 +1,8 @@
 #include <bloom/media/audio/audio.hpp>
+#include <bloom/media/audio/channel_layout.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
@@ -10,11 +12,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <iterator>
 #include <memory>
 #include <numbers>
 #include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <vector>
@@ -26,6 +30,8 @@
 namespace {
 
 using bloom::core::RationalTime;
+using bloom::media::audio::AudioChannel;
+using bloom::media::audio::AudioChannelLayout;
 using bloom::media::audio::AudioContainer;
 using bloom::media::audio::AudioDecodeLimits;
 using bloom::media::audio::AudioErrorCode;
@@ -130,6 +136,121 @@ GeneratedWav writeSineWav(const std::filesystem::path& path) {
     }
     output.close();
     return samples;
+}
+
+// A WAVE_FORMAT_EXTENSIBLE float file whose channel c holds the constant 0.1 * (c + 1).
+void writeExtensibleWav(const std::filesystem::path& path, const std::uint16_t channels,
+                        const std::uint32_t mask) {
+    constexpr std::uint32_t rate = 48'000;
+    constexpr std::uint32_t frames = 64;
+    const auto blockAlign = static_cast<std::uint16_t>(channels * sizeof(float));
+    const auto dataBytes = frames * blockAlign;
+    std::ofstream output(path, std::ios::binary);
+    output.write("RIFF", 4);
+    writeU32(output, 4U + 8U + 40U + 8U + dataBytes);
+    output.write("WAVE", 4);
+    output.write("fmt ", 4);
+    writeU32(output, 40);
+    writeU16(output, 0xFFFE); // WAVE_FORMAT_EXTENSIBLE
+    writeU16(output, channels);
+    writeU32(output, rate);
+    writeU32(output, rate * blockAlign);
+    writeU16(output, blockAlign);
+    writeU16(output, 32);
+    writeU16(output, 22);
+    writeU16(output, 32);
+    writeU32(output, mask);
+    // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+    constexpr std::array<unsigned char, 16> subFormat{0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                                      0x10, 0x00, 0x80, 0x00, 0x00, 0xAA,
+                                                      0x00, 0x38, 0x9B, 0x71};
+    output.write(reinterpret_cast<const char*>(subFormat.data()), subFormat.size());
+    output.write("data", 4);
+    writeU32(output, dataBytes);
+    for (std::uint32_t frame = 0; frame < frames; ++frame)
+        for (std::uint16_t channel = 0; channel < channels; ++channel)
+            writeU32(output, std::bit_cast<std::uint32_t>(0.1F * static_cast<float>(channel + 1)));
+}
+
+[[nodiscard]] bool near(const float actual, const double expected) {
+    return std::abs(static_cast<double>(actual) - expected) < 1e-6;
+}
+
+[[nodiscard]] AudioChannelLayout layoutOf(std::initializer_list<AudioChannel> channels) {
+    AudioChannelLayout layout{};
+    std::copy(channels.begin(), channels.end(), layout.begin());
+    return layout;
+}
+
+// #450: a source layout that differs from the output is downmixed (ITU-R BS.775 with FFmpeg's
+// default levels) instead of mapping channel i to output i and dropping the rest.
+void testChannelLayoutsAndDownmix(Expectations& expectations) {
+    using enum AudioChannel;
+    namespace audio = bloom::media::audio;
+    constexpr double h = 0.70710678118654752440;
+    const std::vector<std::string> ffmpegSide{"FL", "FR", "FC", "LFE", "SL", "SR"};
+    const auto side = audio::audioChannelLayout(ffmpegSide);
+    expectations.expect(
+        side == layoutOf({FrontLeft, FrontRight, FrontCentre, LowFrequency, SideLeft, SideRight}),
+        "FFmpeg channel names parse into speaker roles");
+    expectations.expect(audio::audioChannelFromName("L") == FrontLeft &&
+                            audio::audioChannelFromName("R") == FrontRight &&
+                            audio::audioChannelFromName("channel-3") == Unknown,
+                        "bare L/R are recognised and placeholders stay unknown");
+
+    const auto stereo = audio::channelMixMatrix(side, 6, 2);
+    const std::array<double, 12> expectedStereo{1, 0, h, 0, h, 0, 0, 1, h, 0, 0, h};
+    bool stereoOk = stereo.size() == expectedStereo.size();
+    for (std::size_t index = 0; stereoOk && index < stereo.size(); ++index)
+        stereoOk = near(stereo[index], expectedStereo[index]);
+    expectations.expect(stereoOk, "5.1 downmixes to stereo with centre and surrounds at -3 dB, "
+                                  "LFE dropped");
+
+    const auto mono = audio::channelMixMatrix(side, 6, 1);
+    const std::array<double, 6> expectedMono{h, h, 1.0, 0.0, 0.5, 0.5};
+    bool monoOk = mono.size() == expectedMono.size();
+    for (std::size_t index = 0; monoOk && index < mono.size(); ++index)
+        monoOk = near(mono[index], expectedMono[index]);
+    expectations.expect(monoOk, "mono output sums the stereo downmix at -3 dB");
+
+    const auto identity = audio::channelMixMatrix(AudioChannelLayout{}, 2, 2);
+    expectations.expect(identity == std::vector<float>{1.0F, 0.0F, 0.0F, 1.0F},
+                        "undeclared stereo into stereo is the identity");
+    expectations.expect(audio::channelMixMatrix(AudioChannelLayout{}, 1, 2) ==
+                            std::vector<float>{1.0F, 1.0F},
+                        "a mono source feeds both outputs at unity");
+
+    const std::vector<std::string> unnamed{"channel-0", "channel-1", "channel-2",
+                                           "channel-3", "channel-4", "channel-5"};
+    expectations.expect(
+        audio::resolvedAudioChannelLayout(audio::audioChannelLayout(unnamed), 6) ==
+            layoutOf({FrontLeft, FrontRight, FrontCentre, LowFrequency, BackLeft, BackRight}),
+        "an undeclared six-channel source takes the default 5.1 layout");
+    expectations.expect(audio::resolvedAudioChannelLayout(AudioChannelLayout{}, 4) ==
+                            layoutOf({FrontLeft, FrontRight, BackLeft, BackRight}),
+                        "an undeclared four-channel source is quad");
+
+    expectations.expect(
+        audio::waveChannelLayout(0x60FU, 6) ==
+            layoutOf({FrontLeft, FrontRight, FrontCentre, LowFrequency, SideLeft, SideRight}),
+        "a WAVE channel mask declares speakers in bit order");
+    expectations.expect(audio::waveChannelLayout(0x3FU, 4) == AudioChannelLayout{} &&
+                            audio::waveChannelLayout(0U, 2) == AudioChannelLayout{},
+                        "a mask that disagrees with the channel count declares nothing");
+
+    TemporaryFile file{".wav"};
+    writeExtensibleWav(file.path(), 4, 0x0FU); // FL FR FC LFE, not the quad default
+    const auto expected = layoutOf({FrontLeft, FrontRight, FrontCentre, LowFrequency});
+    const auto probe = audio::probeAudio(file.path());
+    expectations.expect(probe && probe.value()->channelLayout == expected,
+                        "WAV probe reports the extensible channel mask");
+    const auto decoded = audio::decodeAudio(file.path(), AudioDecodeLimits{.sampleBudget = 256});
+    expectations.expect(decoded && decoded.value()->channelLayout == expected,
+                        "decoded WAV carries the extensible channel mask");
+    const auto windowed =
+        audio::openWindowedAudio(file.path(), AudioDecodeLimits{.sampleBudget = 4096U * 4U});
+    expectations.expect(windowed && windowed.value()->channelLayout == expected,
+                        "windowed WAV playback carries the extensible channel mask");
 }
 
 void testWavRoundTripAndWaveform(Expectations& expectations) {
@@ -366,6 +487,7 @@ void testHostileInputsAndLimits(Expectations& expectations) {
 int main() {
     Expectations expectations;
     testWavRoundTripAndWaveform(expectations);
+    testChannelLayoutsAndDownmix(expectations);
     testMp3Fixture(expectations);
     testHostileInputsAndLimits(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

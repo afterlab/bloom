@@ -235,24 +235,41 @@ AudioEngine::AudioEngine(std::unique_ptr<Backend> backend, const Config config)
 
 AudioEngine::~AudioEngine() { stop(); }
 
+std::vector<float> AudioEngine::clipGains(const AudioClip& clip) const {
+    if (!clip.buffer)
+        return {};
+    return channelMixMatrix(clip.buffer->channelLayout, clip.buffer->channels, config_.channels);
+}
+
 AudioEngine::ClipId AudioEngine::addClip(AudioClip clip) {
+    auto gains = clipGains(clip);
     std::scoped_lock lock(controlMutex_);
+    clipGains_.reserve(clips_.size() + 1U);
     clips_.push_back(std::move(clip));
+    clipGains_.push_back(std::move(gains));
     return clips_.size() - 1U;
 }
 
 void AudioEngine::replaceClips(std::vector<AudioClip> clips) {
+    // The channel mix is resolved here, off the mixer, so mixBlock never allocates.
+    std::vector<std::vector<float>> gains;
+    gains.reserve(clips.size());
+    for (const auto& clip : clips)
+        gains.push_back(clipGains(clip));
     {
         std::scoped_lock lock(controlMutex_);
         clips_.swap(clips);
+        clipGains_.swap(gains);
     } // Old decoded refs are released outside the mixer mutex.
 }
 
 void AudioEngine::clearClips() noexcept {
     std::vector<AudioClip> old;
+    std::vector<std::vector<float>> oldGains;
     {
         std::scoped_lock lock(controlMutex_);
         old.swap(clips_);
+        oldGains.swap(clipGains_);
     }
 }
 
@@ -262,6 +279,7 @@ bool AudioEngine::removeClip(const ClipId id) {
         return false;
     }
     clips_.erase(clips_.begin() + static_cast<std::ptrdiff_t>(id));
+    clipGains_.erase(clipGains_.begin() + static_cast<std::ptrdiff_t>(id));
     return true;
 }
 
@@ -653,25 +671,41 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
          ++outputFrame) {
         const auto absoluteFrame =
             loopedFrame(firstAbsoluteFrame + saturatingFrameOffset(outputFrame, playbackRate_));
-        for (const auto& clip : clips_) {
+        for (std::size_t clipIndex = 0; clipIndex < clips_.size(); ++clipIndex) {
+            const auto& clip = clips_[clipIndex];
             if (anySolo && !clip.solo)
                 continue;
             const auto sourceFrame = clipSampleFrame(clip, absoluteFrame, config_.rate);
             if (!sourceFrame)
                 continue;
-            for (std::size_t channel = 0; channel < config_.channels; ++channel) {
-                const auto sourceChannel = clip.buffer->channels == 1 ? std::size_t{0} : channel;
-                if (sourceChannel >= clip.buffer->channels) {
+            // Gains are output-major: gains[output * sourceChannels + source].
+            const auto& gains = clipGains_[clipIndex];
+            const std::size_t sourceChannels = clip.buffer->channels;
+            if (gains.size() != sourceChannels * config_.channels)
+                continue;
+            for (std::size_t source = 0; source < sourceChannels; ++source) {
+                bool audible = false;
+                for (std::size_t channel = 0; channel < config_.channels; ++channel)
+                    audible = audible || gains[channel * sourceChannels + source] != 0.0F;
+                if (!audible)
+                    continue;
+                float sample = 0.0F;
+                if (clip.buffer->stream) {
+                    const auto streamed = clip.buffer->stream->sample(
+                        *sourceFrame, static_cast<std::uint32_t>(source), cancelled);
+                    if (!streamed)
+                        continue;
+                    sample = *streamed;
+                } else if (source < clip.buffer->planes.size() &&
+                           *sourceFrame < clip.buffer->planes[source].size()) {
+                    sample = clip.buffer->planes[source][*sourceFrame];
+                } else {
                     continue;
                 }
-                if (clip.buffer->stream) {
-                    if (const auto sample = clip.buffer->stream->sample(
-                            *sourceFrame, static_cast<std::uint32_t>(sourceChannel), cancelled))
-                        output[outputFrame * config_.channels + channel] += *sample * clip.level;
-                } else if (*sourceFrame < clip.buffer->planes[sourceChannel].size()) {
-                    output[outputFrame * config_.channels + channel] +=
-                        clip.buffer->planes[sourceChannel][*sourceFrame] * clip.level;
-                }
+                for (std::size_t channel = 0; channel < config_.channels; ++channel)
+                    if (const auto gain = gains[channel * sourceChannels + source]; gain != 0.0F)
+                        output[outputFrame * config_.channels + channel] +=
+                            sample * (gain * clip.level);
             }
         }
     }
