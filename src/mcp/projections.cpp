@@ -86,6 +86,10 @@ yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& valu
                         if (option.value == *stored)
                             out.set(record, "label", out.text(option.label));
                     }
+                    if (value.schemaKey == document::kTextFontParameterSchemaKey) {
+                        if (const auto label = document::legacyTextFontLabel(*stored))
+                            out.set(record, "label", out.text(std::string(*label)));
+                    }
                 }
             } else if constexpr (std::is_same_v<T, document::AnimationCurveSource>) {
                 out.set(record, "source", out.text("curve"));

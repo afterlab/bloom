@@ -140,11 +140,6 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return sequential({"Clip", "Grow"});
     if (schemaKey == "bloom.channel-shuffle.mode")
         return sequential({"Color", "Raw"});
-    if (schemaKey == kTextFontParameterSchemaKey)
-        return {{"DejaVu Sans", kTextFontDejaVuSans},
-                {"Inter Regular", kTextFontInterRegular},
-                {"Inter Medium", kTextFontInterMedium},
-                {"Inter SemiBold", kTextFontInterSemiBold}};
     if (schemaKey == kScalarOperationParameterSchemaKey) {
         Options options;
         for (const auto operation : kScalarOperations) {
@@ -190,6 +185,21 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
                      {"Equal", "Not Equal", "Less", "Less Or Equal", "Greater", "Greater Or Equal"},
                      [](const auto value) { return compareOperationStoredValue(value); });
     return {};
+}
+
+std::optional<std::string_view> legacyTextFontLabel(const std::int64_t value) noexcept {
+    switch (value) {
+    case kTextFontDejaVuSans:
+        return "DejaVu Sans";
+    case kTextFontInterRegular:
+        return "Inter Regular";
+    case kTextFontInterMedium:
+        return "Inter Medium";
+    case kTextFontInterSemiBold:
+        return "Inter SemiBold";
+    default:
+        return std::nullopt;
+    }
 }
 
 std::optional<std::int64_t> parameterEnumValue(const std::string_view schemaKey,

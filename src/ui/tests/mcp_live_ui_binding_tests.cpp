@@ -133,6 +133,13 @@ void testEnumTableParity() {
                !document::parameterEnumOptions("bloom.shape.kind").empty() &&
                !document::parameterEnumOptions(document::kScalarOperationParameterSchemaKey).empty(),
            "blend modes, shape kinds and scalar operations are in the table");
+    expect(document::parameterEnumOptions(document::kTextFontParameterSchemaKey).empty() &&
+               document::parameterEnumValue(document::kTextFontParameterSchemaKey, "Inter Regular") ==
+                   std::nullopt,
+           "the legacy built-in faces are not an enumeration any list or edit can reach");
+    expect(document::legacyTextFontLabel(document::kTextFontInterMedium) == "Inter Medium" &&
+               !document::legacyTextFontLabel(4).has_value(),
+           "legacy integer font values keep their label for readback only");
 }
 
 // ---- compile diagnostics carry their subject as data -------------------------------------------

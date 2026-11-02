@@ -23,6 +23,11 @@ struct ParameterEnumOption final {
 // describe a parameter; the Properties selectors show the same members.
 [[nodiscard]] std::vector<ParameterEnumOption> parameterEnumOptions(std::string_view schemaKey);
 
+// The label of an old integer text font value (the built-in faces 0..3 that documents saved before
+// text fonts became Font asset references). It exists only to label those values when a legacy
+// document is read back; it is not an enumeration and no edit or list accepts or offers it.
+[[nodiscard]] std::optional<std::string_view> legacyTextFontLabel(std::int64_t value) noexcept;
+
 // The stored value whose label matches `name`, ignoring case, spaces, hyphens and underscores
 // ("Ping-pong", "ping_pong" and "pingpong" all name the same member).
 [[nodiscard]] std::optional<std::int64_t> parameterEnumValue(std::string_view schemaKey,
