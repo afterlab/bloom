@@ -553,6 +553,10 @@ struct detail::SequenceExportWorkV1 {
             settings().videoCodec.empty() ? settings().audioCodec : settings().videoCodec;
         outcome.expectedContainer =
             settings().container + "/" + (codec == "prores_ks" ? std::string("prores") : codec);
+        outcome.expectedFrames = settings().frames;
+        outcome.expectedAudioSamples = settings().audioSamples;
+        outcome.expectedFrameRate = settings().rate;
+        outcome.expectedSampleRate = settings().sampleRate;
         outcome.encodedFrames = encoded;
         outcome.streamedPublication = streamed;
         outcome.mediaProvider = provenance;

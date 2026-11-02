@@ -936,6 +936,13 @@ void testVideoEndToEnd(const document::ExportFormat format,
     };
     expect(passed(host::ExportCheck::Reopen), name + ": reopened by the worker");
     expect(passed(host::ExportCheck::FrameCount), name + ": frame count matches the range");
+    expect(passed(host::ExportCheck::Timing), name + ": the duration matches the range");
+    const auto audioCheck = std::ranges::find(verification.checks, host::ExportCheck::Audio,
+                                              &host::ExportCheckResult::check);
+    expect(audioCheck != verification.checks.end() &&
+               audioCheck->outcome == (audio ? host::ExportCheckOutcome::Passed
+                                             : host::ExportCheckOutcome::NotApplicable),
+           name + ": the audio sample count matches the request");
     expect(passed(host::ExportCheck::Container), name + ": the container and codec match");
     expect(passed(host::ExportCheck::ColourTags),
            name + ": the color tags match the output color intent");

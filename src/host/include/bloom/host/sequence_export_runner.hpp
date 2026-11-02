@@ -177,6 +177,12 @@ struct SequenceExportResultV1 {
     // failure's own detail is the human-readable sentence.
     std::string diagnostic;
     std::string expectedContainer;
+    // Issue #465: the stream layout the encoder was asked for, for the Timing and Audio checks
+    // (frames is 0 for WAV; audioSamples is 0 without audio).
+    std::uint64_t expectedFrames = 0;
+    std::uint64_t expectedAudioSamples = 0;
+    media::provider::Rational expectedFrameRate{0, 1};
+    std::uint32_t expectedSampleRate = 0;
     // ADR 0033 section 16: the worker wrote the container straight into the staged artifact
     // (Linux) instead of returning chunks for a copy.
     bool streamedPublication = false;

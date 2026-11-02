@@ -1351,12 +1351,16 @@ class MediaDriver final : public DriverBase {
                           ? (wav ? ExportCheckOutcome::NotApplicable : ExportCheckOutcome::Passed)
                           : ExportCheckOutcome::Failed,
                       "export.check.frame-count", expectedFrames, evidence.frameCount));
-            checks.push_back(check(
-                ExportCheck::Timing,
-                evidence.duration.denominator > 0 ? ExportCheckOutcome::Passed
-                                                  : ExportCheckOutcome::Failed,
-                "export.check.timing", {},
-                ExportRationalValue{evidence.duration.numerator, evidence.duration.denominator}));
+            // #465: Timing and Audio compare the reopened stream with what was asked for.
+            const ExportStreamRequest requested{
+                result.expectedFrames,
+                ExportRationalValue{result.expectedFrameRate.numerator,
+                                    result.expectedFrameRate.denominator},
+                result.expectedAudioSamples, result.expectedSampleRate};
+            const ExportStreamObservation reopened{
+                evidence.frameCount, evidence.audioSamples,
+                ExportRationalValue{evidence.duration.numerator, evidence.duration.denominator}};
+            checks.push_back(exportTimingCheck(requested, reopened));
             const auto& tags = evidence.colourTags;
             const auto expectedTags = result.expectedColourTags;
             if (wav) {
@@ -1384,11 +1388,7 @@ class MediaDriver final : public DriverBase {
                       evidence.container == result.expectedContainer ? ExportCheckOutcome::Passed
                                                                      : ExportCheckOutcome::Failed,
                       "export.check.container", result.expectedContainer, evidence.container));
-            const bool audio = settings.format == ExportFormat::Wav || settings.includeAudio;
-            checks.push_back(
-                check(ExportCheck::Audio,
-                      audio ? ExportCheckOutcome::Passed : ExportCheckOutcome::NotApplicable,
-                      "export.check.audio", {}, evidence.audioSamples));
+            checks.push_back(exportAudioCheck(requested, reopened));
         } else {
             checks.push_back(check(ExportCheck::Reopen, ExportCheckOutcome::Failed,
                                    "export.check.reopen.missing"));

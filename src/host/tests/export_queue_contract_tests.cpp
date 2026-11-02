@@ -120,6 +120,47 @@ int main() {
     check.observed = host::ExportColourTags{1, 1, 1, false};
     failures += expect(check.expected == check.observed, "color tags compare structurally");
 
+    // #465: Timing and Audio compare the reopened stream with the request. 48 frames at
+    // 30000/1001 with 48 kHz audio: floor(48 * 1001 / 30000 * 48000) = 76876 samples.
+    using host::ExportCheckOutcome;
+    const host::ExportStreamRequest movie{48, {30000, 1001}, 76876, 48000};
+    const host::ExportStreamObservation exact{48, 76876, {48048, 30000}};
+    failures += expect(host::exportTimingCheck(movie, exact).outcome == ExportCheckOutcome::Passed,
+                       "a movie whose duration and audio match the request passes Timing");
+    failures += expect(host::exportAudioCheck(movie, exact).outcome == ExportCheckOutcome::Passed,
+                       "a movie whose audio sample count matches the request passes Audio");
+    auto longer = exact;
+    longer.duration = {49049, 30000};
+    failures += expect(host::exportTimingCheck(movie, longer).outcome == ExportCheckOutcome::Failed,
+                       "a reopened duration other than the requested one fails Timing");
+    auto shortAudio = exact;
+    shortAudio.audioSamples = 76000;
+    failures +=
+        expect(host::exportTimingCheck(movie, shortAudio).outcome == ExportCheckOutcome::Failed &&
+                   host::exportTimingCheck(movie, shortAudio).code ==
+                       "export.check.timing.audio-duration-mismatch",
+               "audio that ends before the video fails Timing");
+    failures +=
+        expect(host::exportAudioCheck(movie, shortAudio).outcome == ExportCheckOutcome::Failed,
+               "a sample count other than the requested one fails Audio");
+    failures += expect(host::exportTimingCheck(movie, {48, 76876, {0, 1}}).outcome ==
+                           ExportCheckOutcome::Failed,
+                       "an empty duration fails Timing");
+    const host::ExportStreamRequest silent{48, {24, 1}, 0, 48000};
+    failures += expect(host::exportTimingCheck(silent, {48, 0, {2, 1}}).outcome ==
+                               ExportCheckOutcome::Passed &&
+                           host::exportAudioCheck(silent, {48, 0, {2, 1}}).outcome ==
+                               ExportCheckOutcome::NotApplicable,
+                       "a silent movie passes Timing and does not apply Audio");
+    failures += expect(host::exportAudioCheck(silent, {48, 96000, {2, 1}}).outcome ==
+                           ExportCheckOutcome::Failed,
+                       "audio nobody asked for fails Audio");
+    const host::ExportStreamRequest wav{0, {24, 1}, 96000, 48000};
+    failures += expect(
+        host::exportTimingCheck(wav, {0, 96000, {2, 1}}).outcome == ExportCheckOutcome::Passed &&
+            host::exportTimingCheck(wav, {0, 96000, {3, 1}}).outcome == ExportCheckOutcome::Failed,
+        "a WAV's duration is its sample count over its sample rate");
+
     host::ExportPreset preset;
     preset.id = std::string(host::kExportDefaultVideoPresetId);
     failures +=

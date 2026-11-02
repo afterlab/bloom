@@ -1234,7 +1234,11 @@ publication outcome), device provenance, and typed `ExportCheckResult`s for Reop
 Timing, ColourTags, Container, Audio, Naming, ArtifactDigest, Publication and DeviceProvenance with
 expected and observed values. A frame evaluated on the CPU reference path is a DeviceProvenance
 warning, so it is never presented as a GPU frame. Movies are checked against the worker's reopen
-evidence, including the color tags and `<container>/<codec>` it read back.
+evidence, including the color tags and `<container>/<codec>` it read back. Timing passes only when
+the reopened duration equals the requested one (frames over the frame rate, or samples over the
+sample rate for WAV) and, for a movie with sound, the audio sample count is exactly the floor of
+that duration times the sample rate; Audio passes only when the reopened sample count equals the
+requested one, and fails when a file without requested audio carries any.
 
 **Replacement.** An output's overwrite policy is AskBeforeReplacing (default), Replace or Refuse.
 Destination facts are sampled on a blocking-I/O worker; an existing destination is a

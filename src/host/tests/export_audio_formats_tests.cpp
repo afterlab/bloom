@@ -360,6 +360,17 @@ void testSourceFormatsAcrossPresets() {
                 std::cerr << "  " << name << ": " << finished->failure->reason << '\n';
             expect(published(finished) && std::filesystem::exists(f.folder / file),
                    name + ": exports and publishes");
+            // #465: the reopened duration and sample count match the request.
+            if (finished && !finished->outputs.empty() && finished->outputs.front().verification)
+                for (const auto what : {host::ExportCheck::Timing, host::ExportCheck::Audio}) {
+                    const auto& checks = finished->outputs.front().verification->checks;
+                    const auto found =
+                        std::ranges::find(checks, what, &host::ExportCheckResult::check);
+                    expect(
+                        found != checks.end() && found->outcome == host::ExportCheckOutcome::Passed,
+                        name + ": the " + (what == host::ExportCheck::Timing ? "Timing" : "Audio") +
+                            " check passes");
+                }
             const auto& expected =
                 encoding == WavEncoding::Pcm16 ? preset.shallowCodec : preset.deepCodec;
             const auto actual = audioCodecOf(f.folder / file);

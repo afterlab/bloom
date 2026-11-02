@@ -92,6 +92,30 @@ struct ExportCheckResult final {
     std::optional<std::uint64_t> frame;
 };
 
+// The stream layout a single-file movie or WAV export asked the encoder for (issue #465).
+struct ExportStreamRequest final {
+    std::uint64_t frames = 0; // 0 for WAV
+    ExportRationalValue frameRate{0, 1};
+    std::uint64_t audioSamples = 0; // 0 without audio
+    std::uint32_t sampleRate = 0;
+};
+// What the reopened artifact reports.
+struct ExportStreamObservation final {
+    std::uint64_t frames = 0;
+    std::uint64_t audioSamples = 0;
+    ExportRationalValue duration{0, 1};
+};
+
+// Timing: the reopened duration equals the requested one (frames over the frame rate, or samples
+// over the sample rate for WAV), and with both video and audio the audio covers the video duration
+// to within one sample (the encoder is given exactly floor(duration * sample rate) samples).
+[[nodiscard]] ExportCheckResult exportTimingCheck(const ExportStreamRequest& requested,
+                                                  const ExportStreamObservation& observed);
+// Audio: when audio was requested, the reopened sample count equals the requested one; without
+// audio, the artifact carries none.
+[[nodiscard]] ExportCheckResult exportAudioCheck(const ExportStreamRequest& requested,
+                                                 const ExportStreamObservation& observed);
+
 enum class ExportPublicationOutcome : std::uint8_t {
     Published = 1,
     PublishedWithDurabilityWarning = 2,

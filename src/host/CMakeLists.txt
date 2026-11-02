@@ -13,6 +13,7 @@ target_sources(
         export_queue_service.cpp
         export_run_backend.cpp
         export_queue_service_views.cpp
+        export_verification.cpp
         font_catalogue.cpp
         frame_export_publication.cpp
         frame_export_publication_naming.cpp
