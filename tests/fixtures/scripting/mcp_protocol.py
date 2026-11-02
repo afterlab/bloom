@@ -269,6 +269,21 @@ class Protocol(unittest.TestCase):
         self.assertFalse(rejected['succeeded'])
         self.assertIn('bloom.context', rejected['diagnostics'][0]['message'])
 
+    def test_compositions_query_reads_back_the_background_colour(self):
+        """The compositions projection returns the straight RGBA Viewer backdrop that was set."""
+        responses = exchange([
+            INIT, READY,
+            tool(2, 'query', {'kind': 'compositions'}),
+            tool(3, 'transact', {'expectedRevision': 0, 'operations': [
+                {'op': 'bloom.composition.set-background-color',
+                 'args': {'color': [0.25, 0.5, 0.75, 0.5]}}]}),
+            tool(4, 'query', {'kind': 'compositions'})])
+        before = responses[1]['result']['structuredContent']['records'][0]
+        self.assertEqual(len(before['backgroundColor']), 4)
+        self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
+        after = responses[3]['result']['structuredContent']['records'][0]
+        self.assertEqual(after['backgroundColor'], [0.25, 0.5, 0.75, 0.5])
+
     def test_context_history_capture_and_export_status(self):
         """ADR 0034: the tools the in-app server added, on the headless session."""
         responses = exchange([

@@ -707,6 +707,13 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
                     out.number(composition.format().frameRate().numerator()));
             out.set(record, "frameRateDenominator",
                     out.number(composition.format().frameRate().denominator()));
+            // Straight RGBA display values; the Viewer backdrop only, never composited by output.
+            const auto background = composition.backgroundColor();
+            auto* colour = out.array();
+            for (const double channel :
+                 {background.red, background.green, background.blue, background.alpha})
+                out.append(colour, out.real(channel));
+            out.set(record, "backgroundColor", colour);
             out.append(records, record);
         }
     } else if (kind == "assets") {

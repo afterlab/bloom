@@ -378,7 +378,8 @@ returns, but Bloom keeps the newest 32 finished ones: `export.status` lists them
 creating another project releases them.
 
 Output keeps alpha: a composition's `backgroundColor`
-(`bloom.composition.set-background-color`) is the Viewer's display backdrop only, so `render`,
+(`bloom.composition.set-background-color`; `query` with `kind` compositions reads it back as
+straight `[red, green, blue, alpha]` display values) is the Viewer's display backdrop only, so `render`,
 `export` and `capture` never composite it. Where nothing covers the frame, a still stays
 transparent exactly as a sequence or a video format that carries alpha does, on the GPU route and
 the CPU reference alike. For an opaque backdrop in the output, add a full-frame solid layer at the
