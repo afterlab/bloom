@@ -166,9 +166,10 @@ int main() {
               "identity record sizes pinned");
         // Independent Python byte oracle: domain + 04 + frozen settings hash (EncodeSettingsV1
         // version 2) + eleven explicit (facet byte,state byte,NUL-terminated UTF-8 description)
-        // tuples: 759 bytes. See tests/color5_identity_oracle.py.
+        // tuples: 759 bytes. See tests/color5_identity_oracle.py. Issue #424: the settings hash
+        // binds video tolerance profile v3 (6fcfd3e3...; v2's 7e8bea87... gave 1253f309...).
         check(std::string(hex.data(), hex.size()) ==
-                  "1253f309292cb3999ba7f1f81b46b38e3260d59c64dd37bac17a5b70dfb47b9d",
+                  "2d6eeb234758d5328c33943f27c9faaf5ee63f80befd73650bed22d95c60b350",
               "media analysis frozen oracle");
 #endif
         check(report.implementationNote.starts_with(p::kProResExportNote) &&
