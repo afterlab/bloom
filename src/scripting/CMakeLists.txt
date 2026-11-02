@@ -56,6 +56,7 @@ target_compile_features(bloom_scripting PUBLIC cxx_std_20)
 target_link_libraries(
     bloom_scripting
     PUBLIC bloom_commands bloom_core bloom_document bloom_host bloom_runtime
+    PRIVATE bloom_platform_process
 )
 bloom_enable_warnings(bloom_scripting)
 

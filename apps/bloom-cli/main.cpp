@@ -19,6 +19,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -456,14 +457,20 @@ int main(int argc, char** argv) {
     if (command == "open" && argc == 3) {
         return commandOpen(argv[2]);
     }
-    if (command == "run" && argc == 3) {
-        return commandRun(argv[2]);
-    }
-    if (command == "render") {
-        return commandRender(argc, argv);
-    }
-    if (command == "export") {
-        return commandExport(argc, argv);
+    // A headless export queue that cannot make its private scratch directory refuses to start.
+    try {
+        if (command == "run" && argc == 3) {
+            return commandRun(argv[2]);
+        }
+        if (command == "render") {
+            return commandRender(argc, argv);
+        }
+        if (command == "export") {
+            return commandExport(argc, argv);
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "error[bloom-cli]: " << error.what() << '\n';
+        return 1;
     }
     printUsage();
     return 2;

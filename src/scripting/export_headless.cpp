@@ -7,6 +7,7 @@
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/platform/user_data_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
@@ -15,6 +16,7 @@
 #include <bloom/scripting/session.hpp>
 
 #include <iostream>
+#include <stdexcept>
 #include <thread>
 
 namespace bloom::scripting {
@@ -44,6 +46,13 @@ HeadlessExportQueue::HeadlessExportQueue(
     std::filesystem::path vulkanLoader, std::shared_ptr<std::timed_mutex> bootstrapGate)
     : state_(std::make_unique<State>()) {
     auto& s = *state_;
+    // Scratch files are opened by path and truncated, so they live in a fresh owner-only directory
+    // of this queue's own, never a shared, predictable one another user could plant links in.
+    // Made before any work is submitted, so a refusal leaves nothing to retire.
+    auto scratch = platform::createPrivateTemporaryDirectory("bloom-export-");
+    if (!scratch)
+        throw std::runtime_error("Could not create a private export scratch directory");
+    s.scratch = std::move(*scratch);
     const auto projectFolder = session.displayPath().empty()
                                    ? std::filesystem::path{}
                                    : std::filesystem::absolute(session.displayPath()).parent_path();
@@ -64,9 +73,6 @@ HeadlessExportQueue::HeadlessExportQueue(
         {.userDataDirectory = platform::userDataDirectory(), .initialEncoders = encoders});
     s.presets->refreshEncoders(s.scheduler);
     s.presets->loadUserPresets(s.scheduler);
-    s.scratch = std::filesystem::temp_directory_path() / "bloom-export-scratch";
-    std::error_code error;
-    std::filesystem::create_directories(s.scratch, error);
     s.service = std::make_unique<host::ExportQueueService>(host::ExportQueueServiceDependencies{
         .session = *session.hostSession(),
         .scheduler = s.scheduler,
@@ -106,6 +112,8 @@ HeadlessExportQueue::~HeadlessExportQueue() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     while (!s.retirement->collect())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::error_code ignored;
+    std::filesystem::remove_all(s.scratch, ignored);
 }
 
 host::ExportQueueService& HeadlessExportQueue::service() { return *state_->service; }
