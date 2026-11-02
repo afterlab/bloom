@@ -79,14 +79,16 @@ enum class McpTool : std::uint8_t {
     CompositionActivate = 28,
     Transport = 29,
     ViewerSet = 30,
+    // Brings the Export editor into view and optionally selects a job (#382). Window state only.
+    ExportReveal = 31,
     // Project Settings > Colour (not undoable; marks the project dirty).
-    ProjectSetColorSettings = 31,
+    ProjectSetColorSettings = 32,
     // The runtime telemetry snapshot (#423; docs/architecture/profiler-feed.md). Read-only; holds
     // no session lease.
-    ProfilerSnapshot = 32,
+    ProfilerSnapshot = 33,
 };
 
-inline constexpr std::size_t kMcpToolCount = 33;
+inline constexpr std::size_t kMcpToolCount = 34;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -124,6 +126,7 @@ inline constexpr std::size_t kMcpToolCount = 33;
         "composition.activate",
         "transport",
         "viewer.set",
+        "export.reveal",
         "project.set-color-settings",
         "profiler.snapshot",
     };
@@ -159,7 +162,7 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
 // thread through McpLiveUiPort without a session lease, so it works while a project opens.
 [[nodiscard]] constexpr bool toolUsesLiveUi(const McpTool tool) {
     return static_cast<std::uint8_t>(tool) >= static_cast<std::uint8_t>(McpTool::ProjectSave) &&
-           static_cast<std::uint8_t>(tool) <= static_cast<std::uint8_t>(McpTool::ViewerSet);
+           static_cast<std::uint8_t>(tool) <= static_cast<std::uint8_t>(McpTool::ExportReveal);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -5,7 +5,8 @@
 // same controllers -- ProjectHost for open/save/new/close and colour settings, CompositionSession
 // for the active composition, selection and playhead, PlaybackController for the transport, the
 // WorkspaceHost for revealing editors and the displayed Viewer's own controls for its display
-// settings. Nothing here owns project truth or invents a second path.
+// settings, and the export queue adapter for selecting a job in the Export editor. Nothing here owns
+// project truth or invents a second path.
 //
 // ONE binding, built once in apps/bloom/main.cpp and handed to McpServerServiceDependencies::liveUi
 // through port(). Every member runs on the owner (UI) thread. Session-state members (selection,
@@ -31,6 +32,7 @@ class QTimer;
 namespace bloom::ui {
 
 class CompositionSession;
+class ExportQueueAdapter;
 class MainWindow;
 class RamPreviewController;
 class PlaybackController;
@@ -52,8 +54,11 @@ class McpLiveUiBinding final : public QObject {
     // The RAM Preview the Viewer button and Numpad 0 run, for transport ram-preview. Weak; without
     // one, ram-preview answers Unbound.
     void setRamPreview(RamPreviewController* ramPreview);
+    // The application's one export queue adapter, for export.reveal's job lookup and selection.
+    // Weak; without one, export.reveal answers Unbound.
+    void setExportQueue(ExportQueueAdapter* exportQueue);
 
-    // The seven members, bound to this object (which must outlive the service).
+    // The eight members, bound to this object (which must outlive the service).
     [[nodiscard]] mcp::McpLiveUiPort port();
 
     // The members themselves, public so the port and tests call the same code.
@@ -66,6 +71,7 @@ class McpLiveUiBinding final : public QObject {
     [[nodiscard]] mcp::McpUiResult transport(const mcp::McpTransportRequest& request);
     [[nodiscard]] mcp::McpUiResult setViewer(const mcp::McpViewerRequest& request);
     [[nodiscard]] mcp::McpUiResult setColorSettings(const document::ColorSettings& settings);
+    [[nodiscard]] mcp::McpUiResult revealExport(std::optional<document::ExportJobId> job);
 
   private:
     struct Pending;
@@ -88,6 +94,7 @@ class McpLiveUiBinding final : public QObject {
     PlaybackController& playback_;
     QPointer<MainWindow> window_;
     QPointer<RamPreviewController> ramPreview_;
+    QPointer<ExportQueueAdapter> exportQueue_;
     std::unique_ptr<Pending> pending_;
     QTimer* jobsTimer_ = nullptr;
 };

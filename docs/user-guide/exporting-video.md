@@ -9,6 +9,8 @@ item is on a composition row in Assets, and you can drag
 a composition from Assets onto the list. Bloom adds a job for the composition, reveals the panel
 and selects the new job. A job renders one composition range to one or more outputs, one job at a
 time in queue order, in the background while you keep working.
+An agent connected over [MCP](mcp.md) brings the panel forward the same way only when it calls
+`export.reveal`; its queue edits never reveal the panel on their own.
 
 The panel is laid out like the After Effects Render Queue. At the top, **Current Render** says in
 one line what renders now ("Rendering SC020 · frame 404 of 2156 · 0:28 elapsed · about 2 min

@@ -789,6 +789,7 @@ int main(int argc, char* argv[]) try {
     window.setMcpServer(&mcpAdapter);
     mcpLiveUi.setWindow(&window);
     mcpLiveUi.setRamPreview(&ramPreviewController);
+    mcpLiveUi.setExportQueue(&exportQueueAdapter);
     mcpAdapter.setCompositionNamer([&compositionSession](const std::uint64_t id) {
         const auto* composition = compositionSession.snapshot().project().findComposition(
             bloom::document::CompositionId::fromRaw(id));

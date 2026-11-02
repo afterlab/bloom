@@ -6,6 +6,7 @@
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/export_queue_adapter.hpp>
 #include <bloom/ui/main_window.hpp>
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
@@ -81,6 +82,10 @@ void McpLiveUiBinding::setRamPreview(RamPreviewController* const ramPreview) {
     ramPreview_ = ramPreview;
 }
 
+void McpLiveUiBinding::setExportQueue(ExportQueueAdapter* const exportQueue) {
+    exportQueue_ = exportQueue;
+}
+
 mcp::McpLiveUiPort McpLiveUiBinding::port() {
     return {
         .revealComposition =
@@ -106,6 +111,8 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
         .setViewer = [this](const mcp::McpViewerRequest& request) { return setViewer(request); },
         .setColorSettings =
             [this](const document::ColorSettings& settings) { return setColorSettings(settings); },
+        .revealExport =
+            [this](const std::optional<document::ExportJobId> job) { return revealExport(job); },
     };
 }
 
@@ -349,6 +356,35 @@ mcp::McpUiResult McpLiveUiBinding::setColorSettings(const document::ColorSetting
         break;
     }
     return uiResult(McpUiRefusal::Failed, tr("There is no project to change."));
+}
+
+// ---- export.reveal -----------------------------------------------------------------------------
+
+mcp::McpUiResult McpLiveUiBinding::revealExport(const std::optional<document::ExportJobId> job) {
+    if (!exportQueue_)
+        return uiResult(McpUiRefusal::Unbound, tr("This Bloom window has no export queue."));
+    if (job) {
+        // The queue as the Export editor shows it: saved jobs and the running transient ones.
+        const auto snapshot = exportQueue_->snapshot();
+        const bool queued = snapshot != nullptr &&
+                            std::ranges::any_of(snapshot->jobs, [&](const host::ExportJobView& view) {
+                                return view.id == *job;
+                            });
+        if (!queued)
+            return uiResult(McpUiRefusal::UnknownTarget,
+                            tr("Export job %1 is not in the queue; export.status lists the jobs.")
+                                .arg(job->value()));
+    }
+    // The menus' reveal policy: focus an open Export editor, else take the Timeline's panel, else a
+    // new panel along the bottom.
+    auto* workspace = window_ ? window_->workspaceHost() : nullptr;
+    if (workspace == nullptr || workspace->revealEditor("bloom.export") == nullptr)
+        return uiResult(McpUiRefusal::Failed, tr("The Export panel could not be shown"));
+    if (!job)
+        return uiOk(tr("The Export panel is shown."));
+    // Jobs > Show in Export: the panel (now open) selects the job; its reveal finds it in view.
+    exportQueue_->showJob(*job);
+    return uiOk(tr("The Export panel shows job %1.").arg(job->value()));
 }
 
 // ---- project lifecycle -------------------------------------------------------------------------

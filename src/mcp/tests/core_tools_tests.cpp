@@ -184,7 +184,8 @@ void unboundSeams() {
              {"transport", R"({"action":"play"})"},
              {"viewer.set", R"({"zoom":"fit"})"},
              {"project.new", "{}"},
-             {"project.set-color-settings", R"({"config":"aces"})"}}) {
+             {"project.set-color-settings", R"({"config":"aces"})"},
+             {"export.reveal", "{}"}}) {
         const auto result = server.call(tool, arguments);
         expect(contains(result, "bloom.mcp.ui-unbound"), tool + " unbound is typed: " + result);
     }
@@ -251,7 +252,8 @@ void liveSeams() {
             [&](const document::ColorSettings& settings) {
                 colour = settings;
                 return mcp::McpUiResult{};
-            }};
+            },
+        .revealExport = {}};
     Live server(std::move(port));
 
     // One time contract: an integer is a whole frame at the composition's rate (24 fps), and
@@ -315,6 +317,64 @@ void liveSeams() {
            "Bloom Neutral reads back lin_rec709_scene labelled Linear Rec.709 (sRGB): " + result);
     result = server.call("events", R"({"sinceRevision":0})");
     expect(contains(result, R"("kind":"project.saved")"), "events list project.saved: " + result);
+}
+
+// export.reveal (#382): listed read-only, live-only, and a plain pass-through to the port, which
+// owns the queue lookup and the refusals.
+void exportReveal() {
+    {
+        Headless stdio;
+        const auto listed = stdio.send(R"({"jsonrpc":"2.0","id":90,"method":"tools/list"})");
+        const auto at = listed.find(R"("name":"export.reveal")");
+        expect(at != std::string::npos, "tools/list lists export.reveal");
+        const auto entry = listed.substr(at, listed.find(R"({"name":)", at + 1) - at);
+        expect(contains(entry, R"("readOnlyHint":true)") &&
+                   contains(entry, R"("openWorldHint":false)") &&
+                   contains(entry, R"("job":{"type":"integer","minimum":1})"),
+               "export.reveal is read-only with an optional job id: " + entry);
+        // A port bound on stdio would still not be reached: there is no window.
+        bool reached = false;
+        mcp::McpLiveUiPort stdioPort;
+        stdioPort.revealExport = [&](std::optional<document::ExportJobId>) {
+            reached = true;
+            return mcp::McpUiResult{};
+        };
+        Headless bound(std::move(stdioPort));
+        for (auto* server : {&stdio, &bound})
+            for (const auto* arguments : {"{}", R"({"job":3})"}) {
+                const auto result = server->call("export.reveal", arguments);
+                expect(contains(result, "bloom.mcp.not-live") && contains(result, R"("isError":true)"),
+                       "stdio export.reveal answers not-live: " + result);
+            }
+        expect(!reached, "stdio never calls the port");
+    }
+    std::vector<std::optional<document::ExportJobId>> asked;
+    mcp::McpLiveUiPort port;
+    port.revealExport = [&](const std::optional<document::ExportJobId> job) {
+        asked.push_back(job);
+        if (job && job->value() == 9)
+            return mcp::McpUiResult{.refusal = mcp::McpUiRefusal::UnknownTarget,
+                                    .message = "Export job 9 is not in the queue."};
+        return mcp::McpUiResult{};
+    };
+    Live server(std::move(port));
+    const auto before = server.session->snapshot().revision();
+    auto result = server.call("export.reveal", "{}");
+    expect(contains(result, R"("succeeded":true)") && asked.size() == 1 && !asked.back(),
+           "export.reveal without a job reveals the panel only: " + result);
+    result = server.call("export.reveal", R"({"job":4})");
+    expect(contains(result, R"("succeeded":true)") && asked.size() == 2 && asked.back() &&
+               asked.back()->value() == 4,
+           "export.reveal passes the job: " + result);
+    result = server.call("export.reveal", R"({"job":9})");
+    expect(contains(result, "bloom.mcp.unknown-target") && contains(result, "not in the queue"),
+           "the port's UnknownTarget reaches the agent: " + result);
+    result = server.call("export.reveal", R"({"job":0})");
+    expect(contains(result, R"("error")") && asked.size() == 3,
+           "job 0 is an invalid argument and never reaches the port: " + result);
+    result = server.call("export.reveal", R"({"composition":1})");
+    expect(contains(result, R"("error")") && asked.size() == 3, "unknown arguments are refused");
+    expect(server.session->snapshot().revision() == before, "export.reveal never edits the project");
 }
 
 // The id after the first `"job":` of a response.
@@ -571,6 +631,7 @@ int main() {
         profilerSnapshotTool();
         unboundSeams();
         liveSeams();
+        exportReveal();
         retiredTransientJobs();
         animationReadBack();
     } catch (const std::exception& error) {

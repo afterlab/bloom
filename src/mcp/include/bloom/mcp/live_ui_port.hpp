@@ -3,7 +3,8 @@
 // The desktop application's session and UI seams for MCP (ADR 0034, "Owner decisions" item 9):
 // the things an artist does in the application that are not project-truth edits -- opening and
 // saving projects, choosing what is selected and which composition is active, moving the
-// playhead, and the Viewer's display settings -- offered to agents as live-only tools.
+// playhead, the Viewer's display settings and bringing the Export editor into view -- offered to
+// agents as live-only tools.
 //
 // One struct of std::function members so the composition root binds them in one place and a test
 // fakes them as a group. Every member is called on the OWNER thread (the UI thread), marshalled
@@ -222,6 +223,11 @@ struct McpLiveUiPort final {
     // Project Settings > Colour does (not undoable; marks the project dirty). Refuse ReadOnly for a
     // read-only project and Busy while a project is opening.
     std::function<McpUiResult(const document::ColorSettings&)> setColorSettings;
+    // export.reveal: bring the Export editor into view (WorkspaceHost's reveal policy) and, when
+    // given, select the job, as Jobs > Show in Export does. UnknownTarget for a job the queue does
+    // not hold; Failed when the panel could not be shown. Window state only: never changes the
+    // project or its undo history. Export queue edits never call it (an agent reveals explicitly).
+    std::function<McpUiResult(std::optional<document::ExportJobId>)> revealExport;
 };
 
 } // namespace bloom::mcp

@@ -44,6 +44,7 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::CompositionActivate,
     McpTool::Transport,
     McpTool::ViewerSet,
+    McpTool::ExportReveal,
     McpTool::ProjectSetColorSettings,
     McpTool::ProfilerSnapshot,
 };

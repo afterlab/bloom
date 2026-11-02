@@ -197,8 +197,8 @@ struct TransientResult final {
                                           yyjson_val* arguments);
 [[nodiscard]] yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out,
                                                 McpCall& call, McpTool tool, yyjson_val* arguments);
-// project.*, editor.reveal, selection.set, composition.activate, transport and viewer.set
-// (tools_session.cpp). They hold no session lease.
+// project.*, editor.reveal, selection.set, composition.activate, transport, viewer.set and
+// export.reveal (tools_session.cpp). They hold no session lease.
 [[nodiscard]] yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, McpTool tool,
                                           yyjson_val* arguments, const McpRequestControl& control,
                                           std::string& summary);

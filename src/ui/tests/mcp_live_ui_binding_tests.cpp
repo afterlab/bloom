@@ -1,9 +1,9 @@
 // bloom.ui.mcp-live-ui-binding (ADR 0034, "MCP is a UI for agents"): the real McpLiveUiBinding over
 // the real window fixture. Every member of mcp::McpLiveUiPort is called through port(), and the
 // visible state and the typed refusals are asserted: project lifecycle (UnsavedChanges, NoPath,
-// DestinationExists, PathInvalid, JobsRunning, Busy, Failed, stopJobs), reveal, selection in the
-// Timeline, the transport, the Viewer's footer, colour settings, and that no session seam dirties
-// the project. Also the enum-label table: every enum parameter's Properties choices equal the
+// DestinationExists, PathInvalid, JobsRunning, Busy, Failed, stopJobs), reveal, export.reveal,
+// selection in the Timeline, the transport, the Viewer's footer, colour settings, and that no
+// session seam dirties the project. Also the enum-label table: every enum parameter's Properties choices equal the
 // document's one table. Offscreen.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "composition_preview_stage_shared.hpp"
@@ -19,6 +19,7 @@
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/host/testing/fake_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/ui/export_editor.hpp>
 #include <bloom/ui/export_queue_edits.hpp>
 #include <bloom/ui/export_queue_service_port.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -239,8 +240,8 @@ void testBinding() {
     const auto port = binding.port();
     expect(port.revealComposition && port.projectLifecycle && port.setSelection &&
                port.activateComposition && port.transport && port.setViewer &&
-               port.setColorSettings,
-           "all seven members are bound");
+               port.setColorSettings && port.revealExport,
+           "all eight members are bound");
 
     // ---- refusals over an untitled, edited project
     expect(host.isDirty(), "the seeded project has unsaved changes");
@@ -461,6 +462,71 @@ void testBinding() {
         result = runProject(binding,
                             request(mcp::McpProjectRequestKind::SaveAs, shot, false, false, true));
         expect(result.ok() && !host.isDirty(), "saved again");
+    }
+
+    // ---- export.reveal: the Export editor comes forward and selects the job; nothing in the
+    // project or its undo history changes, and a queue edit alone never reveals the panel.
+    {
+        const auto exportEditors = [&] {
+            int shown = 0;
+            for (auto* editor : fixture.window->findChildren<ui::ExportEditor*>())
+                shown += editor->isVisible() ? 1 : 0;
+            return shown;
+        };
+        expect(port.revealExport(std::nullopt).refusal == McpUiRefusal::Unbound,
+               "export.reveal without the export queue -> Unbound");
+        binding.setExportQueue(world.adapter.get());
+        const auto added = world.port->addJobs({session.compositionId()}, std::nullopt);
+        world.adapter->drain();
+        QApplication::processEvents();
+        expect(added.accepted && added.addedJob.has_value(), "an agent-style queue edit adds a job");
+        expect(exportEditors() == 0, "a queue edit alone does not reveal the Export panel");
+        const auto* stack = host.liveDocumentAndStack().second;
+        const auto undoEntries = stack != nullptr ? stack->size() : 0;
+        const auto undoLabel = stack != nullptr ? std::string(stack->undoLabel().value_or(""))
+                                                : std::string{};
+        const auto exportRevision = session.snapshot().revision();
+        const bool dirty = host.isDirty();
+        if (added.addedJob) {
+            const auto job = *added.addedJob;
+            auto revealed = port.revealExport(job);
+            QApplication::processEvents();
+            expect(revealed.ok(), "export.reveal with a queued job succeeds");
+            auto* workspace = fixture.window->workspaceHost();
+            expect(exportEditors() == 1 && workspace->activeArea() != nullptr &&
+                       workspace->activeArea()->editorId() == "bloom.export",
+                   "the Export editor is shown in the active panel");
+            auto* editor = fixture.window->findChild<ui::ExportEditor*>();
+            expect(editor != nullptr && editor->selectedJob() == job, "and the job is selected");
+            expect(fixture.window->findChild<ui::TimelineEditor*>() == nullptr ||
+                       !fixture.window->findChild<ui::TimelineEditor*>()->isVisible(),
+                   "it took the Timeline's panel instead of splitting another");
+            revealed = port.revealExport(std::nullopt);
+            QApplication::processEvents();
+            expect(revealed.ok() && exportEditors() == 1,
+                   "a second reveal focuses the open Export editor without another");
+            revealed = port.revealExport(document::ExportJobId::fromRaw(987654));
+            expect(revealed.refusal == McpUiRefusal::UnknownTarget && !revealed.message.empty(),
+                   "a job the queue does not hold -> UnknownTarget");
+            expect(editor != nullptr && editor->selectedJob() == job,
+                   "an unknown job leaves the selection alone");
+        }
+        stack = host.liveDocumentAndStack().second;
+        expect(stack != nullptr && stack->size() == undoEntries &&
+                   std::string(stack->undoLabel().value_or("")) == undoLabel,
+               "export.reveal adds nothing to the undo history");
+        expect(session.snapshot().revision() == exportRevision && host.isDirty() == dirty,
+               "export.reveal neither edits nor dirties the project");
+        // Put the queue and the workspace back for the lifecycle checks below.
+        if (added.addedJob)
+            (void)world.port->removeJob(*added.addedJob);
+        world.adapter->drain();
+        if (auto* area = fixture.window->workspaceHost()->activeArea();
+            area != nullptr && area->editorId() == "bloom.export")
+            (void)area->setEditorId("bloom.timeline");
+        result = runProject(binding,
+                            request(mcp::McpProjectRequestKind::SaveAs, shot, false, false, true));
+        expect(result.ok() && !host.isDirty(), "saved without the job");
     }
 
     // ---- Busy: a second lifecycle request while one runs

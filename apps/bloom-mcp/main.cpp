@@ -208,7 +208,8 @@ int serve(scripting::Session& session) {
                     .activateComposition = {},
                     .transport = {},
                     .setViewer = {},
-                    .setColorSettings = {}},
+                    .setColorSettings = {},
+                    .revealExport = {}},
              .profilerSnapshot =
                  [&profiler](runtime::ProfilerSnapshot& out) {
                      static_cast<void>(profiler.sampleNow());

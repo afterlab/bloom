@@ -269,7 +269,9 @@ class AgentFeedback(unittest.TestCase):
                                 ('selection.set', {'composition': 1, 'layers': []}),
                                 ('composition.activate', {'composition': 1}),
                                 ('transport', {'action': 'play'}),
-                                ('viewer.set', {'exposure': 1.0})):
+                                ('viewer.set', {'exposure': 1.0}),
+                                ('export.reveal', {}),
+                                ('export.reveal', {'job': 1})):
             result = self.server.call(name, arguments)
             self.assertFalse(result['succeeded'])
             self.assertEqual(result['diagnostic']['code'], 'bloom.mcp.not-live', name)

@@ -74,6 +74,12 @@ static_assert(mcp::toolName(mcp::McpTool::ExportScript) == "export.script");
 static_assert(mcp::toolName(mcp::McpTool::ProjectSaveAs) == "project.save-as");
 static_assert(mcp::toolName(mcp::McpTool::EditorReveal) == "editor.reveal");
 static_assert(mcp::toolName(mcp::McpTool::ViewerSet) == "viewer.set");
+// export.reveal is a window tool: live UI, inline, never a document change.
+static_assert(mcp::toolName(mcp::McpTool::ExportReveal) == "export.reveal");
+static_assert(mcp::toolUsesLiveUi(mcp::McpTool::ExportReveal));
+static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ExportReveal));
+static_assert(mcp::toolExecution(mcp::McpTool::ExportReveal) == mcp::McpToolExecution::Inline);
+static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ProjectSetColorSettings));
 static_assert(mcp::toolUsesLiveUi(mcp::McpTool::ProjectOpen));
 static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ExportScript));
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectOpen));

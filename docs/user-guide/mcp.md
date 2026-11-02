@@ -75,8 +75,8 @@ Clients stay connected when you open or create a project. While a project is ope
 ### Projects and the application window
 
 An agent can save, open, create and close projects as you can from the File menu, and can act on
-the window the way you do: what is selected, which composition is active, the playhead and the
-Viewer. None of these is an undo step. The project tools never throw work away silently: Open,
+the window the way you do: what is selected, which composition is active, the playhead, the
+Viewer and the Export panel. None of these is an undo step. The project tools never throw work away silently: Open,
 New and Close over unsaved changes answer `bloom.mcp.unsaved-changes` (naming the project) unless
 the call passes `discardChanges:true`, and while export jobs run they answer
 `bloom.mcp.jobs-running` unless it passes `stopJobs:true`.
@@ -93,6 +93,7 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 | `composition.activate` | `composition` | The Viewer, Timeline and contextual `composition` follow it. |
 | `transport` | `action` (`seek`, `play`, `stop`, `step-forward`, `step-backward`, `go-to-start`, `go-to-end`, `ram-preview`), `time` for `seek`, optional `composition` | `time` counts in the given composition, or the active one. `ram-preview` caches the work area and then plays it, as the RAM Preview button and Numpad 0 do; `stop` also ends a RAM preview that is still caching. |
 | `viewer.set` | any of `display`, `view`, `exposure` (stops), `channel` (`rgba`, `rgb`, `red`, `green`, `blue`, `alpha`), `zoom` (`"fit"`, `"actual-size"` or a factor, 1.0 is 100%) | Display settings only: they never reach a render or the project. |
+| `export.reveal` | optional `job` | Brings the Export editor into view and, with `job`, selects it, as the Jobs panel's **Show in Export** does. `bloom.mcp.unknown-target` for a job the queue does not hold; `bloom.mcp.failed` when the panel could not be shown. |
 
 A successful project tool answers `{succeeded, event, path, projectName}` and records the event
 (`project.saved`, `project.opened`, `project.created` or `project.closed`) for the `events` tool and
@@ -126,6 +127,10 @@ call goes through the same controllers the window uses, and the window shows it 
   project's default. A value the project does not offer answers `bloom.mcp.invalid-argument` and
   lists the choices. Nothing here reaches a render.
 - **`editor.reveal`** brings the Viewer and Timeline forward on the composition.
+- **`export.reveal`** follows the Export panel's own reveal rule: an open Export editor is focused,
+  otherwise the Timeline's panel becomes Export, and with no Timeline a new panel opens along the
+  bottom. Export queue edits (adding jobs, rendering) never reveal the panel by themselves; an agent
+  calls `export.reveal` when you should see the queue.
 - **`project.set-color-settings`** is Project Settings > Color: not undoable, marks the project
   dirty, `bloom.mcp.busy` while a project opens.
 

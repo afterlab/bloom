@@ -1,7 +1,8 @@
 // The tools that act on the application window rather than the project (live_ui_port.hpp): project
-// lifecycle, editor.reveal, selection, active composition, transport and Viewer settings. They run
-// through McpExportAccess::run on the owner thread and hold no session lease, so project.open works
-// while the old project is being replaced. Session-state tools never dirty the project.
+// lifecycle, editor.reveal, selection, active composition, transport, Viewer settings and
+// export.reveal. They run through McpExportAccess::run on the owner thread and hold no session
+// lease, so project.open works while the old project is being replaced. Session-state tools never
+// dirty the project.
 #include "core_internal.hpp"
 
 #include <algorithm>
@@ -397,6 +398,25 @@ yyjson_mut_val* sessionTool(McpServerCore::State& core, Json& out, const McpTool
         if (!onOwner(core, control, [&] { result = ui.setViewer(request); }))
             cancelled();
         summary = "viewer.set";
+        return uiResult(out, result);
+    }
+    case McpTool::ExportReveal: {
+        members(arguments, {"job"});
+        std::optional<document::ExportJobId> job;
+        if (auto* value = member(arguments, "job")) {
+            const auto id = integer(value);
+            if (id == 0)
+                throw InvalidInput("job must be an export job id (export.status lists them)");
+            job = document::ExportJobId::fromRaw(id);
+        }
+        if (!live)
+            return notLive();
+        if (!ui.revealExport)
+            return unbound();
+        McpUiResult result;
+        if (!onOwner(core, control, [&] { result = ui.revealExport(job); }))
+            cancelled();
+        summary = "export.reveal";
         return uiResult(out, result);
     }
     default:
