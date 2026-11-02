@@ -47,6 +47,7 @@
 #include <QClipboard>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QGuiApplication>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
@@ -1008,6 +1009,20 @@ void saveAsPreset(TestContext& context) {
             dialog->reject();
         }
         rig.port.presets.reset();
+        // The store is written on the blocking-I/O executor: let the write land before shutdown,
+        // which would cancel it if it had not started.
+        const auto written = [&] {
+            for (const auto& entry : QDir(folder.path()).entryInfoList(QDir::Files)) {
+                QFile file(entry.filePath());
+                if (file.open(QIODevice::ReadOnly) && file.readAll().contains("Alpha master"))
+                    return true;
+            }
+            return false;
+        };
+        timer.restart();
+        while (!written() && timer.elapsed() < 20000)
+            QTest::qWait(5);
+        context.expect(written(), "the store file holds the saved preset");
         scheduler.beginShutdown();
         while (!scheduler.isQuiescent())
             QTest::qWait(1);
