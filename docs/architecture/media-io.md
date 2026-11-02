@@ -1924,14 +1924,61 @@ preserves complete frames already published.
 
 ### Immutable tolerance profiles and records
 
-Lossy video uses `DecodedSemanticTolerance`. Its exact UTF-8 profile is:
+Lossy video uses `DecodedSemanticTolerance`. Its exact UTF-8 profile (version 3, issue #424) is:
 
 ```text
-bloom.video-rgba16-srgb.v2;first-last;reference=declared-sampling;absolute-max=22938;mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact
+bloom.video-rgba16-srgb.v3;first-last;reference=declared-sampling;percentile-max=p99.99-per-frame:22938;absolute-max=reported;mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact
 ```
 
-SHA-256: `15e8c88900528492844693ec44fe2261d5a713ec96b4498c1b2ec65c611290d3`.
-The maximum and mean thresholds use unsigned 16-bit sample units. Alpha is checked separately
+SHA-256: `ee48a55241f0028b78fd554f14bee0cc5fa9dcdde8c62a7879db0e6043a38292`.
+The worker binds this one profile to every lossy video codec it encodes: H.264, HEVC, VP9, AV1,
+ProRes and DNxHD/DNxHR. The thresholds use unsigned 16-bit sample units and apply to the first and
+last frames:
+
+- **Percentile maximum (gated, ≤ 22938).** Per frame, the color (R, G, B) sample errors are
+  counted in an exact 65536-bin histogram, one bin per 16-bit error value. The largest
+  `floor(samples / 10000)` errors (at most 0.01% of the frame) are set aside, and the next largest
+  error, the frame's exact 99.99th percentile, must stay within the bound. Nothing is sorted,
+  interpolated or estimated. The cost is one histogram increment per sample, a scan of at most
+  65536 bins per frame, and 256 KiB of counts. A 1280×720 frame has 2,764,800 color samples and
+  sets aside 276. A frame under 10,000 samples sets aside none, so its percentile maximum is its raw
+  maximum.
+- **Mean (gated, ≤ 1967).** The per-frame mean absolute error, rounded up, is unchanged.
+- **Raw maximum (reported, not gated).** The largest single sample error is still measured.
+- **Alpha (gated, absolute).** Alpha keeps its absolute bound and takes no percentile.
+
+The evidence and the export report carry all three numbers: `EncodeQcV1` and `MediaQcEvidenceV1`
+record `maximumError`, `percentileMaximumError` and `meanError`. The export verification's
+`reopenQuality` names the profile version (`bloom.video-rgba16-srgb.v3`) and its digest beside the
+numbers, so a reviewer sees what was set aside. A failed check states all three numbers:
+`Reopened pixels exceed tolerance profile v3 (max=… p99.99max=… mean=…)`. Provider schema 6
+carries the new field.
+
+Why version 3 (issue #424, owner decision 2026-11-02): a 720p H.264 export (the bench project
+"720p H.264 A" trimmed to 2.5 s, and the full-length 720p PNG16 and EXR half projects, exported
+with the software encoder, OpenH264) failed version 2 with a raw maximum of 30734 (PNG16/EXR: 34660)
+against 22938. The means were 599 and 632, and the frames measured about 45 dB PSNR. Only 2 of
+about 2.7 million color samples exceeded the bound, both on the last compared frame at a
+saturated orange edge beside a chroma edge. Rate control did not change the numbers. The hardware
+encoder passed. Under version 3 the same exports publish with every frame on the GPU route,
+software and automatic encoders alike. H.264 A measures a raw maximum of 30734, a percentile
+maximum of 6309 and a mean of 599. The full-length PNG16 and EXR half projects measure raw maxima
+of 34660, percentile maxima of 9555 and 9576, and means of 632 and 631. One absolute maximum over every sample turns two codec samples into a failed
+export, while real damage spreads far beyond 0.01% of a frame and still fails. A corrupted or
+shifted block, 1% of samples off, drift and a wrong matrix, range or siting all still fail. A
+uniformly degraded frame still fails the mean. The bounds themselves are unchanged. This is a
+reviewed tolerance change, so it is a new profile version and a new digest, never a widened
+version 2. Version 2's SHA-256 was
+`15e8c88900528492844693ec44fe2261d5a713ec96b4498c1b2ec65c611290d3`. It gated the absolute maximum
+of every sample (`absolute-max=22938`) with the same reference and mean.
+
+The lossless and exact rules do not change: TIFF compares exactly (`DecodedSemanticExact`), PCM
+and WAV are byte exact, the ProRes 4444 alpha bound stays absolute, and PNG/EXR/TIFF/DPX
+sequences use their own exact reopen verifiers. On macOS the VideoToolbox path records the same
+percentile maximum as evidence. Version 3 does not change that path's existing pixel gate, which
+checks only the ProRes mean.
+
+Alpha is checked separately
 against the reference alpha; TIFF requires exact equality. ProRes 4444 stores alpha losslessly, so
 its 10-bit alpha is rounded to the nearest code by Bloom, not by swscale. Issue #406: swscale's
 16- to 10-bit alpha conversion behaves as if one code were 64 units instead of 65535/1023, so a
@@ -1947,8 +1994,8 @@ Y'CbCr to full-resolution 16-bit Y'CbCr at the declared siting, and the declared
 are applied with clipping (issue #394: swscale's Y'CbCr to RGBA64 path wrapped footroom samples
 beside saturated chroma, so a near-black VA-API H.264 pixel read back as full green). 4:2:0 and 4:2:2 chroma
 decimation is therefore not counted as codec error, so a small saturated feature passes. The
-luma, alpha and every chroma sample the codec kept are still compared, and the bounds are
-unchanged. A real encoding error still fails: corrupted or drifting samples, a sample layout that
+luma, alpha and every chroma sample the codec kept are still compared, and version 2 left the
+bounds unchanged. A real encoding error still fails: corrupted or drifting samples, a sample layout that
 decimates chroma differently from the encoder's input, or a declared matrix, range or siting that
 differs from what the encoder did. Unspecified siting means co-sited left (the H.273 default, and
 what Bloom's reader assumes). An unspecified matrix means BT.709. A Y'CbCr stream that declares a
@@ -1963,15 +2010,17 @@ the bound fails closed. AAC uses the exact profile
 the SHA-256 of the two profile strings concatenated in video-then-audio order. PCM has no tolerance
 digest and uses `ByteExact`; TIFF uses `DecodedSemanticExact`.
 AAC profile SHA-256: `2c4c461185d7d9ba7741afefbc076060b7e55cb9b75e39d15a934eea133c03d8`.
-Combined video/AAC SHA-256: `88e3e40e56e68e465d0250f2e45f26b26959f8ce5ab1f8f723be88bceefd8d7e`.
+Combined video/AAC SHA-256 (v3 video): `17e72e34ef30897fc51fbba101d14a784be8e48a45a54e3c84dbc192a3541a84`
+(with v2 video it was `88e3e40e56e68e465d0250f2e45f26b26959f8ce5ab1f8f723be88bceefd8d7e`).
 
 Wire protocol version 3 adds encode begin, frame/audio acknowledgements, finish/QC and bounded
 artifact chunks. `EncodeSettingsV1` canonical encoding orders container, codec, profile, audio codec,
 dimensions, rational rate, frame/sample counts, sample rate, channels, BWF description, determinism
 and tolerance digest after its versioned domain; version 2 (#369) adds the color tags and the bit
 rate. Execution byte limits are excluded from semantic identity. The 256×128, 48-frame HQ/PCM
-fixture record (video tolerance profile v2) is 166 bytes and independently derives
-`7e8bea8770830d7257eba98ee80d465a1d0106bbc3e06665f8d171d99b1baa2f`.
+fixture record (video tolerance profile v3) is 166 bytes and independently derives
+`6fcfd3e3caf0e2287d6ec7dc63863e17086f3a12f885b4090743dba236c0783f` (under v2 it derived
+`7e8bea8770830d7257eba98ee80d465a1d0106bbc3e06665f8d171d99b1baa2f`).
 
 Media analysis binds the frozen preset byte (4 = ProRes, 5 = DNxHR, 6 = PCM, 7 = H.264 review), settings digest and
 all eleven ordered preservation facets. COLOR-5 binds the chosen display/view identity and look
