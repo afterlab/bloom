@@ -17,6 +17,20 @@ selects the job, through `McpLiveUiPort::revealExport` on the UI thread. It is r
 changes the project or the undo history, and agent queue edits never reveal the panel on their own.
 `bloom-mcp` answers `bloom.mcp.not-live`.
 
+Amendment (2026-11-02, issue #389): MCP parity adds `project.save-copy` (File > Save a Copy, on
+both hosts through `projectLifecycle`, `McpProjectRequestKind::SaveCopy`) and the live-only tools
+`project.cancel-open`, `preferences.get`, `preferences.set`, `cache.purge`, `jobs.list`,
+`jobs.cancel`, `asset.reveal`, `composition.presets`, `composition.save-preset`,
+`composition.rename-preset` and `composition.delete-preset`, each one `McpLiveUiPort` member
+called on the UI thread; `viewer.set` also takes gamma, resolution, look, background, transparency
+grid and region of interest. None of them changes the project or its undo history; `bloom-mcp`
+answers `bloom.mcp.not-live` for the live-only ones. The project edits `bloom.asset.reload`,
+`bloom.layer.set-anchor-preset` and `bloom.cryptomatte.pick` are registry operations that read the
+project source (`OperationContext::source`) when they are created on the request worker, and stop
+with the request (`OperationContext::stop`). Not exposed: panel arrangement and other cosmetic
+layout, Quit, the MCP server's own controls, running Script editor Python, the Help links and the
+launch-time recovery prompt.
+
 ## Context
 
 `apps/bloom-mcp` is a Qt-free MCP 2025-11-25 server on stdio. It opens its own headless session

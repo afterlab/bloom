@@ -76,7 +76,8 @@ Clients stay connected when you open or create a project. While a project is ope
 
 An agent can save, open, create and close projects as you can from the File menu, and can act on
 the window the way you do: what is selected, which composition is active, the playhead, the
-Viewer and the Export panel. None of these is an undo step. The project tools never throw work away silently: Open,
+Viewer, the Export panel, the Jobs panel, Preferences, Edit > Purge and the composition presets.
+None of these is an undo step. The project tools never throw work away silently: Open,
 New and Close over unsaved changes answer `bloom.mcp.unsaved-changes` (naming the project) unless
 the call passes `discardChanges:true`, and while export jobs run they answer
 `bloom.mcp.jobs-running` unless it passes `stopJobs:true`.
@@ -88,20 +89,40 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 | `project.open` | `path`, optional `discardChanges`, `stopJobs` | Replaces the open project. |
 | `project.new` | optional `discardChanges`, `stopJobs` | An untitled project. |
 | `project.close` | optional `discardChanges`, `stopJobs` | The window shows an empty project. |
+| `project.save-copy` | `path` (absolute, `.bloom`), optional `replace` | File > Save a Copy: a byte-for-byte copy of a read-only (newer or preserved) project; the open project stays where it is. An editable project answers `bloom.mcp.invalid-argument` (use `project.save-as`). |
+| `project.cancel-open` | none | File > Cancel Open: abandons the open in progress, yours or an agent's. `bloom.mcp.invalid-argument` when nothing is opening. |
 | `editor.reveal` | `composition`, optional `time` | Shows the composition in the Viewer and moves the playhead. |
-| `selection.set` | `composition`, optional `layers`, `nodes`, `mode` (`set`, `add`, `remove`, `clear`) | Contextual `layer`, `layers` and `selection` arguments then default to it. |
+| `selection.set` | `composition`, optional `layers`, `nodes`, `mode` (`set`, `add`, `remove`, `clear`, or the Select menus' `all-layers`, `all-nodes`, `invert-layers`, `invert-nodes`, `linked-upstream`, `linked-downstream`) | Contextual `layer`, `layers` and `selection` arguments then default to it. Invert works on the active composition's selection; the linked modes extend from `nodes`, or from the selected nodes, through links and driver bindings. |
 | `composition.activate` | `composition` | The Viewer, Timeline and contextual `composition` follow it. |
 | `transport` | `action` (`seek`, `play`, `stop`, `step-forward`, `step-backward`, `go-to-start`, `go-to-end`, `ram-preview`), `time` for `seek`, optional `composition` | `time` counts in the given composition, or the active one. `ram-preview` caches the work area and then plays it, as the RAM Preview button and Numpad 0 do; `stop` also ends a RAM preview that is still caching. |
-| `viewer.set` | any of `display`, `view`, `exposure` (stops), `channel` (`rgba`, `rgb`, `red`, `green`, `blue`, `alpha`), `zoom` (`"fit"`, `"actual-size"` or a factor, 1.0 is 100%) | Display settings only: they never reach a render or the project. |
+| `viewer.set` | any of `display`, `view`, `exposure` (stops), `gamma` (1.0 is neutral), `channel` (`rgba`, `rgb`, `red`, `green`, `blue`, `alpha`), `zoom` (`"fit"`, `"actual-size"` or a factor, 1.0 is 100%), `resolution` (`auto`, `full`, `half`, `quarter`), `look` (true or false), `background` (`solid`, `gray`, `black`, `white`), `transparencyGrid` (true or false), `regionOfInterest` (`{x, y, width, height}` in composition pixels, or `null` to clear it) | Display settings only: they never reach a render or the project. |
 | `export.reveal` | optional `job` | Brings the Export editor into view and, with `job`, selects it, as the Jobs panel's **Show in Export** does. `bloom.mcp.unknown-target` for a job the queue does not hold; `bloom.mcp.failed` when the panel could not be shown. |
+| `jobs.list` | none | The Jobs panel's rows: `{id, name, phase, state, completed, total, canCancel, cancellationRequested, exportJob}`. An export run's row names its `exportJob`. |
+| `jobs.cancel` | `job` | The Jobs panel's **Cancel**. `bloom.mcp.unknown-target` for a job it does not list; `bloom.mcp.invalid-argument` for a job it cannot cancel (an export run: use `export.stop`). |
+| `preferences.get` | none | Every preference below with its current value, as `{key: value}`. |
+| `preferences.set` | `preferences`: `{key: value, ...}` (1 to 64) | Edit > Preferences' **OK**: every entry is checked first, then all are saved and applied together. An unknown key or a value out of range answers `bloom.mcp.invalid-argument` naming the key and changes nothing; `bloom.mcp.busy` while a dialog is open. |
+| `cache.purge` | `cache` (`preview` or `media`) | Edit > Purge: derived caches only; the project, its revision and undo are untouched. `bloom.mcp.busy` while a purge runs. |
+| `asset.reveal` | `asset` | Reveal in File Manager. `bloom.mcp.invalid-argument` for an asset without a file. |
+| `composition.presets` | none | The Composition Settings presets: the built-in sizes, then your saved presets with `frameRate`, `duration`, `startTimecode`, `dropFrame` and `background`. Apply one with `bloom.composition.set-settings`. |
+| `composition.save-preset` | `composition`, `name` | **Save as preset**: the composition's size, pixel aspect, frame rate, duration, start timecode, drop-frame and background. `bloom.mcp.invalid-argument` for an empty or used name. |
+| `composition.rename-preset` | `name`, `newName` | **Rename preset**, for a saved preset. `bloom.mcp.unknown-target` when no saved preset has that name. |
+| `composition.delete-preset` | `name` | **Delete preset**. Presets are saved for you, not in the project, so Undo cannot restore one. |
 
 A successful project tool answers `{succeeded, event, path, projectName}` and records the event
-(`project.saved`, `project.opened`, `project.created` or `project.closed`) for the `events` tool and
-the MCP Server editor's activity list. The window tools work only with the in-app server:
-`bloom-mcp` implements the five project tools on its own session and answers `bloom.mcp.not-live`
-for the others. A window tool the application has not connected answers `bloom.mcp.ui-unbound`.
+(`project.saved`, `project.opened`, `project.created`, `project.closed` or `project.copy-saved`)
+for the `events` tool and the MCP Server editor's activity list. The window tools work only with
+the in-app server: `bloom-mcp` implements `project.save`, `project.save-as`, `project.open`,
+`project.new`, `project.close` and `project.save-copy` on its own session and answers
+`bloom.mcp.not-live` for the others. A window tool the application has not connected answers `bloom.mcp.ui-unbound`.
 Other refusals are `bloom.mcp.unknown-target`, `bloom.mcp.invalid-argument`, `bloom.mcp.busy` and
 `bloom.mcp.failed`, each with a message that says what to do.
+
+Some of what you do in the window has no tool, on purpose: arranging panels (split, close,
+maximize, Reset Workspace, full screen, the toolbar), zooming and scrolling editors other than the
+Viewer, and the Viewer's guide overlays except through `preferences.set`; quitting Bloom;
+starting, stopping or configuring the MCP server and its token; running Python in the Script
+editor (use `transact`); the Help menu's links; and the recovery question Bloom asks at launch
+after a crash.
 
 #### Acting in the open app
 
@@ -133,9 +154,25 @@ call goes through the same controllers the window uses, and the window shows it 
   calls `export.reveal` when you should see the queue.
 - **`project.set-color-settings`** is Project Settings > Color: not undoable, marks the project
   dirty, `bloom.mcp.busy` while a project opens.
+- **`preferences.set`** is the Preferences window without the window: the open editors take the new
+  values at once and the settings are saved for you, never in the project. The keys are
+  `audioPlayback`, `loopPlayback`, `ramHeadroomBytes` and `vramHeadroomBytes` (0 to 256 GiB),
+  `mediaDiskCache`, `mediaDiskCacheDirectory` (absolute, or empty for the default),
+  `mediaDiskCacheBudgetBytes` (0 for the default), `timelineTimeFormat` (`frames` or `timecode`),
+  `timelineSnapping`, `timelineKeyframesVisible`, `timelineGraphEditor`, `nodeLinkStyle` (`spline`,
+  `straight`, `angled`), `nodeSnap`, `nodeGridSize` (pixels), `viewerResolution` (`auto`, `full`,
+  `half`, `quarter`), `viewerBackground` (`solid`, `gray`, `black`, `white`),
+  `viewerTransparencyGrid`, `viewerSafeAreas`, `viewerCenterCross`, `viewerThirds`, `viewerRulers`,
+  `viewerPixelGrid`, `importSequenceFrameRate` (`"24"`, `"24000/1001"`, or empty for one image per
+  composition frame), `importStillDuration` (seconds, `"5"` or `"1001/240"`, or empty for the
+  composition's length), `sounds`, `soundVolume` (0 to 100), `eventSounds`, `interactionSounds`
+  and `renderNotifications`.
+- **`jobs.list`** and **`jobs.cancel`** read and cancel what the Jobs panel shows: imports, previews,
+  thumbnails, purges and export runs.
 
-Selection, the active composition, the playhead and the Viewer's settings are session state: they
-never mark the project as changed and never enter the undo history. An edit that leaves a
+Selection, the active composition, the playhead, the Viewer's settings, preferences, cache purges,
+jobs and composition presets are session or per-user state: they never mark the project as changed
+and never enter the undo history. An edit that leaves a
 composition unable to render also appears in the MCP Server editor's activity list as a red line
 ("left 'Main' unable to render: ...") and in `transact`'s `compileFailures`.
 
@@ -230,6 +267,30 @@ arrive as `bloom.scripting.operation-warning` diagnostics; when no layer can mov
 fails with the reasons. See [Scripting Bloom with Python](python.md#align-and-distribute) for the
 arguments.
 
+Three more edits read the project when the operation is created, on the server and never on the
+window's thread, and stop when the request is cancelled (`bloom.scripting.cancelled`):
+
+- `bloom.asset.reload` (`asset`) is the Assets panel's **Reload Footage**: it probes the asset's own
+  file again the way it was imported and updates its size, duration and digest in one undo step.
+  A font answers that it reloads from the system catalogue; a missing file is refused with the
+  probe's reason (`bloom.asset.relink` points the asset at another file).
+- `bloom.layer.set-anchor-preset` (`layer` contextual, `anchor` one of `top-left`, `top`,
+  `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, `bottom-right`, `time`
+  contextual) is the anchor grid in Properties > Transform: it measures the layer's evaluated local
+  bounds at `time` and moves the anchor point to that point of them. An animated anchor gets a key
+  at the layer's own key time. A locked layer, a driven anchor or a layer with no visible bounds at
+  the time is refused.
+- `bloom.cryptomatte.pick` (`node`, `point` `[x, y]` in composition pixels as `capture` shows them,
+  optional `mode` `add` or `remove`, `time` contextual) is the Viewer's Cryptomatte eyedropper: it
+  maps the point through the layer that shows the node, reads the object with the most coverage
+  there and adds it to (or removes it from) the node's matte list by its manifest name, or its raw
+  ID without a manifest. A point outside the layer or over no object answers "No object under the
+  point". To choose mattes by name, set the node's `mattes` text with
+  `bloom.node.set-parameter-value`.
+
+A client that cannot read the project (no session) gets `bloom.scripting.source-unavailable` from
+these three.
+
 ## Edits and diagnostics
 
 **Times.** Every time argument follows one contract, in `transact`, `editor.reveal`, `transport`,
@@ -270,8 +331,8 @@ composition compiles.
 
 **Events.** Besides command events (`kind` `revision`, `history` or `rejected`), `events` reports
 `{kind, revision, message, composition?, subject?, path?, projectName?, sequence}` records for
-`composition.compile-failed`, `project.saved`, `project.opened`, `project.created` and
-`project.closed`.
+`composition.compile-failed`, `project.saved`, `project.opened`, `project.created`,
+`project.closed` and `project.copy-saved`.
 
 For a large parameter set, start with `{"kind":"parameters","composition":1,"pageSize":64}`.
 Repeat with its `nextCursor` until it is `null`. Each page includes `revision` and `totalRecords`;
