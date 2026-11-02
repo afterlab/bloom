@@ -2,6 +2,7 @@
 
 #include "gpu_shader_compiler_process.hpp"
 
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 
 #include <algorithm>
@@ -166,19 +167,13 @@ class TempDirectory final {
     std::filesystem::path path_;
 };
 
+// The shader tools read and write files here by name, so the directory is a fresh owner-only one
+// with an unpredictable name, never a guessable or shared path.
 std::optional<TempDirectory> makeTempDirectory() {
-    std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error);
-    if (error)
+    auto path = platform::createPrivateTemporaryDirectory("bloom-gpu-shader-");
+    if (!path)
         return std::nullopt;
-    const auto seed = Clock::now().time_since_epoch().count();
-    for (int attempt = 0; attempt < 128; ++attempt) {
-        auto candidate =
-            base / ("bloom-gpu-shader-" + std::to_string(seed) + "-" + std::to_string(attempt));
-        if (std::filesystem::create_directory(candidate, error) && !error)
-            return TempDirectory(std::move(candidate));
-    }
-    return std::nullopt;
+    return TempDirectory(std::move(*path));
 }
 
 std::string hex(const core::Sha256Digest& digest) {
