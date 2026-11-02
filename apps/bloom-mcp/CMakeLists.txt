@@ -22,7 +22,9 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
         COMMAND "${Python3_EXECUTABLE}" -I
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/mcp_protocol.py"
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli>
-        LABELS scripting mcp integration)
+        LABELS scripting mcp integration
+        # Measured 21-25 s alone: 13 cases each start bloom-mcp, which enumerates the GPU (~1.2 s).
+        TIMEOUT 120)
     # Defects an agent found live-testing the MCP server, each pinned at the protocol level.
     bloom_add_test(NAME bloom.mcp.agent-feedback
         COMMAND "${Python3_EXECUTABLE}" -I
