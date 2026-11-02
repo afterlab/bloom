@@ -1421,6 +1421,111 @@ void detailsDialog(TestContext& context) {
     QApplication::processEvents();
 }
 
+// Details shows a movie's reopen measurements (issue #424) under its File opens line, and nothing
+// for an output without them; the tolerance digest goes only into Copy details.
+void reopenQualityRows(TestContext& context) {
+    constexpr std::string_view digest =
+        "ee48a55241f0028b78fd554f14bee0cc5fa9dcdde8c62a7879db0e6043a38292";
+    Rig rig;
+    rig.publish([&](host::ExportQueueSnapshot& snapshot) {
+        const auto published = [](host::ExportOutputView output) {
+            output.state = host::ExportOutputState::Published;
+            host::ExportOutputVerification verification;
+            verification.output = output.id;
+            verification.overall = host::ExportCheckOutcome::Passed;
+            verification.checks.push_back({.check = host::ExportCheck::Reopen,
+                                           .outcome = host::ExportCheckOutcome::Passed,
+                                           .code = "export.check.reopen.pass"});
+            verification.checks.push_back({.check = host::ExportCheck::FrameCount,
+                                           .outcome = host::ExportCheckOutcome::Passed,
+                                           .code = "export.check.frame-count.match"});
+            verification.artifacts.publishedArtifacts = 1;
+            output.verification = verification;
+            return output;
+        };
+        auto movie = makeJob(
+            1, "Shot 010", rig.composition(),
+            {published(makeOutput(11)),
+             published(makeOutput(12, "builtin:exr-sequence", document::ExportFormat::OpenExr,
+                                  "renders/out.####.exr"))});
+        movie.state = host::ExportJobState::Done;
+        movie.run = host::ExportRunLink{.run = 1};
+        movie.outputs[0].verification->reopenQuality = host::ExportReopenQuality{
+            .toleranceProfile = "bloom.video-rgba16-srgb.v3",
+            .toleranceDigest = *core::Sha256Digest::fromLowercaseHex(digest),
+            .maximumError = 30734,
+            .percentileMaximumError = 6309,
+            .meanError = 599};
+        auto sequence = makeJob(
+            2, "Shot 020", rig.composition(),
+            {published(makeOutput(21, "builtin:exr-sequence", document::ExportFormat::OpenExr,
+                                  "renders/out.####.exr"))});
+        sequence.state = host::ExportJobState::Done;
+        sequence.run = host::ExportRunLink{.run = 2};
+        snapshot.jobs = {movie, sequence};
+    });
+    auto* dialog = rig.editor->openDetails(J(1));
+    QApplication::processEvents();
+    context.expect(dialog != nullptr, "Details opens for a finished movie");
+    if (dialog == nullptr)
+        return;
+    const auto lines = dialog->lineTexts();
+    qsizetype opens = -1;
+    int quality = 0;
+    for (qsizetype index = 0; index < lines.size(); ++index) {
+        if (opens < 0 && lines[index].endsWith("File opens"))
+            opens = index;
+        quality += lines[index].contains("Pixels differ") || lines[index].contains("Largest single")
+                       ? 1
+                       : 0;
+    }
+    context.expect(quality == 3,
+                   "only the output with reopen measurements shows them, in three lines");
+    context.expect(
+        opens >= 0 && opens + 3 < lines.size() &&
+            lines[opens + 1].endsWith("Pixels differ by 599 on average") &&
+            lines[opens + 2].endsWith(
+                "Pixels differ by at most 6309, setting aside the top 0.01%") &&
+            lines[opens + 3].endsWith("Largest single difference is 30734 (not checked)"),
+        "the average, the judged maximum and the raw maximum follow File opens");
+    bool profileInToolTip = false;
+    QStringList shown;
+    for (auto* label :
+         dialog->findChildren<kit::KLabel*>(QStringLiteral("exportVerificationLine"))) {
+        shown.push_back(label->text() + '\n' + label->toolTip());
+        profileInToolTip |= label->text().contains("on average") &&
+                            label->toolTip().contains("bloom.video-rgba16-srgb.v3") &&
+                            label->toolTip().contains("0 to 65535");
+    }
+    context.expect(profileInToolTip, "the tolerance profile and the scale are in the tooltip");
+    const auto all = shown.join('\n');
+    context.expect(!all.contains("sha256") &&
+                       !all.contains(QString::fromLatin1(digest.data(), digest.size())) &&
+                       !all.contains("Error"),
+                   "no digest or field name in view");
+    const auto details = dialog->detailsText();
+    context.expect(
+        details.contains("toleranceProfile=bloom.video-rgba16-srgb.v3") &&
+            details.contains(QStringLiteral("toleranceDigest=sha256:%1")
+                                 .arg(QString::fromLatin1(digest.data(), digest.size()))) &&
+            details.contains("maximumError=30734 percentileMaximumError=6309 meanError=599"),
+        "Copy details carries the profile, its digest and the numbers");
+    dialog->close();
+
+    auto* plain = rig.editor->openDetails(J(2));
+    QApplication::processEvents();
+    context.expect(plain != nullptr, "Details opens for a finished sequence");
+    if (plain == nullptr)
+        return;
+    const auto sequenceLines = plain->lineTexts().join('\n');
+    context.expect(sequenceLines.contains("File opens") &&
+                       !sequenceLines.contains("Pixels differ") &&
+                       !sequenceLines.contains("Largest single") &&
+                       !plain->detailsText().contains("reopenQuality"),
+                   "an output without reopen measurements shows no such lines");
+    plain->close();
+}
+
 void noRawCodes(TestContext& context) {
     Rig rig;
     rig.publish([&](host::ExportQueueSnapshot& snapshot) {
@@ -1580,6 +1685,7 @@ int main(int argc, char** argv) {
     startedAndRenderTime(context);
     detailsDialog(context);
     noRawCodes(context);
+    reopenQualityRows(context);
     narrowAndWide(context);
     addJobsIsOneUndo(context);
     jobsLink(context);

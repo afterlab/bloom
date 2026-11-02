@@ -1,9 +1,11 @@
 // Real-widget captures of the Export panel (a compositor's render queue layout) from hand-built
 // snapshots, at three panel widths: the empty list, three queued jobs with one open on two outputs,
 // a rendering job, a failed job, and the Render Settings, Output Module (ProRes and OpenEXR, and
-// Save as preset with its name prompt) and replace dialogs over the panel. Writes PNGs named <state>-<width>-<dpr>.png to the directory given
+// Save as preset with its name prompt), replace and Details (with reopen measurements) dialogs over
+// the panel. Writes PNGs named <state>-<width>-<dpr>.png to the directory given
 // as the first argument (or BLOOM_GRAMMAR_ARTIFACT_DIR) and prints their names.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "export_job_details.hpp"
 #include "export_job_lines.hpp"
 #include "export_output_module_dialog.hpp"
 #include "export_render_list.hpp"
@@ -284,5 +286,43 @@ int main(int argc, char** argv) {
     shot("replace", prompt);
     if (prompt != nullptr)
         prompt->reject();
+
+    // Details of a finished ProRes movie (issue #424): the reopen measurements under File opens.
+    publish([&](host::ExportQueueSnapshot& s) {
+        queued(s);
+        auto& done = s.jobs[1];
+        done.state = host::ExportJobState::Done;
+        done.run = host::ExportRunLink{.run = 3};
+        done.progress.elapsed = std::chrono::milliseconds(151000);
+        auto& output = done.outputs[0];
+        output.state = host::ExportOutputState::Published;
+        host::ExportOutputVerification verification;
+        verification.output = output.id;
+        verification.overall = host::ExportCheckOutcome::Passed;
+        for (const auto check : {host::ExportCheck::Reopen, host::ExportCheck::FrameCount,
+                                 host::ExportCheck::ColourTags})
+            verification.checks.push_back(
+                {.check = check, .outcome = host::ExportCheckOutcome::Passed});
+        verification.artifacts = {.publishedArtifacts = 1,
+                                  .firstPath = output.destination.firstPath,
+                                  .lastPath = output.destination.firstPath,
+                                  .totalBytes = 1'790'000'000};
+        verification.provenance.gpuFrames = 2156;
+        verification.provenance.encoder = "ffmpeg-prores";
+        verification.reopenQuality =
+            host::ExportReopenQuality{.toleranceProfile = "bloom.video-rgba16-srgb.v3",
+                                      .maximumError = 30734,
+                                      .percentileMaximumError = 6309,
+                                      .meanError = 599};
+        output.verification = verification;
+    });
+    open(1, false);
+    auto* details = editor->openDetails(document::ExportJobId::fromRaw(2));
+    QTest::qWait(60);
+    if (details == nullptr)
+        ++failures;
+    shot("details-reopen-quality", details);
+    if (details != nullptr)
+        details->close();
     return failures == 0 ? 0 : 1;
 }

@@ -244,7 +244,10 @@ the verbs that fit the state (Start; Pause and Stop; Resume and Stop; Stop; Rend
 **Details…**, Duplicate, Remove, Move up, Move down, Copy as bloom-cli command and Copy as Python.
 **Details…** (`exportJobDetailsDialog`) holds the result sentence, the plain verification lines, a
 Show in folder per saved output and the log, with **Copy details** for bug reports; raw codes and
-the host's own wording appear only in what Copy details copies.
+the host's own wording appear only in what Copy details copies. An output whose verification
+carries reopen measurements adds three Muted lines under File opens (the mean, the maximum after
+the top 0.01% is set aside, and the unchecked raw maximum, in 16-bit units) with the tolerance
+profile in their tooltip; its digest appears only in Copy details. Outputs without them add none.
 
 ## Status bar, toolbar and tools
 

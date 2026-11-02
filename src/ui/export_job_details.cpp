@@ -93,6 +93,26 @@ struct Line final {
     const auto add = [&](QString text, const StatusTone tone, QString toolTip = {}) {
         lines.push_back({prefix + text, tone, std::move(toolTip)});
     };
+    // A movie's reopen measurements (issue #424), under the file-opens line: the average and the
+    // largest difference the check judges, then the largest single one it reports without judging.
+    bool qualityShown = !verification.reopenQuality.has_value();
+    const auto addQuality = [&] {
+        if (qualityShown)
+            return;
+        qualityShown = true;
+        const auto& quality = *verification.reopenQuality;
+        const auto toolTip =
+            tr("How far the reopened movie is from the render, on a scale of 0 to 65535 per "
+               "color sample. Tolerance profile: %1")
+                .arg(qs(quality.toleranceProfile));
+        add(tr("Pixels differ by %1 on average").arg(quality.meanError), StatusTone::Neutral,
+            toolTip);
+        add(tr("Pixels differ by at most %1, setting aside the top 0.01%")
+                .arg(quality.percentileMaximumError),
+            StatusTone::Neutral, toolTip);
+        add(tr("Largest single difference is %1 (not checked)").arg(quality.maximumError),
+            StatusTone::Neutral, toolTip);
+    };
     const auto& settings = output.record.settings;
     for (const auto& check : verification.checks) {
         switch (check.outcome) {
@@ -100,9 +120,10 @@ struct Line final {
         case host::ExportCheckOutcome::NotRun:
             continue;
         case host::ExportCheckOutcome::Passed:
-            if (check.check == host::ExportCheck::Reopen)
+            if (check.check == host::ExportCheck::Reopen) {
                 add(tr("File opens"), StatusTone::Neutral);
-            else if (check.check == host::ExportCheck::FrameCount)
+                addQuality();
+            } else if (check.check == host::ExportCheck::FrameCount)
                 add(tr("Right number of frames"), StatusTone::Neutral);
             else if (check.check == host::ExportCheck::ColourTags) {
                 const auto name = !settings.outputColorSpaceId.empty()
@@ -124,10 +145,13 @@ struct Line final {
                 text += tr(" at frame %1").arg(*check.frame);
             add(text, check.outcome == host::ExportCheckOutcome::Failed ? StatusTone::Error
                                                                           : StatusTone::Neutral);
+            if (check.check == host::ExportCheck::Reopen)
+                addQuality();
             break;
         }
         }
     }
+    addQuality();
     const auto& provenance = verification.provenance;
     if (provenance.gpuFrames + provenance.cpuReferenceFrames > 0)
         add(provenance.cpuReferenceFrames == 0 && provenance.cpuDisplayFrames == 0
@@ -141,6 +165,27 @@ struct Line final {
                 .arg(provenance.gpuFrames + provenance.cpuReferenceFrames + provenance.framesReused),
             StatusTone::Neutral);
     return lines;
+}
+
+// The reopen measurements as the host names them, with the tolerance digest, for Copy details only.
+[[nodiscard]] QString reopenDetails(const host::ExportJobView& job) {
+    QStringList parts;
+    for (const auto& output : job.outputs) {
+        if (!output.verification.has_value() || !output.verification->reopenQuality.has_value())
+            continue;
+        const auto& quality = *output.verification->reopenQuality;
+        const auto digest = quality.toleranceDigest.toLowercaseHex();
+        // One multi-argument arg() so a profile name can never be read as a later placeholder.
+        parts.push_back(
+            QStringLiteral("reopenQuality output=%1 toleranceProfile=%2 toleranceDigest=sha256:%3 "
+                           "maximumError=%4 percentileMaximumError=%5 meanError=%6")
+                .arg(QString::number(output.id.value()), qs(quality.toleranceProfile),
+                     QString::fromLatin1(digest.data(), static_cast<qsizetype>(digest.size())),
+                     QString::number(quality.maximumError),
+                     QString::number(quality.percentileMaximumError),
+                     QString::number(quality.meanError)));
+    }
+    return parts.join(QLatin1Char('\n'));
 }
 
 [[nodiscard]] int notesIn(const host::ExportJobView& job) {
@@ -310,6 +355,8 @@ void JobDetailsDialog::refresh() {
     reason_->setVisible(!reason.isEmpty());
     changed_->setVisible(job->recordChangedSinceStart);
     rawDetails_ = failureDetails(*job);
+    if (const auto reopen = reopenDetails(*job); !reopen.isEmpty())
+        rawDetails_ += (rawDetails_.isEmpty() ? QString{} : QStringLiteral("\n")) + reopen;
 
     // Plain lines and one Show in folder row per saved output; rebuilt only when they change.
     std::vector<Line> lines;

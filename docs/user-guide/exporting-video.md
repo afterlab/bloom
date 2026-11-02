@@ -174,6 +174,11 @@ shown as a GPU frame.
 The **File opens** check decodes the movie and compares it with what Bloom rendered, after taking
 the codec's own 4:2:2 or 4:2:0 color sampling into account, so small saturated detail such as thin
 colored text passes while damaged pixels or wrong color tags still fail the export.
+Under **File opens**, a movie's **Details…** show how far the reopened pixels are from the render,
+on a scale of 0 to 65535: the average difference, the largest difference after the top 0.01% of
+each frame's samples are set aside (the two the check judges), and the largest single difference,
+which is reported but not checked. The tooltip names the tolerance profile, and **Copy details**
+adds its digest.
 
 **Add to Assets when done** adds the checked result to Assets (a movie as a video asset,
 a sequence as a sequence, a still as an image, a WAV as audio) with one undoable import. A file
