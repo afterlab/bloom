@@ -215,6 +215,8 @@ revocation rule.
 `src/mcp` owns the one MCP server core (`McpServerCore`: JSON-RPC, handshake, tool schemas, handlers
 and projections) and both transports: `serveStdio` for `bloom-mcp` and `McpServerService`, the
 in-app Streamable HTTP server on `127.0.0.1` (see [Using Bloom from an agent](../user-guide/mcp.md)).
+`serveStdio` returns at end of input or when its stop token fires, also while input is idle; a
+reader still blocked on that input is detached and ends at end of input.
 The core reads and commits through `McpSessionSource`, a typed choice between the headless session
 `bloom-mcp` owns and the desktop's `LiveSessionHost`; on the live host every `tools/call` takes its
 own lease with the request's stop token and the 30-second commit deadline. Contextual arguments

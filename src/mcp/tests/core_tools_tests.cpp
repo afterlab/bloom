@@ -1,6 +1,6 @@
 // The shared MCP core's tool behaviour driven directly through McpServerCore::handle(), without a
 // transport: the export queue's absence, and (live host) the session and UI seams of
-// live_ui_port.hpp.
+// live_ui_port.hpp. One stdio transport check: it stops while its input is idle.
 
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/testing/fake_export_runner.hpp>
@@ -16,12 +16,18 @@
 #include <bloom/scripting/session.hpp>
 
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
+#include <stop_token>
+#include <streambuf>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -893,6 +899,61 @@ void profilerSnapshotTool() {
     scheduler.beginShutdown();
 }
 
+// Input that never arrives: a read blocks until released, then reports end of input.
+class IdleInput final : public std::streambuf {
+  public:
+    bool waitUntilBlocked(const std::chrono::seconds timeout) {
+        std::unique_lock lock(mutex_);
+        return changed_.wait_for(lock, timeout, [&] { return blocked_; });
+    }
+    void release() {
+        {
+            const std::lock_guard lock(mutex_);
+            released_ = true;
+        }
+        changed_.notify_all();
+    }
+
+  protected:
+    int_type underflow() override {
+        std::unique_lock lock(mutex_);
+        blocked_ = true;
+        changed_.notify_all();
+        changed_.wait(lock, [&] { return released_; });
+        return traits_type::eof();
+    }
+
+  private:
+    std::mutex mutex_;
+    std::condition_variable changed_;
+    bool blocked_ = false;
+    bool released_ = false;
+};
+
+// The stdio transport returns when its stop token fires while stdin is idle, instead of waiting
+// for the next line.
+void stdioStopsWhileInputIdle() {
+    Headless world;
+    // Static: a reader left blocked on idle input outlives serveStdio() and ends when released.
+    static IdleInput idle;
+    static std::istream input(&idle);
+    std::ostringstream output;
+    std::stop_source stop;
+    std::promise<void> done;
+    auto returned = done.get_future();
+    std::thread serving([&] {
+        mcp::serveStdio(*world.core, input, output, stop.get_token());
+        done.set_value();
+    });
+    expect(idle.waitUntilBlocked(std::chrono::seconds(10)), "the reader waits on idle input");
+    stop.request_stop();
+    const bool stopped = returned.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+    expect(stopped, "stdio stops while input is idle");
+    idle.release(); // Ends the reader; without the fix this is also what lets serveStdio return.
+    serving.join();
+    expect(output.str().empty(), "nothing was answered without a request");
+}
+
 int main() {
     try {
         exportWithoutQueue();
@@ -903,6 +964,7 @@ int main() {
         retiredTransientJobs();
         animationReadBack();
         parityTools();
+        stdioStopsWhileInputIdle();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

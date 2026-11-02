@@ -262,7 +262,9 @@ class McpServerCore final {
 
 // The stdio transport (newline-delimited UTF-8 JSON-RPC on the given streams), moved unchanged from
 // apps/bloom-mcp: a bounded reader thread, the 16-message inbox, cancellation intercepted while a
-// call runs, one protocol session. Returns at end of input or when `stop` fires.
+// call runs, one protocol session. Returns at end of input or when `stop` fires, including while
+// input is idle; the request being handled finishes first. A reader still blocked on idle input
+// is then left to end at end of input, so `input` must outlive it (std::cin does).
 void serveStdio(McpServerCore& core, std::istream& input, std::ostream& output,
                 const std::stop_token& stop);
 
