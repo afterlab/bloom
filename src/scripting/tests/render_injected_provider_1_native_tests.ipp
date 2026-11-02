@@ -464,3 +464,102 @@ GpuProofOutcome testNativeSequenceRangeProvenanceAndParity(Expectations& expecta
     }
     return GpuProofOutcome::Ran;
 }
+
+// Issue #433. The composition Background Color is Viewer presentation only
+// (docs/ux/ui-grammar.md, "Viewer canvas and empty state"): no render route composites it, so a
+// still keeps alpha exactly like a video or sequence export. A still rendered after setting a
+// non-black, opaque background must decode to the same pixels as one rendered with the default
+// background, keep exact zero alpha (and zero colour) where nothing covers the frame, and match
+// between the CPU reference and the GPU route. Without a device the CPU half still runs;
+// --require-device makes the GPU half mandatory.
+void testStillKeepsAlphaOverNonBlackBackground(Expectations& expectations,
+                                               const bool requireDevice) {
+    // A 64x32 frame with a 64x32 solid centred at (16, 16): the right-hand quarter is uncovered.
+    auto session = buildSolidSession(expectations, 64, 32);
+    if (session == nullptr) {
+        return;
+    }
+    TempDirectory directory;
+    expectations.expect(directory.isValid(), "still background: temp directory is available");
+    if (!directory.isValid()) {
+        return;
+    }
+    runtime::TaskScheduler scheduler;
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compositionId = session->snapshot().project().compositions().front().id();
+    const auto renderStill = [&](const std::shared_ptr<host::GpuExportProvider>& provider,
+                                 const std::string& name) {
+        const auto path = directory.path() / name;
+        const auto result =
+            scripting::Render::run(*session, scheduler, compiler,
+                                   {.composition = compositionId,
+                                    .frame = 0,
+                                    .range = std::nullopt,
+                                    .preset = bloom::output::OutputPresetV1::PngRgba8SrgbV1,
+                                    .destination = path},
+                                   {}, provider);
+        expectations.expect(result.succeeded,
+                            "still background: " + name + " publishes: " + result.diagnostic);
+        return std::pair{result, independentlyDecodePng(path)};
+    };
+
+    auto cpuProvider = host::GpuExportProvider::create(disabledOptions());
+    cpuProvider->prepare(scheduler);
+    const auto [cpuDefaultResult, cpuDefault] = renderStill(cpuProvider, "cpu-default.png");
+    commands::Transaction setBackground("Set background", session->snapshot().revision());
+    setBackground.emplace<commands::SetCompositionBackgroundColor>(
+        compositionId, core::Color4d{0.9, 0.3, 0.1, 1.0});
+    expectations.expect(session->execute(std::move(setBackground)).succeeded(),
+                        "still background: the background colour is set");
+    const auto [cpuResult, cpuImage] = renderStill(cpuProvider, "cpu-background.png");
+    expectations.expect(cpuResult.gpuEvaluatedFrames == 0,
+                        "still background: the disabled provider is an honest CPU reference");
+    expectations.expect(cpuDefault.ok && cpuImage.ok && cpuDefault.width == 64 &&
+                            cpuDefault.height == 32 && cpuDefault.rgba == cpuImage.rgba,
+                        "still background: the background colour never reaches still pixels");
+    std::size_t transparent = 0;
+    bool transparentIsZero = true;
+    for (std::size_t index = 0; index + 3 < cpuImage.rgba.size(); index += 4) {
+        if (cpuImage.rgba[index + 3] != 0) {
+            continue;
+        }
+        ++transparent;
+        transparentIsZero = transparentIsZero && cpuImage.rgba[index] == 0 &&
+                            cpuImage.rgba[index + 1] == 0 && cpuImage.rgba[index + 2] == 0;
+    }
+    expectations.expect(transparent > 0 && transparentIsZero,
+                        "still background: uncovered pixels keep exact zero alpha and colour");
+    expectations.expect(cpuProvider->shutdownAndWait(std::chrono::seconds(10)),
+                        "still background: the CPU reference provider retires");
+
+    const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
+    if (loader == nullptr || *loader == '\0') {
+        expectations.expect(!requireDevice,
+                            "still background: --require-device needs BLOOM_TEST_VULKAN_LOADER");
+        std::cout << "NOTE: BLOOM_TEST_VULKAN_LOADER unset; still background GPU half not run\n";
+        return;
+    }
+    auto provider = host::GpuExportProvider::create(optionsFor(loader));
+    provider->prepare(scheduler);
+    const auto bootstrapDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (!provider->prepared() && std::chrono::steady_clock::now() < bootstrapDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!provider->deviceAvailable() || !provider->gpuDisplayPreparationAvailable()) {
+        expectations.expect(!requireDevice,
+                            "still background: a qualified device and display route are required");
+        std::cout << "NOTE: no qualified Vulkan device; still background GPU half not run\n";
+        expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
+                            "still background: the unused provider retires");
+        return;
+    }
+    const auto [gpuResult, gpuImage] = renderStill(provider, "gpu-background.png");
+    expectations.expect(gpuResult.gpuEvaluatedFrames == 1 && gpuResult.gpuNativeDispatches > 0 &&
+                            gpuResult.gpuReadbacks == 1,
+                        "still background: the GPU still is genuinely evaluated on the device");
+    expectations.expect(pngsMatch(gpuImage, cpuImage),
+                        "still background: GPU and CPU stills match within one code with exact "
+                        "alpha");
+    expectations.expect(provider->shutdownAndWait(std::chrono::seconds(10)),
+                        "still background: the GPU provider retires");
+}

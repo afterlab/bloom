@@ -16,6 +16,7 @@
 #include "gpu_route_proof_export_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/color.hpp>
@@ -101,6 +102,9 @@ int main(int argc, char** argv) {
         }
         testInjectedProviderIsReusedAndNotRetired(expectations);
         testMissingProcessingRootIsRefused(expectations);
+        if (proofRoute == "both") {
+            testStillKeepsAlphaOverNonBlackBackground(expectations, requireDevice);
+        }
         if (proofRoute != "sequence") {
             headlessOutcome =
                 testNativeHeadlessRenderProvenanceAndParity(expectations, requireDevice, proofDir);
