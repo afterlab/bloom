@@ -2,8 +2,8 @@
 #   -DCODEC_PREFIX=<install prefix> -DCODEC_LIBRARY=<name> -DCODEC_PKGCONFIG=<pc name>
 #   -DCODEC_PRIVATE_LIBS=<extra Libs.private, space separated> -DCODEC_WINDOWS=<ON|OFF>
 # It appends the runtime libraries a static archive needs to the pkg-config record FFmpeg reads,
-# gives MSVC's FFmpeg link the `<name>.lib` spelling it expects, and refuses a shared artifact so
-# the codec stays inside libavcodec.
+# gives MSVC's FFmpeg link the `<name>.lib` spelling it expects (from lib<name>.a or
+# lib<name>.lib), and refuses a shared artifact so the codec stays inside libavcodec.
 foreach(required CODEC_PREFIX CODEC_LIBRARY CODEC_PKGCONFIG)
     if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
         message(FATAL_ERROR "codec-static-install.cmake requires ${required}")
@@ -43,9 +43,16 @@ if(CODEC_PRIVATE_LIBS)
 endif()
 
 if(CODEC_WINDOWS)
-    if(EXISTS "${CODEC_PREFIX}/lib/lib${CODEC_LIBRARY}.a")
-        file(COPY_FILE "${CODEC_PREFIX}/lib/lib${CODEC_LIBRARY}.a"
-            "${CODEC_PREFIX}/lib/${CODEC_LIBRARY}.lib")
+    # FFmpeg's MSVC toolchain turns -l<name> into <name>.lib. A codec may install lib<name>.a
+    # (MinGW-style naming) or lib<name>.lib (MSVC with OUTPUT_NAME lib<name>, as Kvazaar does).
+    if(NOT EXISTS "${CODEC_PREFIX}/lib/${CODEC_LIBRARY}.lib")
+        foreach(codec_candidate lib${CODEC_LIBRARY}.a lib${CODEC_LIBRARY}.lib)
+            if(EXISTS "${CODEC_PREFIX}/lib/${codec_candidate}")
+                file(COPY_FILE "${CODEC_PREFIX}/lib/${codec_candidate}"
+                    "${CODEC_PREFIX}/lib/${CODEC_LIBRARY}.lib")
+                break()
+            endif()
+        endforeach()
     endif()
     set(codec_shared "${CODEC_PREFIX}/bin/${CODEC_LIBRARY}*.dll")
 else()
