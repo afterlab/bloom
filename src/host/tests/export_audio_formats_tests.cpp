@@ -3,7 +3,8 @@
 // family, PCM containers keep 24 bits for a deeper source, and a source the export audio path
 // cannot decode is refused by the source-aware audio preflight before anything renders, with a
 // sentence naming the stage and the input. Issue #424: a failed run keeps its frames' route
-// provenance instead of counting every frame as CPU reference.
+// provenance instead of counting every frame as CPU reference. Issue #450: a 5.1 source exports
+// to stereo through the ITU-R BS.775 downmix instead of losing every channel past the second.
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/layer_drop_operations.hpp>
@@ -25,6 +26,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -33,7 +35,9 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -63,18 +67,21 @@ document::Snapshot currentSnapshot(const host::ProjectSession& session) {
     return decoded.snapshot();
 }
 
-// The WAV encodings the tests write: integer PCM, IEEE float, and IMA ADPCM (which the import
-// decoder reads but the bundled FFmpeg build has no decoder for).
-enum class WavEncoding { Pcm16, Pcm24, Float32, ImaAdpcm };
+// The WAV encodings the tests write: integer PCM, IEEE float, IMA ADPCM (which the import
+// decoder reads but the bundled FFmpeg build has no decoder for), and WAVE_FORMAT_EXTENSIBLE
+// float 5.1 (FL FR FC LFE BL BR) holding the constants in kSurroundLevels.
+enum class WavEncoding { Pcm16, Pcm24, Float32, ImaAdpcm, Surround51 };
+constexpr std::array<float, 6> kSurroundLevels{0.1F, 0.2F, 0.3F, 0.4F, 0.05F, 0.15F};
 
 void put(std::vector<char>& out, const std::uint64_t value, const int bytes) {
     for (int i = 0; i < bytes; ++i)
         out.push_back(static_cast<char>((value >> (8 * i)) & 0xFFU));
 }
 
-// One second of a 440 Hz stereo tone at 48 kHz.
+// One second of a 440 Hz stereo tone at 48 kHz, or of constant 5.1 levels for Surround51.
 std::filesystem::path writeWav(const std::filesystem::path& path, const WavEncoding encoding) {
-    constexpr std::uint32_t rate = 48000, channels = 2;
+    constexpr std::uint32_t rate = 48000;
+    const std::uint32_t channels = encoding == WavEncoding::Surround51 ? 6 : 2;
     std::vector<char> data;
     std::uint16_t format = 1, bits = 16, blockAlign = 4;
     std::vector<char> extra;
@@ -82,9 +89,24 @@ std::filesystem::path writeWav(const std::filesystem::path& path, const WavEncod
         // 256-byte blocks of 505 frames; a zeroed block header and zero nibbles are valid.
         format = 0x11;
         bits = 4;
-        blockAlign = 256 * channels;
+        blockAlign = static_cast<std::uint16_t>(256 * channels);
         put(extra, 505, 2);
         data.assign(static_cast<std::size_t>(blockAlign) * 96, '\0');
+    } else if (encoding == WavEncoding::Surround51) {
+        format = 0xFFFE;
+        bits = 32;
+        blockAlign = static_cast<std::uint16_t>(channels * 4);
+        put(extra, 32, 2);   // valid bits
+        put(extra, 0x3F, 4); // FL FR FC LFE BL BR
+        for (const auto byte : {0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00,
+                                0xAA, 0x00, 0x38, 0x9B, 0x71}) // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+            extra.push_back(static_cast<char>(byte));
+        for (std::uint32_t frame = 0; frame < rate; ++frame)
+            for (const auto level : kSurroundLevels) {
+                std::uint32_t raw = 0;
+                std::memcpy(&raw, &level, sizeof raw);
+                put(data, raw, 4);
+            }
     } else {
         format = encoding == WavEncoding::Float32 ? 3 : 1;
         bits = encoding == WavEncoding::Pcm16 ? 16 : encoding == WavEncoding::Pcm24 ? 24 : 32;
@@ -324,6 +346,68 @@ std::string audioCodecOf(const std::filesystem::path& path) {
 bool published(const std::optional<host::ExportJobView>& view) {
     return view &&
            (view->state == ExportJobState::Done || view->state == ExportJobState::DoneWithWarnings);
+}
+
+// The channel count and one frame of a published 24-bit PCM WAV, read from its chunks.
+std::pair<unsigned, std::vector<double>> wavFrame(const std::filesystem::path& path,
+                                                  const std::size_t frame) {
+    std::ifstream in(path, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto u = [&](const std::size_t at, const unsigned count) {
+        std::uint64_t value = 0;
+        for (unsigned i = 0; i < count; ++i)
+            value |= std::uint64_t{static_cast<unsigned char>(bytes[at + i])} << (8U * i);
+        return value;
+    };
+    unsigned channels = 0, bits = 0;
+    for (std::size_t at = 12; at + 8 <= bytes.size();) {
+        const auto id = bytes.substr(at, 4);
+        const auto size = static_cast<std::size_t>(u(at + 4, 4));
+        if (id == "fmt " && at + 24 <= bytes.size()) {
+            channels = static_cast<unsigned>(u(at + 10, 2));
+            bits = static_cast<unsigned>(u(at + 22, 2));
+        } else if (id == "data" && channels != 0 && bits == 24) {
+            const auto first = at + 8 + frame * channels * 3;
+            if (first + channels * 3 > bytes.size())
+                return {channels, {}};
+            std::vector<double> samples;
+            for (unsigned c = 0; c < channels; ++c) {
+                auto raw = static_cast<std::int32_t>(u(first + c * 3, 3) << 8) >> 8;
+                samples.push_back(static_cast<double>(raw) / 8388608.0);
+            }
+            return {channels, samples};
+        }
+        at += 8 + size + (size & 1U);
+    }
+    return {channels, {}};
+}
+
+// #450: the export mix downmixes a 5.1 source to its stereo output with ITU-R BS.775 levels
+// (centre and surrounds at -3 dB, LFE dropped), the same mix the playback engine applies.
+void testSurroundSourceDownmixesToStereo() {
+    Fixture f("surround", WavEncoding::Surround51);
+    document::ExportOutputSettings settings;
+    settings.format = ExportFormat::Wav;
+    settings.codecProfile = "s24";
+    settings.includeAudio = true;
+    const std::string file = "Exports/surround.wav";
+    const auto finished = f.run(f.addJob(settings, file), "5.1 source");
+    if (finished && finished->failure)
+        std::cerr << "  5.1 source: " << finished->failure->reason << '\n';
+    expect(published(finished), "5.1 source: exports and publishes");
+    constexpr double h = 0.70710678118654752440;
+    const auto v = [](const std::size_t channel) {
+        return static_cast<double>(kSurroundLevels[channel]);
+    };
+    const double left = v(0) + h * v(2) + h * v(4);
+    const double right = v(1) + h * v(2) + h * v(5);
+    const auto [channels, samples] = wavFrame(f.folder / file, 24000);
+    expect(channels == 2 && samples.size() == 2, "5.1 source: the export is a stereo WAV");
+    if (samples.size() == 2)
+        expect(std::abs(samples[0] - left) < 1e-4 && std::abs(samples[1] - right) < 1e-4,
+               "5.1 source: stereo carries the BS.775 downmix (got " + std::to_string(samples[0]) +
+                   ", " + std::to_string(samples[1]) + "; expected " + std::to_string(left) + ", " +
+                   std::to_string(right) + ")");
 }
 
 struct Preset {
@@ -591,6 +675,7 @@ int main() {
     try {
         testSourceFormatsAcrossPresets();
         testUndecodableSourceIsRefusedBeforeRendering();
+        testSurroundSourceDownmixesToStereo();
         testFailedRunKeepsFrameProvenance();
         testCompileFailureNamesItsSubject();
     } catch (const std::exception& error) {
