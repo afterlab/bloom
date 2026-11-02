@@ -40,6 +40,21 @@ struct SampleKey final {
     friend bool operator==(const SampleKey&, const SampleKey&) = default;
 };
 
+// What an audio-source sample was taken for: the document revision and the folder relative paths
+// resolve against.
+struct AudioSampleKey final {
+    std::uint64_t revision = 0;
+    std::filesystem::path baseDirectory;
+    friend bool operator==(const AudioSampleKey&, const AudioSampleKey&) = default;
+};
+
+// The newest answer for a composition. It stays shown while a newer sample is in flight, so an
+// edit never makes the refusal flicker.
+struct AudioVerdict final {
+    std::optional<AudioSampleKey> key;
+    std::optional<std::string> refusal;
+};
+
 struct OutputRuntime final {
     ExportOutputState state = ExportOutputState::Pending;
     std::optional<ExportOutputVerification> verification;
@@ -97,6 +112,12 @@ struct JobRuntime final {
 // probes and user-preset store, which outlive any one service.
 [[nodiscard]] std::uint64_t allocateExportOwnerId() noexcept;
 
+struct PendingAudioSample final {
+    document::CompositionId composition;
+    AudioSampleKey key;
+    runtime::TaskHandle<std::shared_ptr<const ExportAudioSourceSample>> handle;
+};
+
 struct PendingSample final {
     ExportOutputId output;
     SampleKey key;
@@ -144,6 +165,9 @@ struct ExportQueueService::State {
     std::map<ExportOutputId, detail::DestinationSample> samples;
     std::map<ExportOutputId, detail::SampleKey> sampleKeys;
     std::vector<detail::PendingSample> pendingSamples;
+    // Source-aware audio facts per composition (#435), sampled on a worker.
+    std::map<document::CompositionId, detail::AudioVerdict> audioVerdicts;
+    std::vector<detail::PendingAudioSample> pendingAudio;
     std::map<ExportOutputId, core::Sha256Digest> confirmations;
     // Fingerprints of destinations this session itself published, per output.
     std::map<ExportOutputId, core::Sha256Digest> ownPublications;
@@ -167,6 +191,13 @@ namespace detail {
     runtime::TaskScheduler& scheduler, const std::shared_ptr<ExportRunBackend>& backend,
     const SampleKey& key, std::optional<runtime::TaskGroupId> group = std::nullopt,
     std::optional<runtime::TaskOwner> owner = std::nullopt, bool forRun = false);
+
+[[nodiscard]] runtime::TaskHandle<std::shared_ptr<const ExportAudioSourceSample>>
+submitAudioSourceSample(runtime::TaskScheduler& scheduler,
+                        const std::shared_ptr<ExportRunBackend>& backend,
+                        const runtime::SnapshotCompiler& compiler, document::Snapshot snapshot,
+                        document::CompositionId composition,
+                        std::filesystem::path baseDirectory, runtime::TaskOwner owner);
 
 // Builds the published snapshot from owner-thread state. Pure apart from reading the catalogue's
 // in-memory snapshot.

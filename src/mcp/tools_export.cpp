@@ -609,6 +609,9 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
         case McpTool::ExportScript:
             members(arguments, {"job", "format"}, {"job"});
             break;
+        case McpTool::ExportPresets:
+            members(arguments, {"job"});
+            break;
         default:
             members(arguments, {});
             break;
@@ -728,16 +731,27 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                 }
                 case McpTool::ExportPresets: {
                     const auto catalogue = queue->presets().snapshot();
+                    // #435: with a job, availability also reflects its composition's sources.
+                    std::optional<std::string> audioRefusal;
+                    if (member(arguments, "job")) {
+                        const auto job = findJob(*queue->snapshot(), jobArgument());
+                        if (!job || job->transient)
+                            throw InvalidInput("Unknown export job");
+                        audioRefusal = job->audioSourceRefusal;
+                    }
                     out.set(result, "revision", out.number(catalogue->revision));
                     auto* presets = out.array();
                     for (const auto& preset : catalogue->presets) {
+                        auto availability = preset.platformAvailability;
+                        if (availability.available)
+                            availability =
+                                host::exportSourceAvailability(preset.settings, audioRefusal);
                         auto* row = out.object();
                         out.set(row, "id", out.text(preset.id));
                         out.set(row, "name", out.text(preset.displayName));
                         out.set(row, "description", out.text(preset.description));
-                        out.set(row, "available",
-                                out.boolean(preset.platformAvailability.available));
-                        out.set(row, "reason", out.text(preset.platformAvailability.reason));
+                        out.set(row, "available", out.boolean(availability.available));
+                        out.set(row, "reason", out.text(availability.reason));
                         Parsed settings(host::exportSettingsToJson(preset.settings));
                         out.set(row, "settings", out.copy(settings.root()));
                         out.append(presets, row);

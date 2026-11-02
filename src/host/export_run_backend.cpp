@@ -1,6 +1,8 @@
 // The production runner seam: ExportJobRunner and the platform destination facts.
 #include <bloom/host/export_job_runner.hpp>
+#include <bloom/output/export_audio_sources.hpp>
 #include <bloom/platform/destination_facts.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
 
 #include <algorithm>
 #include <array>
@@ -70,6 +72,27 @@ class ProductionBackend final : public ExportRunBackend {
         }
         if (sample.existing > 0)
             sample.fingerprint = hasher.finalize();
+        return sample;
+    }
+
+    ExportAudioSourceSample
+    sampleAudioSources(const ExportAudioSourceSampleRequest& request,
+                       const runtime::CancellationToken& cancellation) override {
+        ExportAudioSourceSample sample;
+        if (request.compiler == nullptr)
+            return sample;
+        const auto compiled = request.compiler->compile(
+            {.snapshot = request.snapshot, .compositionId = request.composition}, cancellation);
+        if (compiled.plan == nullptr)
+            return sample;
+        if (output::exportAudioSourcesV1(*compiled.plan).empty())
+            return sample;
+        const auto sources = output::preflightExportAudioSourcesV1(
+            request.snapshot, *compiled.plan, request.assetBaseDirectory,
+            [&] { return cancellation.isCancellationRequested(); });
+        if (const auto* refused = std::get_if<media::provider::Unavailable>(&sources);
+            refused != nullptr && refused->reason != media::provider::Error::Cancelled)
+            sample.refusal = refused->detail;
         return sample;
     }
 };

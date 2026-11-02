@@ -227,11 +227,59 @@ struct Pump final {
         }
     }
 
+    void collectAudioSamples() {
+        for (auto it = s.pendingAudio.begin(); it != s.pendingAudio.end();) {
+            auto result = it->handle.tryTakeResult();
+            if (!result) {
+                ++it;
+                continue;
+            }
+            if (result->state() == runtime::TaskState::Succeeded && result->value() &&
+                *result->value())
+                s.audioVerdicts[it->composition] = {it->key, (*result->value())->refusal};
+            it = s.pendingAudio.erase(it);
+        }
+    }
+
+    // #435: a composition whose job has an output that carries audio is sampled once per document
+    // revision, on a worker, so availability can say before Start that a source is undecodable.
+    void scheduleAudioSamples() {
+        if (s.gestureActive)
+            return;
+        const detail::AudioSampleKey key{s.snapshot->revision().value(),
+                                         s.projectFolder.value_or(std::filesystem::path{})};
+        for (const auto& record : s.snapshot->project().exportJobs()) {
+            if (isRunning(s.jobs[record.id].state) ||
+                std::ranges::none_of(record.outputs, [](const auto& output) {
+                    return output.enabled && exportOutputCarriesAudio(output.settings);
+                }))
+                continue;
+            const auto verdict = s.audioVerdicts.find(record.composition);
+            if (verdict != s.audioVerdicts.end() && verdict->second.key == key)
+                continue;
+            if (std::ranges::any_of(s.pendingAudio, [&](const auto& pending) {
+                    return pending.composition == record.composition;
+                }))
+                continue;
+            auto handle = detail::submitAudioSourceSample(
+                s.dependencies.scheduler, s.dependencies.backend, s.dependencies.compiler,
+                *s.snapshot, record.composition, key.baseDirectory,
+                runtime::TaskOwner{runtime::TaskOwnerKind::Export,
+                                   runtime::TaskOwnerId::fromRaw(s.serviceOwner)});
+            if (handle.isValid())
+                s.pendingAudio.push_back({record.composition, key, std::move(handle)});
+        }
+    }
+
     void scheduleSamples() {
         if (!s.snapshot || s.runner == ExportRunnerState::ShuttingDown)
             return;
-        if (std::exchange(s.refreshRequested, false))
+        if (std::exchange(s.refreshRequested, false)) {
             s.sampleKeys.clear();
+            for (auto& [composition, verdict] : s.audioVerdicts)
+                verdict.key.reset();
+        }
+        scheduleAudioSamples();
         for (const auto& record : s.snapshot->project().exportJobs()) {
             const auto& job = s.jobs[record.id];
             if (isRunning(job.state))
@@ -866,6 +914,7 @@ struct Pump final {
     void run() {
         readSession();
         collectSamples();
+        collectAudioSamples();
         syncJobs();
         advance();
         startNext();
@@ -1276,12 +1325,14 @@ void ExportQueueService::beginShutdown(const ExportStopCause cause) {
     // service submitted outlives it.
     for (auto& pending : s.pendingSamples)
         pending.handle.cancel();
+    for (auto& pending : s.pendingAudio)
+        pending.handle.cancel();
     pump();
 }
 
 bool ExportQueueService::quiescent() const noexcept {
     const auto& s = *state_;
-    if (s.active || !s.pendingSamples.empty())
+    if (s.active || !s.pendingSamples.empty() || !s.pendingAudio.empty())
         return false;
     for (const auto& [id, job] : s.jobs)
         if (job.runner || job.terminalEventPending)

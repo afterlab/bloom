@@ -2,6 +2,7 @@
 
 #include <bloom/host/export_presets.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <thread>
@@ -546,9 +547,23 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
     }
     if (name == "export.presets") {
         const auto catalogue = service_.presets().snapshot();
+        // #435: with a job, availability also reflects its composition's sources.
+        std::optional<std::string> audioRefusal;
+        if (const auto id = integerArgument(arguments, "job")) {
+            const auto snapshot = service_.snapshot();
+            const auto found = std::ranges::find_if(snapshot->jobs, [&](const auto& view) {
+                return view.id == document::ExportJobId::fromRaw(*id) && !view.transient;
+            });
+            if (found == snapshot->jobs.end())
+                return {false, {}, "bloom.scripting.invalid-argument", "Unknown export job"};
+            audioRefusal = found->audioSourceRefusal;
+        }
         Json json;
         json.begin('[');
-        for (const auto& preset : catalogue->presets)
+        for (const auto& preset : catalogue->presets) {
+            auto availability = preset.platformAvailability;
+            if (availability.available)
+                availability = host::exportSourceAvailability(preset.settings, audioRefusal);
             json.begin('{')
                 .key("id")
                 .string(preset.id)
@@ -557,12 +572,13 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
                 .key("format")
                 .string(document::exportFormatToken(preset.settings.format))
                 .key("available")
-                .boolean(preset.platformAvailability.available)
+                .boolean(availability.available)
                 .key("reason")
-                .string(preset.platformAvailability.reason)
+                .string(availability.reason)
                 .key("settings")
                 .raw(host::exportSettingsToJson(preset.settings))
                 .end('}');
+        }
         json.end(']');
         return {true, json.take(), {}, {}};
     }

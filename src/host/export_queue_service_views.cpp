@@ -127,6 +127,32 @@ submitDestinationSample(runtime::TaskScheduler& scheduler,
     return std::move(submission.handle);
 }
 
+runtime::TaskHandle<std::shared_ptr<const ExportAudioSourceSample>>
+submitAudioSourceSample(runtime::TaskScheduler& scheduler,
+                        const std::shared_ptr<ExportRunBackend>& backend,
+                        const runtime::SnapshotCompiler& compiler, document::Snapshot snapshot,
+                        const document::CompositionId composition,
+                        std::filesystem::path baseDirectory, const runtime::TaskOwner owner) {
+    runtime::TaskRequest request("Check export audio sources", owner,
+                                 runtime::TaskPriority::Foreground,
+                                 runtime::TaskExecutor::BlockingIo);
+    auto submission = scheduler.submit<std::shared_ptr<const ExportAudioSourceSample>>(
+        std::move(request),
+        [backend, &compiler, snapshot = std::move(snapshot), composition,
+         baseDirectory = std::move(baseDirectory)](runtime::TaskContext& context) {
+            using Result = runtime::TaskResult<std::shared_ptr<const ExportAudioSourceSample>>;
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            auto sample = backend->sampleAudioSources(
+                {snapshot, composition, baseDirectory, &compiler}, context.cancellation());
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            return Result::succeeded(
+                std::make_shared<const ExportAudioSourceSample>(std::move(sample)));
+        });
+    return std::move(submission.handle);
+}
+
 std::optional<std::uint64_t> estimateBytes(const document::ExportOutputSettings& settings,
                                            const document::Composition& composition,
                                            const ExportResolvedRange& range) {
@@ -197,7 +223,11 @@ preflightFor(const ExportQueueService::State& state, const document::ExportJob& 
         return issues;
     for (const auto& issue : destination.issues)
         issues.push_back(issue);
-    if (!availability.available)
+    if (!availability.available &&
+        availability.code == ExportAvailabilityCode::AudioSourceUnsupported)
+        blocking(ExportPreflightCode::AudioSourceUnsupported, ExportPreflightTarget::Audio,
+                 availability.reason);
+    else if (!availability.available)
         blocking(ExportPreflightCode::PresetUnavailable,
                  availability.code == ExportAvailabilityCode::RequiresAcesConfig ||
                          availability.code == ExportAvailabilityCode::ConfigRevisionUnpinned ||
@@ -344,6 +374,9 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
             refuseStart(no(ExportUnavailableCode::CompositionMissing,
                            "The job's composition no longer exists"));
         view.preflight = jobPreflightFor(state, record);
+        if (const auto verdict = state.audioVerdicts.find(record.composition);
+            verdict != state.audioVerdicts.end())
+            view.audioSourceRefusal = verdict->second.refusal;
         if (!view.resolvedRange)
             refuseStart(no(ExportUnavailableCode::PreflightBlocked,
                            "The range lies outside the composition"));
@@ -370,6 +403,14 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
                 exportPlatformAvailability(output.settings, catalogue->encoders);
             if (outputView.availability)
                 outputView.availability = exportProjectAvailability(output.settings, colour);
+            if (outputView.availability) {
+                // #435: the composition's sources, sampled on a worker; the last answer stays
+                // until a newer one arrives.
+                const auto verdict = state.audioVerdicts.find(record.composition);
+                if (verdict != state.audioVerdicts.end())
+                    outputView.availability =
+                        exportSourceAvailability(output.settings, verdict->second.refusal);
+            }
             if (composition && view.resolvedRange)
                 outputView.estimatedBytes =
                     estimateBytes(output.settings, *composition, *view.resolvedRange);
@@ -494,7 +535,7 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
             << view.recordChangedSinceStart << '|' << (view.failure ? view.failure->reason : "")
             << '|' << (view.resolvedRange ? view.resolvedRange->last : 0) << '|'
             << view.progress.remaining.value_or(std::chrono::milliseconds(-1)).count() << '|'
-            << snapshot->catalogueRevision;
+            << snapshot->catalogueRevision << '|' << (view.audioSourceRefusal ? 1 : 0);
         for (const auto& issue : view.preflight)
             key << ',' << static_cast<int>(issue.code) << static_cast<int>(issue.severity);
         for (const auto& output : view.outputs) {

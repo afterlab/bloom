@@ -453,6 +453,19 @@ ExportAvailability exportProjectAvailability(const document::ExportOutputSetting
     return available();
 }
 
+bool exportOutputCarriesAudio(const document::ExportOutputSettings& settings) noexcept {
+    if (settings.format == document::ExportFormat::Wav)
+        return true;
+    return !document::isImageExportFormat(settings.format) && settings.includeAudio;
+}
+
+ExportAvailability exportSourceAvailability(const document::ExportOutputSettings& settings,
+                                            const std::optional<std::string>& audioSourceRefusal) {
+    if (audioSourceRefusal && exportOutputCarriesAudio(settings))
+        return unavailable(ExportAvailabilityCode::AudioSourceUnsupported, *audioSourceRefusal);
+    return available();
+}
+
 struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
     ExportPresetCatalogueOptions options;
     std::vector<BuiltIn> builtIns = makeBuiltIns();

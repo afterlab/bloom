@@ -64,6 +64,9 @@ enum class ExportAvailabilityCode : std::uint8_t {
     ConfigRevisionUnpinned = 9,
     // Project-dependent: an output colour space or display/view does not exist in the config.
     ColourNameMissing = 10,
+    // Source-dependent (#435): the composition mixes an audio source the export audio path cannot
+    // decode, so an output that carries audio is refused. The same output without audio is fine.
+    AudioSourceUnsupported = 11,
 };
 
 // An action the UI can offer next to the reason. The engine never shows it; it only names it.
@@ -266,6 +269,15 @@ exportPlatformAvailability(const document::ExportOutputSettings& settings,
 [[nodiscard]] ExportAvailability
 exportProjectAvailability(const document::ExportOutputSettings& settings,
                           const document::ColorSettings& project);
+// True when an output with `settings` writes an audio track: WAV always, a movie format when
+// Include audio is on, an image format never.
+[[nodiscard]] bool exportOutputCarriesAudio(const document::ExportOutputSettings& settings) noexcept;
+// Source-dependent availability (#435): `audioSourceRefusal` is the sentence the source-aware audio
+// preflight gave for the composition's sources (absent when every source is accepted or not yet
+// known). Only an output that carries audio is refused.
+[[nodiscard]] ExportAvailability
+exportSourceAvailability(const document::ExportOutputSettings& settings,
+                         const std::optional<std::string>& audioSourceRefusal);
 // The document 1.29 `settings` object and a whole output ({"preset", "settings", "destination",
 // "enabled", "importIntoAssets"}) as compact JSON, for scripting, MCP and "copy as command".
 // Parsing validates the record; the parsed output has no id (the add operation allocates it).

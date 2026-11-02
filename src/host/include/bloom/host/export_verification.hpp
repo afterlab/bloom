@@ -206,6 +206,9 @@ enum class ExportPreflightCode : std::uint8_t {
     DuplicateTarget = 9,          // two enabled outputs write the same file
     DestinationCheckPending = 10, // the worker has not sampled this destination yet
     NoEnabledOutputs = 11,        // every output of the job is disabled (target Job)
+    // The composition mixes an audio source the export audio path cannot decode and this output
+    // carries audio (target Audio). Sampled on a worker, never on the caller's thread (#435).
+    AudioSourceUnsupported = 12,
 };
 
 // Which part of the job or output an issue is about, so the panel can mark the right field.

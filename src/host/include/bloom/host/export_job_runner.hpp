@@ -6,6 +6,7 @@
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/export_verification.hpp>
+#include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/task_types.hpp>
 
@@ -163,6 +164,22 @@ struct ExportDestinationSample final {
     std::optional<std::uint64_t> freeBytes;
 };
 
+// One worker sample of a composition's audio sources (#435): the same source-aware check the run's
+// compile stage applies, taken ahead of Start so availability can show it.
+struct ExportAudioSourceSampleRequest final {
+    document::Snapshot snapshot;
+    document::CompositionId composition;
+    std::filesystem::path assetBaseDirectory;
+    const runtime::SnapshotCompiler* compiler = nullptr;
+};
+
+struct ExportAudioSourceSample final {
+    // The refusal sentence ("Audio asset 4 (adpcm_ima_wav) is not accepted by the export audio
+    // path."); absent when every source the mix reads is accepted. A composition that does not
+    // compile has no audio facts: the run reports that failure itself.
+    std::optional<std::string> refusal;
+};
+
 // What the service uses to run jobs and sample destinations.
 class ExportRunBackend {
   public:
@@ -176,6 +193,12 @@ class ExportRunBackend {
     // Blocking-I/O worker thread only.
     [[nodiscard]] virtual ExportDestinationSample
     sampleDestination(const ExportDestinationSampleRequest& request) = 0;
+    // Blocking-I/O worker thread only. The default accepts every source (fakes that do not model
+    // audio).
+    [[nodiscard]] virtual ExportAudioSourceSample
+    sampleAudioSources(const ExportAudioSourceSampleRequest&, const runtime::CancellationToken&) {
+        return {};
+    }
 };
 
 // The production backend: ExportJobRunner and the platform destination facts.

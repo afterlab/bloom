@@ -513,6 +513,11 @@ struct ExportJobView final {
     // or its Range (composition missing, range outside the composition, no enabled output). Each
     // output's own issues (destination, naming, encoder, colour) stay on ExportOutputView.
     std::vector<ExportPreflightIssue> preflight;
+    // Source-aware (#435): why the composition's audio cannot be exported, when a worker sample
+    // found a source the export audio path cannot decode. Outputs that carry audio are then
+    // unavailable (ExportOutputView::availability); exportSourceAvailability() applies it to any
+    // preset.
+    std::optional<std::string> audioSourceRefusal;
     std::vector<ExportOutputView> outputs;
     ExportCommandAvailabilitySet commands;
 };

@@ -377,6 +377,8 @@ void testUndecodableSourceIsRefusedBeforeRendering() {
                output::exportAudioPathDecodesV1("pcm_s24le") &&
                output::exportAudioPathDecodesV1("pcm_f32le"),
            "the export audio path decodes PCM and float but not IMA ADPCM");
+    // #435: the queue samples the composition's sources on a worker, so the refusal is on the
+    // outputs and in Start's availability before anything runs.
     for (const auto format : {ExportFormat::ProResMov, ExportFormat::Wav}) {
         document::ExportOutputSettings settings;
         settings.format = format;
@@ -384,30 +386,96 @@ void testUndecodableSourceIsRefusedBeforeRendering() {
         settings.includeAudio = true;
         const auto file =
             std::string("Exports/adpcm.") + (format == ExportFormat::Wav ? "wav" : "mov");
-        const auto finished = f.run(f.addJob(settings, file), "ADPCM " + file);
-        expect(finished && finished->state == ExportJobState::Failed && finished->failure,
-               file + ": an undecodable audio source fails the job");
-        if (!finished || !finished->failure)
+        const auto job = f.addJob(settings, file);
+        const auto refused = [&] {
+            const auto view = f.view(job);
+            return view && view->audioSourceRefusal && !view->outputs.empty() &&
+                   !view->outputs.front().availability.available;
+        };
+        expect(f.pumpUntil(refused, 20), file + ": the worker sample refuses the audio source");
+        const auto view = f.view(job);
+        if (!view || view->outputs.empty())
             continue;
-        const auto& failure = *finished->failure;
-        expect(failure.code == host::ExportFailureCode::PreflightRefused &&
-                   failure.diagnosticCode == "export.preflight.audio-source",
-               file + ": the source-aware audio preflight refuses it");
-        expect(failure.reason == expectedReason,
-               file + ": the refusal names the stage and the input (got \"" + failure.reason +
-                   "\")");
-        expect(failure.reason.find("encoder") == std::string::npos,
-               file + ": the refusal does not blame the encoder");
-        expect(finished->progress.framesCompleted == 0 && !std::filesystem::exists(f.folder / file),
-               file + ": nothing rendered and nothing published");
+        const auto& output = view->outputs.front();
+        expect(view->audioSourceRefusal == expectedReason,
+               file + ": the job names the stage and the input (got \"" +
+                   view->audioSourceRefusal.value_or("") + "\")");
+        expect(output.availability.code == host::ExportAvailabilityCode::AudioSourceUnsupported &&
+                   output.availability.reason == expectedReason,
+               file + ": the output is unavailable for the source");
+        expect(std::ranges::any_of(output.preflight,
+                                   [&](const auto& issue) {
+                                       return issue.code ==
+                                                  host::ExportPreflightCode::
+                                                      AudioSourceUnsupported &&
+                                              issue.target == host::ExportPreflightTarget::Audio &&
+                                              issue.severity ==
+                                                  host::ExportPreflightSeverity::Blocking &&
+                                              issue.reason == expectedReason;
+                                   }),
+               file + ": the panel's preflight shows the reason");
+        const auto start = f.service->canStart(job);
+        expect(!start.available && start.code == host::ExportUnavailableCode::PreflightBlocked &&
+                   start.reason == expectedReason,
+               file + ": Start is refused with the reason before the job runs");
+        const document::ExportJobId ids[] = {job};
+        expect(!f.service->start(ids).accepted && !std::filesystem::exists(f.folder / file),
+               file + ": starting is refused and nothing is written");
+        // Preset availability for the composition (what export.presets reports for the job).
+        expect(!host::exportSourceAvailability(settings, view->audioSourceRefusal).available,
+               file + ": an audio-carrying preset is unavailable for this composition");
     }
-    // Without audio the same composition still exports.
     document::ExportOutputSettings silent;
     silent.format = ExportFormat::ProResMov;
     silent.codecProfile = "hq";
     silent.includeAudio = false;
+    expect(host::exportSourceAvailability(silent, expectedReason).available,
+           "the same preset without audio stays available");
+    // Without audio the same composition still exports.
     const auto finished = f.run(f.addJob(silent, "Exports/silent.mov"), "ADPCM without audio");
     expect(published(finished), "a composition with an undecodable source exports without audio");
+
+    // The run's own source-aware preflight (scripted, CLI and queue-bypassing routes) still
+    // refuses before rendering, naming the stage and the input, and never blames the encoder.
+    const auto snapshot = currentSnapshot(f.session);
+    const auto* composition = snapshot.project().findComposition(f.composition());
+    const auto rate = composition->format().frameRate();
+    const auto duration = composition->duration();
+    host::SequenceExportRequestV1 request{
+        .composition = {snapshot, composition->id()},
+        .range = {.destination = f.folder / "Exports/direct.mov",
+                  .firstFrame = 0,
+                  .lastFrame = static_cast<std::uint64_t>(duration.numerator() * rate.numerator() /
+                                                          (duration.denominator() *
+                                                           rate.denominator())) -
+                               1,
+                  .frameRate = rate,
+                  .duration = duration},
+        .preset = output::OutputPresetV1::ProResMovV1,
+        .profile = "hq",
+        .audio = true,
+        .sampleRate = 48000,
+        .pcmCodec = "pcm_s16le",
+        .bwfDescription = {},
+        .assetBaseDirectory = f.folder,
+        .worker = {}};
+    request.gpuProvider = f.gpu;
+    host::SequenceExportRunnerV1 runner(f.scheduler, f.compiler, f.publications, f.artifacts,
+                                        *f.ledger, std::move(request), *f.retirement, f.ledger);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+    while (!runner.result() && std::chrono::steady_clock::now() < deadline) {
+        runner.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!runner.result())
+        runner.cancel();
+    while (!runner.result())
+        runner.poll();
+    const auto& result = *runner.result();
+    expect(!result.published() && result.failure &&
+               result.failureStage == host::SequenceExportFailureStageV1::AudioSourcePreflight &&
+               result.failure->detail == expectedReason && result.encodedFrames == 0,
+           "the run's preflight refuses the source before rendering");
 }
 
 // #424: a run that fails after encoding frames keeps their route provenance. The artifact limit

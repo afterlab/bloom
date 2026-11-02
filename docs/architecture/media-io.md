@@ -2150,9 +2150,21 @@ encoder.
   import, lacks the selected stream, or whose codec the FFmpeg worker does not declare exactly.
   The refusal names the stage and the input, for example "Audio asset 4 (adpcm_ima_wav) is not
   accepted by the export audio path.", and the job fails with `PreflightRefused` and the diagnostic
-  code `export.preflight.audio-source`. The same composition still exports with audio off. Preset
-  availability stays a property of the computer: presets do not change with the sources of one
-  composition.
+  code `export.preflight.audio-source`. The same composition still exports with audio off.
+- **Source-aware availability (#435).** The queue also runs the same source check ahead of Start,
+  never on the UI thread: for each composition with an enabled audio-carrying output, the export
+  queue service samples the composition's audio sources once per document revision on a
+  blocking-I/O worker (compile, then the source-aware preflight) and keeps the newest answer while
+  a newer sample is in flight. When a source is refused, every output of that composition that
+  carries audio (WAV, or a movie format with Include audio) is unavailable with the preflight's
+  sentence (`ExportAvailabilityCode::AudioSourceUnsupported`); the output shows a blocking
+  `AudioSourceUnsupported` preflight issue (target Audio) in the Export panel, MCP and scripting,
+  and Start is refused with `PreflightBlocked` and the same sentence. `ExportJobView::
+  audioSourceRefusal` carries it, and MCP and scripted `export.presets` take an optional `job` to
+  report each preset's availability for that job's composition (`exportSourceAvailability`). The
+  same outputs without audio stay available. A composition that does not compile has no audio
+  facts; the run reports that failure. The run's own preflight above remains the authority on
+  routes that bypass the queue.
 - **Failure stages.** `SequenceExportResultV1::failureStage` records a failure's stage when it is
   known, and the job reports that stage instead of "The encoder failed": a refused audio source
   (`PreflightRefused`), an audio source that fails to read or decode while the mix renders
