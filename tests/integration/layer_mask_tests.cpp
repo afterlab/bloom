@@ -167,6 +167,16 @@ void modesInvertExpansionFeather() {
     pixels = fixture.pixels();
     expect(near(alphaAt(pixels, 8, 8), 1.0F), "None skips the mask");
 
+    // ADR 0028: a layer whose masks are all None is unmasked, exactly as one with no masks.
+    Fixture skipped;
+    const auto unmasked = skipped.solid({1, 1, 1, 1});
+    skipped.mask(unmasked, rectangle(4, 4, 12, 12), document::LayerMaskMode::None);
+    skipped.mask(unmasked, rectangle(2, 2, 6, 6), document::LayerMaskMode::None);
+    pixels = skipped.pixels();
+    expect(near(alphaAt(pixels, 0, 0), 1.0F) && near(alphaAt(pixels, 8, 8), 1.0F) &&
+               near(alphaAt(pixels, 15, 15), 1.0F) && near(pixels[0].red(), 1.0F),
+           "a layer whose masks are all None is unmasked");
+
     Fixture single;
     const auto only = single.solid({1, 1, 1, 1});
     const auto id = single.mask(only, rectangle(4, 4, 12, 12));

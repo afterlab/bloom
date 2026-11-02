@@ -46,8 +46,11 @@ struct PreparedMask final {
 
 struct PreparedLayerMasks final {
     std::vector<PreparedMask> masks; // None masks are dropped
-    float start = 0.0F;              // accumulation start: 0 or 1
-    std::string identity;            // content identity of every prepared value
+    // Accumulation start: 0 when the first mask that is not None is Add or Difference, otherwise
+    // 1. A stack with no mask left (none authored, or all None) starts and stays at 1, so the
+    // reference itself leaves the layer unmasked (ADR 0028) rather than relying on callers.
+    float start = 1.0F;
+    std::string identity; // content identity of every prepared value
     std::size_t segmentCount = 0;
 };
 
