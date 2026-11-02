@@ -1025,6 +1025,8 @@ class CompilePass final {
     std::size_t valueOutputCount_ = 0;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     std::unordered_set<document::NodeId> emptyImages_;
+    // #436: the Layer Outputs whose audio the mix lowers (collectAudibleLayers()).
+    std::unordered_set<document::NodeId> audibleLayers_;
     // Set Alpha / Multiply Alpha nodes whose optional matte is unconnected, mapped to the empty
     // transparent operation that stands in for it.
     std::unordered_map<document::NodeId, runtime::OperationIndex> unconnectedMattes_;

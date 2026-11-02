@@ -1253,6 +1253,22 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
             return PreflightOutcome::failure(parameterFailure.value_or(diagnostic(
                 EvaluationDiagnosticCode::InvalidPlan, "Invalid nested audio time mapping")));
     }
+    // #436: the audio mix references curves too: a source's animated level and a layer's Time
+    // Remap. An audio-only layer has no image operation, so its remap curve is referenced only
+    // here. The audio mix validates these values when it is evaluated, so they claim no ownership.
+    const auto referenceAudioCurve = [&](const CompiledScalarParameter& parameter) {
+        if (const auto* curve = std::get_if<ScalarCurveIndex>(&parameter.source);
+            curve != nullptr && curve->value() < scalarCurveReferences.size())
+            scalarCurveReferences[curve->value()] = 1;
+    };
+    for (const auto& source : plan->audioMix().sources)
+        referenceAudioCurve(source.level);
+    for (const auto& layer : plan->audioMix().layers)
+        if (layer.time && layer.time->timeRemap)
+            referenceAudioCurve(*layer.time->timeRemap);
+    for (const auto& layer : plan->audioMix().nestedLayers)
+        if (layer.time && layer.time->timeRemap)
+            referenceAudioCurve(*layer.time->timeRemap);
     // The VALUE graph references curves too (task FIX1, item G): a literal Scalar, Vector 2 or
     // Colour node whose authored value is on a curve lowers to a curve index, and its curve is as
     // referenced as any layer parameter's. Counted here, before the unreferenced-curve rule below

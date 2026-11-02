@@ -1298,7 +1298,13 @@ at an older revision while the audio must keep playing. The
 image edge remains independent, so an audio-only Layer occupies a normal stable stack row without
 inventing transparent image pixels. Layer `enabled` is the audio mute state, `solo` is applied by
 the audio mixer with the same composition-wide rule as image layers, and the half-open Layer range
-limits the compiled audio description.
+limits the compiled audio description. The compiler lowers only audible layers into the mix: those
+whose audio reaches Output through the edges the picture consumes (see
+[Render Reachability](#render-reachability)) and whose source is not muted. A disabled, muted or
+solo-excluded layer, a slot of a disabled or muted Merge, and a muted source are silent. A track
+matte source still plays its audio. The curves the mix samples, such as an audio-only layer's Time
+Remap, are compiled for the mix whether or not the picture reaches them
+([animation and time](animation-and-time.md#layer-time)).
 
 The immutable compiled plan carries `CompiledAudioSource`, `CompiledAudioLayer`, and a
 `CompositionAudioMix` beside the image operations. `CpuCompositionEvaluator::evaluateAudioMix()`

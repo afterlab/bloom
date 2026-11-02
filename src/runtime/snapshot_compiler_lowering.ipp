@@ -104,6 +104,14 @@
 
 [[nodiscard]] std::optional<CompiledCurveTables> compileReachableCurves() {
     std::unordered_set<document::AnimationCurveId> reachableCurveIds;
+    const auto addParameterCurve = [&](const document::ParameterId id) {
+        const auto* parameter = findParameter(id);
+        const auto* source = parameter == nullptr
+                                 ? nullptr
+                                 : std::get_if<document::AnimationCurveSource>(&parameter->source);
+        if (source != nullptr)
+            reachableCurveIds.insert(source->curveId);
+    };
     for (const auto* node : reachableNodes_) {
         if (cancelled()) {
             return std::nullopt;
@@ -115,28 +123,25 @@
             if (cancelled()) {
                 return std::nullopt;
             }
-            const auto* parameter = findParameter(binding.parameterId);
-            const auto* source =
-                parameter == nullptr
-                    ? nullptr
-                    : std::get_if<document::AnimationCurveSource>(&parameter->source);
-            if (source != nullptr) {
-                reachableCurveIds.insert(source->curveId);
-            }
+            addParameterCurve(binding.parameterId);
         }
         // ADR 0028: a reachable layer's masks own their parameters outside any node binding.
         if (const auto boundary = layerOutputs_.find(node->id); boundary != layerOutputs_.end())
             for (const auto& mask : boundary->second->masks)
                 for (const auto& [id, schema] : document::layerMaskParameters(mask)) {
                     static_cast<void>(schema);
-                    const auto* parameter = findParameter(id);
-                    const auto* source =
-                        parameter == nullptr
-                            ? nullptr
-                            : std::get_if<document::AnimationCurveSource>(&parameter->source);
-                    if (source != nullptr)
-                        reachableCurveIds.insert(source->curveId);
+                    addParameterCurve(id);
                 }
+    }
+    // #436: the audio mix samples an audible layer's Time Remap whether or not the layer has a
+    // picture. An audio-only Layer Output is an empty image, so the loop above skips it; its remap
+    // is compiled here for the mix. An audible layer's source is reachable and unmuted, so the loop
+    // above already compiled its level.
+    for (const auto layerNodeId : audibleLayers_) {
+        const auto* node = findNode(layerNodeId);
+        if (const auto* binding =
+                node ? findParameterBinding(*node, document::kTimeRemapParameterRole) : nullptr)
+            addParameterCurve(binding->parameterId);
     }
     // Path curves are compiled inline into the mask kernel that samples them (ADR 0028).
     std::erase_if(reachableCurveIds, [&](const document::AnimationCurveId id) {
@@ -262,6 +267,7 @@ lower(const std::vector<document::NodeId>& order) {
             emptyImages_.insert(id);
         }
     }
+    collectAudibleLayers();
     auto curveTables = compileReachableCurves();
     if (!curveTables.has_value()) {
         return {};
@@ -684,6 +690,67 @@ lower(const std::vector<document::NodeId>& order) {
     return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }
 
+[[nodiscard]] bool reachableEdge(const document::EdgeRecord& edge) const {
+    return std::ranges::any_of(reachableEdges_,
+                               [&](const auto* candidate) { return candidate->id == edge.id; });
+}
+
+// The edge into `port` of node `nodeId`, if any.
+[[nodiscard]] const document::EdgeRecord* audioInputEdge(const document::NodeId nodeId,
+                                                         const std::string_view port) const {
+    const auto& edges = composition_->graph().edges();
+    const auto edge = std::ranges::find_if(edges, [&](const auto& candidate) {
+        const auto* input = std::get_if<document::NodeInputRef>(&candidate.destination);
+        return input != nullptr && input->nodeId == nodeId && input->port == port;
+    });
+    return edge == edges.end() ? nullptr : &*edge;
+}
+
+// #436: the audio mix lowers only what is audible. A Layer is audible exactly when its audio
+// reaches Composition Output through the edges the picture consumes -- so a disabled or muted
+// Merge, and a disabled, muted or solo-excluded layer, are silent, as they are absent from the
+// picture -- and its source is not muted. (A track matte source's slot is the one exception: it
+// hides the layer's pixels, not its audio.) Every audible layer and its source are therefore
+// reachable, so the curves and value graph the mix samples are compiled; compileReachableCurves()
+// adds the Time Remap of an audible layer that has no picture.
+void collectAudibleLayers() {
+    audibleLayers_.clear();
+    const auto& graph = composition_->graph();
+    const auto& endpoint = graph.compositionOutput();
+    if (!endpoint.has_value())
+        return;
+    const auto* outputEdge =
+        audioInputEdge(endpoint->nodeId, document::kCompositionOutputAudioInputPort);
+    if (outputEdge == nullptr || !reachableEdge(*outputEdge))
+        return;
+    const auto consider = [&](const document::NodeId layerNodeId) {
+        const auto boundary = layerOutputs_.find(layerNodeId);
+        if (boundary == layerOutputs_.end() || !boundary->second->enabled)
+            return;
+        // A muted Layer Output consumes only its image input, so its audio edge is unreached.
+        const auto* audio = audioInputEdge(layerNodeId, document::kLayerOutputAudioInputPort);
+        if (audio != nullptr && reachableEdge(*audio) && !isMuted(audio->source.nodeId))
+            audibleLayers_.insert(layerNodeId);
+    };
+    const auto feedNodeId = outputEdge->source.nodeId;
+    const auto* stack = graph.merge(feedNodeId);
+    const auto* stackNode = findNode(feedNodeId);
+    if (stack == nullptr || stackNode == nullptr) {
+        consider(feedNodeId);
+        return;
+    }
+    for (const auto& entry : stack->entries()) {
+        const auto edge = std::ranges::find_if(graph.edges(), [&](const auto& candidate) {
+            const auto* input = std::get_if<document::LayerStackInputRef>(&candidate.destination);
+            return input != nullptr && input->stackNodeId == stack->nodeId() &&
+                   input->slotId == entry.slotId &&
+                   input->role == document::kLayerStackAudioInputRole;
+        });
+        if (edge != graph.edges().end() && consumesEdge(*stackNode, *edge, false))
+            consider(edge->source.nodeId);
+    }
+}
+
 [[nodiscard]] std::optional<runtime::CompositionAudioMix> lowerAudioMix() {
     runtime::CompositionAudioMix mix;
     const auto& graph = composition_->graph();
@@ -697,6 +764,9 @@ lower(const std::vector<document::NodeId>& order) {
                input->port == document::kCompositionOutputAudioInputPort;
     });
     if (outputEdge == graph.edges().end())
+        return mix;
+    // #436: a muted Composition Output consumes no audio.
+    if (!reachableEdge(*outputEdge))
         return mix;
     // Lowers one audio source node into `mix.sources`, returning its index.
     const auto appendSource =
@@ -758,10 +828,10 @@ lower(const std::vector<document::NodeId>& order) {
             addTopologyFailure(layerNodeId, "Validated audio layer topology could not be lowered.");
             return false;
         }
-        // #431: a disabled or muted layer is silent, as its picture is absent. It is outside the
-        // reachable set, so its Time Remap and level curves are not compiled and its timing must
-        // not be lowered; it contributes nothing to the mix.
-        if (!boundary->enabled || isMuted(boundary->nodeId))
+        // #431, #436: a layer that is not audible (collectAudibleLayers()) contributes nothing to
+        // the mix. A disabled, muted or solo-excluded layer may be outside the reachable set, so
+        // its Time Remap and level curves are not compiled and its timing must not be lowered.
+        if (!audibleLayers_.contains(layerNodeId))
             return true;
         const auto layerAudioEdgeIterator =
             std::ranges::find_if(graph.edges(), [&](const auto& edge) {
@@ -779,8 +849,7 @@ lower(const std::vector<document::NodeId>& order) {
             const auto time = lowerLayerTime(*layerNode, *boundary);
             if (!time)
                 return false;
-            mix.nestedLayers.push_back({*source, !isMuted(audioSource->id), boundary->solo,
-                                        boundary->inPoint,
+            mix.nestedLayers.push_back({*source, true, boundary->solo, boundary->inPoint,
                                         boundary->endPoint(composition_->duration()), *time});
             return true;
         }
@@ -830,12 +899,16 @@ lower(const std::vector<document::NodeId>& order) {
             return std::nullopt;
         return mix;
     }
+    // A muted source wired straight into the output is silent, as it is behind a Layer.
+    if (feed != nullptr && isMuted(feedNodeId) &&
+        (feed->typeId == document::kCompositionSourceNodeType ||
+         feed->typeId == document::kAudioSourceNodeType || feed->typeId == "bloom.video-source"))
+        return mix;
     if (feed && feed->typeId == document::kCompositionSourceNodeType) {
         const auto source = lowerCompositionSource(*feed);
         if (!source)
             return std::nullopt;
-        mix.nestedLayers.push_back(
-            {*source, !isMuted(feedNodeId), false, {}, composition_->duration()});
+        mix.nestedLayers.push_back({*source, true, false, {}, composition_->duration()});
         return mix;
     }
     if (feed != nullptr &&
@@ -844,8 +917,8 @@ lower(const std::vector<document::NodeId>& order) {
         const auto sourceIndex = appendSource(*feed);
         if (!sourceIndex)
             return std::nullopt;
-        mix.layers.push_back({feedNodeId, document::LayerId{}, *sourceIndex, !isMuted(feedNodeId),
-                              false, core::RationalTime{}, composition_->duration()});
+        mix.layers.push_back({feedNodeId, document::LayerId{}, *sourceIndex, true, false,
+                              core::RationalTime{}, composition_->duration()});
         return mix;
     }
     addTopologyFailure(feedNodeId,

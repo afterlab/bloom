@@ -1473,11 +1473,21 @@ Audio timing (#354):
   held sample, as for a nested composition). Export re-evaluates the mix per block and playback
   per transport change through the same `mapAudioClipTime` and mixer, so they produce identical
   samples; the per-sample mapping allocates nothing on the mixer worker.
-- A disabled or muted layer is absent from the audio mix as it is from the picture (#431). Its
-  Layer Output is outside the reachable set, so its Time Remap and level curves are never compiled,
-  and the mix lowers no timing, source or nested composition for it. Disabling a Time Remapped
-  layer (a nested-composition layer routes audio too) therefore compiles on every route and simply
-  excludes the layer; enabling it again restores its picture and audio.
+- The audio mix lowers only audible layers (#431, #436). A layer is audible when its audio reaches
+  Composition Output through the edges the picture consumes and its source is not muted. A
+  disabled, muted or solo-excluded layer, a slot of a disabled or muted Merge, and a muted audio,
+  video or composition source are silent, as they are absent from the picture. A track matte
+  source is the one exception: its slot hides its pixels but not its audio. The mix lowers no timing,
+  source or nested composition for a silent layer, whose Time Remap and level curves may never be
+  compiled. Disabling or soloing around a Time Remapped layer (a nested-composition or video layer
+  routes audio too), or muting a source with an animated level, therefore compiles on every route
+  and simply silences it.
+- The curves the mix samples are compiled for the mix, independent of picture reachability. An
+  audio-only Layer Output has no image input, so the picture treats it as empty and compiles none of
+  its curves. The compiler still compiles an audible layer's Time Remap for the mix, so an audio-only
+  layer with Time Remap plays retimed in preview, export and headless renders. An audible layer and
+  its source are always reachable, so a level curve or a driven remap is compiled with the picture's
+  curves and value graph.
 
 Implementation notes:
 

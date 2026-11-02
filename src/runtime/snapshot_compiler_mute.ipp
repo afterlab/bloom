@@ -52,8 +52,10 @@ firstImageInput(const document::NodeRecord& node) const {
     });
 }
 
-[[nodiscard]] bool consumesEdge(const document::NodeRecord& node,
-                                const document::EdgeRecord& edge) const {
+// A track matte source's slot carries no pixels, but its audio still plays, so the audio mix asks
+// with `hideMatteSources` false.
+[[nodiscard]] bool consumesEdge(const document::NodeRecord& node, const document::EdgeRecord& edge,
+                                const bool hideMatteSources = true) const {
     if (const auto* merge = composition_->graph().merge(node.id); merge && !merge->enabled())
         return false;
     if (isMuted(node.id)) {
@@ -64,7 +66,7 @@ firstImageInput(const document::NodeRecord& node) const {
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination)) {
         const auto* stack = composition_->graph().merge(slot->stackNodeId);
         const auto* entry = stack ? stack->find(slot->slotId) : nullptr;
-        if (entry && (mutedLayer(*entry) || isMatteSource(entry->layerId)))
+        if (entry && (mutedLayer(*entry) || (hideMatteSources && isMatteSource(entry->layerId))))
             return false;
     }
     return true;
