@@ -26,6 +26,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 class QTimer;
 
@@ -35,6 +37,7 @@ class CompositionSession;
 class ExportQueueAdapter;
 class MainWindow;
 class RamPreviewController;
+class TaskMonitorModel;
 class PlaybackController;
 class ProjectHost;
 enum class ProjectHostOperationOutcome : std::uint8_t;
@@ -57,8 +60,10 @@ class McpLiveUiBinding final : public QObject {
     // The application's one export queue adapter, for export.reveal's job lookup and selection.
     // Weak; without one, export.reveal answers Unbound.
     void setExportQueue(ExportQueueAdapter* exportQueue);
+    // The Jobs panel's model, for jobs.list and jobs.cancel. Weak; without one they answer Unbound.
+    void setTaskMonitor(TaskMonitorModel* tasks);
 
-    // The eight members, bound to this object (which must outlive the service).
+    // The members, bound to this object (which must outlive the service).
     [[nodiscard]] mcp::McpLiveUiPort port();
 
     // The members themselves, public so the port and tests call the same code.
@@ -72,12 +77,28 @@ class McpLiveUiBinding final : public QObject {
     [[nodiscard]] mcp::McpUiResult setViewer(const mcp::McpViewerRequest& request);
     [[nodiscard]] mcp::McpUiResult setColorSettings(const document::ColorSettings& settings);
     [[nodiscard]] mcp::McpUiResult revealExport(std::optional<document::ExportJobId> job);
+    // MCP parity (#389), mcp_live_ui_binding_application.cpp: Preferences, Edit > Purge, the Jobs
+    // panel, Cancel Open, Reveal in File Manager and the composition presets.
+    [[nodiscard]] std::vector<mcp::McpPreference> preferences() const;
+    [[nodiscard]] mcp::McpUiResult setPreferences(const std::vector<mcp::McpPreference>& entries);
+    [[nodiscard]] mcp::McpUiResult purgeCache(bool media);
+    [[nodiscard]] std::vector<mcp::McpJob> jobs() const;
+    [[nodiscard]] mcp::McpUiResult cancelJob(std::uint64_t job);
+    [[nodiscard]] mcp::McpUiResult cancelOpen();
+    [[nodiscard]] mcp::McpUiResult revealAsset(document::AssetId asset);
+    [[nodiscard]] std::vector<mcp::McpCompositionPreset> compositionPresets() const;
+    [[nodiscard]] mcp::McpUiResult saveCompositionPreset(document::CompositionId composition,
+                                                         const std::string& name);
+    [[nodiscard]] mcp::McpUiResult renameCompositionPreset(const std::string& name,
+                                                           const std::string& newName);
+    [[nodiscard]] mcp::McpUiResult deleteCompositionPreset(const std::string& name);
 
   private:
     struct Pending;
 
     void onSaveFinished(ProjectHostOperationOutcome outcome, const QString& message);
     void onOpenFinished(ProjectHostOperationOutcome outcome, const QString& message);
+    void onCopyFinished(ProjectHostOperationOutcome outcome, const QString& message);
     void beginPending(mcp::McpProjectRequestKind kind,
                       std::function<void(mcp::McpProjectResult)> done);
     void finishPending(mcp::McpUiRefusal refusal, const QString& message);
@@ -95,6 +116,7 @@ class McpLiveUiBinding final : public QObject {
     QPointer<MainWindow> window_;
     QPointer<RamPreviewController> ramPreview_;
     QPointer<ExportQueueAdapter> exportQueue_;
+    QPointer<TaskMonitorModel> tasks_;
     std::unique_ptr<Pending> pending_;
     QTimer* jobsTimer_ = nullptr;
 };

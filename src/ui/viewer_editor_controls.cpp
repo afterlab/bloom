@@ -285,6 +285,29 @@ QString ViewerEditor::applyRemoteChange(const RemoteChange& change) {
         return tr("Exposure must be between %1 and %2 stops.")
             .arg(exposureField_->minimum())
             .arg(exposureField_->maximum());
+    if (change.gamma && (!std::isfinite(*change.gamma) || *change.gamma < gammaField_->minimum() ||
+                         *change.gamma > gammaField_->maximum()))
+        return tr("Gamma must be between %1 and %2.")
+            .arg(gammaField_->minimum())
+            .arg(gammaField_->maximum());
+    if (change.resolution &&
+        (*change.resolution < 0 || *change.resolution >= resolutionDropdown_->count()))
+        return tr("That preview resolution is not offered.");
+    if (change.look && *change.look != lookAction_->isChecked() && !lookAction_->isEnabled())
+        return tr("This composition has no look-tagged effect, so the look cannot be toggled.");
+    std::optional<QRectF> region;
+    if (change.regionOfInterest && *change.regionOfInterest) {
+        const auto* current = session_.composition();
+        if (current == nullptr)
+            return tr("There is no composition to set a region of interest on.");
+        const auto& format = current->format();
+        region = (*change.regionOfInterest)
+                     ->normalized()
+                     .intersected(QRectF(0, 0, format.width(), format.height()));
+        if (!(region->width() >= 1 && region->height() >= 1))
+            return tr("The region of interest must overlap the composition frame by at least one "
+                      "pixel.");
+    }
     if (change.zoom == RemoteChange::Zoom::Factor &&
         (!std::isfinite(change.zoomFactor) || change.zoomFactor < ViewTransform::kMinZoom ||
          change.zoomFactor > ViewTransform::kMaxZoom))
@@ -298,6 +321,23 @@ QString ViewerEditor::applyRemoteChange(const RemoteChange& change) {
         exposureField_->setValue(*change.exposure);
     if (change.channel)
         channelDropdown_->setCurrentIndex(static_cast<int>(*change.channel));
+    if (change.gamma)
+        gammaField_->setValue(*change.gamma);
+    if (change.resolution)
+        resolutionDropdown_->setCurrentIndex(*change.resolution);
+    if (change.background)
+        backgroundDropdown_->setCurrentIndex(static_cast<int>(*change.background));
+    if (change.transparencyGrid)
+        transparencyGridAction_->setChecked(*change.transparencyGrid);
+    if (change.look)
+        lookAction_->setChecked(*change.look);
+    if (change.regionOfInterest) {
+        // What drawing the region (Ctrl-drag) and Clear Region of Interest do.
+        roiGesture_.reset();
+        roiRect_ = region;
+        roiAction_->setChecked(region.has_value());
+        publishRoi();
+    }
     switch (change.zoom) {
     case RemoteChange::Zoom::Keep:
         break;

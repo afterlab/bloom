@@ -127,6 +127,13 @@ class MainWindow final : public QMainWindow {
     // preferences exactly as the Preferences dialog's approved path does, without presenting the
     // modal dialog, so a test can assert the View action mirror and the open-editor propagation.
     void applyCommittedPreferencesForTest(const ApplicationPreferences& preferences);
+    // The Preferences window's OK, without the window (MCP preferences.set): saves `preferences`,
+    // applies them to the open editors and emits preferencesChanged().
+    void commitPreferences(const ApplicationPreferences& preferences);
+    // Edit | Purge… command bodies (also MCP cache.purge). Neither touches project truth, the
+    // command stack, or undo. False when a purge is already running.
+    bool purgePreviewCache();
+    bool purgeMediaCache();
 
   signals:
     void shutdownRequested();
@@ -148,9 +155,6 @@ class MainWindow final : public QMainWindow {
     void createViewMenu(QMenu& viewMenu);
     void revealMcpServerPanel();
     void createHelpMenu(QMenu& helpMenu);
-    // Edit | Purge… command bodies. Neither touches project truth, the command stack, or undo.
-    void purgePreviewCache();
-    void purgeMediaCache();
     void updatePurgeActions();
     void createEditorLayout(const EditorRegistry& editorRegistry);
     void createCentralStack();

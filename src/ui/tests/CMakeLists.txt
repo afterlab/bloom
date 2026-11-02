@@ -1684,6 +1684,19 @@ bloom_add_test(NAME bloom.ui.mcp-live-ui-binding COMMAND bloom_ui_mcp_live_ui_bi
     LABELS ui mcp integration TIMEOUT 240
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
+# #389: the live-UI port's application members (Viewer settings, preferences, purge, jobs, cancel
+# open, reveal, composition presets) over the real window.
+add_executable(bloom_ui_mcp_live_ui_application_test mcp_live_ui_binding_application_tests.cpp)
+target_include_directories(bloom_ui_mcp_live_ui_application_test PRIVATE ..)
+target_link_libraries(bloom_ui_mcp_live_ui_application_test PRIVATE bloom_ui bloom_runtime_compiler
+    Qt6::Test)
+target_compile_definitions(bloom_ui_mcp_live_ui_application_test PRIVATE
+    BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
+bloom_enable_warnings(bloom_ui_mcp_live_ui_application_test)
+bloom_add_test(NAME bloom.ui.mcp-live-ui-application COMMAND bloom_ui_mcp_live_ui_application_test
+    LABELS ui mcp integration TIMEOUT 240
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 if(BLOOM_BUILD_PYTHON)
     add_executable(bloom_script_panel_test script_panel_tests.cpp)
     target_include_directories(bloom_script_panel_test PRIVATE ..)

@@ -472,7 +472,7 @@ void MainWindow::updateCompositionActions() {
     deleteCompositionAction_->setEnabled(hasComposition);
 }
 
-void MainWindow::purgePreviewCache() {
+bool MainWindow::purgePreviewCache() {
     // Edit | Purge… | Purge preview cache. The RAM preview frame cache and the in-flight preview
     // work are retired on the UI thread (cheap, and the displayed frame stays valid). The
     // operation-cache and GPU-scene clears run through the purge controller once the scheduler has
@@ -482,14 +482,14 @@ void MainWindow::purgePreviewCache() {
         // Gate first (retires in-flight work and blocks new asks), then clear the frame cache.
         if (!cachePurgeController_->requestPreviewPurge()) {
             statusStrip_->showTransientMessage(tr("A cache purge is already running"));
-            return;
+            return false;
         }
         if (previewController_ != nullptr) {
             previewController_->purgePreviewCache();
         } else if (ramPreview_ != nullptr) {
             ramPreview_->cancel();
         }
-        return;
+        return true;
     }
     if (previewController_ != nullptr) {
         previewController_->purgePreviewCache();
@@ -504,9 +504,10 @@ void MainWindow::purgePreviewCache() {
     } else {
         statusStrip_->showTransientMessage(tr("No preview cache is available"));
     }
+    return true;
 }
 
-void MainWindow::purgeMediaCache() {
+bool MainWindow::purgeMediaCache() {
     // Edit | Purge… | Purge media cache. The on-disk clear flushes the pending writer and removes
     // entries from disk, so it must run on the task system's BlockingIo lane; the controller waits
     // for scheduler retirement first. Source files are never touched. No confirmation: the caches
@@ -514,7 +515,7 @@ void MainWindow::purgeMediaCache() {
     if (cachePurgeController_ != nullptr) {
         if (!cachePurgeController_->requestMediaPurge()) {
             statusStrip_->showTransientMessage(tr("A cache purge is already running"));
-            return;
+            return false;
         }
         // Completed frames also encode the retained source revision. Drop them while the producer
         // gate is active, so the first request after refresh cannot bypass source verification.
@@ -523,7 +524,7 @@ void MainWindow::purgeMediaCache() {
         } else if (ramPreview_ != nullptr) {
             ramPreview_->cancel();
         }
-        return;
+        return true;
     }
     if (previewController_ != nullptr) {
         previewController_->purgePreviewCache();
@@ -538,6 +539,7 @@ void MainWindow::purgeMediaCache() {
     } else {
         statusStrip_->showTransientMessage(tr("No media cache is available"));
     }
+    return true;
 }
 
 void MainWindow::updatePurgeActions() {
@@ -698,13 +700,7 @@ void MainWindow::showPreferences() {
     PreferencesWindow dialog(*this, loadApplicationPreferences(currentSettings),
                              accelerationStatus_);
     connect(&dialog, &PreferencesWindow::preferencesApplied, this,
-            [this](const ApplicationPreferences& preferences) {
-                QSettings settings;
-                saveApplicationPreferences(settings, preferences);
-                settings.sync();
-                applyPreferencesToOpenEditors(preferences);
-                emit preferencesChanged();
-            });
+            [this](const ApplicationPreferences& preferences) { commitPreferences(preferences); });
     connect(&dialog, &PreferencesWindow::soundTestRequested, this, &MainWindow::soundTestRequested);
     connect(&dialog, &PreferencesWindow::mcpSettingsRequested, this, [this, &dialog] {
         dialog.reject();
@@ -714,6 +710,14 @@ void MainWindow::showPreferences() {
             statusStrip_->showTransientMessage(tr("The MCP server is not available in this build"));
     });
     dialog.exec();
+}
+
+void MainWindow::commitPreferences(const ApplicationPreferences& preferences) {
+    QSettings settings;
+    saveApplicationPreferences(settings, preferences);
+    settings.sync();
+    applyPreferencesToOpenEditors(preferences);
+    emit preferencesChanged();
 }
 
 void MainWindow::applyPreferencesToOpenEditors(const ApplicationPreferences& preferences) {

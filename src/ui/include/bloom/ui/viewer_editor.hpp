@@ -392,6 +392,15 @@ class ViewerEditor final : public QWidget,
         Zoom zoom = Zoom::Keep;
         // With Zoom::Factor: 1.0 is 100 percent.
         double zoomFactor = 1.0;
+        std::optional<double> gamma;
+        // An index of the Resolution dropdown: Auto, Full, Half, Quarter.
+        std::optional<int> resolution;
+        std::optional<ViewerBackground> background;
+        std::optional<bool> transparencyGrid;
+        std::optional<bool> look;
+        // A value sets the region of interest (composition pixels, clipped to the frame); an empty
+        // inner value clears it.
+        std::optional<std::optional<QRectF>> regionOfInterest;
     };
     // Validates the whole change first, then applies it. Returns the refusal as a plain sentence
     // (in the interface language), or an empty string once applied.

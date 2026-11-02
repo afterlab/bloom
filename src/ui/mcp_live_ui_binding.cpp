@@ -11,6 +11,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/ram_preview_controller.hpp>
+#include <bloom/ui/task_monitor_model.hpp>
 #include <bloom/ui/timeline_frame_math.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/workspace_host.hpp>
@@ -72,6 +73,10 @@ McpLiveUiBinding::McpLiveUiBinding(ProjectHost& project, CompositionSession& ses
             [this](const ProjectHostOperationOutcome outcome, const QString& message) {
                 onOpenFinished(outcome, message);
             });
+    connect(&project_, &ProjectHost::copyFinished, this,
+            [this](const ProjectHostOperationOutcome outcome, const QString& message) {
+                onCopyFinished(outcome, message);
+            });
 }
 
 McpLiveUiBinding::~McpLiveUiBinding() = default;
@@ -85,6 +90,8 @@ void McpLiveUiBinding::setRamPreview(RamPreviewController* const ramPreview) {
 void McpLiveUiBinding::setExportQueue(ExportQueueAdapter* const exportQueue) {
     exportQueue_ = exportQueue;
 }
+
+void McpLiveUiBinding::setTaskMonitor(TaskMonitorModel* const tasks) { tasks_ = tasks; }
 
 mcp::McpLiveUiPort McpLiveUiBinding::port() {
     return {
@@ -113,6 +120,26 @@ mcp::McpLiveUiPort McpLiveUiBinding::port() {
             [this](const document::ColorSettings& settings) { return setColorSettings(settings); },
         .revealExport =
             [this](const std::optional<document::ExportJobId> job) { return revealExport(job); },
+        .preferences = [this] { return preferences(); },
+        .setPreferences = [this](const std::vector<mcp::McpPreference>& entries) {
+            return setPreferences(entries);
+        },
+        .purgeCache = [this](const bool media) { return purgeCache(media); },
+        .jobs = [this] { return jobs(); },
+        .cancelJob = [this](const std::uint64_t job) { return cancelJob(job); },
+        .cancelOpen = [this] { return cancelOpen(); },
+        .revealAsset = [this](const document::AssetId asset) { return revealAsset(asset); },
+        .compositionPresets = [this] { return compositionPresets(); },
+        .saveCompositionPreset =
+            [this](const document::CompositionId composition, const std::string& name) {
+                return saveCompositionPreset(composition, name);
+            },
+        .renameCompositionPreset =
+            [this](const std::string& name, const std::string& newName) {
+                return renameCompositionPreset(name, newName);
+            },
+        .deleteCompositionPreset =
+            [this](const std::string& name) { return deleteCompositionPreset(name); },
     };
 }
 
@@ -327,6 +354,18 @@ mcp::McpUiResult McpLiveUiBinding::setViewer(const mcp::McpViewerRequest& reques
             break;
         }
     }
+    change.gamma = request.gamma;
+    if (request.resolution)
+        change.resolution = static_cast<int>(*request.resolution);
+    if (request.background)
+        change.background = static_cast<ViewerBackground>(*request.background);
+    change.transparencyGrid = request.transparencyGrid;
+    change.look = request.look;
+    if (request.regionOfInterest) {
+        change.regionOfInterest = std::optional<QRectF>{};
+        if (const auto& region = *request.regionOfInterest)
+            *change.regionOfInterest = QRectF(region->x, region->y, region->width, region->height);
+    }
     const auto refusal = viewer->applyRemoteChange(change);
     if (!refusal.isEmpty())
         return uiResult(McpUiRefusal::InvalidArgument, refusal);
@@ -489,6 +528,28 @@ void McpLiveUiBinding::projectLifecycle(mcp::McpProjectRequest request,
         project_.beginSaveAs(request.path);
         return;
     }
+    case Kind::SaveCopy: {
+        if (const auto bad = checkPath(false)) {
+            refuse(McpUiRefusal::PathInvalid, *bad);
+            return;
+        }
+        if (!project_.canSaveCopy()) {
+            refuse(McpUiRefusal::InvalidArgument,
+                   tr("%1 can be saved normally. Use project.save-as for a copy.")
+                       .arg(quoted(projectName())));
+            return;
+        }
+        std::error_code error;
+        if (std::filesystem::exists(request.path, error) && !request.replace) {
+            refuse(McpUiRefusal::DestinationExists,
+                   tr("%1 already exists. Pass replace to overwrite it.")
+                       .arg(QString::fromStdString(request.path.generic_string())));
+            return;
+        }
+        beginPending(request.kind, std::move(done));
+        project_.beginSaveCopy(request.path);
+        return;
+    }
     case Kind::Open:
     case Kind::New:
     case Kind::Close: {
@@ -583,6 +644,17 @@ void McpLiveUiBinding::onSaveFinished(const ProjectHostOperationOutcome outcome,
                        outcome == ProjectHostOperationOutcome::PublishedWithWarning;
     finishPending(saved ? McpUiRefusal::None : McpUiRefusal::Failed,
                   saved ? tr("Saved %1. %2").arg(quoted(projectName()), message) : message);
+}
+
+void McpLiveUiBinding::onCopyFinished(const ProjectHostOperationOutcome outcome,
+                                      const QString& message) {
+    if (!pending_ || pending_->kind != mcp::McpProjectRequestKind::SaveCopy)
+        return;
+    const bool saved = outcome == ProjectHostOperationOutcome::Published ||
+                       outcome == ProjectHostOperationOutcome::PublishedWithWarning;
+    finishPending(saved ? McpUiRefusal::None : McpUiRefusal::Failed,
+                  saved ? tr("Saved a copy of %1. %2").arg(quoted(projectName()), message)
+                        : message);
 }
 
 void McpLiveUiBinding::onOpenFinished(const ProjectHostOperationOutcome outcome,

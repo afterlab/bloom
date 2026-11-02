@@ -514,6 +514,7 @@ target_sources(
         export_detail_support.hpp
         compile_failure.cpp
         mcp_live_ui_binding.cpp
+        mcp_live_ui_binding_application.cpp
         mcp_server_adapter.cpp
         mcp_server_editor.cpp
         profiler_editor.cpp
