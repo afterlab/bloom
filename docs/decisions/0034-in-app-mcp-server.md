@@ -11,6 +11,12 @@ and `ExportEncoderStatus::exportPlatform` no longer exist, and render, export, c
 `export.start*` are no longer refused on macOS and Windows. The statements below that say
 otherwise are kept as history.
 
+Amendment (2026-11-02, issue #382): the live-only window tools also include `export.reveal`
+(optional `job`). It brings the Export editor into view under the Export panel reveal rules and
+selects the job, through `McpLiveUiPort::revealExport` on the UI thread. It is read-only: it never
+changes the project or the undo history, and agent queue edits never reveal the panel on their own.
+`bloom-mcp` answers `bloom.mcp.not-live`.
+
 ## Context
 
 `apps/bloom-mcp` is a Qt-free MCP 2025-11-25 server on stdio. It opens its own headless session
