@@ -61,9 +61,6 @@ struct MediaProviderFallbackV1 final {
 struct MediaProviderProvenanceV1 final {
     std::string provider; // empty when no provider served the operation
     std::vector<MediaProviderFallbackV1> fallbacks;
-    // What the serving provider delivered differently from the request (the reopen check's
-    // adjustment); empty when it delivered the request.
-    std::string adjustment;
     [[nodiscard]] bool fellBack() const noexcept { return !fallbacks.empty(); }
     // One diagnostic line, e.g. "ffmpeg (after videotoolbox: failed [Crashed] ...)".
     [[nodiscard]] std::string diagnostic() const;

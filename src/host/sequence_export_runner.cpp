@@ -460,10 +460,7 @@ struct detail::SequenceExportWorkV1 {
         // providers ahead of it in the platform chain did not serve (ADR 0035).
         const auto served = encoder->handshake();
         auto provenance = encoder->provenance();
-        // ADR 0036: a delivery that differs from the request is recorded in provenance, logged and
-        // stated in the evidence; never silent.
-        provenance.adjustment = qc.adjustment;
-        if (provenance.fellBack() || !provenance.adjustment.empty())
+        if (provenance.fellBack())
             std::cerr << "Bloom export: media provider " << provenance.diagnostic() << '\n';
         require(qc.frames == settings().frames && qc.audioSamples == settings().audioSamples &&
                     qc.bytes <= settings().byteLimit,
@@ -536,8 +533,6 @@ struct detail::SequenceExportWorkV1 {
              settings().videoCodec == "vp9" || settings().videoCodec == "av1"))
             analysis->implementationNote += "; delivered=" + settings().videoCodec + " " +
                                             qc.profile + " " + std::to_string(qc.bitDepth) + "-bit";
-        if (!qc.adjustment.empty())
-            analysis->implementationNote += "; " + qc.adjustment;
         auto evidence =
             checked(output::makeMediaQcEvidenceV1(*analysis, qc, approvals.finalize(), &served));
         checkpoint();

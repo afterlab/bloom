@@ -316,11 +316,10 @@ void qc(Writer& w, const EncodeQcV1& v) {
     for (const auto code : {v.colour.primaries, v.colour.transfer, v.colour.matrix, v.colour.range})
         w.number(static_cast<std::uint32_t>(code + 1));
     require(v.container.size() <= Limits::stringBytes && v.profile.size() <= Limits::stringBytes &&
-            v.adjustment.size() <= Limits::stringBytes && v.bitDepth <= 32);
+            v.bitDepth <= 32);
     w.text(v.container);
     w.text(v.profile);
     w.number(v.bitDepth);
-    w.text(v.adjustment);
 }
 EncodeQcV1 qc(Reader& r) {
     EncodeQcV1 v;
@@ -338,7 +337,6 @@ EncodeQcV1 qc(Reader& r) {
     v.container = r.text();
     v.profile = r.text();
     v.bitDepth = r.number<std::uint32_t>();
-    v.adjustment = r.text();
     Writer validation;
     qc(validation, v);
     return v;

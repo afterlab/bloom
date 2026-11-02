@@ -1954,7 +1954,9 @@ record `maximumError`, `percentileMaximumError` and `meanError`. The export veri
 `reopenQuality` names the profile version (`bloom.video-rgba16-srgb.v3`) and its digest beside the
 numbers, so a reviewer sees what was set aside. A failed check states all three numbers:
 `Reopened pixels exceed tolerance profile v3 (max=… p99.99max=… mean=…)`. Provider schema 6
-carries the new field.
+carried the new field. Schema 7 (#441) drops the unused `EncodeQcV1::adjustment` string, which only
+reported the retired "Main 10 served as Main" fallback; `MediaProviderProvenanceV1` loses the same
+field, and a stream that does not match the request fails the reopen check instead.
 
 The export verification's `provenance.encoder` holds only the encoder implementation token that
 served the output (`openh264`, `nvenc`, `vaapi`, `kvazaar`, `libvpx`, `svt-av1`, `videotoolbox`,

@@ -85,8 +85,6 @@ bool mediaFallbackPermittedV1(const Unavailable& error) noexcept {
 
 std::string MediaProviderProvenanceV1::diagnostic() const {
     std::string text = provider.empty() ? std::string("no provider") : provider;
-    if (!adjustment.empty())
-        text += " [delivered: " + adjustment + "]";
     if (fallbacks.empty())
         return text;
     text += " (after";

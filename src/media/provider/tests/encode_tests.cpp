@@ -53,7 +53,7 @@ FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
                                     y + 5 >= settings.height / 2 && y < settings.height / 2 + 5;
                 const auto ramp = static_cast<std::uint32_t>(
                     static_cast<std::uint64_t>(x) * 65535U / std::max(1U, settings.width - 1));
-                const auto value = lumaRamp ? (c == 3 ? 65535U : ramp)
+                const auto value = lumaRamp              ? (c == 3 ? 65535U : ramp)
                                    : c == 3 && alphaRamp ? ramp
                                    : c == 3    ? (settings.profile.starts_with("4444") && !redSquare
                                                       ? (x < settings.width / 2 ? 20000U : 50000U)
@@ -296,8 +296,7 @@ void tests(const std::filesystem::path& directory) {
         (void)run(mp4, directory / "export-hevc.mp4");
         EncodeQcV1 delivered;
         (void)run(hevc, directory / "export-hevc-main.mov", {}, nullptr, &delivered);
-        test::check(delivered.profile == "Main" && delivered.bitDepth == 8 &&
-                        delivered.adjustment.empty(),
+        test::check(delivered.profile == "Main" && delivered.bitDepth == 8,
                     "an HEVC Main request reports the Main 8-bit stream it delivered");
         // #408: a Main 10 request with no hardware encoder is real Main 10 from the 10-bit
         // Kvazaar, in MOV and MP4, tagged as requested and passing the unchanged reopen check.
@@ -312,7 +311,6 @@ void tests(const std::filesystem::path& directory) {
                       &tenServed, &delivered);
             test::check(tenServed.provider == kFfmpegProviderId && !tenServed.fellBack() &&
                             delivered.profile == "Main 10" && delivered.bitDepth == 10 &&
-                            delivered.adjustment.empty() &&
                             delivered.container == std::string(container) + "/hevc" &&
                             delivered.colour == ColourTags{1, 1, 1, 1},
                         "software HEVC Main 10 is delivered as 10-bit Main 10 by the bundled "
@@ -389,7 +387,7 @@ void tests(const std::filesystem::path& directory) {
             test::check(
                 served.provider == kFfmpegProviderId && !served.fellBack() &&
                     delivered.container == std::string("webm/") + codec &&
-                    delivered.bitDepth == (ten ? 10U : 8U) && delivered.adjustment.empty() &&
+                    delivered.bitDepth == (ten ? 10U : 8U) &&
                     delivered.profile == (std::string_view(codec) == "av1" ? "Main"
                                           : ten                            ? "Profile 2"
                                                                            : "Profile 0"),
@@ -660,7 +658,7 @@ int nvencTests(const std::filesystem::path& directory) {
         MediaProviderProvenanceV1 provenance;
         EncodeQcV1 qc;
         (void)run(request, directory / file, options, &provenance, &qc);
-        test::check(provenance.provider == kFfmpegNvencProviderId && qc.adjustment.empty(),
+        test::check(provenance.provider == kFfmpegNvencProviderId,
                     "NVENC serves the request itself");
         return qc;
     };
