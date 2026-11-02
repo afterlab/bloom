@@ -262,17 +262,48 @@ void testAbsentReadsAbsentAndZeroReadsZero(Expectations& expectations) {
             editor.history().series(ProfilerHistory::Series::Rss).latest() == 0.0F,
         "the history stores a gap for absent and 0 for zero");
 
-    // The fake feed's absent fields: utilization, the encode stage before an export, a helper's
-    // CPU time and an exited helper's RSS.
-    fillFakeProfilerSnapshot(2, std::chrono::milliseconds(500), snapshot);
-    editor.deliver(snapshot);
-    expectations.expect(gpu->isAbsent(5), "the fake feed leaves GPU utilization absent");
     auto* encode = child<kit::KHistogramChart>(editor, "profilerStage_5");
     auto* decode = child<kit::KHistogramChart>(editor, "profilerStage_0");
     expectations.expect(encode != nullptr && encode->absent() &&
                             encode->summary() == kit::absentMetricText(),
-                        "an untimed stage reads Unavailable");
+                        "an absent stage reads Unavailable");
+
+    // The fake feed's absent fields: utilization, a helper's CPU time and an exited helper's RSS.
+    // Every stage is present (schema 3), so the encode stage before an export has no samples.
+    fillFakeProfilerSnapshot(2, std::chrono::milliseconds(500), snapshot);
+    editor.deliver(snapshot);
+    expectations.expect(gpu->isAbsent(5), "the fake feed leaves GPU utilization absent");
+    expectations.expect(encode != nullptr && !encode->absent() &&
+                            encode->summary() == QStringLiteral("No samples"),
+                        "a counted stage nothing has timed reads No samples");
     expectations.expect(decode != nullptr && !decode->absent(), "a timed stage is present");
+    auto* pools = child<QTableView>(editor, "profilerPoolTable");
+    expectations.expect(pools != nullptr &&
+                            pools->model()->rowCount() ==
+                                static_cast<int>(snapshot.memory.poolCount) &&
+                            pools->model()->columnCount() == 13,
+                        "the pool table lists one row per pool, with an Evicted column");
+    if (pools != nullptr && pools->model()->rowCount() > 0) {
+        const auto* model = pools->model();
+        expectations.expect(model->headerData(11, Qt::Horizontal).toString() ==
+                                    QStringLiteral("Evicted") &&
+                                model->index(0, 0).data().toString() ==
+                                    QStringLiteral("Preview frames") &&
+                                model->index(0, 1).data().toString() == QStringLiteral("Cache"),
+                            "a pool row shows its name and kind");
+        expectations.expect(model->index(0, 11).data().toString() != kit::absentMetricText(),
+                            "a pool's evicted bytes read as measured");
+    }
+    snapshot.memory.pools[0].evictedBytes = {};
+    editor.deliver(snapshot);
+    if (pools != nullptr && pools->model()->rowCount() > 0)
+        expectations.expect(pools->model()->index(0, 11).data().toString() ==
+                                kit::absentMetricText(),
+                            "absent evicted bytes read Unavailable");
+    auto* cpu = child<kit::KReadoutGrid>(editor, "profilerCpuReadouts");
+    expectations.expect(cpu != nullptr && cpu->visibleRowCount() == 5 &&
+                            cpu->labelText(4) == QStringLiteral("Row bands"),
+                        "the CPU readouts show the process and four executor pools");
     auto* helpers = child<QTableView>(editor, "profilerHelperTable");
     expectations.expect(helpers != nullptr && helpers->model()->rowCount() == 3,
                         "the helper table lists three processes");

@@ -1,12 +1,15 @@
 // Captures of the Profiler panel (#423) for visual review: over the deterministic fake feed, a
 // wide and a narrow panel after five minutes of history; over the real runtime sampler in an
-// app-shaped setup (a scheduler with running and queued work, a ledger with a reusable pool, the
-// GPU image counters, memory that grows while it samples), a wide live panel; and a panel with no
+// app-shaped setup (a scheduler with running and queued work, a ledger with a named, counted
+// reusable pool, an admission policy, the GPU image counters, memory that grows while it samples),
+// a wide live panel; and a panel with no
 // source. Writes
 // <dir>/profiler-<state>-dpr<scale>.png, where <dir> is BLOOM_PROFILER_CAPTURE_DIR (or the first
 // argument) and the scale follows QT_SCALE_FACTOR. Without either it captures into a temporary
 // directory and only checks that each capture rendered.
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_pool_counters.hpp>
 #include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -122,6 +125,12 @@ int captureLive(const QString& directory, const QString& scale) {
                 .hostBytes = cached.load(), .hostPendingRetirementBytes = 0, .deviceBytes = 0};
         },
         [](std::size_t) {});
+    runtime::MemoryPoolCounters counters;
+    ledger.setPoolProfile(&cacheOwner, {.name = "Preview frames",
+                                        .kind = runtime::ProfilerPoolKind::Cache,
+                                        .counters = &counters,
+                                        .rows = {}});
+    runtime::GpuProcessingPhasePolicy admission;
 
     int failures = 0;
     {
@@ -129,6 +138,7 @@ int captureLive(const QString& directory, const QString& scale) {
             {.scheduler = &scheduler, .readGpu = &ui::readProfilerGpuImageStats});
         ui::ProfilerUiSources sources;
         sources.ledger = &ledger;
+        sources.admission = &admission;
         ui::RuntimeProfilerFeed feed(sampler, sources);
         feed.setInterval(std::chrono::milliseconds(100));
         ui::ProfilerEditor panel(&feed);
@@ -141,8 +151,17 @@ int captureLive(const QString& directory, const QString& scale) {
             auto block = std::make_unique<char[]>(kBlock);
             std::memset(block.get(), tick + 1, kBlock);
             blocks.push_back(std::move(block));
-            if (tick % 3 != 0)
+            if (tick % 3 != 0) {
                 cached.fetch_add(kBlock);
+                counters.store();
+            } else {
+                counters.miss();
+            }
+            if (tick % 20 == 19) {
+                cached.fetch_sub(kBlock);
+                counters.evicted(kBlock);
+            }
+            counters.hit();
             QTest::qWait(100);
         }
         if (!sampler.running() || panel.current().serial < 30) {

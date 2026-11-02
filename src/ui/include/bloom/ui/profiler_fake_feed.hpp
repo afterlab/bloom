@@ -4,8 +4,8 @@
 // only; it is never offered in the interface. Sample n is a pure function of n: memory grows,
 // plateaus and drops on an eviction in a two-minute cycle while an unattributed gap creeps up over
 // the idle baseline; the ledger sample's age cycles and stalls once a cycle (stale ages); GPU
-// utilization, one helper's CPU time and the encode stage stay absent; playback and export
-// alternate, so their rates are absent half the time.
+// utilization and one helper's CPU time stay absent, and the encode stage has no samples until
+// the first export; playback and export alternate, so their rates are absent half the time.
 //
 // Tests and captures use it; the application's source is RuntimeProfilerFeed
 // (profiler_runtime_feed.hpp) over the runtime sampler.

@@ -202,8 +202,9 @@ void ProfilerEditor::buildMemory(QVBoxLayout* const layout, QWidget* const paren
     addHeading(body, host, tr("Pools"), QStringLiteral("profilerPoolsHeading"));
     view.pools = new ProfilerTableModel(
         {tr("Pool"), tr("Kind"), tr("Host"), tr("Pending"), tr("Device"), tr("Entries"),
-         tr("Ceiling"), tr("Hits"), tr("Misses"), tr("Stores"), tr("Evictions"), tr("Refusals")},
-        0xFFCU,
+         tr("Ceiling"), tr("Hits"), tr("Misses"), tr("Stores"), tr("Evictions"), tr("Evicted"),
+         tr("Refusals")},
+        0x1FFCU,
         [this] {
             return static_cast<int>(
                 std::min<std::size_t>(current_->memory.poolCount, runtime::kProfilerMaximumPools));

@@ -35,7 +35,8 @@ template <typename T> runtime::ProfilerMetric<T> of(const T value) {
 void addPool(runtime::ProfilerMemory& memory, const std::string_view name,
              const runtime::ProfilerPoolKind kind, const std::uint64_t host,
              const std::uint64_t pending, const std::uint64_t device, const std::uint64_t entries,
-             const ProfilerBytes ceiling, const std::uint64_t t, const std::uint64_t evictions) {
+             const ProfilerBytes ceiling, const std::uint64_t t, const std::uint64_t evictions,
+             const std::uint64_t bytesPerEviction) {
     auto& pool = memory.pools[memory.poolCount++];
     runtime::setProfilerName(pool.name, name);
     pool.kind = kind;
@@ -48,6 +49,7 @@ void addPool(runtime::ProfilerMemory& memory, const std::string_view name,
     pool.misses = of(t * 2 + t / 7);
     pool.stores = of(t * 3);
     pool.evictions = of(evictions);
+    pool.evictedBytes = of(evictions * bytesPerEviction);
     pool.refusals = of(t / 90);
 }
 
@@ -120,18 +122,24 @@ void fillFakeProfilerSnapshot(const std::uint64_t serial, const std::chrono::mil
                                        ? mib(96.0 - static_cast<double>(phase - kEvictionAt) * 8.0)
                                        : 0;
     const std::uint64_t evictions = cycles * 4 + (phase >= kEvictionAt ? 4 : 0);
+    // The pool rows the application registers (docs/architecture/profiler-feed.md).
     addPool(memory, "Preview frames", runtime::ProfilerPoolKind::Cache, preview, retiring,
-            preview / 2, preview / (6 * kMiB), of(2 * kGiB), t, evictions);
-    addPool(memory, "Operation cache", runtime::ProfilerPoolKind::Cache,
-            mib(300.0 + 90.0 * wobble(t, 74.0)), 0, 0, 140 + t % 9, of(mib(512.0)), t, cycles);
-    addPool(memory, "Decoded media", runtime::ProfilerPoolKind::Cache,
-            mib(180.0 + 24.0 * wobble(t, 31.0)), 0, mib(64.0), 36, of(mib(512.0)), t, cycles * 2);
-    addPool(memory, "Composite frames", runtime::ProfilerPoolKind::Cache,
-            pressure ? mib(40.0) : mib(220.0), 0, 0, pressure ? 4 : 22, {}, t, cycles);
-    addPool(memory, "Render scratch", runtime::ProfilerPoolKind::Scratch, rendering ? mib(96.0) : 0,
-            0, 0, rendering ? 3 : 0, {}, t, 0);
-    addPool(memory, "Export reservations", runtime::ProfilerPoolKind::Live,
-            exporting ? mib(256.0) : 0, 0, exporting ? mib(128.0) : 0, exporting ? 8 : 0, {}, t, 0);
+            preview / 2, preview / (6 * kMiB), of(2 * kGiB), t, evictions, mib(240.0));
+    addPool(memory, "Operation cache: operations", runtime::ProfilerPoolKind::Cache,
+            mib(300.0 + 90.0 * wobble(t, 74.0)), 0, 0, 140 + t % 9, of(mib(512.0)), t, cycles,
+            mib(18.0));
+    addPool(memory, "Operation cache: decoded media", runtime::ProfilerPoolKind::Cache,
+            mib(180.0 + 24.0 * wobble(t, 31.0)), 0, mib(64.0), 36, of(mib(512.0)), t, cycles * 2,
+            mib(24.0));
+    addPool(memory, "Decoded video", runtime::ProfilerPoolKind::Cache,
+            pressure ? mib(40.0) : mib(220.0), 0, 0, pressure ? 4 : 22, of(mib(1024.0)), t, cycles,
+            mib(12.0));
+    addPool(memory, "Proxies", runtime::ProfilerPoolKind::Cache, mib(48.0), 0, 0, 64,
+            of(mib(256.0)), t, 0, 0);
+    addPool(memory, "Decoded audio", runtime::ProfilerPoolKind::Cache,
+            mib(24.0 + 4.0 * wobble(t, 23.0)), 0, 0, 6, of(mib(128.0)), t, cycles, mib(4.0));
+    addPool(memory, "Media disk cache write queue", runtime::ProfilerPoolKind::Scratch,
+            rendering ? mib(96.0) : 0, 0, 0, rendering ? 3 : 0, {}, t, 0, 0);
 
     memory.stagingLiveBytes = of(rendering ? mib(48.0 + 16.0 * wobble(t, 6.0)) : mib(8.0));
     memory.stagingPeakBytes = of(t >= 3 ? mib(96.0) : mib(64.0));
@@ -194,11 +202,12 @@ void fillFakeProfilerSnapshot(const std::uint64_t serial, const std::chrono::mil
         double busy;
         double busyIntegral;
     };
-    const std::array<Executor, 3> executors{{
+    const std::array<Executor, 4> executors{{
         {"CPU", 12, 0.35 + 0.2 * wobble(t, sinePeriod) + (exporting ? 0.3 : 0.0),
          0.35 * tt + 0.2 * sineIntegral + 0.3 * exported},
         {"Blocking I/O", 4, playing ? 0.55 : 0.15, 0.15 * tt + 0.4 * played},
-        {"GPU service", 1, rendering ? 0.8 : 0.3, 0.3 * tt + 0.5 * rendered},
+        {"GPU submit", 1, rendering ? 0.8 : 0.3, 0.3 * tt + 0.5 * rendered},
+        {"Row bands", 8, rendering ? 0.6 : 0.05, 0.05 * tt + 0.55 * rendered},
     }};
     for (const auto& executor : executors) {
         auto& pool = cpu.executorPools[cpu.executorPoolCount++];
@@ -242,8 +251,9 @@ void fillFakeProfilerSnapshot(const std::uint64_t serial, const std::chrono::mil
     workload.stages[2] = of(stage(t, 7));
     workload.stages[3] = of(stage(t, 10));
     workload.stages[4] = of(stage(t, 6));
-    if (exportedSamples > 0)
-        workload.stages[5] = of(stage(exportedSamples, 11));
+    // Every stage is counted; encode has no samples before the first export.
+    workload.stages[5] =
+        of(exportedSamples > 0 ? stage(exportedSamples, 11) : runtime::ProfilerHistogram{});
     if (playing)
         workload.playbackFps =
             of(static_cast<float>(t % 53 == 0 ? 19.5 : 23.9 + 0.1 * wobble(t, 9.0)));

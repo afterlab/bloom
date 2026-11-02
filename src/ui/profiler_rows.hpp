@@ -89,6 +89,7 @@ enum PoolColumn : int {
     PoolMissesColumn,
     PoolStoresColumn,
     PoolEvictionsColumn,
+    PoolEvictedColumn,
     PoolRefusalsColumn,
 };
 

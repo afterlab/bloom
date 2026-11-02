@@ -368,6 +368,8 @@ QVariant ProfilerEditor::poolCell(const int row, const int column, const int rol
         return metricCell(pool.stores, MetricUnit::Count, role);
     case PoolEvictionsColumn:
         return metricCell(pool.evictions, MetricUnit::Count, role);
+    case PoolEvictedColumn:
+        return metricCell(pool.evictedBytes, MetricUnit::Bytes, role);
     case PoolRefusalsColumn:
         return metricCell(pool.refusals, MetricUnit::Count, role);
     default:
