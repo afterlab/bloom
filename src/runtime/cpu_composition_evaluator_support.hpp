@@ -154,6 +154,18 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
             static_cast<double>(window.maxXExclusive()) / sx,
             static_cast<double>(window.maxYExclusive()) / sy};
 }
+// #429: a Composition Source is placed by its nested frame, never by where the nested content
+// sits. Its local and output bounds are the nested composition's full-resolution frame, also when
+// that composition is empty; the CPU evaluator and the GPU scene preparation publish exactly this.
+[[nodiscard]] inline EvaluatedOperationBounds
+nestedCompositionFrameBounds(const CompiledCompositionPlan& nested) noexcept {
+    const ContentBounds frame{0.0, 0.0, static_cast<double>(nested.format().width()),
+                              static_cast<double>(nested.format().height())};
+    EvaluatedOperationBounds bounds;
+    bounds.local = frame;
+    bounds.output = frame;
+    return bounds;
+}
 [[nodiscard]] inline ContentBounds unionBounds(const ContentBounds a,
                                                const ContentBounds b) noexcept {
     if (a.empty())

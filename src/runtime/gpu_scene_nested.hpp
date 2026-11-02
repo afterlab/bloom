@@ -379,9 +379,8 @@ template <typename BuildChild>
     result.prepared = true;
     result.outputCommand = static_cast<GpuSceneCommandIndex>(childOutput + base);
     result.outputKey = commandSemanticKey(childScene.commands()[childOutput]);
-    result.bounds = childScene.bounds()[nested->output().value()];
-    // The CPU evaluator carries a Composition Source's output bounds in BOTH fields.
-    result.bounds.local = result.bounds.output;
+    // Placed by its nested frame (#429), exactly as the CPU evaluator publishes it.
+    result.bounds = nestedCompositionFrameBounds(*nested);
     result.outputWindow = childScene.outputDescriptor().dataWindow();
     if (!result.outputWindow.has_value()) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,

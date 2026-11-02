@@ -244,9 +244,10 @@ void mappedPixels() {
         require(a.size_bytes() == b.size_bytes() &&
                     std::memcmp(a.data(), b.data(), a.size_bytes()) == 0,
                 "nested pixels equal direct pixels at independently expected mapped time");
-        require(direct.frame()->evaluatedBounds()[nested.plan->output().value()].output ==
-                    composed.frame()->evaluatedBounds()[parent.plan->output().value()].output,
-                "nested evaluated bounds equal direct bounds");
+        // #429: the nested source is bounded by its frame, not by the content inside it.
+        require(composed.frame()->evaluatedBounds()[parent.plan->output().value()].output ==
+                    runtime::ContentBounds{0, 0, 8, 8},
+                "nested evaluated bounds equal the nested frame");
         const auto cached = evaluate(evaluator, parent.plan, test.parent);
         require(cached.frame() && cached.frame()->operationCacheStatistics().misses == 0,
                 "nested frames use operation cache");

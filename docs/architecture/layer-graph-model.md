@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-25
+Updated: 2026-11-02
 
 ## Geometry and transform levels
 
@@ -163,7 +163,15 @@ Compilation retains nested immutable plans in a table indexed by `CompiledCompos
 The runtime-owned `CompiledPlanCache` shares those plans by project, composition and revision;
 its UI aliases preserve the existing preview callers. Evaluation runs the same evaluator at the
 [mapped time](animation-and-time.md#composition-source-time-mapping), retaining the nested output
-image and its evaluated content bounds. Nested compositions keep their own format and frame rate.
+image clipped to the nested frame. Nested compositions keep their own format and frame rate.
+
+A Composition Source's local and output bounds are the nested composition's frame,
+`[0, width) x [0, height)` in its own full-resolution pixels, independent of where its content
+sits, and an empty nested composition keeps that frame. A layer showing it is therefore placed,
+scaled and rotated about the frame centre (plus its anchor), and children parented to it use the
+frame's top-left as their parent space, at every nesting depth. The CPU reference and the GPU
+scene preparation publish the same frame bounds. Before CPU evaluator semantics 12, these bounds
+were the nested content bounds, so off-centre content was re-centred on the layer's position.
 Operation-cache keys include the nested composition ID, revision and mapped time, and request
 cancellation, resolution, pixel-budget and cache-bypass rules apply recursively. Plan semantics
 advances from 5 to 6 for the nested-plan table; existing pixel semantics remain unchanged.
@@ -236,8 +244,8 @@ version 2 declares animatable Scalar `width` and `height`, each at least one pix
 writes the composition size. Fractional dimensions retain their exact geometric bounds
 and partial coverage at the final row or column. Text version 2 uses the laid-out glyph box,
 including glyph overhangs. Merge version 2 takes the union of its inputs' transformed content
-bounds. A Layer Output's local bounds equal its source's output bounds. Empty content has empty
-bounds. These rectangles describe content, independently of the conservative bilinear storage window.
+bounds. A Composition Source's bounds are its nested frame (see Composition Sources above). A
+Layer Output's local bounds equal its source's output bounds. Empty content has empty bounds. These rectangles describe content, independently of the conservative bilinear storage window.
 
 The Layer Output version-4 authoring order is:
 

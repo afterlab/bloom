@@ -38,7 +38,9 @@ namespace bloom::runtime {
 // VECTOR-1: semantics 8 covers transformed vector geometry at output resolution.
 // COLOR-3: semantics 9 adds image-effect kernels; existing primitive pixels are unchanged.
 // Semantics 10 evaluates pointwise affine RGB directly in premultiplied space.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 11;
+// Semantics 12 (#429) places a Composition Source by its nested frame instead of its nested
+// content bounds, so a nested composition with off-centre content renders in a new place.
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 12;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,

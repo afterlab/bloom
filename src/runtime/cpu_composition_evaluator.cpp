@@ -3036,9 +3036,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         [&](const CompiledCompositionSource& source) {
                             const auto& nested = plan->nestedPlans()[source.nestedPlanIndex];
                             slots[index] = nestedFrame->processImage_;
-                            bounds[index].local =
-                                nestedFrame->evaluatedBounds()[nested->output().value()].output;
-                            bounds[index].output = bounds[index].local;
+                            bounds[index] = detail::nestedCompositionFrameBounds(*nested);
                         },
                         [&](const CompiledVideoSource&) {
                             if (!selectedVideo || !selectedVideo->frame)
