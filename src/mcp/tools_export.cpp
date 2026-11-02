@@ -174,6 +174,17 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
     out.set(value, "cpuReferenceFrames", out.number(verification.provenance.cpuReferenceFrames));
     out.set(value, "gpuDisplayFrames", out.number(verification.provenance.gpuDisplayFrames));
     out.set(value, "cpuDisplayFrames", out.number(verification.provenance.cpuDisplayFrames));
+    // A published movie's reopen measurements (issue #424), named as in ExportReopenQuality;
+    // absent for an output without a tolerance profile.
+    if (const auto& quality = verification.reopenQuality) {
+        auto* reopen = out.object();
+        out.set(reopen, "toleranceProfile", out.text(quality->toleranceProfile));
+        out.set(reopen, "toleranceDigest", out.text(hex(quality->toleranceDigest)));
+        out.set(reopen, "maximumError", out.number(quality->maximumError));
+        out.set(reopen, "percentileMaximumError", out.number(quality->percentileMaximumError));
+        out.set(reopen, "meanError", out.number(quality->meanError));
+        out.set(value, "reopenQuality", reopen);
+    }
     return value;
 }
 

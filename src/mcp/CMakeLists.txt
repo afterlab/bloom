@@ -67,6 +67,16 @@ if(BUILD_TESTING)
         LABELS unit mcp
         TIMEOUT 120
     )
+    add_executable(bloom_mcp_export_reopen_quality_test tests/export_reopen_quality_tests.cpp)
+    target_link_libraries(bloom_mcp_export_reopen_quality_test PRIVATE bloom_mcp
+                          bloom_host_export_testing yyjson::yyjson)
+    bloom_enable_warnings(bloom_mcp_export_reopen_quality_test)
+    bloom_add_test(
+        NAME bloom.mcp.export-reopen-quality
+        COMMAND bloom_mcp_export_reopen_quality_test
+        LABELS unit mcp
+        TIMEOUT 120
+    )
     add_executable(bloom_mcp_http_parser_test tests/http_parser_tests.cpp)
     target_link_libraries(bloom_mcp_http_parser_test PRIVATE bloom_mcp)
     bloom_enable_warnings(bloom_mcp_http_parser_test)
