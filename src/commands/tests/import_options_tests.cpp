@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 namespace bloom::commands::test {
 namespace {
@@ -224,6 +225,46 @@ void testStillDuration(TestContext& test) {
                     compositionSettingsForAsset(plain, base).duration == base.duration,
                 "New Composition from a still is as long as the still");
 }
+// #432: importing a file the project already holds adds nothing and names the asset that holds
+// it, as bloom.asset.ensure-font does for a face, so a caller always gets one asset id per file.
+void testReimportReturnsExistingAsset(TestContext& test) {
+    const Fixture fixture;
+    auto seed = document::makeNewProject("Again", "Main", core::RationalTime::fromInteger(10));
+    Document document(std::move(seed.project));
+    CommandStack stack(document);
+    ImportOptions options;
+    options.sequences = false;
+    const auto import = [&](std::vector<std::filesystem::path> files) {
+        return run(document, stack,
+                   std::make_unique<ImportAssets>(std::move(files), fixture.directory,
+                                                  std::function<bool()>{}, ImportProgressCallback{},
+                                                  options));
+    };
+    const auto assetOutputs = [](const CommandResult& result) {
+        std::vector<document::AssetId> ids;
+        for (const auto& output : result.outputs)
+            if (const auto* id = std::get_if<document::AssetId>(&output.output.id);
+                id != nullptr && output.output.name == "asset")
+                ids.push_back(*id);
+        return ids;
+    };
+    const auto first = import({fixture.frame_(1)});
+    const auto firstIds = assetOutputs(first);
+    test.expect(first.changed() && firstIds.size() == 1, "the first import adds one asset");
+    const auto history = stack.size();
+
+    const auto again = import({fixture.frame_(1)});
+    test.expect(again.status == CommandStatus::NoChange && assetOutputs(again) == firstIds &&
+                    document.snapshot().project().assets().size() == 1 && stack.size() == history,
+                "re-importing the same file adds nothing and returns the existing asset id");
+
+    const auto mixed = import({fixture.frame_(1), fixture.frame_(2)});
+    const auto mixedIds = assetOutputs(mixed);
+    test.expect(mixed.changed() && mixedIds.size() == 2 && mixedIds.front() == firstIds.front() &&
+                    mixedIds.back() != firstIds.front() &&
+                    document.snapshot().project().assets().size() == 2,
+                "a batch names the held asset and the new one, one id per file in order");
+}
 } // namespace
 } // namespace bloom::commands::test
 
@@ -232,6 +273,7 @@ int main() {
     try {
         bloom::commands::test::testImportOptions(test);
         bloom::commands::test::testStillDuration(test);
+        bloom::commands::test::testReimportReturnsExistingAsset(test);
     } catch (const std::exception& error) {
         test.fail(error.what());
     }

@@ -633,6 +633,7 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
     if (!diagnostic_.empty())
         return OperationResult::rejected(OperationIssueCode::InvalidValue, diagnostic_);
     std::vector<OperationOutput> outputs;
+    bool added = false;
     const auto folder =
         folder_ && draft.project().findAssetFolder(*folder_) ? folder_ : std::nullopt;
     for (auto asset : assets_) {
@@ -641,8 +642,13 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
                 return candidate.locator.path == asset.locator.path &&
                        candidate.contentDigest == asset.contentDigest;
             });
-        if (existing != draft.project().assets().end())
+        // A file already in the project is not imported twice; its existing id is the output,
+        // exactly as bloom.asset.ensure-font returns an existing face, so a caller always gets
+        // one asset id per imported file.
+        if (existing != draft.project().assets().end()) {
+            outputs.push_back({"asset", existing->id});
             continue;
+        }
         const auto id = draft.ids().allocateAsset();
         if (!id)
             return OperationResult::rejected(OperationIssueCode::Unsupported,
@@ -661,9 +667,10 @@ OperationResult ImportAssets::apply(document::Draft& draft) const {
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Invalid imported asset");
         outputs.push_back({"asset", *id});
+        added = true;
     }
-    auto result = outputs.empty() ? OperationResult::noChange()
-                                  : OperationResult::applied(std::move(outputs));
+    auto result = added ? OperationResult::applied(std::move(outputs))
+                        : OperationResult::noChange(std::move(outputs));
     // The successful files commit together; each skipped file stays reported individually.
     for (const auto& failure : failures_)
         result.issues.push_back({OperationIssueCode::InvalidValue,

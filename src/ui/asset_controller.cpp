@@ -1912,11 +1912,15 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
             // reported with its own diagnostic.
             commands::Transaction transaction("Import Assets", base_->revision());
             if (transaction.add(std::move(**result.value()))) {
+                // The import names an asset it found already held as well as one it added, so
+                // "added" is an output asset the project did not hold before this transaction.
+                const document::Snapshot before = session_.snapshot();
                 const auto executed = session_.executeTransaction(std::move(transaction));
                 std::vector<std::string> added;
                 for (const auto& output : executed.outputs)
                     if (const auto* id = std::get_if<document::AssetId>(&output.output.id);
-                        id && output.output.name == "asset")
+                        id && output.output.name == "asset" &&
+                        before.project().findAsset(*id) == nullptr)
                         if (const auto* asset = session_.snapshot().project().findAsset(*id))
                             added.push_back(asset->locator.path);
                 report.imported = added.size();
