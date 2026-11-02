@@ -115,11 +115,14 @@ struct TextLayout final {
 // the ascender), and the bitmap is the exact union of every glyph's ink: nothing is clipped to a
 // line box here, so clipping is the compositor's decision rather than this function's.
 //
-// LAYOUT: one line, no wrapping, no shaping, no bidi, no line breaks. Glyphs advance left to right
-// by their own horizontal advance plus the face's kern pair, with the sub-pixel fraction of the pen
-// position handed to the rasterizer so spacing is not rounded per glyph. A newline or any other
-// control character is a glyph lookup like every other codepoint, not a layout instruction. Text
-// shaping is a separate, later concern; this is the proof path the CPU reference evaluator needs.
+// LAYOUT: no shaping and no bidi. Glyphs advance left to right by their own horizontal advance plus
+// the face's kern pair, with the sub-pixel fraction of the pen position handed to the rasterizer so
+// spacing is not rounded per glyph. TextLayoutOptions decides the rest: with the default
+// multiline = true a newline starts a new line (a carriage return is skipped), and with
+// multiline = false a newline or any other control character is a glyph lookup like every other
+// codepoint, not a layout instruction. Words wrap only when wrap is set with a positive box width.
+// Text shaping is a separate, later concern; this is the proof path the CPU reference evaluator
+// needs.
 [[nodiscard]] ImageResult<std::vector<Path>>
 textOutlines(const TextFont& font, std::string_view content, TextRasterParameters parameters,
              TextLayoutOptions layout = {}, PathCancellation cancelled = {});
