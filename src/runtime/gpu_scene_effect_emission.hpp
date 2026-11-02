@@ -248,8 +248,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                     plan.operations()[chain->source], plan, leafResolution(chain->source),
                     chain->matrix, *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
                     ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
-                    nullptr, ctx.coverageCache, cancellation, emit, charge, chargeCoverage,
-                    inputCommand, inputKey, result.consumedText, result.consumedShape))
+                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
+                    inputKey, result.consumedText, result.consumedShape))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -345,8 +345,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 plan.operations()[chain->source], plan, leafResolution(chain->source),
                 chain->matrix, *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect,
                 ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
-                nullptr, ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command,
-                key, consumedText, consumedShape);
+                ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command, key,
+                consumedText, consumedShape);
             if (!error)
                 consumedLeaf = chain->source;
             return error;
@@ -481,8 +481,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                     plan.operations()[chain->source], plan, leafResolution(chain->source),
                     chain->matrix, sourceWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
                     ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
-                    nullptr, ctx.coverageCache, cancellation, emit, charge, chargeCoverage,
-                    inputCommand, inputKey, result.consumedText, result.consumedShape))
+                    ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
+                    inputKey, result.consumedText, result.consumedShape))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -734,7 +734,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         if (const auto error = emitVectorLeafLayer(
                 plan.operations()[chain.source], plan, leafResolution(chain.source), chain.matrix,
                 *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
-                chain.opacity, false, ctx.allowance, operationIndex, nullptr, ctx.coverageCache,
+                chain.opacity, false, ctx.allowance, operationIndex, ctx.coverageCache,
                 cancellation, emit, charge, chargeCoverage, materialized, materializedKey,
                 result.consumedText, result.consumedShape)) {
             return error;

@@ -611,6 +611,25 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_nested_frame_placement_native
     PROPERTIES SKIP_RETURN_CODE 77)
 
+# #430: a size sweep of text parented to a 2x2 null, through real documents. The CPU sweep always
+# runs; the production GPU scene must match the CPU reference. Skips (exit 77) only the GPU half.
+add_executable(bloom_runtime_gpu_parented_text_sweep_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_parented_text_sweep_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_parented_text_sweep_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_parented_text_sweep_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+bloom_enable_warnings(bloom_runtime_gpu_parented_text_sweep_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_parented_text_sweep_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_parented_text_sweep_native
+    COMMAND bloom_runtime_gpu_parented_text_sweep_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_parented_text_sweep_native
+    PROPERTIES SKIP_RETURN_CODE 77)
+
 # Bounded GPU coverage contract gate. It enumerates every CompiledOperation/ImageEffectKernel
 # alternative, feature axis, render route, and built-in pixel node type from the same contract,
 # drives the REAL production CpuGpuSceneBuilder over one genuine fixture per required id, and

@@ -23,7 +23,7 @@ emitResizeFitCommand(const ResizeFitKernel& kernel, const OperationIndex input,
         if (const auto error = emitVectorLeafLayer(
                 ctx.plan->operations()[chain->source], *ctx.plan, *ctx.resolved, chain->matrix,
                 *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
-                chain->opacity, false, ctx.allowance, operation, nullptr, ctx.coverageCache,
+                chain->opacity, false, ctx.allowance, operation, ctx.coverageCache,
                 cancellation, emit, charge, chargeCoverage, inputCommand, inputKey,
                 result.consumedText, result.consumedShape))
             return error;

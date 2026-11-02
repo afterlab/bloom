@@ -130,26 +130,29 @@ publishVectorLeafBounds(const CompiledOperation& operation, const CompiledCompos
 }
 
 template <typename Emit, typename Charge, typename ChargeCoverage>
-[[nodiscard]] std::optional<GpuSceneLeafFailure> emitVectorLeafLayer(
-    const CompiledOperation& inputOperation, const CompiledCompositionPlan& plan,
-    const ResolvedEvaluation& resolved, const LayerMatrix& matrix,
-    const render::ImageWindow layerWindow, const render::ImageWindow fullDisplayWindow,
-    const core::PixelAspectRatio fullPixelAspect, const double hScale, const double vScale,
-    const double opacity, const bool nativeGrid, const std::uint64_t allowance,
-    const OperationIndex operationIndex, const render::LayerTransform* transformValue,
-    const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
-    const CancellationToken& cancellation, Emit&& emit, Charge&& charge,
-    ChargeCoverage&& chargeCoverage, GpuSceneCommandIndex& composed, std::string& semanticKey,
-    bool& consumedText, bool& consumedShape) {
+[[nodiscard]] std::optional<GpuSceneLeafFailure>
+emitVectorLeafLayer(const CompiledOperation& inputOperation, const CompiledCompositionPlan& plan,
+                    const ResolvedEvaluation& resolved, const LayerMatrix& matrix,
+                    const render::ImageWindow layerWindow,
+                    const render::ImageWindow fullDisplayWindow,
+                    const core::PixelAspectRatio fullPixelAspect, const double hScale,
+                    const double vScale, const double opacity, const bool nativeGrid,
+                    const std::uint64_t allowance, const OperationIndex operationIndex,
+                    const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
+                    const CancellationToken& cancellation, Emit&& emit, Charge&& charge,
+                    ChargeCoverage&& chargeCoverage, GpuSceneCommandIndex& composed,
+                    std::string& semanticKey, bool& consumedText, bool& consumedShape) {
     const auto* solidInput = std::get_if<CompiledSolid>(&inputOperation);
     const auto* textInput = std::get_if<CompiledText>(&inputOperation);
     const auto* shapeInput = std::get_if<CompiledShape>(&inputOperation);
 
-    if (textInput != nullptr && nativeGrid && transformValue != nullptr) {
+    if (textInput != nullptr && nativeGrid) {
         // The integer-grid CPU arm renders the text leaf's own proxy-scaled coverage image and
         // translates it by an exact integer. Build that leaf coverage over its own bitmap window,
         // then the identity TranslationOpacityBilinearV1 command performs the exact integer move
-        // and the layer opacity.
+        // and the layer opacity. The move is the FULL composed matrix's translation, parents
+        // included (#430): the layer's own unparented transform would place a parented leaf
+        // outside its layer window and draw nothing.
         GpuSceneCoverageSolidCommand leafCommand{
             .index = kInvalidGpuSceneCommand,
             .sourceOperation = operationIndex,
@@ -175,17 +178,12 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         const std::string leafKey = leafCommand.semanticKey;
         leafCommand.sourceOperation = operationIndex;
         const auto leafIndex = emit(std::move(leafCommand));
-        const auto device = transformValue->translationOnlyDeviceTranslation();
-        if (!device.has_value()) {
-            return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                                       "Translation-only transform lost its device translation"};
-        }
         const double gpuTranslationX =
-            device->x - (static_cast<double>(layerWindow.originX()) -
-                         static_cast<double>(leafSourceWindow.originX()));
+            matrix.x * hScale - (static_cast<double>(layerWindow.originX()) -
+                                 static_cast<double>(leafSourceWindow.originX()));
         const double gpuTranslationY =
-            device->y - (static_cast<double>(layerWindow.originY()) -
-                         static_cast<double>(leafSourceWindow.originY()));
+            matrix.y * vScale - (static_cast<double>(layerWindow.originY()) -
+                                 static_cast<double>(leafSourceWindow.originY()));
         OperationKey key;
         key.add(std::string{"gpu-translation-opacity-v1"});
         key.add(leafKey);

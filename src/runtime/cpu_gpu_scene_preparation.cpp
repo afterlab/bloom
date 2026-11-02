@@ -926,10 +926,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         detail::resolvedForClock(
                             frameResolved,
                             plan->operationClock(OperationIndex::fromRaw(chainSource))),
-                        chainMatrix, *layerWindow,
-                        fullDisplayWindow, fullPixelAspect, hScale, vScale,
-                        inputVec->opacity * opacity->value, leafPath && nativeGrid, allowance,
-                        operationIndex, &transformValue, coverageCache_, cancellation, emit,
+                        chainMatrix, *layerWindow, fullDisplayWindow, fullPixelAspect, hScale,
+                        vScale, inputVec->opacity * opacity->value, leafPath && nativeGrid,
+                        allowance, operationIndex, coverageCache_, cancellation, emit,
                         chargeTransient, chargeCoverage, composedIndex, semanticKey,
                         consumedTextLeaf, consumedShapeLeaf)) {
                     return fail(error->code, error->message);

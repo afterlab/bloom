@@ -184,9 +184,12 @@ for every reachable operation it cannot prepare. A vector source emits the
 immutable bounded `PathRasterCoverageGeometry` (integer scanline spans, never a host per-pixel mask)
 that the executor rasterizes through the native `GpuPathCoverage` producer; scene integration keeps
 that producer's device provenance and dispatch counters, so the Required
-`feature.geometry.vector_coverage` axis is carried by real GPU work rather than a host mask. A
-Composition Source publishes its nested frame as its bounds, as the CPU evaluator does
-([Layer And Graph Model](layer-graph-model.md#composition-sources)). Command
+`feature.geometry.vector_coverage` axis is carried by real GPU work rather than a host mask. A Text
+layer whose composed matrix is an identity linear map on the integer device grid keeps the CPU
+reference's leaf form: the glyph coverage over its own bitmap window, then one translation by the
+composed matrix's translation, parents included, so a parented text layer moves exactly as its
+CPU reference does. A Composition Source publishes its nested frame as its bounds, as the CPU
+evaluator does ([Layer And Graph Model](layer-graph-model.md#composition-sources)). Command
 semantic keys carry the resolved operands plus the pinned render SPIR-V digests and never node/layer
 IDs, operation indexes, or the revision. `ImageSource`/`VideoSource` leaves decode raw on the CPU
 task thread through the evaluator's own entry points and publish a frozen upload command; when the
