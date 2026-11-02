@@ -8,9 +8,9 @@ Date: 2026-10-25
 
 Dropping Assets items on the Timeline added a layer for the first dragged item only, always on top
 at the composition start, and files dropped from a file manager were only imported
-([ADR 0029](0029-import-progress-and-cancellation.md)). After Effects places dropped footage where
-it is dropped: at a stacking position in the layer outline, at a time in the time graph, several
-items at once, optionally end to end. The owner asked for the same behavior.
+([ADR 0029](0029-import-progress-and-cancellation.md)). A layer-based compositor places dropped
+footage where it is dropped: at a stacking position in the layer outline, at a time in the time
+graph, several items at once, optionally end to end. The owner asked for the same behavior.
 
 ## Decision
 
@@ -24,8 +24,8 @@ items at once, optionally end to end. The owner asked for the same behavior.
    playhead), a row and a frame over the lanes (the frame under the pointer, on the composition
    frame grid), or elsewhere (on top at the playhead). The Viewer always adds on top at the
    playhead; the add-layer commands center the layers. Alt at the drop sequences the items end to
-   end, as After Effects' Sequence Layers; a layer that would start after the composition ends
-   starts on its last frame, the same clamp a Timeline move uses.
+   end, as a compositor's sequence-layers command does; a layer that would start after the
+   composition ends starts on its last frame, the same clamp a Timeline move uses.
 3. **Payload.** An Assets drag also carries `application/x-bloom-layer-items`: every asset and
    composition in selection order, valid only for the session and document revision it was made
    for, like the existing single-item payloads, which the Nodes canvas keeps using unchanged.
@@ -39,8 +39,8 @@ items at once, optionally end to end. The owner asked for the same behavior.
    snapshot, while layer placement depends on the composition the artist is looking at when the
    import finishes.
 5. **Selection.** After a drop (and after a file drop's follow-up) the new layers are selected,
-   the uppermost primary, as in After Effects. This is a session selection change, not part of
-   the transaction.
+   the uppermost primary, as in a layer-based compositor. This is a session selection change, not
+   part of the transaction.
 6. **Indicators.** The layer stack reuses the reorder insertion line; the lanes paint the same
    line and an Accent time marker. Both are session-only presentation.
 

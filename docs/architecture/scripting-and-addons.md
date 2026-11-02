@@ -82,16 +82,17 @@ The facade versioning and compatibility policy is recorded in
 
 ## Public Python Model
 
-Bloom adopts the clarity of Blender's `context`, `data`, `ops`, and registerable-type model while
-preserving Bloom's asynchronous and command-based ownership rules. The resemblance should help an
-artist guess where an API lives; it is not a requirement to reproduce every behavior or
-context-dependent edge case.
+Bloom adopts the clarity of the `context`, `data`, `ops`, and registerable-type model familiar from
+established 3D applications' Python APIs while preserving Bloom's asynchronous and command-based
+ownership rules. The resemblance should help an artist guess where an API lives; it is not a
+requirement to reproduce every behavior or context-dependent edge case.
 
-This is behavioral and conceptual inspiration only. Bloom must not copy Blender source, add-on
-implementation code, generated bindings, bundled assets, or other GPL-licensed implementation
-material. API contracts and examples in this repository are independently authored from Bloom's
-own document, command, task, and extension architecture. Any third-party dependency or imported
-asset still passes license and provenance review before entering the source tree or distribution.
+This is behavioral and conceptual inspiration only. Bloom must not copy another application's
+source, add-on implementation code, generated bindings, bundled assets, or other GPL-licensed
+implementation material. API contracts and examples in this repository are independently authored
+from Bloom's own document, command, task, and extension architecture. Any third-party dependency or
+imported asset still passes license and provenance review before entering the source tree or
+distribution.
 
 The initial conceptual Python surface is:
 
@@ -139,10 +140,8 @@ or a Python sandbox. Scoped command, task, file, network, render and UI authoriz
 of the future add-on host. An operation whose target the session cannot supply is rejected with the
 context value it was missing, not with a bare missing-keyword error.
 
-This follows Blender's useful distinction between
-[`bpy.context`](https://docs.blender.org/api/current/bpy.context.html),
-[`bpy.data`](https://docs.blender.org/api/current/bpy.data.html), and
-[`bpy.ops`](https://docs.blender.org/api/current/bpy.ops.html), while avoiding implicit focused-area
+This follows the useful distinction, familiar from established 3D applications' Python APIs,
+between the current context, the data, and the operators, while avoiding implicit focused-area
 requirements for operations that can be expressed with explicit targets.
 
 ## Stable Proxies, Commands, And Undo
@@ -416,7 +415,7 @@ vendor-bloom-tools/
 Only `pyproject.toml`, `bloom-addon.toml`, and the declared import package are required. The manifest
 names an entry point from `bloom.addons.v1`; the entry point resolves to a normal Python module with
 a `register(registrar)` callable and optional `unregister(registrar)` cleanup hook. A minimal
-`addon.py` stays recognizable to Blender add-on authors:
+`addon.py` stays recognizable to authors of add-ons for established 3D applications:
 
 ```python
 from .operators import NormalizeTransforms
@@ -444,8 +443,8 @@ execution tier cannot support it.
 
 Registration and unregistration callbacks must be quick and deterministic. They declare classes,
 factories, schemas, and subscriptions; startup I/O or preparation is scheduled through the task
-service after registration. Blender's official API likewise separates module import from
-[`register()` and `unregister()`](https://docs.blender.org/api/current/info_overview.html#registration).
+service after registration. Established 3D applications' official APIs likewise separate module
+import from `register()` and `unregister()`.
 
 `bloom-addon.toml` is a static, versioned host manifest. `pyproject.toml` remains the source of
 standard package metadata. The first SDK spike freezes the exact manifest keys and wheel placement,

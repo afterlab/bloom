@@ -2,14 +2,14 @@
 
 ## The project panel
 
-Assets works like the After Effects Project panel. One tree holds your folders, compositions and
-imported media. It always fills the panel: **Name** takes whatever width the other columns leave.
-**Name**, **Type** and **Dimensions** (the picture's width × height) show by default; right-click
-the header, or open **View > Columns**, to add **Duration**, **Frame Rate**, **File Size** (the
-bytes the media takes on disk; an image sequence adds up its frames), **Tags** and **File
-Location**. Click a column header to sort by it, and click again to reverse; folders always stay at
-the top. Drag a header divider to resize a column or a header to move it. Bloom remembers your
-columns and their widths for the next session.
+Assets works like the project panel of a layer-based compositor. One tree holds your folders,
+compositions and imported media. It always fills the panel: **Name** takes whatever width the other
+columns leave. **Name**, **Type** and **Dimensions** (the picture's width × height) show by default;
+right-click the header, or open **View > Columns**, to add **Duration**, **Frame Rate**, **File
+Size** (the bytes the media takes on disk; an image sequence adds up its frames), **Tags** and
+**File Location**. Click a column header to sort by it, and click again to reverse; folders always
+stay at the top. Drag a header divider to resize a column or a header to move it. Bloom remembers
+your columns and their widths for the next session.
 
 Compositions show a film strip; every symbol in the list is drawn in the row's own color, and only
 a warning (missing media) is colored. An open folder shows an open folder, and a folder's name is
@@ -148,7 +148,7 @@ to the first item whose name starts with what you typed.
 ## Adding layers by dragging
 
 Drag footage or compositions from Assets onto the Timeline to add them to the open composition, as
-in After Effects:
+in a layer-based compositor:
 
 - Drop on the layer list to insert the layers at that position; they start at the playhead.
 - Drop over the time area to start them at the frame under the pointer, inserted at the row under

@@ -7,7 +7,7 @@ Date: 2026-08-25
 
 ## Context
 
-Bloom's design uses a Blender-like workspace in which viewer, nodes, timeline, media, properties, and
+Bloom's design uses a split-area workspace in which viewer, nodes, timeline, media, properties, and
 future editors are peer surfaces. Artists should be able to adapt the workspace to a task without
 the application hard-coding one permanent arrangement.
 

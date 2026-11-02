@@ -130,7 +130,7 @@ before it is treated as final. See
 The initial implementation compared the product requirements against:
 
 1. Enhanced dock widgets with replaceable editor content.
-2. A custom split-area tree with Blender-like split, merge, and editor replacement behavior.
+2. A custom split-area tree with area split, merge, and editor replacement behavior.
 
 The custom split-area tree now proves editor replacement, stable layout serialization, keyboard and
 mouse focus, resizing, close, and non-destructive panel maximization. Multi-monitor floating

@@ -9,17 +9,18 @@ Updated: 2026-10-30
 This document owns Bloom's keyboard and pointer bindings. It is the single list: a binding that is not
 here is not a binding, and a key that appears here appears exactly once per editor.
 
-Bloom is Adobe-first. An artist arriving from After Effects or Photoshop should find the navigation and
-editing keys where they already are, and Bloom does not spend a bare letter key on something those
-hosts reach with a modifier — bare letters belong to tools.
+Bloom follows the established conventions of layer-based compositors and image editors. An artist
+arriving from one of them should find the navigation and editing keys where they already are,
+and Bloom does not spend a bare letter key on something those hosts reach
+with a modifier — bare letters belong to tools.
 
 ## Rules
 
 - **One meaning per key per editor.** A key does not change meaning depending on what is selected.
 - **A modifier-free letter is a tool, not a command**, except the Timeline's own keys (the B/N range
-  marks and After Effects' A, P, S, R, T, U, M, E, J and K; see "Timeline keys"), which answer only
-  while the Timeline holds focus or no widget does. Commands that destroy, duplicate, or toggle
-  state take a modifier or live in a menu.
+  marks and the compositor-standard A, P, S, R, T, U, M, E, J and K; see "Timeline keys"), which
+  answer only while the Timeline holds focus or no widget does. Commands that destroy, duplicate, or
+  toggle state take a modifier or live in a menu.
 - **A command may live in a menu without owning a key.** Mute, collapse, and dissolve are exactly
   that: they are in the node context menu and bind nothing.
 - **A focused text field keeps its own keys.** While an in-node value field or rename field holds
@@ -45,7 +46,7 @@ hosts reach with a modifier — bare letters belong to tools.
 | `Ctrl+S` / `Ctrl+Shift+S` | Save / Save As |
 | `Ctrl+Q` | Quit |
 | `Ctrl+Alt+N` | New Composition… |
-| `Ctrl+Alt+K` | Composition Settings… for the active composition (After Effects' `Ctrl+K` splits layers here) |
+| `Ctrl+Alt+K` | Composition Settings… for the active composition (the compositor-standard `Ctrl+K` splits layers here) |
 | `Space` | Play/pause immediately from cache in any panel; focused text entry keeps Space |
 | `Ctrl+Shift+Space`, `Numpad 0` | RAM Preview: cache this composition's range, then play it; press again, or `Esc`, to cancel (never fires while typing in a field) |
 | `Esc` | Cancel the RAM preview being cached (bound only while one is) |
@@ -62,10 +63,11 @@ command, and undo restores and reactivates the composition.
 ## Tools And The Toolbar
 
 There is ONE active tool for the whole application ([ADR 0031](../decisions/0031-contextual-tool-bar.md),
-the After Effects model). `ToolController`, owned by the window's `CompositionSession` and handed to
-every Viewer and the toolbar through it, holds the tool as session/UI state; it is never project
-truth and is not saved. A tool chosen anywhere is the tool in every Viewer, and it acts in whichever
-Viewer receives the gesture; a gesture in flight in one Viewer is confirmed when the tool changes.
+the layer-based compositor model). `ToolController`, owned by the window's `CompositionSession` and
+handed to every Viewer and the toolbar through it, holds the tool as session/UI state; it is never
+project truth and is not saved. A tool chosen anywhere is the tool in every Viewer, and it acts in
+whichever Viewer receives the gesture; a gesture in flight in one Viewer is confirmed when the tool
+changes.
 
 | Binding | Action |
 | --- | --- |
@@ -287,10 +289,10 @@ the playhead on the layer's own clock when the path is keyed), and clicking an o
 
 ## Assets
 
-Assets is the project panel (#378), after the After Effects Project panel: one tree of folders,
-compositions and imported assets with columns, a collapsible search row and a summary strip
-(`ui-grammar.md` owns the presentation). Its keys belong to the focused tree, which claims them
-through `ShortcutOverride` so a window-level shortcut cannot take them; text entry stays in the
+Assets is the project panel (#378), modelled on a layer-based compositor's project panel: one tree
+of folders, compositions and imported assets with columns, a collapsible search row and a summary
+strip (`ui-grammar.md` owns the presentation). Its keys belong to the focused tree, which claims
+them through `ShortcutOverride` so a window-level shortcut cannot take them; text entry stays in the
 search or inline rename field.
 
 | Gesture or control | Action |
@@ -311,7 +313,7 @@ search or inline rename field.
 | Click, Shift-click, Ctrl-click; Up/Down/Left/Right, Home/End | Selects one row, a range or a set; arrows move and Left/Right collapse or expand folders |
 | F2 or Return | Renames the current row in place (asset, composition or folder); Return, Escape and clicking away commit |
 | Delete or Backspace, footer Delete | Deletes the selection; a used item, or a folder that holds items, asks first (see below) |
-| Double-click a composition | Switches the shared `CompositionSession` to that composition, as in After Effects; it opens no dialog. Double-clicking a folder expands it |
+| Double-click a composition | Switches the shared `CompositionSession` to that composition, as in a layer-based compositor; it opens no dialog. Double-clicking a folder expands it |
 | Click a Tags cell | Opens the search row filtering by the asset's first tag |
 | Drag rows onto a folder, onto a row, or onto empty space | Moves the dragged assets, compositions and folders into that folder, the row's folder, or the root, as one undoable step; a folder never moves into itself or a subfolder |
 | Drag rows to Timeline or Viewer | Makes a layer of every dragged footage item and composition, in the order they were selected (see "Layer drops" under Timeline) |
@@ -574,14 +576,14 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Drop Assets items onto the layer stack | Inserts a layer for each at the row under the pointer, starting at the playhead |
 | Drop Assets items onto the lanes | Inserts them at the row under the pointer, starting at the frame under the pointer |
 | Drop Assets items elsewhere in the Timeline | Adds them on top, starting at the playhead |
-| `Alt` held at the drop | Sequences several items end to end (After Effects' Sequence Layers) instead of starting them together |
+| `Alt` held at the drop | Sequences several items end to end (a compositor's sequence-layers command) instead of starting them together |
 | Drop files or folders onto the Timeline | Imports them (the import progress modal), then makes layers of what was imported at the same place, as one more undoable step |
 
 ### Timeline keys
 
-After Effects' Timeline keys. They are `Qt::WidgetWithChildrenShortcut` actions on the Timeline,
-so they answer while the layer table, the lanes or the graph hold focus, and also when no widget in
-the window holds focus; a text or value field being typed in keeps its letters.
+The compositor-standard Timeline keys. They are `Qt::WidgetWithChildrenShortcut` actions on the
+Timeline, so they answer while the layer table, the lanes or the graph hold focus, and also when no
+widget in the window holds focus; a text or value field being typed in keeps its letters.
 
 | Binding | Action |
 | --- | --- |
@@ -597,8 +599,8 @@ They act on the selected layers, or on every listed layer when none is selected;
 locked layer. A reveal is editor state like expansion: clicking the layer's twirl closes it and the
 next twirl shows every property. Clashes: R, E, P and T are also the Rectangle, Ellipse, Pen and
 Text tool letters, but those are read only while a Viewer or the Toolbar holds focus (not window
-shortcuts), so each key has one meaning per focused panel, as in After Effects (where the
-Composition panel's tools take other letters). K, M, S and A appear elsewhere only with a modifier
+shortcuts), so each key has one meaning per focused panel, as in a layer-based compositor (where the
+composition viewer's tools take other letters). K, M, S and A appear elsewhere only with a modifier
 (`Ctrl+K` Split, `Ctrl+Alt+K` Composition Settings, `Ctrl+M` Add to Export Queue, `Ctrl+S` Save,
 `Ctrl+A` Select All); bare M (Nodes mute) is retired. J, U, `[`, `]`, `Alt+[` and `Alt+]` were
 unbound.
@@ -606,24 +608,25 @@ unbound.
 ### Layer drops
 
 Dropping footage (images, image sequences, video, audio) or compositions from Assets onto the
-Timeline creates layers in the active composition, as in After Effects (#380). While dragging, the
-layer stack shows the Accent insertion line (`timelineLayerInsertionIndicator`) above the row the
-layers will join and the lanes continue it (`timelineDropRowLine`); over the lanes an Accent time
-marker (`timelineDropTimeMarker`) shows the frame where they will start. The marker snaps to the composition frame grid. Several items become several
-layers in the order they were selected in Assets, the first on top; they all start at the same
-frame, or, with Alt held at the drop, end to end, each starting where the previous one ends (a
-layer that would start after the composition ends starts on its last frame). A composition becomes
-a nested composition layer; the active composition itself, fonts and LUTs are not accepted. Each
-layer keeps its media's own length up to the composition's duration (layer-owned time, ADR 0024,
-exactly as the add-layer commands set it): a sequence its frame count, a video or a nested
-composition its duration, a still the composition's duration from its start. The whole drop is one undoable step, built from the ordinary add-layer commands and the
-Timeline's own move. The new layers are then selected, the uppermost primary, so Properties shows
-it at once; the selection is session state, not part of the undoable edit. Files dropped from a file
-manager are imported first through the import
-progress modal ([ADR 0029](../decisions/0029-import-progress-and-cancellation.md)); once the import
-commits, their layers are added at the place they were dropped as a second undoable step, and the
-status bar (or the import summary) says how many layers were added
-([ADR 0030](../decisions/0030-layer-drops.md)). Dropping on the Nodes canvas is unchanged.
+Timeline creates layers in the active composition, as in a layer-based compositor (#380). While
+dragging, the layer stack shows the Accent insertion line (`timelineLayerInsertionIndicator`) above
+the row the layers will join and the lanes continue it (`timelineDropRowLine`); over the lanes an
+Accent time marker (`timelineDropTimeMarker`) shows the frame where they will start. The marker
+snaps to the composition frame grid. Several items become several layers in the order they were
+selected in Assets, the first on top; they all start at the same frame, or, with Alt held at the
+drop, end to end, each starting where the previous one ends (a layer that would start after the
+composition ends starts on its last frame). A composition becomes a nested composition layer; the
+active composition itself, fonts and LUTs are not accepted. Each layer keeps its media's own length
+up to the composition's duration (layer-owned time, ADR 0024, exactly as the add-layer commands set
+it): a sequence its frame count, a video or a nested composition its duration, a still the
+composition's duration from its start. The whole drop is one undoable step, built from the ordinary
+add-layer commands and the Timeline's own move. The new layers are then selected, the uppermost
+primary, so Properties shows it at once; the selection is session state, not part of the undoable
+edit. Files dropped from a file manager are imported first through the import progress modal ([ADR
+0029](../decisions/0029-import-progress-and-cancellation.md)); once the import commits, their layers
+are added at the place they were dropped as a second undoable step, and the status bar (or the
+import summary) says how many layers were added ([ADR 0030](../decisions/0030-layer-drops.md)).
+Dropping on the Nodes canvas is unchanged.
 
 The visible header offers **Add** (Solid, Text and shapes), **View**, and **Select**, in that order.
 Edit remains available in the overflow menu and reuses the application's Undo/Redo actions and

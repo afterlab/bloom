@@ -171,7 +171,7 @@ ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit 
 
 ## Export panel
 
-The Export panel (`exportEditor`, editor id `bloom.export`) is the After Effects Render Queue in
+The Export panel (`exportEditor`, editor id `bloom.export`) is a compositor's render queue in
 Bloom's components. The panel header (`exportHeader`) holds the editor picker and **Add
 composition** (`exportAddCompositionButton`, Secondary, shown once the list has a job); on the right
 **Stop All** (`exportStopAllButton`, Danger, shown only while something renders) and **Start All**
@@ -222,20 +222,20 @@ keyboard focus; the ▾ quick picks are plate-less carets.
 
 **Render Settings** (`exportRenderSettingsDialog`) and **Output Module**
 (`exportOutputModuleDialog`) are `KDialog`s of `Width::Wide` built from `KSection` groups holding
-two `KForm` columns side by side, as After Effects groups them; fields keep their content width.
-Render Settings has one group, `Composition “SC020”`: Range (Work area, Whole composition, Custom,
-One frame) on the left; Start, End (frame `KValueField`s with their timecode for Custom and One
-frame, readouts otherwise) and Duration on the right. Output Module has the preset's own group
-(`“ProRes 422 HQ”`: Format, If a file is there | Post-render, Cached frames), **Quality** (Profile,
-Compression, Look, Audio | Color space, or Display and View; only what applies to the format) and,
-for image sequences, **Numbering** (Start number or Use the frame numbers | Digits). OK writes
-every change as one undoable edit; Cancel writes nothing. Beside Format, a plus `KIconButton`
-(`exportSavePreset`, "Save as preset…") opens a `kit::promptText` name prompt
-(`exportSavePresetPrompt`, Save | Cancel) whose inline refusal keeps Save disabled for an empty
-name or one the Format list already has (ignoring case). Save stores the current settings with
+two `KForm` columns side by side, as a compositor's render queue groups them; fields keep their
+content width. Render Settings has one group, `Composition “SC020”`: Range (Work area, Whole
+composition, Custom, One frame) on the left; Start, End (frame `KValueField`s with their timecode
+for Custom and One frame, readouts otherwise) and Duration on the right. Output Module has the
+preset's own group (`“ProRes 422 HQ”`: Format, If a file is there | Post-render, Cached frames),
+**Quality** (Profile, Compression, Look, Audio | Color space, or Display and View; only what applies
+to the format) and, for image sequences, **Numbering** (Start number or Use the frame numbers |
+Digits). OK writes every change as one undoable edit; Cancel writes nothing. Beside Format, a plus
+`KIconButton` (`exportSavePreset`, "Save as preset…") opens a `kit::promptText` name prompt
+(`exportSavePresetPrompt`, Save | Cancel) whose inline refusal keeps Save disabled for an empty name
+or one the Format list already has (ignoring case). Save stores the current settings with
 `ExportPresetCatalogue::saveUserPreset`, a per-user setting outside Undo that never replaces a
-preset; the new preset is listed under My presets and chosen in Format, so OK applies it. A save
-the catalogue refuses is reported under Format (`exportSavePresetError`).
+preset; the new preset is listed under My presets and chosen in Format, so OK applies it. A save the
+catalogue refuses is reported under Format (`exportSavePresetError`).
 
 When an output's file exists under Ask first, the job reads **Waiting for your OK**, and Start
 (in the ⋯ menu) or Start All asks once with `kit::confirm` (`exportReplaceConfirm`): "Replace
@@ -300,10 +300,10 @@ Workspace field on the right:
   `ChromeGroupGap`: navigation (Select V, Hand H, Zoom Z), creation (the shape slot, Line, Pen P,
   Text T) and the Cryptomatte eyedropper. Rectangle R, Ellipse E, Polygon and Star share one slot
   that shows the last shape chosen and carries a small corner mark; a press and hold or a
-  right-click opens its flyout menu of all four (After Effects' shape slot). Each slot wears the
-  one control look with the Selected plate when its tool is active (the tool-column Ghost
-  exception is gone). A tooltip is the tool's name and shortcut ("Select (V)"), then how to use
-  it; the shape slot adds how to reach the other shapes. The tools never collapse.
+  right-click opens its flyout menu of all four (a compositor's shape tool slot). Each slot wears
+  the one control look with the Selected plate when its tool is active (the tool-column Ghost
+  exception is gone). A tooltip is the tool's name and shortcut ("Select (V)"), then how to use it;
+  the shape slot adds how to reach the other shapes. The tools never collapse.
 - **Tool options**, after the tools: only options backed by real session or document state, and
   only for the active tool. Select and the Pen show the anchor handle-mode strip (below); the shape
   tools, Line and the Pen show Fill (a check box and a square color chip), Stroke (the same) and
@@ -501,7 +501,7 @@ duration.
 
 ### Viewer canvas and empty state
 
-The canvas has two backdrops, as in After Effects, and they are separate questions:
+The canvas has two backdrops, as in a layer-based compositor, and they are separate questions:
 
 - **The surround** is the content area outside the composition frame. View > Background chooses
   it: Solid (the default, the `Canvas` token), Gray (`CanvasGrey`), Black (`CanvasBlack`) or White
@@ -613,11 +613,11 @@ including the primary selection, uses an Accent outline.
 
 The title band starts with a `CaretDown` disclosure caret (`CaretRight` while collapsed); a click
 on it collapses or expands that card, the same `SetNodeCollapsed` Node > Collapse issues. A
-collapsed card is its header alone, as a folded Blender node: only its linked sockets stay, centered
-down its two edges, and it grows past `NodeTitleBand` only when those need the room. Source cards
-(Image, Video, Audio, Shape) carry no preview: their rows start under the title band, and a missing
-or unreadable asset shows a `Warn` badge at the right of the header. Merge's ordered multi-input
-gives each stack slot its own attach point, the middle of its pill segment.
+collapsed card is its header alone, as a folded node in a node editor: only its linked sockets stay,
+centered down its two edges, and it grows past `NodeTitleBand` only when those need the room. Source
+cards (Image, Video, Audio, Shape) carry no preview: their rows start under the title band, and a
+missing or unreadable asset shows a `Warn` badge at the right of the header. Merge's ordered
+multi-input gives each stack slot its own attach point, the middle of its pill segment.
 
 The footer's right edge holds the Arrange button: a labelled `KButton` with the `Arrange` glyph and
 an "Arrange" label (the Viewer footer's RAM Preview shape), running Arrange All.
@@ -884,39 +884,38 @@ the same keys at once only make an artist ask which one they are editing. A `Siz
 header (`timelineGraphHeader`) over the canvas carries the segmented Value Graph / Speed Graph
 switch and the Normalize check box, persisted under `timeline/graph-type` and
 `timeline/graph-normalize`. The Value Graph plots the curve; the Speed Graph plots its speed (value
-units per second) read off the sampler, with After Effects' horizontal influence/speed handles.
-Normalize (Blender) draws every curve scaled to -1...1 in one shared window; edits are converted back
+units per second) read off the sampler, with a compositor's horizontal influence/speed handles.
+Normalize draws every curve scaled to -1...1 in one shared window; edits are converted back
 and always write real values, and the scale holds still for the length of a drag. Below the header,
 the left gutter is `Size::GraphValueAxis` wide and carries the ACTIVE curve's value ticks -- the
 curve of the primary keyframe selection, else the one on the selected row, else the first -- and the
 gutter is painted over the curves so a line running off the left edge slides under the axis instead
 of colliding with its labels. While the graph is shown the shared time axis leads with the gutter's
 width (`TimelineRuler::setLeadingInset`), so the ruler, the work area and the graph move together
-and a key at frame 0 always sits clear of the gutter. The background grid is After Effects': `Border`
-hairlines at the gutter's value ticks and at the ruler's own labelled ticks. A component curve strokes
-in `Color::ComponentX/Y/Z/W` (X red, Y green, Z blue; R/G/B/A borrow them unchanged so one hue always
-means "the first component"); single-value curves take `Color::GraphCurve1..5` in curve order,
-cycling. The selected curve -- every curve carrying a selected key, else the selected row's -- is
-drawn brighter (`kit::emphasizedStrokeFor`) and on top. Selection is Accent, which none of the curve
-tokens is. Handles are drawn only for a SELECTED key on an eased segment: an arm in the curve's own
-ink to a `Size::GraphHandleDot` Accent dot. The graph toggle persists under `timeline/graph-editor`.
-View exposes checkable Keyframes and Graph Editor choices; enabling either turns the other off, and
-both may be off to show plain layer lanes. The one header tool button is the graph toggle
-(`timelineGraphToggle`, `IconId::GraphEditor`) at the right end of the layer-table header, beside
-Fullscreen: it and `Shift+F3` switch the right pane between the keyframes and the graph.
-`timeline/keyframes-visible` and `timeline/snapping` persist Keyframes and Snap to Frames.
-Header menu order is Add, View,
-Select, with text-only menu buttons and no caret indicators; the composition dropdown is absent.
-These are the unchanged shared KMenuButton/EditorChromeRowSpec controls and application theme used
-by Assets, Viewer and Nodes: no Timeline-specific menu painting, stylesheet or background palette.
-Right-clicking empty layer-table space opens a shared kit popup with the existing Add submenu,
-then direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions.
-There are no View/Select wrapper submenus or selection-only layer commands; action objects and
-checked state are shared with the header. Opening the popup never changes the layer selection.
-Timeline's fullscreen button sits at the right edge of the layer-table header, beside the divider.
-Keys off hides both key lanes and collapsed summary
-glyphs. Empty key-lane labels paint no chip. Lane snapping is `snapping && !Shift`; in the graph,
-Shift is the axis lock and snapping follows Snap to Frames alone.
+and a key at frame 0 always sits clear of the gutter. The background grid is a compositor's:
+`Border` hairlines at the gutter's value ticks and at the ruler's own labelled ticks. A component
+curve strokes in `Color::ComponentX/Y/Z/W` (X red, Y green, Z blue; R/G/B/A borrow them unchanged so
+one hue always means "the first component"); single-value curves take `Color::GraphCurve1..5` in
+curve order, cycling. The selected curve -- every curve carrying a selected key, else the selected
+row's -- is drawn brighter (`kit::emphasizedStrokeFor`) and on top. Selection is Accent, which none
+of the curve tokens is. Handles are drawn only for a SELECTED key on an eased segment: an arm in the
+curve's own ink to a `Size::GraphHandleDot` Accent dot. The graph toggle persists under
+`timeline/graph-editor`. View exposes checkable Keyframes and Graph Editor choices; enabling either
+turns the other off, and both may be off to show plain layer lanes. The one header tool button is
+the graph toggle (`timelineGraphToggle`, `IconId::GraphEditor`) at the right end of the layer-table
+header, beside Fullscreen: it and `Shift+F3` switch the right pane between the keyframes and the
+graph. `timeline/keyframes-visible` and `timeline/snapping` persist Keyframes and Snap to Frames.
+Header menu order is Add, View, Select, with text-only menu buttons and no caret indicators; the
+composition dropdown is absent. These are the unchanged shared KMenuButton/EditorChromeRowSpec
+controls and application theme used by Assets, Viewer and Nodes: no Timeline-specific menu painting,
+stylesheet or background palette. Right-clicking empty layer-table space opens a shared kit popup
+with the existing Add submenu, then direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit,
+Select All and Deselect All actions. There are no View/Select wrapper submenus or selection-only
+layer commands; action objects and checked state are shared with the header. Opening the popup never
+changes the layer selection. Timeline's fullscreen button sits at the right edge of the layer-table
+header, beside the divider. Keys off hides both key lanes and collapsed summary glyphs. Empty
+key-lane labels paint no chip. Lane snapping is `snapping && !Shift`; in the graph, Shift is the
+axis lock and snapping follows Snap to Frames alone.
 
 Timeline lanes use `LanePadding` (12) on both sides of their time axis. The layer column/lanes split
 is a draggable `KSplitHandle` (`Size::SplitHandle`, 6, its hit zone; it paints one snapped
@@ -933,35 +932,33 @@ the SelectionEdge Accent edge at the layer row's leading side. Every row of the 
 layer, group, parameter and component -- takes the list hover step (one surface rung up) under the
 pointer and is clickable; a clicked group or property row wears the same selected-row recipe
 (`KListSurface::setRowStates` under the rows that paint no background, `KRow::setHovered` on a layer
-row) and its key lane the same wash. The layer table's columns read, as in After Effects: Video,
-Audio, Solo and Lock, the Label square, the disclosure and name (which takes every extra pixel),
-the Shy switch (`KRow::setCells` switches after the name), then Blending, Parent and Matte. The
-column headings put the label filter (`timelineLabelFilterButton`, `IconId::LabelFilter`) over the
-Label squares and the Hide Shy Layers toggle (`timelineHideShyToggle`, `IconId::Shy`) over the Shy
-switches; both are plated `KIconToggle`s that wear the Accent plate while filtering or hiding. New
-names: `timelineLayerLabel`, `timelineLayerShy`, `timelineLayerLabelMenu`,
-`timelineSelectLabelGroupAction`, `timelineLabelFilterMenu`. Every populated and empty row uses
-one snapped Background hairline separator (`kit::paintRowSeparator`, the window color, never a
-lighter border), without alternating fills.
-The work-area slider occupies the lane half
-of the layer-column header row, directly below the ruler. Its active range uses SurfaceRaised; outside the range stays Surface, with accent endpoint handles.
-Cached-frame strips use green Ok. Ruler tick labels and the current-frame readout are centered on
-their needles. The Accent playhead has a solid tab with a downward-pointing tip below its readout,
-joining the single-pixel line through the work area and lanes; the readout never paints over it.
-The readout reserves its rectangle against tick labels. The footer navigator hides
-at fit, keeping the zoom slider visible. It uses a rounded 10px neutral BorderHover thumb with no
-painted background or track; hover/drag uses BorderActive. Its ends advertise resizing, and its
-body advertises panning.
-Clip trim edges show SizeHorCursor using the same
-hit tolerance as trimming; locked layers do not advertise trimming. The vertical scrollbar appears
-only when the expanded row content exceeds the viewport. Only then does a ScrollBarTrack-width
-gutter reserve its space in the ruler, work-area and body rows together. Otherwise lanes extend
-to the panel's right edge, with no fullscreen or scrollbar gutter.
-Object, Transform, Source groups are collapsible Title Case rows, joined by one group per upstream
-value node driving the layer, titled by that node's display name. KPropertyRow's leading-indicator
-layout places the diamond or disclosure in a ToggleCell column, then the compact label and
-bounded controls; vector component labels live inside fields, three per row so a Vector 3 shows all
-of its components. New name: `timelinePropertyDisclosure`.
+row) and its key lane the same wash. The layer table's columns read, as in a layer-based compositor:
+Video, Audio, Solo and Lock, the Label square, the disclosure and name (which takes every extra
+pixel), the Shy switch (`KRow::setCells` switches after the name), then Blending, Parent and Matte.
+The column headings put the label filter (`timelineLabelFilterButton`, `IconId::LabelFilter`) over
+the Label squares and the Hide Shy Layers toggle (`timelineHideShyToggle`, `IconId::Shy`) over the
+Shy switches; both are plated `KIconToggle`s that wear the Accent plate while filtering or hiding.
+New names: `timelineLayerLabel`, `timelineLayerShy`, `timelineLayerLabelMenu`,
+`timelineSelectLabelGroupAction`, `timelineLabelFilterMenu`. Every populated and empty row uses one
+snapped Background hairline separator (`kit::paintRowSeparator`, the window color, never a lighter
+border), without alternating fills. The work-area slider occupies the lane half of the layer-column
+header row, directly below the ruler. Its active range uses SurfaceRaised; outside the range stays
+Surface, with accent endpoint handles. Cached-frame strips use green Ok. Ruler tick labels and the
+current-frame readout are centered on their needles. The Accent playhead has a solid tab with a
+downward-pointing tip below its readout, joining the single-pixel line through the work area and
+lanes; the readout never paints over it. The readout reserves its rectangle against tick labels. The
+footer navigator hides at fit, keeping the zoom slider visible. It uses a rounded 10px neutral
+BorderHover thumb with no painted background or track; hover/drag uses BorderActive. Its ends
+advertise resizing, and its body advertises panning. Clip trim edges show SizeHorCursor using the
+same hit tolerance as trimming; locked layers do not advertise trimming. The vertical scrollbar
+appears only when the expanded row content exceeds the viewport. Only then does a
+ScrollBarTrack-width gutter reserve its space in the ruler, work-area and body rows together.
+Otherwise lanes extend to the panel's right edge, with no fullscreen or scrollbar gutter. Object,
+Transform, Source groups are collapsible Title Case rows, joined by one group per upstream value
+node driving the layer, titled by that node's display name. KPropertyRow's leading-indicator layout
+places the diamond or disclosure in a ToggleCell column, then the compact label and bounded
+controls; vector component labels live inside fields, three per row so a Vector 3 shows all of its
+components. New name: `timelinePropertyDisclosure`.
 
 The expanded layer's hierarchy nests one step per depth: the layer row itself (never indented), a
 group (Object/Transform/Source or a DRIVE-1 upstream node), that group's parameter rows, and an
@@ -1034,7 +1031,7 @@ row to exact reference numbers with the `reference` suffix.
 
 ## Image Assets And Source Cards
 
-Assets is one tree after the After Effects Project panel (#378): folders, compositions and
+Assets is one tree modelled on a compositor's project panel (#378): folders, compositions and
 imported assets together. Above it sit a compact summary strip and, when opened, a search row; the
 panel footer keeps New Composition, New Folder, Import and Delete as fast icon buttons.
 
@@ -1045,7 +1042,7 @@ shown columns always span the viewport exactly at any panel width and no dead ba
 right; every other shown column fits its content (never below `ValueCellMin`) until the user drags
 it. Visibility, dragged widths, order and sort are a per-user setting (`assets/header-state-v2`,
 `assets/sized-columns`), never project data. Type names the kind; Dimensions is `W × H` (Size was
-renamed: size reads as bytes on disk). Duration shows the After Effects timecode `H:MM:SS:FF` at
+renamed: size reads as bytes on disk). Duration shows the compositor timecode `H:MM:SS:FF` at
 the item's rate; its tooltip carries the frame count and rate in the one duration format (#380),
 `0:00:02:00 (48 frames) at 24 fps` (`(1 frame)` in the singular). A sequence plays one member per
 composition frame, so it is timed at the active composition's rate (24 fps with none open) over
@@ -1123,17 +1120,19 @@ a priority row: as the panel narrows its menus fold one at a time into the overf
 (`dots-three-vertical`) -- Select first, then Add, then View -- and the Search toggle keeps its
 place beside Maximize. Text set by any other route (a Tags cell, automation) opens the row too.
 
-Context menus follow After Effects. An asset: New Composition from Selection, Interpret Footage…,
-Copy Interpretation, Paste Interpretation (footage only), Replace Footage…, Reload Footage, Reveal in File Manager, Rename, Edit Tags…,
-Delete. A composition: Open, Composition Settings…, Rename, Duplicate, Delete. A folder: Rename,
-Delete. Each ends with New Folder, New Composition… and Import…, which is the whole menu on empty
-space. Reveal selects the file in the platform's file manager (freedesktop.org
-`FileManager1.ShowItems` on Linux, `open -R` on macOS, `explorer /select,` on Windows) and opens the
-folder holding it where that is not available; one helper chooses the command per platform. Deleting unused items is immediate; deleting a used item, or a folder that holds items,
-first asks in a warning box that names the usage, and for folders offers Delete Folders Only (the
-contents move up) or Delete with Contents. Every delete is one transaction and one undo step.
+Context menus follow a layer-based compositor's. An asset: New Composition from Selection, Interpret
+Footage…, Copy Interpretation, Paste Interpretation (footage only), Replace Footage…, Reload
+Footage, Reveal in File Manager, Rename, Edit Tags…, Delete. A composition: Open, Composition
+Settings…, Rename, Duplicate, Delete. A folder: Rename, Delete. Each ends with New Folder, New
+Composition… and Import…, which is the whole menu on empty space. Reveal selects the file in the
+platform's file manager (freedesktop.org `FileManager1.ShowItems` on Linux, `open -R` on macOS,
+`explorer /select,` on Windows) and opens the folder holding it where that is not available; one
+helper chooses the command per platform. Deleting unused items is immediate; deleting a used item,
+or a folder that holds items, first asks in a warning box that names the usage, and for folders
+offers Delete Folders Only (the contents move up) or Delete with Contents. Every delete is one
+transaction and one undo step.
 
-Interpret Footage (#381) is one KDialog form (Wide) per selection, After Effects' order: Frame
+Interpret Footage (#381) is one KDialog form (Wide) per selection, in a compositor's order: Frame
 Rate (a mode dropdown: the file's rate or Conform to for video, Match the composition or Assume
 this frame rate for a sequence, with an exact rate field), Start Timecode (the source's or an
 override), Alpha (Guess from the file, Ignore, Straight, Premultiplied with a Matte Color chip shown
@@ -1300,7 +1299,7 @@ Restore Defaults and every failure notice are asynchronous. The keys are in
 
 The Composition dialog (New Composition and Composition Settings, #376) is one `kit::KDialog` at
 least `DialogWideWidth` wide, titled `New Composition` or `Composition Settings`, built only from kit
-controls, with two tabs in a `kit::KTabs` (After Effects style; no collapsible sections). **Basic**
+controls, with two tabs in a `kit::KTabs` (compositor style; no collapsible sections). **Basic**
 holds what most compositions change: Name, Preset with its buttons and summary line, Size with the
 link toggle and the frame aspect beside it in muted Value text (`16:9`, `2.39:1`), Frame Rate,
 Duration with its unit, and Background Color. **Advanced** holds the rarely changed values: Pixel
@@ -1322,7 +1321,7 @@ interaction contract is in
 [interaction-model.md](interaction-model.md#composition-dialog).
 
 **Preferences window.** Preferences is a settings window rather than a dialog form, laid out the
-way Blender lays out its Preferences and built from the Properties panel's own parts, so a
+way a 3D application lays out its preferences and built from the Properties panel's own parts, so a
 Preferences page and a Properties section look the same. A `PreferencesRailWidth` sidebar lists the
 categories one per `ListRow`, grouped by an `Spacing::S` gap: General (and Sounds when it lands) |
 Viewer, Timeline, Node Graph | Memory & Caches, Performance; a page that no group names appears in a

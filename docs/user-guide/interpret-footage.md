@@ -2,9 +2,9 @@
 
 Interpret Footage tells Bloom how to read a piece of media: at what rate it plays, where its
 timecode starts, what its alpha channel means, whether it is interlaced, how wide its pixels are,
-how often it loops, and what color it is in. It works like After Effects' Interpret Footage
-dialog. The interpretation belongs to the asset, so every layer that uses the asset follows it,
-and it is saved with the project.
+how often it loops, and what color it is in. It works like the Interpret Footage
+dialog of a layer-based compositor. The interpretation belongs to the asset, so every layer that
+uses the asset follows it, and it is saved with the project.
 
 ## Opening it
 

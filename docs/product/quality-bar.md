@@ -11,15 +11,14 @@ technical compositor with a desktop wrapper. Artists should be able to trust it 
 the interface stays responsive, operations are predictable and reversible, image semantics remain
 correct, and the application explains anything it cannot preserve or render.
 
-After Effects, DaVinci Resolve, and Blender are workflow references for the level of capability and
-care artists already expect. Bloom may study their public behavior, terminology, and documented
-workflows, but must not copy proprietary code, assets, or distinctive implementation details. A
-reference application establishes an expectation to investigate, not a requirement to reproduce
-every feature or interaction.
+Established layer-based compositors, editing and grading suites, and 3D applications are workflow
+references for the level of capability and care artists already expect. Bloom may study their public
+behavior, terminology, and documented workflows, but must not copy proprietary code, assets, or
+distinctive implementation details. A reference application establishes an expectation to
+investigate, not a requirement to reproduce every feature or interaction.
 
-Useful public references include the [After Effects documentation][after-effects], the official
-[DaVinci Resolve training material][resolve-training], and Blender's documentation for
-[Editors][blender-editors] and [Areas][blender-areas].
+Useful public references are those applications' published user documentation and training
+material, including their documentation of editors and split workspace areas.
 
 ## Artist Experience Principles
 
@@ -112,10 +111,10 @@ area or panel:
   semantics.
 - Maximizing, moving, replacing, and restoring an editor must preserve its meaningful context.
 
-This adopts the artist-friendly flexibility demonstrated by Blender's editor model without requiring
-Bloom to reproduce Blender's implementation. File pickers, preferences, transient popovers, and
-genuine confirmations may remain dialogs when that is clearer; the rule applies to persistent work
-surfaces.
+This adopts the artist-friendly flexibility demonstrated by split-area editor models without
+requiring Bloom to reproduce any application's implementation. File pickers, preferences, transient
+popovers, and genuine confirmations may remain dialogs when that is clearer; the rule applies to
+persistent work surfaces.
 
 ## Professional Interaction Baseline
 
@@ -165,8 +164,4 @@ evidence-backed answers:
 9. Has representative project profiling shown that interaction remains responsive?
 10. Is artist-facing documentation sufficient to use and troubleshoot it without reading source?
 
-[after-effects]: https://helpx.adobe.com/after-effects/desktop.html
-[resolve-training]: https://www.blackmagicdesign.com/products/davinciresolve/training
-[blender-editors]: https://docs.blender.org/manual/en/latest/editors/index.html
-[blender-areas]: https://docs.blender.org/manual/en/latest/interface/window_system/areas.html
 [qt-threads]: https://doc.qt.io/qt-6/threads-qobject.html

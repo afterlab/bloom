@@ -1,18 +1,17 @@
 # Export
 
-Exports run from the **Export** panel, a queue saved in the project, much like the After Effects
-Render Queue. Open it by choosing **Export** in any panel's editor picker, or choose **File → Add to Export
-Queue** (Ctrl+M). If an Export panel is already open Bloom brings it forward; otherwise the Timeline's
-panel becomes Export, and with no Timeline a new panel opens along the bottom
-([Workspace presets](workspace-presets.md#opening-the-export-panel)). The same **Add to Export Queue**
-item is on a composition row in Assets, and you can drag
-a composition from Assets onto the list. Bloom adds a job for the composition, reveals the panel
-and selects the new job. A job renders one composition range to one or more outputs, one job at a
-time in queue order, in the background while you keep working.
-An agent connected over [MCP](mcp.md) brings the panel forward the same way only when it calls
-`export.reveal`; its queue edits never reveal the panel on their own.
+Exports run from the **Export** panel, a queue saved in the project, much like a compositor's
+render queue. Open it by choosing **Export** in any panel's editor picker, or choose **File → Add to
+Export Queue** (Ctrl+M). If an Export panel is already open Bloom brings it forward; otherwise the
+Timeline's panel becomes Export, and with no Timeline a new panel opens along the bottom ([Workspace
+presets](workspace-presets.md#opening-the-export-panel)). The same **Add to Export Queue** item is
+on a composition row in Assets, and you can drag a composition from Assets onto the list. Bloom adds
+a job for the composition, reveals the panel and selects the new job. A job renders one composition
+range to one or more outputs, one job at a time in queue order, in the background while you keep
+working. An agent connected over [MCP](mcp.md) brings the panel forward the same way only when it
+calls `export.reveal`; its queue edits never reveal the panel on their own.
 
-The panel is laid out like the After Effects Render Queue. At the top, **Current Render** says in
+The panel is laid out like a compositor's render queue. At the top, **Current Render** says in
 one line what renders now ("Rendering SC020 · frame 404 of 2156 · 0:28 elapsed · about 2 min
 left", or **Idle**); open it with its caret for a progress bar. Below it is the render list, with
 the columns **Render** (a check box: include the job in **Start All**), **#** (queue order),
@@ -22,7 +21,7 @@ in its Status cell. Drag a row to change the order. Each row's **⋯** menu (or 
 **Duplicate**, **Remove**, **Move up**, **Move down**, **Copy as bloom-cli command** and **Copy as
 Python**. On a narrow panel Started and Render Time give way first.
 
-Open a job with its caret to see its settings, one line each, as in After Effects:
+Open a job with its caret to see its settings, one line each, as in a compositor's render queue:
 
 - **Render Settings:** the range, for example **Work area · 0–239**. Click it (it is blue) for the
   **Render Settings** dialog; the **▾** before it picks **Work area**, **Whole composition** or
@@ -40,8 +39,8 @@ shows only while something renders. A control that cannot act now says why in it
 ## Jobs and outputs
 
 Output keeps alpha: a composition's Background Color is only shown in the Viewer behind the
-composition, so exports and renders of a format that can carry transparency keep it, like After
-Effects.
+composition, so exports and renders of a format that can carry transparency keep it, as in other
+layer-based compositors.
 
 A new job renders the composition's work area (or the whole composition when it has none) to one
 **H.264 MP4** output at `Exports/{name}.mp4` beside the project. The H.264 encoder ships with
@@ -85,16 +84,16 @@ computer that lacks the user preset it came from. Every format is listed and cho
 the panel never asks you to install anything. If a format still cannot run when the job starts, the
 job reads **Failed** with a plain sentence saying why, like any other failure.
 
-The **Output Module** dialog is grouped like After Effects': the preset's own group (**Format**,
-**If a file is there**, **Post-render**: **Add to Assets when done**, and **Cached frames**: **Use
-cached frames**), **Quality** and, for image sequences, **Numbering** (**Start number**, or **Use
-the frame numbers**, and **Digits**). **Quality** shows only what the chosen format has: **Profile**
-where a format has several, **Compression** for OpenEXR, **Color space** for OpenEXR and DPX,
-**Display** and **View** for movies, PNG and TIFF, **Bake in the look**, and **Include audio** for
-movies. **Color space**, **Display** and **View** are lists of what the project's color setup
-offers, with **Project default** first, so a name cannot be mistyped. The bit rate, encoder choice,
-audio sample rate and file-name pattern an output already has are kept and used; the panel does not
-edit them.
+The **Output Module** dialog is grouped like a compositor's output settings: the preset's own group
+(**Format**, **If a file is there**, **Post-render**: **Add to Assets when done**, and **Cached
+frames**: **Use cached frames**), **Quality** and, for image sequences, **Numbering** (**Start
+number**, or **Use the frame numbers**, and **Digits**). **Quality** shows only what the chosen
+format has: **Profile** where a format has several, **Compression** for OpenEXR, **Color space** for
+OpenEXR and DPX, **Display** and **View** for movies, PNG and TIFF, **Bake in the look**, and
+**Include audio** for movies. **Color space**, **Display** and **View** are lists of what the
+project's color setup offers, with **Project default** first, so a name cannot be mistyped. The bit
+rate, encoder choice, audio sample rate and file-name pattern an output already has are kept and
+used; the panel does not edit them.
 
 - **H.264** is encoded by OpenH264, which ships with Bloom on Linux, macOS and Windows; nothing is
   downloaded or installed. On a computer with an NVIDIA graphics driver, Bloom encodes on the GPU

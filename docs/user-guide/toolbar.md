@@ -11,9 +11,9 @@ undoable command Properties, the Timeline and the menus use.
 
 ## Tools
 
-There is one active tool for the whole application, as in After Effects. Choosing a tool in the bar,
-or with its key while a Viewer has focus, changes it for every Viewer; the tool then acts in
-whichever Viewer you use it in.
+There is one active tool for the whole application, as in a layer-based compositor. Choosing a tool
+in the bar, or with its key while a Viewer has focus, changes it for every Viewer; the tool then
+acts in whichever Viewer you use it in.
 
 | Tool | Key | Use |
 | --- | --- | --- |

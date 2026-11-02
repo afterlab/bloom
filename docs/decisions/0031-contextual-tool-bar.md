@@ -11,9 +11,10 @@ Date: 2026-10-30
 [ADR 0008](0008-replaceable-editor-panels.md) made the menu bar Bloom's only fixed surface and
 every workspace area a replaceable panel. Tools then lived in a column inside each Viewer, so each
 Viewer had its own active tool, tool options sat on the canvas, and there was nowhere to put
-selection actions such as aligning layers. After Effects and Illustrator put the tools, the active
-tool's options and the selection's actions in one bar under the menu bar, with one active tool for
-the whole application. The owner asked for the same, and for align and distribute.
+selection actions such as aligning layers. Layer-based compositors and vector illustration
+applications put the tools, the active tool's options and the selection's actions in one bar under
+the menu bar, with one active tool for the whole application. The owner asked for the same, and for
+align and distribute.
 
 ## Decision
 
@@ -21,12 +22,12 @@ the whole application. The owner asked for the same, and for align and distribut
    application surfaces. Every workspace content area stays a replaceable editor panel; nothing
    else becomes fixed. The bar can be hidden with Window > Toolbar. Its visibility is
    session/UI state persisted like other workspace UI state, never project truth.
-2. **One app-wide active tool (the After Effects model).** One application-level, typed owner holds
-   the active tool, passed explicitly to the Viewers that use it (no service locator or event bus).
-   The tool acts in whichever Viewer receives the gesture. Temporary overrides (Space for Hand and
-   similar) stay per gesture. The existing rules stay: bare letters choose tools, creation tools are
-   one-shot and return to Select, Escape confirms, a zero-size press keeps the tool, and choosing a
-   tool alone never authors anything. The per-Viewer tool column goes away.
+2. **One app-wide active tool (the layer-based compositor model).** One application-level, typed
+   owner holds the active tool, passed explicitly to the Viewers that use it (no service locator or
+   event bus). The tool acts in whichever Viewer receives the gesture. Temporary overrides (Space
+   for Hand and similar) stay per gesture. The existing rules stay: bare letters choose tools,
+   creation tools are one-shot and return to Select, Escape confirms, a zero-size press keeps the
+   tool, and choosing a tool alone never authors anything. The per-Viewer tool column goes away.
 3. **Three regions.** Left: the tools. Middle: options for the active tool, backed only by real
    session or document state. Right: actions on the selection (align and distribute, with the
    Align To target). Within a tool the slots are stable: an action that does not apply is
@@ -41,7 +42,8 @@ the whole application. The owner asked for the same, and for align and distribut
      composition-space rectangle around its transformed content (`EvaluatedOperationBounds::output`,
      not clipped by the frame).
    - **Targets.** Composition is the composition frame. Selection is the union of the requested
-     layers' bounds. Key Object is one layer's bounds, Illustrator's key object; the key never moves.
+     layers' bounds. Key Object is one layer's bounds, the key object of vector illustration
+     applications; the key never moves.
    - **The move** is a composition-space delta converted into the layer's parent space through the
      parent's evaluated world transform (rotation, scale and shear; a translation does not depend on
      any anchor) and added to Position. A layer carried by a moving ancestor moves only by the rest.

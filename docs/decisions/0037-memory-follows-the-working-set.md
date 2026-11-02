@@ -36,8 +36,8 @@ Three rules govern every store that holds pixels:
    (YUV, half, 8/16-bit) where scrubbing needs them, never expanded float32 copies.
 3. **Memory follows the working set.** Playback holds its read-ahead window. Intermediates are
    retained only where reuse is measured.
-   - **Finished frames are the exception** (the owner's After Effects model): frames rendered during
-     playback and RAM Preview stay cached up to the headroom and are evicted last (#413).
+- **Finished frames are the exception** (the owner's layer-based compositor model): frames rendered
+     during playback and RAM Preview stay cached up to the headroom and are evicted last (#413).
    - **Source caches hold the playback window**, not every frame played: the decoded video frames
      and the image-sequence source revisions keep a frame's source only while that frame is inside
      the window around the playhead (below), or while a render in flight still needs it. Finished

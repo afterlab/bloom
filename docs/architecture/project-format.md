@@ -5,27 +5,25 @@ interpretation, a sequence's imported frame range and a video stream's coded pix
 1.34"). Document 1.33 added the export formats `vp9-webm`, `av1-webm` and `av1-mp4` and their codec
 profiles (see "Export Formats In Document 1.33"). Document 1.32 added the optional
 keyframe member `handleMode` (see "Keyframe Handle Modes In Document 1.32"). Document 1.31 added the optional node group `color` (see "Node Group
-Colors In Document 1.31"). Document 1.30 added Blender's keyframe easing equations (ten interpolation
-tokens and the optional keyframe `easing` member) and the optional presentation-only layer members
-`shy` and `nameFollowsSource` (see "Easing And Layer Flags In Document 1.30"). Document 1.29 added
-the export queue: the required last project member
-`exportQueue` and the `exportJob`/`exportOutput` allocator namespaces (see "Export Queue In Document
-1.29"). Document 1.28 changed no member: it marks projects saved after ordinary
-and untagged SDR video in Auto began to be shown through the sRGB texture space (see "Video Color
-Default In Document 1.28"). Document 1.27 added the optional composition `folder`, the Assets folder
-that holds a composition (see "Composition Folders In Document 1.27"), on top of the 1.26 Image
-source node v2 (optional `part` and `layer` parameters and a `channels` output; see "Channel Sets
-In Document 1.26") and optional composition `timecode` (see "Composition Timecode In Document
-1.26"), the 1.25
-video stream field order and timecode type and the optional Video node audio stream selection (see
-"Video Stream Metadata In Document 1.25"), the 1.24
-optional layer masks and track matte on Layer Output boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
+Colors In Document 1.31"). Document 1.30 added Robert Penner's keyframe easing equations (ten
+interpolation tokens and the optional keyframe `easing` member) and the optional presentation-only
+layer members `shy` and `nameFollowsSource` (see "Easing And Layer Flags In Document 1.30").
+Document 1.29 added the export queue: the required last project member `exportQueue` and the
+`exportJob`/`exportOutput` allocator namespaces (see "Export Queue In Document 1.29"). Document 1.28
+changed no member: it marks projects saved after ordinary and untagged SDR video in Auto began to be
+shown through the sRGB texture space (see "Video Color Default In Document 1.28"). Document 1.27
+added the optional composition `folder`, the Assets folder that holds a composition (see
+"Composition Folders In Document 1.27"), on top of the 1.26 Image source node v2 (optional `part`
+and `layer` parameters and a `channels` output; see "Channel Sets In Document 1.26") and optional
+composition `timecode` (see "Composition Timecode In Document 1.26"), the 1.25 video stream field
+order and timecode type and the optional Video node audio stream selection (see "Video Stream
+Metadata In Document 1.25"), the 1.24 optional layer masks and track matte on Layer Output
+boundaries, the Path animation curve kind and the optional `layerMask` allocator namespace (see
 "Layer Masks In Document 1.24") on top of the 1.23 layer-owned time members (see "Layer Time In
-Document 1.23"), the 1.22 explicit external file-URI asset
-locators, the 1.21 LUT asset kind, 1.20 config-managed asset input color-space ids,
-the 1.19 optional per-composition working color-space override, the 1.18 `project.dataBlocks`
-collection, and the `dataBlock` allocator namespace.
-See [data blocks](data-blocks.md) for the model and provenance contract.
+Document 1.23"), the 1.22 explicit external file-URI asset locators, the 1.21 LUT asset kind, 1.20
+config-managed asset input color-space ids, the 1.19 optional per-composition working color-space
+override, the 1.18 `project.dataBlocks` collection, and the `dataBlock` allocator namespace. See
+[data blocks](data-blocks.md) for the model and provenance contract.
 
 Status: accepted
 
@@ -1518,7 +1516,7 @@ Document `1.26` persists the multi-channel nodes of
 - `bloom.cryptomatte` (node schema 1, #364) is a new node type: `channels` (ChannelSet) and `image`
   inputs, `mask` (Mask) and `image` outputs, and the String parameters `layer`
   (`bloom.cryptomatte.layer`, at most 256 bytes) and `mattes` (`bloom.cryptomatte.mattes`, the
-  Nuke-syntax matte list, at most 65536 bytes).
+  matte list in the common Cryptomatte syntax, at most 65536 bytes).
 
 The `1.25` → `1.26` DOM step rewrites only the node-record `schemaVersion` of `bloom.image-source`
 nodes from 1 to 2; the new parameters are optional, so no record is inserted and every edge and
@@ -1552,7 +1550,7 @@ read it. The `1.30` → `1.31` DOM step `migrateNodeGroupColorsV1_30` only advan
 
 ## Easing And Layer Flags In Document 1.30
 
-Document `1.30` adds Blender's easing equations
+Document `1.30` adds Robert Penner's easing equations
 ([animation-and-time.md](animation-and-time.md#easing-equations)) and two presentation-only layer
 flags. Every addition is optional or a new value, so the `1.29` → `1.30` DOM step
 `migrateEasingAndLayerFlagsV1_29` only advances the version, and a re-saved older project changes

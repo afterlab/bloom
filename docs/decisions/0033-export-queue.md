@@ -13,7 +13,7 @@ One export runs at a time, the settings are lost when it ends, and the orchestra
 `src/ui/frame_export_controller*.cpp`, a Qt class, so headless scripting, MCP and `bloom-cli` reach
 the same pipeline through separate code.
 
-The owner wants an Export panel with an export queue, like After Effects' Render Queue, and has
+The owner wants an Export panel with an export queue, like a compositor's render queue, and has
 decided:
 
 1. The queue (jobs, render settings and outputs) is saved in the project. Run status, progress,

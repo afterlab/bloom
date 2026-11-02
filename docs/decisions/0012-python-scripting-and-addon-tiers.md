@@ -6,10 +6,10 @@ Date: 2026-08-25
 
 ## Context
 
-Bloom needs a Blender-like artist automation API, studio pipeline integration, headless scripting,
-and a credible route for third-party extensions including custom UI. Supporting multiple public
-languages or exposing internal document/Qt objects directly would multiply compatibility cost and
-violate Bloom's command, threading, modularity, and project-preservation rules.
+Bloom needs a 3D-application-style artist automation API, studio pipeline integration, headless
+scripting, and a credible route for third-party extensions including custom UI. Supporting multiple
+public languages or exposing internal document/Qt objects directly would multiply compatibility cost
+and violate Bloom's command, threading, modularity, and project-preservation rules.
 
 ## Decision
 
@@ -18,11 +18,12 @@ violate Bloom's command, threading, modularity, and project-preservation rules.
   target is CPython 3.13.x for CY2026.
 - Bundle a private interpreter and expose stable proxies, immutable reads, typed commands,
   transactions, tasks, events, diagnostics, and contribution registries.
-- Organize the public API around Blender-familiar `bloom.context`, `bloom.data`, `bloom.ops`,
+- Organize the public API around the familiar `bloom.context`, `bloom.data`, `bloom.ops`,
   `bloom.types`, and explicit `register()` / `unregister()` concepts. Keep permission checks at the
   host gateways and keep persistent mutation on the command/undo path.
-- Treat that familiarity as clean-room behavioral inspiration only: do not copy Blender source,
-  add-on implementation code, generated bindings, assets, or GPL-licensed implementation material.
+- Treat that familiarity as clean-room behavioral inspiration only: do not copy another
+  application's source, add-on implementation code, generated bindings, assets, or GPL-licensed
+  implementation material.
 - Use standard wheels, `pyproject.toml`, and namespaced Python entry points plus a small inspectable
   Bloom manifest.
 - Accept wheels, ZIP/source archives, local folders, and Git URLs through one inert staging and

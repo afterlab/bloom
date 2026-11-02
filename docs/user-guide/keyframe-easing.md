@@ -11,13 +11,13 @@ leaves it. The last key of a curve has no outgoing segment and is always Linear.
 | Constant | Holds the key's value until the next key, then jumps. |
 | Linear | Moves at a steady speed. |
 | Bezier | A smooth curve shaped by the two keys' handles. New handles give a gentle ease in and out. |
-| Sinusoidal, Quadratic, Cubic, Quartic, Quintic, Exponential, Circular | Blender's easing curves, from gentlest (Sinusoidal) to sharpest (Exponential). |
+| Sinusoidal, Quadratic, Cubic, Quartic, Quintic, Exponential, Circular | The standard easing curves, from gentlest (Sinusoidal) to sharpest (Exponential). |
 | Back | Overshoots its target and settles back, or pulls back before it starts. |
 | Bounce | Bounces against the target like a dropped ball. |
 | Elastic | Springs past the target and oscillates into place. |
 
-The easing curves are Blender's, so a curve you know from Blender's Graph Editor looks the same in
-Bloom.
+The easing curves are the standard ones, so a curve you know from a 3D application's graph editor
+looks the same in Bloom.
 
 ### Ease mode
 
@@ -26,7 +26,7 @@ Each easing curve applies to one or both ends of its segment:
 - **Ease In** eases the start of the segment.
 - **Ease Out** eases the end of the segment.
 - **Ease In and Out** eases both ends.
-- **Automatic** is Blender's default: Ease Out for Back, Bounce and Elastic, and Ease In for every
+- **Automatic** is the usual default: Ease Out for Back, Bounce and Elastic, and Ease In for every
   other curve.
 
 ### Back, amplitude and period
@@ -39,7 +39,7 @@ another mode and back never loses them.
   is 0.8. An amplitude smaller than the change between the two keys scales the swing down
   smoothly.
 - **Period** (Elastic curve): the time between swings, in seconds. The default, about 0.17 seconds,
-  is Blender's 4.1 frames at 24 fps. A period of 0 picks one automatically from the segment's
+  is the usual 4.1 frames at 24 fps. A period of 0 picks one automatically from the segment's
   length.
 
 Bloom stores keyframe times in seconds, so changing a composition's frame rate never changes how an
@@ -47,8 +47,8 @@ eased segment moves.
 
 ## Easy Ease
 
-Easy Ease works like After Effects' Easy Ease (F9): the selected keys come to a gentle stop and
-start again, with 33.33% influence and zero speed. **Easy Ease In** (Shift+F9 in After Effects)
+Easy Ease (F9) works as in a layer-based compositor: the selected keys come to a gentle stop and
+start again, with 33.33% influence and zero speed. **Easy Ease In** (Shift+F9)
 eases only the side arriving at each key, and **Easy Ease Out** (Ctrl+Shift+F9) only the side
 leaving it. The eased segments become Bezier. The other end of a segment keeps the speed it had, so
 easing one key does not change how its neighbors move. Easy Ease is one undo step for the whole
@@ -62,10 +62,11 @@ from the right-click **Handles** menu in the Graph Editor, that decides how its 
 - **Free** -- the handles are independent. This is how every key behaves until you change it.
 - **Aligned** -- the handles stay in a straight line through the key. Drag one and the other turns
   to follow it, keeping its own length.
-- **Auto** -- Bloom places the handles for you, like Blender's Automatic Clamped handles: they follow
-  the direction between the neighboring keys and flatten at peaks and valleys, so the curve never
-  overshoots. They update by themselves whenever a neighboring key moves or changes value. The first
-  and last key of a curve are always flat. If you drag an Auto handle, that key becomes Aligned.
+- **Auto** -- Bloom places the handles for you, like the usual automatic clamped handles: they
+  follow the direction between the neighboring keys and flatten at peaks and valleys, so the curve
+  never overshoots. They update by themselves whenever a neighboring key moves or changes value. The
+  first and last key of a curve are always flat. If you drag an Auto handle, that key becomes
+  Aligned.
 
 Changing the mode to **Free** or **Aligned** moves nothing and never changes your render, so RAM
 Preview and cached frames are kept. Switching to **Auto** repositions the handles, which is an
@@ -76,9 +77,9 @@ Projects saved before handle modes existed open with every key Free and look exa
 
 ## Shy layers
 
-Mark a layer **shy** to hide it from the layer table while the table's shy filter is on, like After
-Effects' Shy switch. Shy never changes what renders, and turning it on or off keeps your RAM Preview
-and every cached frame.
+Mark a layer **shy** to hide it from the layer table while the table's shy filter is on, like the
+compositor-standard Shy switch. Shy never changes what renders, and turning it on or off keeps your
+RAM Preview and every cached frame.
 
 ## Layer names that follow their source
 
