@@ -175,6 +175,15 @@ grant with libvpx) is a notice file of its lock component and is reproduced in
 its pkg-config record (FFmpeg reads them through `--pkg-config-flags=--static`), gives MSVC the
 `<name>.lib` spelling and refuses any shared artifact.
 
+Kvazaar fixes its sample depth at compile time, so its one lock component is built twice from the
+same archive and vector: the 8-bit archive (`libkvazaar`) and a 10-bit archive (`libkvazaar10`,
+issue #408) built with `KVZ_BIT_DEPTH=10` and the force-included `kvazaar10-symbols.h`, which gives
+every external symbol a `kvz10_` prefix so both link into one `libavcodec`.
+`kvazaar10-install.cmake` refuses an archive that still defines an unprefixed symbol (every
+external symbol on ELF and Mach-O; Kvazaar's own names with MSVC, whose objects also carry shared
+COMDAT helpers) and installs it under its own names (`libkvazaar10`, `include/kvazaar10/`,
+`kvazaar10.pc`). FFmpeg reaches it through the reviewed `libkvazaar10` encoder patch.
+
 NVENC uses nv-codec-headers, recorded with `header-only` linkage and an FFmpeg `build` edge: the
 superbuild installs the MIT headers and `ffnvcodec.pc` (Linux and Windows), and FFmpeg's NVENC
 encoders load the NVIDIA driver at run time, so no NVIDIA code is linked or shipped.

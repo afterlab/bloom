@@ -10,7 +10,7 @@
     "provenancePolicy": "not-published",
     "provenanceReview": {
       "path": "dependencies/licenses/kvazaar/provenance.md",
-      "sha256": "sha256:824af16dd5e147fbd8a6466f2c7df20648a42c4157f8bd17d75396d9349811c8"
+      "sha256": "sha256:adf096caff058b6d6324ca6015e6974f1d72841efee701f014b71deafd06463d"
     },
     "provenance": []
   },
@@ -29,9 +29,9 @@
     "modified": false,
     "reviewRecord": {
       "path": "dependencies/licenses/kvazaar/review.md",
-      "sha256": "sha256:b724201c34d9da08526714aefe6b9b4e5ddcda6ed2fcd6fae998573e5e62730a"
+      "sha256": "sha256:df2bd498932b77240cdfb0208875a9307a6de11f9b74cb337e8e01ad79c9866f"
     },
-    "reviewedAt": "2026-10-31"
+    "reviewedAt": "2026-11-02"
   },
   "patches": [],
   "dependencies": [],
@@ -45,10 +45,16 @@
           "id": "bloom.feature.kvazaar.bundled-static",
           "state": "enabled",
           "reason": "Built from source as a static library-only archive linked into the worker's libavcodec on every platform"
+        },
+        {
+          "id": "bloom.feature.kvazaar.bundled-static-10bit",
+          "state": "enabled",
+          "reason": "A second build of the same archive with KVZ_BIT_DEPTH=10 and kvz10_-prefixed external symbols, linked into the worker libavcodec for HEVC Main 10 on every platform"
         }
       ],
       "capabilities": [
-        "bloom.capability.kvazaar.hevc-encode"
+        "bloom.capability.kvazaar.hevc-encode",
+        "bloom.capability.kvazaar.hevc-main10-encode"
       ],
       "shippingRoles": [
         "library",

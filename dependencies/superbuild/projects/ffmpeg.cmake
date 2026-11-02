@@ -51,13 +51,15 @@ else()
     endif()
 endif()
 
-# Bundled permissive codecs (codec-common.cmake): OpenH264 (H.264 encode), Kvazaar (HEVC encode),
+# Bundled permissive codecs (codec-common.cmake): OpenH264 (H.264 encode), Kvazaar (HEVC encode, an
+# 8-bit and a 10-bit archive, kvazaar.cmake),
 # dav1d (AV1 decode), SVT-AV1 (AV1 encode), libvpx (VP9 encode) and Opus (Opus encode) are static
 # archives linked into libavcodec on every platform, so the worker ships no extra runtime files. --pkg-config-flags=--static makes FFmpeg read their
 # Libs.private runtime libraries.
 set(BLOOM_FFMPEG_DEPENDS
     bloom_dependency_openh264
     bloom_dependency_kvazaar
+    bloom_dependency_kvazaar10
     bloom_dependency_dav1d
     bloom_dependency_svt_av1
     bloom_dependency_libvpx
@@ -78,7 +80,8 @@ endif()
 # Reviewed source patches (dependencies/patches/ffmpeg/, recorded in the lock with their digests and
 # apply order). The Windows build takes `patch` from the same MSYS2 installation as its shell.
 set(BLOOM_FFMPEG_PATCHES
-    "${CMAKE_CURRENT_LIST_DIR}/../../patches/ffmpeg/0001-libkvazaar-pad-frames-to-whole-blocks.patch")
+    "${CMAKE_CURRENT_LIST_DIR}/../../patches/ffmpeg/0001-libkvazaar-pad-frames-to-whole-blocks.patch"
+    "${CMAKE_CURRENT_LIST_DIR}/../../patches/ffmpeg/0002-libkvazaar10-hevc-main10-encoder.patch")
 find_program(BLOOM_FFMPEG_PATCH_PROGRAM NAMES patch
     HINTS "$ENV{MSYS2_ROOT}/usr/bin" "C:/msys64/usr/bin" REQUIRED)
 set(BLOOM_FFMPEG_PATCH_COMMAND)

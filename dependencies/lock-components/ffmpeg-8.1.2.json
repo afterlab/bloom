@@ -10,7 +10,7 @@
     "provenancePolicy": "required",
     "provenanceReview": {
       "path": "dependencies/licenses/ffmpeg/provenance.md",
-      "sha256": "sha256:7fa736b52f541a1f61cd71810a2bf1ccfba8ac41834a2074911b65a7a6358155"
+      "sha256": "sha256:e961cf10aa42bb1de0b55d0dfb35d5ad5ed1d22afd18c63f5e0e4591bb092a23"
     },
     "provenance": [
       {
@@ -40,9 +40,9 @@
     "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/ffmpeg/review.md",
-      "sha256": "sha256:c852b96d5c99613015c6412d742356af1baa691914fd4d58ca77ebc5721b45ca"
+      "sha256": "sha256:1125922e5a54fcb334580c95d7006582ecd0ae6b7ac0cc59ae33eeb7a5de12a7"
     },
-    "reviewedAt": "2026-10-31"
+    "reviewedAt": "2026-11-02"
   },
   "patches": [
     {
@@ -50,6 +50,12 @@
       "sha256": "sha256:bfc386833ef7ca6f878a8e0fb7769ed20fc7df9b597266a01f0e6c1a97969e9e",
       "applyOrder": 0,
       "reason": "libkvazaar: pad frames to whole 8x8 blocks so Kvazaar encodes every even extent and crops with its conformance window"
+    },
+    {
+      "path": "dependencies/patches/ffmpeg/0002-libkvazaar10-hevc-main10-encoder.patch",
+      "sha256": "sha256:c3ef3a9486ef61c98bcd72499ab0b4c49e11ce1c483a258fbd30fcbf89827a4a",
+      "applyOrder": 1,
+      "reason": "libkvazaar10: HEVC Main 10 encoder over the 10-bit Kvazaar build (kvz10_ symbols), sharing the depth-parameterized libkvazaar wrapper"
     }
   ],
   "dependencies": [
@@ -105,7 +111,7 @@
         {
           "id": "bloom.feature.ffmpeg-kvazaar",
           "state": "enabled",
-          "reason": "HEVC software encode through the libkvazaar wrapper; Kvazaar 2.3.2 is a static archive linked into libavcodec"
+          "reason": "HEVC software encode through the libkvazaar (8-bit, HEVC Main) and libkvazaar10 (10-bit, HEVC Main 10) wrappers; Kvazaar 2.3.2 is built as two static archives linked into libavcodec"
         },
         {
           "id": "bloom.feature.ffmpeg-libvpx",
@@ -162,6 +168,7 @@
         "bloom.capability.ffmpeg.h264-nvenc-encode",
         "bloom.capability.ffmpeg.h264-software-openh264",
         "bloom.capability.ffmpeg.h264-vaapi-encode",
+        "bloom.capability.ffmpeg.hevc-main10-software-kvazaar",
         "bloom.capability.ffmpeg.hevc-nvenc-encode",
         "bloom.capability.ffmpeg.hevc-software-kvazaar",
         "bloom.capability.ffmpeg.hevc-vaapi-encode",

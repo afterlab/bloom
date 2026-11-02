@@ -6,7 +6,7 @@ if(NOT DEFINED BLOOM_DEPENDENCY_PREFIX)
     message(FATAL_ERROR "BLOOM_DEPENDENCY_PREFIX is required")
 endif()
 
-set(codec_libraries openh264 kvazaar dav1d SvtAv1Enc vpx opus)
+set(codec_libraries openh264 kvazaar kvazaar10 dav1d SvtAv1Enc vpx opus)
 foreach(codec IN LISTS codec_libraries)
     file(GLOB codec_shared "${BLOOM_DEPENDENCY_PREFIX}/lib/lib${codec}.so*")
     if(codec_shared)

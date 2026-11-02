@@ -21,7 +21,7 @@ component, and its own records explain why the lock cannot represent it.
 | OpenH264 | 2.6.0 | BSD-2-Clause | H.264 encoder built from source as a static archive inside the worker's `libavcodec`; ships with Bloom, nothing is downloaded | `dependencies/licenses/openh264/`, `dependencies/dependencies.lock.json` |
 | dav1d | 1.5.4 | BSD-2-Clause | AV1 decoder built from VideoLAN's signed source as a static archive inside the worker's `libavcodec`; ships with Bloom | `dependencies/licenses/dav1d/`, `dependencies/dependencies.lock.json` |
 | nv-codec-headers | 12.1.14.1 | MIT | Header-only NVIDIA Video Codec SDK interface compiled into the worker's `libavcodec` for NVENC; the NVIDIA driver is loaded at run time and never shipped | `dependencies/licenses/nv-codec-headers/`, `dependencies/dependencies.lock.json` |
-| Kvazaar | 2.3.2 | BSD-3-Clause | HEVC encoder built from source as a static archive inside the worker's `libavcodec`; ships with Bloom | `dependencies/licenses/kvazaar/`, `dependencies/dependencies.lock.json` |
+| Kvazaar | 2.3.2 | BSD-3-Clause | HEVC encoder built from source twice, as an 8-bit (HEVC Main) and a 10-bit (HEVC Main 10) static archive inside the worker's `libavcodec`; ships with Bloom | `dependencies/licenses/kvazaar/`, `dependencies/dependencies.lock.json` |
 | NASM | 2.16.03 | BSD-2-Clause | Build-host-only assembler for FFmpeg's x86 SIMD; installed outside the dependency prefix, never linked or shipped | `dependencies/licenses/nasm/`, `dependencies/dependencies.lock.json` |
 | glslang | 16.4.0 | BSD-3-Clause AND BSD-2-Clause AND MIT AND Apache-2.0 AND GPL-3.0-or-later WITH Bison-exception-2.2 | Runtime `glslangValidator` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with its full `LICENSES/` set | `dependencies/licenses/glslang/`, `dependencies/dependencies.lock.json` |
 | SPIRV-Tools | b707790a898e44038547df54580022fc1cf89c3d | Apache-2.0 | Runtime `spirv-val` staged beside the desktop/CLI/MCP executables under the private `bloom-gpu-tools/` directory, with the Apache-2.0 text | `dependencies/licenses/spirv-tools/`, `dependencies/dependencies.lock.json` |
@@ -34,7 +34,7 @@ generated digest inventory. The glslang Bison Exception 2.2 covers the Bison-gen
 gate and no approval is asserted here.
 
 FFmpeg's corresponding-source obligation is the exact locked official release archive plus the
-reviewed patch under `dependencies/patches/ffmpeg/`. The lock, recipe, detached-signature evidence,
+reviewed patches under `dependencies/patches/ffmpeg/`. The lock, recipe, detached-signature evidence,
 and license/review/security records are the authority for the configuration and source offer; the desktop `bloom` target does not link FFmpeg.
 
 The bundled codec libraries (OpenH264, Kvazaar, dav1d, SVT-AV1, libvpx, Opus) are compiled from
@@ -52,10 +52,11 @@ binary forms, with or without modification, are permitted under the BSD-2-Clause
 
 Copyright (c) 2021, Tampere University, ITU/ISO/IEC, project contributors. All rights reserved.
 Redistribution and use in source and binary forms, with or without modification, are permitted
-under the BSD-3-Clause terms in `dependencies/licenses/kvazaar/LICENSE`. The compiled library
-includes Colin Plumb's public-domain MD5 implementation; Windows builds also include Kvazaar's
-thread wrapper (Copyright 2019 Tampere University, ISC license) and NetBSD's `getopt` (Copyright
-(c) 2000 The NetBSD Foundation, Inc., BSD-2-Clause), whose texts are in the Kvazaar source archive.
+under the BSD-3-Clause terms in `dependencies/licenses/kvazaar/LICENSE`. Bloom compiles the same
+release twice, for 8-bit and 10-bit samples. Each compiled library includes Colin Plumb's
+public-domain MD5 implementation; Windows builds also include Kvazaar's thread wrapper (Copyright
+2019 Tampere University, ISC license) and NetBSD's `getopt` (Copyright (c) 2000 The NetBSD
+Foundation, Inc., BSD-2-Clause), whose texts are in the Kvazaar source archive.
 
 ### dav1d
 

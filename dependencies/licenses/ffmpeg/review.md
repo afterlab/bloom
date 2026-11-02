@@ -10,17 +10,27 @@ BSD-2-Clause, SVT-AV1 BSD-3-Clause-Clear with the AOM patent license, libvpx BSD
 BSD-3-Clause; each has its own review beside this one); FFmpeg's version script keeps their symbols
 private, and their locked source archives complete `libavcodec`'s corresponding source. The
 selected source record includes FFmpeg’s upstream license summary; the corresponding source is the
-exact locked release archive plus the reviewed patch below.
+exact locked release archive plus the reviewed patches below.
 
-## Patch
+## Patches
 
 `dependencies/patches/ffmpeg/0001-libkvazaar-pad-frames-to-whole-blocks.patch` changes only
 `libavcodec/libkvazaar.c`: the wrapper refused widths and heights that are not multiples of eight,
 although Kvazaar codes any even extent when the caller pads the picture to whole blocks (Kvazaar's
 own command-line tool does this and Kvazaar writes the conformance window that crops it). The
 patched wrapper allocates the padded picture, repeats the last column and row into the padding and
-accepts every even extent. The patch is LGPL-2.1-or-later like the file it changes, applied in the
-lock's recorded order, and ships with the corresponding source.
+accepts every even extent.
+
+`dependencies/patches/ffmpeg/0002-libkvazaar10-hevc-main10-encoder.patch` adds the `libkvazaar10`
+encoder (issue #408): HEVC Main 10 from 4:2:0 10-bit input through the bundled 10-bit Kvazaar
+archive, whose symbols carry a `kvz10_` prefix (see Kvazaar's review) and which it reaches through
+the `kvazaar10` pkg-config package. `libkvazaar.c` is parameterized by sample depth, its frame copy
+and padding work in Kvazaar sample units, and `libkvazaar10.c` compiles the same wrapper for 10-bit
+samples; `configure`, `libavcodec/Makefile` and `allcodecs.c` register the encoder after
+`libkvazaar`, so FFmpeg's default HEVC encoder is unchanged.
+
+Both patches are LGPL-2.1-or-later like the files they change, applied in the lock's recorded
+order, and ship with the corresponding source.
 
 FFmpeg is admitted inside `bloom-media-worker` on Linux, macOS and Windows (ADR 0035, 2026-10-31),
 always as LGPL shared libraries private to the worker's generation directory: Linux `lib/` with a
@@ -40,9 +50,10 @@ The configure vector is checked byte-for-byte against
 - Decode: H.264, HEVC, VP9 (FFmpeg's native decoder), AV1 (`libdav1d`), ProRes, DNxHD, MJPEG,
   TIFF, AAC, MP3, Opus (FFmpeg's native decoder), and the explicitly enumerated native PCM
   decoders. WebM is read by the Matroska demuxer.
-- Encode: `libopenh264` (H.264), `libkvazaar` (HEVC), `libsvtav1` (AV1), `libvpx-vp9` (VP9),
-  `libopus` (Opus), `prores_ks`, DNxHD, TIFF, AAC, the NVIDIA NVENC (`h264_nvenc`, `hevc_nvenc`)
-  and VA-API H.264/HEVC hardware encoders, and the explicitly enumerated native PCM encoders.
+- Encode: `libopenh264` (H.264), `libkvazaar` (HEVC Main) and `libkvazaar10` (HEVC Main 10),
+  `libsvtav1` (AV1), `libvpx-vp9` (VP9), `libopus` (Opus), `prores_ks`, DNxHD, TIFF, AAC, the
+  NVIDIA NVENC (`h264_nvenc`, `hevc_nvenc`) and VA-API H.264/HEVC hardware encoders, and the
+  explicitly enumerated native PCM encoders.
 - Parsers and bitstream filters are limited to the entries needed by those paths; the file
   protocol is the only protocol.
 - Programs, documentation, network access, autodetection, and all unspecified components remain
@@ -52,9 +63,9 @@ The configure vector is checked byte-for-byte against
   position-independent and shared-only.
 - Platform adjustments change the toolchain and loader naming only: macOS adds
   `--install-name-dir=@rpath`; Windows adds `--toolchain=msvc --target-os=win64` and an `--arch`.
-  The codec wrappers (`libopenh264`, `libkvazaar`, `libdav1d`, `libsvtav1`, `libvpx`, `libopus`)
-  are enabled on every platform; `--pkg-config-flags=--static` makes configure read the static
-  archives' runtime libraries. No platform adds a GPL, nonfree or version-3 component.
+  The codec wrappers (`libopenh264`, `libkvazaar`, `libkvazaar10`, `libdav1d`, `libsvtav1`,
+  `libvpx`, `libopus`) are enabled on every platform; `--pkg-config-flags=--static` makes configure
+  read the static archives' runtime libraries. No platform adds a GPL, nonfree or version-3 component.
 - NVENC (`--enable-ffnvcodec --enable-nvenc`) compiles against the MIT nv-codec-headers and loads
   the NVIDIA driver's encode library at run time; it needs neither `--enable-nonfree` nor
   `--enable-gpl`, and nothing from NVIDIA is linked or shipped. macOS builds omit it.
@@ -65,8 +76,8 @@ The configure vector is checked byte-for-byte against
 ## Patent and authorization posture
 
 H.264 and HEVC decoding and encoding ship with Bloom (owner decision, 2026-10-31): software
-encode is the bundled OpenH264 and Kvazaar, with NVENC and VA-API hardware encode preferred when a
-device answers. AV1, VP9 and Opus encode ship the same way through SVT-AV1, libvpx and libopus;
+encode is the bundled OpenH264 and Kvazaar (its 8-bit and 10-bit builds), with NVENC and VA-API
+hardware encode preferred when a device answers. AV1, VP9 and Opus encode ship the same way through SVT-AV1, libvpx and libopus;
 their upstream royalty-free patent grants (the AOM Patent License 1.0 and Google's VP8/VP9 grant)
 are reproduced in `THIRD_PARTY_NOTICES.md`. Codec patent questions outside ProRes are covered by
 Bloom's existing deployment warning; no patent license is claimed. VA-API hardware use is an implementation capability, not

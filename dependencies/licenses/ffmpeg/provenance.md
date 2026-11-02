@@ -20,7 +20,7 @@
 - Verification result: `gpg --verify` reported a good signature from
   `FFmpeg release signing key <ffmpeg-devel@ffmpeg.org>`.
 
-The locked archive plus the reviewed patch under `dependencies/patches/ffmpeg/` (see `review.md`)
+The locked archive plus the reviewed patches under `dependencies/patches/ffmpeg/` (see `review.md`)
 is the corresponding source for the LGPL build. The superbuild verifies the archive's SHA-256
-before extraction, applies the patch in the lock's recorded order, and can build from the
+before extraction, applies the patches in the lock's recorded order, and can build from the
 populated archive cache with downloads disabled.

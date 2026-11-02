@@ -4,6 +4,12 @@
 # libavcodec. The CMake configure vector is the adjacent kvazaar.configure-arguments file, copied
 # into the lock and checked byte for byte. Kvazaar's x86 kernels are compiler intrinsics with
 # run-time dispatch; it needs no assembler.
+#
+# Kvazaar fixes its sample depth at compile time (KVZ_BIT_DEPTH), so the same archive is built
+# twice: 8-bit for HEVC Main (FFmpeg's libkvazaar) and 10-bit for HEVC Main 10 (libkvazaar10,
+# dependencies/patches/ffmpeg/0002). Both builds use the same configure vector; the 10-bit one adds
+# KVZ_BIT_DEPTH=10 and force-includes kvazaar10-symbols.h, which renames every external symbol to
+# kvz10_ so both archives link into the one libavcodec without resolving against each other.
 set(BLOOM_KVAZAAR_VERSION 2.3.2)
 set(BLOOM_KVAZAAR_URL
     "https://github.com/ultravideo/kvazaar/releases/download/v${BLOOM_KVAZAAR_VERSION}/kvazaar-${BLOOM_KVAZAAR_VERSION}.tar.xz")
@@ -39,6 +45,64 @@ ExternalProject_Add(bloom_dependency_kvazaar
         -DCODEC_PREFIX=<INSTALL_DIR>
         -DCODEC_LIBRARY=kvazaar
         -DCODEC_PKGCONFIG=kvazaar
+        "-DCODEC_PRIVATE_LIBS=${BLOOM_KVAZAAR_PRIVATE_LIBS}"
+        -DCODEC_WINDOWS=${WIN32}
+        -P "${BLOOM_CODEC_STATIC_INSTALL_SCRIPT}"
+    ${BLOOM_DEPENDENCY_OFFLINE_ARGS}
+    BUILD_ALWAYS OFF
+    INSTALL_DIR "${BLOOM_DEPENDENCY_PREFIX}"
+    USES_TERMINAL_DOWNLOAD ON
+    USES_TERMINAL_BUILD ON)
+
+# The 10-bit build. It installs into its own tree first; kvazaar10-install.cmake checks that every
+# external symbol carries the kvz10_ prefix and installs lib/libkvazaar10.a, include/kvazaar10/ and
+# kvazaar10.pc beside the 8-bit files. It follows the 8-bit build, which has already verified the
+# shared source archive.
+set(BLOOM_KVAZAAR10_SYMBOLS "${CMAKE_CURRENT_LIST_DIR}/kvazaar10-symbols.h")
+if(MSVC)
+    set(BLOOM_KVAZAAR10_FLAGS "/DKVZ_BIT_DEPTH=10 /FI\"${BLOOM_KVAZAAR10_SYMBOLS}\"")
+    get_filename_component(bloom_kvazaar10_linker_dir "${CMAKE_LINKER}" DIRECTORY)
+    find_program(BLOOM_KVAZAAR10_DUMPBIN dumpbin HINTS "${bloom_kvazaar10_linker_dir}" REQUIRED)
+    set(BLOOM_KVAZAAR10_SYMBOL_TOOL "-DKVZ10_DUMPBIN=${BLOOM_KVAZAAR10_DUMPBIN}")
+else()
+    set(BLOOM_KVAZAAR10_FLAGS "-DKVZ_BIT_DEPTH=10 -include \"${BLOOM_KVAZAAR10_SYMBOLS}\"")
+    if(NOT CMAKE_NM)
+        message(FATAL_ERROR "The 10-bit Kvazaar symbol check needs nm (CMAKE_NM)")
+    endif()
+    set(BLOOM_KVAZAAR10_SYMBOL_TOOL "-DKVZ10_NM=${CMAKE_NM}")
+endif()
+
+ExternalProject_Add(bloom_dependency_kvazaar10
+    URL "${BLOOM_KVAZAAR_URL}"
+    URL_HASH SHA256=${BLOOM_KVAZAAR_SHA256}
+    DOWNLOAD_DIR "${BLOOM_DEPENDENCY_DOWNLOAD_DIR}"
+    DOWNLOAD_NAME kvazaar-${BLOOM_KVAZAAR_VERSION}.tar.xz
+    DOWNLOAD_NO_PROGRESS ON
+    DOWNLOAD_EXTRACT_TIMESTAMP ON
+    DEPENDS bloom_dependency_kvazaar
+    CMAKE_ARGS
+        ${BLOOM_DEPENDENCY_COMMON_CMAKE_ARGS}
+        -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
+        -DCMAKE_INSTALL_LIBDIR:PATH=lib
+        "-DCMAKE_C_FLAGS:STRING=${BLOOM_KVAZAAR10_FLAGS}"
+        "-DCMAKE_CXX_FLAGS:STRING=${BLOOM_KVAZAAR10_FLAGS}"
+        ${BLOOM_KVAZAAR_CONFIGURE_ARGUMENTS}
+        ${BLOOM_CODEC_CMAKE_PLATFORM_ARGUMENTS}
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --parallel 3
+    INSTALL_COMMAND ${CMAKE_COMMAND} --install <BINARY_DIR> --config Release
+            --prefix <BINARY_DIR>/stage
+        COMMAND ${CMAKE_COMMAND}
+        -DKVZ10_STAGE=<BINARY_DIR>/stage
+        -DKVZ10_PREFIX=<INSTALL_DIR>
+        "-DKVZ10_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}"
+        -DKVZ10_VERSION=${BLOOM_KVAZAAR_VERSION}
+        "${BLOOM_KVAZAAR10_SYMBOL_TOOL}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/kvazaar10-install.cmake"
+        COMMAND ${CMAKE_COMMAND}
+        -DCODEC_PREFIX=<INSTALL_DIR>
+        -DCODEC_LIBRARY=kvazaar10
+        -DCODEC_PKGCONFIG=kvazaar10
         "-DCODEC_PRIVATE_LIBS=${BLOOM_KVAZAAR_PRIVATE_LIBS}"
         -DCODEC_WINDOWS=${WIN32}
         -P "${BLOOM_CODEC_STATIC_INSTALL_SCRIPT}"

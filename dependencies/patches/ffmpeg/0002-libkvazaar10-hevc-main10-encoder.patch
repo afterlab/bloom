@@ -1,0 +1,225 @@
+Bloom: add libkvazaar10, an HEVC Main 10 encoder over a 10-bit build of Kvazaar.
+
+Kvazaar fixes its sample depth when it is compiled (KVZ_BIT_DEPTH), and FFmpeg's libkvazaar
+wrapper opens the 8-bit API with 4:2:0 8-bit input only. Bloom builds Kvazaar a second time for
+10-bit samples, with every external symbol renamed to kvz10_ so both static archives link into the
+one libavcodec, and installs it as the kvazaar10 pkg-config package with the public header
+<kvazaar10/kvazaar10.h>.
+
+The wrapper is parameterized by LIBKVAZAAR_BIT_DEPTH: libkvazaar.c keeps the 8-bit libkvazaar
+encoder, and libkvazaar10.c compiles the same wrapper against the 10-bit header as libkvazaar10
+(4:2:0 10-bit input, AV_PIX_FMT_YUV420P10). The frame copy and the block padding of patch 0001 now
+work in kvz_pixel units, so both builds share them. Kvazaar writes the Main 10 profile itself from
+its sample depth. libkvazaar10 is registered after libkvazaar, so the default HEVC encoder is
+unchanged; configure gains --enable-libkvazaar10.
+
+--- a/configure
++++ b/configure
+@@ -246,6 +246,7 @@
+   --enable-libjxl          enable JPEG XL de/encoding via libjxl [no]
+   --enable-libklvanc       enable Kernel Labs VANC processing [no]
+   --enable-libkvazaar      enable HEVC encoding via libkvazaar [no]
++  --enable-libkvazaar10    enable HEVC Main 10 encoding via a 10-bit libkvazaar [no]
+   --enable-liblc3          enable LC3 de/encoding via liblc3 [no]
+   --enable-liblcevc-dec    enable LCEVC decoding via liblcevc-dec [no]
+   --enable-liblensfun      enable lensfun lens correction [no]
+@@ -2058,6 +2059,7 @@
+     libjxl
+     libklvanc
+     libkvazaar
++    libkvazaar10
+     liblc3
+     liblcevc_dec
+     libmodplug
+@@ -3783,6 +3785,7 @@
+ libjxl_decoder_deps="libjxl libjxl_threads"
+ libjxl_encoder_deps="libjxl libjxl_threads"
+ libkvazaar_encoder_deps="libkvazaar"
++libkvazaar10_encoder_deps="libkvazaar10"
+ liblc3_decoder_deps="liblc3"
+ liblc3_encoder_deps="liblc3"
+ liblc3_encoder_select="audio_frame_queue"
+@@ -7284,6 +7287,7 @@
+                              require_pkg_config libjxl_threads "libjxl_threads >= 0.7.0" jxl/thread_parallel_runner.h JxlThreadParallelRunner
+ enabled libklvanc         && require libklvanc libklvanc/vanc.h klvanc_context_create -lklvanc
+ enabled libkvazaar        && require_pkg_config libkvazaar "kvazaar >= 2.0.0" kvazaar.h kvz_api_get
++enabled libkvazaar10      && require_pkg_config libkvazaar10 "kvazaar10 >= 2.0.0" kvazaar10/kvazaar10.h kvz10_api_get
+ enabled liblc3            && require_pkg_config liblc3 "lc3 >= 1.1.0" lc3.h lc3_hr_setup_encoder
+ enabled liblensfun        && require_pkg_config liblensfun lensfun lensfun.h lf_db_create
+ enabled liblcevc_dec      && require_pkg_config liblcevc_dec "lcevc_dec >= 4.0.0" "LCEVC/lcevc_dec.h" LCEVC_CreateDecoder
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1187,6 +1187,7 @@
+ OBJS-$(CONFIG_LIBJXL_DECODER)             += libjxldec.o libjxl.o
+ OBJS-$(CONFIG_LIBJXL_ENCODER)             += libjxlenc.o libjxl.o
+ OBJS-$(CONFIG_LIBKVAZAAR_ENCODER)         += libkvazaar.o
++OBJS-$(CONFIG_LIBKVAZAAR10_ENCODER)       += libkvazaar10.o
+ OBJS-$(CONFIG_LIBLC3_ENCODER)             += liblc3enc.o
+ OBJS-$(CONFIG_LIBLC3_DECODER)             += liblc3dec.o
+ OBJS-$(CONFIG_LIBMP3LAME_ENCODER)         += libmp3lame.o
+--- a/libavcodec/allcodecs.c
++++ b/libavcodec/allcodecs.c
+@@ -905,6 +905,7 @@
+ extern const FFCodec ff_hevc_videotoolbox_encoder;
+ extern const FFCodec ff_hevc_vulkan_encoder;
+ extern const FFCodec ff_libkvazaar_encoder;
++extern const FFCodec ff_libkvazaar10_encoder;
+ extern const FFCodec ff_mjpeg_cuvid_decoder;
+ extern const FFCodec ff_mjpeg_qsv_encoder;
+ extern const FFCodec ff_mjpeg_qsv_decoder;
+--- a/libavcodec/libkvazaar.c
++++ b/libavcodec/libkvazaar.c
+@@ -20,7 +20,28 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
+ 
++/* LIBKVAZAAR_BIT_DEPTH selects the Kvazaar build this file wraps: 8 (libkvazaar, HEVC Main) or
++ * 10 (libkvazaar10.c, HEVC Main 10). Kvazaar fixes its sample depth when it is compiled, so the
++ * 10-bit library is a separate build whose symbols carry a kvz10_ prefix. */
++#ifndef LIBKVAZAAR_BIT_DEPTH
++#define LIBKVAZAAR_BIT_DEPTH 8
++#endif
++#if LIBKVAZAAR_BIT_DEPTH == 10
++#include <kvazaar10/kvazaar10.h>
++#define LIBKVAZAAR_NAME       "libkvazaar10"
++#define LIBKVAZAAR_LONG_NAME  "libkvazaar H.265 / HEVC Main 10"
++#define LIBKVAZAAR_PIX_FMT    AV_PIX_FMT_YUV420P10
++#define LIBKVAZAAR_ENCODER    ff_libkvazaar10_encoder
++#else
+ #include <kvazaar.h>
++#define LIBKVAZAAR_NAME       "libkvazaar"
++#define LIBKVAZAAR_LONG_NAME  "libkvazaar H.265 / HEVC"
++#define LIBKVAZAAR_PIX_FMT    AV_PIX_FMT_YUV420P
++#define LIBKVAZAAR_ENCODER    ff_libkvazaar_encoder
++#endif
++#if KVZ_BIT_DEPTH != LIBKVAZAAR_BIT_DEPTH
++#error "the Kvazaar header does not match LIBKVAZAAR_BIT_DEPTH"
++#endif
+ #include <stdint.h>
+ #include <string.h>
+ 
+@@ -51,7 +72,7 @@
+ static av_cold int libkvazaar_init(AVCodecContext *avctx)
+ {
+     LibkvazaarContext *const ctx = avctx->priv_data;
+-    const kvz_api *const api = ctx->api = kvz_api_get(8);
++    const kvz_api *const api = ctx->api = kvz_api_get(LIBKVAZAAR_BIT_DEPTH);
+     kvz_config *cfg = NULL;
+     kvz_encoder *enc = NULL;
+ 
+@@ -208,20 +229,22 @@
+         }
+ 
+         // Copy pixels from frame to input_pic, then repeat the last column and row into the
+-        // padding, which the conformance window crops but prediction still reads.
++        // padding, which the conformance window crops but prediction still reads. Kvazaar's
++        // samples are kvz_pixel: one byte in the 8-bit build, two in the 10-bit build.
+         {
+             const int padded_width  = FFALIGN(frame->width, 8);
+             const int padded_height = FFALIGN(frame->height, 8);
++            const int bytes         = sizeof(kvz_pixel);
+             uint8_t *dst[4] = {
+-                input_pic->data[0],
+-                input_pic->data[1],
+-                input_pic->data[2],
++                (uint8_t *)input_pic->data[0],
++                (uint8_t *)input_pic->data[1],
++                (uint8_t *)input_pic->data[2],
+                 NULL,
+             };
+             int dst_linesizes[4] = {
+-              padded_width,
+-              padded_width / 2,
+-              padded_width / 2,
++              padded_width * bytes,
++              padded_width / 2 * bytes,
++              padded_width / 2 * bytes,
+               0
+             };
+             av_image_copy2(dst, dst_linesizes,
+@@ -232,13 +255,16 @@
+                 const int width  = frame->width >> shift;
+                 const int height = frame->height >> shift;
+                 const int rows   = padded_height >> shift;
+-                const int stride = dst_linesizes[plane];
+-                for (int y = 0; y < height; y++)
+-                    memset(dst[plane] + y * stride + width,
+-                           dst[plane][y * stride + width - 1], stride - width);
++                const int stride = padded_width >> shift;
++                kvz_pixel *const samples = input_pic->data[plane];
++                for (int y = 0; y < height; y++) {
++                    kvz_pixel *const row = samples + y * stride;
++                    for (int x = width; x < stride; x++)
++                        row[x] = row[width - 1];
++                }
+                 for (int y = height; y < rows; y++)
+-                    memcpy(dst[plane] + y * stride,
+-                           dst[plane] + (height - 1) * stride, stride);
++                    memcpy(samples + y * stride, samples + (height - 1) * stride,
++                           stride * bytes);
+             }
+         }
+ 
+@@ -312,7 +338,7 @@
+ }
+ 
+ static const enum AVPixelFormat pix_fmts[] = {
+-    AV_PIX_FMT_YUV420P,
++    LIBKVAZAAR_PIX_FMT,
+     AV_PIX_FMT_NONE
+ };
+ 
+@@ -325,7 +351,7 @@
+ };
+ 
+ static const AVClass class = {
+-    .class_name = "libkvazaar",
++    .class_name = LIBKVAZAAR_NAME,
+     .item_name  = av_default_item_name,
+     .option     = options,
+     .version    = LIBAVUTIL_VERSION_INT,
+@@ -336,9 +362,9 @@
+     { NULL },
+ };
+ 
+-const FFCodec ff_libkvazaar_encoder = {
+-    .p.name           = "libkvazaar",
+-    CODEC_LONG_NAME("libkvazaar H.265 / HEVC"),
++const FFCodec LIBKVAZAAR_ENCODER = {
++    .p.name           = LIBKVAZAAR_NAME,
++    CODEC_LONG_NAME(LIBKVAZAAR_LONG_NAME),
+     .p.type           = AVMEDIA_TYPE_VIDEO,
+     .p.id             = AV_CODEC_ID_HEVC,
+     .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY |
+@@ -357,5 +383,5 @@
+     .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP |
+                         FF_CODEC_CAP_AUTO_THREADS,
+ 
+-    .p.wrapper_name   = "libkvazaar",
++    .p.wrapper_name   = LIBKVAZAAR_NAME,
+ };
+--- a/libavcodec/libkvazaar10.c
++++ b/libavcodec/libkvazaar10.c
+@@ -0,0 +1,22 @@
++/*
++ * libkvazaar10 encoder: HEVC Main 10 through a 10-bit build of Kvazaar
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#define LIBKVAZAAR_BIT_DEPTH 10
++#include "libkvazaar.c"

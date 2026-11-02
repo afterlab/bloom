@@ -10,6 +10,8 @@
 - Archive SHA-256: `sha256:35e506a6d2be9ae343f17787eb80fa214492b276e9c88b6e93749050ae380070`
 - Upstream signature: none published; the lock pins the archive digest.
 
-The same locked archive is the corresponding-source archive for the static library linked into
-`libavcodec`. Bloom does not modify the source; the superbuild verifies the SHA-256 before
-extraction and builds from the populated archive cache with downloads disabled.
+The same locked archive is the corresponding-source archive for both static libraries linked into
+`libavcodec`: the 8-bit build and the 10-bit build (`KVZ_BIT_DEPTH=10`, issue #408). Bloom does not
+modify the source; the 10-bit build only adds compiler definitions, including the force-included
+symbol-rename header `dependencies/superbuild/projects/kvazaar10-symbols.h`. The superbuild verifies
+the SHA-256 before extraction and builds from the populated archive cache with downloads disabled.
