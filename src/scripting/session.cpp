@@ -317,7 +317,16 @@ OperationContext Session::operationContext() const {
     context.time = core::RationalTime::fromInteger(0);
     context.layerGeometry = layerGeometryProvider();
     context.compositionFrameRate = compositionFrameRateLookup();
+    context.source = operationSourceProvider();
     return context;
+}
+
+OperationSourceProvider Session::operationSourceProvider() const {
+    return [this]() -> std::optional<SessionRenderSourceSnapshot> {
+        if (!isValid())
+            return std::nullopt;
+        return renderSourceSnapshot();
+    };
 }
 
 std::function<std::optional<std::pair<std::uint32_t, std::uint32_t>>(std::uint64_t)>

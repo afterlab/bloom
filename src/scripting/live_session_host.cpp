@@ -252,6 +252,7 @@ OperationContext LiveSessionLease::operationContext() const {
     if (session_) {
         context.layerGeometry = session_->layerGeometryProvider();
         context.compositionFrameRate = session_->compositionFrameRateLookup();
+        context.source = session_->operationSourceProvider();
     }
     return context;
 }

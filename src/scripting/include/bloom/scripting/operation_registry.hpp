@@ -2,14 +2,17 @@
 
 #include <bloom/commands/operation.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/host/layer_alignment.hpp>
 #include <bloom/scripting/value.hpp>
 
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -87,6 +90,23 @@ struct OperationSchema final {
 using LayerGeometryProvider = std::function<host::LayerAlignmentGeometryResult(
     document::CompositionId composition, core::RationalTime time)>;
 
+// One consistent read of the project a client edits: its document, the folder relative media paths
+// resolve against, and its colour settings, captured together so a Save As or a settings edit
+// cannot mix two of them.
+struct SessionRenderSourceSnapshot final {
+    document::Snapshot snapshot;
+    std::filesystem::path assetBaseDirectory;
+    // Project color settings are archive state, not part of document::Snapshot. Capture them
+    // with the document and asset base so a later Save As or settings edit cannot mix intents.
+    std::optional<document::ColorSettings> colorSettings;
+};
+
+// The project as an operation is created against it, for operations that read media or evaluate
+// the composition when they are created (asset reload, anchor presets, Cryptomatte picks). It is
+// called on the client thread (the script, MCP or CLI thread), never the UI thread; nullopt when
+// the session was closed or replaced.
+using OperationSourceProvider = std::function<std::optional<SessionRenderSourceSnapshot>()>;
+
 // The live session values that contextual arguments fall back to. Every field is optional because
 // a headless session may have no selection, and a project may have no composition at all.
 struct OperationContext final {
@@ -105,6 +125,12 @@ struct OperationContext final {
     // Absent, such an operation asks for the time in seconds instead.
     std::function<std::optional<std::pair<std::uint32_t, std::uint32_t>>(std::uint64_t)>
         compositionFrameRate{};
+    // Absent when the client cannot read media or evaluate; operations that need it then refuse
+    // when they are created, naming what was missing.
+    OperationSourceProvider source{};
+    // Fired when the caller stops waiting (MCP notifications/cancelled, server stop or shutdown).
+    // A media probe or evaluation an operation runs when it is created stops with it.
+    std::stop_token stop{};
 };
 
 // Fills every omitted contextual argument the context can answer and returns their names in schema
@@ -147,8 +173,9 @@ class [[nodiscard]] OperationCreateResult final {
 };
 
 using OperationFactory = std::function<OperationCreateResult(const std::string&, const Arguments&)>;
-// A factory that also reads the live context beyond its argument defaults -- today only the layer
-// geometry align and distribute measure before they are queued.
+// A factory that also reads the live context beyond its argument defaults: the layer geometry
+// align and distribute measure, and the project source asset reload, anchor presets and
+// Cryptomatte picks read before they are queued.
 using ContextualOperationFactory = std::function<OperationCreateResult(
     const std::string&, const Arguments&, const OperationContext&)>;
 

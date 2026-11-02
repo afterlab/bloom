@@ -25,6 +25,7 @@ target_sources(
         live_session_host.cpp
         operation_registry.cpp
         operation_registry_alignment.cpp
+        operation_registry_evaluated.cpp
         operation_registry_export.cpp
         operation_frame_times.cpp
         operation_registry_parity_layers.cpp
@@ -82,6 +83,18 @@ if(BUILD_TESTING)
     )
     # MCP parity operations: every UI edit that had no op runs through the registry, makes one
     # undo step and undoes/redoes.
+    # #389: asset reload, anchor presets and Cryptomatte picks read media or evaluate when created.
+    add_executable(bloom_scripting_evaluated_operations_test tests/evaluated_operations_tests.cpp)
+    target_include_directories(bloom_scripting_evaluated_operations_test PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/runtime/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+    target_link_libraries(bloom_scripting_evaluated_operations_test PRIVATE bloom_scripting
+        OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_scripting_evaluated_operations_test)
+    bloom_add_test(
+        NAME bloom.scripting.evaluated-operations
+        COMMAND bloom_scripting_evaluated_operations_test
+        LABELS unit scripting commands document media TIMEOUT 120
+    )
     add_executable(bloom_scripting_parity_operations_test tests/parity_operations_tests.cpp)
     target_link_libraries(bloom_scripting_parity_operations_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_parity_operations_test)

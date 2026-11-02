@@ -85,14 +85,6 @@ struct SessionCommandResult final {
     }
 };
 
-struct SessionRenderSourceSnapshot final {
-    document::Snapshot snapshot;
-    std::filesystem::path assetBaseDirectory;
-    // Project color settings are archive state, not part of document::Snapshot. Capture them
-    // with the document and asset base so a later Save As or settings edit cannot mix intents.
-    std::optional<document::ColorSettings> colorSettings;
-};
-
 // A live client borrows typed host services and immutable reads, never mutable document
 // pointers. The owner revokes valid() before replacing or destroying its authoring session.
 struct SessionBinding final {
@@ -164,6 +156,9 @@ class Session final {
     // render source snapshot, for align and distribute. Valid while this session is; it evaluates
     // synchronously on the calling client thread.
     [[nodiscard]] LayerGeometryProvider layerGeometryProvider() const;
+    // The current render source (document, asset base and colour settings), for operations that
+    // probe media or evaluate when they are created. Valid while this session is.
+    [[nodiscard]] OperationSourceProvider operationSourceProvider() const;
     // A composition's current frame rate {numerator, denominator} (OperationContext).
     [[nodiscard]] std::function<
         std::optional<std::pair<std::uint32_t, std::uint32_t>>(std::uint64_t)>

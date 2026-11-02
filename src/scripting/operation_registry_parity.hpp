@@ -256,5 +256,8 @@ void addLayerAndNodeOperations(std::vector<OperationDescriptor>& descriptors);
 void addProjectOperations(std::vector<OperationDescriptor>& descriptors);
 // Registers Interpret Footage (#381): bloom.asset.set-interpretation.
 void addFootageOperations(std::vector<OperationDescriptor>& descriptors);
+// Registers the edits that read media or evaluate when they are created (#389): bloom.asset.reload,
+// bloom.layer.set-anchor-preset and bloom.cryptomatte.pick.
+void addEvaluatedOperations(std::vector<OperationDescriptor>& descriptors);
 
 } // namespace bloom::scripting::detail::parity

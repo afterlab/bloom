@@ -3618,6 +3618,7 @@ OperationRegistry OperationRegistry::builtIn() {
     detail::parity::addLayerAndNodeOperations(all);
     detail::parity::addProjectOperations(all);
     detail::parity::addFootageOperations(all);
+    detail::parity::addEvaluatedOperations(all);
 
     std::ranges::sort(
         all, {}, [](const OperationDescriptor& descriptor) { return descriptor.schema.typeId; });
