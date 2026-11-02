@@ -6,6 +6,8 @@ add_library(
     repository_checks.cpp
     ui_grammar.cpp
     ui_grammar.hpp
+    product_names.cpp
+    product_names.hpp
     repository_checks.hpp
 )
 target_include_directories(bloom_repository_checks PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -110,5 +112,27 @@ if(BUILD_TESTING)
         "-DBLOOM_REPOSITORY_CHECKER=$<TARGET_FILE:bloom_ui_grammar_check>"
         "-DBLOOM_REPOSITORY_ROOT=${PROJECT_SOURCE_DIR}"
         "-DBLOOM_REPOSITORY_FILE_MANIFEST=${PROJECT_BINARY_DIR}/quality/ui-grammar-test.files"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/RunRepositoryCheck.cmake" LABELS quality TIMEOUT 30)
+endif()
+
+add_executable(bloom_product_names_check product_names_main.cpp)
+target_link_libraries(bloom_product_names_check PRIVATE bloom_repository_checker_main)
+bloom_enable_warnings(bloom_product_names_check)
+add_custom_target(bloom-product-names-check
+    COMMAND ${CMAKE_COMMAND}
+        "-DBLOOM_REPOSITORY_CHECKER=$<TARGET_FILE:bloom_product_names_check>"
+        "-DBLOOM_REPOSITORY_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DBLOOM_REPOSITORY_FILE_MANIFEST=${PROJECT_BINARY_DIR}/quality/product-names.files"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/RunRepositoryCheck.cmake"
+    DEPENDS bloom_product_names_check VERBATIM)
+if(BUILD_TESTING)
+    add_executable(bloom_product_names_checker_test tests/product_names_tests.cpp)
+    target_link_libraries(bloom_product_names_checker_test PRIVATE bloom_repository_checks)
+    bloom_enable_warnings(bloom_product_names_checker_test)
+    bloom_add_test(NAME bloom.quality.product_names_checker COMMAND bloom_product_names_checker_test LABELS quality unit TIMEOUT 30)
+    bloom_add_test(NAME bloom.quality.product_names COMMAND ${CMAKE_COMMAND}
+        "-DBLOOM_REPOSITORY_CHECKER=$<TARGET_FILE:bloom_product_names_check>"
+        "-DBLOOM_REPOSITORY_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DBLOOM_REPOSITORY_FILE_MANIFEST=${PROJECT_BINARY_DIR}/quality/product-names-test.files"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/RunRepositoryCheck.cmake" LABELS quality TIMEOUT 30)
 endif()

@@ -76,6 +76,7 @@ add_custom_target(
         bloom-hygiene-check
         bloom-architecture-check
         bloom-ui-grammar-check
+        bloom-product-names-check
         bloom-project-schema-check
         bloom-dependency-artifact-check
 )
