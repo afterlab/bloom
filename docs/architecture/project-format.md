@@ -1651,6 +1651,16 @@ the mode, so a transaction that changes only modes is render-neutral. The `1.31`
 `migrateKeyframeHandleModesV1_31` only advances the version; every older key loads Free and samples
 bit-for-bit as before.
 
+Document `1.32` is also the first version that every build saved after HLG input began following
+BT.2408 ([color management](color-management.md#hdr-reference-white), issue #407): document `1.31`
+was current on both sides of that change, so no member or version marks it exactly. When the
+opened version (`SessionOpenResult::openedDocumentSchemaVersion()`) is below `1.32` and an asset
+uses the HLG input space (`Rec.2100-HLG (Bloom)` chosen explicitly, or a video in Auto whose stored
+stream transfer is HLG), Open shows a one-time information note, on the same surface as the 1.28
+note, naming how many assets now look about 1.26 times brighter. Saving writes the current version,
+so the note does not return. A project below `1.28` that has both kinds of footage shows one note
+with both changes.
+
 ## Export Queue In Document 1.29
 
 Document `1.29` persists the export queue ([ADR 0033](../decisions/0033-export-queue.md)): the jobs,

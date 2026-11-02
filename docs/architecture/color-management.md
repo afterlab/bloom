@@ -170,7 +170,10 @@ anywhere. Because the definition uses OCIO built-ins, transform identity include
 `synthesizedColorSpaceIdentity()` (`bloom-hlg-scene-v2;ocio=<version>`) as well as the space id.
 Version 1 (before issue #369) used OCIO's scale unchanged, so HLG reference white was 0.795 (a third
 of a stop, about 24 codes of 8-bit sRGB below SDR white); the identity change re-decodes every
-cached HLG frame, thumbnail and proxy.
+cached HLG frame, thumbnail and proxy. BT.2408 is the only HLG mapping; there is no per-asset
+choice of HLG reference white (issue #407). Opening a project saved before document 1.32 that has
+HLG footage shows a one-time note that it now looks about 1.26 times brighter (see
+[project format](project-format.md#keyframe-handle-modes-in-document-132)).
 
 ### Synthesized Rec.2100 PQ input space
 

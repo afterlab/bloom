@@ -101,7 +101,11 @@ fills only the tags that are missing. The asset then shows an Info mark and the 
 missing — assumed Rec.709 with the sRGB transfer. Change in Assets → Interpret Footage"; choose an
 explicit input color space to replace the assumption. A project saved by a Bloom version before
 this default (document 1.28) shows a one-time note when you open it if any of its video looks
-different now; saving the project records the new default. ARRI
+different now; saving the project records the new default. HLG footage follows the BT.2408
+standard: its reference white (the 75% signal) lands at the same level as SDR white, so HLG and SDR
+sources composite at one white. A project saved by an earlier version of Bloom (before document
+1.32) that has HLG footage shows a one-time note when you open it, because that footage now looks
+about 1.26 times brighter than before; saving the project clears the note. ARRI
 LogC3 and RED Log3G10 are not reliable container tags, so choose their color space explicitly in
 the searchable **Input color space** picker. The picker lists every non-data color space from the
 selected configuration grouped by family.
