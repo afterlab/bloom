@@ -1103,25 +1103,13 @@ class MediaDriver final : public DriverBase {
             return;
         }
         const auto* composition = input_.snapshot.project().findComposition(input_.composition);
-        const bool h264 =
-            settings.format == ExportFormat::H264Mov || settings.format == ExportFormat::H264Mp4;
-        const bool hevc =
-            settings.format == ExportFormat::HevcMov || settings.format == ExportFormat::HevcMp4;
         const auto& encoders = input_.encoders;
-        const bool softwareH264 = encoders.openh264 == ExportEncoderStatus::OpenH264::Installed;
-        // Hardware first when asked for: NVIDIA NVENC, then VA-API. Automatic uses NVENC whenever
-        // the driver answers (fast, and real 10-bit HEVC), and VA-API for HEVC when a render node
-        // encodes it (the bundled Kvazaar is the slower encoder). The encode chain falls back to
-        // the bundled software encoder silently either way.
-        const auto preference = settings.encoder;
-        const bool nvencServes = (h264 && encoders.nvencH264) || (hevc && encoders.nvencHevc);
-        nvenc_ = preference != document::ExportEncoderPreference::Software && nvencServes;
-        hardware_ = (hevc && (preference == document::ExportEncoderPreference::Hardware ||
-                              (preference == document::ExportEncoderPreference::Automatic &&
-                               encoders.vaapiHevc))) ||
-                    (h264 && (preference == document::ExportEncoderPreference::Hardware ||
-                              (preference == document::ExportEncoderPreference::Automatic &&
-                               !softwareH264 && encoders.vaapiH264)));
+        // Hardware first when asked for: NVIDIA NVENC, then VA-API, each only for the codec and
+        // profile its probe opened (#465). The encode chain falls back to the bundled software
+        // encoder silently either way.
+        const auto route = exportHardwareRoute(settings, encoders);
+        nvenc_ = route.nvenc;
+        hardware_ = route.vaapi;
         const auto profile = mediaProfile(settings);
         SequenceExportRequestV1 request{
             .composition = {input_.snapshot, input_.composition},

@@ -1152,10 +1152,11 @@ std::unique_ptr<Input> openInput(const CallRequest& request) {
 }
 } // namespace
 namespace {
-// Opens `name` on `node` with a small NV12 VA-API frame pool of `width` x `height`. Success means
-// the driver exposes the encode entry point, not merely the device.
-bool vaapiEncoderOpensAt(const char* name, const std::string& node, const int width,
-                         const int height) {
+// Opens `name` on `node` with a small VA-API frame pool of `samples` (NV12 for 8 bits, P010 for
+// HEVC Main 10) at `width` x `height`. Success means the driver exposes the encode entry point for
+// that depth, not merely the device.
+bool vaapiEncoderOpensAt(const char* name, const std::string& node, const AVPixelFormat samples,
+                         const int width, const int height) {
     const auto* codec = avcodec_find_encoder_by_name(name);
     if (codec == nullptr)
         return false;
@@ -1168,7 +1169,7 @@ bool vaapiEncoderOpensAt(const char* name, const std::string& node, const int wi
     if (frames != nullptr && context != nullptr) {
         auto* framesContext = reinterpret_cast<AVHWFramesContext*>(frames->data);
         framesContext->format = AV_PIX_FMT_VAAPI;
-        framesContext->sw_format = AV_PIX_FMT_NV12;
+        framesContext->sw_format = samples;
         framesContext->width = width;
         framesContext->height = height;
         framesContext->initial_pool_size = 2;
@@ -1190,8 +1191,10 @@ bool vaapiEncoderOpensAt(const char* name, const std::string& node, const int wi
 // Issue #394: drivers reject pictures outside their encode limits (AMD's Mesa driver reports
 // 128..4096), so a 64x64 probe called a working encoder unavailable. Probe at sizes every
 // qualified encoder accepts: 256x256 first, then 1280x720 for a driver with a larger minimum.
-bool vaapiEncoderOpens(const char* name, const std::string& node) {
-    return vaapiEncoderOpensAt(name, node, 256, 256) || vaapiEncoderOpensAt(name, node, 1280, 720);
+bool vaapiEncoderOpens(const char* name, const std::string& node,
+                       const AVPixelFormat samples = AV_PIX_FMT_NV12) {
+    return vaapiEncoderOpensAt(name, node, samples, 256, 256) ||
+           vaapiEncoderOpensAt(name, node, samples, 1280, 720);
 }
 } // namespace
 bool probeVaapiEncode() {
@@ -1201,12 +1204,16 @@ bool probeVaapiEncode() {
         if (entry.path().filename().string().starts_with("renderD"))
             nodes.push_back(entry.path().string());
     std::ranges::sort(nodes);
-    std::string text = "bloom-vaapi-probe-v1\n";
+    std::string text = "bloom-vaapi-probe-v2\n";
     for (const auto& node : nodes) {
         if (node.find_first_of(" \n") != std::string::npos)
             continue;
-        text += node + (vaapiEncoderOpens("h264_vaapi", node) ? " 1" : " 0") +
-                (vaapiEncoderOpens("hevc_vaapi", node) ? " 1" : " 0") + "\n";
+        // #465: HEVC Main 10 is probed with the P010 input it encodes from, not inferred from
+        // an 8-bit session.
+        const bool hevc = vaapiEncoderOpens("hevc_vaapi", node);
+        text +=
+            node + (vaapiEncoderOpens("h264_vaapi", node) ? " 1" : " 0") + (hevc ? " 1" : " 0") +
+            (hevc && vaapiEncoderOpens("hevc_vaapi", node, AV_PIX_FMT_P010) ? " 1" : " 0") + "\n";
     }
     return std::fwrite(text.data(), 1, text.size(), stdout) == text.size() &&
            std::fflush(stdout) == 0;
@@ -1233,7 +1240,13 @@ bool nvencEncoderOpens(const char* name, const AVPixelFormat format, const char*
     return opened;
 }
 } // namespace
-bool nvencEncodeAvailable() { return nvencEncoderOpens("h264_nvenc", AV_PIX_FMT_YUV420P, "high"); }
+// #465: the NVENC generation serves H.264, HEVC Main and HEVC Main 10; a driver that opens any of
+// them is available (each route still refuses at EncodeBegin what it cannot open).
+bool nvencEncodeAvailable() {
+    return nvencEncoderOpens("h264_nvenc", AV_PIX_FMT_YUV420P, "high") ||
+           nvencEncoderOpens("hevc_nvenc", AV_PIX_FMT_YUV420P, "main") ||
+           nvencEncoderOpens("hevc_nvenc", AV_PIX_FMT_P010LE, "main10");
+}
 bool probeNvencEncode() {
     std::string text = "bloom-nvenc-probe-v1\n";
     text += nvencEncoderOpens("h264_nvenc", AV_PIX_FMT_YUV420P, "high") ? "1" : "0";

@@ -32,11 +32,12 @@ class Encoder final {
 };
 [[nodiscard]] provider::Payload call(const provider::CallRequest& request, bool hardware = false);
 [[nodiscard]] bool hardwareEncodeAvailable();
-// `--probe-vaapi`: prints "bloom-vaapi-probe-v1" and one "<render node> <h264> <hevc>" line per
-// VA-API render node (1 when the encode entry point opens) to stdout, then the worker exits.
+// `--probe-vaapi`: prints "bloom-vaapi-probe-v2", then one line per VA-API render node:
+// "<render node> <h264> <hevc> <hevc-main10>" (1 when the encode entry point opens at that depth),
+// to stdout; then the worker exits.
 [[nodiscard]] bool probeVaapiEncode();
-// Whether the NVIDIA driver's NVENC opens an H.264 encode session (the driver library is loaded at
-// run time; a computer without it answers false).
+// Whether the NVIDIA driver's NVENC opens an H.264, HEVC Main or HEVC Main 10 encode session (the
+// driver library is loaded at run time; a computer without it answers false).
 [[nodiscard]] bool nvencEncodeAvailable();
 // `--probe-nvenc`: prints "bloom-nvenc-probe-v1" and one "<h264> <hevc> <hevc-main10>" line
 // (1 when that NVENC session opens) to stdout, then the worker exits.

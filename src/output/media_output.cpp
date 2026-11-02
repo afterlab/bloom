@@ -61,28 +61,43 @@ VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable) {
     }
     const auto finished = (*process)->finish(deadline);
     const auto* exit = std::get_if<int>(&finished);
-    if (exit == nullptr || *exit != 0 || !text.starts_with("bloom-vaapi-probe-v1\n"))
+    if (exit == nullptr || *exit != 0)
         return result;
-    std::size_t at = text.find('\n') + 1;
-    while (at < text.size()) {
-        const auto end = text.find('\n', at);
-        if (end == std::string::npos)
-            break;
-        const auto line = std::string_view(text).substr(at, end - at);
-        at = end + 1;
-        if (line.size() < 5)
-            continue;
-        const bool h264 = line[line.size() - 3] == '1';
-        const bool hevc = line[line.size() - 1] == '1';
-        const auto node = std::string(line.substr(0, line.size() - 4));
-        if (!h264)
-            continue;
-        if (result.renderNode.empty() || (hevc && !result.hevc))
-            result = {node, h264, hevc};
-    }
+    result = parseVaapiEncodeProbeV1(text);
 #else
     (void)workerExecutable;
 #endif
+    return result;
+}
+VaapiEncodeProbeV1 parseVaapiEncodeProbeV1(const std::string_view text) {
+    VaapiEncodeProbeV1 result;
+    constexpr std::string_view header = "bloom-vaapi-probe-v2\n";
+    if (!text.starts_with(header))
+        return result;
+    // A node that encodes HEVC beats one that does not; one that also encodes Main 10 beats both.
+    const auto rank = [](const VaapiEncodeProbeV1& probe) {
+        return (probe.hevc ? 2 : 0) + (probe.hevcMain10 ? 1 : 0);
+    };
+    std::size_t at = header.size();
+    while (at < text.size()) {
+        const auto end = text.find('\n', at);
+        if (end == std::string_view::npos)
+            break;
+        const auto line = text.substr(at, end - at);
+        at = end + 1;
+        const auto flag = [&](const std::size_t fromEnd) {
+            return line[line.size() - fromEnd] == '1';
+        };
+        if (line.size() < 7 || line[line.size() - 2] != ' ' || line[line.size() - 4] != ' ' ||
+            line[line.size() - 6] != ' ')
+            continue;
+        const VaapiEncodeProbeV1 node{std::string(line.substr(0, line.size() - 6)), flag(5),
+                                      flag(3), flag(3) && flag(1)};
+        if (!node.h264)
+            continue;
+        if (result.renderNode.empty() || rank(node) > rank(result))
+            result = node;
+    }
     return result;
 }
 NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable) {

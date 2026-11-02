@@ -46,15 +46,22 @@ struct H264EncoderSupportV1 {
 // worker, never on the UI thread.
 [[nodiscard]] bool vaapiRenderNodeAvailableV1();
 // VA-API render-node discovery (#369): the render node whose driver opens the H.264 encode entry
-// point (preferring one that also opens HEVC), probed through the supervised media worker so no
-// driver code loads into the application. Blocking: worker threads only. Empty on other
-// platforms or when no node encodes.
+// point (preferring one that also opens HEVC, then HEVC Main 10), probed through the supervised
+// media worker so no driver code loads into the application. Blocking: worker threads only. Empty
+// on other platforms or when no node encodes.
 struct VaapiEncodeProbeV1 {
     std::string renderNode;
     bool h264 = false;
     bool hevc = false;
+    // #465: probed with 10-bit (P010) input, never inferred from the 8-bit HEVC session.
+    bool hevcMain10 = false;
+    friend bool operator==(const VaapiEncodeProbeV1&, const VaapiEncodeProbeV1&) = default;
 };
 [[nodiscard]] VaapiEncodeProbeV1 probeVaapiEncodeV1(std::string workerExecutable = {});
+// The worker's `--probe-vaapi` answer ("bloom-vaapi-probe-v2" and one
+// "<render node> <h264> <hevc> <hevc-main10>" line per node) read into the chosen node. Empty for
+// any other answer.
+[[nodiscard]] VaapiEncodeProbeV1 parseVaapiEncodeProbeV1(std::string_view text);
 // NVIDIA NVENC discovery (ADR 0036): whether the supervised worker opens an NVENC H.264, HEVC Main
 // and HEVC Main 10 session through the driver installed on this computer. Blocking: worker threads
 // only. All false on macOS and where no NVIDIA driver answers.

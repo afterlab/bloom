@@ -2089,9 +2089,11 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
   software (#408); HEVC presets are never refused for a missing hardware encoder (see the
   `HevcMovV1` row above).
 - **VA-API render-node discovery** is part of the encoder probe. The worker's `--probe-vaapi` mode
-  opens the H.264 and HEVC encode entry points on every render node and prints the answer;
-  `output::probeVaapiEncodeV1()` reads it, so no driver code loads into the application. Encoding
-  uses the probed node.
+  opens the H.264 and HEVC encode entry points on every render node, HEVC once with 8-bit NV12 and
+  once with 10-bit P010 input, and prints the answer; `output::probeVaapiEncodeV1()` reads it, so
+  no driver code loads into the application. Encoding uses the probed node. Automatic routes HEVC
+  Main 10 to NVENC or VA-API only when that encoder's probe opened Main 10 itself, not merely 8-bit
+  HEVC (#465); `host::exportHardwareRoute()` owns the choice.
 - **Color tags** come from the output color intent: `output::outputColourTagsV1()` maps the
   resolved display to H.273 primaries, transfer and matrix (sRGB displays get the sRGB transfer,
   Rec.1886/Rec.709 BT.709, P3 and Rec.2100 their own code points, unknown displays unspecified;

@@ -132,8 +132,10 @@ struct ExportEncoderStatus final {
     OpenH264 openh264 = OpenH264::Checking;
     // A VA-API render node exists and its driver exposes the encode entry point.
     bool vaapiH264 = false;
-    // A VA-API render node encodes HEVC Main/Main 10. Without it HEVC uses the bundled Kvazaar.
+    // A VA-API render node encodes HEVC Main, and HEVC Main 10 from 10-bit input (#465). Without
+    // it that profile uses the bundled Kvazaar.
     bool vaapiHevc = false;
+    bool vaapiHevcMain10 = false;
     // The supervised media worker can be started on this computer.
     bool mediaWorker = false;
     // The NVIDIA driver opens an NVENC H.264 / HEVC Main / HEVC Main 10 session (ADR 0036).
@@ -145,6 +147,19 @@ struct ExportEncoderStatus final {
     // True once the first worker probe has answered.
     bool probed = false;
 };
+
+// The hardware encoders a movie export tries, in order, before the bundled software encoder.
+// Automatic takes NVENC whenever its probe opened the requested codec and profile, and VA-API for
+// HEVC whose probe opened that profile (H.264 only when no software H.264 is installed); Hardware
+// tries VA-API for H.264 and HEVC regardless of the probe; Software takes neither (#465).
+struct ExportHardwareRoute final {
+    bool nvenc = false;
+    bool vaapi = false;
+    friend bool operator==(const ExportHardwareRoute&, const ExportHardwareRoute&) = default;
+};
+[[nodiscard]] ExportHardwareRoute
+exportHardwareRoute(const document::ExportOutputSettings& settings,
+                    const ExportEncoderStatus& encoders) noexcept;
 
 // One closed token of a format's vocabulary with its panel label.
 struct ExportFormatToken final {

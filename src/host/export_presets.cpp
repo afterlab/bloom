@@ -374,6 +374,27 @@ exportExpectedPreservation(const document::ExportOutputSettings& settings) noexc
     return expectedFor(settings);
 }
 
+ExportHardwareRoute exportHardwareRoute(const document::ExportOutputSettings& settings,
+                                        const ExportEncoderStatus& encoders) noexcept {
+    const bool h264 =
+        settings.format == ExportFormat::H264Mov || settings.format == ExportFormat::H264Mp4;
+    const bool hevc =
+        settings.format == ExportFormat::HevcMov || settings.format == ExportFormat::HevcMp4;
+    const bool main10 = hevc && settings.codecProfile == "main10";
+    using Preference = document::ExportEncoderPreference;
+    const auto preference = settings.encoder;
+    const bool softwareH264 = encoders.openh264 == ExportEncoderStatus::OpenH264::Installed;
+    const bool nvencServes = (h264 && encoders.nvencH264) ||
+                             (hevc && (main10 ? encoders.nvencHevcMain10 : encoders.nvencHevc));
+    const bool vaapiHevc = encoders.vaapiHevc && (!main10 || encoders.vaapiHevcMain10);
+    return {.nvenc = preference != Preference::Software && nvencServes,
+            .vaapi = (hevc && (preference == Preference::Hardware ||
+                               (preference == Preference::Automatic && vaapiHevc))) ||
+                     (h264 && (preference == Preference::Hardware ||
+                               (preference == Preference::Automatic && !softwareH264 &&
+                                encoders.vaapiH264)))};
+}
+
 bool exportPreservationFits(const output::OutputPreservationStateV1 actual,
                             const output::OutputPreservationStateV1 expected) noexcept {
     if (actual == S::Missing || actual == S::Unsupported)

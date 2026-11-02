@@ -161,6 +161,37 @@ int main() {
             host::exportTimingCheck(wav, {0, 96000, {3, 1}}).outcome == ExportCheckOutcome::Failed,
         "a WAV's duration is its sample count over its sample rate");
 
+    // #465: HEVC Main 10 goes to a hardware encoder only when its probe opened Main 10.
+    document::ExportOutputSettings hevc10;
+    hevc10.format = document::ExportFormat::HevcMp4;
+    hevc10.codecProfile = "main10";
+    auto hevc8 = hevc10;
+    hevc8.codecProfile = "main";
+    host::ExportEncoderStatus eightBit;
+    eightBit.nvencHevc = true;
+    eightBit.vaapiHevc = true;
+    using Route = host::ExportHardwareRoute;
+    failures += expect(host::exportHardwareRoute(hevc8, eightBit) == Route{true, true},
+                       "HEVC Main takes NVENC and VA-API when both open 8-bit HEVC");
+    failures += expect(host::exportHardwareRoute(hevc10, eightBit) == Route{false, false},
+                       "HEVC Main 10 takes neither when only 8-bit HEVC opened");
+    auto tenBit = eightBit;
+    tenBit.nvencHevcMain10 = true;
+    failures += expect(host::exportHardwareRoute(hevc10, tenBit) == Route{true, false},
+                       "HEVC Main 10 takes NVENC when NVENC opened Main 10");
+    tenBit.nvencHevcMain10 = false;
+    tenBit.vaapiHevcMain10 = true;
+    failures += expect(host::exportHardwareRoute(hevc10, tenBit) == Route{false, true},
+                       "HEVC Main 10 takes VA-API when VA-API opened Main 10");
+    auto forced = hevc10;
+    forced.encoder = document::ExportEncoderPreference::Hardware;
+    failures += expect(host::exportHardwareRoute(forced, eightBit) == Route{false, true},
+                       "Hardware still asks VA-API for Main 10 and falls back if refused");
+    auto software = hevc8;
+    software.encoder = document::ExportEncoderPreference::Software;
+    failures += expect(host::exportHardwareRoute(software, tenBit) == Route{false, false},
+                       "Software takes no hardware encoder");
+
     host::ExportPreset preset;
     preset.id = std::string(host::kExportDefaultVideoPresetId);
     failures +=

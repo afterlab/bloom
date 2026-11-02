@@ -123,9 +123,28 @@ void testOutputColourTags() {
               tiff.colour == bloom::media::provider::ColourTags{1, 13, 0, 2},
           "a TIFF export declares sRGB primaries and transfer, the RGB matrix and full range");
 }
+// #465: the VA-API probe answer, with HEVC Main 10 probed apart from 8-bit HEVC.
+void testVaapiProbeParsing() {
+    namespace o = bloom::output;
+    using Probe = o::VaapiEncodeProbeV1;
+    check(o::parseVaapiEncodeProbeV1("bloom-vaapi-probe-v2\n/dev/dri/renderD128 1 1 0\n") ==
+              Probe{"/dev/dri/renderD128", true, true, false},
+          "a node that opens only 8-bit HEVC does not report Main 10");
+    check(o::parseVaapiEncodeProbeV1("bloom-vaapi-probe-v2\n/dev/dri/renderD128 1 1 0\n"
+                                     "/dev/dri/renderD129 1 1 1\n") ==
+              Probe{"/dev/dri/renderD129", true, true, true},
+          "a node that also opens Main 10 is preferred");
+    check(o::parseVaapiEncodeProbeV1("bloom-vaapi-probe-v2\n/dev/dri/renderD128 1 0 0\n"
+                                     "/dev/dri/renderD129 0 1 1\n") ==
+              Probe{"/dev/dri/renderD128", true, false, false},
+          "a node without H.264 encode is never chosen");
+    check(o::parseVaapiEncodeProbeV1("bloom-vaapi-probe-v1\n/dev/dri/renderD128 1 1\n") == Probe{},
+          "an answer in another format is refused");
+}
 int main() {
     try {
         testOutputColourTags();
+        testVaapiProbeParsing();
         namespace p = bloom::media::provider;
         namespace o = bloom::output;
         p::EncodeSettingsV1 s;
