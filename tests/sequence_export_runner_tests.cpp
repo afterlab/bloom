@@ -1,5 +1,6 @@
 #include "gpu_route_proof_export_support.hpp"
 
+#include <tuple>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -1066,12 +1067,26 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
         check(result.encodedFrames == 48 && result.gpuEvaluatedFrames == 0 &&
                   result.gpuNativeDispatches == 0 && result.gpuReadbacks == 0,
               "null-provider default preserves complete actual CPU output with no GPU provenance");
+        // The encoder implementation token is its own field (#439), never the review note.
+        check(result.encoder == (preset == output::OutputPresetV1::ProResMovV1 ? "ffmpeg-prores"
+                                 : preset == output::OutputPresetV1::DnxhrMxfV1 ? "ffmpeg-dnxhr"
+                                                                                : ""),
+              "encoder token for the ProRes, DNxHR and PCM routes");
         if (preset == output::OutputPresetV1::ProResMovV1) {
             cpuProResPath = path;
             check(need(result.evidence)
                       .implementationNote.starts_with(media::provider::kProResExportNote),
                   "required ProRes evidence wording");
         }
+    }
+    // Software delivery routes report their bundled encoder, not the implementation note.
+    for (const auto& [preset, name, token] :
+         {std::tuple{output::OutputPresetV1::H264Mp4V1, "token-h264.mp4", "openh264"},
+          std::tuple{output::OutputPresetV1::HevcMp4V1, "token-hevc.mp4", "kvazaar"},
+          std::tuple{output::OutputPresetV1::Vp9WebmV1, "token-vp9.webm", "libvpx"},
+          std::tuple{output::OutputPresetV1::Av1WebmV1, "token-av1.webm", "svt-av1"}}) {
+        const auto result = f.run(f.request(directory / name, preset));
+        check(result.encoder == token, std::string("encoder token ") + token);
     }
     // The public null-provider default above remains an actual CPU export. An explicitly injected
     // disabled provider uses the same single policy for all admitted frames and releases the phase

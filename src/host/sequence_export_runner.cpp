@@ -192,6 +192,30 @@ struct detail::SequenceExportWorkV1 {
         return frames * s.sampleRate * static_cast<std::uint64_t>(s.rate.denominator) /
                static_cast<std::uint64_t>(s.rate.numerator);
     }
+    // The encoder implementation that served the attempt, after any silent fallback.
+    [[nodiscard]] std::string encoderToken(const media::provider::Handshake& served) const {
+        const auto& codec = settings().videoCodec;
+        if (codec.empty())
+            return {};
+        const auto& execution = served.execution;
+        const bool hardware = execution.implementation == media::provider::Implementation::Hardware;
+        if (execution.provider == "bloom.videotoolbox")
+            return "videotoolbox";
+        if (codec == "h264" || codec == "hevc") {
+            if (execution.device == "nvidia-nvenc")
+                return "nvenc";
+            if (hardware)
+                return "vaapi";
+            return codec == "h264" ? "openh264" : "kvazaar";
+        }
+        if (codec == "vp9")
+            return "libvpx";
+        if (codec == "av1")
+            return "svt-av1";
+        if (codec == "dnxhd")
+            return "ffmpeg-dnxhr";
+        return codec == "prores_ks" ? "ffmpeg-prores" : "ffmpeg-" + codec;
+    }
     // The frames' route provenance, for a published result and for a failure alike.
     void provenanceInto(SequenceExportResultV1& out) const {
         out.gpuEvaluatedFrames = gpuEvaluatedFrames;
@@ -521,6 +545,7 @@ struct detail::SequenceExportWorkV1 {
         SequenceExportResultV1 outcome;
         outcome.evidence = std::move(evidence);
         outcome.toleranceProfile = media::provider::encodeToleranceName(settings());
+        outcome.encoder = encoderToken(served);
         outcome.expectedColourTags =
             settings().videoCodec.empty() ? ColourTags{} : settings().colour;
         // FFmpeg's MXF writes the matrix but neither the primaries nor the transfer, so a DNxHR

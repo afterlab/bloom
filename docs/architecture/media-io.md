@@ -1956,6 +1956,11 @@ numbers, so a reviewer sees what was set aside. A failed check states all three 
 `Reopened pixels exceed tolerance profile v3 (max=… p99.99max=… mean=…)`. Provider schema 6
 carries the new field.
 
+The export verification's `provenance.encoder` holds only the encoder implementation token that
+served the output (`openh264`, `nvenc`, `vaapi`, `kvazaar`, `libvpx`, `svt-av1`, `videotoolbox`,
+`ffmpeg-prores`, `ffmpeg-dnxhr`; empty for audio only). The preset's review or delivery note, such
+as "Review deliverable — not for archival", is the separate `provenance.implementationNote`.
+
 Why version 3 (issue #424, owner decision 2026-11-02): a 720p H.264 export (the bench project
 "720p H.264 A" trimmed to 2.5 s, and the full-length 720p PNG16 and EXR half projects, exported
 with the software encoder, OpenH264) failed version 2 with a raw maximum of 30734 (PNG16/EXR: 34660)

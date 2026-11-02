@@ -135,6 +135,10 @@ struct SequenceExportResultV1 {
     // The versioned tolerance profile name(s) the evidence's tolerance digest binds
     // ("bloom.video-rgba16-srgb.v3"); empty for an exact or byte-exact output.
     std::string toleranceProfile;
+    // The encoder implementation token that served the output ("openh264", "nvenc", "vaapi",
+    // "kvazaar", "libvpx", "svt-av1", "videotoolbox", "ffmpeg-prores", "ffmpeg-dnxhr"); empty for
+    // an audio-only output.
+    std::string encoder;
     std::uint64_t encodedFrames = 0;
     // Native provenance/counters accumulated over the per-frame output attempts (diagnostics
     // only). `gpuEvaluatedFrames` counts frames whose attempt actually ran the GPU bridge;

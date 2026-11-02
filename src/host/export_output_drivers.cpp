@@ -1249,7 +1249,8 @@ class MediaDriver final : public DriverBase {
                      ? ExportDeviceRoute::CpuReference
                      : ExportDeviceRoute::Gpu;
         if (const auto* analysis = runner_->analysis())
-            provenance.encoder = analysis->implementationNote;
+            provenance.implementationNote = analysis->implementationNote;
+        provenance.encoder = result.encoder;
         if (report_.failure)
             return void(done_ = true);
         if (!result.published()) {

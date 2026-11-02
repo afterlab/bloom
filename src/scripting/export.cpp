@@ -224,6 +224,8 @@ void writeVerification(Json& json, const host::ExportOutputVerification& output)
         .number(output.provenance.framesReused)
         .key("encoder")
         .string(output.provenance.encoder)
+        .key("implementationNote")
+        .string(output.provenance.implementationNote)
         .end('}');
     if (const auto& quality = output.reopenQuality) {
         const auto hex = quality->toleranceDigest.toLowercaseHex();

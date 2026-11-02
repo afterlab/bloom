@@ -144,8 +144,12 @@ struct ExportDeviceProvenance final {
     // (the output's useCachedFrames setting). Each reused frame still passes the same analysis,
     // approval and verification as an evaluated one.
     std::uint64_t framesReused = 0;
-    // Encoder actually used, e.g. "openh264", "vaapi", "videotoolbox", "ffmpeg-prores".
+    // Encoder implementation token actually used, e.g. "openh264", "nvenc", "vaapi", "kvazaar",
+    // "libvpx", "svt-av1", "videotoolbox", "ffmpeg-prores"; empty for an audio-only output.
     std::string encoder;
+    // The preset's implementation/review note (e.g. "Review deliverable — not for archival; ..."),
+    // kept apart from the encoder token.
+    std::string implementationNote;
 };
 
 // The worker's reopen pixel measurements of a movie (issue #424), so a reviewer sees what the

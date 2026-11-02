@@ -170,6 +170,7 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
     out.set(value, "totalBytes", out.number(artifacts.totalBytes));
     out.set(value, "digest", artifacts.digest ? out.text(hex(*artifacts.digest)) : out.null());
     out.set(value, "encoder", out.text(verification.provenance.encoder));
+    out.set(value, "implementationNote", out.text(verification.provenance.implementationNote));
     out.set(value, "gpuFrames", out.number(verification.provenance.gpuFrames));
     out.set(value, "cpuReferenceFrames", out.number(verification.provenance.cpuReferenceFrames));
     out.set(value, "gpuDisplayFrames", out.number(verification.provenance.gpuDisplayFrames));
