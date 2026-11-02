@@ -155,6 +155,64 @@ void check(Expectations& expectations, GpuDevice& device, CpuCompositionEvaluato
                         (name + ": a warm rerun dispatches nothing new").c_str());
 }
 
+// #448: one executor and one scene cache, the same plan identity re-prepared after only the
+// footage pixel aspect changed. The prepared output key must change and the warm cache must not
+// serve the square frame for the 2:1 one; each native frame matches its own CPU oracle.
+void checkAspectChange(Expectations& expectations, GpuDevice& device,
+                       CpuCompositionEvaluator& evaluator, const std::filesystem::path& directory,
+                       const document::AssetRecord& asset, const GpuSceneOcioContext& ocioContext,
+                       const std::uint64_t idBase) {
+    auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    context.assetBaseDirectory = directory;
+    const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+    auto cache = GpuSceneCache::create(device, GpuSceneCacheBudgets{});
+    expectations.expect(cache.hasValue(), "aspect change: the cache creates");
+    if (!cache)
+        return;
+    auto executor = GpuSceneExecutor::create(device, *cache.cache);
+    expectations.expect(executor.hasValue(), "aspect change: the executor creates");
+    if (!executor)
+        return;
+    const auto outputKey = [](const bloom::runtime::PreparedGpuScene& scene) {
+        const auto index = scene.outputCommand();
+        return std::visit([](const auto& command) { return command.semanticKey; },
+                          scene.commands()[static_cast<std::size_t>(index)]);
+    };
+    std::vector<std::string> keys;
+    std::vector<std::vector<Rgba32f>> natives;
+    for (const double aspect : {1.0, 2.0}) {
+        const auto plan =
+            aspectPlan(format(8, 8), asset, LayerValues{.position = {4.0, 4.0}, .opacity = 1.0},
+                       idBase, aspect);
+        const auto request = requestFor(*plan);
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(prepared.hasValue(), "aspect change: prepares");
+        if (!prepared)
+            return;
+        keys.push_back(outputKey(*prepared.scene));
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+        expectations.expect(oracle.frame() != nullptr && run.ready,
+                            "aspect change: the oracle and the native run complete");
+        if (!oracle.frame() || !run.ready)
+            return;
+        const auto readback = readbackResidentImage(*run.image, kSceneBudget);
+        expectations.expect(
+            readback.hasValue() &&
+                pixelsClose(readback.pixels, oracle.frame()->processImage().pixels()),
+            "aspect change: native pixels match the CPU oracle (2e-6)");
+        if (!readback.hasValue())
+            return;
+        natives.emplace_back(readback.pixels.begin(), readback.pixels.end());
+    }
+    expectations.expect(keys[0] != keys[1],
+                        "aspect change: the prepared output key covers the pixel aspect");
+    expectations.expect(natives[0] != natives[1],
+                        "aspect change: the warm cache serves a new frame for the new aspect");
+}
+
 // A 4x6 premultiplied RGBA field pattern: even rows and odd rows differ.
 [[nodiscard]] std::vector<ExrPixel> fieldPixels(const float shift) {
     std::vector<ExrPixel> pixels;
@@ -255,6 +313,8 @@ int main(const int argc, char** argv) {
               "pixel aspect 2:1", false, {}, 0, 2.0);
         check(expectations, *device.device, evaluator, directory, matted, ocioContext, 95100,
               "pixel aspect 10:11 with a matte", false, {}, 1, 10.0 / 11.0);
+        checkAspectChange(expectations, *device.device, evaluator, directory, image, ocioContext,
+                          95200);
         // Camera log inputs Bloom synthesizes (#381): the input->working OCIO transform runs as a
         // native program with CPU parity, with no footage pass.
         // Nominal log plates carry code values in [0, 1]; out-of-range codes follow below.

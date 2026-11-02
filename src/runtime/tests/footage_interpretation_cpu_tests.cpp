@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <iostream>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -88,6 +89,37 @@ int main() {
                        std::abs((b.bottom - b.top) - (a.bottom - a.top)) < 1e-9 &&
                        std::abs((b.left + b.right) - (a.left + a.right)) < 1e-9,
                    "a 2:1 pixel aspect doubles the layer's width about its centre");
+        }
+
+        // #448: the same plan re-evaluated through a warm operation cache after only the pixel
+        // aspect changed must not serve the square layer's cached image.
+        bloom::runtime::CpuCompositionEvaluator cached;
+        cached.setAssetBaseDirectory(directory);
+        const auto cachedFrame = [&](const double aspect) {
+            const auto plan =
+                aspectPlan(format(16, 8), still,
+                           LayerValues{.position = {8.0, 4.0}, .opacity = 1.0}, 94100, aspect);
+            return cached.evaluate(plan, requestFor(*plan), {});
+        };
+        const auto warmSquare = cachedFrame(1.0);
+        const auto warmWide = cachedFrame(2.0);
+        expect(warmSquare.frame() != nullptr && warmWide.frame() != nullptr,
+               "the cached aspect plans evaluate");
+        if (warmSquare.frame() != nullptr && warmWide.frame() != nullptr &&
+            square.frame() != nullptr && wide.frame() != nullptr) {
+            const auto pixels = [](const auto& result) {
+                const auto span = result.frame()->processImage().pixels();
+                return std::vector<bloom::render::Rgba32f>(span.begin(), span.end());
+            };
+            expect(pixels(warmSquare) == pixels(square),
+                   "the cached square frame matches the uncached reference");
+            expect(pixels(warmWide) != pixels(warmSquare),
+                   "changing the pixel aspect changes the next cached frame");
+            expect(pixels(warmWide) == pixels(wide),
+                   "the cached 2:1 frame matches the uncached 2:1 reference");
+            expect(warmWide.frame()->evaluatedBounds()[1].output ==
+                       wide.frame()->evaluatedBounds()[1].output,
+                   "the cached 2:1 frame publishes the 2:1 layer bounds");
         }
     } catch (const std::exception& error) {
         std::cerr << "Unexpected test exception: " << error.what() << '\n';

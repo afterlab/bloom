@@ -458,7 +458,11 @@ value and a rendered frame cannot disagree.
   is the ratio over the file's. It scales the layer's own content horizontally in layer space,
   before the layer's scale and rotation (`CompiledLayerOutput::sourcePixelAspect`), on the CPU
   oracle and the GPU affine alike; a child layer inherits the parent's transform without it. Stills
-  and sequences decode square; their override is the ratio itself.
+  and sequences decode square; their override is the ratio itself. The decoded image does not depend
+  on it, so the source keys leave it out; the ratio is part of the Layer Output's operation cache key
+  on the CPU route and of the affine command's semantic key on the GPU route, so a changed override
+  never serves the previous ratio's layer image (#448; `bloom.runtime.footage-interpretation-cpu` and
+  `bloom.runtime.gpu_footage_interpretation_native` re-render through a warm cache).
 
 **Footage interpretation pass.** Ignore, Invert and a premultiplied matte color, and deinterlacing,
 are pixel transformations of the file's stored samples, so they run before the input color

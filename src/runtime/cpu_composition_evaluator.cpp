@@ -2659,6 +2659,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             parameter(step.scale);
                             parameter(step.rotation);
                             parameter(step.opacity);
+                            // #448: the footage pixel aspect scales the layer's content, so a
+                            // changed interpretation must not reuse the previous aspect's image.
+                            key.add(step.sourcePixelAspect);
                             authored(step.blendModeParameterId,
                                      core::blendModeStoredValue(step.blendMode),
                                      step.drivenBlendMode);
