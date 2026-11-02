@@ -1898,6 +1898,33 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# Issue #447: the Viewer's process frame against the exported PNG still for a composition with a
+# non-black background (RGB within one code, exact alpha), and the background added only at paint.
+# The CPU reference half always runs; the GPU half runs with a Vulkan loader and a qualified device
+# and prints NotRun otherwise (--require-device makes that a failure).
+add_executable(bloom_ui_viewer_export_background_parity_test
+    viewer_export_background_parity_tests.cpp)
+target_link_libraries(bloom_ui_viewer_export_background_parity_test PRIVATE bloom_ui bloom_host)
+if(BLOOM_UI_VULKAN_AVAILABLE)
+    target_compile_definitions(bloom_ui_viewer_export_background_parity_test
+        PRIVATE BLOOM_UI_BACKGROUND_PARITY_GPU=1)
+    bloom_package_gpu_shader_tools(bloom_ui_viewer_export_background_parity_test)
+    if(DEFINED BLOOM_DEPENDENCY_PREFIX AND EXISTS "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+        set(bloom_ui_background_parity_loader_args
+            --loader "${BLOOM_DEPENDENCY_PREFIX}/lib/libvulkan.so.1")
+    else()
+        set(bloom_ui_background_parity_loader_args)
+    endif()
+endif()
+bloom_enable_warnings(bloom_ui_viewer_export_background_parity_test)
+bloom_add_test(
+    NAME bloom.ui.viewer_export_background_parity
+    COMMAND bloom_ui_viewer_export_background_parity_test ${bloom_ui_background_parity_loader_args}
+    LABELS ui integration
+    TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # Real Wayland device present/ack/resize/resume for the resident controller. Without a packaged
 # loader it skips cleanly (no --loader is passed by normal CTest, which stays offscreen); the
 # supervisor passes --loader/--require-device under QT_QPA_PLATFORM=wayland for the native run.
