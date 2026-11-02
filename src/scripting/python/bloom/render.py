@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import _state, context
+from .errors import CancelledError
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,10 @@ def _render(first, last, is_range, out, composition, preset):
     cancellation_task = task._ticket.id if task is not None and task._ticket is not None else 0
     result = _state.host().render(int(composition), first, last, is_range, preset, str(Path(out)),
                                  cancellation_task)
+    if not result["succeeded"]:
+        if result["diagnostic_code"] == "cancelled":
+            raise CancelledError(result["diagnostic"])
+        raise RuntimeError(result["diagnostic"])
     return RenderResult(tuple(RenderFile(**item) for item in result["files"]),
                         result["published_frames"], result["preservation_report"])
 

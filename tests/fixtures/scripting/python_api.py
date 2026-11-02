@@ -558,6 +558,34 @@ class PythonApi(unittest.TestCase):
             with self.assertRaises(bloom.CancelledError):
                 handle.result()
 
+    def test_cancelled_render_raises_cancelled_error(self):
+        """A render whose cancellation fires raises bloom.CancelledError, not RuntimeError."""
+        with tempfile.TemporaryDirectory(prefix='bloom-python-cancel-') as directory:
+            root = pathlib.Path(directory)
+            bloom.ops.composition.add(name='Small', width=4, height=4, duration=(48, 1))
+            composition = bloom.data.compositions[-1]
+            # A task ticket without the task worker's tracer, so the error is the render's own.
+            task = bloom.tasks.TaskHandle()
+            task._ticket = self.host.track_task('Cancelled render')
+
+            def cancel_once_native_work_runs():
+                deadline = time.monotonic() + 10
+                while len(self.host.tasks()) < 2 and time.monotonic() < deadline:
+                    time.sleep(0.001)
+                task._ticket.cancel()
+
+            canceller = threading.Thread(target=cancel_once_native_work_runs)
+            token = _state._task.set(task)
+            canceller.start()
+            try:
+                with self.assertRaises(bloom.CancelledError):
+                    bloom.render.range(0, 999, composition=composition, out=root / 'cancel.png')
+            finally:
+                _state._task.reset(token)
+                canceller.join(10)
+                task._ticket.finish('')
+            self.assertLess(len(list(root.glob('cancel.*.png'))), 1000)
+
     def test_worker_cannot_join_authoring_transaction(self):
         with bloom.transactions.group('Author only'):
             handle = bloom.tasks.submit(lambda task: bloom.ops.project.set_name(name='Wrong thread'))

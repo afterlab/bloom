@@ -133,9 +133,13 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                          const runtime::SnapshotCompiler& compiler, RenderRequest request,
                          std::filesystem::path scratchDirectory,
                          std::shared_ptr<host::GpuExportProvider> injectedGpuProvider) {
-    if (!session.isValid() || request.destination.empty() ||
-        (request.cancelled && request.cancelled())) {
+    if (!session.isValid() || request.destination.empty()) {
         return failed("Render request is invalid");
+    }
+    if (request.cancelled && request.cancelled()) {
+        auto cancelled = failed("The render was cancelled");
+        cancelled.diagnosticCode = RenderDiagnosticCode::Cancelled;
+        return cancelled;
     }
     if (!injectedGpuProvider) {
         auto missing = failed(
@@ -282,9 +286,10 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             result.gpuDeviceOwnershipEpoch = provenance.gpuDeviceOwnershipEpoch;
         }
         if (!result.succeeded) {
-            if (runner.stopped())
+            if (runner.stopped()) {
                 result.diagnostic = "The render was cancelled";
-            else if (const auto& failure = runner.failure())
+                result.diagnosticCode = RenderDiagnosticCode::Cancelled;
+            } else if (const auto& failure = runner.failure())
                 result.diagnostic = failure->reason;
             else if (state != nullptr && state->failure)
                 result.diagnostic = state->failure->reason;

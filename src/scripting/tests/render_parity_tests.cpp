@@ -532,6 +532,8 @@ void testParity() {
                     {}, provider);
     expect(!cancelled.succeeded && !std::filesystem::exists(root / "cancelled.png"),
            "a cancelled render publishes nothing");
+    expect(cancelled.diagnosticCode == RenderDiagnosticCode::Cancelled,
+           "a cancelled render reports the Cancelled code");
     const auto outside = Render::run(*session, scheduler, compiler,
                                      RenderRequest{.composition = composition,
                                                    .frame = 100000,

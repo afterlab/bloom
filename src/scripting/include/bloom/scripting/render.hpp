@@ -30,7 +30,9 @@ struct RenderRequest final {
     std::function<bool()> cancelled = {};
 };
 
-enum class RenderDiagnosticCode { None, MissingProcessingRoot };
+// `Cancelled`: the request's cancellation fired before or during the render; nothing it had not
+// already published remains.
+enum class RenderDiagnosticCode { None, MissingProcessingRoot, Cancelled };
 
 struct RenderResult final {
     bool succeeded = false;

@@ -29,6 +29,18 @@ std::string digestFile(const std::filesystem::path& path) {
     return "sha256:" + std::string(hex.data(), hex.size());
 }
 
+const char* diagnosticCode(const RenderDiagnosticCode code) {
+    switch (code) {
+    case RenderDiagnosticCode::None:
+        return "";
+    case RenderDiagnosticCode::MissingProcessingRoot:
+        return "missing-processing-root";
+    case RenderDiagnosticCode::Cancelled:
+        return "cancelled";
+    }
+    return "";
+}
+
 } // namespace
 
 nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t first,
@@ -79,10 +91,14 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
             }
         }
     }
-    if (!result.succeeded) {
-        throw std::runtime_error(result.diagnostic);
-    }
     nb::dict row;
+    row["succeeded"] = result.succeeded;
+    if (!result.succeeded) {
+        // bloom.render raises bloom.CancelledError for "cancelled" and RuntimeError otherwise.
+        row["diagnostic"] = result.diagnostic;
+        row["diagnostic_code"] = diagnosticCode(result.diagnosticCode);
+        return row;
+    }
     row["published_frames"] = result.publishedFrames;
     row["preservation_report"] = result.preservationReport;
     nb::list paths;
