@@ -1473,6 +1473,11 @@ Audio timing (#354):
   held sample, as for a nested composition). Export re-evaluates the mix per block and playback
   per transport change through the same `mapAudioClipTime` and mixer, so they produce identical
   samples; the per-sample mapping allocates nothing on the mixer worker.
+- A disabled or muted layer is absent from the audio mix as it is from the picture (#431). Its
+  Layer Output is outside the reachable set, so its Time Remap and level curves are never compiled,
+  and the mix lowers no timing, source or nested composition for it. Disabling a Time Remapped
+  layer (a nested-composition layer routes audio too) therefore compiles on every route and simply
+  excludes the layer; enabling it again restores its picture and audio.
 
 Implementation notes:
 

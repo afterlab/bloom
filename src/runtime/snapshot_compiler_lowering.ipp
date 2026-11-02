@@ -758,6 +758,11 @@ lower(const std::vector<document::NodeId>& order) {
             addTopologyFailure(layerNodeId, "Validated audio layer topology could not be lowered.");
             return false;
         }
+        // #431: a disabled or muted layer is silent, as its picture is absent. It is outside the
+        // reachable set, so its Time Remap and level curves are not compiled and its timing must
+        // not be lowered; it contributes nothing to the mix.
+        if (!boundary->enabled || isMuted(boundary->nodeId))
+            return true;
         const auto layerAudioEdgeIterator =
             std::ranges::find_if(graph.edges(), [&](const auto& edge) {
                 const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
@@ -774,11 +779,9 @@ lower(const std::vector<document::NodeId>& order) {
             const auto time = lowerLayerTime(*layerNode, *boundary);
             if (!time)
                 return false;
-            mix.nestedLayers.push_back(
-                {*source,
-                 boundary->enabled && !isMuted(boundary->nodeId) && !isMuted(audioSource->id),
-                 boundary->solo, boundary->inPoint, boundary->endPoint(composition_->duration()),
-                 *time});
+            mix.nestedLayers.push_back({*source, !isMuted(audioSource->id), boundary->solo,
+                                        boundary->inPoint,
+                                        boundary->endPoint(composition_->duration()), *time});
             return true;
         }
         if (audioSource == nullptr || (audioSource->typeId != document::kAudioSourceNodeType &&
@@ -793,8 +796,7 @@ lower(const std::vector<document::NodeId>& order) {
         const auto time = lowerLayerTime(*layerNode, *boundary);
         if (!time)
             return false;
-        mix.layers.push_back({layerNodeId, boundary->layerId, *sourceIndex,
-                              boundary->enabled && !isMuted(boundary->nodeId), boundary->solo,
+        mix.layers.push_back({layerNodeId, boundary->layerId, *sourceIndex, true, boundary->solo,
                               boundary->inPoint, boundary->endPoint(composition_->duration()),
                               *time});
         return true;

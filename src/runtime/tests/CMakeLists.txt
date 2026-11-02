@@ -573,6 +573,24 @@ bloom_add_test(
 )
 set_tests_properties(bloom.runtime.gpu_nested_scene_native PROPERTIES SKIP_RETURN_CODE 77)
 
+# #431: a disabled Time Remapped nested-composition layer compiles from a real document and is
+# excluded on the GPU exactly as on the CPU reference; enabling it again brings it back.
+add_executable(bloom_runtime_gpu_disabled_time_remap_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_disabled_time_remap_native_tests.cpp)
+target_include_directories(bloom_runtime_gpu_disabled_time_remap_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_disabled_time_remap_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+bloom_enable_warnings(bloom_runtime_gpu_disabled_time_remap_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_disabled_time_remap_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_disabled_time_remap_native
+    COMMAND bloom_runtime_gpu_disabled_time_remap_native_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_disabled_time_remap_native PROPERTIES SKIP_RETURN_CODE 77)
+
 # Bounded GPU coverage contract gate. It enumerates every CompiledOperation/ImageEffectKernel
 # alternative, feature axis, render route, and built-in pixel node type from the same contract,
 # drives the REAL production CpuGpuSceneBuilder over one genuine fixture per required id, and

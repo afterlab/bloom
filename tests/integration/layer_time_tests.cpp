@@ -5,7 +5,9 @@
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
+#include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/composition_time.hpp>
@@ -15,6 +17,8 @@
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 using namespace bloom;
@@ -282,6 +286,138 @@ void identityRemap() {
     expect(fixture.commands.execute(std::move(disable)).changed(), "Time Remap disables");
     expect(fixture.covered(at(30, 24)) == plain[30], "disabling restores plain playback");
 }
+template <typename Operation, typename... Arguments>
+bool execute(document::Document& document, commands::CommandStack& commands,
+             Arguments&&... arguments) {
+    commands::Transaction transaction("Disabled remap", document.snapshot().revision());
+    transaction.emplace<Operation>(std::forward<Arguments>(arguments)...);
+    return commands.execute(std::move(transaction)).changed();
+}
+
+// #431: disabling a Time Remapped layer excludes it from evaluation instead of failing the
+// compile, whether the layer carries pictures, audio, or a video's picture and audio, and enabling
+// it again brings it back. The remap is animated, so its curve is compiled only while the layer
+// contributes; the audio mix used to lower the disabled layer's remap anyway.
+void disabledRemappedLayers() {
+    auto initial = document::makeNewProject(
+        "Disabled remap", "Main", core::RationalTime::fromInteger(4),
+        *document::CompositionFormat::create(16, 4, core::PixelAspectRatio::square(), rate(24)));
+    {
+        document::AssetRecord tone;
+        tone.id = document::AssetId::fromRaw(9000);
+        tone.kind = document::AssetKind::Audio;
+        tone.locator = {"file", "project-relative", "tone.wav", "file:tone.wav"};
+        tone.rate = 48000;
+        tone.channels = 1;
+        tone.frames = 96000;
+        tone.duration = at(2);
+        document::AssetRecord video;
+        video.id = document::AssetId::fromRaw(9001);
+        video.kind = document::AssetKind::Video;
+        video.locator = {"file", "project-relative", "clip.mov", "file:clip.mov"};
+        video.width = video.height = 4;
+        video.rate = 48000;
+        video.channels = 1;
+        video.frames = 48;
+        video.duration = at(2);
+        document::AssetVideoStream picture;
+        picture.codec = "raw";
+        picture.timebase = picture.framePeriod = at(1, 24);
+        picture.duration = at(2);
+        video.videoStreams.push_back(picture);
+        document::AssetVideoStream sound;
+        sound.id = 1;
+        sound.kind = 2;
+        sound.codec = "pcm";
+        sound.timebase = sound.framePeriod = at(1, 48000);
+        sound.duration = at(2);
+        sound.sampleRate = 48000;
+        sound.channelLayout = {"M"};
+        video.videoStreams.push_back(sound);
+        if (!initial.project.addAsset(tone) || !initial.project.addAsset(video))
+            throw std::runtime_error("disabled remap assets");
+    }
+    const auto composition = initial.initialCompositionId;
+    document::Document document{std::move(initial.project)};
+    commands::CommandStack commands{document};
+    const auto run = [&](const bool changed) {
+        if (!changed)
+            throw std::runtime_error("disabled remap command refused");
+    };
+    run(execute<commands::AddSolidLayer>(document, commands, composition, "Solid",
+                                         core::Color4d{1, 1, 1, 1}, document::Vec2d{8, 2}));
+    run(execute<commands::AddAudioLayer>(document, commands, composition,
+                                         document::AssetId::fromRaw(9000)));
+    run(execute<commands::AddImageLayer>(document, commands, composition,
+                                         document::AssetId::fromRaw(9001)));
+    // A nested-composition layer routes its composition's audio as well as its picture.
+    run(execute<commands::AddComposition>(
+        document, commands, "Inner",
+        *document::CompositionFormat::create(16, 4, core::PixelAspectRatio::square(), rate(24)),
+        core::RationalTime::fromInteger(4)));
+    const auto inner = document.snapshot().project().compositions().back().id();
+    run(execute<commands::AddCompositionSource>(document, commands, composition, inner,
+                                                document::Vec2d{}, true));
+    std::vector<document::LayerId> layers;
+    for (const auto& boundary :
+         document.snapshot().project().findComposition(composition)->graph().layerOutputs())
+        layers.push_back(boundary.layerId);
+    expect(layers.size() == 4, "the fixture has a solid, an audio, a video and a nested layer");
+    // Every layer but the audio-only one carries a Time Remap.
+    for (const std::size_t index : {0U, 2U, 3U})
+        run(execute<commands::EnableLayerTimeRemap>(document, commands, composition,
+                                                    layers[index]));
+    const auto compile = [&] {
+        return runtime::SnapshotCompiler(document::builtInNodeDefinitions())
+            .compile({document.snapshot(), composition}, {});
+    };
+    // Whether the layer at `index` is in the mix: the nested layer is the only nested entry.
+    const auto mixes = [&](const runtime::SnapshotCompileResult& result, const std::size_t index) {
+        if (!result.plan)
+            return false;
+        const auto& mix = result.plan->audioMix();
+        if (index == 3)
+            return mix.nestedLayers.size() == 1;
+        return std::ranges::any_of(
+            mix.layers, [&](const auto& audio) { return audio.layerId == layers[index]; });
+    };
+    const auto enabled = compile();
+    expect(enabled.status == runtime::SnapshotCompileStatus::Compiled,
+           "the Time Remapped layers compile");
+    for (std::size_t index = 0; index < layers.size(); ++index) {
+        const auto layer = layers[index];
+        const bool audible = index > 0;
+        expect(mixes(enabled, index) == audible, "an enabled layer with audio is in the mix");
+        run(execute<commands::SetLayerEnabled>(document, commands, composition, layer, false));
+        const auto disabled = compile();
+        expect(disabled.status == runtime::SnapshotCompileStatus::Compiled,
+               "a disabled layer compiles, Time Remapped or not");
+        expect(!mixes(disabled, index), "a disabled layer is excluded from the audio mix");
+        run(execute<commands::SetLayerEnabled>(document, commands, composition, layer, true));
+        const auto again = compile();
+        expect(again.status == runtime::SnapshotCompileStatus::Compiled && again.plan &&
+                   again.plan->operations().size() == enabled.plan->operations().size() &&
+                   mixes(again, index) == audible,
+               "enabling the layer again restores its picture and audio");
+    }
+
+    // The picture: a disabled remapped Solid renders nothing and enabling it renders it again.
+    Fixture fixture;
+    const auto solidComposition = fixture.initial.initialCompositionId;
+    expect(execute<commands::EnableLayerTimeRemap>(fixture.document, fixture.commands,
+                                                   solidComposition, fixture.layer),
+           "the Solid's Time Remap enables");
+    const auto shown = fixture.covered(at(1, 2));
+    expect(shown > 0, "the remapped Solid is visible");
+    expect(execute<commands::SetLayerEnabled>(fixture.document, fixture.commands, solidComposition,
+                                              fixture.layer, false),
+           "the Solid disables");
+    expect(fixture.covered(at(1, 2)) == 0, "a disabled remapped Solid renders nothing");
+    expect(execute<commands::SetLayerEnabled>(fixture.document, fixture.commands, solidComposition,
+                                              fixture.layer, true),
+           "the Solid enables again");
+    expect(fixture.covered(at(1, 2)) == shown, "the re-enabled remapped Solid renders again");
+}
 } // namespace
 
 int main() {
@@ -290,6 +426,7 @@ int main() {
         evaluation();
         audio();
         identityRemap();
+        disabledRemappedLayers();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -340,6 +340,41 @@ class AgentFeedback(unittest.TestCase):
         self.assertIn('.png', json.dumps(wrong))
         self.assertNotIn('export-unavailable', json.dumps(wrong))
 
+    def test_disabled_time_remapped_nested_layer_renders(self):
+        # #431: disabling a Time Remapped nested-composition layer (which also routes audio)
+        # excludes it from the render instead of failing the composition's compile.
+        server = self.server
+        folder = tempfile.TemporaryDirectory(prefix='bloom-mcp-remap-')
+        self.addCleanup(folder.cleanup)
+        added = server.transact(('bloom.composition.add', {
+            'name': 'Inner', 'width': 64, 'height': 64, 'duration': [2, 1]}))
+        inner = [output['id'] for output in added['outputs'] if output['name'] == 'composition'][0]
+        server.transact(('bloom.layer.add-solid', {
+            'composition': inner, 'name': 'Red', 'color': [1, 0, 0, 1], 'position': [32, 32]}))
+        nested = server.transact(('bloom.layer.add-from-assets', {
+            'composition': 1, 'assets': [], 'compositions': [inner], 'time': 0}))
+        layer = [output['id'] for output in nested['outputs'] if output['name'] == 'layer'][0]
+        server.transact(('bloom.layer.enable-time-remap', {'composition': 1, 'layer': layer}))
+
+        def render(name):
+            destination = os.path.join(folder.name, name)
+            response = server.raw('render', {'composition': 1, 'frame': 12,
+                                             'preset': 'PngRgba8SrgbV1',
+                                             'destination': destination})
+            self.assertFalse(response['result'].get('isError'), response)
+            return destination
+
+        shown = png_pixel(render('enabled.png'), 960, 540)
+        self.assertEqual(shown[:3], (255, 0, 0), 'the remapped nested layer renders')
+        server.transact(('bloom.layer.set-enabled', {'composition': 1, 'layer': layer,
+                                                     'enabled': False}))
+        self.assertNotEqual(png_pixel(render('disabled.png'), 960, 540)[:3], (255, 0, 0),
+                            'the disabled layer is excluded')
+        server.transact(('bloom.layer.set-enabled', {'composition': 1, 'layer': layer,
+                                                     'enabled': True}))
+        self.assertEqual(png_pixel(render('again.png'), 960, 540), shown,
+                         'the re-enabled layer renders again')
+
 
 if __name__ == '__main__':
     unittest.main()
