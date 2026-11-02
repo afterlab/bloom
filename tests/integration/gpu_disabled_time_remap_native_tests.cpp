@@ -2,6 +2,10 @@
 // its composition's audio) compiles and is excluded from the GPU render exactly as from the CPU
 // reference, and that enabling it again brings it back.
 //
+// #436: soloing another layer excludes the Time Remapped nested layer from the picture (and its
+// audio from the mix) instead of failing the compile, and an audio-only Time Remapped layer whose
+// source has an animated level, muted or not, leaves the picture exactly as it was.
+//
 // A real document is edited through commands and compiled by the production SnapshotCompiler at
 // each state (enabled, disabled, enabled again). The production CpuGpuSceneBuilder prepares each
 // plan, the production GpuSceneExecutor runs it on a real device, and the readback must match the
@@ -13,10 +17,13 @@
 
 #include "gpu_composite_native_support.hpp"
 
+#include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -68,12 +75,53 @@ void execute(document::Document& document, commands::CommandStack& commands,
 // A nested-composition layer that fills the frame with red and carries an identity Time Remap,
 // under a smaller blue Solid that covers the top-left of the frame but not its last pixel.
 struct Fixture {
-    document::NewProject initial = document::makeNewProject(
-        "Disabled remap", "Main", core::RationalTime::fromInteger(4), format());
+    document::NewProject initial = makeProject();
     document::CompositionId main = initial.initialCompositionId;
     document::Document document{std::move(initial.project)};
     commands::CommandStack commands{document};
     document::LayerId nested;
+    document::LayerId blueLayer;
+
+    // The project also holds a 2 s tone for the audio-only layer.
+    static document::NewProject makeProject() {
+        auto project = document::makeNewProject("Disabled remap", "Main",
+                                                core::RationalTime::fromInteger(4), format());
+        document::AssetRecord tone;
+        tone.id = document::AssetId::fromRaw(9000);
+        tone.kind = document::AssetKind::Audio;
+        tone.locator = {"file", "project-relative", "tone.wav", "file:tone.wav"};
+        tone.rate = 48000;
+        tone.channels = 1;
+        tone.frames = 96000;
+        tone.duration = core::RationalTime::fromInteger(2);
+        if (!project.project.addAsset(tone))
+            throw std::runtime_error("disabled remap fixture asset");
+        return project;
+    }
+
+    document::NodeId audioSource;
+
+    // #436: an audio-only layer with a Time Remap, whose source has an animated level.
+    void addRemappedAudio() {
+        execute<commands::AddAudioLayer>(document, commands, main,
+                                         document::AssetId::fromRaw(9000));
+        const auto& graph = document.snapshot().project().findComposition(main)->graph();
+        const auto audio = graph.layerOutputs().back().layerId;
+        execute<commands::EnableLayerTimeRemap>(document, commands, main, audio);
+        const auto source = std::ranges::find(graph.nodes(), document::kAudioSourceNodeType,
+                                              &document::NodeRecord::typeId);
+        if (source == graph.nodes().end())
+            throw std::runtime_error("disabled remap fixture audio source");
+        const auto sourceId = source->id;
+        const auto level =
+            std::ranges::find(source->parameters, "level", &document::ParameterBinding::role)
+                ->parameterId;
+        execute<commands::CreateAnimationForParameter>(document, commands, main, level,
+                                                       core::RationalTime{});
+        execute<commands::SetKeyframeAtTimeForParameter>(document, commands, main, level,
+                                                         core::RationalTime::fromInteger(1), 0.5);
+        audioSource = sourceId;
+    }
 
     Fixture() {
         execute<commands::AddComposition>(document, commands, "Inner", format(),
@@ -95,6 +143,13 @@ struct Fixture {
         execute<commands::AddSolidLayer>(document, commands, main, "Blue",
                                          core::Color4d{0.1, 0.2, 0.9, 1.0},
                                          document::Vec2d{4.0, 2.0});
+        blueLayer = document.snapshot()
+                        .project()
+                        .findComposition(main)
+                        ->graph()
+                        .layerOutputs()
+                        .back()
+                        .layerId;
     }
 };
 
@@ -247,12 +302,41 @@ int main(int argc, char** argv) {
             renderState(expectations, fixture, *executor.executor, "re-enabled", false);
         expectations.expect(again && red(again->corner) && blue(again->solid),
                             "the re-enabled layer shows again");
+        // #436: soloing the blue Solid excludes the Time Remapped nested layer.
+        execute<commands::SetLayerSolo>(fixture.document, fixture.commands, fixture.main,
+                                        fixture.blueLayer, true);
+        const auto soloed = renderState(expectations, fixture, *executor.executor, "solo", false);
+        expectations.expect(
+            soloed && soloed->corner.components()[3] == 0.0F && blue(soloed->solid),
+            "a non-solo Time Remapped layer is excluded and the solo Solid renders");
+        execute<commands::SetLayerSolo>(fixture.document, fixture.commands, fixture.main,
+                                        fixture.blueLayer, false);
+        const auto unsoloed =
+            renderState(expectations, fixture, *executor.executor, "unsoloed", false);
+        expectations.expect(unsoloed && red(unsoloed->corner) && blue(unsoloed->solid),
+                            "unsoloing shows the nested layer again");
+        const auto unchanged = [&](const std::optional<State>& state) {
+            return state && again &&
+                   std::ranges::equal(state->corner.components(), again->corner.components()) &&
+                   std::ranges::equal(state->solid.components(), again->solid.components());
+        };
+        fixture.addRemappedAudio();
+        expectations.expect(
+            unchanged(renderState(expectations, fixture, *executor.executor, "audio-only", false)),
+            "an audio-only Time Remapped layer with an animated level leaves the picture "
+            "unchanged");
+        execute<commands::SetNodeMuted>(fixture.document, fixture.commands, fixture.main,
+                                        fixture.audioSource, true);
+        expectations.expect(unchanged(renderState(expectations, fixture, *executor.executor,
+                                                  "muted source", false)),
+                            "muting the animated audio source leaves the picture unchanged");
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " disabled remap expectation(s) failed\n";
             return 1;
         }
-        std::cout << "PASS: a disabled Time Remapped nested layer compiles and is excluded on the "
-                     "GPU and the CPU reference alike\n";
+        std::cout
+            << "PASS: a disabled or solo-excluded Time Remapped nested layer and an audio-only "
+               "Time Remapped layer compile, and the GPU matches the CPU reference\n";
         return 0;
     } catch (const std::exception& exception) {
         std::cerr << "Unexpected test exception: " << exception.what() << '\n';

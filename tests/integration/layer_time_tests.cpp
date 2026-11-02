@@ -8,6 +8,7 @@
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/runtime/composition_time.hpp>
@@ -294,13 +295,11 @@ bool execute(document::Document& document, commands::CommandStack& commands,
     return commands.execute(std::move(transaction)).changed();
 }
 
-// #431: disabling a Time Remapped layer excludes it from evaluation instead of failing the
-// compile, whether the layer carries pictures, audio, or a video's picture and audio, and enabling
-// it again brings it back. The remap is animated, so its curve is compiled only while the layer
-// contributes; the audio mix used to lower the disabled layer's remap anyway.
-void disabledRemappedLayers() {
+// A 16x4, 24 fps, 4 s project holding a 2 s tone (asset 9000) and a 2 s video with embedded audio
+// (asset 9001).
+document::NewProject audioVideoProject(const char* name) {
     auto initial = document::makeNewProject(
-        "Disabled remap", "Main", core::RationalTime::fromInteger(4),
+        name, "Main", core::RationalTime::fromInteger(4),
         *document::CompositionFormat::create(16, 4, core::PixelAspectRatio::square(), rate(24)));
     {
         document::AssetRecord tone;
@@ -335,8 +334,17 @@ void disabledRemappedLayers() {
         sound.channelLayout = {"M"};
         video.videoStreams.push_back(sound);
         if (!initial.project.addAsset(tone) || !initial.project.addAsset(video))
-            throw std::runtime_error("disabled remap assets");
+            throw std::runtime_error("audio and video assets");
     }
+    return initial;
+}
+
+// #431: disabling a Time Remapped layer excludes it from evaluation instead of failing the
+// compile, whether the layer carries pictures, audio, or a video's picture and audio, and enabling
+// it again brings it back. The remap is animated, so its curve is compiled only while the layer
+// contributes; the audio mix used to lower the disabled layer's remap anyway.
+void disabledRemappedLayers() {
+    auto initial = audioVideoProject("Disabled remap");
     const auto composition = initial.initialCompositionId;
     document::Document document{std::move(initial.project)};
     commands::CommandStack commands{document};
@@ -418,6 +426,171 @@ void disabledRemappedLayers() {
            "the Solid enables again");
     expect(fixture.covered(at(1, 2)) == shown, "the re-enabled remapped Solid renders again");
 }
+// #436: the audio mix lowers only what is audible, and compiles the curves it samples for itself
+// rather than for the picture. An audio-only layer has no picture, so its Time Remap is compiled
+// only for its audio; a soloed layer silences every non-solo layer, whose picture is unreachable;
+// and a muted audio source is silent, so its animated level is never lowered. Every case used to
+// fail the whole compile with a topology error.
+void audibleMixCurves() {
+    auto initial = audioVideoProject("Audible mix");
+    const auto composition = initial.initialCompositionId;
+    document::Document document{std::move(initial.project)};
+    commands::CommandStack commands{document};
+    const auto run = [&](const bool changed) {
+        if (!changed)
+            throw std::runtime_error("audible mix command refused");
+    };
+    run(execute<commands::AddSolidLayer>(document, commands, composition, "Solid",
+                                         core::Color4d{1, 1, 1, 1}, document::Vec2d{8, 2}));
+    run(execute<commands::AddAudioLayer>(document, commands, composition,
+                                         document::AssetId::fromRaw(9000)));
+    run(execute<commands::AddImageLayer>(document, commands, composition,
+                                         document::AssetId::fromRaw(9001)));
+    run(execute<commands::AddComposition>(
+        document, commands, "Inner",
+        *document::CompositionFormat::create(16, 4, core::PixelAspectRatio::square(), rate(24)),
+        core::RationalTime::fromInteger(4)));
+    const auto inner = document.snapshot().project().compositions().back().id();
+    run(execute<commands::AddCompositionSource>(document, commands, composition, inner,
+                                                document::Vec2d{}, true));
+    const auto graph = [&]() -> const document::CanonicalGraph& {
+        return document.snapshot().project().findComposition(composition)->graph();
+    };
+    std::vector<document::LayerId> layers;
+    for (const auto& boundary : graph().layerOutputs())
+        layers.push_back(boundary.layerId);
+    expect(layers.size() == 4, "the fixture has a solid, an audio, a video and a nested layer");
+    const auto compile = [&] {
+        return runtime::SnapshotCompiler(document::builtInNodeDefinitions())
+            .compile({document.snapshot(), composition}, {});
+    };
+    const auto compiles = [&](const runtime::SnapshotCompileResult& result, const char* message) {
+        expect(result.status == runtime::SnapshotCompileStatus::Compiled && result.plan != nullptr,
+               (std::string(message) + ": " +
+                runtime::describeCompileFailure(result, document.snapshot().project(), composition))
+                   .c_str());
+        return result.plan != nullptr;
+    };
+    const auto audioLayer = [&](const runtime::SnapshotCompileResult& result,
+                                const std::size_t index) -> const runtime::CompiledAudioLayer* {
+        if (!result.plan)
+            return nullptr;
+        const auto& mix = result.plan->audioMix().layers;
+        const auto found =
+            std::ranges::find(mix, layers[index], &runtime::CompiledAudioLayer::layerId);
+        return found == mix.end() ? nullptr : &*found;
+    };
+    const auto mixes = [&](const runtime::SnapshotCompileResult& result, const std::size_t index) {
+        if (index == 3)
+            return result.plan && result.plan->audioMix().nestedLayers.size() == 1;
+        return audioLayer(result, index) != nullptr;
+    };
+
+    // The picture's preflight accepts a curve only the audio mix references: it is not dead.
+    const auto renders = [&](const runtime::SnapshotCompileResult& result, const char* message) {
+        if (!result.plan)
+            return;
+        const auto frame = runtime::CpuCompositionEvaluator{}.evaluate(
+            result.plan,
+            {at(1, 2), result.plan->output(), runtime::CompositionFormatResolution{},
+             runtime::EvaluationQuality::Reference,
+             runtime::EvaluationColorIntent::LinearRec709Scene, 1U << 22U},
+            {});
+        // The video asset has no file, so the frame itself reports it unavailable; the plan
+        // must still pass preflight.
+        expect(std::ranges::none_of(frame.diagnostics(),
+                                    [](const auto& diagnostic) {
+                                        return diagnostic.code ==
+                                               runtime::EvaluationDiagnosticCode::InvalidPlan;
+                                    }),
+               message);
+    };
+
+    // 1. The audio-only layer's Time Remap: an animated curve compiled for the mix alone.
+    const auto plain = compile();
+    if (!compiles(plain, "the fixture compiles"))
+        return;
+    run(execute<commands::EnableLayerTimeRemap>(document, commands, composition, layers[1]));
+    const auto remapped = compile();
+    if (compiles(remapped, "an audio-only Time Remapped layer compiles")) {
+        const auto* audio = audioLayer(remapped, 1);
+        expect(
+            audio != nullptr && audio->time && audio->time->timeRemap &&
+                std::holds_alternative<runtime::ScalarCurveIndex>(audio->time->timeRemap->source),
+            "the audio-only layer plays through its compiled Time Remap curve");
+        expect(std::ranges::equal(remapped.plan->operations(), plain.plan->operations()),
+               "the audio-only Time Remap leaves the picture unchanged");
+        renders(remapped, "the picture renders beside an audio-only Time Remap");
+    }
+
+    // 2. Solo: every layer carries a Time Remap; soloing one silences and hides the rest.
+    for (const std::size_t index : {0U, 2U, 3U})
+        run(execute<commands::EnableLayerTimeRemap>(document, commands, composition,
+                                                    layers[index]));
+    const auto all = compile();
+    if (compiles(all, "every layer Time Remapped compiles"))
+        for (std::size_t index = 1; index < layers.size(); ++index)
+            expect(mixes(all, index), "an unsoloed audible layer is in the mix");
+    for (std::size_t index = 0; index < layers.size(); ++index) {
+        run(execute<commands::SetLayerSolo>(document, commands, composition, layers[index], true));
+        const auto soloed = compile();
+        if (compiles(soloed, "soloing one of several Time Remapped layers compiles"))
+            for (std::size_t other = 1; other < layers.size(); ++other)
+                expect(mixes(soloed, other) == (other == index),
+                       "only the soloed layer is audible; a non-solo layer is silent");
+        run(execute<commands::SetLayerSolo>(document, commands, composition, layers[index], false));
+    }
+
+    // 3. A muted audio source with an animated level is silent; unmuted it plays its curve.
+    const auto source = std::ranges::find(graph().nodes(), document::kAudioSourceNodeType,
+                                          &document::NodeRecord::typeId);
+    expect(source != graph().nodes().end(), "the audio layer has an audio source");
+    if (source == graph().nodes().end())
+        return;
+    const auto sourceId = source->id;
+    const auto level =
+        std::ranges::find(source->parameters, "level", &document::ParameterBinding::role);
+    expect(level != source->parameters.end(), "the audio source has a level");
+    if (level == source->parameters.end())
+        return;
+    const auto levelId = level->parameterId;
+    run(execute<commands::CreateAnimationForParameter>(document, commands, composition, levelId,
+                                                       at(0)));
+    run(execute<commands::SetKeyframeAtTimeForParameter>(document, commands, composition, levelId,
+                                                         at(1), 0.5));
+    const auto animated = compile();
+    if (compiles(animated, "an animated audio level compiles")) {
+        const auto* audio = audioLayer(animated, 1);
+        expect(audio != nullptr &&
+                   std::holds_alternative<runtime::ScalarCurveIndex>(
+                       animated.plan->audioMix().sources[audio->sourceIndex].level.source),
+               "the audible source plays its animated level");
+        renders(animated, "the picture renders beside an animated audio level");
+    }
+    run(execute<commands::SetNodeMuted>(document, commands, composition, sourceId, true));
+    const auto muted = compile();
+    if (compiles(muted, "a muted audio source with an animated level compiles")) {
+        expect(!mixes(muted, 1), "a muted audio source is silent");
+        // The silent layer's level and Time Remap curves drop out of the tables, which renumbers
+        // the picture's curve indices; the operations themselves are the same.
+        expect(std::ranges::equal(muted.plan->operations(), animated.plan->operations(),
+                                  [](const auto& left, const auto& right) {
+                                      return left.index() == right.index();
+                                  }) &&
+                   muted.plan->scalarCurves().size() + 2 == animated.plan->scalarCurves().size(),
+               "muting an audio source leaves the picture's operations and drops its curves");
+        renders(muted, "the picture renders beside a muted animated audio source");
+        const auto mix = runtime::CpuCompositionEvaluator{}.evaluateAudioMix(muted.plan, at(1, 2));
+        expect(mix &&
+                   std::ranges::none_of(
+                       mix->clips, [&](const auto& clip) { return clip.sourceNodeId == sourceId; }),
+               "the muted source contributes no clip");
+    }
+    run(execute<commands::SetNodeMuted>(document, commands, composition, sourceId, false));
+    const auto unmuted = compile();
+    expect(compiles(unmuted, "unmuting the source compiles") && mixes(unmuted, 1),
+           "an unmuted source is audible again");
+}
 // #431: a real compile failure names its subject in the description an export failure carries.
 // A stale Time Remap override (a parameter-only subject) names the composition, the layer whose
 // Layer Output binds it and the parameter; an unknown node type names the node.
@@ -477,6 +650,7 @@ int main() {
         audio();
         identityRemap();
         disabledRemappedLayers();
+        audibleMixCurves();
         compileFailureNamesItsSubject();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

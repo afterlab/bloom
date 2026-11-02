@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import wave
 
 MCP = sys.argv[1]
 del sys.argv[1]
@@ -376,6 +377,91 @@ class AgentFeedback(unittest.TestCase):
                                                      'enabled': True}))
         self.assertEqual(png_pixel(render('again.png'), 960, 540), shown,
                          'the re-enabled layer renders again')
+
+
+    def test_audio_layers_unreachable_for_the_picture_render(self):
+        # #436: the audio mix compiles what it plays, whatever the picture reaches: an audio-only
+        # layer's Time Remap, a non-solo Time Remapped nested layer while another layer is soloed,
+        # and an animated audio level, muted or not, all render and export.
+        server = self.server
+        folder = tempfile.TemporaryDirectory(prefix='bloom-mcp-audio-remap-')
+        self.addCleanup(folder.cleanup)
+        tone = os.path.join(folder.name, 'tone.wav')
+        with wave.open(tone, 'wb') as file:
+            file.setnchannels(1)
+            file.setsampwidth(2)
+            file.setframerate(48000)
+            file.writeframes(b'\x00\x10' * 96000)
+        imported = server.transact(('bloom.asset.import', {'paths': [tone],
+                                                           'projectDirectory': folder.name}))
+        asset = [output['id'] for output in imported['outputs'] if output['name'] == 'asset'][0]
+        audio = server.transact(('bloom.layer.add-audio', {'composition': 1, 'asset': asset}))
+        audio_layer = [output['id'] for output in audio['outputs'] if output['name'] == 'layer'][0]
+        source = [output['id'] for output in audio['outputs'] if output['name'] == 'audioNode'][0]
+        self.assertTrue(server.transact(('bloom.layer.enable-time-remap', {
+            'composition': 1, 'layer': audio_layer}))['succeeded'])
+
+        def render(name):
+            destination = os.path.join(folder.name, name)
+            response = server.raw('render', {'composition': 1, 'frame': 12,
+                                             'preset': 'PngRgba8SrgbV1',
+                                             'destination': destination})
+            self.assertFalse(response['result'].get('isError'), response)
+            return destination
+
+        def export(name):
+            # A movie with audio mixes the composition's audio (the MEDIA-4 worker, Linux only).
+            if sys.platform != 'linux':
+                return
+            response = server.raw('export', {'composition': 1, 'first': 0, 'last': 1,
+                                             'preset': 'ProResMovV1', 'audio': True,
+                                             'destination': os.path.join(folder.name, name)})
+            self.assertFalse(response['result'].get('isError'), response)
+
+        render('audio-only.png')
+        export('audio-only.mov')
+
+        added = server.transact(('bloom.composition.add', {
+            'name': 'Inner', 'width': 64, 'height': 64, 'duration': [2, 1]}))
+        inner = [output['id'] for output in added['outputs'] if output['name'] == 'composition'][0]
+        server.transact(('bloom.layer.add-solid', {
+            'composition': inner, 'name': 'Red', 'color': [1, 0, 0, 1], 'position': [32, 32]}))
+        nested = server.transact(('bloom.layer.add-from-assets', {
+            'composition': 1, 'assets': [], 'compositions': [inner], 'time': 0}))
+        nested_layer = [output['id'] for output in nested['outputs']
+                        if output['name'] == 'layer'][0]
+        server.transact(('bloom.layer.enable-time-remap', {'composition': 1,
+                                                           'layer': nested_layer}))
+        solid = server.transact(('bloom.layer.add-solid', {
+            'composition': 1, 'name': 'Green', 'color': [0, 1, 0, 1], 'position': [0, 0]}))
+        solid_layer = [output['id'] for output in solid['outputs'] if output['name'] == 'layer'][0]
+        self.assertEqual(png_pixel(render('nested.png'), 960, 540)[:3], (255, 0, 0),
+                         'the remapped nested layer renders')
+        server.transact(('bloom.layer.set-solo', {'composition': 1, 'layer': solid_layer,
+                                                  'solo': True}))
+        soloed = render('solo.png')
+        self.assertNotEqual(png_pixel(soloed, 960, 540)[:3], (255, 0, 0),
+                            'a non-solo remapped nested layer is excluded')
+        self.assertEqual(png_pixel(soloed, 100, 100)[:3], (0, 255, 0),
+                         'the soloed layer renders')
+        export('solo.mov')
+        server.transact(('bloom.layer.set-solo', {'composition': 1, 'layer': solid_layer,
+                                                  'solo': False}))
+
+        level = [node for node in server.nodes() if node['id'] == source][0]['parameters']['level']
+        keyed = server.transact(
+            ('bloom.animation.set-keyframe-at-time-for-parameter',
+             {'composition': 1, 'parameter': level, 'time': 24, 'value': 0.5}))
+        self.assertTrue(keyed['succeeded'], keyed)
+        self.assertEqual(png_pixel(render('level.png'), 960, 540)[:3], (255, 0, 0),
+                         'an animated audio level leaves the picture as it was')
+        export('level.mov')
+        muted = server.transact(('bloom.node.set-muted', {'composition': 1, 'node': source,
+                                                          'muted': True}))
+        self.assertTrue(muted['succeeded'], muted)
+        self.assertEqual(png_pixel(render('muted.png'), 960, 540)[:3], (255, 0, 0),
+                         'a muted audio source leaves the picture as it was')
+        export('muted.mov')
 
 
 if __name__ == '__main__':

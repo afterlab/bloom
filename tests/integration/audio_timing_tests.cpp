@@ -3,6 +3,7 @@
 // actual samples through the production mixer at 8 Hz against a 2 s ramp whose output sample n
 // reads n + 1, so each expected value names the source sample independently of the mapper.
 
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
@@ -144,6 +145,14 @@ struct Fixture {
                 }
         }
         throw std::runtime_error("video source parameter");
+    }
+    [[nodiscard]] document::ParameterId timeRemap(const document::LayerId layer) const {
+        const auto* node = graph().findNode(graph().findLayer(layer)->nodeId);
+        const auto binding = std::ranges::find(node->parameters, document::kTimeRemapParameterRole,
+                                               &document::ParameterBinding::role);
+        if (binding == node->parameters.end())
+            throw std::runtime_error("layer Time Remap parameter");
+        return binding->parameterId;
     }
     [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> plan() const {
         const auto compiled = runtime::SnapshotCompiler(document::builtInNodeDefinitions())
@@ -366,6 +375,23 @@ void transportLoopRemapped() {
            "the looped retimed layer is audible");
 }
 
+// #436: an audio-only layer's Time Remap retimes its audio on playback and export. The layer has no
+// picture, so its remap curve is compiled for the audio mix alone. The remap runs 0 -> 1 s over the
+// layer's [0, 2) s range, so output sample n plays content time n / 16 s: source sample n / 2, at
+// half speed, and the layer is silent after its out point.
+void audioOnlyTimeRemap() {
+    Fixture fixture;
+    const auto layer = fixture.addLayer(kAudioAsset);
+    fixture.run<commands::EnableLayerTimeRemap>(fixture.composition, layer);
+    fixture.run<commands::SetKeyframeAtTimeForParameter>(fixture.composition,
+                                                         fixture.timeRemap(layer), at(2), 1.0);
+    check(
+        fixture,
+        expected(0, 24,
+                 [](const std::int64_t n) { return n < 16 ? std::optional{n / 2} : std::nullopt; }),
+        "audio-only Time Remap");
+}
+
 // The per-sample mapping allocates nothing: it runs on the mixer worker for every output sample.
 void mappingAllocatesNothing() {
     Fixture fixture;
@@ -402,6 +428,7 @@ int main() {
         layerModes();
         videoLoopModes();
         transportLoopRemapped();
+        audioOnlyTimeRemap();
         mappingAllocatesNothing();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
