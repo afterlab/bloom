@@ -254,8 +254,20 @@ void DrivenValueResolver::start() {
         });
     task_ = submission.handle;
     active_ = submission.accepted();
-    if (active_)
+    if (active_) {
         timer_->start();
+        return;
+    }
+    // A refused submission would otherwise leave the rows waiting forever: no task exists to poll.
+    if (ready) {
+        const auto message = submission.diagnostic.has_value()
+                                 ? QString::fromStdString(submission.diagnostic->summary)
+                                 : tr("Unavailable");
+        Values unavailable;
+        for (auto id : parameters_)
+            unavailable.parameters[id] = message;
+        ready(unavailable);
+    }
 }
 void DrivenValueResolver::poll() {
     if (auto result = task_.tryTakeResult()) {
