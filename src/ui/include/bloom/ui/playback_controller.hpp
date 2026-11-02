@@ -118,6 +118,8 @@ class PlaybackController final : public QObject {
     void loopingChanged(bool looping);
 
   private:
+    // pause(), optionally leaving the frame already submitted for the current time to finish.
+    void stop(bool keepCurrentFrame);
     void handleCompositionChanged();
     void handleCurrentTimeChanged();
     void handleWorkAreaChanged();

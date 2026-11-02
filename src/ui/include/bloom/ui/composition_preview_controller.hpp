@@ -196,7 +196,11 @@ class CompositionPreviewController final : public QObject {
     void beginDroppedFrameCounting();
     void endDroppedFrameCounting();
     void noteDroppedFrames(std::uint64_t count);
-    void setPlaybackActive(bool playing);
+    // Stopping cancels the outstanding playback frame (counted as dropped) and queues a Visible
+    // render of the stopped time. With keepCurrentFrame, an outstanding playback frame for the
+    // time on screen is instead left to finish and publish: the run ended on it, so it is neither
+    // dropped nor rendered a second time.
+    void setPlaybackActive(bool playing, bool keepCurrentFrame = false);
     [[nodiscard]] bool playbackActive() const noexcept { return playbackActive_; }
     // #404 preroll: set while Play holds the transport clock for the first frames. The activity
     // surface reports it; the read-ahead runs while it is set, aimed at the frames from the

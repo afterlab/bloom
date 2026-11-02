@@ -15,12 +15,21 @@ void CompositionPreviewController::noteDroppedFrames(const std::uint64_t count) 
     emit droppedFrameCountChanged();
 }
 
-void CompositionPreviewController::setPlaybackActive(const bool playing) {
+void CompositionPreviewController::setPlaybackActive(const bool playing,
+                                                     const bool keepCurrentFrame) {
     if (playbackActive_ == playing) {
         return;
     }
     playbackActive_ = playing;
     emit playbackActiveChanged(playing);
+    if (!playing && keepCurrentFrame && !shuttingDown_ && !cachePurgeGate_ && active_.has_value() &&
+        active_->playbackOutstanding && !active_->carriedInteractionOverride &&
+        active_->desiredIdentity.time == session_.currentTime() &&
+        liveSessionMatches(active_->desiredIdentity)) {
+        // The run ended on this frame: let it publish as an ordinary Current result.
+        active_->playbackOutstanding = false;
+        return;
+    }
     if (!playing && active_.has_value() && active_->playbackOutstanding) {
         active_->handle.cancel();
         active_->playbackOutstanding = false;

@@ -984,6 +984,43 @@ void testLiveWorkAreaEditsReanchorSafely(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// Playing a non-looping range to its end counts only the frames skipped inside the range, and the
+// last frame the run submitted is kept and published rather than cancelled, counted as dropped and
+// rendered again.
+void testNonLoopingEndKeepsLastFrameAndCountsInRangeDrops(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Playback End Accounting", time(4)));
+    expectations.expect(waitUntil([&] {
+                            return fixture.controller.state().activity !=
+                                   ui::PreviewActivity::Rendering;
+                        }),
+                        "the initial preview settles before playback");
+    ManualClock clock;
+    ui::PlaybackController playback(
+        fixture.session, fixture.controller, [&clock] { return clock.now; }, 16ms);
+    playback.setLooping(false);
+    playback.play();
+    clock.advance(10'000'000'000ns);
+    playback.tick();
+    const auto lastTime = time(99, 25);
+    expectations.expect(playback.state() == ui::PlaybackState::Stopped &&
+                            fixture.session.currentTime() == lastTime,
+                        "the run stops on the last frame of the range");
+    expectations.expect(fixture.controller.droppedFrameCount() == 98,
+                        "only the skipped frames inside the range are dropped, and the final "
+                        "submitted frame is not cancelled and counted");
+    expectations.expect(waitUntil([&] {
+                            const auto state = fixture.controller.state();
+                            return state.freshness == ui::FrameFreshness::Current &&
+                                   state.frame &&
+                                   state.frame->desiredIdentity().time == lastTime;
+                        }),
+                        "the last submitted frame publishes as the Current product");
+    expectations.expect(fixture.controller.droppedFrameCount() == 98,
+                        "completing the kept frame adds no dropped count");
+    finishFixture(fixture, expectations);
+}
+
 // A cold, uncached range whose measured preparation does not fit the tick must still make progress
 // when the preview controller is idle. The estimate is the maximum observed duration and is only
 // refreshed by a successful completion, so a hard estimate gate with no idle escape starves every
@@ -2045,6 +2082,7 @@ int main(int argc, char** argv) try {
         return expectations.failures() == 0 ? 0 : 1;
     }
     testWorkAreaLoop(expectations);
+    testNonLoopingEndKeepsLastFrameAndCountsInRangeDrops(expectations);
     testPlayAdvancesExactFrameTimesAndDropsFrames(expectations);
     testCachedFramesUseElapsedClock(expectations);
     testTransportRationalRateBoundaries(expectations);

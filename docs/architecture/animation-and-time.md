@@ -1135,6 +1135,10 @@ elapsed-time catch-up, uncached targets skipped at admission, admitted requests 
 their deadline, and superseded requests. Each playback request contributes at most once. Cached
 frames contribute nothing. The counter is a count, not a measured frame rate.
 
+Frame indices past the end of a non-looping range are never shown and are not counted. When a
+non-looping run ends on the range's last frame, the frame just submitted is kept: stopping neither
+cancels it nor counts it dropped, and it publishes as the Current product without a second render.
+
 The clock's start arms and resets counting: `play()`, or the end of a preroll hold (a hold counts
 nothing). `pause()` disarms it and retains the last total. Outside a run the
 footer says nothing; during one it reports zero explicitly. Ordinary scrubbing while stopped does

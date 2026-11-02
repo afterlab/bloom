@@ -457,7 +457,9 @@ void PlaybackController::handleInteractiveScrubStarted() {
         pause();
 }
 
-void PlaybackController::pause() {
+void PlaybackController::pause() { stop(false); }
+
+void PlaybackController::stop(const bool keepCurrentFrame) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (state_ != PlaybackState::Playing) {
         return;
@@ -473,7 +475,7 @@ void PlaybackController::pause() {
     if (audioControl_)
         expectedAudioGeneration_ = audioControl_->requestStop();
     audioClockActive_ = false;
-    previewController_.setPlaybackActive(false);
+    previewController_.setPlaybackActive(false, keepCurrentFrame);
     previewController_.endDroppedFrameCounting();
     emit stateChanged(state_);
 }
@@ -602,8 +604,22 @@ void PlaybackController::tick() {
     const bool pastEnd = !looping_ && rawOffset >= frameCount;
     const auto targetFrameIndex =
         looping_ ? first + rawOffset % frameCount : first + std::min(rawOffset, frameCount - 1);
-    previewController_.noteDroppedFrames(nextOffset - appliedOffset_ - 1);
+    // Frames past the end of a non-looping range are never shown, so they are not dropped: count
+    // only the skipped frames up to the last one this run can reach.
+    auto countedOffset = nextOffset;
+    if (!looping_) {
+        const auto lastReachable =
+            (frameCount - 1) + completedPassFrames_ - (startFrameIndex_ - first);
+        countedOffset = std::min(nextOffset, lastReachable);
+    }
+    if (countedOffset > appliedOffset_)
+        previewController_.noteDroppedFrames(countedOffset - appliedOffset_ - 1);
+    const bool lastFrameAlreadyShown = pastEnd && countedOffset <= appliedOffset_;
     appliedOffset_ = nextOffset;
+    if (lastFrameAlreadyShown) {
+        stop(true);
+        return;
+    }
 
     const auto targetTime = mapping->timeForFrame(targetFrameIndex);
     if (!targetTime.hasValue()) {
@@ -617,8 +633,9 @@ void PlaybackController::tick() {
     previewController_.presentPlaybackFrame(frameBudget);
     if (pastEnd) {
         // After the frame is applied and presented, so the artist is left looking at the last
-        // frame of the range rather than at whatever the run showed one tick earlier.
-        pause();
+        // frame of the range rather than at whatever the run showed one tick earlier. The frame
+        // just submitted is the one to keep, so stopping neither cancels nor recounts it.
+        stop(true);
     }
 }
 
