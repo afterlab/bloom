@@ -65,6 +65,8 @@ void expect(const bool condition, const std::string& what) {
 }
 
 [[nodiscard]] int run() {
+    const std::set<std::string> sessionSourceOperations{
+        "bloom.asset.reload", "bloom.cryptomatte.pick", "bloom.layer.set-anchor-preset"};
     const auto registry = OperationRegistry::builtIn();
     expect(!registry.descriptors().empty(), "the registry has operations");
 
@@ -102,6 +104,19 @@ void expect(const bool condition, const std::string& what) {
                                               " precedes every optional one");
                 }
             }
+        }
+
+        // Operations that read media or evaluate the composition when created need a session's
+        // render source. Without one they refuse with a typed diagnostic; the
+        // evaluated-operations test constructs them against a real source.
+        if (sessionSourceOperations.contains(id)) {
+            auto refused = registry.create(id, fromExamples);
+            expect(!refused && refused.diagnostic()->code == "bloom.scripting.source-unavailable",
+                   id + " refuses without a session source");
+            const auto example = bloom::scripting::exampleCall(schema);
+            expect(example.starts_with("bloom.ops."), id + " has a pasteable example call");
+            expect(example.ends_with(")"), id + "'s example call is complete");
+            continue;
         }
 
         auto created = registry.create(id, fromExamples);

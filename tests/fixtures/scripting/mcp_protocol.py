@@ -217,7 +217,11 @@ class Protocol(unittest.TestCase):
                           'project.save', 'project.save-as', 'project.open', 'project.new',
                           'project.close', 'editor.reveal', 'selection.set',
                           'composition.activate', 'transport', 'viewer.set', 'export.reveal',
-                          'project.set-color-settings', 'profiler.snapshot'})
+                          'project.set-color-settings', 'profiler.snapshot',
+                          'project.save-copy', 'project.cancel-open', 'preferences.get',
+                          'preferences.set', 'cache.purge', 'jobs.list', 'jobs.cancel',
+                          'asset.reveal', 'composition.presets', 'composition.save-preset',
+                          'composition.rename-preset', 'composition.delete-preset'})
         self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
         self.assertEqual(responses[3]['result']['structuredContent']['project']['name'], 'MCP')
         self.assertFalse(responses[4]['result']['structuredContent']['succeeded'])
