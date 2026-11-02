@@ -625,9 +625,9 @@ text source entirely.
 
 Compositions own `NodeGroupRecord{id, name, members, padding, color}` keyed by `NodeGroupId`, stored in the
 composition LAYOUT beside `NodeLayout`. A group is presentation: it has no ports, no encapsulation,
-no parameters and no evaluation meaning, and compilation never sees one. It is the Blender `Frame`
-shape -- a named rectangle drawn around cards -- and deliberately not the encapsulation feature the
-terminology reserves `Node Group Encapsulation` for.
+no parameters and no evaluation meaning, and compilation never sees one. It is the node-editor
+`Frame` shape -- a named rectangle drawn around cards -- and deliberately not the encapsulation
+feature the terminology reserves `Node Group Encapsulation` for.
 
 A node is a member of at most one group; a member naming a node that does not exist is a warning
 diagnostic, exactly as an unknown-node layout entry is, so an unreadable module never costs the
@@ -673,8 +673,8 @@ A card's drop is judged on its CENTER against the innermost frame under it, so o
 one landing; the resulting membership change travels in the same `MoveNodes` as the move. Clicking a
 frame selects what it frames: `CompositionSession` owns one selection truth and it is made of
 `NodeId`s, so a frame is never itself a document selection. The frame's whole body is its grip, the
-Blender behavior this shape comes from, which does mean a box selection has to start outside every
-frame.
+node-editor behavior this shape comes from, which does mean a box selection has to start outside
+every frame.
 
 `Ctrl+G` groups the selection and `Ctrl+Shift+G` ungroups every frame the selection sits in; the
 canvas claims both through `ShortcutOverride` like every other key it owns. The selection's context
@@ -1169,20 +1169,20 @@ A `LayerOutputBoundary` owns range, visibility (`enabled`, default true), `solo`
 evaluation-input proof (#399) agrees and an edit keeps every compiled plan, RAM-preview frame and
 operation-cache entry valid.
 
-`shy` is After Effects' Shy switch: the layer table hides a shy layer while its shy filter is on.
-`nameFollowsSource` makes the layer show its source's name. A layer's source is the node feeding its
-Layer Output's content input -- walking up through effects' content inputs -- or else its audio
-input: an image, video or audio source names an asset (its Assets name), a composition source a
-composition (`document::layerSourceName`). Layers made from a source (`AddImageLayer`,
+`shy` is the compositor-standard Shy switch: the layer table hides a shy layer while its shy filter
+is on. `nameFollowsSource` makes the layer show its source's name. A layer's source is the node
+feeding its Layer Output's content input -- walking up through effects' content inputs -- or else
+its audio input: an image, video or audio source names an asset (its Assets name), a composition
+source a composition (`document::layerSourceName`). Layers made from a source (`AddImageLayer`,
 `AddAudioLayer`, a nested composition layer) are named after it and follow it; generated content
 (solid, text, shape) has no source and never follows. Renaming the asset or composition, or pointing
 the source node at another one, renames every following layer in the same undo step; renaming the
 layer (`RenameLayer`) turns following off, and `SetLayerNameFollowsSource(true)` turns it back on
-and shows the source's current name (refused for a layer without a source). Its `inPoint` defaults to zero. A zero stored
-`outPoint` is the full-duration sentinel; `endPoint(duration)` resolves it to the composition
-end. An explicit range satisfies `0 <= in < out <= duration`. Commands snap to the composition
-frame grid; the exact composition end is also a valid endpoint. Existing documents therefore
-retain full-range rendering without migration-injected data.
+and shows the source's current name (refused for a layer without a source). Its `inPoint` defaults
+to zero. A zero stored `outPoint` is the full-duration sentinel; `endPoint(duration)` resolves it to
+the composition end. An explicit range satisfies `0 <= in < out <= duration`. Commands snap to the
+composition frame grid; the exact composition end is also a valid endpoint. Existing documents
+therefore retain full-range rendering without migration-injected data.
 
 **Layer-owned time** ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353;
 implemented). The boundary also owns its time mapping: exact `startTime`

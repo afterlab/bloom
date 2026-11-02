@@ -20,12 +20,10 @@ bool exempt(const std::string& path) {
            path == "docs/development/benchmarks.md";
 }
 // TEMPORARY: files that in-flight engine lanes are changing, left unreworded to avoid rebase
-// churn (the evaluation/media lanes, and Lane C #412 for colour). Their product names are reworded
+// churn (the media lane, and Lane C #412 for colour). Their product names are reworded
 // and these entries removed once those lanes land; nothing may be added here.
 constexpr auto kDeferredUntilEngineLands = std::to_array<std::string_view>({
     "docs/architecture/color-management.md",
-    "docs/architecture/evaluation-primitives.md",
-    "docs/architecture/layer-graph-model.md",
     "docs/user-guide/color-management.md",
     "src/color/ocio_builtin_registry.cpp",
 });

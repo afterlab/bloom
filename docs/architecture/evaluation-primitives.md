@@ -1262,17 +1262,18 @@ plans evaluate unchanged; only their version-bearing identities change.
 
 ## Cryptomatte
 
-Issue #364 adds `bloom.cryptomatte`, following the Cryptomatte specification (v1.2) as Nuke reads it
-so artists recognize it. Plan and evaluator semantics versions are unchanged: no existing plan
-evaluates differently.
+Issue #364 adds `bloom.cryptomatte`, following the Cryptomatte specification (v1.2) as compositing
+applications read it, so artists recognize it. Plan and evaluator semantics versions are unchanged:
+no existing plan evaluates differently.
 
 - *Node.* Inputs: `channels` (ChannelSet, required) and `image` (Image, optional). Outputs: `mask`,
   the ADR 0028 Mask transport (premultiplied white with the coverage in all four channels), and
   `image`, the input image times the coverage (matte in alpha) through the existing MultiplyAlpha
   combine, or the white matte itself without an input image. There is no implicit Mask/Image
   conversion. Parameters: `layer` (the Cryptomatte type, default `CryptoObject`) and `mattes` (the
-  selection, Nuke syntax: comma-separated, `\,` escapes a comma, `<1.23e-05>` or `<0xHEX>` is a
-  raw ID). A muted Cryptomatte isolates nothing: its Mask is empty and its Image passes through.
+  selection, in the common matte-list syntax: comma-separated, `\,` escapes a comma, `<1.23e-05>` or
+  `<0xHEX>` is a raw ID). A muted Cryptomatte isolates nothing: its Mask is empty and its Image
+  passes through.
 - *IDs.* A name's ID is MurmurHash3_x86_32 (seed 0) of its UTF-8 bytes used as Float32 bits; an ID
   whose exponent bits are all zero or all one has bit 23 flipped. The selection resolves each entry
   as a raw ID, else through the part's `cryptomatte/<key>/manifest` (the key whose `name` is the
