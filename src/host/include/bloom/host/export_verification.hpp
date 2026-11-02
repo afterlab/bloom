@@ -148,6 +148,20 @@ struct ExportDeviceProvenance final {
     std::string encoder;
 };
 
+// The worker's reopen pixel measurements of a movie (issue #424), so a reviewer sees what the
+// tolerance profile set aside. Errors are absolute differences in unsigned 16-bit units, each the
+// worst over the compared frames.
+struct ExportReopenQuality final {
+    // Versioned profile name(s), e.g. "bloom.video-rgba16-srgb.v3", and the bound digest.
+    std::string toleranceProfile;
+    core::Sha256Digest toleranceDigest;
+    // The raw maximum (reported, not gated by v3), the maximum after each frame's largest 0.01% of
+    // color samples are set aside (gated), and the per-frame mean (gated).
+    std::uint32_t maximumError = 0;
+    std::uint32_t percentileMaximumError = 0;
+    std::uint32_t meanError = 0;
+};
+
 struct ExportFacetState final {
     output::OutputFacetIdV1 facet = output::OutputFacetIdV1::Pixels;
     output::OutputPreservationStateV1 state = output::OutputPreservationStateV1::Exact;
@@ -167,6 +181,8 @@ struct ExportOutputVerification final {
     std::vector<ExportCheckResult> checks;
     ExportArtifactSummary artifacts;
     ExportDeviceProvenance provenance;
+    // Present for a published movie whose output carries a tolerance profile.
+    std::optional<ExportReopenQuality> reopenQuality;
 };
 
 // Problems known before Start. Destination facts (exists, writable, free space, the existing

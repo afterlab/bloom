@@ -225,6 +225,22 @@ void writeVerification(Json& json, const host::ExportOutputVerification& output)
         .key("encoder")
         .string(output.provenance.encoder)
         .end('}');
+    if (const auto& quality = output.reopenQuality) {
+        const auto hex = quality->toleranceDigest.toLowercaseHex();
+        json.key("reopenQuality")
+            .begin('{')
+            .key("toleranceProfile")
+            .string(quality->toleranceProfile)
+            .key("toleranceSha256")
+            .string(std::string_view(hex.data(), hex.size()))
+            .key("maximumError")
+            .number(quality->maximumError)
+            .key("percentileMaximumError")
+            .number(quality->percentileMaximumError)
+            .key("meanError")
+            .number(quality->meanError)
+            .end('}');
+    }
     json.end('}');
 }
 

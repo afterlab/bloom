@@ -132,6 +132,9 @@ struct SequenceExportResultV1 {
     std::optional<media::provider::Unavailable> failure;
     SequenceExportFailureStageV1 failureStage = SequenceExportFailureStageV1::Unclassified;
     std::optional<media::provider::MediaQcEvidenceV1> evidence;
+    // The versioned tolerance profile name(s) the evidence's tolerance digest binds
+    // ("bloom.video-rgba16-srgb.v3"); empty for an exact or byte-exact output.
+    std::string toleranceProfile;
     std::uint64_t encodedFrames = 0;
     // Native provenance/counters accumulated over the per-frame output attempts (diagnostics
     // only). `gpuEvaluatedFrames` counts frames whose attempt actually ran the GPU bridge;

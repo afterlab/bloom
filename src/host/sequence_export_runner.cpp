@@ -520,6 +520,7 @@ struct detail::SequenceExportWorkV1 {
         auto guardResult = FrameExportRequestAccessV1::claim(approved).tryEnterPublication();
         SequenceExportResultV1 outcome;
         outcome.evidence = std::move(evidence);
+        outcome.toleranceProfile = media::provider::encodeToleranceName(settings());
         outcome.expectedColourTags =
             settings().videoCodec.empty() ? ColourTags{} : settings().colour;
         // FFmpeg's MXF writes the matrix but neither the primaries nor the transfer, so a DNxHR

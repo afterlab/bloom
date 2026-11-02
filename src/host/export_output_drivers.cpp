@@ -1326,6 +1326,10 @@ class MediaDriver final : public DriverBase {
             const auto& evidence = *result.evidence;
             artifacts.totalBytes = evidence.artifactBytes;
             artifacts.digest = evidence.artifact;
+            if (!result.toleranceProfile.empty())
+                report_.verification.reopenQuality = ExportReopenQuality{
+                    result.toleranceProfile, evidence.toleranceProfile, evidence.maximumError,
+                    evidence.percentileMaximumError, evidence.meanError};
             checks.push_back(check(ExportCheck::Reopen,
                                    evidence.result == media::provider::QcResult::Pass
                                        ? ExportCheckOutcome::Passed

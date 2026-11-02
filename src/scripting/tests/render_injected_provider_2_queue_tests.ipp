@@ -90,7 +90,9 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
     if (session == nullptr || !directory.isValid())
         return GpuProofOutcome::Ran;
     const auto outputJson = [&](const std::string_view format, const std::string_view profile,
-                                const std::string_view file) -> std::optional<std::string> {
+                                const std::string_view file,
+                                const std::string_view encoder =
+                                    "automatic") -> std::optional<std::string> {
         const auto destination = bloom::core::fileUriFromAbsolutePath(directory.path() / file);
         if (!destination)
             return std::nullopt;
@@ -98,7 +100,8 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
                R"(","codecProfile":")" + std::string(profile) +
                R"(","compression":"","outputColorSpace":"","display":"","view":"",)"
                R"("bakeLook":true,"includeAudio":false,"useCachedFrames":false,)"
-               R"("audioSampleRate":48000,"encoder":"automatic",)"
+               R"("audioSampleRate":48000,"encoder":")" +
+               std::string(encoder) + R"(",)"
                R"("naming":{"framePadding":4,"pattern":"<base>.####.<ext>"}},)"
                R"("destination":{"portability":"external","path":")" +
                *destination +
@@ -106,8 +109,11 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
     };
     const auto prores = outputJson("prores-mov", "hq", "queue.mov");
     const auto dnxhr = outputJson("dnxhr-mxf", "hqx", "queue.mxf");
-    expectations.expect(prores && dnxhr, "headless queue: the destinations are file URIs");
-    if (!prores || !dnxhr)
+    // Issue #424: the software H.264 encoder (OpenH264) through the same GPU route, judged by
+    // lossy video tolerance profile v3.
+    const auto h264 = outputJson("h264-mp4", "high", "queue.mp4", "software");
+    expectations.expect(prores && dnxhr && h264, "headless queue: the destinations are file URIs");
+    if (!prores || !dnxhr || !h264)
         return GpuProofOutcome::Ran;
     const auto composition = session->snapshot().project().compositions().front().id();
     const auto added = session->executeJsonOperation(
@@ -115,10 +121,12 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
         {{"composition", scripting::StableId{composition.value()}},
          {"name", "queue"},
          {"range", "composition"},
-         {"outputs", scripting::ValueArray{scripting::Value(*prores), scripting::Value(*dnxhr)}}});
+         {"outputs", scripting::ValueArray{scripting::Value(*prores), scripting::Value(*dnxhr),
+                                            scripting::Value(*h264)}}});
     const auto job = added.succeeded() ? added.command->outputId<document::ExportJobId>("exportJob")
                                        : std::nullopt;
-    expectations.expect(job.has_value(), "headless queue: the ProRes and DNxHR job is added");
+    expectations.expect(job.has_value(),
+                        "headless queue: the ProRes, DNxHR and H.264 job is added");
     if (!job)
         return GpuProofOutcome::Ran;
 
@@ -136,8 +144,8 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
                         "headless queue: no frame runs before the provider bootstrap completes");
     expectations.expect(
         finished.has_value() && finished->state == host::ExportJobState::Done &&
-            finished->outputs.size() == 2,
-        "headless queue: the ProRes and DNxHR outputs finish and pass verification");
+            finished->outputs.size() == 3,
+        "headless queue: the ProRes, DNxHR and H.264 outputs finish and pass verification");
     if (!finished)
         return GpuProofOutcome::Ran;
     const auto frames = finished->resolvedRange
@@ -150,6 +158,14 @@ GpuProofOutcome testNativeHeadlessQueueVideoDisplay(Expectations& expectations,
             "headless queue: each output passes verification, colour tags included");
         if (!output.verification)
             continue;
+        // Every lossy movie reports the versioned tolerance profile and what it set aside.
+        const auto& quality = output.verification->reopenQuality;
+        expectations.expect(quality.has_value() &&
+                                quality->toleranceProfile == "bloom.video-rgba16-srgb.v3" &&
+                                quality->percentileMaximumError <= quality->maximumError &&
+                                quality->percentileMaximumError <= 22938 &&
+                                quality->meanError <= 1967,
+                            "headless queue: the reopen quality names tolerance profile v3");
         const auto& provenance = output.verification->provenance;
         // Every frame is evaluated on the GPU and its display transform runs in the GPU combined
         // readback; none takes the CPU reference path.
