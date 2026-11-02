@@ -210,6 +210,12 @@ std::optional<OperationResult> refusedDriver(const document::Composition& compos
                                              const document::ParameterRecord& record,
                                              const ParameterOwner& owner,
                                              const document::DriverBindingSource& driver) {
+    if (record.schemaKey == document::kTextFontParameterSchemaKey)
+        return OperationResult::rejected(
+            OperationIssueCode::Unsupported,
+            describe(record, owner) +
+                " cannot be driven: a text font is the id of a Font asset and is read as a "
+                "constant. Set a constant Font asset id instead.");
     const auto* source = composition.graph().findNode(driver.sourceNodeId);
     if (source == nullptr)
         return OperationResult::rejected(

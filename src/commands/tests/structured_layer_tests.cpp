@@ -662,6 +662,14 @@ void testTextFontAcceptsOnlyProjectFontAssetIds(TestContext& test) {
                 "every Font asset in the project is listed, and only Font assets: " + both);
     test.expect(set(exampleId).changed(), "a Font asset id string is accepted");
     test.expect(set(*defaultId).changed(), "and so is the default face's id");
+
+    Transaction drive("Drive Font", document.snapshot().revision());
+    drive.emplace<SetParameterSource>(
+        kCompositionId, *font, document::DriverBindingSource{NodeId::fromRaw(1), "value"});
+    const auto driven = refusal(stack.execute(std::move(drive)));
+    test.expect(driven.find("cannot be driven") != std::string::npos &&
+                    driven.find("constant Font asset id") != std::string::npos,
+                "a driver binding on the font is refused with a clear diagnostic: " + driven);
 }
 
 // New text takes the bar's alignment and font in its creation step; a bad alignment is refused.

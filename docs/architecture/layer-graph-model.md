@@ -592,7 +592,7 @@ Font is stored as the decimal `AssetId` of a `Font` asset in the project, as a S
 only value an edit can set. The font pickers identify a catalogue face by its `family|style|digest`
 reference, ensure its Font asset and store that asset's id. `bloom.parameter.set-source` refuses any
 other value (a family name, an integer, an id that names no Font asset) and lists the project's
-Font assets by id, so an unknown face is never stored and silently drawn in the fallback face. The
+Font assets by id, so an unknown face is never stored and silently drawn in the fallback face. It also refuses a driver binding on font, which is read only as a constant. The
 legacy integer face values 0..3 are read only when an older document is opened. The asset stores
 family, style, face index, content digest and a portable locator; it never stores font bytes. Embedded faces are listed before system faces in the asynchronous platform font
 catalogue. A missing or digest-changed system face warns and falls back to DejaVu Sans while the
