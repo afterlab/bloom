@@ -177,9 +177,11 @@ void write(Writer& w, const MediaQcEvidenceV1& v) {
     w.number<std::uint8_t>(v.appleAuthorized ? 1 : 0);
     w.number<std::uint8_t>(v.deliveryQualified ? 1 : 0);
     w.text(v.implementationNote);
-    require(v.maximumError <= 65535 && v.meanError <= v.maximumError);
+    require(v.maximumError <= 65535 && v.meanError <= v.maximumError &&
+            v.percentileMaximumError <= v.maximumError);
     w.number(v.maximumError);
     w.number(v.meanError);
+    w.number(v.percentileMaximumError);
     for (const auto code :
          {v.colourTags.primaries, v.colourTags.transfer, v.colourTags.matrix, v.colourTags.range})
         w.number(static_cast<std::uint32_t>(code + 1));

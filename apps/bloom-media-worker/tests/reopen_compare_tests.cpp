@@ -1,5 +1,6 @@
-// Tolerance profile v2: the reopen comparison models the codec's own chroma sampling, yet still
-// fails a real encoding error (corrupted luma, a wrong matrix or range).
+// Tolerance profile v3: the reopen comparison models the codec's own chroma sampling, yet still
+// fails a real encoding error (corrupted luma, a wrong matrix or range). Issue #424: the maximum
+// is judged after each frame's largest 0.01% of color samples are set aside.
 #include "ffmpeg_reopen_compare.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -15,7 +16,7 @@ extern "C" {
 using namespace bloom::media::ffmpeg;
 namespace {
 constexpr int kWidth = 640, kHeight = 360;
-// The profile's acceptance bounds in unsigned 16-bit units (kVideoToleranceV2).
+// The profile's acceptance bounds in unsigned 16-bit units (kVideoToleranceV3).
 constexpr std::uint32_t kMaximum = 22938, kMean = 1967;
 int failures = 0;
 void check(bool ok, const std::string& what) {
@@ -91,8 +92,9 @@ Frame encode(const std::vector<std::byte>& reference, AVPixelFormat format,
 std::uint32_t mean(const ReopenMeasure& m) {
     return m.count == 0 ? 0U : static_cast<std::uint32_t>((m.sum + m.count - 1) / m.count);
 }
+// The v3 rule: the percentile maximum and the mean; the raw maximum is reported only.
 bool accepted(const ReopenMeasure& m) {
-    return m.failure.empty() && m.maximum <= kMaximum && mean(m) <= kMean;
+    return m.failure.empty() && m.percentileMaximum <= kMaximum && mean(m) <= kMean;
 }
 // The v1 rule: decoded pixels against the unsampled reference.
 std::uint32_t unsampledMaximum(const ReopenMeasure& m, const std::vector<std::byte>& reference) {
@@ -109,8 +111,10 @@ std::uint32_t unsampledMaximum(const ReopenMeasure& m, const std::vector<std::by
     return maximum;
 }
 std::string describe(const ReopenMeasure& m) {
-    return " (max=" + std::to_string(m.maximum) + " mean=" + std::to_string(mean(m)) +
-           (m.failure.empty() ? "" : " failure=" + m.failure) + ")";
+    return " (max=" + std::to_string(m.maximum) +
+           " p99.99max=" + std::to_string(m.percentileMaximum) +
+           " mean=" + std::to_string(mean(m)) + (m.failure.empty() ? "" : " failure=" + m.failure) +
+           ")";
 }
 // Adds `delta` to the luma samples of [x0,x1)x[y0,y1), clamped to the sample's depth.
 void shiftLuma(AVFrame& f, int x0, int x1, int y0, int y1, int delta) {
@@ -127,7 +131,95 @@ void shiftLuma(AVFrame& f, int x0, int x1, int y0, int y1, int delta) {
             }
         }
 }
+// Sets single luma samples of an 8-bit frame to peak white, `count` of them spread `step` pixels
+// apart over the frame: each corrupts exactly the three color samples of its own pixel.
+void outliers(AVFrame& f, int count, int step) {
+    for (int i = 0; i < count; ++i) {
+        const auto pixel = i * step;
+        f.data[0][(pixel / kWidth) * f.linesize[0] + pixel % kWidth] = 255;
+    }
+}
 } // namespace
+// Issue #424: the percentile is exact. The largest floor(count / 10000) errors are set aside and
+// the next one is the result; nothing is interpolated or estimated.
+void percentileIsExact() {
+    std::vector<std::uint32_t> histogram(65536U, 0U);
+    check(percentileMaximum(histogram, 0, kReopenSetAsideDivisor) == 0, "empty histogram is 0");
+    histogram[10] = 9999;
+    histogram[60000] = 1;
+    check(percentileMaximum(histogram, 10000, kReopenSetAsideDivisor) == 10,
+          "one outlier in 10000 samples is set aside");
+    histogram[60000] = 2;
+    check(percentileMaximum(histogram, 10001, kReopenSetAsideDivisor) == 60000,
+          "two outliers in 10001 samples: only one is set aside");
+    histogram.assign(65536U, 0U);
+    histogram[7] = 9999;
+    histogram[30000] = 1;
+    check(percentileMaximum(histogram, 10000, 0) == 30000 &&
+              percentileMaximum(histogram, 9999 + 1, 20000) == 30000,
+          "with nothing set aside the result is the raw maximum");
+    histogram.assign(65536U, 0U);
+    histogram[100] = 2'764'800 - 276;
+    histogram[30734] = 276;
+    check(percentileMaximum(histogram, 2'764'800, kReopenSetAsideDivisor) == 100,
+          "a 720p frame sets aside exactly 276 color samples");
+    histogram[100] -= 1;
+    histogram[30000] = 1;
+    check(percentileMaximum(histogram, 2'764'800, kReopenSetAsideDivisor) == 30000,
+          "the 277th largest error of a 720p frame is judged");
+}
+// Issue #424: a frame with at most 0.01% extreme outliers passes; real damage still fails.
+void outlierBudget() {
+    const DeclaredSampling bt709{AVCOL_SPC_BT709, AVCOL_RANGE_MPEG, AVCHROMA_LOC_LEFT};
+    const auto black = square({0, 0, 0});
+    constexpr auto samples = std::uint64_t{kWidth} * kHeight * 3U;
+    constexpr auto budget = static_cast<int>(samples / kReopenSetAsideDivisor / 3U);
+    {
+        auto decoded = encode(black, AV_PIX_FMT_YUV420P, bt709);
+        outliers(*decoded, budget, 997);
+        const auto m = measureReopen(*decoded, black, bt709);
+        check(m.count == samples && m.maximum > kMaximum && m.percentileMaximum == 0 && accepted(m),
+              std::to_string(budget * 3) + " extreme samples of " + std::to_string(samples) +
+                  " (at most 0.01%) are set aside and pass" + describe(m));
+    }
+    {
+        auto decoded = encode(black, AV_PIX_FMT_YUV420P, bt709);
+        outliers(*decoded, budget + 1, 997);
+        const auto m = measureReopen(*decoded, black, bt709);
+        check(m.percentileMaximum > kMaximum && !accepted(m),
+              "one extreme pixel beyond the 0.01% budget fails" + describe(m));
+    }
+    {
+        auto decoded = encode(black, AV_PIX_FMT_YUV420P, bt709);
+        outliers(*decoded, kWidth * kHeight / 100, 100);
+        const auto m = measureReopen(*decoded, black, bt709);
+        check(m.percentileMaximum > kMaximum && !accepted(m),
+              "1% of samples damaged fails" + describe(m));
+    }
+    {
+        // A 64x64 block displaced by half a bar period swaps green and magenta inside it.
+        const auto reference = bars();
+        auto moved = reference;
+        const auto at = [](int x, int y) {
+            return (static_cast<std::size_t>(y) * kWidth + static_cast<std::size_t>(x)) * 8U;
+        };
+        for (int y = 128; y < 192; ++y)
+            for (int x = 128; x < 192; ++x)
+                std::copy_n(reference.begin() + static_cast<std::ptrdiff_t>(at(x - 16, y)), 8,
+                            moved.begin() + static_cast<std::ptrdiff_t>(at(x, y)));
+        const auto m = measureReopen(*encode(moved, AV_PIX_FMT_YUV420P, bt709), reference, bt709);
+        check(m.percentileMaximum > kMaximum && !accepted(m),
+              "a shifted 64x64 block fails" + describe(m));
+    }
+    {
+        // Uniform degradation below the percentile bound everywhere still fails on the mean.
+        auto decoded = encode(black, AV_PIX_FMT_YUV420P, bt709);
+        shiftLuma(*decoded, 0, kWidth, 0, kHeight, 12);
+        const auto m = measureReopen(*decoded, black, bt709);
+        check(m.percentileMaximum <= kMaximum && mean(m) > kMean && !accepted(m),
+              "a uniformly degraded frame fails the mean check" + describe(m));
+    }
+}
 // Issue #394: lossy codecs write footroom (Y' below 16) beside saturated chroma. swscale's Y'CbCr
 // to RGBA64 path wrapped such samples (the VA-API H.264 red square reconstructed a near-black
 // pixel, Y' 12 Cb 126 Cr 125, as G = 65535), so the verifier failed a correct encode. The
@@ -172,6 +264,8 @@ void footroomClips() {
 }
 int main() {
     footroomClips();
+    percentileIsExact();
+    outlierBudget();
     const DeclaredSampling bt709{AVCOL_SPC_BT709, AVCOL_RANGE_MPEG, AVCHROMA_LOC_LEFT};
     const auto red = square({1, 0, 0});
     // Every sample layout the lossy presets write or read back: ProRes/DNxHR 4:2:2 and 4:4:4,

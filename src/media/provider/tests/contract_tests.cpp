@@ -78,8 +78,9 @@ void encodeIdentity() {
     oracle.integer(0, 4);
     oracle.integer(3, 1);
     const std::string tolerance =
-        "bloom.video-rgba16-srgb.v2;first-last;reference=declared-sampling;absolute-max=22938;"
-        "mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact";
+        "bloom.video-rgba16-srgb.v3;first-last;reference=declared-sampling;"
+        "percentile-max=p99.99-per-frame:22938;absolute-max=reported;mean-ceil=1967;alpha-max=64;"
+        "timing=exact;stream-layout=exact;pcm=exact";
     oracle.hash(digestBytes(std::as_bytes(std::span(tolerance.data(), tolerance.size()))));
     test::check(oracle.hex.size() / 2 == 166, "frozen EncodeSettingsV1 byte size");
     test::check(oracle.finish() == std::get<Digest>(digest(settings)),
@@ -268,6 +269,7 @@ void distinctFields() {
     qc.implementationNote = "FFmpeg preview";
     qc.maximumError = 231;
     qc.meanError = 42;
+    qc.percentileMaximumError = 117;
     Oracle g;
     g.domain("MediaQcEvidenceV1");
     repeatedDigest(g, 1);
@@ -300,15 +302,70 @@ void distinctFields() {
     g.text("FFmpeg preview");
     g.integer(231, 4);
     g.integer(42, 4);
+    // Issue #424: the maximum after each frame's top 0.01% of samples is set aside.
+    g.integer(117, 4);
     // Issue #369: colour tags (code + 1, absent = 0) and the reopened "<container>/<codec>".
     for (unsigned i = 0; i < 4; ++i)
         g.integer(0, 4);
     g.text("");
-    test::check(g.hex.size() / 2 == 547, "expanded quality evidence frozen size");
+    test::check(g.hex.size() / 2 == 551, "expanded quality evidence frozen size");
     test::check(g.finish() == std::get<Digest>(digest(qc)),
                 "distinct quality evidence field order");
 }
+// Issue #424: the lossy video profile is versioned v3 (percentile maximum) and shared by every
+// lossy video codec the worker encodes; the AAC, PCM and TIFF identities are unchanged.
+void toleranceProfiles() {
+    const auto hex = [](const Digest& d) {
+        const auto text = d.toLowercaseHex();
+        return std::string(text.data(), text.size());
+    };
+    EncodeSettingsV1 video;
+    video.container = "mp4";
+    video.profile = "high";
+    video.frames = 2;
+    constexpr std::string_view videoV3 =
+        "ee48a55241f0028b78fd554f14bee0cc5fa9dcdde8c62a7879db0e6043a38292";
+    for (const auto codec : {"h264", "hevc", "prores_ks", "dnxhd", "vp9", "av1"}) {
+        video.videoCodec = codec;
+        test::check(encodeDeterminism(video) == MediaDeterminismV1::DecodedSemanticTolerance &&
+                        hex(encodeTolerance(video)) == videoV3 &&
+                        encodeToleranceName(video) == "bloom.video-rgba16-srgb.v3",
+                    (std::string(codec) + " binds lossy video tolerance profile v3").c_str());
+    }
+    test::check(hex(digestBytes(std::as_bytes(
+                    std::span(kVideoToleranceV3.data(), kVideoToleranceV3.size())))) == videoV3,
+                "frozen v3 profile text");
+    video.videoCodec = "h264";
+    video.audioCodec = "aac";
+    video.audioSamples = 96000;
+    test::check(hex(encodeTolerance(video)) ==
+                        "17e72e34ef30897fc51fbba101d14a784be8e48a45a54e3c84dbc192a3541a84" &&
+                    encodeToleranceName(video) == "bloom.video-rgba16-srgb.v3+bloom.aac-f32.v1",
+                "video with AAC binds v3 then the unchanged AAC profile");
+    auto audio = video;
+    audio.videoCodec.clear();
+    audio.frames = 0;
+    test::check(hex(encodeTolerance(audio)) ==
+                        "2c4c461185d7d9ba7741afefbc076060b7e55cb9b75e39d15a934eea133c03d8" &&
+                    encodeToleranceName(audio) == "bloom.aac-f32.v1",
+                "AAC tolerance profile unchanged");
+    audio.container = "wav";
+    audio.audioCodec = "pcm_s24le";
+    test::check(encodeDeterminism(audio) == MediaDeterminismV1::ByteExact &&
+                    encodeTolerance(audio) == Digest{} && encodeToleranceName(audio).empty(),
+                "PCM stays byte exact with no tolerance profile");
+    auto tiff = video;
+    tiff.container = "mov";
+    tiff.videoCodec = "tiff";
+    tiff.profile = "rgba16";
+    tiff.audioCodec.clear();
+    tiff.audioSamples = 0;
+    test::check(encodeDeterminism(tiff) == MediaDeterminismV1::DecodedSemanticExact &&
+                    encodeTolerance(tiff) == Digest{} && encodeToleranceName(tiff).empty(),
+                "TIFF stays exact with no tolerance profile");
+}
 void run() {
+    toleranceProfiles();
     distinctFields();
     encodeIdentity();
     const auto c = test::capability();
@@ -414,6 +471,7 @@ void run() {
     g.text("");
     g.integer(0, 4);
     g.integer(0, 4);
+    g.integer(0, 4);            // #424: percentile maximum
     for (int i = 0; i < 4; ++i) // #369: absent colour tags (code + 1)
         g.integer(0, 4);
     g.text("");

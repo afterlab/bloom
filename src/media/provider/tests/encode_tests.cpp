@@ -125,8 +125,14 @@ Bytes run(const EncodeSettingsV1& settings, const std::filesystem::path& destina
     file.write(reinterpret_cast<const char*>(artifact.data()),
                static_cast<std::streamsize>(artifact.size()));
     const auto toleranceHex = encodeTolerance(settings).toLowercaseHex();
+    // Issue #424: the gated percentile maximum crosses the wire beside the raw maximum and never
+    // exceeds it.
+    test::check(qc.percentileMaximumError <= qc.maximumError &&
+                    qc.percentileMaximumError <= kVideoTolerancePercentileMaximum,
+                "reopen percentile maximum within the raw maximum and the v3 bound");
     std::cout << destination.filename() << " frames=" << qc.frames << " samples=" << qc.audioSamples
-              << " max=" << qc.maximumError << " mean=" << qc.meanError
+              << " max=" << qc.maximumError << " p99.99max=" << qc.percentileMaximumError
+              << " mean=" << qc.meanError
               << " tolerance=" << std::string(toleranceHex.data(), toleranceHex.size()) << '\n';
     return artifact;
 }

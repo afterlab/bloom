@@ -1,6 +1,6 @@
 #pragma once
 // The declared sample domain of an encoded video stream and the reopen comparison built on it
-// (tolerance profile v2). Worker-private: FFmpeg types never leave the media worker.
+// (tolerance profile v3). Worker-private: FFmpeg types never leave the media worker.
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -43,11 +43,21 @@ inline constexpr unsigned kReconstructionFlags =
 [[nodiscard]] bool reconstructYuv(int width, int height, AVPixelFormat format,
                                   const std::uint8_t* const* planes, const int* strides,
                                   const DeclaredSampling& declared, std::vector<std::byte>& out);
+// Issue #424: the largest error left once the largest floor(count / setAsideDivisor) errors are
+// set aside, read from a histogram indexed by error value whose counts sum to `count`. Exact (the
+// (count - k)-th smallest error), with no sort; zero for an empty histogram.
+[[nodiscard]] std::uint32_t percentileMaximum(std::span<const std::uint32_t> histogram,
+                                              std::uint64_t count,
+                                              std::uint64_t setAsideDivisor) noexcept;
+// Tolerance profile v3 sets aside a frame's largest 0.01% of color samples.
+inline constexpr std::uint64_t kReopenSetAsideDivisor = 10000;
 struct ReopenMeasure {
     // The decoded frame reconstructed to RGBA16 (little-endian, 8 bytes per pixel).
     std::vector<std::byte> rgba;
-    // Colour channel error against the declared-sampling reference, in unsigned 16-bit units.
-    std::uint32_t maximum = 0;
+    // Colour channel error against the declared-sampling reference, in unsigned 16-bit units:
+    // the raw maximum, the maximum once the frame's largest 0.01% of color samples are set aside
+    // (kReopenSetAsideDivisor), and the sum and count for the mean.
+    std::uint32_t maximum = 0, percentileMaximum = 0;
     std::uint64_t sum = 0, count = 0;
     // Alpha error against the unsampled reference alpha.
     std::uint32_t alphaMaximum = 0;

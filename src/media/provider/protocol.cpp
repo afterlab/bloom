@@ -308,9 +308,11 @@ void qc(Writer& w, const EncodeQcV1& v) {
     w.rational(v.duration);
     for (const auto* d : {&v.artifact, &v.firstFrame, &v.lastFrame, &v.audio})
         w.hash(*d);
-    require(v.maximumError <= 65535 && v.meanError <= v.maximumError);
+    require(v.maximumError <= 65535 && v.meanError <= v.maximumError &&
+            v.percentileMaximumError <= v.maximumError);
     w.number(v.maximumError);
     w.number(v.meanError);
+    w.number(v.percentileMaximumError);
     for (const auto code : {v.colour.primaries, v.colour.transfer, v.colour.matrix, v.colour.range})
         w.number(static_cast<std::uint32_t>(code + 1));
     require(v.container.size() <= Limits::stringBytes && v.profile.size() <= Limits::stringBytes &&
@@ -330,6 +332,7 @@ EncodeQcV1 qc(Reader& r) {
         *d = r.hash();
     v.maximumError = r.number<std::uint32_t>();
     v.meanError = r.number<std::uint32_t>();
+    v.percentileMaximumError = r.number<std::uint32_t>();
     for (auto* code : {&v.colour.primaries, &v.colour.transfer, &v.colour.matrix, &v.colour.range})
         *code = static_cast<std::int32_t>(r.number<std::uint32_t>()) - 1;
     v.container = r.text();

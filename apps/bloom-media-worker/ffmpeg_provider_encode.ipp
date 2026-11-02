@@ -691,9 +691,11 @@ struct Encoder::State {
         packets(track, &f);
         audioSubmitted += static_cast<unsigned>(f.nb_samples);
     }
-    // Tolerance profile v2: the reference goes through the sample format and the sampling the
+    // Tolerance profile v3: the reference goes through the sample format and the sampling the
     // reopened stream declares, so 4:2:0/4:2:2 chroma decimation is not counted as codec error
-    // while a wrong sample layout, matrix, range or siting still is.
+    // while a wrong sample layout, matrix, range or siting still is. The maximum is gated after
+    // each frame's largest 0.01% of color samples are set aside (issue #424); the raw maximum is
+    // reported beside it.
     void compare(const AVFrame& decoded, const Bytes& reference, EncodeQcV1& qc,
                  const DeclaredSampling& declared) {
         require(decoded.width == static_cast<int>(settings.width) &&
@@ -715,17 +717,23 @@ struct Encoder::State {
         const bool alpha = settings.videoCodec == "tiff" ||
                            (settings.videoCodec == "prores_ks" && videoTrack.codec->profile >= 4);
         if (alpha)
-            require(measure.alphaMaximum <= (settings.videoCodec == "tiff" ? 0U : 64U),
+            require(measure.alphaMaximum <=
+                        (settings.videoCodec == "tiff" ? 0U : kVideoToleranceAlphaMaximum),
                     "Reopened alpha exceeds tolerance");
         qc.maximumError = std::max(qc.maximumError, measure.maximum);
+        qc.percentileMaximumError = std::max(qc.percentileMaximumError, measure.percentileMaximum);
         qc.meanError =
             std::max(qc.meanError,
                      static_cast<std::uint32_t>((measure.sum + measure.count - 1) / measure.count));
         const auto& rgba = measure.rgba;
-        require(settings.videoCodec == "tiff" ? rgba == reference
-                                              : qc.maximumError <= 22938 && qc.meanError <= 1967,
-                ("Reopened pixels exceed tolerance profile (max=" +
-                 std::to_string(qc.maximumError) + " mean=" + std::to_string(qc.meanError) + ")")
+        require(settings.videoCodec == "tiff"
+                    ? rgba == reference
+                    : qc.percentileMaximumError <= kVideoTolerancePercentileMaximum &&
+                          qc.meanError <= kVideoToleranceMeanCeiling,
+                ("Reopened pixels exceed tolerance profile v3 (max=" +
+                 std::to_string(qc.maximumError) +
+                 " p99.99max=" + std::to_string(qc.percentileMaximumError) +
+                 " mean=" + std::to_string(qc.meanError) + ")")
                     .c_str());
         const auto digest = digestBytes(rgba);
         if (qc.frames == 0)

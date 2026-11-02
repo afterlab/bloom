@@ -58,8 +58,11 @@ struct EncodeQcV1 {
     std::uint64_t bytes = 0, frames = 0, audioSamples = 0;
     Rational duration;
     Digest artifact, firstFrame, lastFrame, audio;
-    // Fixed point: maximum and mean absolute sample error in unsigned 16-bit units.
-    std::uint32_t maximumError = 0, meanError = 0;
+    // Fixed point: maximum and mean absolute sample error in unsigned 16-bit units, each the worst
+    // over the compared frames. maximumError is the raw maximum and is reported only; tolerance
+    // profile v3 gates percentileMaximumError, the largest error left in a frame once its top
+    // 0.01% of color samples are set aside (issue #424), never above maximumError.
+    std::uint32_t maximumError = 0, meanError = 0, percentileMaximumError = 0;
     // Issue #369: read back from the reopened artifact.
     ColourTags colour;
     std::string container;
@@ -72,16 +75,32 @@ struct EncodeQcV1 {
     std::string adjustment;
 };
 inline constexpr std::uint32_t kEncodeChunkBytes = 1024U * 1024U;
-// v2 compares against the reference taken through the stream's declared sample format, matrix,
+// v2 compared against the reference taken through the stream's declared sample format, matrix,
 // range and chroma siting (v1 used the unsampled reference, failing 4:2:2/4:2:0 decimation of
-// small saturated detail as if it were codec error). The bounds are unchanged.
-inline constexpr std::string_view kVideoToleranceV2 =
-    "bloom.video-rgba16-srgb.v2;first-last;reference=declared-sampling;absolute-max=22938;"
-    "mean-ceil=1967;alpha-max=64;timing=exact;stream-layout=exact;pcm=exact";
+// small saturated detail as if it were codec error). v3 (issue #424) keeps v2's reference and
+// bounds but gates the per-frame maximum after setting aside the frame's largest 0.01% of colour
+// samples (an exact 99.99th percentile), so two lossy-codec samples at a saturated chroma edge no
+// longer fail a 45 dB frame. The raw maximum is still measured and reported. Alpha keeps its
+// absolute bound.
+inline constexpr std::string_view kVideoToleranceV3 =
+    "bloom.video-rgba16-srgb.v3;first-last;reference=declared-sampling;"
+    "percentile-max=p99.99-per-frame:22938;absolute-max=reported;mean-ceil=1967;alpha-max=64;"
+    "timing=exact;stream-layout=exact;pcm=exact";
+// The bounds kVideoToleranceV3 names, in unsigned 16-bit units.
+inline constexpr std::uint32_t kVideoTolerancePercentileMaximum = 22938;
+inline constexpr std::uint32_t kVideoToleranceMeanCeiling = 1967;
+inline constexpr std::uint32_t kVideoToleranceAlphaMaximum = 64;
+// The 99.99th percentile sets aside floor(samples / 10000) color samples of each frame: never
+// more than 0.01%, so a frame under 10000 samples sets aside none.
+inline constexpr std::uint64_t kVideoToleranceSetAsideDivisor = 10000;
 inline constexpr std::string_view kAacToleranceV1 =
     "bloom.aac-f32.v1;sample-count=exact;priming=trim;absolute-max=0.25;rms=0.05";
 [[nodiscard]] bool valid(const EncodeSettingsV1& value);
 [[nodiscard]] MediaDeterminismV1 encodeDeterminism(const EncodeSettingsV1& value);
 [[nodiscard]] Digest encodeTolerance(const EncodeSettingsV1& value);
+// The versioned names of the tolerance profiles encodeTolerance binds
+// ("bloom.video-rgba16-srgb.v3", "bloom.aac-f32.v1", or both joined by '+' in video-then-audio
+// order); empty when it binds none.
+[[nodiscard]] std::string encodeToleranceName(const EncodeSettingsV1& value);
 [[nodiscard]] Result<Digest> digest(const EncodeSettingsV1& value);
 } // namespace bloom::media::provider

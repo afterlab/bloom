@@ -419,6 +419,7 @@ Result<MediaQcEvidenceV1> makeMediaQcEvidenceV1(const MediaOutputAnalysisV1& ana
                 videotoolbox ? kProResVideoToolboxExportNote : kProResFfmpegExportNote;
         evidence.maximumError = qc.maximumError;
         evidence.meanError = qc.meanError;
+        evidence.percentileMaximumError = qc.percentileMaximumError;
         (void)checked(digest(evidence));
         return evidence;
     } catch (const Unavailable& error) {

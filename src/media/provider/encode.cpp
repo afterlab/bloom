@@ -77,13 +77,24 @@ Digest encodeTolerance(const EncodeSettingsV1& v) {
     if (!v.videoCodec.empty() && v.audioCodec == "aac") {
         core::Sha256Hasher hasher;
         (void)hasher.update(
-            std::as_bytes(std::span(kVideoToleranceV2.data(), kVideoToleranceV2.size())));
+            std::as_bytes(std::span(kVideoToleranceV3.data(), kVideoToleranceV3.size())));
         (void)hasher.update(
             std::as_bytes(std::span(kAacToleranceV1.data(), kAacToleranceV1.size())));
         return hasher.finalize();
     }
-    const auto profile = v.videoCodec.empty() ? kAacToleranceV1 : kVideoToleranceV2;
+    const auto profile = v.videoCodec.empty() ? kAacToleranceV1 : kVideoToleranceV3;
     return digestBytes(std::as_bytes(std::span(profile.data(), profile.size())));
+}
+std::string encodeToleranceName(const EncodeSettingsV1& v) {
+    if (encodeDeterminism(v) != MediaDeterminismV1::DecodedSemanticTolerance)
+        return {};
+    const auto name = [](const std::string_view profile) {
+        return std::string(profile.substr(0, profile.find(';')));
+    };
+    if (v.videoCodec.empty())
+        return name(kAacToleranceV1);
+    return v.audioCodec == "aac" ? name(kVideoToleranceV3) + "+" + name(kAacToleranceV1)
+                                 : name(kVideoToleranceV3);
 }
 Result<Digest> digest(const EncodeSettingsV1& v) {
     if (!valid(v))

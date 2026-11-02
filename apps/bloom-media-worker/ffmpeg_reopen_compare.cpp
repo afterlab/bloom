@@ -158,6 +158,20 @@ SwsContext* declaredConversion(const int width, const int height, const AVPixelF
     }
     return scale.release();
 }
+std::uint32_t percentileMaximum(const std::span<const std::uint32_t> histogram,
+                                const std::uint64_t count,
+                                const std::uint64_t setAsideDivisor) noexcept {
+    // Walk down from the largest error until more than the set-aside samples are covered: the bin
+    // that crosses the boundary holds the (count - setAside)-th smallest error.
+    const auto setAside = setAsideDivisor == 0 ? 0 : count / setAsideDivisor;
+    std::uint64_t above = 0;
+    for (auto error = histogram.size(); error-- > 0;) {
+        above += histogram[error];
+        if (above > setAside)
+            return static_cast<std::uint32_t>(error);
+    }
+    return 0;
+}
 ReopenMeasure measureReopen(const AVFrame& decoded, const std::span<const std::byte> reference,
                             const DeclaredSampling& declared) {
     ReopenMeasure result;
@@ -221,6 +235,9 @@ ReopenMeasure measureReopen(const AVFrame& decoded, const std::span<const std::b
         }
         expected = sampled;
     }
+    // One count per possible 16-bit error (256 KiB): a frame's color samples are bounded far
+    // below 2^32 by the frame limits, so the counts cannot overflow.
+    std::vector<std::uint32_t> histogram(65536U, 0U);
     for (std::size_t i = 0; i < bytes; i += 2) {
         const auto a = sample(result.rgba, i);
         if (i % 8 == 6) {
@@ -233,7 +250,9 @@ ReopenMeasure measureReopen(const AVFrame& decoded, const std::span<const std::b
         result.maximum = std::max(result.maximum, error);
         result.sum += error;
         ++result.count;
+        ++histogram[error];
     }
+    result.percentileMaximum = percentileMaximum(histogram, result.count, kReopenSetAsideDivisor);
     return result;
 }
 } // namespace bloom::media::ffmpeg

@@ -883,6 +883,10 @@ provider::Payload Encoder::call(const provider::MessageKind kind, const provider
                         const auto& reference =
                             frames == 0 ? state_->firstReference : state_->lastReference;
                         if (rgba.size() == reference.size()) {
+                            // Tolerance profile v3 evidence (issue #424): the frame's maximum once
+                            // its largest 0.01% of samples are set aside, from an exact histogram.
+                            std::vector<std::uint32_t> histogram(65536U, 0U);
+                            std::uint64_t frameCount = 0;
                             for (std::size_t index = 0; index + 1 < rgba.size(); index += 2) {
                                 const auto a = std::to_integer<unsigned>(rgba[index]) |
                                                (std::to_integer<unsigned>(rgba[index + 1]) << 8U);
@@ -894,6 +898,20 @@ provider::Payload Encoder::call(const provider::MessageKind kind, const provider
                                                            static_cast<std::uint32_t>(errorValue));
                                 sum += errorValue;
                                 ++count;
+                                ++histogram[errorValue];
+                                ++frameCount;
+                            }
+                            const auto setAside =
+                                frameCount / provider::kVideoToleranceSetAsideDivisor;
+                            std::uint64_t above = 0;
+                            for (auto error = histogram.size(); error-- > 0;) {
+                                above += histogram[error];
+                                if (above > setAside) {
+                                    qc.percentileMaximumError =
+                                        std::max(qc.percentileMaximumError,
+                                                 static_cast<std::uint32_t>(error));
+                                    break;
+                                }
                             }
                         }
                         const auto digest = provider::digestBytes(rgba);
@@ -914,9 +932,10 @@ provider::Payload Encoder::call(const provider::MessageKind kind, const provider
                     (settings.videoCodec == "prores" && qc.meanError > 1967)) {
                     char detail[160] = {};
                     std::snprintf(detail, sizeof(detail),
-                                  "Reopened artifact exceeds tolerance (frames=%llu max=%u mean=%u)",
+                                  "Reopened artifact exceeds tolerance (frames=%llu max=%u "
+                                  "p99.99max=%u mean=%u)",
                                   static_cast<unsigned long long>(frames), qc.maximumError,
-                                  qc.meanError);
+                                  qc.percentileMaximumError, qc.meanError);
                     throw Unavailable{Error::Corrupt, detail};
                 }
             }

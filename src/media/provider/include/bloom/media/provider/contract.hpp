@@ -179,7 +179,9 @@ struct MediaQcEvidenceV1 {
     MediaDeterminismV1 determinism = MediaDeterminismV1::NoDeterminismClaim;
     bool appleAuthorized = false, deliveryQualified = false;
     std::string implementationNote;
-    std::uint32_t maximumError = 0, meanError = 0;
+    // The raw maximum and mean sample error, and the maximum after each frame's top 0.01% of
+    // samples is set aside (tolerance profile v3, issue #424; zero for other profiles).
+    std::uint32_t maximumError = 0, meanError = 0, percentileMaximumError = 0;
     // Issue #369: the colour tags and "<container>/<codec>" read back from the reopened artifact.
     ColourTags colourTags;
     std::string container;
