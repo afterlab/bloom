@@ -2,7 +2,7 @@
 
 Status: implemented; grouped native and cross-platform qualification pending
 
-Updated: 2026-10-23
+Updated: 2026-11-03
 
 ## Gaussian Blur and Box Blur
 
@@ -20,8 +20,11 @@ bytes per axis. Larger sampled/upsampled requests fail explicitly; final renderi
 reduce the radius. These finite loop/storage bounds apply to both CPU and GPU paths.
 
 Gaussian uses sigma `radius/3`, evaluates the symmetric finite discrete kernel over that support,
-and normalizes it. Box uses uniform normalized weights over the same integer support; fractional
-radius therefore advances Box support at integer boundaries. The host prepares binary32 weights;
+and normalizes it. Box covers `[-radius, radius]` continuously over the same integer support: every
+tap weighs 1 except, for a fractional radius, the two outermost taps, which weigh the radius's
+fractional part, and the weights are normalized by their sum `2 * radius + 1`. Radius `0.01` is
+therefore nearly the identity rather than a full 3-tap box, and an animated radius widens Box
+smoothly instead of jumping at each integer (#460). The host prepares binary32 weights;
 CPU and GPU use those identical coefficients with ordered binary32 fused multiply-add accumulation.
 The horizontal intermediate is rounded to RGBA32F before the vertical pass. Both filter associated
 RGB and alpha together, preserve signed/HDR RGB without a display clamp, and bound coverage to

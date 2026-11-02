@@ -16,11 +16,15 @@ std::vector<float> weights(const SeparableBlurKind kind, const double radius) {
     std::vector<float> result(static_cast<std::size_t>(support * 2 + 1), 1.0F);
     if (support == 0)
         return result;
+    // Box covers [-radius, radius] continuously: whole taps weigh 1 and the outermost taps of a
+    // fractional radius weigh its fraction, so an animated radius grows smoothly between integers.
+    const double boxEdge = radius - std::floor(radius);
     double total = 0.0;
     for (int i = -support; i <= support; ++i) {
-        const double value = kind == SeparableBlurKind::Box || i == 0
-                                 ? 1.0
-                                 : std::exp(-0.5 * std::pow(double(i) / (radius / 3.0), 2.0));
+        const double value = kind == SeparableBlurKind::Box
+                                 ? (std::abs(i) == support && boxEdge > 0.0 ? boxEdge : 1.0)
+                             : i == 0 ? 1.0
+                                      : std::exp(-0.5 * std::pow(double(i) / (radius / 3.0), 2.0));
         result[static_cast<std::size_t>(i + support)] = static_cast<float>(value);
         total += static_cast<double>(static_cast<float>(value));
     }

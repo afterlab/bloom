@@ -124,6 +124,37 @@ void referenceTests() {
                 !runtime::detail::prepareSeparableBlur(k, std::numeric_limits<double>::quiet_NaN(),
                                                        1.0, 1.0),
             "nonfinite and out-of-domain radius refuses");
+    // #460: Box covers [-radius, radius] continuously; the outermost taps of a fractional radius
+    // weigh its fraction, so radius 0.01 is nearly the identity and the kernel never jumps at an
+    // integer radius.
+    const auto box = kernel(runtime::SeparableBlurKind::Box, runtime::BlurEdgeMode::Transparent);
+    const auto boxAt = [&](const double radius) {
+        const auto prepared = runtime::detail::prepareSeparableBlur(box, radius, 1.0, 1.0);
+        require(prepared.has_value(), "box blur prepares");
+        return prepared->horizontal;
+    };
+    const auto near = [](const float actual, const double expected) {
+        return std::abs(static_cast<double>(actual) - expected) < 1e-7;
+    };
+    const auto quarter = boxAt(2.25);
+    require(quarter.size() == 7 && near(quarter[0], 0.25 / 5.5) && near(quarter[6], 0.25 / 5.5) &&
+                std::all_of(quarter.begin() + 1, quarter.end() - 1,
+                            [&](const float w) { return near(w, 1.0 / 5.5); }),
+            "fractional box radius weights its outermost taps by the fraction");
+    const auto tiny = boxAt(0.01);
+    require(tiny.size() == 3 && near(tiny[1], 1.0 / 1.02) && near(tiny[0], 0.01 / 1.02),
+            "box radius 0.01 is nearly the identity, not a full three-tap box");
+    const auto whole = boxAt(2.0);
+    const auto below = boxAt(1.9999);
+    const auto above = boxAt(2.0001);
+    require(
+        whole.size() == 5 && below.size() == 5 && above.size() == 7 &&
+            std::all_of(whole.begin(), whole.end(), [&](const float w) { return near(w, 0.2); }),
+        "whole box radius keeps uniform weights");
+    for (std::size_t i = 0; i < 5; ++i)
+        require(std::abs(below[i] - whole[i]) < 1e-4F && std::abs(above[i + 1] - whole[i]) < 1e-4F,
+                "box weights are continuous across an integer radius");
+    require(above[0] < 1e-4F && above[6] < 1e-4F, "a just-grown box tap starts near zero");
     const auto proxy = runtime::detail::prepareSeparableBlur(k, 3.0, 0.5, 2.0);
     require(proxy->horizontal.size() == 5 && proxy->vertical.size() == 13,
             "proxy radii and halos scale independently per axis");

@@ -787,26 +787,32 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
                         executor.executor->counters().ocioEffectDispatches ==
                             coldCounters.ocioEffectDispatches,
                     "blur native: warm RAM reuse has identical pixels and zero filter dispatches");
-                auto changedDefinition = plan->copyDefinition();
-                std::get<SeparableBlurKernel>(
-                    std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
-                    .radius.source = 1.0;
-                const auto changedPlan =
-                    std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
-                const auto changed = builder.build(changedPlan, request);
-                const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
-                expectations.expect(changed && changedOracle.frame(),
-                                    "blur native: changed radius prepares");
-                if (changed && changedOracle.frame()) {
+                // #460: a sub-pixel radius exercises the fractional Box edge taps (and a tiny
+                // Gaussian) on the resident route against the CPU reference.
+                std::uint64_t changedRuns = 0;
+                for (const double radius : {1.0, 0.25}) {
+                    auto changedDefinition = plan->copyDefinition();
+                    std::get<SeparableBlurKernel>(
+                        std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
+                        .radius.source = radius;
+                    const auto changedPlan = std::make_shared<const CompiledCompositionPlan>(
+                        std::move(changedDefinition));
+                    const auto changed = builder.build(changedPlan, request);
+                    const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+                    expectations.expect(changed && changedOracle.frame(),
+                                        "blur native: changed radius prepares");
+                    if (!changed || !changedOracle.frame())
+                        continue;
                     const auto rerun = runScene(*executor.executor, changed.scene);
-                    expectations.expect(rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
-                                            parity(rerun.pixels,
-                                                   changedOracle.frame()->processImage().pixels(),
-                                                   detail) &&
-                                            executor.executor->counters().ocioEffectDispatches ==
-                                                coldCounters.ocioEffectDispatches + 2,
-                                        "blur native: changed radius invalidates both passes and "
-                                        "retains CPU parity");
+                    ++changedRuns;
+                    expectations.expect(
+                        rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                            parity(rerun.pixels, changedOracle.frame()->processImage().pixels(),
+                                   detail) &&
+                            executor.executor->counters().ocioEffectDispatches ==
+                                coldCounters.ocioEffectDispatches + 2 * changedRuns,
+                        "blur native: changed radius " + std::to_string(radius) +
+                            " invalidates both passes and retains CPU parity: " + detail);
                 }
             }
         }
