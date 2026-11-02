@@ -234,7 +234,7 @@ Use `tools/call` with `name` and `arguments`:
 | `query` | `kind`: project, compositions, nodes, parameters, parameter, parameter-value, assets, operations or context; nodes and parameter kinds also need `composition`. The legacy `parameters` query returns full records. `parameters` with `pageSize` (1–64) and optional `cursor` returns bounded summaries and `nextCursor`; constant values are explicitly marked `valueOmitted`. `parameter` with `parameter` ID reads one full record, except a string over 128 KiB returns a summary. `parameter-value` with `parameter` ID and `expectedRevision` reads UTF-8 string chunks using optional byte `offset` and `limit` (4–131072). An operations record carries a `description` (purpose, side effects, outputs, errors with remedies and the undo step; empty for an operation not yet described), every argument's `kind`, `required`, `contextual`, `context` and `summary`, plus a pasteable `example` call. An `assets` record of an image, sequence or video carries its `interpretation` (the
 [Interpret Footage](interpret-footage.md) members `bloom.asset.set-interpretation` takes, plus the
 resolved `playbackFrameRate` and `filePixelAspect`). `context` returns the editor context contextual arguments fall back to: project, composition, selected nodes and layers, time, the Viewer's display and view, read-only state and `live` (false on stdio, which reports the session defaults). |
-| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs, structured diagnostics and `compileFailures` (see [Edits and diagnostics](#edits-and-diagnostics)). Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
+| `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs, structured diagnostics, `compileFailures` and `compileWarnings` (see [Edits and diagnostics](#edits-and-diagnostics)). Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
 | `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`. Returns published frame count, preservation report, paths and SHA-256 file digests. |
 | `export` | Render arguments plus optional `profile`, `audio` and `sampleRate`. Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. |
 | `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. |
@@ -337,6 +337,10 @@ rendered). `compileFailures` lists those that cannot render now:
 plain sentence and `node`/`parameter` are `null` when the failure has no narrower subject. Each one
 is also recorded as a `composition.compile-failed` event. An empty list means every touched
 composition compiles.
+
+`compileWarnings` lists what still compiles but degrades, in the same record shape: for example a
+text layer whose Font asset was removed, or whose system font file is missing or changed, which is
+drawn in DejaVu Sans (`bloom.runtime.compile.font-asset-unavailable`).
 
 **Events.** Besides command events (`kind` `revision`, `history` or `rejected`), `events` reports
 `{kind, revision, message, composition?, subject?, path?, projectName?, sequence}` records for

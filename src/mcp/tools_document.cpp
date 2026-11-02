@@ -322,10 +322,21 @@ void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult
 
 // After a successful edit, every edited composition is compiled once (never rendered) so an edit
 // that leaves one uncompilable is reported with the edit instead of surfacing later as a failed
-// preview or export: compileFailures in the result, and a composition.compile-failed event.
+// preview or export: compileFailures in the result, and a composition.compile-failed event. A
+// composition that still compiles but degrades (a text layer drawn in the fallback face because its
+// Font asset is gone) reports each warning in compileWarnings.
 yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& call,
-                                const commands::CommandResult& command) {
+                                const commands::CommandResult& command,
+                                yyjson_mut_val* warnings) {
     auto* failures = out.array();
+    const auto subjectRecord = [&](const runtime::CompileSubject& subject) {
+        auto* record = out.object();
+        out.set(record, "composition", out.number(subject.compositionId.value()));
+        out.set(record, "node", subject.nodeId ? out.number(subject.nodeId->value()) : out.null());
+        out.set(record, "parameter",
+                subject.parameterId ? out.number(subject.parameterId->value()) : out.null());
+        return record;
+    };
     const auto snapshot = call.session.snapshot();
     std::vector<document::CompositionId> edited;
     if (command.affectedComposition) {
@@ -341,6 +352,20 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
             continue;
         const auto compiled =
             compiler.compile({.snapshot = snapshot, .compositionId = composition}, {});
+        for (const auto& diagnostic : compiled.diagnostics) {
+            if (diagnostic.severity != runtime::DiagnosticSeverity::Warning)
+                continue;
+            auto text = diagnostic.summary;
+            if (!diagnostic.detail.empty())
+                text += (text.empty() ? "" : ": ") + diagnostic.detail;
+            auto* warning = out.object();
+            out.set(warning, "composition", out.number(composition.value()));
+            out.set(warning, "code", out.text(std::string(runtime::compileDiagnosticCodeId(
+                                           diagnostic.code))));
+            out.set(warning, "detail", out.text(text));
+            out.set(warning, "subject", subjectRecord(diagnostic.subject));
+            out.append(warnings, warning);
+        }
         const auto failure = runtime::compileFailureSummary(compiled, composition);
         if (!failure)
             continue;
@@ -348,13 +373,14 @@ yyjson_mut_val* compileFailures(McpServerCore::State& core, Json& out, McpCall& 
         out.set(record, "composition", out.number(composition.value()));
         out.set(record, "code", out.text(failure->code));
         out.set(record, "detail", out.text(failure->detail));
-        auto* subject = out.object();
-        out.set(subject, "composition", out.number(failure->compositionId.value()));
-        out.set(subject, "node",
-                failure->nodeId ? out.number(failure->nodeId->value()) : out.null());
-        out.set(subject, "parameter",
-                failure->parameterId ? out.number(failure->parameterId->value()) : out.null());
-        out.set(record, "subject", subject);
+        out.set(record, "subject",
+                subjectRecord({.compositionId = failure->compositionId,
+                               .nodeId = failure->nodeId,
+                               .edgeId = std::nullopt,
+                               .parameterId = failure->parameterId,
+                               .layerId = std::nullopt,
+                               .layerSlotId = std::nullopt,
+                               .field = {}}));
         out.append(failures, record);
         call.compileFailures.push_back(
             {.composition = failure->compositionId.value(),
@@ -465,10 +491,12 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
     if (!result.command)
         throwUnavailable(call, result);
     auto* value = commandResult(out, *result.command);
+    auto* warnings = out.array();
     out.set(value, "compileFailures",
             result.command->changed() && result.command->renderAffecting
-                ? compileFailures(core, out, call, *result.command)
+                ? compileFailures(core, out, call, *result.command, warnings)
                 : out.array());
+    out.set(value, "compileWarnings", warnings);
     return value;
 }
 

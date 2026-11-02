@@ -227,6 +227,29 @@ class AgentFeedback(unittest.TestCase):
             self.assertEqual(len(ids[0]), 1)
             self.assertEqual(ids[1], ids[0])
 
+    def test_missing_font_file_is_a_compile_warning(self):
+        # #442: a text layer whose system font file is gone draws the fallback face; transact says so.
+        server = self.server
+        added = server.transact(('bloom.layer.add-text', {'composition': 1, 'name': 'T',
+                                                          'text': 'Hi'}))
+        self.assertEqual(added['compileWarnings'], [])
+        font = server.role('font')
+        with tempfile.TemporaryDirectory() as directory:
+            face = os.path.join(directory, 'Gone.ttf')
+            ensured = server.transact(('bloom.asset.ensure-font', {
+                'path': face, 'digest': '3' * 64, 'family': 'Gone', 'style': 'Regular',
+                'relinkHint': 'file://' + face}))
+            self.assertTrue(ensured['succeeded'], ensured)
+            asset = [o['id'] for o in ensured['outputs'] if o['name'] == 'asset'][0]
+            result = server.transact(set_source(font, value=str(asset)))
+        self.assertTrue(result['succeeded'], result)
+        self.assertEqual(result['compileFailures'], [])
+        self.assertEqual(len(result['compileWarnings']), 1, result)
+        warning = result['compileWarnings'][0]
+        self.assertEqual(warning['code'], 'bloom.runtime.compile.font-asset-unavailable')
+        self.assertIn('DejaVu Sans was used', warning['detail'])
+        self.assertEqual(warning['subject']['parameter'], font)
+
     def test_rejections_carry_operation_index_and_reason(self):
         server = self.server
         server.transact(('bloom.layer.add-solid', {'composition': 1, 'name': 'S',
