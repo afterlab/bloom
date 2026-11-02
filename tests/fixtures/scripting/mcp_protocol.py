@@ -216,7 +216,7 @@ class Protocol(unittest.TestCase):
                           'export.log', 'export.wait', 'export.presets', 'export.script',
                           'project.save', 'project.save-as', 'project.open', 'project.new',
                           'project.close', 'editor.reveal', 'selection.set',
-                          'composition.activate', 'transport', 'viewer.set',
+                          'composition.activate', 'transport', 'viewer.set', 'export.reveal',
                           'project.set-color-settings', 'profiler.snapshot'})
         self.assertTrue(responses[2]['result']['structuredContent']['succeeded'])
         self.assertEqual(responses[3]['result']['structuredContent']['project']['name'], 'MCP')
