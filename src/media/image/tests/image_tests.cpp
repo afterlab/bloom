@@ -223,7 +223,8 @@ void appendChunk(std::vector<std::byte>& out, const char* type,
 }
 std::vector<std::byte> filteredPng(const unsigned width, const unsigned height,
                                    const unsigned depth, const unsigned colourType,
-                                   const bool interlaced = false, const bool transparency = false) {
+                                   const bool interlaced = false, const bool transparency = false,
+                                   const bool adlerChunk = false) {
     const unsigned channels = colourType == 0 ? 1 : colourType == 2 ? 3 : colourType == 4 ? 2 : 4;
     const unsigned pixelBytes = channels * depth / 8;
     const unsigned rowBytes = width * pixelBytes;
@@ -277,7 +278,9 @@ std::vector<std::byte> filteredPng(const unsigned width, const unsigned height,
     if (transparency)
         appendChunk(out, "tRNS", {0, 0, 0, 0, 0, 0});
     // Split IDAT so the fast path streams more than one chunk into inflate.
-    const auto half = compressed.size() / 2;
+    // adlerChunk puts only the 4-byte zlib checksum in the last IDAT, so the output is already
+    // full when the stream end arrives.
+    const auto half = adlerChunk ? compressed.size() - 4 : compressed.size() / 2;
     appendChunk(out, "IDAT", {compressed.begin(), compressed.begin() + static_cast<long>(half)});
     appendChunk(out, "IDAT", {compressed.begin() + static_cast<long>(half), compressed.end()});
     appendChunk(out, "IEND", {});
@@ -297,6 +300,14 @@ void testFastPngMatchesStb(Expectations& check) {
             check.expect(fast.has_value() && !reference.empty() && *fast == reference,
                          "zlib PNG samples equal the stb decoder for every filter and type");
         }
+    }
+    {
+        const auto bytes = filteredPng(37, 11, 8, 6, false, false, true);
+        detail::ImageInfo adlerInfo;
+        check.expect(detail::imageInfo(bytes, adlerInfo), "adler-chunk PNG header reads");
+        const auto fast = detail::fastPngSamples(bytes, adlerInfo, budget);
+        check.expect(fast.has_value() && *fast == detail::stbImageSamples(bytes, adlerInfo, budget),
+                     "a PNG whose output fills before the zlib end still takes the fast path");
     }
     const auto transparent = filteredPng(5, 3, 8, 2, false, true);
     const auto interlaced = filteredPng(5, 3, 8, 6, true);

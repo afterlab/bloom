@@ -313,7 +313,9 @@ std::optional<std::vector<std::uint16_t>> fastPngSamples(const std::span<const s
                     finished = true;
                     break;
                 }
-                if (status != Z_OK || stream.avail_out == 0)
+                // A full output buffer is fine while the stream end (checksum) is still to come;
+                // more input after a full buffer makes inflate report Z_BUF_ERROR or Z_DATA_ERROR.
+                if (status != Z_OK)
                     return std::nullopt;
             }
         }
