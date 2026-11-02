@@ -9,6 +9,10 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
 
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -124,6 +128,55 @@ int main() {
     expect(contains(gammaExponentAdapter.shaderBody, "bloom_ocio_cpu_gamma_pow(") &&
                contains(gammaExponentAdapter.shaderBody, "res = pow( max( res, vec4(0.) )"),
            "an unrelated ExponentOp pow call is left untouched next to a GammaOp");
+
+    // The same LogOp region with the descriptor's CPU-exact exponent scales (#412): the anti-log
+    // multiplies by OCIO's CPU kinv, bit for bit, instead of rebuilding it from log_slopeinv.
+    auto exactMixed = mixed;
+    exactMixed.cameraLogExponentScales = {1.0F, 2.0F, 0.5F};
+    const auto exactAdapter = bloom::color::ocioGpuSamplingGlslFor(exactMixed);
+    expect(contains(exactAdapter.shaderBody,
+                    "logSeg = bloom_ocio_cpu_log_exp2(logSeg, vec3(uintBitsToFloat(0x3F800000u), "
+                    "uintBitsToFloat(0x40000000u), uintBitsToFloat(0x3F000000u)));") &&
+               !contains(exactAdapter.shaderBody, "log_slopeinv)"),
+           "a camera log-to-linear region takes the descriptor's exact exponent scales");
+    auto mismatched = mixed;
+    mismatched.cameraLogExponentScales = {1.0F, 2.0F, 0.5F, 1.0F, 2.0F, 0.5F};
+    expect(contains(bloom::color::ocioGpuSamplingGlslFor(mismatched).shaderBody,
+                    "bloom_ocio_cpu_log_exp2(logSeg, log_slopeinv)"),
+           "scales that do not match the camera log regions one to one are not applied");
+
+    // A real camera log input (ARRI LogC3, base 10) extracts OCIO's CPU kinv. The generated
+    // shader's `log2(10) * log_slopeinv` is one ULP away from it, which the anti-log amplifies
+    // past the parity gate for over-range code values.
+    const auto logC3 = bloom::color::buildOcioGpuProgramForCst(*neutral, "LogC3 AWG3 (Bloom)",
+                                                               neutral->processColorSpaceId());
+    expect(logC3.succeeded() && logC3.program() != nullptr,
+           "the LogC3 input transform program extracts");
+    if (logC3.program() != nullptr) {
+        const auto& camera = *logC3.program();
+        constexpr float kLogSideSlope = static_cast<float>(0.2471896383);
+        const float cpuKinv = static_cast<float>(std::log2(10.0)) / kLogSideSlope;
+        const float deviceKinv = static_cast<float>(std::log2(10.0)) * (1.0F / kLogSideSlope);
+        expect(camera.cameraLogExponentScales.size() == 3 &&
+                   std::bit_cast<std::uint32_t>(camera.cameraLogExponentScales[0]) ==
+                       std::bit_cast<std::uint32_t>(cpuKinv) &&
+                   camera.cameraLogExponentScales[1] == cpuKinv &&
+                   camera.cameraLogExponentScales[2] == cpuKinv,
+               "the LogC3 program carries OCIO's CPU anti-log exponent scale");
+        expect(cpuKinv != deviceKinv,
+               "the generated reciprocal slope cannot reproduce the CPU scale for LogC3");
+        char literal[40];
+        std::snprintf(literal, sizeof(literal), "uintBitsToFloat(0x%08Xu)",
+                      static_cast<unsigned>(std::bit_cast<std::uint32_t>(cpuKinv)));
+        const auto cameraAdapter = bloom::color::ocioGpuSamplingGlslFor(camera);
+        expect(contains(cameraAdapter.shaderBody, literal) &&
+                   !contains(camera.shaderText, "uintBitsToFloat"),
+               "the adapter emits the exact scale while the extracted body stays verbatim");
+    }
+    const auto display = bloom::color::buildOcioGpuProgramForCst(
+        *neutral, neutral->processColorSpaceId(), neutral->sRgbTextureColorSpaceId());
+    expect(display.program() != nullptr && display.program()->cameraLogExponentScales.empty(),
+           "a program without a camera log-to-linear op carries no exponent scales");
 
     if (failures != 0) {
         std::cerr << failures << " OCIO precision adapter expectation(s) failed\n";

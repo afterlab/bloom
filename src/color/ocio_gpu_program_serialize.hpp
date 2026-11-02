@@ -23,7 +23,7 @@
 namespace bloom::color::detail {
 
 inline constexpr std::uint32_t kOcioGpuProgramSerializationMagic = 0x474D4C42U; // "BLMG"
-inline constexpr std::uint32_t kOcioGpuProgramSerializationVersion = 1U;
+inline constexpr std::uint32_t kOcioGpuProgramSerializationVersion = 2U;
 
 // Returns nullopt when the descriptor cannot be represented (a field length exceeds u32) or when
 // the encoded size would exceed `maxBytes`.

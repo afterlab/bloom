@@ -3,8 +3,11 @@
 #include "ocio_internal.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -232,6 +235,29 @@ void replaceAll(std::string& text, const std::string_view from, const std::strin
     }
 }
 
+// OCIO's generated comment for a camera log-to-linear region (LogOpGPU.cpp).
+constexpr std::string_view kCameraLogToLinComment = "// Add Log 'Camera Log to Lin' processing";
+
+// The camera log-to-linear anti-log exponent scale exactly as OCIO's CPU renderer rounds it,
+// `kinv = log2(base) / logSideSlope` in one binary32 rounding. The generated shader carries only
+// `log_slopeinv = 1 / logSideSlope`; rebuilding kinv on the device as `log2(base) * log_slopeinv`
+// rounds twice and lands one ULP off for some cameras (ARRI LogC3, RED Log3G10). The anti-log
+// multiplies that error by the exponent, so it stays inside the parity gate for nominal codes but
+// not for over-range codes. The literal is emitted bit for bit, so no decimal parse can round it.
+[[nodiscard]] std::string exactExponentScale(const std::span<const float> scales,
+                                             const std::size_t region) {
+    std::string text = "vec3(";
+    for (std::size_t channel = 0; channel < 3; ++channel) {
+        const auto bits = std::bit_cast<std::uint32_t>(scales[region * 3U + channel]);
+        char literal[32];
+        std::snprintf(literal, sizeof(literal), "uintBitsToFloat(0x%08Xu)",
+                      static_cast<unsigned>(bits));
+        text += literal;
+        text += channel < 2 ? ", " : ")";
+    }
+    return text;
+}
+
 struct BodySpecialization final {
     std::string body;
     bool gamma = false;
@@ -249,10 +275,19 @@ struct BodySpecialization final {
 //   `pow(log_base, x)` forms fall back to `exp2(x*log2(base))`.
 // * MatrixOp: `mat4(...) * tmp` -> `bloom_ocio_cpu_matrix(mat4(...), tmp)`, reproducing OCIO's SSE
 //   `(col0*x + col1*y) + (col2*z + col3*w)` add order. Diagonal/offset forms are left untouched.
-[[nodiscard]] BodySpecialization specializeOcioShaderBody(const std::string_view source) {
+//   A camera log-to-linear region instead takes OCIO's CPU `kinv` itself from the descriptor's
+//   cameraLogExponentScales (see exactExponentScale below).
+[[nodiscard]] BodySpecialization
+specializeOcioShaderBody(const std::string_view source,
+                         const std::span<const float> cameraLogExponentScales) {
     BodySpecialization result;
     result.body.reserve(source.size() + 128);
     const std::vector<OpBlock> blocks = findOpBlocks(source);
+    // The scales apply only when they correspond one to one with the camera log-to-linear regions.
+    const bool exactCameraScales =
+        !cameraLogExponentScales.empty() &&
+        cameraLogExponentScales.size() == 3U * countOccurrences(source, kCameraLogToLinComment);
+    std::size_t cameraRegion = 0;
     std::size_t cursor = 0;
     for (const auto& block : blocks) {
         if (block.begin < cursor) {
@@ -266,6 +301,12 @@ struct BodySpecialization final {
             result.gamma = true;
             break;
         case OpKind::Log:
+            if (exactCameraScales && region.find(kCameraLogToLinComment) != std::string::npos) {
+                replaceAll(region, "logSeg = pow(log_base, logSeg);",
+                           "logSeg = bloom_ocio_cpu_log_exp2(logSeg, " +
+                               exactExponentScale(cameraLogExponentScales, cameraRegion) + ");");
+                ++cameraRegion;
+            }
             replaceAll(region,
                        "vec3 linSeg = ( outColor.rgb - linear_segment_offset ) * "
                        "linear_segment_slopeinv;",
@@ -540,7 +581,8 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
         definitions += std::string(kFastPowOverloads);
     } else if ((cpuParity && (hasGamma || hasLog || hasMatrix)) ||
                (hasMatrix && program.semanticsId == kOcioGpuPointwiseAffineSemanticsId)) {
-        BodySpecialization specialized = specializeOcioShaderBody(program.shaderText);
+        BodySpecialization specialized =
+            specializeOcioShaderBody(program.shaderText, program.cameraLogExponentScales);
         if (program.semanticsId == kOcioGpuPointwiseAffineSemanticsId) {
             // OCIO's matrix emitter can append a decimal point after an exponent (e.g.
             // 3.0e+38.), which GLSL rejects. Repair that spelling in our adapter only;

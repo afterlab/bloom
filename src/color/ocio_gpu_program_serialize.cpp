@@ -182,6 +182,13 @@ serializeOcioGpuProgram(const render::OcioGpuProgramDesc& program, const std::ui
     }
     appendU32(out, static_cast<std::uint32_t>(program.uniformBufferData.size()));
     out.insert(out.end(), program.uniformBufferData.begin(), program.uniformBufferData.end());
+    if (program.cameraLogExponentScales.size() > render::kMaxOcioGpuCameraLogExponentScales) {
+        return std::nullopt;
+    }
+    appendU32(out, static_cast<std::uint32_t>(program.cameraLogExponentScales.size()));
+    for (const float scale : program.cameraLogExponentScales) {
+        appendFloat(out, scale);
+    }
     // Shader text last so its (potentially large) body is length-prefixed like every other field.
     appendU32(out, static_cast<std::uint32_t>(program.shaderText.size()));
     {
@@ -289,6 +296,11 @@ deserializeOcioGpuProgram(const std::span<const std::byte> bytes,
         std::uint32_t uniformBytes = 0;
         if (!reader.u32(uniformBytes) || uniformBytes != uniformBufferSize ||
             !reader.bytes(program.uniformBufferData, uniformBytes)) {
+            return fail(OcioGpuProgramError::UnsupportedResourceForm);
+        }
+        std::uint32_t scaleCount = 0;
+        if (!reader.u32(scaleCount) || scaleCount > render::kMaxOcioGpuCameraLogExponentScales ||
+            !reader.floats(program.cameraLogExponentScales, scaleCount)) {
             return fail(OcioGpuProgramError::UnsupportedResourceForm);
         }
         std::uint32_t shaderBytes = 0;

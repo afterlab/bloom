@@ -43,7 +43,8 @@ void testSerializationRoundTrip(Expectations& expectations) {
                                 copy.semanticsId == original->semanticsId &&
                                 copy.stage == original->stage &&
                                 copy.textures.size() == original->textures.size() &&
-                                copy.uniformBufferData == original->uniformBufferData,
+                                copy.uniformBufferData == original->uniformBufferData &&
+                                copy.cameraLogExponentScales == original->cameraLogExponentScales,
                             "every transported field round-trips exactly");
         // The host must recompute the identity, never trust a transported one.
         expectations.expect(copy.contentIdentity == bloom::core::Sha256Digest{},
@@ -51,6 +52,23 @@ void testSerializationRoundTrip(Expectations& expectations) {
         expectations.expect(bloom::render::validateOcioGpuProgram(copy, {}) ==
                                 OcioGpuProgramError::None,
                             "the transported program passes host validation");
+    }
+    // The camera log exponent scales (#412) travel with the program, bit for bit.
+    if (auto camera = buildOcioGpuProgramForCst(*resolved, "LogC3 AWG3 (Bloom)",
+                                                resolved->processColorSpaceId());
+        camera.program() != nullptr) {
+        const auto cameraBytes =
+            detail::serializeOcioGpuProgram(*camera.program(), kMaximumLutBytes);
+        auto cameraCopy = cameraBytes.has_value()
+                              ? detail::deserializeOcioGpuProgram(*cameraBytes, {})
+                              : detail::OcioGpuProgramTransport{};
+        expectations.expect(cameraCopy.reflected() != nullptr &&
+                                camera.program()->cameraLogExponentScales.size() == 3 &&
+                                cameraCopy.reflected()->cameraLogExponentScales ==
+                                    camera.program()->cameraLogExponentScales,
+                            "the camera log exponent scales round-trip through the transport");
+    } else {
+        expectations.expect(false, "a camera log program exists for serialization coverage");
     }
     {
         auto truncated = *encoded;

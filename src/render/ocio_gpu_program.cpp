@@ -159,6 +159,14 @@ core::Sha256Digest computeOcioGpuResourceDigest(const OcioGpuProgramDesc& progra
     if (program.uniformBufferStorage) {
         feedText(hasher, "storage");
     }
+    // Appended only when present, so every program without a camera log-to-linear op keeps its
+    // digest.
+    if (!program.cameraLogExponentScales.empty()) {
+        feedText(hasher, "camera-log-exponent-scales");
+        feedU32(hasher, static_cast<std::uint32_t>(program.cameraLogExponentScales.size()));
+        feedBytes(hasher, std::as_bytes(std::span(program.cameraLogExponentScales.data(),
+                                                  program.cameraLogExponentScales.size())));
+    }
     return finalize(hasher);
 }
 
@@ -174,6 +182,15 @@ OcioGpuProgramError validateOcioGpuProgram(const OcioGpuProgramDesc& program,
     // descriptor was assembled (or transported) inconsistently and must not be uploaded.
     if (program.uniformBufferData.size() != program.uniformBufferSize) {
         return OcioGpuProgramError::UnsupportedResourceForm;
+    }
+    if (program.cameraLogExponentScales.size() % 3U != 0U ||
+        program.cameraLogExponentScales.size() > kMaxOcioGpuCameraLogExponentScales) {
+        return OcioGpuProgramError::UnsupportedResourceForm;
+    }
+    for (const float scale : program.cameraLogExponentScales) {
+        if (!std::isfinite(scale) || !(scale > 0.0F)) {
+            return OcioGpuProgramError::UnsupportedResourceForm;
+        }
     }
     if (program.textures.size() > limits.maxTextures ||
         program.uniforms.size() > limits.maxUniforms ||

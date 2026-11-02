@@ -1,9 +1,11 @@
 #include "ocio_gpu_program_extract.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::color::detail {
 namespace {
@@ -209,6 +211,61 @@ fillResources(const OCIO::GpuShaderDescRcPtr& description,
     return render::OcioGpuProgramError::None;
 }
 
+// OCIO's generated comment for a camera log-to-linear region (LogOpGPU.cpp).
+constexpr std::string_view kCameraLogToLinComment = "// Add Log 'Camera Log to Lin' processing";
+
+[[nodiscard]] std::size_t countCameraLogToLinRegions(const std::string_view shaderText) noexcept {
+    std::size_t count = 0;
+    for (auto at = shaderText.find(kCameraLogToLinComment); at != std::string_view::npos;
+         at = shaderText.find(kCameraLogToLinComment, at + kCameraLogToLinComment.size()))
+        ++count;
+    return count;
+}
+
+void collectCameraLogExponentScales(const OCIO::ConstGroupTransformRcPtr& group,
+                                    std::vector<float>& scales) {
+    for (int index = 0; index < group->getNumTransforms(); ++index) {
+        const auto transform = group->getTransform(index);
+        if (const auto nested = OCIO::DynamicPtrCast<const OCIO::GroupTransform>(transform)) {
+            collectCameraLogExponentScales(nested, scales);
+            continue;
+        }
+        const auto camera = OCIO::DynamicPtrCast<const OCIO::LogCameraTransform>(transform);
+        if (!camera || camera->getDirection() != OCIO::TRANSFORM_DIR_INVERSE)
+            continue;
+        // OCIO's CPU camera log-to-linear renderer (LogOpCPU.cpp) holds the base as binary32,
+        // `m_log2_base = log2((float)m_base)`, and `m_kinv[c] = m_log2_base /
+        // (float)logSideSlope[c]`, each a single binary32 rounding.
+        const auto base = static_cast<float>(camera->getBase());
+        const auto log2Base = static_cast<float>(std::log2(static_cast<double>(base)));
+        double slopes[3] = {0.0, 0.0, 0.0};
+        camera->getLogSideSlopeValue(slopes);
+        for (const double slope : slopes)
+            scales.push_back(log2Base / static_cast<float>(slope));
+    }
+}
+
+// The CPU-exact anti-log exponent scales for the program's camera log-to-linear regions, in
+// shader order. The optimized processor is the op list both default processors render (a camera
+// log op is never fused with a neighbor). Anything that does not correspond one to one with the
+// generated regions yields no scales, and the adapter keeps its generic form.
+[[nodiscard]] std::vector<float> cameraLogExponentScales(const OCIO::ConstProcessorRcPtr& processor,
+                                                         const std::string_view shaderText) {
+    const std::size_t regions = countCameraLogToLinRegions(shaderText);
+    if (regions == 0 || regions * 3U > render::kMaxOcioGpuCameraLogExponentScales)
+        return {};
+    std::vector<float> scales;
+    collectCameraLogExponentScales(
+        processor->getOptimizedProcessor(OCIO::OPTIMIZATION_DEFAULT)->createGroupTransform(),
+        scales);
+    if (scales.size() != regions * 3U)
+        return {};
+    for (const float scale : scales)
+        if (!std::isfinite(scale) || !(scale > 0.0F))
+            return {};
+    return scales;
+}
+
 } // namespace
 
 OcioGpuProgramTransport extractOcioGpuProgram(const OCIO::ConstProcessorRcPtr& processor,
@@ -250,6 +307,7 @@ OcioGpuProgramTransport extractOcioGpuProgram(const OCIO::ConstProcessorRcPtr& p
             result.error = error;
             return result;
         }
+        program.cameraLogExponentScales = cameraLogExponentScales(processor, program.shaderText);
         program.processorCacheId = processor->getCacheID();
         program.gpuProcessorCacheId = gpuProcessor->getCacheID();
         program.ocioVersion = OCIO::GetVersion();

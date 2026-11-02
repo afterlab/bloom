@@ -58,7 +58,7 @@ inline constexpr std::string_view kOcioGpuPointwiseAffineSemanticsId =
 // nearest/linear programs are handled per sampler, and the same API is what the production runtime
 // wrapper must consume.
 inline constexpr std::string_view kOcioGpuPreciseSamplingVersion =
-    "bloom.color.ocio-gpu-sampling.v5";
+    "bloom.color.ocio-gpu-sampling.v6";
 
 // Portable correctly-rounded binary32 division GLSL helper (no float64). Some Vulkan devices do not
 // round `a / b` to nearest-even, which the wrapper's un-premultiply needs to match the unchanged

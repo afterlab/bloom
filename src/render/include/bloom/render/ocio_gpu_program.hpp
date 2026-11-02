@@ -120,6 +120,9 @@ enum class OcioGpuProgramStage : std::uint8_t {
     ProcessNeighborhood,
 };
 
+// Ceiling on OcioGpuProgramDesc::cameraLogExponentScales (three per camera log-to-linear op).
+inline constexpr std::size_t kMaxOcioGpuCameraLogExponentScales = 3U * 64U;
+
 // Checked ceilings applied before a program is accepted. The producer enforces these against the
 // real OCIO reflection; an out-of-limit extraction is a typed refusal, never a truncated program.
 struct OcioGpuProgramLimits final {
@@ -167,6 +170,13 @@ struct OcioGpuProgramDesc final {
     std::string ocioVersion;
     // Producer-owned closed semantics id, e.g. "bloom.color.ocio-process-cst.v1".
     std::string semanticsId;
+    // OCIO's CPU anti-log exponent scale `log2(base) / logSideSlope` (binary32, as OCIO's CPU
+    // camera-log renderer rounds it), three channels per camera log-to-linear op in shader order.
+    // The generated shader carries only `1 / logSideSlope`, which cannot reproduce the CPU's single
+    // rounding, so the CPU-parity sampling adapter uses these exact constants. Empty for a program
+    // without such an op. Each value is finite and positive; any non-empty vector is folded into
+    // the resource digest.
+    std::vector<float> cameraLogExponentScales;
 };
 
 struct OcioGpuProgramResult final {
