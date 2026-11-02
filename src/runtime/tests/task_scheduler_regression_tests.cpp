@@ -1,7 +1,9 @@
+#include <bloom/runtime/task_gpu_executor.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include "task_scheduler_internal.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -463,6 +465,116 @@ void testReprioritizationOrder(Expectations& expectations) {
     expectations.expect(awaitQuiescence(scheduler), "priority fixture reaches quiescence");
 }
 
+// One CPU worker, a Background task X and Interactive gate tasks queued behind a blocker. Every
+// selection ages X by 4 and each waiting Interactive task by 1, so after four selections X
+// (Background, credit 16, score -4) is ahead of a later Interactive task Y (credit 3, score -3).
+// Promoting X to Interactive must keep that accrued wait: it may only move X earlier.
+void testPromotionKeepsAccruedAging(Expectations& expectations) {
+    TaskScheduler scheduler(testConfig());
+    std::array<Gate, 5> gates;
+    std::mutex orderMutex;
+    std::vector<int> order;
+    auto recordOrder = [&orderMutex, &order](const int value) {
+        return [&orderMutex, &order, value](TaskContext&) {
+            std::lock_guard lock(orderMutex);
+            order.push_back(value);
+            return TaskResult<void>::succeeded();
+        };
+    };
+    auto gateTask = [](Gate& gate) {
+        return [&gate](TaskContext&) {
+            gate.enterAndWaitUntilReleased();
+            return TaskResult<void>::succeeded();
+        };
+    };
+    std::vector<TaskHandle<void>> blockers;
+    auto first = scheduler.submit<void>(
+        TaskRequest("Aging gate 0", owner(11), TaskPriority::Interactive), gateTask(gates[0]));
+    expectations.expect(first.accepted() && gates[0].waitUntilEntered(),
+                        "aging fixture occupies the only worker");
+    blockers.push_back(std::move(first.handle));
+    auto promoted = scheduler.submit<void>(
+        TaskRequest("Aged background", owner(11), TaskPriority::Background), recordOrder(1));
+    for (std::size_t index = 1; index < gates.size(); ++index) {
+        auto blocker =
+            scheduler.submit<void>(TaskRequest("Aging gate", owner(11), TaskPriority::Interactive),
+                                   gateTask(gates[index]));
+        expectations.expect(blocker.accepted(), "aging fixture queues its gate tasks");
+        blockers.push_back(std::move(blocker.handle));
+    }
+    gates[0].release();
+    expectations.expect(gates[1].waitUntilEntered(), "first aging selection runs a gate task");
+    auto interactive = scheduler.submit<void>(
+        TaskRequest("Later interactive", owner(11), TaskPriority::Interactive), recordOrder(2));
+    for (std::size_t index = 1; index + 1 < gates.size(); ++index) {
+        gates[index].release();
+        expectations.expect(gates[index + 1].waitUntilEntered(),
+                            "aging selections run the queued gate tasks in order");
+    }
+    expectations.expect(scheduler.reprioritize(promoted.handle.id(), TaskPriority::Interactive),
+                        "queued aged task accepts a promotion");
+    gates.back().release();
+    for (const auto& blocker : blockers) {
+        expectations.expect(awaitResult(blocker).has_value(), "aging gate tasks complete");
+    }
+    expectations.expect(awaitResult(promoted.handle).has_value() &&
+                            awaitResult(interactive.handle).has_value(),
+                        "aging fixture tasks complete");
+    expectations.expect(order.size() == 2 && order.front() == 1,
+                        "promotion never runs an aged task later than it would have run before");
+    expectations.expect(awaitQuiescence(scheduler), "aging fixture reaches quiescence");
+}
+
+// A worker that cancels a sibling group holds a temporary owning reference to the scheduler state.
+// Destroying the scheduler during that window must still shut down and join on the owner thread,
+// never on the worker (which would self-join and terminate).
+void testDestructionWhileWorkerHoldsSchedulerReference(Expectations& expectations) {
+    auto scheduler = std::make_unique<TaskScheduler>(testConfig());
+    const auto weakState = bloom::runtime::detail::TaskSchedulerTestAccess::state(*scheduler);
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::atomic_bool armed = false;
+    bool entered = false;
+    bool destroyed = false;
+    auto attachment =
+        scheduler->attachGpuExecutor(*bloom::runtime::GpuServiceGeneration::fromRaw(451), [&] {
+            if (!armed.exchange(false)) {
+                return;
+            }
+            std::unique_lock lock(mutex);
+            entered = true;
+            changed.notify_all();
+            changed.wait_for(lock, 300ms, [&] { return destroyed; });
+        });
+    expectations.expect(attachment.attached(), "lifetime fixture attaches a GPU wake sink");
+    auto group = scheduler->createGroup(owner(12), "Sibling");
+    expectations.expect(group.accepted(), "lifetime fixture creates a sibling group");
+    auto canceller = scheduler->submit<void>(
+        TaskRequest("Sibling canceller", owner(12), TaskPriority::Interactive),
+        [&armed, control = group.handle](TaskContext&) {
+            armed.store(true);
+            control.cancel();
+            return TaskResult<void>::succeeded();
+        });
+    expectations.expect(canceller.accepted(), "lifetime fixture submits the cancelling task");
+    bool reachedWindow = false;
+    {
+        std::unique_lock lock(mutex);
+        reachedWindow = changed.wait_for(lock, 2s, [&] { return entered; });
+    }
+    expectations.expect(reachedWindow, "worker holds a scheduler reference while cancelling");
+    scheduler.reset();
+    expectations.expect(weakState.expired(),
+                        "scheduler destruction finishes shutdown on the owner thread");
+    {
+        std::lock_guard lock(mutex);
+        destroyed = true;
+    }
+    changed.notify_all();
+    const auto result = canceller.handle.tryTakeResult();
+    expectations.expect(result.has_value(), "destruction joined the worker after its task ended");
+}
+
 void testGroupRegistryBoundAndReclamation(Expectations& expectations) {
     TaskScheduler scheduler(testConfig(8, 16, 1, 2));
     auto first = scheduler.createGroup(owner(9), "First");
@@ -591,6 +703,8 @@ int main() {
     testRejectedReplacementPreservesOldWork(expectations);
     testTerminalResultCoherenceAndMultiworkerStress(expectations);
     testReprioritizationOrder(expectations);
+    testPromotionKeepsAccruedAging(expectations);
+    testDestructionWhileWorkerHoldsSchedulerReference(expectations);
     testGroupRegistryBoundAndReclamation(expectations);
     testGroupProgressAggregation(expectations);
     testShutdownHandoffAndTeardownContract(expectations);

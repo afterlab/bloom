@@ -395,7 +395,8 @@ class TaskScheduler final {
 
     // Destruction is non-blocking only after isQuiescent() reports true. Release builds still
     // request cancellation and join as a lifetime-safe fallback if the owner violates that
-    // contract.
+    // contract. The shutdown and joins always run on the destroying (owner) thread, even while a
+    // worker briefly holds the shared scheduler state, so never destroy it from one of its tasks.
     ~TaskScheduler();
 
     template <TaskResultValue Value>

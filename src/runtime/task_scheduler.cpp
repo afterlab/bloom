@@ -118,7 +118,9 @@ SchedulerState::SchedulerState(TaskSchedulerConfig schedulerConfig,
     groups.reserve(config.groupRegistryCapacity);
 }
 
-SchedulerState::~SchedulerState() {
+SchedulerState::~SchedulerState() { shutdownAndJoin(); }
+
+void SchedulerState::shutdownAndJoin() noexcept {
     requestShutdown();
     std::optional<GpuServiceGeneration> generation;
     std::uint64_t attachmentId = 0;
@@ -386,8 +388,9 @@ bool SchedulerState::reprioritize(const TaskId id, const TaskPriority priority) 
         if (record->snapshot.state != TaskState::Queued || record->completionClaimed) {
             return false;
         }
+        // Keep the aging credit the task has already earned: resetting it would let a promotion
+        // schedule the task later than its old priority would have.
         record->snapshot.priority = priority;
-        record->ageCredit = 0;
         if (record->snapshot.executor == TaskExecutor::Gpu) {
             wake = gpuWakeLocked();
         } else {

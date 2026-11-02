@@ -499,7 +499,10 @@ TaskScheduler::TaskScheduler(TaskSchedulerConfig config, WorkerStartHook workerS
     state_ = std::move(state);
 }
 
-TaskScheduler::~TaskScheduler() = default;
+// Shut down explicitly here, on the owner thread. Leaving it to ~SchedulerState would run the joins
+// on whichever thread drops the last reference, which can be a worker that is briefly holding the
+// state while it cancels a sibling task or group.
+TaskScheduler::~TaskScheduler() { state_->shutdownAndJoin(); }
 
 TaskScheduler::ErasedSubmission
 TaskScheduler::submitErased(TaskRequest request,

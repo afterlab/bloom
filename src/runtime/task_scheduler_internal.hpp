@@ -42,8 +42,9 @@ struct TaskContextState {
     std::function<void(TaskProgress)> reportProgress;
     std::function<void(TaskDiagnostic)> addDiagnostic;
     // Borrowed, never owned: the pool lives in SchedulerState, which outlives every context it
-    // makes (a task cannot still be running once the scheduler state is gone -- ~SchedulerState
-    // joins its workers). Null exactly when this configuration asked for serial row evaluation.
+    // makes (a task cannot still be running once the scheduler state is gone -- ~TaskScheduler
+    // runs shutdownAndJoin() before releasing it). Null exactly when this configuration asked for
+    // serial row evaluation.
     CpuRowBandExecutor* rowBands = nullptr;
 };
 
@@ -133,6 +134,10 @@ struct SchedulerState final : std::enable_shared_from_this<SchedulerState> {
     void copyProfilerTasks(ProfilerWorkload& workload, ProfilerCpu& executors,
                            std::chrono::steady_clock::time_point now) const noexcept;
     void requestShutdown() noexcept;
+    // Requests shutdown, retires any GPU attachment, joins every worker and closes completion
+    // subscriptions. Idempotent. ~TaskScheduler calls it on the owner thread so the joins never run
+    // on a worker, even when a worker still holds a temporary owning reference to this state.
+    void shutdownAndJoin() noexcept;
     [[nodiscard]] bool isAccepting() const noexcept;
     [[nodiscard]] bool isQuiescent() const noexcept;
     [[nodiscard]] bool hasActivePurgeableCacheConsumers() const noexcept;
@@ -252,6 +257,10 @@ struct TaskSchedulerTestAccess {
 
     static void setGpuDispatchTransitionHook(TaskScheduler& scheduler, std::function<void()> hook) {
         scheduler.state_->setGpuDispatchTransitionHookForTesting(std::move(hook));
+    }
+
+    [[nodiscard]] static std::weak_ptr<SchedulerState> state(const TaskScheduler& scheduler) {
+        return scheduler.state_;
     }
 };
 

@@ -21,13 +21,16 @@ The Qt-free `src/runtime` kernel currently implements:
 - independently bounded CPU and blocking-I/O executors with bounded worker, queue, history, and task
   group registry configuration
 - stable task/group IDs, typed owner scopes, four semantic priorities, fair scheduling,
-  reprioritization, and transactional coalescing admission
+  reprioritization that keeps a queued task's accrued aging (a promotion never schedules it later
+  than its old priority would have), and transactional coalescing admission
 - cooperative task and group cancellation; queued cancellation finalizes off the caller and releases
   queue capacity promptly, while running work observes cancellation through its token
 - structured progress, diagnostics, terminal snapshots, task-group aggregation, and typed
   non-blocking result handles delivered through neutral mailboxes
 - admission shutdown that returns promptly, rejects new work, requests cancellation, and leaves
-  quiescent service destruction to its explicit lifecycle owner
+  quiescent service destruction to its explicit lifecycle owner; destroying the scheduler runs the
+  shutdown and worker joins on the destroying thread, never on a worker that briefly holds the
+  shared scheduler state while it cancels a sibling task or group
 - a bounded asynchronous GPU executor contract: one generation-scoped render-service lease pulls
   starters, `Running` survives starter return, and a move-only take-once completion publishes into
   the ordinary neutral mailbox without a scheduler-owned GPU worker
