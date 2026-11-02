@@ -1301,6 +1301,14 @@ class MediaDriver final : public DriverBase {
                                     "export.media.verification",
                                     "The exported file failed the encoder's reopen check (" +
                                         detail + "), so it was not published."));
+            case SequenceExportFailureStageV1::CompileFailed:
+                // #437: the same sentence a still export reports (#431).
+                log(runtime::DiagnosticSeverity::Error, "export.compile.failed", detail);
+                return fail(failure(ExportFailureCode::CompileFailed, "export.compile.failed",
+                                    detail.empty()
+                                        ? "The composition could not be compiled for export"
+                                        : "The composition could not be compiled for export. " +
+                                              detail));
             case SequenceExportFailureStageV1::Unclassified:
                 break;
             }

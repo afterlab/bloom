@@ -2163,5 +2163,6 @@ encoder.
   diagnostic has them (a Layer Output node or a parameter it binds is named by its layer), for
   example `The composition could not be compiled for export. Composition "Main", layer "Clip":
   ...`. Stills and image sequences fail with `CompileFailed` and the diagnostic code
-  `export.compile.failed` carrying that sentence as the reason (#431); a movie or WAV run carries it
-  in the detail it logs.
+  `export.compile.failed` carrying that sentence as the reason (#431). A movie or WAV run reports the
+  same failure from its runner's compile stage (`SequenceExportFailureStageV1::CompileFailed`), so
+  the job fails with `CompileFailed` / `export.compile.failed` and the same sentence (#437).

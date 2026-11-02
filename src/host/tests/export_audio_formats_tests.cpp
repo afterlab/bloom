@@ -185,9 +185,10 @@ struct Fixture {
     }
 
     // The composition carries one audio layer reading `source`.
-    Fixture(const std::string& name, const WavEncoding source)
+    // `compilable == false` leaves the compiler's registry empty, so no composition compiles.
+    Fixture(const std::string& name, const WavEncoding source, const bool compilable = true)
         : folder(scratch(name)), session(makeSession(identity, folder)) {
-        if (!runtime::registerBuiltInNodeDefinitions(registry))
+        if (compilable && !runtime::registerBuiltInNodeDefinitions(registry))
             throw std::runtime_error("registry");
         registry.freeze();
         runtime::GpuProcessFrameEvaluatorOptions options;
@@ -476,6 +477,35 @@ void testFailedRunKeepsFrameProvenance() {
                std::to_string(limited.cpuDisplayFrames) + " CPU display)");
 }
 
+// #437: a movie or WAV export whose composition does not compile fails with CompileFailed and the
+// sentence a still export reports, not the generic encoder-failure summary.
+void testCompileFailureNamesItsSubject() {
+    Fixture f("compile-failure", WavEncoding::Pcm16, false);
+    for (const auto format : {ExportFormat::ProResMov, ExportFormat::Wav}) {
+        document::ExportOutputSettings settings;
+        settings.format = format;
+        settings.codecProfile = format == ExportFormat::Wav ? "s24" : "hq";
+        settings.includeAudio = true;
+        const auto file =
+            std::string("Exports/broken.") + (format == ExportFormat::Wav ? "wav" : "mov");
+        const auto finished = f.run(f.addJob(settings, file), "uncompilable " + file);
+        expect(finished && finished->state == ExportJobState::Failed && finished->failure,
+               file + ": an uncompilable composition fails the job");
+        if (!finished || !finished->failure)
+            continue;
+        const auto& failure = *finished->failure;
+        expect(failure.code == host::ExportFailureCode::CompileFailed &&
+                   failure.diagnosticCode == "export.compile.failed",
+               file + ": the failure is a compile failure");
+        const std::string prefix = "The composition could not be compiled for export. "
+                                   "Composition \"Main\"";
+        expect(failure.reason.starts_with(prefix) &&
+                   failure.reason.find("details are in the log") == std::string::npos,
+               file + ": the reason names the composition (got \"" + failure.reason + "\")");
+        expect(!std::filesystem::exists(f.folder / file), file + ": nothing is published");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -483,6 +513,7 @@ int main() {
         testSourceFormatsAcrossPresets();
         testUndecodableSourceIsRefusedBeforeRendering();
         testFailedRunKeepsFrameProvenance();
+        testCompileFailureNamesItsSubject();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

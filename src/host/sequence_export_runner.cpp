@@ -242,13 +242,13 @@ struct detail::SequenceExportWorkV1 {
         auto compiled = compiler.compile(request.composition, context.cancellation());
         checkpoint();
         if (compiled.plan == nullptr) {
-            // #431: the detail names the failure's subject and the compiler's own sentence.
-            const auto subject =
-                runtime::describeCompileFailure(compiled, request.composition.snapshot.project(),
-                                                request.composition.compositionId);
+            // #431/#437: the detail is the compiler's sentence naming the failure's subject
+            // (composition, layer, node, parameter); the stage lets the job report it as such.
+            failureStage = SequenceExportFailureStageV1::CompileFailed;
             throw Unavailable{Error::InvalidValue,
-                              subject.empty() ? "Composition could not be compiled"
-                                              : "Composition could not be compiled: " + subject};
+                              runtime::describeCompileFailure(
+                                  compiled, request.composition.snapshot.project(),
+                                  request.composition.compositionId)};
         }
         plan = std::move(compiled.plan);
         require(plan->duration() == range.duration && plan->format().frameRate() == range.frameRate,

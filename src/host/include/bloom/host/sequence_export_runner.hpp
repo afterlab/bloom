@@ -126,6 +126,9 @@ enum class SequenceExportFailureStageV1 : std::uint8_t {
     AudioSource,
     // The encoder's reopen check of the finished file failed.
     Verification,
+    // The composition did not compile; the result's detail is the compiler's own sentence naming
+    // the failure's subject (#437).
+    CompileFailed,
 };
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;
