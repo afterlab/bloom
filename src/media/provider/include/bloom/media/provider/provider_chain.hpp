@@ -35,6 +35,13 @@ struct MediaOperationV1 final {
 [[nodiscard]] bool declaresMediaOperationV1(const Handshake& handshake,
                                             const MediaOperationV1& operation);
 
+// The declaration that serves `role` for a stream whose probed codec is `codec`: the exact codec
+// when the handshake declares it, otherwise the first of the codec's family. A decoder pins its
+// declaration's codec exactly, so a PCM stream must never be served by a sibling's declaration
+// (#428: a 24-bit WAV pinned to pcm_s16le). Null when neither is declared.
+[[nodiscard]] const ProviderDeclaration* findDecodeDeclarationV1(const Handshake& handshake,
+                                                                 Role role, std::string_view codec);
+
 enum class MediaFallbackCauseV1 : std::uint8_t {
     NotInstalled = 1, // the provider's worker or platform framework is absent on this computer
     NotDeclared = 2,  // the provider does not declare this codec/container

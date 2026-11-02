@@ -63,6 +63,21 @@ bool declaresMediaOperationV1(const Handshake& handshake, const MediaOperationV1
     return codec && container;
 }
 
+const ProviderDeclaration* findDecodeDeclarationV1(const Handshake& handshake, const Role role,
+                                                   const std::string_view codec) {
+    const auto& declarations = handshake.declarations;
+    const auto exact = std::ranges::find_if(declarations, [&](const ProviderDeclaration& d) {
+        return d.capability.role == role && d.capability.codec == codec;
+    });
+    if (exact != declarations.end())
+        return &*exact;
+    const auto family = mediaCodecFamilyV1(codec);
+    const auto sibling = std::ranges::find_if(declarations, [&](const ProviderDeclaration& d) {
+        return d.capability.role == role && mediaCodecFamilyV1(d.capability.codec) == family;
+    });
+    return sibling != declarations.end() ? &*sibling : nullptr;
+}
+
 bool mediaFallbackPermittedV1(const Unavailable& error) noexcept {
     return error.reason != Error::Cancelled && error.reason != Error::Shutdown &&
            error.reason != Error::SourceChanged;

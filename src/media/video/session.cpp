@@ -310,13 +310,16 @@ VideoDecodeSession::call(Role role, const ProbeResult* source, std::uint32_t str
         return Unavailable{Error::Cancelled, "Video request cancelled"};
     if (source && stream >= source->streams.size())
         return Unavailable{Error::InvalidValue, "Video stream does not exist"};
+    // The stream's own codec when declared, else its family (#428); probe and index roles name
+    // no stream codec.
     const auto declared = [&](const Handshake& hello) {
-        return std::ranges::find_if(hello.declarations, [&](const auto& d) {
-            return d.capability.role == role &&
-                   (!source || role == Role::DemuxIndex ||
-                    mediaCodecFamilyV1(d.capability.codec) ==
-                        mediaCodecFamilyV1(source->streams[stream].codec));
-        });
+        if (source && role != Role::DemuxIndex) {
+            const auto* found = findDecodeDeclarationV1(hello, role, source->streams[stream].codec);
+            return found ? hello.declarations.begin() + (found - hello.declarations.data())
+                         : hello.declarations.end();
+        }
+        return std::ranges::find_if(hello.declarations,
+                                    [&](const auto& d) { return d.capability.role == role; });
     };
     // Platform media framework first (ADR 0035); a failure retires it for this session and the
     // same request is answered by FFmpeg. Cancellation and a changed source end the request.

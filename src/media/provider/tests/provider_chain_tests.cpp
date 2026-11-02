@@ -3,6 +3,7 @@
 // records every fallback, and an ending error (cancellation) never tries another provider.
 #include "support.hpp"
 
+#include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/provider_chain.hpp>
 
 #include <string>
@@ -200,6 +201,36 @@ void codecFamilies() {
           "provider codec spellings normalise to their family");
 }
 
+// #428: a decoder pins its declaration's codec exactly, so a stream is served by the declaration
+// of its own codec; a sibling of the family answers only when the exact codec is not declared.
+void decodeDeclarationsPinTheExactCodec() {
+    Handshake h;
+    for (const auto* codec : {"pcm_s16le", "pcm_s24le", "aac"})
+        h.declarations.push_back(declaration(Role::AudioDecode, codec));
+    const auto* exact = findDecodeDeclarationV1(h, Role::AudioDecode, "pcm_s24le");
+    check(exact != nullptr && exact->capability.codec == "pcm_s24le",
+          "a 24-bit stream pins the 24-bit declaration, not the first PCM one");
+    const auto* sibling = findDecodeDeclarationV1(h, Role::AudioDecode, "pcm_f32le");
+    check(sibling != nullptr && sibling->capability.codec == "pcm_s16le",
+          "an undeclared PCM spelling falls back to its family");
+    check(findDecodeDeclarationV1(h, Role::AudioDecode, "opus") == nullptr &&
+              findDecodeDeclarationV1(h, Role::VideoDecode, "pcm_s24le") == nullptr,
+          "an undeclared codec or role finds nothing");
+    // The bundled FFmpeg worker declares every codec its WAV demuxer reports for the PCM, float,
+    // A-law and mu-law encodings the WAV importer accepts; IMA and Microsoft ADPCM have no
+    // decoder in this build.
+    const auto ffmpeg = bloom::media::provider::ffmpegHandshake();
+    for (const auto* codec : {"pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le",
+                              "pcm_f64le", "pcm_alaw", "pcm_mulaw", "mp3", "aac", "opus"}) {
+        const auto* found = findDecodeDeclarationV1(ffmpeg, Role::AudioDecode, codec);
+        check(found != nullptr && found->capability.codec == codec,
+              (std::string("the FFmpeg worker pins ") + codec + " exactly").c_str());
+    }
+    for (const auto* codec : {"adpcm_ms", "adpcm_ima_wav"})
+        check(findDecodeDeclarationV1(ffmpeg, Role::AudioDecode, codec) == nullptr,
+              (std::string("the FFmpeg worker does not claim ") + codec).c_str());
+}
+
 } // namespace
 
 int main() {
@@ -210,6 +241,7 @@ int main() {
         endingErrorsDoNotFallBack();
         exhaustedChainReportsTheLastError();
         codecFamilies();
+        decodeDeclarationsPinTheExactCodec();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

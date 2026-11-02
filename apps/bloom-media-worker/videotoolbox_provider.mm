@@ -105,6 +105,25 @@ using provider::Unavailable;
     return result;
 }
 
+// Linear PCM named the way FFmpeg names it, so a native probe pins the same exact decode
+// capability as the FFmpeg fallback (#428). An unnamed layout stays "lpcm".
+[[nodiscard]] std::string linearPcmName(const CMFormatDescriptionRef format) {
+    const auto* basic = CMAudioFormatDescriptionGetStreamBasicDescription(
+        static_cast<CMAudioFormatDescriptionRef>(format));
+    if (basic == nullptr)
+        return "lpcm";
+    const auto flags = basic->mFormatFlags;
+    const auto bits = basic->mBitsPerChannel;
+    const std::string order = (flags & kAudioFormatFlagIsBigEndian) != 0 ? "be" : "le";
+    if ((flags & kAudioFormatFlagIsFloat) != 0)
+        return bits == 32 || bits == 64 ? "pcm_f" + std::to_string(bits) + order : "lpcm";
+    if (bits == 8)
+        return (flags & kAudioFormatFlagIsSignedInteger) != 0 ? "pcm_s8" : "pcm_u8";
+    if ((flags & kAudioFormatFlagIsSignedInteger) != 0 && (bits == 16 || bits == 24 || bits == 32))
+        return "pcm_s" + std::to_string(bits) + order;
+    return "lpcm";
+}
+
 [[nodiscard]] std::string codecName(const CMFormatDescriptionRef format) {
     if (format == nullptr)
         return "unknown";
@@ -124,7 +143,7 @@ using provider::Unavailable;
     case kAudioFormatMPEG4AAC:
         return "aac";
     case kAudioFormatLinearPCM:
-        return "lpcm";
+        return linearPcmName(format);
     default:
         return fourCcToString(subtype);
     }
