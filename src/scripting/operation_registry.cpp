@@ -2226,7 +2226,8 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("frameRateDenominator", ValueKind::Integer, std::int64_t{1},
                "Frame-rate denominator. Defaults to 1."),
          maybe("background", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
-               "Background color. Defaults to opaque black.")},
+               "Viewer background color, display only: renders and exports keep alpha. Defaults to "
+               "opaque black.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto name = text(args, op, "name", error);
@@ -2272,7 +2273,7 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("dropFrame", ValueKind::Boolean, false,
                "Drop-frame timecode labels (honored at 29.97 and 59.94 fps)."),
          maybe("background", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
-               "Background color."),
+               "Viewer background color, display only: renders and exports keep alpha."),
          maybe("workingColorSpace", ValueKind::String, "ACEScg",
                "Working color space id; an empty string follows the project."),
          maybe("actionSafe", ValueKind::Double, 0.9, "Action-safe fraction, 0..1."),
@@ -2394,8 +2395,9 @@ OperationRegistry OperationRegistry::builtIn() {
         });
 
     add("bloom.composition.set-background-color",
-        {compositionArgument(), need("color", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
-                                     "The background color.")},
+        {compositionArgument(),
+         need("color", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
+              "The Viewer background color, display only: renders and exports keep alpha.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
