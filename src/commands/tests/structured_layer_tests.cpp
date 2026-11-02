@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <limits>
 #include <optional>
 #include <string>
@@ -583,6 +584,86 @@ void testShapeLayerStyle(TestContext& test) {
                 "a negative stroke width is refused by the shape schema");
 }
 
+// #432: a text font takes one value form, the id of a Font asset in the project as a string. Any
+// other value is refused instead of being stored and rendered in the fallback face, and the
+// refusal lists exactly the values the parameter accepts: the project's Font assets, by id.
+void testTextFontAcceptsOnlyProjectFontAssetIds(TestContext& test) {
+    auto project = makeProject();
+    // A non-font asset whose id a caller could mistake for a face.
+    document::AssetRecord image;
+    image.id = document::AssetId::fromRaw(40);
+    image.kind = document::AssetKind::Image;
+    image.locator = {"file", "project-relative", "plate.png", "file:///plate.png"};
+    image.width = 4;
+    image.height = 4;
+    requireFixture(project.addAsset(image), "image asset fixture");
+    Document document(std::move(project));
+    CommandStack stack(document);
+    Transaction add("Add Text", document.snapshot().revision());
+    add.emplace<AddTextLayer>(kCompositionId, "Title", "Hi", Vec2d{10, 10}, 1.0, 40.0,
+                              core::Color4d{1, 1, 1, 1});
+    const auto added = stack.execute(std::move(add));
+    const auto font = added.outputId<ParameterId>(kAddTextLayerFontParameterOutput);
+    requireFixture(added.changed() && font.has_value(), "text layer fixture");
+    const auto* stored = document.snapshot().project().findComposition(kCompositionId);
+    const auto* record = stored != nullptr ? stored->parameters().find(*font) : nullptr;
+    const auto* constant =
+        record != nullptr ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+    const auto* defaultId =
+        constant != nullptr ? std::get_if<std::string>(&constant->value) : nullptr;
+    requireFixture(defaultId != nullptr, "the new text layer stores its default Font asset id");
+    const auto defaultFace = "\"" + *defaultId + "\" (DejaVu Sans Book)";
+
+    const auto set = [&](document::ParameterValue value) {
+        Transaction edit("Set Font", document.snapshot().revision());
+        edit.emplace<SetParameterSource>(kCompositionId, *font,
+                                         document::ConstantValueSource{std::move(value)});
+        return stack.execute(std::move(edit));
+    };
+    const auto refusal = [](const CommandResult& result) {
+        return result.status == CommandStatus::Rejected && result.operationFailures.size() == 1
+                   ? result.operationFailures.front().issue.message
+                   : std::string{};
+    };
+
+    for (const auto& value : std::vector<document::ParameterValue>{
+             std::string("Nonexistent Face"), std::string("Inter Medium"), std::string("999"),
+             std::string(""), std::string(" 1"), std::string("40"), std::int64_t{2}, 2.0}) {
+        const auto message = refusal(set(value));
+        test.expect(!message.empty(), "a value that names no Font asset is refused");
+        test.expect(message.find("the id of a Font asset in this project, as a string: " +
+                                 defaultFace + ";") != std::string::npos,
+                    "the refusal lists the project's Font assets by id: " + message);
+        const auto takes = message.substr(std::min(message.find("; it takes "), message.size()));
+        test.expect(!takes.empty() && takes.find("Inter") == std::string::npos &&
+                        takes.find("by number or by name") == std::string::npos,
+                    "the refusal no longer lists the legacy face values it rejects");
+    }
+
+    const auto digest = core::Sha256Digest::fromLowercaseHex(
+        "1111111111111111111111111111111111111111111111111111111111111111");
+    requireFixture(digest.has_value(), "font digest fixture");
+    document::AssetRecord face;
+    face.kind = document::AssetKind::Font;
+    face.locator = {"font", "system",
+                    (std::filesystem::current_path() / "Example.ttf").generic_string(),
+                    "file:///Example.ttf"};
+    face.contentDigest = *digest;
+    face.fontFamily = "Example";
+    face.fontStyle = "Bold";
+    Transaction ensure("Ensure Font", document.snapshot().revision());
+    ensure.emplace<EnsureFontAsset>(face);
+    const auto example = stack.execute(std::move(ensure)).outputId<document::AssetId>("asset");
+    requireFixture(example.has_value(), "second font fixture");
+    const auto exampleId = std::to_string(example->value());
+    const auto both = refusal(set(std::string("Example Bold")));
+    test.expect(both.find(defaultFace + ", \"" + exampleId + "\" (Example Bold);") !=
+                    std::string::npos,
+                "every Font asset in the project is listed, and only Font assets: " + both);
+    test.expect(set(exampleId).changed(), "a Font asset id string is accepted");
+    test.expect(set(*defaultId).changed(), "and so is the default face's id");
+}
+
 // New text takes the bar's alignment and font in its creation step; a bad alignment is refused.
 void testTextLayerStyle(TestContext& test) {
     Document document(makeProject());
@@ -788,6 +869,7 @@ int main() {
         bloom::commands::test::testShapeLayers(test);
         bloom::commands::test::testShapeLayerStyle(test);
         bloom::commands::test::testTextLayerStyle(test);
+        bloom::commands::test::testTextFontAcceptsOnlyProjectFontAssetIds(test);
         bloom::commands::test::testAddTextLayerBuildsOneCanonicalTopology(test);
         bloom::commands::test::testAddTextLayerRejectsInvalidInputs(test);
         bloom::commands::test::testCompositionFormatCommand(test);

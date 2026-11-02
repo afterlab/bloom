@@ -588,9 +588,13 @@ mode (Left/Center/Right), and overflow (Clip/Grow). Size, color, line height and
 animatable. Content, alignment, font, box, wrap, vertical alignment, anchor mode and overflow are
 non-animatable values.
 
-Font is a `family|style|digest` reference represented by a stable `AssetId` of a `Font` asset once
-picked. The asset stores family, style, face index, content digest and a portable locator; it never
-stores font bytes. Embedded faces are listed before system faces in the asynchronous platform font
+Font is stored as the decimal `AssetId` of a `Font` asset in the project, as a String; that is the
+only value an edit can set. The font pickers identify a catalogue face by its `family|style|digest`
+reference, ensure its Font asset and store that asset's id. `bloom.parameter.set-source` refuses any
+other value (a family name, an integer, an id that names no Font asset) and lists the project's
+Font assets by id, so an unknown face is never stored and silently drawn in the fallback face. The
+legacy integer face values 0..3 are read only when an older document is opened. The asset stores
+family, style, face index, content digest and a portable locator; it never stores font bytes. Embedded faces are listed before system faces in the asynchronous platform font
 catalogue. A missing or digest-changed system face warns and falls back to DejaVu Sans while the
 Font asset remains visible to Assets for relink or replacement. A version-2 node authored before
 the font binding existed decodes with the definition's DejaVu Sans reference.

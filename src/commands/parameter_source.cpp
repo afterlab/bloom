@@ -2,7 +2,9 @@
 // script client sends is read in the parameter's own declared kind (a whole number for an Integer
 // or enumeration, a number for a Float64, a member name for an enumeration), and every refusal
 // names the parameter, the node that owns it and what it accepts, so an artist or an agent never
-// has to guess why an edit was refused.
+// has to guess why an edit was refused. A text font takes one value form only: the id of a Font
+// asset in this project, as a decimal string. Any other value is refused here, with the project's
+// Font assets listed, instead of being stored and silently rendered in the fallback face.
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -11,6 +13,7 @@
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -63,8 +66,54 @@ std::string formatNumber(const double value) {
     return text;
 }
 
+// The Font asset a text font value names: a decimal asset id string, nothing else. The legacy
+// integer face values are read only when an old document is opened, never accepted from an edit.
+const document::AssetRecord* namedFontAsset(const document::Project& project,
+                                            const document::ParameterValue& value) {
+    const auto* reference = std::get_if<std::string>(&value);
+    if (reference == nullptr || reference->empty())
+        return nullptr;
+    std::uint64_t raw = 0;
+    const auto* end = reference->data() + reference->size();
+    const auto parsed = std::from_chars(reference->data(), end, raw);
+    if (parsed.ec != std::errc{} || parsed.ptr != end || raw == 0)
+        return nullptr;
+    const auto* asset = project.findAsset(document::AssetId::fromRaw(raw));
+    return asset != nullptr && asset->kind == document::AssetKind::Font ? asset : nullptr;
+}
+
+// Exactly the values a text font accepts in this project: each Font asset's id, as a string,
+// with the face it names.
+std::string acceptedFonts(const document::Project& project) {
+    constexpr std::size_t kListed = 32;
+    std::string listed;
+    std::size_t count = 0;
+    for (const auto& asset : project.assets()) {
+        if (asset.kind != document::AssetKind::Font)
+            continue;
+        if (++count > kListed)
+            continue;
+        // Family and style name the face; the asset name is the artist's and may be anything.
+        listed += (listed.empty() ? "" : ", ") + std::string("\"") +
+                  std::to_string(asset.id.value()) + "\" (" + asset.fontFamily + " " +
+                  asset.fontStyle + ")";
+    }
+    const std::string form = "the id of a Font asset in this project, as a string";
+    const std::string add = "bloom.asset.ensure-font adds a face and returns its id";
+    if (count == 0)
+        return form + "; the project has no Font assets yet, and " + add;
+    auto text = form + ": " + listed;
+    if (count > kListed)
+        text +=
+            ", and " + std::to_string(count - kListed) + " more listed by query {kind:\"assets\"}";
+    return text + "; " + add;
+}
+
 // What the parameter accepts, in words: its kind, then its members or its range.
-std::string accepts(const document::ParameterRecord& record, const ParameterOwner& owner) {
+std::string accepts(const document::ParameterRecord& record, const ParameterOwner& owner,
+                    const document::Project& project) {
+    if (record.schemaKey == document::kTextFontParameterSchemaKey)
+        return acceptedFonts(project);
     if (owner.parameter == nullptr)
         return "a value of its schema " + record.schemaKey;
     const auto kind = owner.parameter->valueKind;
@@ -147,10 +196,11 @@ std::string valueText(const document::ParameterValue& value) {
 }
 
 OperationResult refusedValue(const document::ParameterRecord& record, const ParameterOwner& owner,
-                             const document::ParameterValue& value) {
+                             const document::ParameterValue& value,
+                             const document::Project& project) {
     return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                      describe(record, owner) + " cannot take " + valueText(value) +
-                                         "; it takes " + accepts(record, owner) + ".");
+                                         "; it takes " + accepts(record, owner, project) + ".");
 }
 
 // A driver binding is checked here, where the parameter and the driving node are both known, so a
@@ -238,14 +288,15 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
     auto source = source_;
     if (auto* constant = std::get_if<document::ConstantValueSource>(&source)) {
         auto value = coerce(constant->value, *parameter, owner);
-        if (!value)
-            return refusedValue(*parameter, owner, constant->value);
+        if (!value || (parameter->schemaKey == document::kTextFontParameterSchemaKey &&
+                       namedFontAsset(draft.project(), *value) == nullptr))
+            return refusedValue(*parameter, owner, constant->value, draft.project());
         constant->value = *std::move(value);
     } else if (auto* curve = std::get_if<document::AnimationCurveSource>(&source);
                curve != nullptr && curve->defaultValue.has_value()) {
         auto value = coerce(*curve->defaultValue, *parameter, owner);
         if (!value)
-            return refusedValue(*parameter, owner, *curve->defaultValue);
+            return refusedValue(*parameter, owner, *curve->defaultValue, draft.project());
         curve->defaultValue = *std::move(value);
     } else if (const auto* driver = std::get_if<document::DriverBindingSource>(&source)) {
         if (auto refused = refusedDriver(*composition, *parameter, owner, *driver))
@@ -257,10 +308,11 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
     const auto record = *parameter;
     if (!composition->parameters().setSource(parameterId_, source)) {
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&source))
-            return refusedValue(record, owner, constant->value);
+            return refusedValue(record, owner, constant->value, draft.project());
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          describe(record, owner) + " cannot take this source; " +
-                                             "it takes " + accepts(record, owner) + ".");
+                                             "it takes " + accepts(record, owner, draft.project()) +
+                                             ".");
     }
     // Pointing a source node at another asset or composition renames the layers that follow it.
     (void)document::refreshLayerNamesFromSources(draft.project(), compositionId_);
