@@ -104,6 +104,27 @@ processor and the GPU OCIO program are OCIO's own for the space, so the camera s
 ordinary input transform path (CPU parity is proven natively in
 `bloom.runtime.gpu_footage_interpretation_native` under both configs).
 
+Code values outside the nominal [0, 1] range (#412) take the same route with the same parity.
+Negative codes follow each camera's linear toe, codes above white follow its anti-log curve (or the
+clamped domain of a LUT-defined built-in such as C-Log2, C-Log3 or Apple Log, on both routes alike),
+and a code of 4.0 decodes to values near 10^13 to 10^16 that stay finite in binary32. The GPU
+program never clamps them, bakes them into a LUT or falls back to the CPU. OCIO's CPU camera
+log-to-linear renderer multiplies by `kinv = log2(base) / logSideSlope` in one binary32 rounding,
+while the generated GPU shader carries only `1 / logSideSlope`. Rebuilding `kinv` on the device
+rounds twice and is one ULP off for LogC3 and Log3G10, and the anti-log multiplies that error by the
+exponent. Nominal codes stayed inside the 2e-6 parity gate (up to 8e-7), but a 4.0 code reached
+3.3e-6. Extraction therefore records OCIO's CPU `kinv` for each camera log-to-linear op
+(`OcioGpuProgramDesc::cameraLogExponentScales`, transported by the color worker and part of the
+resource digest), and the CPU-parity sampling adapter (`bloom.color.ocio-gpu-sampling.v6`) emits it
+bit for bit while the extracted OCIO body stays verbatim. A negative and an over-range ramp, opaque
+and translucent, now match the CPU reference exactly for all eleven camera spaces under both configs
+in `bloom.runtime.gpu_footage_interpretation_native`.
+
+A straight code high enough to overflow the anti-log in binary32 (about 9.8 for S-Log3, for
+example a premultiplied 3.0 at alpha 0.25) is a separate case: the CPU input conversion fails and
+drops the layer with an "Input color conversion failed" warning, while the GPU program marks the
+non-finite result and fails the job. The two routes currently diverge on that case.
+
 Interpret Footage also names the two legacy no-conversion choices plainly: **Preserve RGB** is the
 `Raw` interpretation (values enter the working space unchanged) and **Interpret as Linear** is the
 legacy `Linear` interpretation.
