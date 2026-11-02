@@ -2053,3 +2053,48 @@ Issue #369 ships with the export queue ([ADR 0033](../decisions/0033-export-queu
   audio channel cap follows the container (WAV and MOV 64, MXF 16, AAC 8) instead of a fixed 8.
 - **DPX** sequences are part of the 1.29 vocabulary and the catalogue but are reported unavailable
   with a typed reason in this build.
+
+## Export Audio Sample Formats And Source-Aware Preflight (#428)
+
+Import and export read audio through different decoders. WAV and MP3 import, waveforms and
+preview use the in-process `dr_wav`/`minimp3` path (Audio v0); export decodes every audio source
+through the media provider (the FFmpeg worker, after the platform framework where one exists) into
+planar float32, mixes in float32, and converts the mix to the container's sample format at the
+encoder.
+
+- **Decode pinning.** A decode request pins one provider declaration, and the worker refuses a
+  stream whose codec differs from the pinned one. `findDecodeDeclarationV1` selects the
+  declaration for the stream's exact probed codec and falls back to the first of the codec's family
+  only when the exact codec is not declared. Selecting by family alone pinned every PCM stream to
+  `pcm_s16le`, so every 24-bit, 32-bit or float WAV failed export with "Stream codec does not match
+  pinned capability".
+- **Decoded source codecs.** The FFmpeg worker declares AudioDecode for AAC, MP3, Opus and the PCM
+  family: unsigned and signed 8-bit, 16-, 24- and 32-bit integer and 32- and 64-bit float in both
+  byte orders, A-law and mu-law. This covers every WAV encoding the importer accepts except IMA and
+  Microsoft ADPCM, which the bundled FFmpeg build cannot decode. The macOS native probe names
+  linear PCM with the same spellings (`pcm_s24le`, `pcm_f32le`, ...) so both providers pin the
+  same declaration.
+- **Container sample formats.** The mix is float32. WAV writes the preset's `pcm_s16le` or
+  `pcm_s24le`. MOV and MXF write `pcm_s16le`, or `pcm_s24le` when any source is deeper than 16 bits
+  (24- or 32-bit integer or floating-point PCM), so depth is kept up to the 24 bits these encoders
+  write. MP4 writes AAC and WebM Opus, both encoded from float input. A 16-bit source exports
+  exactly as before.
+- **Source-aware preflight.** Whenever an output carries audio (an audio-carrying preset with
+  Include audio, or WAV), `preflightExportAudioSourcesV1` runs in the export's compile stage,
+  before any frame renders or an encoder opens, on every route (the export queue, `bloom-cli
+  export`, MCP and scripted export). It probes every audio stream the composition's mix reads,
+  nested compositions included, and refuses a source that is missing, unreadable, changed since
+  import, lacks the selected stream, or whose codec the FFmpeg worker does not declare exactly.
+  The refusal names the stage and the input, for example "Audio asset 4 (adpcm_ima_wav) is not
+  accepted by the export audio path.", and the job fails with `PreflightRefused` and the diagnostic
+  code `export.preflight.audio-source`. The same composition still exports with audio off. Preset
+  availability stays a property of the computer: presets do not change with the sources of one
+  composition.
+- **Failure stages.** `SequenceExportResultV1::failureStage` records a failure's stage when it is
+  known, and the job reports that stage instead of "The encoder failed": a refused audio source
+  (`PreflightRefused`), an audio source that fails to read or decode while the mix renders
+  (`EvaluationFailed`, `export.audio-source.failed`, naming the asset and codec), and a finished
+  file that fails the worker's reopen check (`VerificationFailed`, `export.media.verification`,
+  with the check's detail). A failed run also keeps its frames' route provenance (GPU-evaluated
+  frames and the GPU or CPU display transform) instead of counting every encoded frame as CPU
+  reference (#424).
