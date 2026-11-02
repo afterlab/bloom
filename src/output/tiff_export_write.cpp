@@ -1,8 +1,23 @@
+#include <bloom/output/display_output.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/tiff_export_write.hpp>
 #include <fstream>
 
 namespace bloom::output {
+media::provider::EncodeSettingsV1 tiffExportEncodeSettingsV1(const std::uint32_t width,
+                                                             const std::uint32_t height,
+                                                             const std::string_view display) {
+    media::provider::EncodeSettingsV1 settings;
+    settings.container = "tiff";
+    settings.videoCodec = "tiff";
+    settings.profile = "rgba16";
+    settings.width = width;
+    settings.height = height;
+    const auto tags = outputColourTagsV1(display);
+    // H.273 matrix 0 is the identity (RGB); range 2 is full in FFmpeg's convention.
+    settings.colour = {tags.primaries, tags.transfer, 0, 2};
+    return settings;
+}
 TiffExportWriteResultV1
 TiffExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
                         const std::filesystem::path& destination,
@@ -45,12 +60,9 @@ TiffExportWriterV1::run(const OutputAnalysisAttemptV1& attempt,
         if (const auto* e = std::get_if<Unavailable>(&prepared))
             return fail(*e);
         auto frame = std::get<FrameProduct>(std::move(prepared));
-        EncodeSettingsV1 settings;
-        settings.container = "tiff";
-        settings.videoCodec = "tiff";
-        settings.profile = "rgba16";
-        settings.width = frame.planes[0].width;
-        settings.height = frame.planes[0].height;
+        const auto settings =
+            tiffExportEncodeSettingsV1(frame.planes[0].width, frame.planes[0].height,
+                                       attempt.report()->display()->displayName());
         EncodeSessionV1 session({}, cancel);
         if (const auto e = session.begin(settings))
             return fail(*e);

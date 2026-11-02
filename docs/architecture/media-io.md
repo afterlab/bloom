@@ -2065,8 +2065,9 @@ The named **Review H.264 (Rec.709, look on)** deliverable evaluates the captured
 `Rec.1886 Rec.709 - Display` / `ACES 1.0 - SDR Video` OCIO `DisplayViewTransform`, clamps and
 quantizes the display values to RGBA16, then sends the existing worker settings. The 30 Mbps
 default, H.264 High profile and Rec.709 tags remain unchanged. PNG/TIFF and raw movie presets use
-the config's default display/view instead of a fixed sRGB transfer function. No Viewer state is
-consulted. Unsupported config/display/view combinations fail before encoding.
+the config's default display/view instead of a fixed sRGB transfer function; a TIFF's worker
+settings declare that display's primaries and transfer with the identity (RGB) matrix and full
+range, not the encoder default BT.709 limited range. No Viewer state is consulted. Unsupported config/display/view combinations fail before encoding.
 
 Analysis binds the processor identity, actual display/view pair, config revision and
 `look: baked (N look-tagged effects)`; approval and QC retain that description. The existing

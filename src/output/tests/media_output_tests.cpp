@@ -3,6 +3,7 @@
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/output/display_output.hpp>
 #include <bloom/output/media_output.hpp>
+#include <bloom/output/tiff_export_write.hpp>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -116,6 +117,11 @@ void testOutputColourTags() {
     check(tags("Rec.2100-HLG - Display") == Tags{9, 18, 9, 1}, "HLG display tags Rec.2100 HLG");
     check(tags("Display P3 - Display") == Tags{12, 13, 1, 1}, "Display P3 tags P3-D65 sRGB");
     check(tags("Unknown") == Tags{2, 2, 1, 1}, "an unknown display leaves primaries unspecified");
+    // #465: a TIFF carries full-range RGB, not the encoder default BT.709 limited range.
+    const auto tiff = o::tiffExportEncodeSettingsV1(16, 8, "sRGB - Display");
+    check(tiff.videoCodec == "tiff" && tiff.width == 16 && tiff.height == 8 &&
+              tiff.colour == bloom::media::provider::ColourTags{1, 13, 0, 2},
+          "a TIFF export declares sRGB primaries and transfer, the RGB matrix and full range");
 }
 int main() {
     try {

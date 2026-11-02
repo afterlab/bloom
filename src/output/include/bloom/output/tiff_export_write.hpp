@@ -1,9 +1,12 @@
 #pragma once
 
 #include <bloom/media/image.hpp>
+#include <bloom/media/provider/encode.hpp>
 #include <bloom/output/output_analysis_attempt.hpp>
 
+#include <cstdint>
 #include <filesystem>
+#include <string_view>
 
 namespace bloom::output {
 
@@ -33,6 +36,12 @@ struct TiffExportWriteResultV1 final {
         return {.written = false, .cancelled = false, .error = diagnostic};
     }
 };
+
+// The worker settings of one TIFF export. The pixels are display-referred RGB at full range, so
+// the declared tags are the display's primaries and transfer with the identity (RGB) matrix and
+// full range, never the encoder default BT.709 limited range (issue #465).
+[[nodiscard]] media::provider::EncodeSettingsV1
+tiffExportEncodeSettingsV1(std::uint32_t width, std::uint32_t height, std::string_view display);
 
 // TIFF encoding and exact reopen verification run in the isolated media worker.
 class TiffExportWriterV1 final {
