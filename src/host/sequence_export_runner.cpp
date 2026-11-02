@@ -3,6 +3,7 @@
 #include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/composition_output_stream.hpp>
+#include <bloom/output/export_audio_sources.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <condition_variable>
 #include <cstdint>
@@ -103,6 +104,7 @@ struct detail::SequenceExportWorkV1 {
     bool active = false, abandoned = false;
     runtime::CancellationToken taskCancellation;
     std::optional<Unavailable> error;
+    SequenceExportFailureStageV1 failureStage = SequenceExportFailureStageV1::Unclassified;
     std::uint64_t encoded = 0;
     core::Sha256Hasher approvals;
     std::uint64_t gpuEvaluatedFrames = 0;
@@ -190,6 +192,20 @@ struct detail::SequenceExportWorkV1 {
         return frames * s.sampleRate * static_cast<std::uint64_t>(s.rate.denominator) /
                static_cast<std::uint64_t>(s.rate.numerator);
     }
+    // The frames' route provenance, for a published result and for a failure alike.
+    void provenanceInto(SequenceExportResultV1& out) const {
+        out.gpuEvaluatedFrames = gpuEvaluatedFrames;
+        out.gpuNativeDispatches = gpuNativeDispatches;
+        out.gpuReadbacks = gpuReadbacks;
+        out.gpuReadbackSubmissions = gpuReadbackSubmissions;
+        out.gpuTransferredPayloads = gpuTransferredPayloads;
+        out.gpuProcessPayloadBytes = gpuProcessPayloadBytes;
+        out.gpuEncodedPayloadBytes = gpuEncodedPayloadBytes;
+        out.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
+        out.gpuDisplayFrames = gpuDisplayFrames;
+        out.cpuDisplayFrames = cpuDisplayFrames;
+        out.cpuDisplayReason = cpuDisplayReason;
+    }
     void prepare(const runtime::SnapshotCompiler& compiler, output::ExportResourceLedgerV1& ledger,
                  runtime::TaskContext& context) {
         checkpoint();
@@ -261,6 +277,21 @@ struct detail::SequenceExportWorkV1 {
             s.frames = 0;
         }
         if (request.audio || request.preset == output::OutputPresetV1::PcmWavV1) {
+            // #428: every audio source must reach the export audio path before anything renders
+            // or an encoder opens; a refusal names the source and its codec.
+            const auto sources = output::preflightExportAudioSourcesV1(
+                request.composition.snapshot, *plan, request.assetBaseDirectory,
+                [&] { return isCancelled() || context.isCancellationRequested(); });
+            if (const auto* refused = std::get_if<Unavailable>(&sources)) {
+                if (refused->reason != Error::Cancelled)
+                    failureStage = SequenceExportFailureStageV1::AudioSourcePreflight;
+                throw *refused;
+            }
+            // MOV and MXF carry 16-bit PCM unless a source is deeper; then they keep 24 bits.
+            if (request.pcmCodec == "pcm_s16le" &&
+                request.preset != output::OutputPresetV1::PcmWavV1 &&
+                std::get<output::ExportAudioSourceFactsV1>(sources).deeperThan16Bit)
+                request.pcmCodec = "pcm_s24le";
             s.audioCodec = request.pcmCodec;
             require(s.sampleRate > 0 && s.sampleRate <= Limits::sampleRate,
                     "Invalid source audio sample rate");
@@ -344,6 +375,12 @@ struct detail::SequenceExportWorkV1 {
         const auto digest = required(attempt.digest(), "Frame approval digest missing");
         (void)approvals.update(std::as_bytes(std::span(digest.bytes())));
         const auto samples = settings().audioCodec.empty() ? 0 : samplesThrough(encoded + 1);
+        // #428: a failure the stream traced to an audio source belongs to that stage.
+        const auto written = [this](std::optional<Unavailable> failure) {
+            if (failure && encoder->audioSourceFailed())
+                failureStage = SequenceExportFailureStageV1::AudioSource;
+            checked(std::move(failure));
+        };
         const auto& media = attempt.gpuMediaDisplay();
         if (!settings().videoCodec.empty() && mediaDisplay != nullptr && media.isPresent() &&
             media.commandIdentity == mediaDisplay->commandIdentity() &&
@@ -353,7 +390,7 @@ struct detail::SequenceExportWorkV1 {
             auto prepared = checked(output::prepareMediaRgba16FromDisplayV1(
                 media.pixels.pixels(), media.width, media.height, framePts(encoded),
                 [this] { return isCancelled() || taskCancellation.isCancellationRequested(); }));
-            checked(encoder->writePreparedFrame(std::move(prepared), samples, context));
+            written(encoder->writePreparedFrame(std::move(prepared), samples, context));
             ++gpuDisplayFrames;
         } else {
             if (!settings().videoCodec.empty()) {
@@ -370,7 +407,7 @@ struct detail::SequenceExportWorkV1 {
                               << ")\n";
                 }
             }
-            checked(
+            written(
                 encoder->writeFrame(attempt.frame()->processImage(), encoded, samples, context));
         }
         ++encoded;
@@ -380,7 +417,13 @@ struct detail::SequenceExportWorkV1 {
                  runtime::TaskContext& context) {
         checkpoint();
         context.reportProgress({"Verifying composition", "Close and reopen", encoded, total()});
-        const auto qc = checked(encoder->finish());
+        auto finished = encoder->finish();
+        // The worker's reopen check names its failures "Reopen..."; they are verification, not
+        // encoding (#424).
+        if (const auto* refused = std::get_if<Unavailable>(&finished);
+            refused && refused->detail.starts_with("Reopen"))
+            failureStage = SequenceExportFailureStageV1::Verification;
+        const auto qc = checked(std::move(finished));
         // Captured before the encoder is released below: the serving provider and why the
         // providers ahead of it in the platform chain did not serve (ADR 0035).
         const auto served = encoder->handshake();
@@ -484,17 +527,7 @@ struct detail::SequenceExportWorkV1 {
         outcome.encodedFrames = encoded;
         outcome.streamedPublication = streamed;
         outcome.mediaProvider = provenance;
-        outcome.gpuEvaluatedFrames = gpuEvaluatedFrames;
-        outcome.gpuNativeDispatches = gpuNativeDispatches;
-        outcome.gpuReadbacks = gpuReadbacks;
-        outcome.gpuReadbackSubmissions = gpuReadbackSubmissions;
-        outcome.gpuTransferredPayloads = gpuTransferredPayloads;
-        outcome.gpuProcessPayloadBytes = gpuProcessPayloadBytes;
-        outcome.gpuEncodedPayloadBytes = gpuEncodedPayloadBytes;
-        outcome.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
-        outcome.gpuDisplayFrames = gpuDisplayFrames;
-        outcome.cpuDisplayFrames = cpuDisplayFrames;
-        outcome.cpuDisplayReason = cpuDisplayReason;
+        provenanceInto(outcome);
         if (guardResult.status() == PublicationGuardStatus::Entered) {
             auto guard = std::move(guardResult).takeGuard();
             outcome.publication = lease.publish(platform::PublicationDisposition::Proceed);
@@ -747,8 +780,8 @@ struct SequenceExportRunnerV1::State {
             if (frame.runner)
                 frame.runner->requestCancellation();
     }
-    void fail(Unavailable error) {
-        SequenceExportResultV1 result;
+    // `result` may already carry the work's provenance and failure stage.
+    void fail(Unavailable error, SequenceExportResultV1 result = {}) {
         result.failure = std::move(error);
         result.diagnostic = std::exchange(diagnostic, {});
         result.encodedFrames = visibleEncoded;
@@ -1189,7 +1222,13 @@ void SequenceExportRunnerV1::poll() {
                 return;
             }
             if (s.work->error) {
-                s.fail(*s.work->error);
+                // The task has finished: its counters are stable, and the failure keeps the
+                // frames' real provenance instead of counting every frame as CPU reference (#424).
+                s.visibleEncoded = s.work->encoded;
+                SequenceExportResultV1 failed;
+                s.work->provenanceInto(failed);
+                failed.failureStage = s.work->failureStage;
+                s.fail(*s.work->error, std::move(failed));
                 return;
             }
             if (s.work->isCancelled() || completed->state() != runtime::TaskState::Succeeded) {

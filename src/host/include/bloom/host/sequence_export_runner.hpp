@@ -116,9 +116,21 @@ enum class SequenceExportStageV1 : std::uint8_t {
     Verifying,
     Complete
 };
+// The stage a failure belongs to when it is known (#428), so the job names the stage and the
+// input instead of blaming the encoder. The failure's detail is then a plain sentence.
+enum class SequenceExportFailureStageV1 : std::uint8_t {
+    Unclassified,
+    // Source-aware audio preflight refused an audio source before rendering started.
+    AudioSourcePreflight,
+    // Reading or decoding an audio source failed while the mix was rendered.
+    AudioSource,
+    // The encoder's reopen check of the finished file failed.
+    Verification,
+};
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;
     std::optional<media::provider::Unavailable> failure;
+    SequenceExportFailureStageV1 failureStage = SequenceExportFailureStageV1::Unclassified;
     std::optional<media::provider::MediaQcEvidenceV1> evidence;
     std::uint64_t encodedFrames = 0;
     // Native provenance/counters accumulated over the per-frame output attempts (diagnostics

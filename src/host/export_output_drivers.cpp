@@ -1271,10 +1271,30 @@ class MediaDriver final : public DriverBase {
                     break;
                 }
             }
-            // A per-frame refusal already carries a plain sentence (and its diagnostic); any other
-            // media failure detail is technical and goes to the log under a plain sentence.
             const std::string detail =
                 result.failure ? result.failure->detail : std::string("no publication result");
+            // #428: a failure whose stage is known names the stage and the input; the encoder is
+            // blamed only for what it actually did.
+            switch (result.failureStage) {
+            case SequenceExportFailureStageV1::AudioSourcePreflight:
+                log(runtime::DiagnosticSeverity::Error, "export.preflight.audio-source", detail);
+                return fail(failure(ExportFailureCode::PreflightRefused,
+                                    "export.preflight.audio-source", detail));
+            case SequenceExportFailureStageV1::AudioSource:
+                log(runtime::DiagnosticSeverity::Error, "export.audio-source.failed", detail);
+                return fail(failure(ExportFailureCode::EvaluationFailed,
+                                    "export.audio-source.failed", detail));
+            case SequenceExportFailureStageV1::Verification:
+                log(runtime::DiagnosticSeverity::Error, "export.media.detail", detail);
+                return fail(failure(ExportFailureCode::VerificationFailed,
+                                    "export.media.verification",
+                                    "The exported file failed the encoder's reopen check (" +
+                                        detail + "), so it was not published."));
+            case SequenceExportFailureStageV1::Unclassified:
+                break;
+            }
+            // A per-frame refusal already carries a plain sentence (and its diagnostic); any other
+            // media failure detail is technical and goes to the log under a plain sentence.
             const bool readable = !result.diagnostic.empty();
             log(runtime::DiagnosticSeverity::Error, "export.media.detail",
                 readable ? result.diagnostic : detail);

@@ -346,6 +346,15 @@ if(BUILD_TESTING)
                        COMMAND bloom_host_export_queue_service_test
                        LABELS unit host media output TIMEOUT 300)
 
+        add_executable(bloom_host_export_audio_formats_test tests/export_audio_formats_tests.cpp)
+        target_link_libraries(bloom_host_export_audio_formats_test PRIVATE bloom_host
+                                                                           bloom_commands)
+        add_dependencies(bloom_host_export_audio_formats_test bloom-media-worker)
+        bloom_enable_warnings(bloom_host_export_audio_formats_test)
+        bloom_add_test(NAME bloom.host.export-audio-formats
+                       COMMAND bloom_host_export_audio_formats_test
+                       LABELS unit host media output TIMEOUT 600)
+
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)
         target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host

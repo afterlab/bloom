@@ -37,6 +37,9 @@ class CompositionOutputStreamV1 final {
     [[nodiscard]] std::optional<media::provider::Unavailable> close();
     // The provider that serves this stream once the first frame began it, and how it was
     // selected (ADR 0035; diagnostics and provenance only).
+    // True after an audio source failed to read or decode for the mix (#428): the failure that
+    // writeFrame returned belongs to the audio source stage, not the encoder.
+    [[nodiscard]] bool audioSourceFailed() const noexcept;
     [[nodiscard]] const media::provider::Handshake& handshake() const;
     [[nodiscard]] const media::provider::MediaProviderProvenanceV1& provenance() const;
 

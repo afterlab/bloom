@@ -85,6 +85,8 @@ struct CompositionOutputStreamV1::State {
     std::map<runtime::AudioStreamKey, OwnedAudioBuffer> audioBuffers;
     std::uint64_t samples = 0;
     bool started = false;
+    // An audio source failed to read or decode (#428); see loadSource.
+    bool audioSourceFailed = false;
     State(CompositionOutputSourceV1 input, EncodeSettingsV1 settings, EncodeSessionOptionsV1 worker,
           std::shared_ptr<ExportResourceReservationV1> reservation,
           platform::ProcessCancellation cancel)
@@ -99,6 +101,103 @@ struct CompositionOutputStreamV1::State {
     const EncodeSettingsV1& settings() const { return encoding; }
     void checkpoint() const {
         require(!cancellation || !cancellation(), "Composition output cancelled", Error::Cancelled);
+    }
+    // Decodes one audio source for the offline mix. A read or decode failure names the source
+    // and its codec and marks the audio source stage (#428), so the job does not blame the
+    // encoder; cancellation and admission refusals keep their own meaning.
+    std::map<runtime::AudioStreamKey, OwnedAudioBuffer>::iterator
+    loadSource(runtime::TaskContext& context, const runtime::AudioClipDescription& description,
+               const media::video::Cancel& cancel) {
+        const runtime::AudioStreamKey key{description.assetId, description.audioStream};
+        std::string codec;
+        try {
+            const auto* asset = source.snapshot.project().findAsset(description.assetId);
+            require(asset != nullptr, "Audio source asset is missing", Error::Unavailable);
+            const auto path = media::resolveImagePath(
+                asset->locator.path, asset->locator.relinkHint, source.assetBaseDirectory);
+            // On every failure path the decoder retires before its scratch reservation.
+            std::shared_ptr<ExportResourceReservationV1> retainedClaim;
+            std::shared_ptr<ExportResourceReservationV1> scratchClaim;
+            std::optional<media::video::VideoDecodeSession> decoder(std::in_place, path);
+            const auto probe = checked(decoder->probe(cancel));
+            require(probe.sourceDigest == asset->contentDigest, "Audio source changed",
+                    Error::SourceChanged);
+            const auto* stream = media::video::audioStreamAt(probe, description.audioStream);
+            require(stream != nullptr && stream->duration.denominator > 0,
+                    "Audio stream unavailable", Error::Unavailable);
+            codec = stream->codec;
+            const auto frames = media::video::audioClipFrameCount(*stream);
+            require(frames.has_value() && *frames <= std::numeric_limits<std::uint64_t>::max() /
+                                                         stream->channelLayout.size(),
+                    "Audio source sample count is not representable", Error::Oversized);
+            const auto decodedSampleCount = *frames * stream->channelLayout.size();
+            require(decodedSampleCount <= std::numeric_limits<std::size_t>::max() / sizeof(float),
+                    "Audio source exceeds addressable sample storage", Error::Oversized);
+            const auto metadata = sizeof(media::audio::AudioBuffer) +
+                                  stream->channelLayout.size() * sizeof(std::vector<float>);
+            require(decodedSampleCount <=
+                        (std::numeric_limits<std::uint64_t>::max() - metadata) / sizeof(float),
+                    "Audio source byte count overflows", Error::Oversized);
+            const auto scratchSamples =
+                std::min<std::uint64_t>(*frames, media::provider::Limits::audioSamples) *
+                stream->channelLayout.size();
+            const auto retained = decodedSampleCount * sizeof(float) + metadata;
+            require(scratchSamples <=
+                        (std::numeric_limits<std::uint64_t>::max() - retained) / sizeof(float),
+                    "Audio decode scratch byte count overflows", Error::Oversized);
+            const auto scratchBytes = scratchSamples * sizeof(float);
+            if (queueReservation->processingPolicy()) {
+                ExportResourceAdmissionStatusV1 status{};
+                retainedClaim = queueReservation->reserveOwnedHostBacking(retained, status,
+                                                                          context.cancellation());
+                require(retainedClaim != nullptr, "Audio backing admission refused",
+                        Error::Oversized);
+                scratchClaim =
+                    queueReservation->reserveScratch(scratchBytes, status, context.cancellation());
+                require(scratchClaim != nullptr, "Audio decode scratch admission refused",
+                        Error::Oversized);
+            } else {
+                // Legacy callers without a processing root retain the existing ledger
+                // envelope and cannot claim physical-sample backing credit.
+                const auto total = retained + scratchBytes;
+                require(total <= std::numeric_limits<std::uint64_t>::max() -
+                                     queueReservation->chargedBytes(),
+                        "Audio export reservation overflows", Error::Oversized);
+                require(queueReservation->expand(queueReservation->chargedBytes() + total) ==
+                            ExportResourceAdmissionStatusV1::Reserved,
+                        "Audio decode ledger reservation refused", Error::Oversized);
+            }
+            auto buffer = checked(media::video::decodeAudioClip(*decoder, probe, decodedSampleCount,
+                                                                cancel, description.audioStream));
+            decoder.reset();
+            auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(buffer));
+            std::shared_ptr<const media::audio::AudioBuffer> published;
+            if (retainedClaim) {
+                const auto measured = measuredAudioBacking(*backing);
+                require(measured.has_value(), "Audio backing byte count overflows",
+                        Error::Oversized);
+                published = render::adoptProcessingHostBacking(
+                    std::move(backing), retainedClaim->ownedHostPhase(), measured->allocated,
+                    measured->initialized);
+                require(published != nullptr, "Audio backing exceeds its admitted allocation",
+                        Error::Oversized);
+            } else {
+                published = std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
+            }
+            scratchClaim.reset();
+            return audioBuffers
+                .emplace(key, OwnedAudioBuffer{std::move(retainedClaim), std::move(published)})
+                .first;
+        } catch (const Unavailable& error) {
+            if (error.reason == Error::Cancelled || error.reason == Error::Oversized ||
+                error.reason == Error::Busy)
+                throw;
+            audioSourceFailed = true;
+            throw Unavailable{error.reason,
+                              "Audio asset " + std::to_string(description.assetId.value()) +
+                                  (codec.empty() ? "" : " (" + codec + ")") +
+                                  " couldn't be decoded for the export (" + error.detail + ")."};
+        }
     }
     void audio(runtime::TaskContext& context, std::uint64_t through) {
         if (settings().audioCodec.empty())
@@ -130,94 +229,9 @@ struct CompositionOutputStreamV1::State {
             std::vector<media::audio::playback::AudioClip> clips;
             clips.reserve(mix.clips.size());
             for (const auto& description : mix.clips) {
-                const runtime::AudioStreamKey key{description.assetId, description.audioStream};
-                auto found = audioBuffers.find(key);
-                if (found == audioBuffers.end()) {
-                    const auto* asset = source.snapshot.project().findAsset(description.assetId);
-                    require(asset != nullptr, "Audio source asset is missing", Error::Unavailable);
-                    const auto path = media::resolveImagePath(
-                        asset->locator.path, asset->locator.relinkHint, source.assetBaseDirectory);
-                    // On every failure path the decoder retires before its scratch reservation.
-                    std::shared_ptr<ExportResourceReservationV1> retainedClaim;
-                    std::shared_ptr<ExportResourceReservationV1> scratchClaim;
-                    std::optional<media::video::VideoDecodeSession> decoder(std::in_place, path);
-                    const auto probe = checked(decoder->probe(cancel));
-                    require(probe.sourceDigest == asset->contentDigest, "Audio source changed",
-                            Error::SourceChanged);
-                    const auto* stream =
-                        media::video::audioStreamAt(probe, description.audioStream);
-                    require(stream != nullptr && stream->duration.denominator > 0,
-                            "Audio stream unavailable", Error::Unavailable);
-                    const auto frames = media::video::audioClipFrameCount(*stream);
-                    require(frames.has_value() &&
-                                *frames <= std::numeric_limits<std::uint64_t>::max() /
-                                               stream->channelLayout.size(),
-                            "Audio source sample count is not representable", Error::Oversized);
-                    const auto decodedSampleCount = *frames * stream->channelLayout.size();
-                    require(decodedSampleCount <=
-                                std::numeric_limits<std::size_t>::max() / sizeof(float),
-                            "Audio source exceeds addressable sample storage", Error::Oversized);
-                    const auto metadata = sizeof(media::audio::AudioBuffer) +
-                                          stream->channelLayout.size() * sizeof(std::vector<float>);
-                    require(decodedSampleCount <=
-                                (std::numeric_limits<std::uint64_t>::max() - metadata) /
-                                    sizeof(float),
-                            "Audio source byte count overflows", Error::Oversized);
-                    const auto scratchSamples =
-                        std::min<std::uint64_t>(*frames, media::provider::Limits::audioSamples) *
-                        stream->channelLayout.size();
-                    const auto retained = decodedSampleCount * sizeof(float) + metadata;
-                    require(scratchSamples <=
-                                (std::numeric_limits<std::uint64_t>::max() - retained) /
-                                    sizeof(float),
-                            "Audio decode scratch byte count overflows", Error::Oversized);
-                    const auto scratchBytes = scratchSamples * sizeof(float);
-                    if (queueReservation->processingPolicy()) {
-                        ExportResourceAdmissionStatusV1 status{};
-                        retainedClaim = queueReservation->reserveOwnedHostBacking(
-                            retained, status, context.cancellation());
-                        require(retainedClaim != nullptr, "Audio backing admission refused",
-                                Error::Oversized);
-                        scratchClaim = queueReservation->reserveScratch(scratchBytes, status,
-                                                                        context.cancellation());
-                        require(scratchClaim != nullptr, "Audio decode scratch admission refused",
-                                Error::Oversized);
-                    } else {
-                        // Legacy callers without a processing root retain the existing ledger
-                        // envelope and cannot claim physical-sample backing credit.
-                        const auto total = retained + scratchBytes;
-                        require(total <= std::numeric_limits<std::uint64_t>::max() -
-                                             queueReservation->chargedBytes(),
-                                "Audio export reservation overflows", Error::Oversized);
-                        require(
-                            queueReservation->expand(queueReservation->chargedBytes() + total) ==
-                                ExportResourceAdmissionStatusV1::Reserved,
-                            "Audio decode ledger reservation refused", Error::Oversized);
-                    }
-                    auto buffer = checked(media::video::decodeAudioClip(
-                        *decoder, probe, decodedSampleCount, cancel, description.audioStream));
-                    decoder.reset();
-                    auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(buffer));
-                    std::shared_ptr<const media::audio::AudioBuffer> published;
-                    if (retainedClaim) {
-                        const auto measured = measuredAudioBacking(*backing);
-                        require(measured.has_value(), "Audio backing byte count overflows",
-                                Error::Oversized);
-                        published = render::adoptProcessingHostBacking(
-                            std::move(backing), retainedClaim->ownedHostPhase(),
-                            measured->allocated, measured->initialized);
-                        require(published != nullptr,
-                                "Audio backing exceeds its admitted allocation", Error::Oversized);
-                    } else {
-                        published =
-                            std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
-                    }
-                    scratchClaim.reset();
-                    found = audioBuffers
-                                .emplace(key, OwnedAudioBuffer{std::move(retainedClaim),
-                                                               std::move(published)})
-                                .first;
-                }
+                auto found = audioBuffers.find({description.assetId, description.audioStream});
+                if (found == audioBuffers.end())
+                    found = loadSource(context, description, cancel);
                 require(found->second.buffer != nullptr, "Audio source buffer unavailable",
                         Error::Unavailable);
                 clips.push_back({.buffer = found->second.buffer,
@@ -311,6 +325,9 @@ Result<EncodedChunkV1> CompositionOutputStreamV1::read(std::uint64_t offset) {
     return state_->encoder->read(offset);
 }
 std::optional<Unavailable> CompositionOutputStreamV1::close() { return state_->encoder->close(); }
+bool CompositionOutputStreamV1::audioSourceFailed() const noexcept {
+    return state_->audioSourceFailed;
+}
 const Handshake& CompositionOutputStreamV1::handshake() const {
     return state_->encoder->handshake();
 }

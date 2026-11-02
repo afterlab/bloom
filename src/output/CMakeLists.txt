@@ -30,6 +30,7 @@ target_sources(
         tiff_export_write.cpp
         media_output.cpp
         composition_output_stream.cpp
+        export_audio_sources.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -54,6 +55,7 @@ target_sources(
             include/bloom/output/tiff_export_write.hpp
             include/bloom/output/media_output.hpp
             include/bloom/output/composition_output_stream.hpp
+            include/bloom/output/export_audio_sources.hpp
 )
 
 target_compile_features(bloom_output PUBLIC cxx_std_20)
