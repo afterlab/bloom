@@ -19,7 +19,7 @@ class RenderResult:
     preservation_report: str
 
 
-def _render(first, last, is_range, out, composition, preset):
+def _render(first, last, is_range, out, composition, preset, replace):
     if type(first) is not int or type(last) is not int or first < 0 or last < first:
         raise ValueError("Frames must be nonnegative integers in ascending order")
     if composition is None:
@@ -29,7 +29,7 @@ def _render(first, last, is_range, out, composition, preset):
     task = _state._task.get()
     cancellation_task = task._ticket.id if task is not None and task._ticket is not None else 0
     result = _state.host().render(int(composition), first, last, is_range, preset, str(Path(out)),
-                                 cancellation_task)
+                                 cancellation_task, bool(replace))
     if not result["succeeded"]:
         if result["diagnostic_code"] == "cancelled":
             raise CancelledError(result["diagnostic"])
@@ -38,10 +38,11 @@ def _render(first, last, is_range, out, composition, preset):
                         result["published_frames"], result["preservation_report"])
 
 
-def frame(number: int, *, out, composition=None, preset="PngRgba8SrgbV1") -> RenderResult:
-    return _render(number, number, False, out, composition, preset)
+def frame(number: int, *, out, composition=None, preset="PngRgba8SrgbV1",
+          replace=False) -> RenderResult:
+    return _render(number, number, False, out, composition, preset, replace)
 
 
-def range(first: int, last: int, *, out, composition=None,
-          preset="PngRgba8SrgbV1") -> RenderResult:
-    return _render(first, last, True, out, composition, preset)
+def range(first: int, last: int, *, out, composition=None, preset="PngRgba8SrgbV1",
+          replace=False) -> RenderResult:
+    return _render(first, last, True, out, composition, preset, replace)

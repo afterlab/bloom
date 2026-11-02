@@ -42,7 +42,8 @@ class NativeHost final {
                                                   std::optional<std::string> workingSpace);
     [[nodiscard]] nb::dict render(std::uint64_t composition, std::uint64_t first,
                                   std::uint64_t last, bool range, const std::string& preset,
-                                  const std::string& destination, std::uint64_t cancellationTask);
+                                  const std::string& destination, std::uint64_t cancellationTask,
+                                  bool replace);
     [[nodiscard]] nb::list events();
     [[nodiscard]] nb::list tasks() const;
     [[nodiscard]] std::unique_ptr<TaskTicket> trackTask(std::string name) {

@@ -235,7 +235,7 @@ Use `tools/call` with `name` and `arguments`:
 [Interpret Footage](interpret-footage.md) members `bloom.asset.set-interpretation` takes, plus the
 resolved `playbackFrameRate` and `filePixelAspect`). `context` returns the editor context contextual arguments fall back to: project, composition, selected nodes and layers, time, the Viewer's display and view, read-only state and `live` (false on stdio, which reports the session defaults). |
 | `transact` | `expectedRevision`, an `operations` array of `{op,args}`, and optional `label`. Returns one atomic command result, created IDs, structured diagnostics, `compileFailures` and `compileWarnings` (see [Edits and diagnostics](#edits-and-diagnostics)). Arguments the descriptor marks `contextual` may be omitted and are filled from the session (the live editor context in the desktop application). Coded failures carry `structuredContent.diagnostic` `{code, message}` with a `bloom.mcp.*` code. |
-| `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`. Returns published frame count, preservation report, paths and SHA-256 file digests. |
+| `render` | `composition`, `frame` or inclusive `first`/`last`, `preset`, `destination`, optional `overwrite` (`ask`, the default, `replace` or `refuse`). Returns published frame count, preservation report, paths and SHA-256 file digests. |
 | `export` | Render arguments plus optional `profile`, `audio` and `sampleRate`. Uses the existing MEDIA-4 composition runner for ProRes preview, DNxHR and PCM output. |
 | `events` | `sinceRevision`, optionally `afterSequence`. Returns revision-inclusive events, a sequence cursor and `resetRequired` when retained history cannot cover the cursor. |
 | `history` | `action` (`undo` or `redo`) and `expectedRevision`. One step of the project's history, refused with a stale-revision result when the revision moved. In the desktop application it is queued like a `transact`. |
@@ -365,9 +365,12 @@ silently shortened. An `expectedRevision` mismatch is an error.
 added), or an existing folder (the file is then `frame.<ext>`, or `render.<ext>` for media). A
 range writes `<base>.NNNN.<ext>`; a still destination may instead carry one `####` or `{frame}`
 where the frame number goes (`seq.####.png` writes `seq.0000.png`, `seq.0001.png`, ...). A wrong
-extension is an argument error saying which one the preset needs. A request the export checks
+extension is an argument error saying which one the preset needs. An existing file is replaced
+only with `overwrite:"replace"`; every file a range would write is checked, frame by frame. On
+stdio, which has no confirmation, `ask` refuses like `refuse`. A request the export checks
 refuse (an existing file without `overwrite:"replace"`, for example) answers
-`bloom.mcp.preflight-blocked` with the reason; `bloom.mcp.export-unavailable` means export itself
+`bloom.mcp.preflight-blocked` with the reason, and a file that appears or changes after the check
+is not replaced either; `bloom.mcp.export-unavailable` means export itself
 cannot run here, and "Export isn't available in this window yet." means the window has no export
 queue.
 

@@ -42,14 +42,14 @@ class ProductionBackend final : public ExportRunBackend {
         core::Sha256Hasher hasher;
         std::error_code error;
         const auto record = [&](const std::filesystem::path& path) {
-            const auto size = std::filesystem::file_size(path, error);
-            const auto time = std::filesystem::last_write_time(path, error);
+            const auto existing = sampleExistingExportTargetV1(path).value_or(
+                ExistingExportTargetV1{.byteSize = 0, .modificationTicks = 0});
             const auto name = path.filename().string();
             (void)hasher.update(std::as_bytes(std::span(name.data(), name.size())));
             const std::array<std::uint64_t, 2> values{
-                static_cast<std::uint64_t>(size),
-                static_cast<std::uint64_t>(time.time_since_epoch().count())};
+                existing.byteSize, static_cast<std::uint64_t>(existing.modificationTicks)};
             (void)hasher.update(std::as_bytes(std::span(values)));
+            sample.existingFiles[path.lexically_normal()] = existing;
             ++sample.existing;
         };
         if (key.fileCount <= 1 || key.firstPath == key.lastPath) {

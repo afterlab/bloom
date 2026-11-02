@@ -140,8 +140,11 @@ estimate does not fit the free space, Start is blocked.
 file exists under Ask first, the job reads **Waiting for your OK**, and **Start** or **Start All**
 asks once: "Replace SC020.mov?" with **Replace**, **Choose another name** (the file chooser) and
 **Cancel**. Several files are asked about in one question. The confirmation covers exactly the files that were checked; if they change before the
-export publishes, Bloom refuses to replace them. Files this session itself exported for the output
-need no confirmation on a re-run. Bloom never replaces a file silently.
+export publishes, Bloom refuses to replace them, and a file that appears after **Start**, such as a
+frame another program writes, is not replaced either. **Don't render** holds for every file the
+output writes, movies and WAV included. A movie or WAV is checked before it replaces anything, so
+one that fails verification leaves the existing file as it was. Files this session itself exported
+for the output need no confirmation on a re-run. Bloom never replaces a file silently.
 
 ## Running
 

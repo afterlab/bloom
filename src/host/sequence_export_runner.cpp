@@ -536,7 +536,6 @@ struct detail::SequenceExportWorkV1 {
         auto evidence =
             checked(output::makeMediaQcEvidenceV1(*analysis, qc, approvals.finalize(), &served));
         checkpoint();
-        auto guardResult = FrameExportRequestAccessV1::claim(approved).tryEnterPublication();
         SequenceExportResultV1 outcome;
         outcome.evidence = std::move(evidence);
         outcome.toleranceProfile = media::provider::encodeToleranceName(settings());
@@ -561,6 +560,13 @@ struct detail::SequenceExportWorkV1 {
         outcome.streamedPublication = streamed;
         outcome.mediaProvider = provenance;
         provenanceInto(outcome);
+        // #453: verification before the staged file can replace the destination.
+        if (request.verifyBeforePublication)
+            if (auto refused = request.verifyBeforePublication(outcome)) {
+                failureStage = SequenceExportFailureStageV1::Verification;
+                throw Unavailable{Error::IdentityMismatch, std::move(*refused)};
+            }
+        auto guardResult = FrameExportRequestAccessV1::claim(approved).tryEnterPublication();
         if (guardResult.status() == PublicationGuardStatus::Entered) {
             auto guard = std::move(guardResult).takeGuard();
             outcome.publication = lease.publish(platform::PublicationDisposition::Proceed);
@@ -895,7 +901,8 @@ struct SequenceExportRunnerV1::State {
             .assetBaseDirectory = work->request.assetBaseDirectory,
             .fallbackEvaluator = work->fallbackEvaluator,
             .targetPath = work->request.range.destination,
-            .overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace,
+            .overwritePolicy = work->request.overwritePolicy,
+            .confirmedExisting = work->request.confirmedExisting,
             .owner = work->request.owner,
             .preset = preset,
             .gpuProvider = work->request.gpuProvider,
@@ -1025,6 +1032,21 @@ struct SequenceExportRunnerV1::State {
             capacity.succeeded();
             capacityLogged = false;
         }
+        if (const auto* failure = result.failure();
+            failure && failure->stage() == OutputAnalysisAttemptStageV1::Resolving)
+            if (const auto* error = failure->payloadAs<platform::StagedArtifactError>();
+                error && (*error == platform::StagedArtifactError::OverwritePolicyConflict ||
+                          *error == platform::StagedArtifactError::ExternalModificationConflict)) {
+                // #453: the destination exists without permission to replace it, or changed.
+                diagnostic = describeOutputAnalysisAttemptV1(result);
+                SequenceExportResultV1 refused;
+                refused.failureStage = SequenceExportFailureStageV1::Destination;
+                fail({Error::Unavailable,
+                      "The destination exists or changed after it was checked; it was not "
+                      "replaced"},
+                     std::move(refused));
+                return false;
+            }
         if (!result || !result.attempt() || !result.attempt()->approvable()) {
             // The artist reads a sentence; the stage, codes and facets go to the diagnostic log.
             const auto index = work->request.range.firstFrame + frame.offset;

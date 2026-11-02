@@ -470,7 +470,8 @@ struct Fixture {
 
     explicit Fixture(const std::string& name, host::ExportEncoderStatus encoders = linuxEncoders(),
                      std::optional<document::ColorSettings> colour = {},
-                     std::shared_ptr<runtime::GpuProcessingPhasePolicy> root = {})
+                     std::shared_ptr<runtime::GpuProcessingPhasePolicy> root = {},
+                     std::shared_ptr<host::ExportRunBackend> backend = {})
         : folder(scratch(name)), session(makeSession(identity, folder, std::move(colour))),
           gpu(makeProvider(std::move(root))) {
         if (!runtime::registerBuiltInNodeDefinitions(registry))
@@ -492,7 +493,7 @@ struct Fixture {
                                                  .limits = {},
                                                  .displayProcessor = nullptr,
                                                  .scratchDirectory = folder / "scratch",
-                                                 .backend = nullptr});
+                                                 .backend = std::move(backend)});
         std::filesystem::create_directories(folder / "scratch");
     }
     ~Fixture() {
@@ -724,6 +725,139 @@ void testReplaceConfirmation() {
                },
                20),
            "Refuse blocks Start while the destination exists");
+}
+
+// #453: the production backend, except that the run's start writes a file first: a file that
+// appears, or a confirmed file that changes, after Start was checked.
+class WritesAtStartBackend final : public host::ExportRunBackend {
+  public:
+    std::filesystem::path path;
+    std::string contents;
+    std::unique_ptr<host::ExportRun> start(host::ExportJobRunnerDependencies dependencies,
+                                           host::ExportJobRunRequest request) override {
+        if (!path.empty())
+            std::ofstream(path, std::ios::binary | std::ios::trunc) << contents;
+        return production_->start(std::move(dependencies), std::move(request));
+    }
+    host::ExportDestinationSample
+    sampleDestination(const host::ExportDestinationSampleRequest& request) override {
+        return production_->sampleDestination(request);
+    }
+    host::ExportAudioSourceSample
+    sampleAudioSources(const host::ExportAudioSourceSampleRequest& request,
+                       const runtime::CancellationToken& cancellation) override {
+        return production_->sampleAudioSources(request, cancellation);
+    }
+
+  private:
+    std::shared_ptr<host::ExportRunBackend> production_ = host::makeProductionExportRunBackend();
+};
+
+std::string fileContents(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+document::ExportOutputSettings prores() {
+    document::ExportOutputSettings settings;
+    settings.format = document::ExportFormat::ProResMov;
+    settings.codecProfile = "hq";
+    settings.includeAudio = false;
+    return settings;
+}
+
+// #453: the overwrite policy holds at every publication, not only when Start was checked.
+void testPolicyHoldsAtPublication() {
+    const auto run = [](Fixture& f, const document::ExportJobId job, const std::string& name,
+                        const bool confirm) {
+        if (confirm) {
+            expect(f.pumpUntil(
+                       [&] {
+                           return f.service->canStart(job).code ==
+                                  ExportUnavailableCode::NeedsReplaceConfirmation;
+                       },
+                       20),
+                   name + ": the existing file needs confirmation");
+            const auto* view = f.view(job);
+            expect(view && f.service->confirmReplace(job, view->outputs.front().id).accepted,
+                   name + ": confirm replace");
+        }
+        expect(f.startable(job), name + ": the job becomes startable");
+        const document::ExportJobId ids[] = {job};
+        expect(f.service->start(ids).accepted, name + ": start");
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 120),
+               name + ": the job ends");
+        return f.view(job);
+    };
+    const auto refusedWithConflict = [](const host::ExportJobView* view) {
+        return view && view->state == ExportJobState::Failed && view->failure &&
+               view->failure->code == host::ExportFailureCode::PublicationConflict;
+    };
+    {
+        // A frame file that appears after Start under Ask first is never replaced; the frames
+        // before it publish.
+        auto backend = std::make_shared<WritesAtStartBackend>();
+        Fixture f("appears-frame", linuxEncoders(), {}, {}, backend);
+        std::filesystem::create_directories(f.folder / "Exports");
+        backend->path = f.folder / "Exports/late.0001.png";
+        backend->contents = "appeared after Start";
+        const auto job = f.addJob(png(), "Exports/late.png");
+        const auto* view = run(f, job, "appearing frame", false);
+        if (view && view->failure)
+            std::cerr << "  appearing frame: " << view->failure->reason << '\n';
+        expect(refusedWithConflict(view), "a frame file that appeared after Start is a conflict");
+        expect(fileContents(backend->path) == "appeared after Start",
+               "the file that appeared after Start is untouched");
+        expect(std::filesystem::exists(f.folder / "Exports/late.0000.png") &&
+                   !std::filesystem::exists(f.folder / "Exports/late.0002.png"),
+               "the frame before it published and the frame after it did not render");
+    }
+    {
+        // Don't render holds for movies at publication too.
+        auto backend = std::make_shared<WritesAtStartBackend>();
+        Fixture f("appears-movie", linuxEncoders(), {}, {}, backend);
+        std::filesystem::create_directories(f.folder / "Exports");
+        backend->path = f.folder / "Exports/late.mov";
+        backend->contents = "appeared after Start";
+        const auto job =
+            f.addJob(prores(), "Exports/late.mov", document::ExportOverwritePolicy::Refuse,
+                     {document::ExportRangeKind::Custom, 0, 2});
+        const auto* view = run(f, job, "refusing movie", false);
+        expect(refusedWithConflict(view), "Don't render refuses a movie that appeared after Start");
+        expect(fileContents(backend->path) == "appeared after Start",
+               "the movie that appeared after Start is untouched");
+    }
+    {
+        // A confirmed movie that changes after Start is not replaced.
+        auto backend = std::make_shared<WritesAtStartBackend>();
+        Fixture f("changed-movie", linuxEncoders(), {}, {}, backend);
+        std::filesystem::create_directories(f.folder / "Exports");
+        std::ofstream(f.folder / "Exports/confirmed.mov") << "confirmed";
+        backend->path = f.folder / "Exports/confirmed.mov";
+        backend->contents = "changed after the confirmation";
+        const auto job = f.addJob(prores(), "Exports/confirmed.mov",
+                                  document::ExportOverwritePolicy::AskBeforeReplacing,
+                                  {document::ExportRangeKind::Custom, 0, 2});
+        const auto* view = run(f, job, "changed movie", true);
+        expect(refusedWithConflict(view), "a confirmed movie that changed after Start conflicts");
+        expect(fileContents(backend->path) == "changed after the confirmation",
+               "the changed movie is untouched");
+    }
+    {
+        // A confirmed movie that stays as it was is replaced.
+        Fixture f("confirmed-movie");
+        std::filesystem::create_directories(f.folder / "Exports");
+        std::ofstream(f.folder / "Exports/confirmed.mov") << "confirmed";
+        const auto job = f.addJob(prores(), "Exports/confirmed.mov",
+                                  document::ExportOverwritePolicy::AskBeforeReplacing,
+                                  {document::ExportRangeKind::Custom, 0, 2});
+        const auto* view = run(f, job, "confirmed movie", true);
+        if (view && view->failure)
+            std::cerr << "  confirmed movie: " << view->failure->reason << '\n';
+        expect(view && view->state != ExportJobState::Failed &&
+                   fileContents(f.folder / "Exports/confirmed.mov") != "confirmed",
+               "the confirmed, unchanged movie is replaced");
+    }
 }
 
 // ADR 0035: every operating system exports. A computer whose only media provider is the bundled
@@ -965,6 +1099,7 @@ int main() {
         testLifecycle();
         testZeroHostCapacityRefusal();
         testReplaceConfirmation();
+        testPolicyHoldsAtPublication();
         testEveryPlatformExports();
         testTransient();
         testVideoEndToEnd(document::ExportFormat::ProResMov, linuxEncoders(), "prores-mov");

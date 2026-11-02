@@ -40,6 +40,7 @@ target_sources(
             include/bloom/host/bloom_neutral_profile.hpp
             include/bloom/host/copy_async_io.hpp
             include/bloom/host/copy_publication.hpp
+            include/bloom/host/existing_export_target.hpp
             include/bloom/host/export_job_runner.hpp
             include/bloom/host/export_presets.hpp
             include/bloom/host/export_queue.hpp

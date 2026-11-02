@@ -24,7 +24,8 @@ class Host:
     def save(self, path: str) -> None: ...
     def set_color_settings(self, config: str, working_space: str | None = None) -> dict[str, Any]: ...
     def render(self, composition: int, first: int, last: int, range: bool,
-               preset: str, destination: str, cancellation_task: int) -> dict[str, Any]:
+               preset: str, destination: str, cancellation_task: int,
+               replace: bool) -> dict[str, Any]:
         """`succeeded`; on failure `diagnostic` and `diagnostic_code` ("cancelled",
         "missing-processing-root" or "")."""
         ...

@@ -253,6 +253,14 @@ destination, and Start says "Choose where to save this output".
   - A file this session itself published for that output needs no confirmation on a re-run.
   - The external-modification guard still applies at publication. A file changed after the sample
     or the confirmation fails with `PublicationConflict` and is never replaced.
+  - Every publication enforces the policy, for every route and format (#453). The run receives
+    the confirmed files with the size and modification time the sample recorded
+    (`ExportRunOutput::confirmedFiles`). Replace replaces; Refuse publishes create-only;
+    AskBeforeReplacing replaces only a confirmed file that is still as recorded and publishes every
+    other file create-only, so a file that appears after Start is refused with
+    `PublicationConflict`. Scripted render, bloom-cli render and stdio MCP render and export have
+    no confirmation: they refuse an existing file unless the caller passes the replace opt-in, and
+    a range is checked frame by frame.
 
 ### 8. Import into Assets after render
 
@@ -345,6 +353,11 @@ must not starve an explicit export. The CPU and I/O scheduler keeps that rule.
   the preset's declared expected preservation. A frame that does not fit fails the output before
   publication (`AnalysisRefused`, check `AnalysisPolicy`). The byte-equality guard and per-frame
   publication intent are unchanged; only the modal question goes away.
+- **Before replacement**, nothing unverified replaces a file (#453). An image frame's staged file
+  is reopened and its digest checked before its atomic publication. A movie or WAV runs its
+  Reopen, FrameCount, Timing, ColourTags, Container and Audio checks on the staged, reopened file
+  (`SequenceExportRequestV1::verifyBeforePublication`); a failed check fails the output with
+  `VerificationFailed` and the destination is untouched.
 - **After publication**, each output carries an `ExportOutputVerification`. It contains the
   accepted facet states and digest, an artifact summary (count, first and last path, bytes, digest,
   worst publication outcome), device provenance, and typed `ExportCheckResult`s for Reopen,

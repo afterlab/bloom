@@ -45,7 +45,8 @@ const char* diagnosticCode(const RenderDiagnosticCode code) {
 
 nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t first,
                             const std::uint64_t last, const bool range, const std::string& preset,
-                            const std::string& destination, const std::uint64_t cancellationTask) {
+                            const std::string& destination, const std::uint64_t cancellationTask,
+                            const bool replace) {
     output::OutputPresetV1 selected;
     if (preset == "PngRgba8SrgbV1") {
         selected = output::OutputPresetV1::PngRgba8SrgbV1;
@@ -71,12 +72,15 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
             .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
             .preset = selected,
             .destination = destination,
-            .cancelled = [this, cancellationTask, &call, &scheduler] {
-                if (call.closing() || cancellationRequested() || !session_->isValid())
-                    return true;
-                const auto task = scheduler.snapshot(runtime::TaskId::fromRaw(cancellationTask));
-                return task && task->cancellationRequested;
-            }};
+            .cancelled =
+                [this, cancellationTask, &call, &scheduler] {
+                    if (call.closing() || cancellationRequested() || !session_->isValid())
+                        return true;
+                    const auto task =
+                        scheduler.snapshot(runtime::TaskId::fromRaw(cancellationTask));
+                    return task && task->cancellationRequested;
+                },
+            .replaceExisting = replace};
         result =
             Render::run(*session_, scheduler, compiler, std::move(request), {}, gpuExportProvider_);
         if (result.succeeded) {

@@ -403,6 +403,33 @@ class AgentFeedback(unittest.TestCase):
                                         'destination': os.path.join(folder.name, 'seq.####.png')})
         names = sorted(os.path.basename(file['path']) for file in result['files'])
         self.assertEqual(names, ['seq.0000.png', 'seq.0001.png'])
+        # #453: an existing frame is never replaced unless overwrite is "replace", and a range is
+        # checked frame by frame.
+        frames = {name: open(os.path.join(folder.name, name), 'rb').read() for name in names}
+        for policy in (None, 'ask', 'refuse'):
+            arguments = {'composition': 1, 'first': 0, 'last': 1, 'preset': 'PngRgba8SrgbV1',
+                         'destination': os.path.join(folder.name, 'seq.####.png')}
+            if policy:
+                arguments['overwrite'] = policy
+            again = server.call('render', arguments)
+            self.assertEqual(again['diagnostic']['code'], 'bloom.mcp.preflight-blocked', again)
+        for name, data in frames.items():
+            self.assertEqual(open(os.path.join(folder.name, name), 'rb').read(), data)
+        with open(os.path.join(folder.name, 'only.0001.png'), 'wb') as existing:
+            existing.write(b'not rendered by Bloom')
+        lone = server.call('render', {'composition': 1, 'first': 0, 'last': 1,
+                                      'preset': 'PngRgba8SrgbV1',
+                                      'destination': os.path.join(folder.name, 'only.####.png')})
+        self.assertEqual(lone['diagnostic']['code'], 'bloom.mcp.preflight-blocked', lone)
+        self.assertIn('only.0001.png', lone['diagnostic']['message'])
+        self.assertFalse(os.path.exists(os.path.join(folder.name, 'only.0000.png')))
+        replaced = server.call('render', {'composition': 1, 'first': 0, 'last': 1,
+                                          'preset': 'PngRgba8SrgbV1', 'overwrite': 'replace',
+                                          'destination': os.path.join(folder.name,
+                                                                      'only.####.png')})
+        self.assertNotIn('diagnostic', replaced, replaced)
+        with open(os.path.join(folder.name, 'only.0001.png'), 'rb') as published:
+            self.assertTrue(published.read().startswith(b'\x89PNG'))
         # A wrong extension is an argument error that says what is expected.
         wrong = server.raw('render', {'composition': 1, 'frame': 0, 'preset': 'PngRgba8SrgbV1',
                                       'destination': os.path.join(folder.name, 'still.exr')})

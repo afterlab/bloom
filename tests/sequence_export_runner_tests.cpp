@@ -1117,16 +1117,54 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
         std::ofstream file(path);
         file << "original";
     }
-    const auto cancelled = f.run(f.request(path, output::OutputPresetV1::ProResMovV1), true);
-    check(!cancelled.published() && cancelled.failure &&
-              cancelled.failure->reason == media::provider::Error::Cancelled,
-          "cancel typed result");
-    {
+    const auto contents = [&path] {
         std::ifstream file(path);
         std::string bytes;
         file >> bytes;
-        check(bytes == "original", "cancel retains existing destination");
-    }
+        return bytes;
+    };
+    auto replacing = f.request(path, output::OutputPresetV1::ProResMovV1);
+    replacing.overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace;
+    const auto cancelled = f.run(std::move(replacing), true);
+    check(!cancelled.published() && cancelled.failure &&
+              cancelled.failure->reason == media::provider::Error::Cancelled,
+          "cancel typed result");
+    check(contents() == "original", "cancel retains existing destination");
+    // #453: the default never replaces an existing file; a confirmed replacement covers only the
+    // file that was confirmed; verification runs before the staged file can replace anything.
+    auto refusing = f.request(path, output::OutputPresetV1::ProResMovV1);
+    refusing.range.lastFrame = 2;
+    const auto existing = f.run(std::move(refusing));
+    check(!existing.published() &&
+              existing.failureStage == host::SequenceExportFailureStageV1::Destination &&
+              contents() == "original",
+          "the default refuses an existing destination and leaves it untouched");
+    auto stale = f.request(path, output::OutputPresetV1::ProResMovV1);
+    stale.range.lastFrame = 2;
+    stale.overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace;
+    stale.confirmedExisting = host::ExistingExportTargetV1{.byteSize = 1, .modificationTicks = 0};
+    const auto changed = f.run(std::move(stale));
+    check(!changed.published() &&
+              changed.failureStage == host::SequenceExportFailureStageV1::Destination &&
+              contents() == "original",
+          "a destination that changed after its confirmation is not replaced");
+    auto gated = f.request(path, output::OutputPresetV1::ProResMovV1);
+    gated.range.lastFrame = 2;
+    gated.overwritePolicy = platform::ArtifactOverwritePolicy::CreateOrReplace;
+    gated.confirmedExisting = host::sampleExistingExportTargetV1(path);
+    bool gateSawEvidence = false;
+    gated.verifyBeforePublication =
+        [&gateSawEvidence](
+            const host::SequenceExportResultV1& staged) -> std::optional<std::string> {
+        gateSawEvidence = staged.evidence.has_value() && !staged.published();
+        return std::string("frame count");
+    };
+    const auto unverified = f.run(std::move(gated));
+    check(gateSawEvidence && !unverified.published() &&
+              unverified.failureStage == host::SequenceExportFailureStageV1::Verification &&
+              unverified.failure && unverified.failure->detail == "frame count" &&
+              contents() == "original",
+          "a staged file that fails verification never replaces the destination");
     const auto crashed =
         f.run(f.request(directory / "crash.mov", output::OutputPresetV1::ProResMovV1), false, true);
     check(!crashed.published() && crashed.failure &&

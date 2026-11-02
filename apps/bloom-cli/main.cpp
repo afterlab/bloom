@@ -67,7 +67,8 @@ class ExportProviderTeardown final {
 void printUsage() {
     std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
-                 "<dir> | export --project <file> (--all | --job <id>...) [--replace] [--save]\n";
+                 "<dir> [--replace] | export --project <file> (--all | --job <id>...) [--replace] "
+                 "[--save]\n";
 }
 
 [[nodiscard]] std::optional<std::string> readText(const std::filesystem::path& path) {
@@ -332,8 +333,13 @@ frameRange(std::string_view value) {
     std::optional<std::pair<std::uint64_t, std::uint64_t>> range;
     std::optional<output::OutputPresetV1> selectedPreset;
     std::filesystem::path outputDirectory;
+    bool replace = false;
     for (int index = 2; index < argc; ++index) {
         const std::string_view option = argv[index];
+        if (option == "--replace") {
+            replace = true;
+            continue;
+        }
         if ((option == "--project" || option == "--out" || option == "--preset" ||
              option == "--frame" || option == "--range") &&
             index + 1 >= argc) {
@@ -423,7 +429,8 @@ frameRange(std::string_view value) {
                                                 .frame = frame,
                                                 .range = range,
                                                 .preset = *selectedPreset,
-                                                .destination = destination},
+                                                .destination = destination,
+                                                .replaceExisting = replace},
                                                {}, gpuProvider);
     providerTeardown.finish();
     std::cout << result.preservationReport << '\n';

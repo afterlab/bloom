@@ -7,6 +7,8 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 
 namespace bloom::host {
 namespace detail {
@@ -60,6 +62,8 @@ class SequenceExportRetirementOwnerV1 final {
     std::unique_ptr<State> state_;
 };
 
+struct SequenceExportResultV1;
+
 struct SequenceExportRequestV1 {
     runtime::SnapshotCompileRequest composition;
     FrameRangeRequestV1 range;
@@ -107,6 +111,18 @@ struct SequenceExportRequestV1 {
     // GPU display-only transform for a cached frame is available
     // (detail::compositeFrameReuseAvailableV1); every other frame is evaluated.
     bool useCachedFrames = false;
+    // #453: what an existing destination may be. CreateOnly (the default) never replaces a file;
+    // CreateOrReplace replaces it, only the confirmed file when `confirmedExisting` is set. A
+    // refused or changed destination fails with failureStage Destination and is never replaced.
+    platform::ArtifactOverwritePolicy overwritePolicy =
+        platform::ArtifactOverwritePolicy::CreateOnly;
+    std::optional<ExistingExportTargetV1> confirmedExisting = std::nullopt;
+    // #453: verification before publication. Called on the encoder's worker with the staged,
+    // reopened artifact's result (evidence and expectations; not yet published). A returned
+    // sentence refuses the publication with failureStage Verification; the destination is
+    // untouched.
+    std::function<std::optional<std::string>(const SequenceExportResultV1&)>
+        verifyBeforePublication = {};
 };
 enum class SequenceExportStageV1 : std::uint8_t {
     Compiling,
@@ -124,11 +140,15 @@ enum class SequenceExportFailureStageV1 : std::uint8_t {
     AudioSourcePreflight,
     // Reading or decoding an audio source failed while the mix was rendered.
     AudioSource,
-    // The encoder's reopen check of the finished file failed.
+    // The encoder's reopen check of the finished file failed, or verifyBeforePublication refused
+    // the staged file.
     Verification,
     // The composition did not compile; the result's detail is the compiler's own sentence naming
     // the failure's subject (#437).
     CompileFailed,
+    // #453: the destination exists and the overwrite policy does not let this export replace it,
+    // or it changed after it was checked or confirmed. Nothing was replaced.
+    Destination,
 };
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;

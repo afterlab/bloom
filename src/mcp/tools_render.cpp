@@ -175,12 +175,31 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     if (still && (member(arguments, "profile") || member(arguments, "audio") ||
                   member(arguments, "sampleRate")))
         throw InvalidInput("Still presets do not accept media encoding settings");
-    if (auto* overwrite = member(arguments, "overwrite");
-        overwrite != nullptr && string(overwrite, 16) != "replace") {
-        std::error_code error;
-        if (std::filesystem::exists(destination, error))
-            throw ToolFailure(McpToolErrorCode::PreflightBlocked,
-                              "The destination exists. Pass overwrite=replace to replace it.");
+    // #453: nothing is replaced unless overwrite is "replace". Headless has no confirmation, so
+    // "ask" (the default) refuses like "refuse". Every file the render would write is checked: each
+    // frame of an image range, or the one file; the publications enforce it again.
+    auto* overwrite = member(arguments, "overwrite");
+    const auto policy = overwrite ? string(overwrite, 16) : std::string("ask");
+    if (policy != "ask" && policy != "replace" && policy != "refuse")
+        throw InvalidInput("overwrite is ask, replace or refuse");
+    const bool replace = policy == "replace";
+    if (!replace) {
+        const auto refuseExisting = [](const std::filesystem::path& path) {
+            std::error_code error;
+            if (std::filesystem::exists(path, error))
+                throw ToolFailure(McpToolErrorCode::PreflightBlocked,
+                                  path.filename().string() +
+                                      " exists. Pass overwrite=replace to replace it.");
+        };
+        if (still && range)
+            for (auto index = first;; ++index) {
+                refuseExisting(
+                    host::FrameRangeRunnerV1::sequenceFramePath(destination, index, last));
+                if (index == last)
+                    break;
+            }
+        else
+            refuseExisting(destination);
     }
     const auto source = session.renderSourceSnapshot();
     const auto& snapshot = source.snapshot;
@@ -202,7 +221,8 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
              .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
              .preset = *preset,
              .destination = destination,
-             .cancelled = [stop] { return stop.stop_requested(); }},
+             .cancelled = [stop] { return stop.stop_requested(); },
+             .replaceExisting = replace},
             {}, gpuExportProvider);
         if (!result.succeeded)
             throw std::runtime_error(result.diagnostic);
@@ -254,7 +274,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
              .workingColorSpaceId = std::string(colorIntent->workingColorSpaceId),
              .ocioConfigRevision = colorIntent->ocioConfigRevision,
              .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
-             .gpuProvider = gpuExportProvider},
+             .gpuProvider = gpuExportProvider,
+             .overwritePolicy = replace ? platform::ArtifactOverwritePolicy::CreateOrReplace
+                                        : platform::ArtifactOverwritePolicy::CreateOnly},
             *retirement);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(10);
         while (!runner.result()) {
@@ -272,9 +294,14 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             if (!runner.result())
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        if (!runner.result()->published())
+        if (!runner.result()->published()) {
+            if (runner.result()->failureStage == host::SequenceExportFailureStageV1::Destination)
+                throw ToolFailure(McpToolErrorCode::PreflightBlocked,
+                                  destination.filename().string() +
+                                      " exists or changed. Pass overwrite=replace to replace it.");
             throw std::runtime_error(runner.result()->failure ? runner.result()->failure->detail
                                                               : "Export was not published");
+        }
         frames = runner.result()->encodedFrames;
     }
     auto* result = out.object();

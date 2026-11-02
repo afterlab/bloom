@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <set>
 #include <variant>
 
 namespace bloom::host::detail {
@@ -133,6 +134,44 @@ ExportFailure failure(const ExportFailureCode code, std::string diagnostic, std:
             .diagnosticCode = std::move(diagnostic),
             .reason = std::move(reason),
             .summary = std::string(exportFailureSummary(code))};
+}
+
+// #453: how one publication of this output treats an existing file at `path`. Replace replaces;
+// Refuse never replaces; AskBeforeReplacing replaces only a confirmed file that is still exactly as
+// the run's destination sample recorded it, and refuses a file that appeared after the sample.
+struct ExistingFileRule final {
+    platform::ArtifactOverwritePolicy policy = platform::ArtifactOverwritePolicy::CreateOnly;
+    std::optional<ExistingExportTargetV1> confirmed;
+};
+
+ExistingFileRule existingFileRule(const ExportRunOutput& output,
+                                  const std::filesystem::path& path) {
+    switch (output.record.destination.overwrite) {
+    case document::ExportOverwritePolicy::Replace:
+        return {platform::ArtifactOverwritePolicy::CreateOrReplace, std::nullopt};
+    case document::ExportOverwritePolicy::Refuse:
+        return {platform::ArtifactOverwritePolicy::CreateOnly, std::nullopt};
+    case document::ExportOverwritePolicy::AskBeforeReplacing:
+        if (const auto found = output.confirmedFiles.find(path.lexically_normal());
+            found != output.confirmedFiles.end())
+            return {platform::ArtifactOverwritePolicy::CreateOrReplace, found->second};
+        return {platform::ArtifactOverwritePolicy::CreateOnly, std::nullopt};
+    }
+    return {};
+}
+
+// The sentence for a publication refused because its file exists without permission to replace
+// it, or changed after it was checked or confirmed.
+std::string existingFileReason(const ExportRunOutput& output, const std::filesystem::path& path) {
+    const auto name = path.filename().string();
+    const auto rule = existingFileRule(output, path);
+    if (output.record.destination.overwrite == document::ExportOverwritePolicy::Refuse)
+        return name + " already exists and this output never replaces files, so the export "
+                      "stopped without replacing it.";
+    if (rule.policy == platform::ArtifactOverwritePolicy::CreateOnly)
+        return name + " appeared after the destination was checked, so the export stopped "
+                      "without replacing it.";
+    return name + " changed after it was checked, so the export stopped without replacing it.";
 }
 
 // Shared bookkeeping for both passes.
@@ -662,6 +701,12 @@ class ImageDriver final : public DriverBase {
             return false;
         }
         frame.target = *path;
+        // A name pattern without a frame number publishes every frame to one file: this run's own
+        // earlier publication of it is replaced.
+        const auto rule =
+            ownPublished_.contains(frame.target)
+                ? ExistingFileRule{platform::ArtifactOverwritePolicy::CreateOrReplace, std::nullopt}
+                : existingFileRule(input_.output, frame.target);
         OutputAnalysisAttemptRequestV1 request{
             .plan = plan_,
             .evaluation = {.time = *time,
@@ -674,9 +719,8 @@ class ImageDriver final : public DriverBase {
                            .linearPass = linearPass_},
             .assetBaseDirectory = input_.assetBaseDirectory,
             .targetPath = frame.target,
-            .overwritePolicy = input_.output.refuseExisting
-                                   ? platform::ArtifactOverwritePolicy::CreateOnly
-                                   : platform::ArtifactOverwritePolicy::CreateOrReplace,
+            .overwritePolicy = rule.policy,
+            .confirmedExisting = rule.confirmed,
             .owner = input_.owner,
             .preset = preset_,
             .displayProcessorProvider = dependencies_.displayProcessor,
@@ -803,6 +847,15 @@ class ImageDriver final : public DriverBase {
                     : "Bloom couldn't check frame " + frameText +
                           " before exporting, so the export stopped. This is a bug in Bloom; the "
                           "details are in the log.";
+            if (attemptFailure &&
+                attemptFailure->stage() == OutputAnalysisAttemptStageV1::Resolving)
+                if (const auto* error = attemptFailure->payloadAs<platform::StagedArtifactError>();
+                    error &&
+                    (*error == platform::StagedArtifactError::OverwritePolicyConflict ||
+                     *error == platform::StagedArtifactError::ExternalModificationConflict))
+                    return fail(failure(ExportFailureCode::PublicationConflict,
+                                        "export.publication.existing",
+                                        existingFileReason(input_.output, target_), next_));
             if (attemptFailure) {
                 if (const auto* phase =
                         attemptFailure->payloadAs<runtime::GpuProcessFrameDiagnosticCode>();
@@ -983,6 +1036,7 @@ class ImageDriver final : public DriverBase {
             else
                 report_.published.back() = target_;
         }
+        ownPublished_.insert(target_);
         ++published_;
         ++next_;
         ++releaseEpoch_;
@@ -1030,6 +1084,7 @@ class ImageDriver final : public DriverBase {
     std::uint64_t next_ = 0;
     std::uint64_t published_ = 0;
     std::filesystem::path target_;
+    std::set<std::filesystem::path> ownPublished_;
     core::Sha256Hasher digests_;
     bool missingDigest_ = false;
     ExportPublicationOutcome worst_ = ExportPublicationOutcome::Published;
@@ -1083,6 +1138,90 @@ std::string mediaProfile(const document::ExportOutputSettings& settings) {
     default:
         return {};
     }
+}
+
+// The plain name of a stream check, for a refusal sentence.
+const char* streamCheckName(const ExportCheck what) {
+    switch (what) {
+    case ExportCheck::Reopen:
+        return "reopen";
+    case ExportCheck::FrameCount:
+        return "frame count";
+    case ExportCheck::Timing:
+        return "timing";
+    case ExportCheck::ColourTags:
+        return "color tags";
+    case ExportCheck::Container:
+        return "container";
+    case ExportCheck::Audio:
+        return "audio";
+    default:
+        return "check";
+    }
+}
+
+// The reopened stream against the request: Reopen, FrameCount, Timing, ColourTags, Container and
+// Audio. #453: the same checks gate the publication, so a file that fails them never replaces the
+// destination, and they are reported again after publication.
+std::vector<ExportCheckResult> mediaStreamChecks(const bool wav, const std::uint64_t expectedFrames,
+                                                 const SequenceExportResultV1& result) {
+    std::vector<ExportCheckResult> checks;
+    if (result.evidence) {
+        const auto& evidence = *result.evidence;
+        checks.push_back(check(ExportCheck::Reopen,
+                               evidence.result == media::provider::QcResult::Pass
+                                   ? ExportCheckOutcome::Passed
+                                   : ExportCheckOutcome::Failed,
+                               "export.check.reopen.worker"));
+        checks.push_back(
+            check(ExportCheck::FrameCount,
+                  wav || evidence.frameCount == expectedFrames
+                      ? (wav ? ExportCheckOutcome::NotApplicable : ExportCheckOutcome::Passed)
+                      : ExportCheckOutcome::Failed,
+                  "export.check.frame-count", expectedFrames, evidence.frameCount));
+        // #465: Timing and Audio compare the reopened stream with what was asked for.
+        const ExportStreamRequest requested{
+            result.expectedFrames,
+            ExportRationalValue{result.expectedFrameRate.numerator,
+                                result.expectedFrameRate.denominator},
+            result.expectedAudioSamples, result.expectedSampleRate};
+        const ExportStreamObservation reopened{
+            evidence.frameCount, evidence.audioSamples,
+            ExportRationalValue{evidence.duration.numerator, evidence.duration.denominator}};
+        checks.push_back(exportTimingCheck(requested, reopened));
+        const auto& tags = evidence.colourTags;
+        const auto expectedTags = result.expectedColourTags;
+        if (wav) {
+            checks.push_back(check(ExportCheck::ColourTags, ExportCheckOutcome::NotApplicable,
+                                   "export.check.colour-tags.audio"));
+        } else {
+            const ExportColourTags observed{static_cast<std::uint8_t>(std::max(tags.primaries, 2)),
+                                            static_cast<std::uint8_t>(std::max(tags.transfer, 2)),
+                                            static_cast<std::uint8_t>(std::max(tags.matrix, 2)),
+                                            tags.range == 2};
+            const ExportColourTags expected{
+                static_cast<std::uint8_t>(std::max(expectedTags.primaries, 2)),
+                static_cast<std::uint8_t>(std::max(expectedTags.transfer, 2)),
+                static_cast<std::uint8_t>(std::max(expectedTags.matrix, 2)),
+                expectedTags.range == 2};
+            checks.push_back(check(ExportCheck::ColourTags,
+                                   observed == expected ? ExportCheckOutcome::Passed
+                                                        : ExportCheckOutcome::Failed,
+                                   observed == expected ? "export.check.colour-tags.match"
+                                                        : "export.check.colour-tags.mismatch",
+                                   expected, observed));
+        }
+        checks.push_back(
+            check(ExportCheck::Container,
+                  evidence.container == result.expectedContainer ? ExportCheckOutcome::Passed
+                                                                 : ExportCheckOutcome::Failed,
+                  "export.check.container", result.expectedContainer, evidence.container));
+        checks.push_back(exportAudioCheck(requested, reopened));
+    } else {
+        checks.push_back(
+            check(ExportCheck::Reopen, ExportCheckOutcome::Failed, "export.check.reopen.missing"));
+    }
+    return checks;
 }
 
 class MediaDriver final : public DriverBase {
@@ -1153,6 +1292,23 @@ class MediaDriver final : public DriverBase {
         request.gpuProvider = dependencies_.gpu;
         request.owner = input_.owner;
         request.useCachedFrames = settings.useCachedFrames;
+        const auto rule = existingFileRule(input_.output, input_.output.destination.firstPath);
+        request.overwritePolicy = rule.policy;
+        request.confirmedExisting = rule.confirmed;
+        // #453: verification runs before the publication can replace the destination.
+        request.verifyBeforePublication =
+            [wav = settings.format == ExportFormat::Wav,
+             expectedFrames = input_.range.last - input_.range.first + 1](
+                const SequenceExportResultV1& staged) -> std::optional<std::string> {
+            std::string failed;
+            for (const auto& result : mediaStreamChecks(wav, expectedFrames, staged))
+                if (result.outcome == ExportCheckOutcome::Failed)
+                    failed +=
+                        std::string(failed.empty() ? "" : ", ") + streamCheckName(result.check);
+            if (failed.empty())
+                return std::nullopt;
+            return failed;
+        };
         runner_ = std::make_unique<SequenceExportRunnerV1>(
             dependencies_.scheduler, dependencies_.compiler, dependencies_.publications,
             dependencies_.artifacts, *dependencies_.ledger, std::move(request),
@@ -1287,8 +1443,13 @@ class MediaDriver final : public DriverBase {
                 log(runtime::DiagnosticSeverity::Error, "export.media.detail", detail);
                 return fail(failure(ExportFailureCode::VerificationFailed,
                                     "export.media.verification",
-                                    "The exported file failed the encoder's reopen check (" +
-                                        detail + "), so it was not published."));
+                                    "The exported file failed verification (" + detail +
+                                        "), so it was not published and nothing was replaced."));
+            case SequenceExportFailureStageV1::Destination:
+                log(runtime::DiagnosticSeverity::Error, "export.publication.existing", detail);
+                return fail(failure(
+                    ExportFailureCode::PublicationConflict, "export.publication.existing",
+                    existingFileReason(input_.output, input_.output.destination.firstPath)));
             case SequenceExportFailureStageV1::CompileFailed:
                 // #437: the same sentence a still export reports (#431).
                 log(runtime::DiagnosticSeverity::Error, "export.compile.failed", detail);
@@ -1318,7 +1479,6 @@ class MediaDriver final : public DriverBase {
         artifacts.publication = publicationOutcome(result.publication.outcome);
         report_.published.push_back(artifacts.firstPath);
         const auto expectedFrames = input_.range.last - input_.range.first + 1;
-        std::vector<ExportCheckResult> checks;
         if (result.evidence) {
             const auto& evidence = *result.evidence;
             artifacts.totalBytes = evidence.artifactBytes;
@@ -1327,60 +1487,9 @@ class MediaDriver final : public DriverBase {
                 report_.verification.reopenQuality = ExportReopenQuality{
                     result.toleranceProfile, evidence.toleranceProfile, evidence.maximumError,
                     evidence.percentileMaximumError, evidence.meanError};
-            checks.push_back(check(ExportCheck::Reopen,
-                                   evidence.result == media::provider::QcResult::Pass
-                                       ? ExportCheckOutcome::Passed
-                                       : ExportCheckOutcome::Failed,
-                                   "export.check.reopen.worker"));
-            const bool wav = settings.format == ExportFormat::Wav;
-            checks.push_back(
-                check(ExportCheck::FrameCount,
-                      wav || evidence.frameCount == expectedFrames
-                          ? (wav ? ExportCheckOutcome::NotApplicable : ExportCheckOutcome::Passed)
-                          : ExportCheckOutcome::Failed,
-                      "export.check.frame-count", expectedFrames, evidence.frameCount));
-            // #465: Timing and Audio compare the reopened stream with what was asked for.
-            const ExportStreamRequest requested{
-                result.expectedFrames,
-                ExportRationalValue{result.expectedFrameRate.numerator,
-                                    result.expectedFrameRate.denominator},
-                result.expectedAudioSamples, result.expectedSampleRate};
-            const ExportStreamObservation reopened{
-                evidence.frameCount, evidence.audioSamples,
-                ExportRationalValue{evidence.duration.numerator, evidence.duration.denominator}};
-            checks.push_back(exportTimingCheck(requested, reopened));
-            const auto& tags = evidence.colourTags;
-            const auto expectedTags = result.expectedColourTags;
-            if (wav) {
-                checks.push_back(check(ExportCheck::ColourTags, ExportCheckOutcome::NotApplicable,
-                                       "export.check.colour-tags.audio"));
-            } else {
-                const ExportColourTags observed{
-                    static_cast<std::uint8_t>(std::max(tags.primaries, 2)),
-                    static_cast<std::uint8_t>(std::max(tags.transfer, 2)),
-                    static_cast<std::uint8_t>(std::max(tags.matrix, 2)), tags.range == 2};
-                const ExportColourTags expected{
-                    static_cast<std::uint8_t>(std::max(expectedTags.primaries, 2)),
-                    static_cast<std::uint8_t>(std::max(expectedTags.transfer, 2)),
-                    static_cast<std::uint8_t>(std::max(expectedTags.matrix, 2)),
-                    expectedTags.range == 2};
-                checks.push_back(check(ExportCheck::ColourTags,
-                                       observed == expected ? ExportCheckOutcome::Passed
-                                                            : ExportCheckOutcome::Failed,
-                                       observed == expected ? "export.check.colour-tags.match"
-                                                            : "export.check.colour-tags.mismatch",
-                                       expected, observed));
-            }
-            checks.push_back(
-                check(ExportCheck::Container,
-                      evidence.container == result.expectedContainer ? ExportCheckOutcome::Passed
-                                                                     : ExportCheckOutcome::Failed,
-                      "export.check.container", result.expectedContainer, evidence.container));
-            checks.push_back(exportAudioCheck(requested, reopened));
-        } else {
-            checks.push_back(check(ExportCheck::Reopen, ExportCheckOutcome::Failed,
-                                   "export.check.reopen.missing"));
         }
+        auto checks =
+            mediaStreamChecks(settings.format == ExportFormat::Wav, expectedFrames, result);
         checks.push_back(check(ExportCheck::Naming, ExportCheckOutcome::NotApplicable,
                                "export.check.naming.single-file"));
         checks.push_back(

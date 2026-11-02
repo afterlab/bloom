@@ -617,6 +617,23 @@ class PythonApi(unittest.TestCase):
             self.assertEqual(result.files[0].digest, 'sha256:' + hashlib.sha256(expected).hexdigest())
             with self.assertRaises(AttributeError):
                 result.published_frames = 2
+            # #453: an existing file is replaced only on request, here and in bloom-cli.
+            with self.assertRaises(RuntimeError):
+                bloom.render.frame(12, out=root / 'cli/frame.png')
+            self.assertEqual((root / 'cli/frame.png').read_bytes(), expected)
+            arguments = [CLI, 'render', '--project', str(root / 'scene.bloom'), '--frame', '12',
+                         '--preset', 'PngRgba8SrgbV1', '--out', str(root / 'python-out')]
+            (root / 'python-out').mkdir()
+            (root / 'python-out/frame.png').write_bytes(b'kept')
+            refused = subprocess.run(arguments, capture_output=True, timeout=60)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual((root / 'python-out/frame.png').read_bytes(), b'kept')
+            replaced = subprocess.run(arguments + ['--replace'], capture_output=True, timeout=60)
+            self.assertEqual(replaced.returncode, 0, replaced.stderr.decode())
+            self.assertEqual((root / 'python-out/frame.png').read_bytes(), expected)
+            self.assertEqual(bloom.render.frame(12, out=root / 'python.png',
+                                                replace=True).files[0].digest,
+                             result.files[0].digest)
 
 
 if __name__ == '__main__':

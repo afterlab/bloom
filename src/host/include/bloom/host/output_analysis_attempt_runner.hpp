@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/host/existing_export_target.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/display_output.hpp>
 #include <bloom/output/output_analysis_analyzer.hpp>
@@ -137,6 +138,10 @@ struct OutputAnalysisAttemptRequestV1 final {
     std::filesystem::path targetPath;
     platform::ArtifactOverwritePolicy overwritePolicy =
         platform::ArtifactOverwritePolicy::CreateOrReplace;
+    // #453: the existing file a replacement was confirmed for. When set and the target exists,
+    // Resolving refuses with ExternalModificationConflict unless the target is still exactly that
+    // file; the publication guard then refuses any change after Resolving.
+    std::optional<ExistingExportTargetV1> confirmedExisting = std::nullopt;
     runtime::TaskOwner owner{.kind = runtime::TaskOwnerKind::Export, .id = {}};
     // Which closed preset contract this attempt analyzes for (issue #111). The typed preset selects
     // the analyzer entry point -- analyzePngRgba8SrgbV1 vs analyzeFlatExrRgba32fLinRec709SceneV1 --

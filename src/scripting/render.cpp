@@ -165,7 +165,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     if (!format || artifacts == nullptr || publications == nullptr)
         return failed("Export services are unavailable");
 
-    // The transient job: one output, never saved, replacing the destination as Render always did.
+    // The transient job: one output, never saved. It replaces an existing file only when the
+    // caller opted in (#453); otherwise every frame's publication refuses an existing file.
     document::ExportJob job;
     job.id = document::ExportJobId::fromRaw(1);
     job.composition = request.composition;
@@ -184,7 +185,9 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         return failed("The render destination cannot be represented as a file URI");
     output.destination = {.portability = "external",
                           .path = *uri,
-                          .overwrite = document::ExportOverwritePolicy::Replace};
+                          .overwrite = request.replaceExisting
+                                           ? document::ExportOverwritePolicy::Replace
+                                           : document::ExportOverwritePolicy::Refuse};
     job.outputs.push_back(output);
     const auto range = host::resolveExportRange(job, snapshot.project());
     if (!range)
@@ -226,8 +229,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         .outputs = {host::ExportRunOutput{.record = output,
                                           .context = context,
                                           .destination = std::move(resolved),
-                                          .confirmedSample = std::nullopt,
-                                          .refuseExisting = false,
+                                          .confirmedFiles = {},
                                           .artifactByteLimit = std::nullopt}},
         .encoders = encoders,
         .owner = {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},

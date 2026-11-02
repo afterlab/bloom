@@ -3,6 +3,7 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/export_queue.hpp>
+#include <bloom/host/existing_export_target.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/export_verification.hpp>
@@ -11,6 +12,7 @@
 #include <bloom/runtime/task_types.hpp>
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -63,12 +65,12 @@ struct ExportRunOutput final {
     // The context the destination was resolved against, frozen when the run started.
     ExportDestinationContext context;
     ExportResolvedDestination destination;
-    // The confirmed destination sample (fingerprint digest of the existing file or file set). The
-    // run re-samples and refuses with PublicationConflict when it changed. Absent when nothing
-    // existed or the policy is Replace.
-    std::optional<core::Sha256Digest> confirmedSample;
-    // Refuse when the destination exists at run time (policy Refuse).
-    bool refuseExisting = false;
+    // #453: the existing files a replacement covers under AskBeforeReplacing (the confirmed sample,
+    // or this session's own earlier files), as the run's destination sample recorded them. Every
+    // publication enforces record.destination.overwrite: Replace replaces, Refuse never replaces,
+    // and AskBeforeReplacing replaces only a file listed here that is still exactly as recorded; a
+    // file that appeared or changed after the sample is refused with PublicationConflict.
+    std::map<std::filesystem::path, ExistingExportTargetV1> confirmedFiles;
     // Issue #369: the destination's sampled free space minus the safety margin.
     std::optional<std::uint64_t> artifactByteLimit;
 };
@@ -161,6 +163,8 @@ struct ExportDestinationSample final {
     std::uint64_t existing = 0;
     // SHA-256 over the existing files' names, sizes and modification times.
     std::optional<core::Sha256Digest> fingerprint;
+    // #453: the same existing files with the size and modification time the fingerprint hashed.
+    std::map<std::filesystem::path, ExistingExportTargetV1> existingFiles;
     std::optional<std::uint64_t> freeBytes;
 };
 

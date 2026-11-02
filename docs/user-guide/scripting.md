@@ -8,7 +8,7 @@ bloom-cli new <file>
 bloom-cli open <file>
 bloom-cli run <script.json>
 bloom-cli render [--project <file>] (--frame N | --range A-B) \
-  --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir>
+  --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir> [--replace]
 bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save]
 ```
 
@@ -50,7 +50,9 @@ They measure the layers with the CPU reference evaluation before the step runs; 
 
 `render` selects the first composition when no project is supplied. A frame writes `frame.png` or
 `frame.exr`; a range writes zero-padded `frame.XXXX` sequence files. The command prints the output
-preservation report and only exits successfully after publication completes.
+preservation report and only exits successfully after publication completes. A file that already
+exists is replaced only with `--replace`; without it the command fails and leaves the file as it
+was.
 
 Example scripts live in [`examples/scripting`](../../examples/scripting/).
 

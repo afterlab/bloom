@@ -477,14 +477,13 @@ struct Pump final {
                                                   "The destination changed after it was checked or "
                                                   "confirmed; it was not replaced",
                                                   output.id));
-                    run.confirmedSample = sample.fingerprint;
+                    // Every publication replaces only these files, unchanged (#453).
+                    run.confirmedFiles = sample.existingFiles;
                     break;
                 case document::ExportOverwritePolicy::Replace:
                     break;
                 }
             }
-            run.refuseExisting =
-                output.destination.overwrite == document::ExportOverwritePolicy::Refuse;
             const auto estimate = composition ? detail::estimateBytes(output.settings, *composition,
                                                                       *job.capturedRange)
                                               : std::nullopt;

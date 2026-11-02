@@ -185,9 +185,11 @@ result = bloom.render.frame(12, composition=composition, out="frame-12.png")
 print(result.files[0].path, result.files[0].digest)
 
 sequence = bloom.render.range(0, 23, out="frame.png")
+again = bloom.render.frame(12, composition=composition, out="frame-12.png", replace=True)
 ```
 
-The destination directory must already exist. Frame labels are zero-based and range endpoints are
+The destination directory must already exist. An existing file is never replaced unless the call
+passes `replace=True`; without it the render raises `RuntimeError` and leaves the file as it was. Frame labels are zero-based and range endpoints are
 inclusive. PNG and scene-linear float OpenEXR use the host's reference compile, analysis, approval,
 publication and frame naming paths. `RenderResult` and `RenderFile` are immutable. Digests are
 SHA-256 over the published file bytes. These calls release the GIL during native work; no Python

@@ -831,11 +831,28 @@ OutputAnalysisAttemptRunnerV1 OutputAnalysisAttemptRunnerResultV1::takeHandle() 
     return std::move(*handle_);
 }
 
+std::optional<ExistingExportTargetV1>
+sampleExistingExportTargetV1(const std::filesystem::path& path) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error) || error)
+        return std::nullopt;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error)
+        return std::nullopt;
+    const auto time = std::filesystem::last_write_time(path, error);
+    if (error)
+        return std::nullopt;
+    return ExistingExportTargetV1{.byteSize = static_cast<std::uint64_t>(size),
+                                  .modificationTicks =
+                                      static_cast<std::int64_t>(time.time_since_epoch().count())};
+}
+
 OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
     runtime::TaskScheduler& scheduler, platform::StagedArtifactCoordinator& artifacts,
     output::ExportResourceLedgerV1& ledger, OutputAnalysisAttemptRequestV1 request) {
     const auto targetPath = request.targetPath;
     const auto overwritePolicy = request.overwritePolicy;
+    const auto confirmedExisting = request.confirmedExisting;
     const auto capturedColor =
         runtime::captureEvaluationColorIntent(request.evaluation.colorIntent);
     if (!capturedColor) {
@@ -873,8 +890,8 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
         runtime::TaskPriority::Foreground, runtime::TaskExecutor::BlockingIo);
     auto submission = scheduler.submit<ResolvingOutcomeV1>(
         std::move(resolvingRequest),
-        [&artifacts, targetPath, overwritePolicy, preset, displayProvider, gpuProvider,
-         capturedColorIntent,
+        [&artifacts, targetPath, overwritePolicy, confirmedExisting, preset, displayProvider,
+         gpuProvider, capturedColorIntent,
          colorGeometry](runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<ResolvingOutcomeV1>::cancelled();
@@ -891,6 +908,18 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
             auto target = std::move(preflightResult).takeTarget();
             const auto targetKey = target.targetKey();
             const auto observation = target.observation();
+            // #453: a confirmed replacement covers only the file that was confirmed. Sampled after
+            // the preflight observation, so a change before it fails here and a change after it
+            // fails the publication guard.
+            if (observation.exists && confirmedExisting.has_value()) {
+                const auto current = sampleExistingExportTargetV1(targetPath);
+                if (!current || *current != *confirmedExisting ||
+                    current->byteSize != observation.fingerprint.byteSize) {
+                    return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(
+                        {.succeeded = false,
+                         .error = platform::StagedArtifactError::ExternalModificationConflict});
+                }
+            }
             // `target` goes out of scope here: the live platform active-target admission it holds
             // is released immediately rather than kept open for the duration of a pending artist
             // decision (see this file's own header-level rationale comment).

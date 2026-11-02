@@ -28,6 +28,9 @@ struct RenderRequest final {
     output::OutputPresetV1 preset = output::OutputPresetV1::PngRgba8SrgbV1;
     std::filesystem::path destination;
     std::function<bool()> cancelled = {};
+    // #453: an existing file is never replaced unless the caller opts in. With false, a frame
+    // whose file exists fails the render and the file is untouched.
+    bool replaceExisting = false;
 };
 
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not
