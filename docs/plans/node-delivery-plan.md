@@ -72,9 +72,10 @@ output data and display windows and pixel aspect. The second image is sampled at
 composition-space integer pixel coordinate, with transparent black outside its data window.
 Mix interpolates premultiplied RGBA by its factor. Set Alpha replaces coverage while preserving
 the first image's straight RGB; a zero-alpha first pixel has zero RGB even if the matte gives it
-positive coverage. RGB matte channels and scene-linear Rec. 709 luma are unpremultiplied,
-then clamped to [0,1]; a zero-alpha matte gives zero coverage. A separate per-pixel mask input
-for Mix remains part of the later Matte integration rather than this two-image slice.
+positive coverage. RGB matte channels are unpremultiplied and scene-linear Rec. 709 luma is read
+from the premultiplied colour (#460), then clamped to [0,1]; a zero-alpha matte gives zero
+coverage. A separate per-pixel mask input for Mix remains part of the later Matte integration
+rather than this two-image slice.
 
 Depends on #332.
 

@@ -18,7 +18,7 @@ layout(push_constant) uniform BloomImageCombinePush {
     int sourceOffsetY;
     uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha
     float factor;           // finite unit factor, validated by host
-    uint channel;           // bits 0-2: 0=A, 1=R, 2=G, 3=B, 4=scene-linear luma; bit 3: invert
+    uint channel;           // bits 0-2: 0=A, 1=R, 2=G, 3=B, 4=premultiplied luma; bit 3: invert
     uint maskWidth;
     uint maskHeight;
     int maskOffsetX;
@@ -83,7 +83,7 @@ float channelCoverage(vec4 matte) {
     if (channel == 1u) value = matte.r / matte.a;
     else if (channel == 2u) value = matte.g / matte.a;
     else if (channel == 3u) value = matte.b / matte.a;
-    else value = luma(matte.rgb) / matte.a;
+    else value = luma(matte.rgb);  // premultiplied: the matte's alpha feathers its luma
     return clamp(value, 0.0, 1.0);
 }
 // An inverted matte is the exact Float32 complement, matching render::matteCoverage.

@@ -63,10 +63,11 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
     basePixels[7] = pixel(1.0F, -2.0F, 3.0F, std::numeric_limits<float>::min());
     basePixels[12] = pixel(-0.75F, 2.5F, 0.125F, 1.0F);
     const std::vector<Rgba32f> secondPixels{
-        pixel(-10000.0F, 10000.0F, -10000.0F, 1.0F),
-        pixel(7152.0F, -2126.0F, 0.5F, 1.0F),
+        pixel(-10000.0F, 10000.0F, -10000.0F, 1.0F), pixel(7152.0F, -2126.0F, 0.5F, 1.0F),
         pixel(1.0F, -0.29725947976112366F, 0.0F, 1.0e-7F),
-        pixel(1.0F, 0.75F, 2.0F, 1.0F)};
+        // #460: a feathered matte edge (straight 1, 0.75, 2 at half alpha). Luma reads the
+        // premultiplied colour, so its coverage is about 0.4467, not the straight 0.8934.
+        pixel(0.5F, 0.375F, 1.0F, 0.5F)};
     auto baseImage = makeImage(baseWindow, baseWindow, PixelAspectRatio::square(), basePixels);
     auto secondImage =
         makeImage(secondWindow, secondWindow, PixelAspectRatio::square(), secondPixels);
@@ -90,8 +91,7 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
                                   ImageCoverageChannel::Alpha},
         GpuImageCombineParameters{GpuImageCombineKind::Mix, std::numeric_limits<float>::min(),
                                   ImageCoverageChannel::Alpha},
-        GpuImageCombineParameters{GpuImageCombineKind::SetAlpha, 1.0F,
-                                  ImageCoverageChannel::Luma},
+        GpuImageCombineParameters{GpuImageCombineKind::SetAlpha, 1.0F, ImageCoverageChannel::Luma},
         GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha,
                                   std::numeric_limits<float>::min(), ImageCoverageChannel::Red},
         GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha, 0.5F,
@@ -165,6 +165,15 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
                 const auto index = static_cast<std::size_t>(y) * width + x;
                 expected[index] = oracle(basePixels[index], tap, mode);
             }
+        }
+        // The feathered matte pixel lands on opaque base pixel 12; its Luma coverage must follow
+        // its alpha on both routes instead of saturating the edge (Set Alpha publishes it as the
+        // output alpha, so the readback below compares it directly).
+        if (mode.channel == ImageCoverageChannel::Luma && !mode.matteAbsent) {
+            const float edge = expected[12].alpha();
+            const float straight = mode.invert ? 1.0F - edge : edge;
+            expectations.expect(straight > 0.44F && straight < 0.45F,
+                                label + ": feathered Luma matte coverage follows matte alpha");
         }
         const auto readback = readbackResidentImage(result, kBudget);
         expectations.expect(readback.hasValue(), label + ": oracle readback succeeds");

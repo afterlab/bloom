@@ -157,6 +157,29 @@ void testImageCombineWindows() {
         expect(replaced.image->pixels()[2] == render::Rgba32f::transparent(),
                "Set Alpha clears base pixels after matte extent");
     }
+    // #460: Luma reads the premultiplied matte colour, so a feathered white matte edge keeps its
+    // alpha as coverage instead of going hard; straight R/G/B selectors are unchanged.
+    const auto featheredWhite = rgba(0.5F, 0.5F, 0.5F, 0.5F);
+    expect(render::imageCoverage(featheredWhite, render::ImageCoverageChannel::Luma) == 0.5F &&
+               render::imageCoverage(rgba(0.25F, 0.25F, 0.25F, 0.25F),
+                                     render::ImageCoverageChannel::Luma) == 0.25F &&
+               render::imageCoverage(rgba(2.0F, 2.0F, 2.0F, 0.5F),
+                                     render::ImageCoverageChannel::Luma) == 1.0F &&
+               render::imageCoverage(featheredWhite, render::ImageCoverageChannel::Red) == 1.0F,
+           "Luma coverage of a feathered white matte follows its alpha");
+    {
+        const auto opaqueBase = make(0, 0, 1, 1, {rgba(0.25F, 0.5F, 0.75F, 1.0F)});
+        const auto feathered = make(0, 0, 1, 1, {featheredWhite});
+        runtime::detail::PreparedImageEffect lumaMatte;
+        lumaMatte.combine = {runtime::ImageCombineMode::MultiplyAlpha,
+                             1.0F,
+                             {render::ImageCoverageChannel::Luma, false}};
+        const auto matted = runtime::detail::applyImageEffect(lumaMatte, opaqueBase, &feathered,
+                                                              1U << 20U, {}, operation, {});
+        expect(matted.image && !matted.diagnostic &&
+                   matted.image->pixels()[0] == rgba(0.125F, 0.25F, 0.375F, 0.5F),
+               "a Luma matte with a feathered white edge halves the target");
+    }
     // #361: an inverted matte is the exact complement of the selected unit coverage.
     const auto withAlpha = [](const render::Rgba32f pixel, const float coverage) {
         const auto result = render::setImageAlpha(pixel, coverage);

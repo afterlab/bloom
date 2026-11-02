@@ -10,10 +10,11 @@
 
 namespace bloom::render {
 
-// Flat RGBA matte extraction in scene-linear light. RGB selectors read straight colour;
-// transparent pixels have zero coverage. The result is always a finite unit coverage,
-// including for negative and HDR source colour. These values also define the resident
-// GPU kernel's channel selector and are deliberately independent of UI labels.
+// Flat RGBA matte extraction in scene-linear light. RGB selectors read straight colour; Luma reads
+// the Rec. 709 luma of the premultiplied colour, so a matte's alpha feathers its luma coverage as
+// a track matte does (ADR 0028). Transparent pixels have zero coverage. The result is always a
+// finite unit coverage, including for negative and HDR source colour. These values also define the
+// resident GPU kernel's channel selector and are deliberately independent of UI labels.
 enum class ImageCoverageChannel : std::uint8_t { Alpha, Red, Green, Blue, Luma };
 
 [[nodiscard]] inline float imageCoverage(const Rgba32f pixel,
@@ -35,9 +36,9 @@ enum class ImageCoverageChannel : std::uint8_t { Alpha, Red, Green, Blue, Luma }
         value = static_cast<double>(pixel.blue()) * inverseAlpha;
         break;
     case ImageCoverageChannel::Luma:
-        value = (0.2126 * static_cast<double>(pixel.red()) +
-                 0.7152 * static_cast<double>(pixel.green()) +
-                 0.0722 * static_cast<double>(pixel.blue())) * inverseAlpha;
+        value = 0.2126 * static_cast<double>(pixel.red()) +
+                0.7152 * static_cast<double>(pixel.green()) +
+                0.0722 * static_cast<double>(pixel.blue());
         break;
     case ImageCoverageChannel::Alpha:
         return pixel.alpha();

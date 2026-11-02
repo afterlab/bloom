@@ -765,7 +765,9 @@ colors, dimensions, windows and shader digest participate in cache identity.
 
 Multiply Alpha consumes a base image and a matte at matching global pixel coordinates. It reads
 the selected Alpha, straight Red/Green/Blue, or Luma matte channel, treats absent matte pixels as
-zero coverage, and multiplies the base premultiplied RGBA by the clamped coverage and animatable
+zero coverage, reads Luma as the Rec. 709 luma of the premultiplied matte colour (as ADR 0028
+defines for track mattes, so a feathered white matte edge gives its alpha rather than full
+coverage), and multiplies the base premultiplied RGBA by the clamped coverage and animatable
 unit factor. Zero-alpha matte RGB contributes zero; negative and HDR matte channels are clamped
 only after extraction. The base image retains its data/display windows and pixel aspect. CPU and
 resident two-image GPU paths share the coverage contract, with normal cancellation and budget
