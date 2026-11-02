@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <set>
 
 namespace bloom::commands::test {
@@ -354,6 +355,63 @@ void testDeleteMatteSource(TestContext& test) {
                 "deleting a matte source clears the matte and renders whole");
 }
 
+[[nodiscard]] std::optional<LayerStackInputRef> slotOf(const Document& document,
+                                                       const LayerId layer) {
+    for (const auto& entry :
+         composition(document.snapshot()).graph().merge(kLayerStackNodeId)->entries())
+        if (entry.layerId == layer)
+            return LayerStackInputRef{kLayerStackNodeId, entry.slotId,
+                                      std::string(document::kLayerStackContentInputRole)};
+    return std::nullopt;
+}
+
+// #460: a layer that leaves its Merge clears the track mattes it shared there instead of the edit
+// being rejected, whether it was the matte's target or its source.
+void testMatteLayerLeavesMerge(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    const document::TrackMatte matte{kSecondLayerId};
+    (void)run<SetTrackMatte>(document, stack, kCompositionId, kFirstLayerId, matte);
+    const auto target =
+        run<DisconnectInput>(document, stack, kCompositionId, *slotOf(document, kFirstLayerId));
+    test.expect(target.changed() && !slotOf(document, kFirstLayerId) &&
+                    !layerOf(document).trackMatte && valid(document),
+                "disconnecting a matted layer's Merge slot clears its matte");
+    test.expect(stack.undo().changed() && slotOf(document, kFirstLayerId) &&
+                    layerOf(document).trackMatte == matte && valid(document),
+                "undo restores the slot and the matte");
+    const auto source =
+        run<DisconnectInput>(document, stack, kCompositionId, *slotOf(document, kSecondLayerId));
+    test.expect(source.changed() && !slotOf(document, kSecondLayerId) &&
+                    !layerOf(document).trackMatte && valid(document),
+                "disconnecting a matte source's Merge slot clears the matte that reads it");
+    test.expect(stack.undo().changed() && layerOf(document).trackMatte == matte && valid(document),
+                "undo restores the source slot and the matte");
+
+    // A copy of the matted layer joins the Merge with the same matte; detached, it loses it.
+    const auto duplicated = run<DuplicateNodes>(document, stack, kCompositionId,
+                                                std::set<NodeId>{kFirstLayerNodeId}, Vec2d{0, 0});
+    const auto copyId =
+        duplicated.outputId<LayerId>("layer." + std::to_string(kFirstLayerId.value()));
+    test.expect(duplicated.changed() && copyId && slotOf(document, copyId.value_or(LayerId{})),
+                "the copy has its own Merge slot");
+    if (!copyId || !slotOf(document, *copyId))
+        return;
+    const auto copyNode = layerOf(document, *copyId).nodeId;
+    test.expect(run<DisconnectInput>(document, stack, kCompositionId, *slotOf(document, *copyId))
+                        .changed() &&
+                    !layerOf(document, *copyId).trackMatte &&
+                    layerOf(document).trackMatte == matte && valid(document),
+                "a detached copy loses only its own matte");
+    // Feeding the matted layer's slot from the detached copy moves the matted layer out.
+    const auto replaced = run<ConnectPorts>(
+        document, stack, kCompositionId, document::OutputPortRef{copyNode, "image"},
+        document::InputPortRef{*slotOf(document, kFirstLayerId)});
+    test.expect(replaced.changed() && !slotOf(document, kFirstLayerId) &&
+                    slotOf(document, *copyId) && !layerOf(document).trackMatte && valid(document),
+                "replacing a matted layer's slot source clears the matte it left behind");
+}
+
 void testSplit(TestContext& test) {
     Document document(makeProject());
     CommandStack stack(document);
@@ -396,6 +454,7 @@ int main() {
         bloom::commands::test::testTrackMatte(test);
         bloom::commands::test::testDeleteDuplicateSplit(test);
         bloom::commands::test::testDeleteMatteSource(test);
+        bloom::commands::test::testMatteLayerLeavesMerge(test);
         bloom::commands::test::testSplit(test);
         bloom::commands::test::testDuplicateComposition(test);
     } catch (const std::exception& error) {

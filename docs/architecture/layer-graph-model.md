@@ -473,7 +473,9 @@ truth on the `LayerOutputBoundary`:
   Merge reads the target's blend mode and clock through it (`mergeEntryLayerIndex`).
 - Typed commands with exact undo add, remove, reorder, rename, re-mode, invert and re-path masks
   and set the matte; deleting, duplicating, splitting and cloning layers carry masks with fresh ids.
-  A matte source cannot be split.
+  A matte source cannot be split. A layer that leaves a Merge -- its slot disconnected, or the slot
+  fed by another layer -- clears every matte it shared there, as its target or as its source, in
+  the same undoable edit, as deleting a matte source does.
 
 ## Hard-Case Contracts
 

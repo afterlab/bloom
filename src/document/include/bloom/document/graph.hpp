@@ -242,6 +242,9 @@ class CanonicalGraph final {
     [[nodiscard]] bool eraseNode(NodeId id);
     [[nodiscard]] bool eraseEdge(EdgeId id);
     [[nodiscard]] bool renameLayer(LayerId id, std::string name);
+    // ADR 0028: a track matte joins two layers of one Merge. After `layer` leaves a Merge slot,
+    // clear each matte naming it as target or source whose two ends no longer share a Merge.
+    void clearTrackMattesOutsideMerge(LayerId layer);
     void setCompositionOutput(OutputPortRef output) { compositionOutput_ = std::move(output); }
 
     [[nodiscard]] ValidationResult

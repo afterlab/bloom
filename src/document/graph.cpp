@@ -6,6 +6,7 @@
 #include <array>
 #include <cstddef>
 #include <deque>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -374,6 +375,24 @@ bool CanonicalGraph::eraseNode(const NodeId id) {
     std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
     std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
     return true;
+}
+
+void CanonicalGraph::clearTrackMattesOutsideMerge(const LayerId layer) {
+    // The same first-Merge membership validate() uses for the same-Merge rule.
+    const auto mergeOf = [this](const LayerId id) -> std::optional<NodeId> {
+        for (const auto& stack : layerStacks_)
+            if (std::ranges::any_of(stack.entries(),
+                                    [id](const auto& entry) { return entry.layerId == id; }))
+                return stack.nodeId();
+        return std::nullopt;
+    };
+    for (auto& target : layerOutputs_) {
+        if (!target.trackMatte || (target.layerId != layer && target.trackMatte->source != layer))
+            continue;
+        const auto targetMerge = mergeOf(target.layerId);
+        if (!targetMerge || targetMerge != mergeOf(target.trackMatte->source))
+            target.trackMatte.reset();
+    }
 }
 
 bool CanonicalGraph::renameLayer(const LayerId id, std::string name) {

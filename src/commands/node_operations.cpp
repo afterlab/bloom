@@ -524,10 +524,13 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         const auto boundary =
             std::ranges::find(boundaries, source_.nodeId, &document::LayerOutputBoundary::nodeId);
         const auto layerId = boundary == boundaries.end() ? document::LayerId{} : boundary->layerId;
+        const auto replacedLayer = found->layerId;
         (void)stack->erase(slot->slotId);
         if (!stack->append({slot->slotId, layerId}) || !stack->moveBefore(slot->slotId, next))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Merge slot source cannot be replaced");
+        if (replacedLayer != layerId)
+            graph.clearTrackMattesOutsideMerge(replacedLayer);
     }
     if (!graph.addEdge({*edgeId, source_, destination_}, registry_))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
@@ -595,6 +598,7 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
         // where it was; only a slot left with NEITHER edge is the shape this actually removes. The
         // Layer node keeps its boundary and its LayerId regardless, so reconnecting is one gesture
         // rather than a rebuild.
+        const auto removedLayer = stack->find(slot->slotId)->layerId;
         const auto* edge = detail::inputEdge(graph, input_);
         if (edge != nullptr)
             (void)graph.eraseEdge(edge->id);
@@ -606,6 +610,10 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
         if (!stillFed && !stack->erase(slot->slotId))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Layer stack slot could not be removed");
+        // A layer that leaves its Merge loses the track mattes it shared there (ADR 0028), as a
+        // matte whose source node is deleted is cleared.
+        if (!stillFed)
+            graph.clearTrackMattesOutsideMerge(removedLayer);
         if (const auto failure = detail::validateGraph(*composition, registry_))
             return *failure;
         return neutral(OperationResult::applied());
