@@ -3,7 +3,8 @@
 // The desktop application's session and UI seams for MCP (ADR 0034, "Owner decisions" item 9):
 // the things an artist does in the application that are not project-truth edits -- opening and
 // saving projects, choosing what is selected and which composition is active, moving the
-// playhead, the Viewer's display settings and bringing the Export editor into view -- offered to
+// playhead, the Viewer's display settings, bringing the Export editor into view, Preferences,
+// Edit > Purge, the Jobs panel, Reveal in File Manager and the composition presets -- offered to
 // agents as live-only tools.
 //
 // One struct of std::function members so the composition root binds them in one place and a test
@@ -25,6 +26,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace bloom::mcp {
@@ -100,13 +103,16 @@ enum class McpProjectRequestKind : std::uint8_t {
     Open = 2,
     New = 3,
     Close = 4,
+    // File > Save a Copy: a byte-for-byte copy of a read-only (newer or preserved) project's file
+    // at `path`; the open project stays where it is.
+    SaveCopy = 5,
 };
 
 struct McpProjectRequest final {
     McpProjectRequestKind kind = McpProjectRequestKind::Save;
-    // SaveAs and Open: an absolute path to a .bloom file.
+    // SaveAs, SaveCopy and Open: an absolute path to a .bloom file.
     std::filesystem::path path;
-    // SaveAs: replace an existing file.
+    // SaveAs and SaveCopy: replace an existing file.
     bool replace = false;
     // Open, New and Close: discard unsaved changes instead of refusing with UnsavedChanges.
     bool discardChanges = false;
@@ -192,6 +198,31 @@ enum class McpViewerZoom : std::uint8_t {
     Factor = 2,
 };
 
+// The Viewer's preview resolution (the footer's Resolution dropdown).
+enum class McpViewerResolution : std::uint8_t {
+    Auto = 0,
+    Full = 1,
+    Half = 2,
+    Quarter = 3,
+};
+
+// The surround outside the composition frame (View > Background).
+enum class McpViewerBackground : std::uint8_t {
+    // The composition's own background colour.
+    Solid = 0,
+    Gray = 1,
+    Black = 2,
+    White = 3,
+};
+
+// A region of interest in composition pixels.
+struct McpViewerRegion final {
+    double x = 0.0;
+    double y = 0.0;
+    double width = 0.0;
+    double height = 0.0;
+};
+
 // Only the fields that are present change.
 struct McpViewerRequest final {
     // OCIO display and view names; an empty string returns to the project default.
@@ -203,6 +234,60 @@ struct McpViewerRequest final {
     std::optional<McpViewerZoom> zoom;
     // With zoom Factor: 1.0 is 100 percent.
     std::optional<double> zoomFactor;
+    // Viewer gamma (display-only, never rendered); 1.0 is neutral.
+    std::optional<double> gamma;
+    std::optional<McpViewerResolution> resolution;
+    std::optional<McpViewerBackground> background;
+    // The checkerboard inside the composition frame.
+    std::optional<bool> transparencyGrid;
+    // The Viewer's look toggle (the OCIO look of the display and view).
+    std::optional<bool> look;
+    // Present with a value: evaluate only that region (clipped to the composition frame); present
+    // and empty: clear the region of interest.
+    std::optional<std::optional<McpViewerRegion>> regionOfInterest;
+};
+
+// ---- Preferences (preferences.get, preferences.set)
+
+// One application preference by its key (the vocabulary is the binding's: docs/user-guide/mcp.md
+// lists it). A number is a double; a choice or a path is a string.
+using McpPreferenceValue = std::variant<bool, double, std::string>;
+struct McpPreference final {
+    std::string key;
+    McpPreferenceValue value;
+};
+
+// ---- Jobs (jobs.list, jobs.cancel): the Jobs panel's rows
+
+struct McpJob final {
+    std::uint64_t id = 0;
+    // The Jobs panel's own words for the row.
+    std::string name;
+    std::string phase;
+    std::string state;
+    std::optional<std::uint64_t> completed;
+    std::optional<std::uint64_t> total;
+    bool canCancel = false;
+    bool cancellationRequested = false;
+    // Set for an export run's row: export.stop stops it (export.reveal shows it).
+    std::optional<document::ExportJobId> exportJob;
+};
+
+// ---- Composition presets (composition.presets, composition.save-preset, ...)
+
+struct McpCompositionPreset final {
+    std::string name;
+    bool builtIn = false;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint64_t pixelAspectNumerator = 1;
+    std::uint64_t pixelAspectDenominator = 1;
+    // User presets only.
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> frameRate;
+    std::optional<core::RationalTime> duration;
+    std::optional<core::RationalTime> startTimecode;
+    std::optional<bool> dropFrame;
+    std::optional<std::array<double, 4>> background;
 };
 
 struct McpLiveUiPort final {
@@ -228,6 +313,31 @@ struct McpLiveUiPort final {
     // not hold; Failed when the panel could not be shown. Window state only: never changes the
     // project or its undo history. Export queue edits never call it (an agent reveals explicitly).
     std::function<McpUiResult(std::optional<document::ExportJobId>)> revealExport;
+    // preferences.get: every preference the agent may read and set, with its current value.
+    std::function<std::vector<McpPreference>()> preferences;
+    // preferences.set: validates every entry first (InvalidArgument names the key), then commits
+    // them together as the Preferences window's OK does. Busy while a modal dialog is open.
+    std::function<McpUiResult(const std::vector<McpPreference>&)> setPreferences;
+    // cache.purge: Edit > Purge (media = false: the preview cache; true: the media cache). Busy
+    // while a purge runs. Never touches the project or its undo history.
+    std::function<McpUiResult(bool media)> purgeCache;
+    // jobs.list and jobs.cancel: the Jobs panel's rows and its Cancel. UnknownTarget for a job the
+    // panel does not list; InvalidArgument for a row the panel cannot cancel (an export run).
+    std::function<std::vector<McpJob>()> jobs;
+    std::function<McpUiResult(std::uint64_t)> cancelJob;
+    // project.cancel-open: File > Cancel Open. InvalidArgument when no project is opening.
+    std::function<McpUiResult()> cancelOpen;
+    // asset.reveal: Reveal in File Manager. UnknownTarget for an unknown asset; InvalidArgument
+    // for an asset without a file.
+    std::function<McpUiResult(document::AssetId)> revealAsset;
+    // The Composition Settings dialog's preset list and its Save, Rename and Delete preset
+    // buttons (per-user settings, never project truth or undo).
+    std::function<std::vector<McpCompositionPreset>()> compositionPresets;
+    std::function<McpUiResult(document::CompositionId, const std::string& name)>
+        saveCompositionPreset;
+    std::function<McpUiResult(const std::string& name, const std::string& newName)>
+        renameCompositionPreset;
+    std::function<McpUiResult(const std::string& name)> deleteCompositionPreset;
 };
 
 } // namespace bloom::mcp

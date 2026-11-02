@@ -113,6 +113,39 @@ int serve(scripting::Session& session) {
             done(result);
         };
         using Kind = mcp::McpProjectRequestKind;
+        if (request.kind == Kind::SaveCopy) {
+            // File > Save a Copy: only a read-only (newer or preserved) document, whose bytes are
+            // copied verbatim; an editable project is saved with Save As.
+            if (session.state().contentKind != host::ProjectSessionContentKind::PreservedReadOnly)
+                return refuse(mcp::McpUiRefusal::InvalidArgument,
+                              result.projectName +
+                                  " can be saved normally; use project.save-as for a copy.");
+            if (request.path.extension() != ".bloom" ||
+                !std::filesystem::is_directory(request.path.parent_path(), ignored))
+                return refuse(mcp::McpUiRefusal::PathInvalid,
+                              "Save a Copy needs a .bloom path in a folder that exists.");
+            if (std::filesystem::exists(request.path, ignored) && !request.replace)
+                return refuse(mcp::McpUiRefusal::DestinationExists,
+                              request.path.filename().string() +
+                                  " already exists; pass replace:true to replace it.");
+            // Staged beside the destination, then renamed over it, so a reader never sees half
+            // a file.
+            auto staged = request.path;
+            staged += ".copy-partial";
+            std::error_code copied;
+            std::filesystem::copy_file(session.displayPath(), staged,
+                                       std::filesystem::copy_options::overwrite_existing, copied);
+            if (!copied)
+                std::filesystem::rename(staged, request.path, copied);
+            if (copied) {
+                std::filesystem::remove(staged, ignored);
+                return refuse(mcp::McpUiRefusal::Failed,
+                              "The copy could not be written: " + copied.message());
+            }
+            result.path = request.path;
+            result.message = "Saved a copy of " + result.projectName + ".";
+            return done(result);
+        }
         if (request.kind == Kind::Save || request.kind == Kind::SaveAs) {
             if (request.kind == Kind::Save && session.displayPath().empty())
                 return refuse(mcp::McpUiRefusal::NoPath,
@@ -209,7 +242,18 @@ int serve(scripting::Session& session) {
                     .transport = {},
                     .setViewer = {},
                     .setColorSettings = {},
-                    .revealExport = {}},
+                    .revealExport = {},
+                    .preferences = {},
+                    .setPreferences = {},
+                    .purgeCache = {},
+                    .jobs = {},
+                    .cancelJob = {},
+                    .cancelOpen = {},
+                    .revealAsset = {},
+                    .compositionPresets = {},
+                    .saveCompositionPreset = {},
+                    .renameCompositionPreset = {},
+                    .deleteCompositionPreset = {}},
              .profilerSnapshot =
                  [&profiler](runtime::ProfilerSnapshot& out) {
                      static_cast<void>(profiler.sampleNow());

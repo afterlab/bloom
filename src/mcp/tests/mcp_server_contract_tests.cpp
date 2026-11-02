@@ -86,7 +86,16 @@ static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProjectOpen));
 static_assert(mcp::uiRefusalCode(mcp::McpUiRefusal::UnsavedChanges) == "bloom.mcp.unsaved-changes");
 static_assert(mcp::toolName(mcp::McpTool::ProjectSetColorSettings) == "project.set-color-settings");
 static_assert(mcp::toolName(mcp::McpTool::ProfilerSnapshot) == "profiler.snapshot");
-static_assert(static_cast<std::size_t>(mcp::McpTool::ProfilerSnapshot) + 1 == mcp::kMcpToolCount);
+// #389: the parity window and application tools are live UI, inline, and never document edits.
+static_assert(mcp::toolName(mcp::McpTool::ProjectSaveCopy) == "project.save-copy");
+static_assert(mcp::toolName(mcp::McpTool::CompositionDeletePreset) == "composition.delete-preset");
+static_assert(static_cast<std::size_t>(mcp::McpTool::CompositionDeletePreset) + 1 ==
+              mcp::kMcpToolCount);
+static_assert(mcp::toolUsesLiveUi(mcp::McpTool::ProjectSaveCopy));
+static_assert(mcp::toolUsesLiveUi(mcp::McpTool::PreferencesSet));
+static_assert(mcp::toolUsesLiveUi(mcp::McpTool::CompositionDeletePreset));
+static_assert(!mcp::toolMutatesDocument(mcp::McpTool::CachePurge));
+static_assert(mcp::toolExecution(mcp::McpTool::JobsCancel) == mcp::McpToolExecution::Inline);
 // Telemetry is read-only, inline and holds no live-UI lease.
 static_assert(!mcp::toolMutatesDocument(mcp::McpTool::ProfilerSnapshot));
 static_assert(!mcp::toolUsesLiveUi(mcp::McpTool::ProfilerSnapshot));

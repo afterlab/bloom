@@ -86,9 +86,24 @@ enum class McpTool : std::uint8_t {
     // The runtime telemetry snapshot (#423; docs/architecture/profiler-feed.md). Read-only; holds
     // no session lease.
     ProfilerSnapshot = 33,
+    // MCP parity (#389). File > Save a Copy and Cancel Open, then live-only window and
+    // application state (live_ui_port.hpp): Preferences, Edit > Purge, the Jobs panel, Reveal in
+    // File Manager and the Composition Settings dialog's presets. None of them is a project edit.
+    ProjectSaveCopy = 34,
+    ProjectCancelOpen = 35,
+    PreferencesGet = 36,
+    PreferencesSet = 37,
+    CachePurge = 38,
+    JobsList = 39,
+    JobsCancel = 40,
+    AssetReveal = 41,
+    CompositionPresets = 42,
+    CompositionSavePreset = 43,
+    CompositionRenamePreset = 44,
+    CompositionDeletePreset = 45,
 };
 
-inline constexpr std::size_t kMcpToolCount = 34;
+inline constexpr std::size_t kMcpToolCount = 46;
 
 // The wire name. MCP tool names allow [A-Za-z0-9_.-]; the export.* names are ADR 0033's session
 // call names verbatim.
@@ -129,6 +144,18 @@ inline constexpr std::size_t kMcpToolCount = 34;
         "export.reveal",
         "project.set-color-settings",
         "profiler.snapshot",
+        "project.save-copy",
+        "project.cancel-open",
+        "preferences.get",
+        "preferences.set",
+        "cache.purge",
+        "jobs.list",
+        "jobs.cancel",
+        "asset.reveal",
+        "composition.presets",
+        "composition.save-preset",
+        "composition.rename-preset",
+        "composition.delete-preset",
     };
     // clang-format on
     return names[static_cast<std::size_t>(tool)];
@@ -161,8 +188,10 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
 // Whether a tool works on the application window rather than the project: it runs on the owner
 // thread through McpLiveUiPort without a session lease, so it works while a project opens.
 [[nodiscard]] constexpr bool toolUsesLiveUi(const McpTool tool) {
-    return static_cast<std::uint8_t>(tool) >= static_cast<std::uint8_t>(McpTool::ProjectSave) &&
-           static_cast<std::uint8_t>(tool) <= static_cast<std::uint8_t>(McpTool::ExportReveal);
+    const auto index = static_cast<std::uint8_t>(tool);
+    return (index >= static_cast<std::uint8_t>(McpTool::ProjectSave) &&
+            index <= static_cast<std::uint8_t>(McpTool::ExportReveal)) ||
+           index >= static_cast<std::uint8_t>(McpTool::ProjectSaveCopy);
 }
 
 // ---------------------------------------------------------------------------------------------

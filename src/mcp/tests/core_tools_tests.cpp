@@ -4,6 +4,7 @@
 
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/testing/fake_export_runner.hpp>
+#include <bloom/document/project.hpp>
 #include <bloom/mcp/server_core.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -185,10 +186,266 @@ void unboundSeams() {
              {"viewer.set", R"({"zoom":"fit"})"},
              {"project.new", "{}"},
              {"project.set-color-settings", R"({"config":"aces"})"},
-             {"export.reveal", "{}"}}) {
+             {"export.reveal", "{}"},
+             {"project.cancel-open", "{}"},
+             {"preferences.get", "{}"},
+             {"preferences.set", R"({"preferences":{"loopPlayback":false}})"},
+             {"cache.purge", R"({"cache":"preview"})"},
+             {"jobs.list", "{}"},
+             {"jobs.cancel", R"({"job":3})"},
+             {"asset.reveal", R"({"asset":1})"},
+             {"composition.presets", "{}"},
+             {"composition.save-preset", R"({"composition":1,"name":"Card"})"},
+             {"composition.rename-preset", R"({"name":"Card","newName":"Plate"})"},
+             {"composition.delete-preset", R"({"name":"Card"})"}}) {
         const auto result = server.call(tool, arguments);
         expect(contains(result, "bloom.mcp.ui-unbound"), tool + " unbound is typed: " + result);
     }
+}
+
+} // namespace
+std::string firstMatch(const std::string& text, const std::string& pattern);
+namespace {
+
+// #389: the parity tools. Listed on both hosts; on stdio the window and application tools answer
+// not-live, project.save-copy goes to the host's lifecycle, and the evaluated project edits work
+// headless with one undo step each. On the live host each tool reaches its port member.
+void parityTools() {
+    {
+        Headless server;
+        const auto listed = server.send(R"({"jsonrpc":"2.0","id":90,"method":"tools/list"})");
+        for (const auto* name :
+             {"project.save-copy", "project.cancel-open", "preferences.get", "preferences.set",
+              "cache.purge", "jobs.list", "jobs.cancel", "asset.reveal", "composition.presets",
+              "composition.save-preset", "composition.rename-preset",
+              "composition.delete-preset"})
+            expect(contains(listed, std::string(R"("name":")") + name + """),
+                   std::string("tools/list lists ") + name);
+        expect(contains(listed, R"("regionOfInterest")") && contains(listed, R"("gamma")"),
+               "viewer.set lists its new fields");
+        for (const auto& [tool, arguments] : std::vector<std::pair<std::string, std::string>>{
+                 {"project.cancel-open", "{}"},
+                 {"preferences.get", "{}"},
+                 {"preferences.set", R"({"preferences":{"loopPlayback":false}})"},
+                 {"cache.purge", R"({"cache":"media"})"},
+                 {"jobs.list", "{}"},
+                 {"jobs.cancel", R"({"job":3})"},
+                 {"asset.reveal", R"({"asset":1})"},
+                 {"composition.presets", "{}"},
+                 {"composition.save-preset", R"({"composition":1,"name":"Card"})"},
+                 {"composition.rename-preset", R"({"name":"Card","newName":"Plate"})"},
+                 {"composition.delete-preset", R"({"name":"Card"})"},
+                 {"viewer.set", R"({"gamma":2.2,"regionOfInterest":null})"}}) {
+            const auto result = server.call(tool, arguments);
+            expect(contains(result, "bloom.mcp.not-live") && contains(result, R"("isError":true)"),
+                   "stdio " + tool + " answers not-live: " + result);
+        }
+        auto result = server.call("project.save-copy", R"({"path":"copy.bloom"})");
+        expect(contains(result, "bloom.mcp.path-invalid"),
+               "save-copy refuses a relative path: " + result);
+        result = server.call("cache.purge", R"({"cache":"disk"})");
+        expect(contains(result, "preview or media"), "an unknown cache is refused: " + result);
+
+        // The evaluated project edits work on the headless session.
+        const auto before = server.session->snapshot().revision();
+        result = server.call("transact",
+                             R"({"expectedRevision":)" + std::to_string(before.value()) +
+                                 R"(,"operations":[{"op":"bloom.layer.add-solid","args":{)"
+                                 R"("composition":1,"name":"Card","color":[1,1,1,1]}}]})");
+        const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
+        const auto layer = firstMatch(layers, R"re("records":\[\{"id":(\d+))re");
+        const auto revision = server.session->snapshot().revision().value();
+        result = server.call(
+            "transact", R"({"expectedRevision":)" + std::to_string(revision) +
+                            R"(,"operations":[{"op":"bloom.layer.set-anchor-preset","args":{)"
+                            R"("composition":1,"layer":)" +
+                            layer + R"(,"anchor":"bottom-right","time":0}}]})");
+        expect(contains(result, R"("isError":false)") && contains(result, R"("succeeded":true)"),
+               "set-anchor-preset applies headless: " + result);
+        result = server.call("history", R"({"action":"undo","expectedRevision":)" +
+                                            std::to_string(revision + 1) + "}");
+        expect(contains(result, R"("succeeded":true)") &&
+                   server.session->snapshot().revision().value() != revision + 1,
+               "the preset is one undo step: " + result);
+        result = server.call(
+            "transact", R"({"expectedRevision":)" +
+                            std::to_string(server.session->snapshot().revision().value()) +
+                            R"(,"operations":[{"op":"bloom.asset.reload","args":{"asset":42}}]})");
+        expect(contains(result, R"("succeeded":false)") && contains(result, "does not exist") &&
+                   contains(result, R"("operationIndex":0)"),
+               "reload of an unknown asset is refused with its index: " + result);
+    }
+
+    std::vector<mcp::McpPreference> set;
+    std::optional<bool> purged;
+    std::optional<std::uint64_t> cancelledJob;
+    std::optional<document::AssetId> revealed;
+    std::vector<std::string> presetCalls;
+    mcp::McpViewerRequest viewer;
+    mcp::McpSelectionRequest selected;
+    mcp::McpLiveUiPort port;
+    port.setSelection = [&](const mcp::McpSelectionRequest& request) {
+        selected = request;
+        return mcp::McpUiResult{};
+    };
+    port.setViewer = [&](const mcp::McpViewerRequest& request) {
+        viewer = request;
+        return mcp::McpUiResult{};
+    };
+    port.preferences = [] {
+        return std::vector<mcp::McpPreference>{{.key = "loopPlayback", .value = true},
+                                               {.key = "soundVolume", .value = 40.0},
+                                               {.key = "timelineTimeFormat",
+                                                .value = std::string("frames")}};
+    };
+    port.setPreferences = [&](const std::vector<mcp::McpPreference>& entries) {
+        set = entries;
+        return mcp::McpUiResult{};
+    };
+    port.purgeCache = [&](const bool media) {
+        purged = media;
+        return mcp::McpUiResult{.refusal = mcp::McpUiRefusal::Busy, .message = "running"};
+    };
+    port.jobs = [] {
+        return std::vector<mcp::McpJob>{{.id = 7,
+                                         .name = "Import media",
+                                         .phase = "Importing media",
+                                         .state = "Running",
+                                         .completed = 2,
+                                         .total = 5,
+                                         .canCancel = true,
+                                         .cancellationRequested = false,
+                                         .exportJob = std::nullopt}};
+    };
+    port.cancelJob = [&](const std::uint64_t job) {
+        cancelledJob = job;
+        return mcp::McpUiResult{};
+    };
+    port.cancelOpen = [] {
+        return mcp::McpUiResult{.refusal = mcp::McpUiRefusal::InvalidArgument,
+                                .message = "No project is opening."};
+    };
+    port.revealAsset = [&](const document::AssetId asset) {
+        revealed = asset;
+        return mcp::McpUiResult{};
+    };
+    port.compositionPresets = [] {
+        return std::vector<mcp::McpCompositionPreset>{
+            {.name = "HD 1080p",
+             .builtIn = true,
+             .width = 1920,
+             .height = 1080,
+             .pixelAspectNumerator = 1,
+             .pixelAspectDenominator = 1,
+             .frameRate = std::nullopt,
+             .duration = std::nullopt,
+             .startTimecode = std::nullopt,
+             .dropFrame = std::nullopt,
+             .background = std::nullopt},
+            {.name = "Card",
+             .builtIn = false,
+             .width = 800,
+             .height = 600,
+             .pixelAspectNumerator = 1,
+             .pixelAspectDenominator = 1,
+             .frameRate = std::pair<std::uint32_t, std::uint32_t>{25, 1},
+             .duration = core::RationalTime::fromInteger(4),
+             .startTimecode = std::nullopt,
+             .dropFrame = std::nullopt,
+             .background = std::nullopt}};
+    };
+    port.saveCompositionPreset = [&](const document::CompositionId composition,
+                                     const std::string& name) {
+        presetCalls.push_back("save " + std::to_string(composition.value()) + " " + name);
+        return mcp::McpUiResult{};
+    };
+    port.renameCompositionPreset = [&](const std::string& name, const std::string& newName) {
+        presetCalls.push_back("rename " + name + " " + newName);
+        return mcp::McpUiResult{};
+    };
+    port.deleteCompositionPreset = [&](const std::string& name) {
+        presetCalls.push_back("delete " + name);
+        return mcp::McpUiResult{.refusal = mcp::McpUiRefusal::UnknownTarget,
+                                .message = "No saved preset."};
+    };
+    Live server(std::move(port));
+
+    auto result = server.call(
+        "viewer.set", R"({"gamma":2.2,"resolution":"half","background":"black",)"
+                      R"("transparencyGrid":true,"look":false,)"
+                      R"("regionOfInterest":{"x":10,"y":20,"width":30,"height":40}})");
+    expect(viewer.gamma == 2.2 && viewer.resolution == mcp::McpViewerResolution::Half &&
+               viewer.background == mcp::McpViewerBackground::Black &&
+               viewer.transparencyGrid == true && viewer.look == false &&
+               viewer.regionOfInterest && *viewer.regionOfInterest &&
+               (*viewer.regionOfInterest)->width == 30.0 && !viewer.exposure,
+           "viewer.set passes the new fields: " + result);
+    result = server.call("viewer.set", R"({"regionOfInterest":null})");
+    expect(viewer.regionOfInterest && !*viewer.regionOfInterest,
+           "a null region clears it: " + result);
+    result = server.call("viewer.set", R"({"regionOfInterest":{"x":0,"y":0,"width":0,"height":4}})");
+    expect(contains(result, "at least 1 x 1"), "an empty region is refused: " + result);
+    result = server.call("viewer.set", R"({"resolution":"eighth"})");
+    expect(contains(result, "auto, full, half or quarter"), "an unknown resolution: " + result);
+
+    result = server.call("selection.set", R"({"composition":1,"mode":"all-nodes"})");
+    const auto nodeCount = server.session->snapshot()
+                               .project()
+                               .findComposition(document::CompositionId::fromRaw(1))
+                               ->graph()
+                               .nodes()
+                               .size();
+    expect(contains(result, R"("succeeded":true)") && selected.mode == mcp::McpSelectionMode::Set &&
+               selected.nodes.size() == nodeCount && selected.layers.empty(),
+           "all-nodes selects every node of the composition: " + result);
+    result = server.call("selection.set", R"({"composition":1,"mode":"linked-upstream"})");
+    expect(contains(result, "bloom.mcp.invalid-argument"),
+           "linked-upstream with nothing to extend from is refused: " + result);
+    result = server.call("selection.set", R"({"composition":1,"mode":"everything"})");
+    expect(contains(result, "linked-downstream"), "an unknown mode names the choices: " + result);
+
+    result = server.call("preferences.get", "{}");
+    expect(contains(result, R"("loopPlayback":true)") && contains(result, R"("soundVolume":40)") &&
+               contains(result, R"("timelineTimeFormat":"frames")"),
+           "preferences.get reads the port: " + result);
+    result = server.call("preferences.set",
+                         R"({"preferences":{"loopPlayback":false,"soundVolume":10,)"
+                         R"("timelineTimeFormat":"timecode"}})");
+    expect(contains(result, R"("succeeded":true)") && set.size() == 3,
+           "preferences.set passes every entry: " + result);
+    result = server.call("preferences.set", R"({"preferences":{"loopPlayback":[1]}})");
+    expect(contains(result, "true/false, a number or a string"),
+           "a structured value is refused: " + result);
+    result = server.call("preferences.set", R"({"preferences":{}})");
+    expect(contains(result, "1 to 64"), "an empty preference set is refused: " + result);
+
+    result = server.call("cache.purge", R"({"cache":"media"})");
+    expect(purged == true && contains(result, "bloom.mcp.busy"),
+           "cache.purge reaches the port and returns its refusal: " + result);
+    result = server.call("jobs.list", "{}");
+    expect(contains(result, R"("id":7)") && contains(result, R"("total":5)") &&
+               contains(result, R"("canCancel":true)") && contains(result, R"("exportJob":null)"),
+           "jobs.list lists the rows: " + result);
+    result = server.call("jobs.cancel", R"({"job":7})");
+    expect(cancelledJob == 7u && contains(result, R"("succeeded":true)"),
+           "jobs.cancel passes the job: " + result);
+    result = server.call("project.cancel-open", "{}");
+    expect(contains(result, "bloom.mcp.invalid-argument"),
+           "cancel-open with nothing opening is refused: " + result);
+    result = server.call("asset.reveal", R"({"asset":3})");
+    expect(revealed && revealed->value() == 3, "asset.reveal passes the asset: " + result);
+    result = server.call("composition.presets", "{}");
+    expect(contains(result, R"("name":"HD 1080p","builtIn":true)") &&
+               contains(result, R"("frameRate":[25,1])") && contains(result, R"("duration":[4,1])"),
+           "composition.presets lists built-in and saved presets: " + result);
+    static_cast<void>(server.call("composition.save-preset", R"({"composition":1,"name":"Card"})"));
+    static_cast<void>(
+        server.call("composition.rename-preset", R"({"name":"Card","newName":"Plate"})"));
+    result = server.call("composition.delete-preset", R"({"name":"Plate"})");
+    expect(presetCalls == std::vector<std::string>{"save 1 Card", "rename Card Plate",
+                                                   "delete Plate"} &&
+               contains(result, "bloom.mcp.unknown-target"),
+           "the preset tools reach the port in order: " + result);
 }
 
 void liveSeams() {
@@ -253,7 +510,18 @@ void liveSeams() {
                 colour = settings;
                 return mcp::McpUiResult{};
             },
-        .revealExport = {}};
+        .revealExport = {},
+        .preferences = {},
+        .setPreferences = {},
+        .purgeCache = {},
+        .jobs = {},
+        .cancelJob = {},
+        .cancelOpen = {},
+        .revealAsset = {},
+        .compositionPresets = {},
+        .saveCompositionPreset = {},
+        .renameCompositionPreset = {},
+        .deleteCompositionPreset = {}};
     Live server(std::move(port));
 
     // One time contract: an integer is a whole frame at the composition's rate (24 fps), and
@@ -634,6 +902,7 @@ int main() {
         exportReveal();
         retiredTransientJobs();
         animationReadBack();
+        parityTools();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

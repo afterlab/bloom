@@ -47,6 +47,18 @@ constexpr std::array<McpTool, kMcpToolCount> kTools{
     McpTool::ExportReveal,
     McpTool::ProjectSetColorSettings,
     McpTool::ProfilerSnapshot,
+    McpTool::ProjectSaveCopy,
+    McpTool::ProjectCancelOpen,
+    McpTool::PreferencesGet,
+    McpTool::PreferencesSet,
+    McpTool::CachePurge,
+    McpTool::JobsList,
+    McpTool::JobsCancel,
+    McpTool::AssetReveal,
+    McpTool::CompositionPresets,
+    McpTool::CompositionSavePreset,
+    McpTool::CompositionRenamePreset,
+    McpTool::CompositionDeletePreset,
 };
 // clang-format on
 
@@ -492,6 +504,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const std::string
                         target = &headless;
                         context = headless.operationContext();
                     }
+                    // A probe or evaluation an operation runs when it is created stops with
+                    // the request.
+                    context.stop = control.stop;
                     McpCall call{.session = *target,
                                  .context = std::move(context),
                                  .live = lease ? &lease->state() : nullptr,
