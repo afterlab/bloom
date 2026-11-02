@@ -57,7 +57,7 @@ The **Pools** table lists every pool: its kind (*Cache* keeps reusable results, 
 playback or export needs right now, *Scratch* holds memory only while work runs), the memory it
 holds on the host, memory evicted but not yet released (**Pending**), memory on the GPU
 (**Device**), its entries, its ceiling, and how many hits, misses, stores, evictions and refusals it
-has counted.
+has counted, with the memory its evictions gave back (**Evicted**).
 
 ## GPU
 
@@ -74,8 +74,8 @@ GPU budget turned away, and memory taken back to make room.
 
 The first graph is Bloom's whole-process CPU use in cores (2.00 cores is two cores fully busy). The
 second shows how busy each worker pool is, from 0 to 100%: the CPU pool, the blocking I/O pool
-(disk and decode) and the GPU service. Each pool's row says how many workers it has and how many
-tasks wait in its queue.
+(disk and decode), the GPU submit pool and, when Bloom splits frames into row bands, the row-band
+pool. Each pool's row says how many workers it has and how many tasks wait in its queue.
 
 ## Workload
 
@@ -87,7 +87,7 @@ tasks wait in its queue.
 - **Stage timings** show, for decode, color convert, upload, render, transfer and encode, how long
   each step took since this Profiler opened: one bar per time range from 16 µs to over 4 s, the
   bar holding the median in white, and the median (p50) and 95th percentile (p95) above it. A
-  stage that nothing has timed reads Unavailable.
+  stage that nothing has timed since the Profiler opened reads No samples.
 - **Throughput** graphs playback frames per second, RAM Preview fill rate and export frames per
   second. Each is Unavailable while nothing plays, fills or exports. **Dropped frames** counts the
   frames playback skipped, and **RAM Preview cached** the frames RAM Preview holds.
@@ -113,20 +113,24 @@ time and whether they are still running.
 The Profiler reads Bloom's runtime sampler. These values are live now:
 
 - **Memory**: RSS on every platform; anonymous memory, unattributed memory and its idle baseline
-  on Linux; the computer's physical, available and swap memory; the RAM headroom and usable
-  capacity; the ledger's configured, effective and retained memory; memory and swap pressure; and
-  one **Reusable caches (all)** pool row with what every reusable cache holds on the host, pending
-  release and on the GPU. The idle baseline is the unattributed memory when the Profiler first
-  sampled in this session.
-- **GPU**: Bloom's own live and retiring GPU images, admission refusals and reclaims.
-- **CPU**: Bloom's process CPU use, and each worker pool's workers and queued tasks.
-- **Workload**: task counts by state, owner and executor, and the top 16 tasks; playback frames per
-  second and dropped frames while playing; RAM Preview cached frames and fill rate; export frames
-  per second.
+  on Linux; staging and its peak; admission claims; the computer's physical, available and swap
+  memory; the RAM headroom and usable capacity; the ledger's configured, effective and retained
+  memory; memory and swap pressure; and one row per pool (preview frames, the operation cache's
+  operations and decoded media, decoded video, proxies, decoded audio and the media disk cache
+  write queue) with its kind, host, pending and device memory, ceiling, and hit, miss, store,
+  eviction, evicted and refusal counts. The idle baseline is the unattributed memory when the
+  Profiler first sampled in this session.
+- **GPU**: Bloom's own live and retiring GPU images, admission refusals and reclaims, upload and
+  readback traffic and queue submits; the driver's heap budget and use where the GPU driver
+  reports them.
+- **CPU**: Bloom's process CPU use, and each worker pool's workers, queued tasks and how busy it
+  is.
+- **Workload**: task counts by state, owner and executor, and the top 16 tasks; the stage timings;
+  playback frames per second and dropped frames while playing; RAM Preview cached frames and fill
+  rate; export frames per second.
+- **Processes**: each helper process with its resident memory, CPU time and whether it is still
+  running.
 
 These read Unavailable until Bloom's engine counts them: file-backed and shared memory, the age of
-the slower memory sample, per-pool rows with entries, ceilings and hit, miss, store, eviction and
-refusal counts, staging and admission claims, the driver's GPU heap budget and use, upload and
-readback traffic, queue submits and utilization, how busy each worker pool is, stage timings,
-admission waits and refusals and eviction totals by reason, and helper processes. On macOS and
-Windows, anonymous and unattributed memory also read Unavailable.
+the slower memory sample, pool entries, GPU utilization, admission waits and refusals, and eviction
+totals by reason. On macOS and Windows, anonymous and unattributed memory also read Unavailable.
