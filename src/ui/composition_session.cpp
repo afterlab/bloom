@@ -61,6 +61,9 @@ struct SessionColorConverterState final {
     document::ColorSettings settings;
     std::atomic<bool> cancelled{false};
     bool finished = false;
+    // Owner thread only: set by the poll that announces the landing with snapshotChanged(). Until
+    // then the converter is not handed out, so no caller sees it before that announcement.
+    bool published = false;
 };
 
 [[nodiscard]] std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle>
@@ -90,7 +93,7 @@ buildColorProcessor(const document::ColorSettings& settings) {
 }
 
 bool CompositionSession::colorConverterReady() const {
-    if (!colorConverterState_)
+    if (!colorConverterState_ || !colorConverterState_->published)
         return false;
     const std::lock_guard lock(colorConverterState_->mutex);
     return colorConverterState_->processor != nullptr;
@@ -154,6 +157,7 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
                 return;
             timer->stop();
             timer->deleteLater();
+            state->published = true;
             if (!ready)
                 reportUnavailable(tr("Color conversion unavailable"));
             Q_EMIT snapshotChanged();
@@ -163,6 +167,8 @@ kit::KColorConverter CompositionSession::colorConverter(const std::string_view s
         });
         timer->start();
     }
+    if (!colorConverterState_->published)
+        return {};
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> processor;
     {
         const std::lock_guard lock(colorConverterState_->mutex);

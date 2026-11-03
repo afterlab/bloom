@@ -823,6 +823,8 @@ The kit receives a conversion callable from `CompositionSession::colorConverter(
 it has no dependency on project types or OCIO. The accessor accepts the four reference color
 schemas above and refuses unknown encodings. Each session prepares its immutable built-in processor
 off the UI thread, publishes readiness through a timer, and cancels publication when destroyed.
+The accessor hands out the converter only once that timer has announced it with
+`snapshotChanged()`, so no caller sees a ready converter before the refresh it causes.
 Worker-owned state contains no widget or session pointer; session destruction never waits for the
 worker. Pending or failed conversion disables reference swatches and leaves explicitly labelled
 reference numbers available. A failed preparation reports a session diagnostic. This currently

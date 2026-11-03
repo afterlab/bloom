@@ -192,6 +192,8 @@ class CompositionSession final : public QObject {
     // Whether the converter colorConverter() hands out has finished preparing. It is prepared off
     // the UI thread and its landing is announced by snapshotChanged() with no document change, so
     // a view that skips republished unchanged content (the Nodes canvas, #359) still has to see it.
+    // Neither this nor colorConverter() reports the converter before that announcement: a caller
+    // that sees it ready has already seen the snapshotChanged() it causes.
     [[nodiscard]] bool colorConverterReady() const;
     [[nodiscard]] const document::ColorSettings& colorSettings() const& noexcept {
         return colorSettings_;
