@@ -194,6 +194,7 @@ void ProfilerEditor::buildMemory(QVBoxLayout* const layout, QWidget* const paren
     (void)grid->addRow(tr("Physical memory"));
     (void)grid->addRow(tr("Available"));
     (void)grid->addRow(tr("Swap used"));
+    (void)grid->addRow(tr("Bloom in swap"));
     (void)grid->addRow(tr("Memory pressure"));
     const int last = grid->addRow(tr("Swap pressure"));
     Q_ASSERT(last == SwapPressureRow);
@@ -359,6 +360,8 @@ void ProfilerEditor::buildPressure(QVBoxLayout* const layout, QWidget* const par
     auto* grid = view.readouts;
     (void)grid->addRow(tr("Memory pressure"));
     (void)grid->addRow(tr("Swap pressure"));
+    (void)grid->addRow(tr("Swap used"));
+    (void)grid->addRow(tr("Bloom in swap"));
     (void)grid->addRow(tr("Admission waits"), kit::chartSeriesColor(0));
     (void)grid->addRow(tr("Admission refusals"), kit::chartSeriesColor(1));
     for (std::size_t cause = 0; cause < runtime::kProfilerEvictionCauseCount; ++cause)

@@ -32,7 +32,8 @@ The header is data only, apart from small inline helpers (the unattributed math,
 the bucket index). Schema 2 made pool counters (entries, hits, misses, stores, evictions,
 refusals) and executor busy time `ProfilerMetric`s, so a source that does not count them reports
 them absent rather than zero. Schema 3 added each pool's cumulative evicted bytes
-(`ProfilerPool::evictedBytes`).
+(`ProfilerPool::evictedBytes`). Schema 4 added this process's memory in swap
+(`ProfilerMemory::processSwappedBytes`).
 
 ## Sampler
 
@@ -57,42 +58,69 @@ Sources, each read at the sampler rate unless noted:
 | --- | --- |
 | RSS | Linux `/proc/self/statm` (O(1), never `smaps`), macOS `task_info`, Windows `GetProcessMemoryInfo` |
 | Anonymous | Linux statm `resident - shared` (the kernel's anonymous resident pages); absent elsewhere |
+| File-backed, shared, swapped | Linux `/proc/self/status` `RssFile`, `RssShmem` and `VmSwap` (the kernel's per-process counters, O(1), fixed buffer, never `smaps`); absent on macOS and Windows, whose standard calls do not split resident memory this way |
 | Machine, headroom, usable, ledger totals, pressure flags | the memory budget ledger, through `readProfilerLedger()` (below) |
+| Ledger sample age | the time the ledger last applied a machine sample (`MemoryBudgetState::machineAppliedAt`: a process sample, a pressure sample or a poll); it ages available memory, swap, the pressure flags and the ledger totals |
 | Pool rows | `MemoryBudgetLedger::copyProfilerPools()`, through the adapter: one row per registered pool (below) |
 | Staging live and peak | the process-wide telemetry counters (below); the peak restarts when the sampler starts |
 | Admission claims | the UI-side hook: `GpuProcessingPhasePolicy::usableCapacity()` host claims minus the retained preview frames they include |
-| Unattributed, idle baseline | computed from what is present; the baseline is the unattributed gap at the first sample that has the pool rows |
+| Unattributed, idle baseline | computed from what is present; the baseline is the unattributed gap at the first sample that has the pool rows while Bloom is idle (`profilerSampleIdle()`: no queued or running task, and the hook reports no playback, RAM Preview fill or export); absent until then |
 | GPU live/retiring bytes, refusals, reclaims | the render module's process-wide `GpuImageReclamationStats`, read-only, through an injected function pointer (`runtime::readProfilerGpuDevice`; absent in a build without a GPU device) |
 | GPU upload and readback bytes, submits | the telemetry counters, reported only in a process whose GPU reader found a device |
 | GPU heap budget and usage | the telemetry counters: the preview display service's owner thread queries `VK_EXT_memory_budget` (summed over device-local heaps) at most once a second while a sampler runs; `gpuBudgetQueryAgeNs` is its age; absent on a device without the extension or before the first query |
-| GPU utilization | absent: Vulkan has no portable query and Bloom links no vendor library |
+| GPU utilization | absent on every platform: Vulkan has no portable query and Bloom links no vendor library (NVML, ADLX, Level Zero); Linux sysfs busy counters exist only for some kernel drivers (amdgpu `gpu_busy_percent`), not for the proprietary NVIDIA driver, and would need a Vulkan-device-to-DRM-node mapping |
 | Process CPU time | `getrusage` (Linux, macOS), `GetProcessTimes` (Windows) |
 | Tasks and executor pools | `TaskScheduler::copyProfilerTasks()`: counts and the top 16 tasks copied into the snapshot's fixed slots under the scheduler lock, names truncated, no allocation or formatting under the lock; per executor pool (CPU, Blocking I/O, GPU submit, and Row bands when the scheduler has a row-band pool) its workers, queue depth and busy time |
 | Stage histograms | the telemetry counters (below) |
 | Helper processes | the telemetry counters' helper registry; each listed pid is read through Linux `/proc/<pid>/statm` and `/proc/<pid>/stat` (fixed buffers), macOS `proc_pidinfo(PROC_PIDTASKINFO)`, Windows `GetProcessMemoryInfo`, `GetProcessTimes` and `GetExitCodeProcess`. A process that is gone or a zombie is listed as not alive with absent figures |
 | Playback fps, dropped frames, RAM Preview cached frames and fill rate, export fps | the UI-side hook (below) |
+| Admission waits and refusals | the telemetry counters: `GpuProcessingPhasePolicy::reserve()` counts each `AwaitingCapacity` answer (a waiting request retries, so each retry that waits again counts) and each `BudgetRefused` answer |
+| Evicted bytes by cause | the telemetry counters (below, "Eviction causes") |
 
-Still absent: file-backed and shared memory and the ledger sample's age (the ledger's process
-sample carries cgroup figures, not a memory breakdown), pool entry counts, GPU utilization and the
-pressure section (admission waits and refusals, evicted bytes by cause).
+Still absent: GPU utilization (above).
+
+**Eviction causes.** `core::telemetry::EvictionCause` matches `ProfilerEvictionCause`: Ceiling,
+MemoryPressure, Admission, Purge. `MemoryPoolCounters::evicted()` adds the bytes to the pool's row
+and to the thread's current cause; a pool evicts synchronously inside the ledger's budget callbacks,
+so every ledger entry point that runs them opens an `EvictionCauseScope` (a thread-local cause,
+restored on exit) naming why:
+
+- Ceiling: `registerCache`, `unregisterCache`, `setCacheCeiling`, `setConfiguredTotal` and
+  `setRamHeadroom` (a changed allowance or preference). Outside every scope a pool's eviction is
+  also Ceiling: a pool making room within its own budget on a store.
+- MemoryPressure: `poll`, `applySample`, `applyPressureSample` and `beginProcessSampling` (budgets
+  from a measured memory sample).
+- Admission: `reclaim` (admission's retention reclaimer for a waiting request), `beginPreviewFill`
+  and `yieldToPreview` (room for a RAM Preview fill).
+- Purge: the user purge's clears count their host bytes directly
+  (`OperationCache::clearOperations` and `clearDecodedMedia` the cleared entries' standalone
+  charge, `DecodedVideoCache::clear` its planes, `CompositionPreviewController::purgePreviewCache`
+  the preview frames' host bytes). A purge is not a pool eviction: the pool rows' eviction counters
+  do not include it.
+
+`MemoryPoolCounters::released()` counts an eviction in the pool's row only, outside every cause:
+decoded media and decoded video released because the source working set moved on, and media disk
+cache entries removed from disk (bytes on disk, not memory). The causes therefore sum to the host
+evictions, not to the pools' evicted bytes.
 
 **Pool identity and counters.** A pool registers its Profiler identity once, after
 `registerCache`, with `MemoryBudgetLedger::setPoolProfile(owner, MemoryPoolProfile)`
 (`memory_pool_counters.hpp`): a fixed name, a kind (scratch, cache or live) and a
 `MemoryPoolCounters`, six relaxed atomics (hits, misses, stores, evictions, evicted bytes,
-refusals) the pool increments next to the work it already does. A pool that is several rows
-supplies a `rows` callback instead. The ledger reads counters without the pool's lock; the host,
+refusals) the pool increments next to the work it already does, and an `entries` callback that
+returns the entries it holds now (under the ledger's callback rules). A pool that is several rows
+supplies a `rows` callback instead, which fills the entry counts itself. The ledger reads counters without the pool's lock; the host,
 pending and device bytes come from the pool's existing holding callback, the ceiling from its
 registration. A registered pool without a profile is one "Unnamed pool" row with absent counters.
 
-| Row (kind) | Hit / miss | Store | Eviction (bytes) | Refusal |
-| --- | --- | --- | --- | --- |
-| Preview frames (cache) | `PreviewFrameCache::take` | an inserted frame | budget, pressure and GPU-resident evictions (the frame's charge) | a rejected or unallocatable frame |
-| Operation cache: operations, Operation cache: decoded media (cache) | `OperationCache::find`: a hit under the found entry's kind, a miss under the kind the caller asked for | an inserted entry | LRU eviction and, for decoded media, release outside the playback window (the entry's standalone charge) | over the budget, or allocation failure |
-| Decoded video (cache) | `DecodedVideoCache::find` | `store` | budget eviction and release outside the playback window (plane bytes) | a frame larger than the budget |
-| Proxies (cache) | the thumbnail lookups of the asset preview worker | a kept thumbnail | trimming (thumbnail bytes) | a thumbnail larger than the allowance |
-| Decoded audio (cache) | reusing a cached buffer | a kept buffer | trimming (buffer bytes) | a buffer sent for delivery only |
-| Media disk cache write queue (scratch) | disk-cache lookups | disk writes | disk entries evicted (bytes on disk) | writes the queue refused |
+| Row (kind) | Entries | Hit / miss | Store | Eviction (bytes) | Refusal |
+| --- | --- | --- | --- | --- | --- |
+| Preview frames (cache) | frames held (host or GPU-resident) | `PreviewFrameCache::take` | an inserted frame | budget, pressure and GPU-resident evictions (the frame's charge) | a rejected or unallocatable frame |
+| Operation cache: operations, Operation cache: decoded media (cache) | retained entries of the kind | `OperationCache::find`: a hit under the found entry's kind, a miss under the kind the caller asked for | an inserted entry | LRU eviction and, for decoded media, release outside the playback window (the entry's standalone charge) | over the budget, or allocation failure |
+| Decoded video (cache) | frames held | `DecodedVideoCache::find` | `store` | budget eviction and release outside the playback window (plane bytes) | a frame larger than the budget |
+| Proxies (cache) | thumbnails held | the thumbnail lookups of the asset preview worker | a kept thumbnail | trimming (thumbnail bytes) | a thumbnail larger than the allowance |
+| Decoded audio (cache) | buffers held | reusing a cached buffer | a kept buffer | trimming (buffer bytes) | a buffer sent for delivery only |
+| Media disk cache write queue (scratch) | queued writes | disk-cache lookups | disk writes | disk entries evicted (bytes on disk) | writes the queue refused |
 
 **Telemetry counters.** `bloom::core::telemetry` (`src/core/include/bloom/core/telemetry_counters.hpp`)
 holds the process-wide always-on counters, in the core module because render, media, output and
@@ -118,6 +146,8 @@ a stage. Nothing there allocates, locks or formats.
   worker process it launches (one-call and retained) for its lifetime, and the colour workers
   (the OCIO CPU file-transform worker and the GPU program extraction worker) theirs.
   `MediaWorkerPool::workerProcessIds()` is the pool's read-only view of its own entries.
+- **Admission and eviction causes:** relaxed adds where admission answers a reservation and where
+  a pool evicts or a purge clears (above).
 - **Profiler active:** set while a sampler thread runs; the GPU heap-budget query runs only then.
 
 **The ledger adapter.** `readProfilerLedger()` (`profiler_ledger_adapter.hpp`) is the one place
@@ -149,8 +179,9 @@ It is also the UI-side hook: on each feed tick, on the UI thread, it reads the l
 adapter and the playback, RAM Preview and export controllers, and publishes those values into the
 sampler with `publishHostInputs()` (a second seqlock), which the next sample merges. Playback fps
 is the rate of playhead advances while playing, the RAM Preview fill rate the rate of newly cached
-frames while caching, and export fps the rate of completed frames of the running job. No Qt object
-is read off the UI thread.
+frames while caching, and export fps the rate of completed frames of the running job. It also
+reports whether any of the three runs (`ProfilerHostInputs::hostBusy`), which holds back the idle
+baseline. No Qt object is read off the UI thread.
 
 `FakeProfilerFeed` (`profiler_fake_feed.hpp`) is a deterministic source for tests and captures:
 sample n is a pure function of n, with growth, plateaus, eviction drops, absent fields and stale

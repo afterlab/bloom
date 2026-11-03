@@ -36,9 +36,8 @@ backed and shared memory on top. The dashed **Idle baseline** line marks how muc
 memory an idle Bloom with an empty project has.
 
 - **Resident (RSS)**: the memory the operating system has given Bloom, read twice a second.
-- **Anonymous**, **File-backed**, **Shared memory**: RSS broken down by kind. On Linux, anonymous
-  memory is read with RSS, twice a second; file-backed and shared memory are not yet told apart
-  and read Unavailable. A value that comes from a slower memory sample shows its age.
+- **Anonymous**, **File-backed**, **Shared memory**: RSS broken down by kind, read with RSS twice a
+  second on Linux. macOS and Windows do not split RSS this way, so there they read Unavailable.
 - **RSS growth**: how much RSS changed across the graph. Memory that keeps climbing and never comes
   back down while you work points to a leak.
 - **Unattributed**: anonymous memory that no pool, staging or claim accounts for, and how far it
@@ -50,7 +49,10 @@ memory an idle Bloom with an empty project has.
 - **Ledger configured / effective / retained**: the reusable memory you allowed in Preferences,
   what the computer's limits leave of it, and what the caches hold now (see [Memory](memory.md)).
 - **Headroom** and **Usable**: the RAM headroom preference and the capacity left for Bloom's work.
-- **Physical memory**, **Available**, **Swap used**: the computer as a whole.
+- **Physical memory**, **Available**, **Swap used**: the computer as a whole. Available memory
+  comes from Bloom's slower memory sample and shows how old that sample is.
+- **Bloom in swap**: how much of Bloom's own memory the operating system has moved to swap (Linux;
+  Unavailable elsewhere).
 - **Memory pressure** and **Swap pressure**: whether the operating system reports pressure now.
 
 The **Pools** table lists every pool: its kind (*Cache* keeps reusable results, *Live* holds what a
@@ -95,10 +97,21 @@ pool. Each pool's row says how many workers it has and how many tasks wait in it
 ## Pressure
 
 The graph shows admission **waits** (work held until memory frees up) and **refusals** (work that
-could not fit at all) per second. Below it: whether the operating system reports memory or swap
-pressure, the totals of waits and refusals, how much memory caches gave back for each reason (a
-pool over its **ceiling**, memory **pressure**, to **admit** new work, or a **purge**), and the
-current eviction rate.
+could not fit at all) per second. A waiting request asks again, so each time it is told to wait
+again counts. Below it: whether the operating system reports memory or swap pressure, the swap in
+use (with the total) and how much of Bloom is in it, the totals of waits and refusals, how much
+memory caches gave back for each reason, and the current eviction rate. The reasons are:
+
+- **Ceiling**: a cache made room within its own allowance, when it stored something new or after
+  its allowance or the memory preferences changed.
+- **Memory pressure**: the computer's available memory fell below the RAM headroom and the caches
+  gave back the difference.
+- **Admission**: caches gave memory to work that needed it now (a frame waiting for memory, or a
+  RAM Preview fill).
+- **Purge**: you purged a cache from Edit > Purge.
+
+Memory released because playback moved past it and media disk cache entries removed from disk
+count in the pool's evictions but under none of these reasons.
 
 **Events** lists the latest 16 changes, newest first: pressure starting or ending, refusals,
 evictions and helper processes exiting.
@@ -117,9 +130,11 @@ The Profiler reads Bloom's runtime sampler. These values are live now:
   memory; the RAM headroom and usable capacity; the ledger's configured, effective and retained
   memory; memory and swap pressure; and one row per pool (preview frames, the operation cache's
   operations and decoded media, decoded video, proxies, decoded audio and the media disk cache
-  write queue) with its kind, host, pending and device memory, ceiling, and hit, miss, store,
-  eviction, evicted and refusal counts. The idle baseline is the unattributed memory when the
-  Profiler first sampled in this session.
+  write queue) with its kind, host, pending and device memory, entries, ceiling, and hit, miss,
+  store, eviction, evicted and refusal counts. File-backed and shared memory and Bloom's memory in
+  swap on Linux, and the age of the slower memory sample. The idle baseline is the unattributed
+  memory at the first sample in this session that finds Bloom idle: no task queued or running and
+  nothing playing, filling RAM Preview or exporting.
 - **GPU**: Bloom's own live and retiring GPU images, admission refusals and reclaims, upload and
   readback traffic and queue submits; the driver's heap budget and use where the GPU driver
   reports them.
@@ -130,7 +145,9 @@ The Profiler reads Bloom's runtime sampler. These values are live now:
   rate; export frames per second.
 - **Processes**: each helper process with its resident memory, CPU time and whether it is still
   running.
+- **Pressure**: admission waits and refusals, and the memory caches gave back by reason.
 
-These read Unavailable until Bloom's engine counts them: file-backed and shared memory, the age of
-the slower memory sample, pool entries, GPU utilization, admission waits and refusals, and eviction
-totals by reason. On macOS and Windows, anonymous and unattributed memory also read Unavailable.
+**GPU utilization** reads Unavailable: Vulkan has no portable way to ask how busy the GPU is, and
+Bloom does not link a vendor library (such as NVIDIA's) to ask the driver. On macOS and Windows,
+anonymous, file-backed and shared memory, unattributed memory and Bloom's memory in swap also read
+Unavailable.

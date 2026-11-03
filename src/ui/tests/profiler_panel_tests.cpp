@@ -325,24 +325,32 @@ void testStaleAgesShowTheirAge(Expectations& expectations) {
         expectations.expect(false, "the memory readouts exist");
         return;
     }
+    // Available memory comes from the ledger's machine sample; anonymous memory is read at the
+    // sampler rate and shows no age.
+    constexpr int kAnonRow = 1;
+    constexpr int kAvailableRow = 16;
     runtime::ProfilerSnapshot snapshot;
     snapshot.serial = 1;
     snapshot.memory.anonBytes = runtime::ProfilerBytes::of(512ULL << 20);
+    snapshot.memory.availableBytes = runtime::ProfilerBytes::of(8ULL << 30);
     snapshot.ledgerSampleAgeNs = runtime::ProfilerNanoseconds::of(3'000'000'000);
     editor.deliver(snapshot);
-    expectations.expect(memory->noteText(1) == QStringLiteral("3.0 s old") &&
-                            memory->noteTone(1) == kit::Color::Muted,
+    expectations.expect(memory->noteText(kAvailableRow) == QStringLiteral("3.0 s old") &&
+                            memory->noteTone(kAvailableRow) == kit::Color::Muted,
                         "a fresh ledger value shows its age in Muted");
+    expectations.expect(!memory->isAbsent(kAnonRow) && memory->noteText(kAnonRow).isEmpty(),
+                        "a sampler-rate value shows no ledger age");
     snapshot.serial = 2;
     snapshot.ledgerSampleAgeNs = runtime::ProfilerNanoseconds::of(12'500'000'000);
     editor.deliver(snapshot);
-    expectations.expect(memory->noteText(1) == QStringLiteral("12.5 s old") &&
-                            memory->noteTone(1) == kit::Color::Warn,
+    expectations.expect(memory->noteText(kAvailableRow) == QStringLiteral("12.5 s old") &&
+                            memory->noteTone(kAvailableRow) == kit::Color::Warn,
                         "a stale ledger value shows its age in Warn");
     snapshot.serial = 3;
-    snapshot.memory.anonBytes = {};
+    snapshot.memory.availableBytes = {};
     editor.deliver(snapshot);
-    expectations.expect(memory->isAbsent(1) && memory->noteText(1).isEmpty(),
+    expectations.expect(memory->isAbsent(kAvailableRow) &&
+                            memory->noteText(kAvailableRow).isEmpty(),
                         "an absent value shows no age");
 
     // The fake feed stalls its ledger sample once a cycle: the age grows past the stale line.
@@ -351,8 +359,43 @@ void testStaleAgesShowTheirAge(Expectations& expectations) {
                             snapshot.ledgerSampleAgeNs.value > 10'000'000'000,
                         "the fake feed produces stale ledger ages");
     editor.deliver(snapshot);
-    expectations.expect(memory->noteTone(1) == kit::Color::Warn,
+    expectations.expect(memory->noteTone(kAvailableRow) == kit::Color::Warn,
                         "the fake feed's stalled ledger sample shows as stale");
+}
+
+// The pressure section shows system swap in use (with its total) and Bloom's own swapped memory
+// beside the pressure flags, and every eviction cause.
+void testPressureShowsSwapAndCauses(Expectations& expectations) {
+    ProfilerEditor editor(nullptr);
+    auto* pressure = child<kit::KReadoutGrid>(editor, "profilerPressureReadouts");
+    if (pressure == nullptr) {
+        expectations.expect(false, "the pressure readouts exist");
+        return;
+    }
+    constexpr int kSwapUsedRow = 2;
+    constexpr int kProcessSwapRow = 3;
+    constexpr int kFirstEvictionRow = 6;
+    runtime::ProfilerSnapshot snapshot;
+    snapshot.serial = 1;
+    snapshot.memory.swapPressure = runtime::ProfilerMetric<bool>::of(false);
+    snapshot.memory.swapTotalBytes = runtime::ProfilerBytes::of(8ULL << 30);
+    snapshot.memory.swapUsedBytes = runtime::ProfilerBytes::of(3ULL << 30);
+    snapshot.pressure.evictionBytes[1] = runtime::ProfilerBytes::of(64ULL << 20);
+    editor.deliver(snapshot);
+    expectations.expect(!pressure->isAbsent(kSwapUsedRow) &&
+                            pressure->valueText(kSwapUsedRow) != kit::absentMetricText() &&
+                            !pressure->noteText(kSwapUsedRow).isEmpty(),
+                        "swap in use shows in the pressure section with its total");
+    expectations.expect(pressure->isAbsent(kProcessSwapRow),
+                        "Bloom's swapped memory reads Unavailable where it is not measured");
+    expectations.expect(pressure->isAbsent(kFirstEvictionRow) &&
+                            !pressure->isAbsent(kFirstEvictionRow + 1),
+                        "an absent cause reads Unavailable and a counted one its bytes");
+    snapshot.serial = 2;
+    snapshot.memory.processSwappedBytes = runtime::ProfilerBytes::of(512ULL << 20);
+    editor.deliver(snapshot);
+    expectations.expect(!pressure->isAbsent(kProcessSwapRow),
+                        "Bloom's swapped memory shows its bytes");
 }
 
 void testUnattributedMath(Expectations& expectations) {
@@ -510,6 +553,7 @@ int main(int argc, char** argv) {
     testRingsWrapAt600WithoutAllocating(expectations);
     testAbsentReadsAbsentAndZeroReadsZero(expectations);
     testStaleAgesShowTheirAge(expectations);
+    testPressureShowsSwapAndCauses(expectations);
     testUnattributedMath(expectations);
     testSnapshotIsTriviallyCopyable(expectations);
     testSampleRingAndFormatting(expectations);

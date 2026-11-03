@@ -24,6 +24,7 @@ enum MemoryRow : int {
     PhysicalRow,
     AvailableRow,
     SwapRow,
+    ProcessSwapRow,
     MemoryPressureRow,
     SwapPressureRow,
 };
@@ -70,6 +71,8 @@ enum WorkloadRow : int {
 enum PressureRow : int {
     PressureMemoryRow,
     PressureSwapRow,
+    PressureSwapUsedRow,
+    PressureProcessSwapRow,
     WaitsRow,
     RefusalsRow,
     // Then one row per runtime::ProfilerEvictionCause, then the eviction rate.

@@ -43,6 +43,15 @@ void setAged(kit::KReadoutGrid& grid, const int row, const runtime::ProfilerByte
         grid.setNote(row, {});
 }
 
+// System swap in use, with the swap total as its note.
+void setSwapUsed(kit::KReadoutGrid& grid, const int row, const runtime::ProfilerMemory& memory) {
+    setBytes(grid, row, memory.swapUsedBytes);
+    if (memory.swapUsedBytes.present && memory.swapTotalBytes.present)
+        grid.setNote(row,
+                     ProfilerEditor::tr("of %1").arg(kit::formatMetric(
+                         static_cast<double>(memory.swapTotalBytes.value), MetricUnit::Bytes)));
+}
+
 void setFlag(kit::KReadoutGrid& grid, const int row, const runtime::ProfilerMetric<bool>& flag) {
     if (!flag.present)
         grid.setAbsent(row);
@@ -122,9 +131,9 @@ void ProfilerEditor::refreshMemory() {
     auto& grid = *memory_.readouts;
     const auto& ledgerAge = snapshot.ledgerSampleAgeNs;
     setBytes(grid, RssRow, memory.rssBytes);
-    setAged(grid, AnonRow, memory.anonBytes, ledgerAge);
-    setAged(grid, FileRow, memory.fileBytes, ledgerAge);
-    setAged(grid, ShmemRow, memory.shmemBytes, ledgerAge);
+    setBytes(grid, AnonRow, memory.anonBytes);
+    setBytes(grid, FileRow, memory.fileBytes);
+    setBytes(grid, ShmemRow, memory.shmemBytes);
 
     // Growth across the visible history: a steady climb that does not come back is the leak
     // signal; the note says over how long.
@@ -176,12 +185,9 @@ void ProfilerEditor::refreshMemory() {
     setBytes(grid, HeadroomRow, memory.headroomBytes);
     setBytes(grid, UsableRow, memory.usableBytes);
     setBytes(grid, PhysicalRow, memory.physicalBytes);
-    setBytes(grid, AvailableRow, memory.availableBytes);
-    setBytes(grid, SwapRow, memory.swapUsedBytes);
-    if (memory.swapUsedBytes.present && memory.swapTotalBytes.present)
-        grid.setNote(SwapRow,
-                     tr("of %1").arg(kit::formatMetric(
-                         static_cast<double>(memory.swapTotalBytes.value), MetricUnit::Bytes)));
+    setAged(grid, AvailableRow, memory.availableBytes, ledgerAge);
+    setSwapUsed(grid, SwapRow, memory);
+    setBytes(grid, ProcessSwapRow, memory.processSwappedBytes);
     setFlag(grid, MemoryPressureRow, memory.memoryPressure);
     setFlag(grid, SwapPressureRow, memory.swapPressure);
     memory_.pools->refresh();
@@ -318,6 +324,8 @@ void ProfilerEditor::refreshPressure() {
     auto& grid = *pressure_.readouts;
     setFlag(grid, PressureMemoryRow, snapshot.memory.memoryPressure);
     setFlag(grid, PressureSwapRow, snapshot.memory.swapPressure);
+    setSwapUsed(grid, PressureSwapUsedRow, snapshot.memory);
+    setBytes(grid, PressureProcessSwapRow, snapshot.memory.processSwappedBytes);
     grid.setValue(WaitsRow, number(pressure.admissionWaits), MetricUnit::Count);
     grid.setNoteValue(WaitsRow, latest(history.series(Series::AdmissionWaitRate)),
                       MetricUnit::CountPerSecond);
