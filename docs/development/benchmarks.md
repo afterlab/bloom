@@ -268,7 +268,15 @@ Every measurement is a fresh process.
   and the harness prints the window's last snapshot as a `BENCH_PROFILER` line in the
   `profiler.snapshot` JSON. `peakDeviceBytes` is the
   process tree's peak device memory as the driver reports it (`nvidia-smi --query-compute-apps`,
-  NVIDIA only). The harness also prints a `BENCH_MEMORY` line with the same fields every ten seconds,
+  NVIDIA only). Next to it, for device admission (#417): each memory sample also carries
+  `deviceOwnedNativeBytes` (the processing root's own native image and buffer storage, what the
+  device claims cover), `deviceLiveBytes` (Bloom's live device allocations) and
+  `deviceHeapUsageBytes` (the driver's `VK_EXT_memory_budget` heap usage; present only with
+  `--bench-profiler`, which runs the sampler that queries it); and the result gives the run's
+  high-water marks `peakDeviceClaimBytes` and `peakDeviceOwnedNativeBytes`, and over the released
+  native phases `releasedNativePhases`, `releasedPhaseDeviceNeedBytes` and
+  `releasedPhaseDevicePeakBytes` (sums of each phase's stated need and of the most storage it held
+  at once), `peakPhaseDeviceNeedBytes` and `peakPhaseDeviceAllocationBytes`. The harness also prints a `BENCH_MEMORY` line with the same fields every ten seconds,
   which the run log keeps, so a fill that stops making progress shows where its memory is.
   Fills also report `cachedFrames` (frames still retained when the fill ends) and
   `previewFirstYieldedBytes`: bytes the other reusable pools gave back so a finished preview frame

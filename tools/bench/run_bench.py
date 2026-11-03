@@ -520,14 +520,23 @@ def summarise(measurements):
             rows.append((key, f"export {m['export']}",
                          f"{value * 1000:.0f} ms/frame" if value and not m.get("error")
                          else "error", m))
-    lines = ["| media | measurement | result | GPU % | cores | peak RSS GB | CPU-fallback |",
-             "|---|---|---|---|---|---|---|"]
+    # Device memory peaks (#417): the driver's figure for the process tree, Bloom's own native
+    # storage and the device admission claims, in GB; blank where a run does not report one.
+    lines = ["| media | measurement | result | GPU % | cores | peak RSS GB "
+             "| device GB driver / own / claimed | CPU-fallback |",
+             "|---|---|---|---|---|---|---|---|"]
+
+    def gigabytes(value):
+        return f"{value / 1e9:.2f}" if isinstance(value, (int, float)) else ""
+
     for key, what, detail, m in rows:
         rss = m.get("peakRssBytes") or m.get("peakTreeRssBytes") or 0
         cores = m.get("fillCoresBusy", m.get("cpuCoresBusy"))
         cores = f"{cores:.1f}" if isinstance(cores, (int, float)) else ""
+        device = " / ".join(gigabytes(m.get(field)) for field in (
+            "peakDeviceBytes", "peakDeviceOwnedNativeBytes", "peakDeviceClaimBytes"))
         lines.append(f"| {key} | {what} | {detail} | {m.get('gpuBusyPercent', '')} | {cores} | "
-                     f"{rss / 1e9:.2f} | {m.get('cpuFallbackFrames', '')} |")
+                     f"{rss / 1e9:.2f} | {device} | {m.get('cpuFallbackFrames', '')} |")
     return "\n".join(lines)
 
 

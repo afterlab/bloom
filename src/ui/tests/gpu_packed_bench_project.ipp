@@ -127,11 +127,17 @@ struct BenchMemorySample {
     runtime::ProfilerBytes stagingPeakBytes{};
     runtime::ProfilerBytes admissionClaimBytes{};
     runtime::ProfilerMetric<std::int64_t> unattributedBytes{};
+    // Device memory: Bloom's own live device allocations and the driver's heap usage for this
+    // process (VK_EXT_memory_budget), next to deviceClaimBytes below.
+    runtime::ProfilerBytes deviceLiveBytes{};
+    runtime::ProfilerBytes deviceHeapUsageBytes{};
     // Not in the snapshot.
     std::uint64_t operationSharedBytes = 0;
     std::uint64_t hostClaimBytes = 0;
     std::uint64_t hostUsableBytes = 0;
     std::uint64_t deviceClaimBytes = 0;
+    // The processing root's own native image and buffer storage (what the claims cover).
+    std::uint64_t deviceOwnedNativeBytes = 0;
 };
 
 void benchMemoryFromSnapshot(const runtime::ProfilerSnapshot& snapshot, BenchMemorySample& sample) {
@@ -144,6 +150,8 @@ void benchMemoryFromSnapshot(const runtime::ProfilerSnapshot& snapshot, BenchMem
     sample.stagingPeakBytes = memory.stagingPeakBytes;
     sample.admissionClaimBytes = memory.admissionClaimBytes;
     sample.unattributedBytes = memory.unattributedBytes;
+    sample.deviceLiveBytes = snapshot.gpu.liveBytes;
+    sample.deviceHeapUsageBytes = snapshot.gpu.heapUsageBytes;
     if (memory.poolCount == 0 && memory.droppedPools == 0)
         return; // The ledger reading has not been published yet.
     std::uint64_t all = 0, pending = 0, device = 0, preview = 0, operation = 0, decoded = 0,
@@ -206,9 +214,12 @@ void benchMetricJson(std::ostringstream& out, const char* name,
     benchMetricJson(out, "stagingPeakBytes", sample.stagingPeakBytes);
     benchMetricJson(out, "admissionClaimBytes", sample.admissionClaimBytes);
     benchMetricJson(out, "unattributedBytes", sample.unattributedBytes);
+    benchMetricJson(out, "deviceLiveBytes", sample.deviceLiveBytes);
+    benchMetricJson(out, "deviceHeapUsageBytes", sample.deviceHeapUsageBytes);
     out << ",\"hostClaimBytes\":" << sample.hostClaimBytes
         << ",\"hostUsableBytes\":" << sample.hostUsableBytes
-        << ",\"deviceClaimBytes\":" << sample.deviceClaimBytes << '}';
+        << ",\"deviceClaimBytes\":" << sample.deviceClaimBytes
+        << ",\"deviceOwnedNativeBytes\":" << sample.deviceOwnedNativeBytes << '}';
     return out.str();
 }
 
@@ -819,6 +830,11 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         sample.hostClaimBytes = capacity.hostClaimBytes;
         sample.hostUsableBytes = capacity.hostUsableBytes;
         sample.deviceClaimBytes = capacity.deviceClaimBytes;
+        {
+            const auto owned = policy->snapshot().reservations;
+            sample.deviceOwnedNativeBytes =
+                owned.ownedNativeImageBytes + owned.ownedNativeBufferBytes;
+        }
         if (sample.rssBytes.valueOr(0) >= memoryPeak.rssBytes.valueOr(0))
             memoryPeak = sample;
         const auto now = std::chrono::steady_clock::now();
@@ -964,6 +980,15 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"hostCapacityBytes\":" << claims.hostCapacityBytes.value_or(0)
          << ",\"deviceCapacityBytes\":" << claims.deviceCapacityBytes.value_or(0)
          << ",\"memoryAtPeak\":" << benchMemoryJson(memoryPeak)
+         // Device admission against allocation over the whole process: the claim and own-storage
+         // high-water marks, and per released native phase the claimed need and its peak storage.
+         << ",\"peakDeviceClaimBytes\":" << claims.peakTotalDeviceClaimBytes
+         << ",\"peakDeviceOwnedNativeBytes\":" << claims.peakOwnedNativeBytes
+         << ",\"releasedNativePhases\":" << claims.releasedNativePhases
+         << ",\"releasedPhaseDeviceNeedBytes\":" << claims.releasedPhaseDeviceNeedBytes
+         << ",\"releasedPhaseDevicePeakBytes\":" << claims.releasedPhaseDevicePeakBytes
+         << ",\"peakPhaseDeviceNeedBytes\":" << claims.peakPhaseDeviceNeedBytes
+         << ",\"peakPhaseDeviceAllocationBytes\":" << claims.peakPhaseDeviceAllocationBytes
          << ",\"peakRssBytes\":" << benchPeakRssBytes() << ",\"processSeconds\":"
          << std::chrono::duration<double>(std::chrono::steady_clock::now() - processStarted)
                 .count()
