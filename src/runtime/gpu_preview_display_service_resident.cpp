@@ -728,6 +728,8 @@ void noteResidentExecutorCounters(const std::shared_ptr<PreviewDisplayServiceCor
     // executor's own contract; it is never a full-frame host transfer.
     core->counterNativeDispatches.store(counters.dispatches, std::memory_order_relaxed);
     core->counterUploadsAhead.store(counters.uploadsAhead, std::memory_order_relaxed);
+    core->counterNativeUploads.store(counters.uploads, std::memory_order_relaxed);
+    core->counterNativeSubmissions.store(counters.nativeSubmissions, std::memory_order_relaxed);
     core->counterUploadSubmitNanoseconds.store(counters.uploadSubmitNanoseconds,
                                                std::memory_order_relaxed);
     core->counterUploadFenceObservationNanoseconds.store(counters.uploadFenceObservationNanoseconds,

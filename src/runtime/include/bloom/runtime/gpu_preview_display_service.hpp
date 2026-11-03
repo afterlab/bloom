@@ -154,6 +154,9 @@ struct GpuPreviewDisplayServiceCounters final {
     std::uint64_t nativeDispatches = 0;
     // Uploads the executor began ahead of their own step, beside another native job (#405).
     std::uint64_t uploadsAhead = 0;
+    // Native uploads, and the work submissions that carried the native operations (a batch is one).
+    std::uint64_t nativeUploads = 0;
+    std::uint64_t nativeSubmissions = 0;
     // CPU wall stages, including host submission and fence observation/polling delay.
     std::uint64_t uploadSubmitNanoseconds = 0;
     std::uint64_t uploadFenceObservationNanoseconds = 0;
