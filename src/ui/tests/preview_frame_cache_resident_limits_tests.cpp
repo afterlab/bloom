@@ -619,6 +619,57 @@ int main(int argc, char** argv) {
         }
 
         // ----------------------------------------------------------------------------------------
+        // #462: a host-charged resident frame the resident limits refuse is refused before the
+        // preview-first yield, so no Ordinary pool evicts for a frame that is never kept. The
+        // control cache, identical except for its limits, does take the yield.
+        // ----------------------------------------------------------------------------------------
+        {
+            auto yieldRegistry =
+                GpuResidentFrameLeaseRegistry::create(*device.device, registryBudgets);
+            expectations.expect(yieldRegistry != nullptr, "the yield registry is created");
+            if (yieldRegistry == nullptr) {
+                return 1;
+            }
+            std::string failure;
+            auto probe = makeResidentFrame(*device.device, *yieldRegistry, *sharedProcessor,
+                                           reportHandle, plan, pipelines, size->first, size->second,
+                                           descriptor, 0, 1, kBudget, failure);
+            expectations.expect(probe != nullptr, "the yield probe frame is produced");
+            if (probe == nullptr) {
+                return 1;
+            }
+            const auto frameBytes = PreviewFrameCache::frameByteCost(*probe);
+            bloom::runtime::MemoryBudgetLedger ledger(std::size_t{64} << 30, std::size_t{64} << 30);
+            ledger.setRamHeadroom(std::size_t{2} << 30);
+            const auto held = frameBytes * 2;
+            std::size_t intermediates = held;
+            ledger.registerCache(
+                &intermediates, held, [&] { return intermediates; },
+                [&](const std::size_t bytes) { intermediates = std::min(intermediates, bytes); });
+            {
+                PreviewFrameCache refusing(frameBytes / 2, ledger);
+                refusing.setGpuResidentLimits(std::numeric_limits<std::size_t>::max(), 0);
+                auto fill = refusing.beginFillRetention();
+                const auto inserted = refusing.insert(probe);
+                expectations.expect(
+                    inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedBudget &&
+                        intermediates == held &&
+                        refusing.statistics().previewFirstYieldedBytes == 0 &&
+                        refusing.byteBudget() == frameBytes / 2,
+                    "a frame the resident limits refuse takes no yield from an Ordinary pool");
+            }
+            {
+                PreviewFrameCache control(frameBytes / 2, ledger);
+                auto fill = control.beginFillRetention();
+                const auto inserted = control.insert(probe);
+                expectations.expect(inserted.retained() && intermediates < held &&
+                                        control.statistics().previewFirstYieldedBytes != 0,
+                                    "the same frame within the resident limits takes the yield");
+            }
+            ledger.unregisterCache(&intermediates);
+        }
+
+        // ----------------------------------------------------------------------------------------
         // The small configurable edge case: cache 3 vs registry 5.
         // ----------------------------------------------------------------------------------------
         {

@@ -297,6 +297,15 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
         // A device-budgeted resident frame takes nothing from the host byte budget.
         const bool charged = !resident || !deviceBudgeted();
         const auto hostCharge = charged ? bytes : 0;
+        const auto refuse = [&] {
+            ++statistics_.rejections;
+            counters_.refused();
+            return report(InsertOutcome::RejectedBudget, PreviewTraceOutcome::OverBudget);
+        };
+        // What no room can fix is refused before any pool is asked to give memory back.
+        if (bytes == 0 ||
+            (resident && (bytes > gpuResidentByteLimit_ || gpuResidentEntryLimit_ == 0)))
+            return refuse();
         const auto host = hostBytes();
         if (hostCharge != 0 && (host > byteBudget_ || hostCharge > byteBudget_ - host)) {
             // Preview first: during a fill the ledger's Ordinary pools make room for this frame
@@ -313,12 +322,8 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
                     this, [this] { emit byteBudgetChanged(); }, Qt::QueuedConnection);
             }
         }
-        if (bytes == 0 || hostCharge > byteBudget_ ||
-            (resident && (bytes > gpuResidentByteLimit_ || gpuResidentEntryLimit_ == 0))) {
-            ++statistics_.rejections;
-            counters_.refused();
-            return report(InsertOutcome::RejectedBudget, PreviewTraceOutcome::OverBudget);
-        }
+        if (hostCharge > byteBudget_)
+            return refuse();
         // Prepare every allocating part before changing qualification, revisions or ownership.
         allocationCheckpoint(InsertAllocation::Product);
         Entry incoming{
