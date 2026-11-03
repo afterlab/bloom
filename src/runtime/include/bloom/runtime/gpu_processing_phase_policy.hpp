@@ -7,6 +7,7 @@
 #include <bloom/runtime/task_budget_view.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -232,4 +233,35 @@ reserveHostEvaluationPhase(GpuProcessingPhasePolicy&, std::uint64_t pixels,
                            bool encodedOutput = false,
                            GpuAdmissionClass admissionClass = GpuAdmissionClass::Viewer,
                            std::uint64_t minimumPixelBytes = 0) noexcept;
+
+// Evict-on-demand of device retention (#425). Usable VRAM (the live budget minus the VRAM
+// headroom) is the only device ceiling, so device caches keep what fits and give it back when
+// work needs it: a request waiting for device memory records its shortfall here from any thread,
+// and the GPU owner that holds the caches takes it and evicts, caches first and finished frames
+// last. Thread-safe.
+class GpuDeviceReclaimRequest final {
+  public:
+    // Raises the pending request to at least `bytes`.
+    void request(std::uint64_t bytes) noexcept;
+    // Owner thread: the pending request, cleared.
+    [[nodiscard]] std::uint64_t take() noexcept;
+    [[nodiscard]] bool pending() const noexcept {
+        return bytes_.load(std::memory_order_relaxed) != 0;
+    }
+
+  private:
+    std::atomic<std::uint64_t> bytes_{0};
+};
+// Registers a Device-domain retention reclaimer on `policy` that records each shortfall in
+// `request` (held weakly) and calls `wake` so the owner evicts at once. Returns nothing released:
+// the owner's eviction reaches the waiter through its next device report.
+void registerDeviceReclaim(GpuProcessingPhasePolicy& policy,
+                           const std::shared_ptr<GpuDeviceReclaimRequest>& request,
+                           std::function<void()> wake = {});
+// Owner thread: what to evict now. The larger of a waiting request's shortfall and, under a live
+// driver budget, how far the device's free memory has fallen below the VRAM headroom (another
+// program took it), as host caches shrink when free RAM falls below the RAM headroom.
+[[nodiscard]] std::uint64_t deviceReclaimBytes(GpuDeviceReclaimRequest& request,
+                                               const render::GpuAllocationBudget& live,
+                                               std::uint64_t vramHeadroomBytes) noexcept;
 } // namespace bloom::runtime

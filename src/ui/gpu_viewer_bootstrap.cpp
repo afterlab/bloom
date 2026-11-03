@@ -26,13 +26,11 @@ GpuResidentBudgetPlan budgetPlanFrom(const runtime::GpuResidentCapacityPlan& pla
 
 } // namespace
 
-GpuResidentBudgetPlan
-gpuResidentBudgetPlanFor(const std::size_t previewFrameCacheByteBudget) noexcept {
-    // Pure host-configured partition of the artist's explicit ceiling. No fixed device ceiling is
-    // imposed here: the owner resolves the real device budget and clamps this plan through the
-    // existing status poll. A zero budget stays zero.
-    return budgetPlanFrom(runtime::gpuResidentCapacityPlanConfigured(
-        static_cast<std::uint64_t>(previewFrameCacheByteBudget)));
+GpuResidentBudgetPlan gpuResidentBudgetPlanFor(const std::size_t ceilingBytes) noexcept {
+    // One configured ceiling for every ledger, no partition (#425). The owner resolves the real
+    // device budget and clamps this plan through the existing status poll. Zero stays zero.
+    return budgetPlanFrom(
+        runtime::gpuResidentCapacityPlanConfigured(static_cast<std::uint64_t>(ceilingBytes)));
 }
 
 void applyGpuResidentBudgetPlan(runtime::GpuPreviewDisplayServiceOptions& options,
@@ -40,7 +38,7 @@ void applyGpuResidentBudgetPlan(runtime::GpuPreviewDisplayServiceOptions& option
     options.residentLeaseBudgets.maxBytes = plan.leaseBytes;
     options.residentLeaseBudgets.maxEntries = plan.leaseEntries;
     options.residentSceneCacheBudgets.maxRetainedBytes = plan.sceneCacheBytes;
-    // Share the request headroom with the same pool: only ever lower the configured allowance.
+    // Only ever lower the configured allowance.
     if (plan.requestBytes > 0 &&
         plan.requestBytes <
             options.previewByteAllowance.value_or(runtime::gpuPreviewRequestByteAllowance())) {
@@ -166,6 +164,14 @@ void GpuViewerBootstrap::refreshFromStatus(const runtime::GpuPreviewDisplayServi
             status.residentCapacityPlan != appliedResidentPlan_) {
             applyGpuResidentCacheLimits(*residentCache_, status.residentCapacityPlan);
             appliedResidentPlan_ = status.residentCapacityPlan;
+        }
+        // Work waits for device memory the device caches could not give back: finished resident
+        // frames go last, least recently used first (#425).
+        if (residentCache_ != nullptr &&
+            status.residentFrameEvictionSerial != appliedResidentFrameEvictionSerial_) {
+            appliedResidentFrameEvictionSerial_ = status.residentFrameEvictionSerial;
+            static_cast<void>(residentCache_->evictGpuResidentBytes(
+                static_cast<std::size_t>(status.residentFrameEvictionBytes)));
         }
         sink = sink_;
     }

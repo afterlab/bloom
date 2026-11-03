@@ -705,4 +705,41 @@ reserveHostEvaluationPhase(GpuProcessingPhasePolicy& policy, const std::uint64_t
                            .native = false,
                            .admissionClass = admissionClass});
 }
+void GpuDeviceReclaimRequest::request(const std::uint64_t bytes) noexcept {
+    auto current = bytes_.load(std::memory_order_relaxed);
+    while (bytes > current &&
+           !bytes_.compare_exchange_weak(current, bytes, std::memory_order_relaxed)) {
+    }
+}
+std::uint64_t GpuDeviceReclaimRequest::take() noexcept {
+    return bytes_.exchange(0, std::memory_order_relaxed);
+}
+void registerDeviceReclaim(GpuProcessingPhasePolicy& policy,
+                           const std::shared_ptr<GpuDeviceReclaimRequest>& request,
+                           std::function<void()> wake) {
+    policy.addRetentionReclaimer(
+        [weak = std::weak_ptr(request), wake = std::move(wake)](
+            const render::GpuProcessingPhaseDomain domain,
+            const std::uint64_t shortfall) -> std::uint64_t {
+            if (domain != render::GpuProcessingPhaseDomain::Device)
+                return 0;
+            if (const auto held = weak.lock()) {
+                held->request(shortfall);
+                if (wake)
+                    wake();
+            }
+            return 0;
+        });
+}
+std::uint64_t deviceReclaimBytes(GpuDeviceReclaimRequest& request,
+                                 const render::GpuAllocationBudget& live,
+                                 const std::uint64_t vramHeadroomBytes) noexcept {
+    const auto waiting = request.take();
+    const auto pressure =
+        live.source == render::GpuAllocationBudgetSource::MemoryBudget &&
+                live.available_bytes < vramHeadroomBytes
+            ? vramHeadroomBytes - live.available_bytes
+            : std::uint64_t{0};
+    return std::max(waiting, pressure);
+}
 } // namespace bloom::runtime

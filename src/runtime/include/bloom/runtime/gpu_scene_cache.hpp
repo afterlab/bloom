@@ -122,6 +122,11 @@ class GpuSceneCache final {
     insert(std::string semanticKey, std::shared_ptr<const render::GpuImage> image) noexcept;
 
     [[nodiscard]] bool erase(const std::string& semanticKey) noexcept;
+    // Owner-thread evict-on-demand (#425): drops unpinned entries, least recently used first,
+    // until at least `bytes` are released or only pinned entries remain. Returns the bytes
+    // released. Work waiting for device memory calls this through its owner; a pinned entry is
+    // never invalidated.
+    [[nodiscard]] std::uint64_t reclaim(std::uint64_t bytes) noexcept;
     void clear() noexcept;
 
     // Device loss/recreation: drop every entry and advance the invalidation epoch. Owner thread

@@ -498,6 +498,15 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
                 : gpuPreviewRequestByteAllowance()),
         std::memory_order_relaxed);
     impl_->core = core;
+    if (core->options.processingPhasePolicy) {
+        // Device caches give memory back when work waits for it (#425). The owner wakes, evicts
+        // its scene cache and reports the freed device memory, which resumes the waiter.
+        registerDeviceReclaim(*core->options.processingPhasePolicy, core->deviceReclaim,
+                              [weak = std::weak_ptr(core)] {
+                                  if (const auto held = weak.lock())
+                                      held->notify();
+                              });
+    }
 
     if (!core->options.enabled) {
         core->publishState(GpuPreviewDisplayServiceState::Unavailable, false,
@@ -574,6 +583,8 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.residentQualification = core.publishedResidentQualification;
     result.residentDetail = core.publishedResidentDetail;
     result.residentCapacityPlan = core.publishedResidentCapacityPlan;
+    result.residentFrameEvictionSerial = core.publishedResidentFrameEvictionSerial;
+    result.residentFrameEvictionBytes = core.publishedResidentFrameEvictionBytes;
     result.foregroundRequestBytes =
         core.effectivePreviewByteAllowance.load(std::memory_order_relaxed);
     result.allocatorMemory = core.publishedAllocatorMemory;

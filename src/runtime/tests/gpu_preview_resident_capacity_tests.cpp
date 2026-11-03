@@ -1,7 +1,8 @@
 // Focused, bounded tests for the capacity-aware resident preview admission policy.
 //
-// The pure cases run with no device: configured partition, the device-fits/device-pressure/unknown
-// clamp, overflow saturation, and the 24x6000x4000 RGBA8 retention arithmetic. The optional native
+// The pure cases run with no device: the unpartitioned configured ceiling (#425), the
+// device-fits/device-pressure/unknown clamp, overflow saturation, and the 24x6000x4000 RGBA8
+// retention arithmetic. The optional native
 // owner case creates one real device on this thread, resolves its allocation budget, and proves the
 // effective lease/cache plan stays aligned and never overcommits the resolved budget. It uses
 // a compact arithmetic simulation (no 24 large GPU allocations, no simultaneous worker pressure).
@@ -45,34 +46,22 @@ GpuResidentCapacity knownCapacity(const std::uint64_t bytes) {
     return capacity;
 }
 
-void testConfiguredPartition() {
+// #425: usable VRAM is the only device ceiling. A configured ceiling applies to every ledger as
+// it is; nothing is split into lease/scene/request/cache fractions.
+void testConfiguredCeilingIsNotPartitioned() {
     const auto plan = bloom::runtime::gpuResidentCapacityPlanConfigured(2ULL * kGib);
     expect(plan.poolBytes == 2ULL * kGib, "the configured pool is the explicit ceiling");
-    expect(plan.leaseBytes == 2ULL * kGib / 2ULL, "the lease share is 1/2 of the ceiling");
-    expect(plan.sceneCacheBytes == 2ULL * kGib / 5ULL, "the scene share is 1/5 of the ceiling");
-    expect(plan.requestBytes == 2ULL * kGib - plan.leaseBytes - plan.sceneCacheBytes,
-           "the request share completes the ceiling");
-    expect(plan.leaseBytes + plan.sceneCacheBytes + plan.requestBytes == plan.poolBytes,
-           "the partition sums to exactly the pool and can never overcommit it");
-    // Float processing needs the accumulator, the input, and the new output live together with the
-    // native allocation/staging overhead; the request share must never fall back below the retired
-    // 60/20/20 default (pool/5) that starved it.
-    expect(plan.requestBytes >= 2ULL * kGib / 5ULL,
-           "the request share is at or above the retired 60/20/20 default");
-    expect(plan.requestBytes > plan.leaseBytes / 2ULL,
-           "the request share covers more than a quarter of the pool");
-    expect(plan.cacheBytes == plan.leaseBytes - plan.leaseBytes / 5ULL,
-           "the cache keeps 4/5 of the lease ledger");
-    expect(plan.leaseBytes > plan.cacheBytes, "the lease ledger keeps in-flight headroom");
+    expect(plan.leaseBytes == 2ULL * kGib && plan.sceneCacheBytes == 2ULL * kGib &&
+               plan.requestBytes == 2ULL * kGib && plan.cacheBytes == 2ULL * kGib,
+           "every ledger is the whole ceiling, not a fixed fraction of it");
     expect(plan.cacheEntries >= 8 && plan.leaseEntries >= plan.cacheEntries,
            "the entry bounds are positive and aligned");
-    expect(!plan.resolved, "a host-configured partition is not an owner-resolved plan");
+    expect(!plan.resolved, "a host-configured plan is not an owner-resolved plan");
 
-    // An explicit tiny ceiling is honored proportionally, never floored up, and still sums to it.
     const auto tiny = bloom::runtime::gpuResidentCapacityPlanConfigured(5);
-    expect(tiny.leaseBytes + tiny.sceneCacheBytes + tiny.requestBytes == tiny.poolBytes &&
-               tiny.poolBytes == 5,
-           "a tiny explicit ceiling partitions exactly without a floor");
+    expect(tiny.poolBytes == 5 && tiny.leaseBytes == 5 && tiny.sceneCacheBytes == 5 &&
+               tiny.requestBytes == 5,
+           "a tiny explicit ceiling is honored as it is, without a floor");
 
     const auto zero = bloom::runtime::gpuResidentCapacityPlanConfigured(0);
     expect(zero.poolBytes == 0 && zero.cacheBytes == 0 && zero.leaseBytes == 0 &&
@@ -86,37 +75,33 @@ void testCapacityClamp() {
     configured.sceneCacheBytes = kGib;
     configured.requestBytes = kGib;
 
-    // Plenty of room: the configured plan is preserved exactly, never raised.
+    // Plenty of room: the configured retention ceilings are preserved exactly, never raised; the
+    // lease registry, which only accounts real allocations, takes the device pool.
     const auto roomy =
         bloom::runtime::gpuResidentCapacityPlanFor(configured, knownCapacity(16ULL * kGib));
-    expect(roomy.leaseBytes == configured.leaseBytes &&
+    expect(roomy.cacheBytes == configured.leaseBytes &&
                roomy.sceneCacheBytes == configured.sceneCacheBytes &&
                roomy.requestBytes == configured.requestBytes,
-           "a device with room preserves the configured sub-budgets exactly");
-    expect(roomy.cacheBytes == roomy.leaseBytes - roomy.leaseBytes / 5ULL,
-           "the preserved plan keeps the cache/lease alignment");
+           "a device with room preserves the configured ceilings exactly");
+    expect(roomy.leaseBytes == 16ULL * kGib && roomy.leaseBytes >= roomy.cacheBytes,
+           "the lease registry is bounded by the device, never below the cache");
 
-    // Tight device: each ledger scales down proportionally and the sum stays within the pool.
+    // Tight device: each ledger is clamped to the pool on its own, with no proportional share.
     const auto tight =
-        bloom::runtime::gpuResidentCapacityPlanFor(configured, knownCapacity(4ULL * kGib));
-    expect(tight.poolBytes == 4ULL * kGib, "a tight live budget caps the pool at available VRAM");
-    expect(tight.leaseBytes + tight.sceneCacheBytes + tight.requestBytes <= tight.poolBytes,
-           "the tight plan never exceeds the pool");
-    expect(tight.leaseBytes + tight.sceneCacheBytes + tight.requestBytes > 0,
-           "the tight plan still admits a resident route");
-    expect(tight.cacheBytes <= tight.leaseBytes, "the tight plan keeps cache <= lease");
+        bloom::runtime::gpuResidentCapacityPlanFor(configured, knownCapacity(2ULL * kGib));
+    expect(tight.poolBytes == 2ULL * kGib, "a tight live budget caps the pool at available VRAM");
+    expect(tight.cacheBytes == 2ULL * kGib && tight.leaseBytes == 2ULL * kGib &&
+               tight.sceneCacheBytes == kGib && tight.requestBytes == kGib,
+           "each ledger is min(configured, pool): no 1/2, 1/5, 4/5 or remainder split");
 
     // Unknown device: the small safe fallback, never a host-RAM assumption.
     const auto unknown =
         bloom::runtime::gpuResidentCapacityPlanFor(configured, GpuResidentCapacity{});
     expect(unknown.resolved, "the owner-resolved path is always marked resolved");
     expect(unknown.poolBytes == 256ULL * kMib, "an unknown device uses the safe fallback pool");
-    expect(unknown.poolBytes <= configured.leaseBytes,
-           "the fallback never exceeds the configured bound");
     expect(!unknown.capacity.isKnown(), "an unresolved device source is not known");
 
-    // A KNOWN live budget reporting zero free bytes is not an unresolved device: it yields no
-    // resident subset and must never receive the unknown fallback.
+    // A KNOWN live budget reporting zero free bytes is not an unresolved device.
     const auto knownZero = bloom::runtime::gpuResidentCapacityPlanFor(configured, knownCapacity(0));
     expect(knownZero.capacity.isKnown(), "a known-zero budget is still a resolved device");
     expect(knownZero.poolBytes == 0 && knownZero.cacheBytes == 0,
@@ -127,8 +112,29 @@ void testCapacityClamp() {
     const auto configuredZero =
         bloom::runtime::gpuResidentCapacityPlanFor(none, knownCapacity(16ULL * kGib));
     expect(configuredZero.resolved, "an explicit-zero owner plan is still resolved");
-    expect(configuredZero.poolBytes == 0 && configuredZero.cacheBytes == 0,
+    expect(configuredZero.poolBytes == 0 && configuredZero.cacheBytes == 0 &&
+               configuredZero.leaseBytes == 0,
            "an explicit zero ceiling is respected, never floored upward");
+}
+
+void testNominalHeapHasNoDivisor() {
+    // Without VK_EXT_memory_budget the fallback is the DEVICE_LOCAL heap itself: the retired
+    // nominal-heap divisor of 2 is gone, and the phase policy subtracts the VRAM headroom.
+    GpuResidentCapacity nominal;
+    nominal.source = GpuResidentCapacitySource::DeviceLocalEstimate;
+    nominal.availableBytes = 16ULL * kGib;
+    nominal.deviceLocalBytes = 16ULL * kGib;
+    const GpuResidentConfiguredBudgets unlimited{
+        .leaseBytes = std::numeric_limits<std::uint64_t>::max(),
+        .sceneCacheBytes = std::numeric_limits<std::uint64_t>::max(),
+        .requestBytes = 0};
+    const auto plan = bloom::runtime::gpuResidentCapacityPlanFor(unlimited, nominal);
+    expect(plan.poolBytes == 16ULL * kGib && plan.sceneCacheBytes == 16ULL * kGib &&
+               plan.cacheBytes == 16ULL * kGib && plan.leaseBytes == 16ULL * kGib,
+           "a nominal heap is the whole pool for every retention ledger");
+    expect(bloom::runtime::gpuResidentForegroundRequestBudget(nominal, 3ULL * kGib) ==
+               13ULL * kGib,
+           "nominal foreground capacity is the heap minus actual image ownership");
 }
 
 void testStartupPressureDoesNotFreezeConstruction() {
@@ -143,8 +149,8 @@ void testStartupPressureDoesNotFreezeConstruction() {
            "transient zero free bytes do not become a lifetime construction ceiling");
     const GpuResidentConfiguredBudgets retention{.leaseBytes = kGib, .sceneCacheBytes = kGib / 2};
     const auto plan = bloom::runtime::gpuResidentCapacityPlanFor(retention, cold);
-    expect(plan.leaseBytes != 0 && plan.sceneCacheBytes != 0 && plan.cacheEntries != 0 &&
-               plan.requestBytes == 0 && plan.poolBytes <= 4 * kGib,
+    expect(plan.leaseBytes != 0 && plan.sceneCacheBytes == kGib / 2 && plan.cacheBytes == kGib &&
+               plan.cacheEntries != 0 && plan.requestBytes == 0 && plan.poolBytes == 8 * kGib,
            "rooted retention construction stays finite and usable under startup pressure");
     expect(bloom::runtime::gpuResidentForegroundRequestBudget(pressured, 0) == 0 &&
                bloom::runtime::gpuResidentForegroundRequestBudget(recovered, 0) == 6 * kGib,
@@ -154,19 +160,15 @@ void testStartupPressureDoesNotFreezeConstruction() {
 }
 
 void testRootedForegroundUsesOwnedCapacity() {
-    // A large reusable-cache target still partitions retention, but its unfilled ceilings must
-    // not consume the foreground request's actual live device allowance.
+    // Large retention ceilings never reduce the foreground request's live device allowance.
     GpuResidentConfiguredBudgets retention;
     retention.leaseBytes = 32ULL * kGib;
     retention.sceneCacheBytes = 12ULL * kGib;
     retention.requestBytes = 8ULL * kGib;
     const auto available = knownCapacity(8ULL * kGib);
-    const auto partition = bloom::runtime::gpuResidentCapacityPlanFor(retention, available);
-    expect(partition.leaseBytes + partition.sceneCacheBytes + partition.requestBytes <=
-               partition.poolBytes,
-           "the additive retention plan still fits its one shared pool");
-    expect(partition.requestBytes < 2ULL * kGib,
-           "a large cache target would otherwise starve the active request");
+    const auto plan = bloom::runtime::gpuResidentCapacityPlanFor(retention, available);
+    expect(plan.requestBytes == 8ULL * kGib,
+           "a large cache ceiling no longer starves the active request");
     expect(bloom::runtime::gpuResidentForegroundRequestBudget(available, 0) == 8ULL * kGib,
            "empty retention cannot reduce a rooted foreground request below live free VRAM");
     expect(bloom::runtime::gpuResidentForegroundRequestBudget(knownCapacity(5ULL * kGib),
@@ -178,10 +180,8 @@ void testRootedForegroundUsesOwnedCapacity() {
     GpuResidentCapacity nominal;
     nominal.source = GpuResidentCapacitySource::DeviceLocalEstimate;
     nominal.availableBytes = 16ULL * kGib;
-    expect(bloom::runtime::gpuResidentForegroundRequestBudget(nominal, 3ULL * kGib) == 5ULL * kGib,
-           "nominal planning capacity subtracts actual live and retiring image ownership");
-    expect(bloom::runtime::gpuResidentForegroundRequestBudget(nominal, 9ULL * kGib) == 0,
-           "nominal ownership beyond planning capacity saturates at zero");
+    expect(bloom::runtime::gpuResidentForegroundRequestBudget(nominal, 17ULL * kGib) == 0,
+           "nominal ownership beyond the heap saturates at zero");
     expect(bloom::runtime::gpuResidentForegroundRequestBudget(GpuResidentCapacity{},
                                                               32ULL * kMib) == 224ULL * kMib,
            "unresolved capacity retains its bounded fallback after owned-image charges");
@@ -194,14 +194,12 @@ void testOverflowSaturation() {
     saturated.requestBytes = std::numeric_limits<std::uint64_t>::max();
     const auto plan =
         bloom::runtime::gpuResidentCapacityPlanFor(saturated, knownCapacity(16ULL * kGib));
-    expect(plan.poolBytes <= 16ULL * kGib, "saturated budgets stay within available VRAM");
-    expect(plan.leaseBytes + plan.sceneCacheBytes + plan.requestBytes <= plan.poolBytes,
-           "saturated budgets scale without overflowing the pool");
-    expect(plan.cacheBytes <= plan.leaseBytes, "saturated budgets keep cache <= lease");
+    expect(plan.poolBytes == 16ULL * kGib && plan.leaseBytes == 16ULL * kGib &&
+               plan.sceneCacheBytes == 16ULL * kGib && plan.requestBytes == 16ULL * kGib,
+           "unlimited ceilings resolve to the device pool without overflow");
+    expect(plan.cacheBytes <= plan.leaseBytes, "unlimited ceilings keep cache <= lease");
 }
 
-// The portable fallback must itself be bounded; a rounded-up estimate can never exceed the caller's
-// invariant. Tested directly even where the exact 128-bit path is compiled in.
 // Deterministic default for the scheduler's aggregate GPU request-owned ceiling. Pure: no ledger,
 // no device, no resource dependence.
 void testSchedulerRequestCapacityDefault() {
@@ -216,20 +214,6 @@ void testSchedulerRequestCapacityDefault() {
            "an unknown/low-memory host still yields a valid positive default");
     expect(defaultGpuRequestOwnedByteCapacityFor(0, 4ULL * kGib) > 0,
            "a zero usable budget still yields a valid positive default");
-}
-
-void testPortableScaledShareClamped() {
-    using bloom::runtime::gpu_resident_capacity_detail::scaledShareClamped;
-    const std::uint64_t huge = std::numeric_limits<std::uint64_t>::max();
-    expect(scaledShareClamped(3, 2, 5) <= std::min<std::uint64_t>(3, 2),
-           "the clamped share never exceeds min(value, numerator)");
-    expect(scaledShareClamped(huge, huge, huge) <= huge, "a saturated share stays bounded");
-    expect(scaledShareClamped(huge, 8ULL * 1024ULL * 1024ULL * 1024ULL, huge) <=
-               8ULL * 1024ULL * 1024ULL * 1024ULL,
-           "a share is bounded by its numerator");
-    expect(scaledShareClamped(0, 5, 5) == 0 && scaledShareClamped(5, 0, 5) == 0 &&
-               scaledShareClamped(5, 5, 0) == 0,
-           "degenerate inputs yield zero");
 }
 
 void testAllocationBudgetMapping() {
@@ -259,9 +243,9 @@ void testSixKRetention() {
     const std::uint64_t frame6k = 6000ULL * 4000ULL * 4ULL;
     const std::uint64_t retention24 = 24ULL * frame6k;
     GpuResidentConfiguredBudgets configured;
-    configured.leaseBytes = 12ULL * kGib * 3ULL / 5ULL;
-    configured.sceneCacheBytes = 12ULL * kGib / 5ULL;
-    configured.requestBytes = 12ULL * kGib - configured.leaseBytes - configured.sceneCacheBytes;
+    configured.leaseBytes = 12ULL * kGib;
+    configured.sceneCacheBytes = 12ULL * kGib;
+    configured.requestBytes = 12ULL * kGib;
 
     const auto plan =
         bloom::runtime::gpuResidentCapacityPlanFor(configured, knownCapacity(16ULL * kGib));
@@ -330,10 +314,9 @@ void testNativeOwnerBootstrap(const TestOptions& options) {
     const auto plan = bloom::runtime::gpuResidentCapacityPlanFor(configured, capacity);
     expect(plan.leaseBytes >= plan.cacheBytes,
            "the native effective lease ledger covers the cache sublimit");
-    expect(plan.leaseBytes + plan.sceneCacheBytes + plan.requestBytes <= plan.poolBytes,
-           "the native plan never overcommits the shared resident pool");
-    expect(plan.poolBytes <= capacity.availableBytes,
-           "the native pool is at most the resolved available budget");
+    expect(plan.poolBytes <= capacity.availableBytes && plan.leaseBytes <= plan.poolBytes &&
+               plan.sceneCacheBytes <= plan.poolBytes && plan.requestBytes <= plan.poolBytes,
+           "every native ledger is at most the resolved device pool");
 
     // A foreign-thread query is rejected without touching the driver.
     GpuResidentCapacity foreignCapacity;
@@ -356,13 +339,13 @@ int main(int argc, char** argv) {
         return 1;
 
     const TestOptions options = parseOptions(argc, argv);
-    testConfiguredPartition();
+    testConfiguredCeilingIsNotPartitioned();
     testCapacityClamp();
+    testNominalHeapHasNoDivisor();
     testStartupPressureDoesNotFreezeConstruction();
     testRootedForegroundUsesOwnedCapacity();
     testOverflowSaturation();
     testSchedulerRequestCapacityDefault();
-    testPortableScaledShareClamped();
     testAllocationBudgetMapping();
     testSixKRetention();
     testNativeOwnerBootstrap(options);

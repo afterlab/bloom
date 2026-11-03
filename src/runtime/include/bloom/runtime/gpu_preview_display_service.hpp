@@ -41,6 +41,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -239,6 +240,12 @@ struct GpuPreviewDisplayServiceStatus final {
     // ownership, not another additive part of residentCapacityPlan.poolBytes. Omitted rooted
     // requests still intersect it with the live delivered host allowance and their phase grant.
     std::uint64_t foregroundRequestBytes = 0;
+    // Evict-on-demand of finished resident frames (#425): when work waits for device memory and
+    // the scene cache could not give enough back, the owner asks for the rest here. Each new
+    // serial asks the frame cache to drop that many bytes of its least recently used resident
+    // frames (the bootstrap applies it through the status poll); finished frames go last.
+    std::uint64_t residentFrameEvictionSerial = 0;
+    std::uint64_t residentFrameEvictionBytes = 0;
     GpuPreviewDisplayServiceCounters counters;
     // Latest owner-observed diagnostic intervals; these never establish painted-frame identity.
     render::GpuAllocatorMemorySnapshot allocatorMemory;
@@ -283,17 +290,14 @@ struct GpuPreviewDisplayServiceOptions final {
     // Presentation ownership. Default Disabled keeps the compute-only device exactly as before.
     GpuPreviewDisplayServicePresentationMode presentation =
         GpuPreviewDisplayServicePresentationMode::Disabled;
-    // Bounded resident-frame lease registry budget (charged in actual native allocation bytes).
-    GpuResidentFrameLeaseBudgets residentLeaseBudgets{};
-    // Bounded resident content-cache budget (retained intermediate GpuImages, actual VMA bytes).
-    // This is a separate ledger from the lease registry and the executor's per-request budget.
-    // Without an explicit plan it is the resident partition's scene share of the pool the default
-    // lease registry implies; never a fraction of host memory (ADR 0037). The owner clamps it to
-    // the device.
-    GpuSceneCacheBudgets residentSceneCacheBudgets{
-        gpuResidentCapacityPlanConfigured(GpuResidentFrameLeaseBudgets{}.maxBytes /
-                                          kResidentLeaseNumerator * kResidentLeaseDenominator)
-            .sceneCacheBytes};
+    // Resident-frame lease registry budget (charged in actual native allocation bytes). No byte
+    // ceiling of its own by default: the owner clamps it to the device pool (#425).
+    GpuResidentFrameLeaseBudgets residentLeaseBudgets{
+        .maxBytes = std::numeric_limits<std::uint64_t>::max()};
+    // Resident content-cache budget (retained intermediate GpuImages, actual VMA bytes). No
+    // ceiling of its own by default: the owner clamps it to the device pool, never to a fraction
+    // of it or of host memory (ADR 0037, #425), and evicts it when work waits for device memory.
+    GpuSceneCacheBudgets residentSceneCacheBudgets{};
     // Explicit producer/structural ceilings are honored verbatim, including combined image and
     // staging peaks. A rooted omitted producer limit follows the explicit preview ceiling, or
     // the finite owner-resolved physical request ceiling when a live default view is injected.

@@ -740,6 +740,20 @@ int main(int argc, char** argv) {
             expectations.expect(trimCache.gpuResidentEntryCount() == 4 &&
                                     trimCache.hostBytes() == 0,
                                 "trimToBytes() leaves device-budgeted resident frames");
+            // #425: work waiting for device memory evicts finished resident frames last and LRU
+            // first, only as many as it is short of; the limits stay as they were.
+            const auto oneFrame = trimCache.gpuResidentBytes() / 4;
+            const auto evictionsBefore = trimCache.statistics().gpuResidentEvictions;
+            const auto released = trimCache.evictGpuResidentBytes(oneFrame + 1);
+            expectations.expect(released == 2 * oneFrame && trimCache.gpuResidentEntryCount() == 2,
+                                "a device eviction drops just enough resident frames");
+            expectations.expect(trimCache.statistics().gpuResidentEvictions ==
+                                        evictionsBefore + 2 &&
+                                    trimCache.gpuResidentByteLimit() == kCacheBytes,
+                                "a device eviction is counted and leaves the limits unchanged");
+            expectations.expect(trimCache.evictGpuResidentBytes(0) == 0 &&
+                                    trimCache.gpuResidentEntryCount() == 2,
+                                "a zero device eviction drops nothing");
             trimCache.setGpuResidentLimits(0, 0);
             expectations.expect(trimCache.gpuResidentBytes() == 0 &&
                                     trimCache.gpuResidentEntryCount() == 0,

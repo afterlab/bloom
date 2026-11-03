@@ -16,6 +16,7 @@
 #include <bloom/runtime/gpu_ocio_display_arm.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_preview_resident_capacity.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
@@ -242,6 +243,14 @@ struct PreviewDisplayServiceCore final {
     // unrooted routes take the fixed capacity-plan share, while the rooted owner samples live free
     // capacity after actual allocation ownership. Read atomically by submit() and native stages.
     std::atomic<std::uint64_t> effectivePreviewByteAllowance{0};
+    // Evict-on-demand of device retention (#425): the processing policy's Device reclaimer
+    // records a waiting shortfall here; the owner evicts the scene cache and publishes the rest
+    // as a finished-frame eviction (below) for the UI frame cache.
+    const std::shared_ptr<GpuDeviceReclaimRequest> deviceReclaim =
+        std::make_shared<GpuDeviceReclaimRequest>();
+    // Under stateMutex: each owner request to evict finished resident frames, by serial.
+    std::uint64_t publishedResidentFrameEvictionSerial = 0;
+    std::uint64_t publishedResidentFrameEvictionBytes = 0;
     // Owner-thread-only sampling cadence for the rooted live GPU foreground allowance. Native
     // stage polling may run at 2 ms; heap-budget queries need no such cadence.
     std::chrono::steady_clock::time_point foregroundCapacitySampledAt{};

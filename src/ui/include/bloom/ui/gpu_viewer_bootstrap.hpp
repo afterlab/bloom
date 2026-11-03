@@ -47,47 +47,41 @@ namespace bloom::ui {
 
 class PreviewFrameCache;
 
-// Bounded resident-route budgets derived from the UI frame-cache byte budget. The plan carries BOTH
-// the additive GPU-resident sublimits to install on the shared PreviewFrameCache and the service
-// lease-registry caps, so the cache evicts LRU resident entries before the registry can ever refuse
-// a publishable lease. Every field is finite: no live lease/pin is invalidated, over-budget
-// publications are refused by the service, and the same request takes the CPU fallback.
-//
-// This plan is the CONFIGURED upper bound derived from the artist's RAM-preview budget before any
-// device exists. It is never raised above that explicit ceiling, and a tiny/zero budget stays tiny
-// (no floor forcing a resident route the artist did not ask for). The real device budget is
-// resolved later on the GPU owner and clamped into `runtime::GpuResidentCapacityPlan`, which the
-// bootstrap installs through the existing status poll.
+// Configured resident-route ceilings, set before any device exists. Every ledger takes the one
+// configured ceiling (#425): there is no lease/scene/request/cache split. The application passes
+// no host-derived ceiling, since a RAM budget is not evidence of usable VRAM; tests and explicit
+// callers may pass a smaller one, and a zero ceiling stays zero (no floor forcing a resident route).
+// The GPU owner clamps each ledger to the device and publishes `runtime::GpuResidentCapacityPlan`,
+// which the bootstrap installs through the existing status poll. Usable VRAM bounds what the
+// ledgers hold together, and the caches are evicted when work waits for device memory.
 struct GpuResidentBudgetPlan final {
-    // Total configured resident pool (lease + scene + request).
+    // The configured ceiling.
     std::uint64_t residentPoolBytes = 0;
-    // GPU-resident sublimits inside the overall (unchanged) UI cache budget.
+    // GPU-resident limits inside the overall (unchanged) UI cache budget.
     std::uint64_t cacheBytes = 0;
     std::size_t cacheEntries = 0;
-    // Service lease-registry caps: always >= the cache sublimits plus bounded headroom for leases
-    // that are in flight or currently presented but not yet cached.
+    // Service lease-registry caps; the entry cap keeps bounded headroom for leases that are in
+    // flight or currently presented but not yet cached.
     std::uint64_t leaseBytes = 0;
     std::size_t leaseEntries = 0;
     std::uint64_t sceneCacheBytes = 0;
-    // Per-request LIVE pinned admission headroom (shared with the other ledgers).
+    // Per-request LIVE pinned admission ceiling.
     std::uint64_t requestBytes = 0;
 
     friend bool operator==(const GpuResidentBudgetPlan&, const GpuResidentBudgetPlan&) = default;
 };
 
-// The cache sublimits and the registry caps are derived together from
-// `previewFrameCacheByteBudget`, the artist's explicit ceiling. The partition is pure and cannot
-// overflow; capacity clamping happens on the owner thread and is exposed through the status poll.
-[[nodiscard]] GpuResidentBudgetPlan
-gpuResidentBudgetPlanFor(std::size_t previewFrameCacheByteBudget) noexcept;
+// Every ledger of the plan is `ceilingBytes`; pure and cannot overflow. Capacity clamping happens
+// on the owner thread and is exposed through the status poll.
+[[nodiscard]] GpuResidentBudgetPlan gpuResidentBudgetPlanFor(std::size_t ceilingBytes) noexcept;
 
 // Applies the configured plan to the existing service options. It never enables the service and
 // never changes native budgets or presentation mode. The per-request allowance is only ever
-// lowered to the plan's shared request share.
+// lowered to the plan's request ceiling.
 void applyGpuResidentBudgetPlan(runtime::GpuPreviewDisplayServiceOptions& options,
                                 const GpuResidentBudgetPlan& plan) noexcept;
 
-// Installs the configured plan's additive GPU-resident sublimits on the shared frame cache. The
+// Installs the configured plan's GPU-resident limits on the shared frame cache. The
 // overall CPU cache budget is untouched; only the bounded resident subset is capped, and it evicts
 // LRU resident entries (never invalidating a live lease) when it is exceeded.
 void applyGpuResidentCacheLimits(PreviewFrameCache& cache,
@@ -160,7 +154,8 @@ class GpuViewerBootstrap final {
     // Cheap, UI-thread-safe: reads only the already-published status. Updates the cached client and
     // invokes the publication sink exactly when the usable client changed -- including a change to
     // null when the capability is lost. It also installs the owner-resolved resident cache limit
-    // when that immutable plan changes.
+    // when that immutable plan changes, and applies each new finished-frame eviction the owner
+    // asks for when work waits for device memory (#425).
     void refreshFromStatus(const runtime::GpuPreviewDisplayServiceStatus& status);
 
     [[nodiscard]] ViewerGpuDependencies dependencies() const;
@@ -185,6 +180,8 @@ class GpuViewerBootstrap final {
     // Last capacity plan installed on `residentCache_`. The default (all-zero) never matches a
     // positive resolved plan, so the first publication always installs.
     runtime::GpuResidentCapacityPlan appliedResidentPlan_{};
+    // Last owner finished-frame eviction request applied to `residentCache_`.
+    std::uint64_t appliedResidentFrameEvictionSerial_ = 0;
 };
 
 } // namespace bloom::ui

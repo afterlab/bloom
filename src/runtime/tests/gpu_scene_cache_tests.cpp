@@ -281,6 +281,45 @@ void testBudgetAndPinning(Expectations& expectations, GpuDevice& device, GpuSoli
     }
 }
 
+// #425: evict-on-demand. Work waiting for device memory reclaims unpinned entries, least recently
+// used first, only as many as its shortfall; a pinned entry is never invalidated.
+void testReclaimOnDemand(Expectations& expectations, GpuDevice& device, GpuSolid& solid) {
+    auto created = GpuSceneCache::create(device, GpuSceneCacheBudgets{});
+    expectations.expect(created.hasValue(), "the unbounded cache is created");
+    if (!created) {
+        return;
+    }
+    GpuSceneCache& cache = *created.cache;
+    auto a = makeSolidImage(solid, 32, 32, 0.2);
+    auto b = makeSolidImage(solid, 32, 32, 0.3);
+    auto c = makeSolidImage(solid, 32, 32, 0.4);
+    if (!a || !b || !c) {
+        expectations.expect(false, "the reclaim images are produced");
+        return;
+    }
+    const auto unit = a->allocationBytes();
+    expectations.expect(cache.insert("kA", a) == GpuSceneCacheInsertResult::Inserted &&
+                            cache.insert("kB", b) == GpuSceneCacheInsertResult::Inserted &&
+                            cache.insert("kC", c) == GpuSceneCacheInsertResult::Inserted,
+                        "three entries insert under no ceiling of their own");
+    b.reset();
+    c.reset();
+    // A (oldest) is pinned; B is the least recently used unpinned entry.
+    expectations.expect(cache.reclaim(1) == unit && cache.entryCount() == 2 &&
+                            cache.find("kB") == nullptr && cache.find("kA") != nullptr,
+                        "a small shortfall evicts the LRU unpinned entry only");
+    expectations.expect(cache.reclaim(10 * unit) == unit && cache.entryCount() == 1 &&
+                            cache.retainedBytes() == unit,
+                        "a large shortfall evicts every unpinned entry and stops at a pin");
+    expectations.expect(cache.reclaim(0) == 0 && cache.entryCount() == 1,
+                        "a zero reclaim drops nothing");
+    std::uint64_t foreign = 1;
+    std::thread worker([&cache, &foreign] { foreign = cache.reclaim(1); });
+    worker.join();
+    expectations.expect(foreign == 0 && cache.entryCount() == 1,
+                        "a foreign-thread reclaim is a no-op");
+}
+
 void testWrongThread(Expectations& expectations, GpuDevice& device) {
     auto created = GpuSceneCache::create(device, GpuSceneCacheBudgets{1ULL << 32ULL});
     if (!created) {
@@ -454,6 +493,7 @@ int main(const int argc, char** argv) {
                                foreignSolid ? *foreignSolid : *solid.solid, foreignAvailable);
     testBudgetAndPinning(expectations, *device.device, *solid.solid);
     testPinnedReplacement(expectations, *device.device, *solid.solid);
+    testReclaimOnDemand(expectations, *device.device, *solid.solid);
     testZeroRetention(expectations, *device.device, *solid.solid);
     testForeignThreadCreate(expectations, *device.device);
     testWrongThread(expectations, *device.device);

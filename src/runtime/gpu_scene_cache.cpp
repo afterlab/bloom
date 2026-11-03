@@ -274,6 +274,23 @@ bool GpuSceneCache::erase(const std::string& semanticKey) noexcept {
     return present;
 }
 
+std::uint64_t GpuSceneCache::reclaim(const std::uint64_t bytes) noexcept {
+    if (impl_ == nullptr || !impl_->onOwnerThread()) {
+        return 0;
+    }
+    std::uint64_t released = 0;
+    while (released < bytes) {
+        const auto victim = impl_->findEvictable({});
+        if (victim == impl_->order.end()) {
+            break;
+        }
+        released += impl_->entries.find(*victim)->second.bytes;
+        impl_->removeAt(*victim);
+        ++impl_->counters.evictions;
+    }
+    return released;
+}
+
 void GpuSceneCache::clear() noexcept {
     if (impl_ == nullptr || !impl_->onOwnerThread()) {
         return;

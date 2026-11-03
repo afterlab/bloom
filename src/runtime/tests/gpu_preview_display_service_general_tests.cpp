@@ -456,11 +456,9 @@ int run(const int argc, char** argv) {
 
         TaskScheduler defaultScheduler(root.defaults());
         GpuPreviewDisplayServiceOptions defaultOptions = root.configured(options.loaderPath);
-        // Same configured resident plan the application derives from the artist's frame-cache
-        // ceiling. The former ad-hoc 4/4/2 GiB triplet bypassed the configured split; under the
-        // device clamp it proportionally shrank the request ledger below a full-resolution
-        // transient and refused a request the approved 50/20/30 plan admits. This is the
-        // production derivation, never a widened ceiling.
+        // A configured resident plan from the ledger's frame-cache budget. Every ledger takes the
+        // whole ceiling clamped to the device (#425); no fixed split can shrink the request below a
+        // full-resolution transient.
         const auto defaultLedgerAllocation = root.ledger.allocate();
         const auto defaultConfiguredPlan = bloom::runtime::gpuResidentCapacityPlanConfigured(
             defaultLedgerAllocation.previewFrameCacheByteBudget);

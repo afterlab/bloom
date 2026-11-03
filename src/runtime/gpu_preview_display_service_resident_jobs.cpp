@@ -162,6 +162,18 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
     const bool retryableStorage = storageRefusal && stage->gpuStage &&
                                   stage->gpuStage->phaseLease() && stage->processingPhaseRetired &&
                                   storageRefusal->phaseId == stage->gpuStage->phaseLease()->id();
+    const auto deviceRefusal = [&core] {
+        const auto image = core->device ? core->device->nativeImageStorageRefusal() : std::nullopt;
+        const auto buffer =
+            core->device ? core->device->nativeBufferStorageRefusal() : std::nullopt;
+        return (buffer && buffer->domain == render::GpuProcessingPhaseDomain::Device) ||
+               (!buffer && image && image->domain == render::GpuProcessingPhaseDomain::Device);
+    };
+    if (retryableStorage && core->options.processingPhasePolicy && deviceRefusal()) {
+        // The device caches give way, not the frame (#425): the retry finds the evicted room.
+        core->deviceReclaim->request(
+            std::max<std::uint64_t>(stage->gpuStage->phaseLease()->deviceNeedBytes(), 1));
+    }
     releaseProcessingPhase(core, stage,
                            !stage->processingPhaseTouched || stage->processingPhaseRetired);
     if (stage->cancellationRequested || stage->nativeDiscard ||

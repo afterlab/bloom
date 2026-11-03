@@ -83,16 +83,39 @@ void refreshResidentForegroundCapacity(
         return;
     }
     const auto now = std::chrono::steady_clock::now();
-    if (core->foregroundCapacitySampledAt != std::chrono::steady_clock::time_point{} &&
+    // Work waiting for device memory is answered at once, not at the next sampling slot.
+    if (!core->deviceReclaim->pending() &&
+        core->foregroundCapacitySampledAt != std::chrono::steady_clock::time_point{} &&
         now - core->foregroundCapacitySampledAt < std::chrono::milliseconds(50)) {
         return;
     }
     core->foregroundCapacitySampledAt = now;
-    render::GpuAllocationBudget allocation;
-    try {
-        allocation = core->device->availableAllocationBudget();
-    } catch (...) {
-        allocation = {};
+    const auto sample = [&core] {
+        try {
+            return core->device->availableAllocationBudget();
+        } catch (...) {
+            return render::GpuAllocationBudget{};
+        }
+    };
+    render::GpuAllocationBudget allocation = sample();
+    if (core->options.processingPhasePolicy) {
+        // Evict on demand (#425): what waiting work is short of, or what the driver's free memory
+        // is below the VRAM headroom. The reusable scene cache gives it back first; what it cannot
+        // cover goes to the UI as a finished-frame eviction, so finished frames go last.
+        const auto wanted = deviceReclaimBytes(
+            *core->deviceReclaim, allocation,
+            core->options.processingPhasePolicy->headroom().vramBytes);
+        if (wanted != 0) {
+            const auto released =
+                core->residentSceneCache != nullptr ? core->residentSceneCache->reclaim(wanted) : 0;
+            if (released < wanted) {
+                std::lock_guard lock(core->stateMutex);
+                ++core->publishedResidentFrameEvictionSerial;
+                core->publishedResidentFrameEvictionBytes = wanted - released;
+            }
+            if (released != 0)
+                allocation = sample();
+        }
     }
     const GpuResidentCapacity capacity = gpuResidentCapacityFromAllocationBudget(allocation);
     std::uint64_t ownedImageBytes = 0;
@@ -122,8 +145,7 @@ void refreshResidentForegroundCapacity(
                     std::min(claims.ownedNativeImageBytes, claims.ownedNonlocalNativeHostBytes);
                 untrackedImages -= std::min(untrackedImages, localRootImages);
             }
-            const auto bounded = std::min(untrackedImages, allocation.available_bytes / 2);
-            allocation.available_bytes -= bounded * 2;
+            allocation.available_bytes -= std::min(untrackedImages, allocation.available_bytes);
         }
         // MemoryBudget is already free after VMA allocations. Do not add held phase claims here:
         // some are unallocated promises, and treating them as free could over-admit new work.

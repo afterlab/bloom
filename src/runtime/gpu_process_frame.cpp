@@ -110,8 +110,15 @@ struct GpuProcessFrameEvaluator::Impl final {
     // Test-only fault counter (see failPreparationAllocationAt).
     std::atomic<std::uint32_t> preparationAllocations{0};
     bool stopping = false;
+    // Evict-on-demand of this owner's scene cache when work waits for device memory (#425). The
+    // owner takes it at its next device report (at most one 50 ms idle slice later).
+    const std::shared_ptr<GpuDeviceReclaimRequest> deviceReclaim =
+        std::make_shared<GpuDeviceReclaimRequest>();
 
     void runOwner();
+    // Owner thread: evicts the scene cache by a waiting shortfall or by how far free device
+    // memory is below the VRAM headroom, then reports the live device budget to the policy.
+    void reportDevice();
     GpuProcessFrameOutcome
     runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                const EvaluationRequest& request,
@@ -169,8 +176,20 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
     }
     phase.armed = static_cast<bool>(phaseLease);
     try {
-        return runRequestImpl(plan, request, scene, cancellation, progress,
-                              std::move(outputCommand), phase, readbackByteAllowance);
+        auto outcome = runRequestImpl(plan, request, scene, cancellation, progress,
+                                      std::move(outputCommand), phase, readbackByteAllowance);
+        // A native allocation refused for device room: the scene cache gives way before the
+        // retry, not the frame (#425).
+        if (phaseLease && device) {
+            const auto refusedHere = [&phaseLease](const auto& refusal) {
+                return refusal && refusal->phaseId == phaseLease->id() &&
+                       refusal->domain == render::GpuProcessingPhaseDomain::Device;
+            };
+            if (refusedHere(device->nativeImageStorageRefusal()) ||
+                refusedHere(device->nativeBufferStorageRefusal()))
+                deviceReclaim->request(std::max<std::uint64_t>(phaseLease->deviceNeedBytes(), 1));
+        }
+        return outcome;
     } catch (const std::bad_alloc&) {
         return failure(GpuProcessFrameStatus::Failed, GpuProcessFrameDiagnosticCode::BadAllocation,
                        "the request failed to allocate its host buffers");
@@ -560,15 +579,12 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             }
             auto cacheBudgets = options.cacheBudgets.value_or(GpuSceneCacheBudgets{});
             if (!options.cacheBudgets) {
-                // The resident partition's proportions over this device's construction capacity,
-                // exactly as the preview route clamps its scene cache.
-                const auto partition =
-                    gpuResidentCapacityPlanConfigured(std::numeric_limits<std::uint64_t>::max());
+                // The device pool over this device's construction capacity, exactly as the
+                // preview route clamps its scene cache: no fraction of it (#425). Allocation
+                // admission bounds it by usable VRAM and waiting work evicts it.
                 cacheBudgets.maxRetainedBytes =
                     gpuResidentCapacityPlanFor(
-                        {.leaseBytes = partition.leaseBytes,
-                         .sceneCacheBytes = partition.sceneCacheBytes,
-                         .requestBytes = partition.requestBytes},
+                        {.sceneCacheBytes = std::numeric_limits<std::uint64_t>::max()},
                         gpuResidentConstructionCapacity(gpuResidentCapacityFromAllocationBudget(
                             device->availableAllocationBudget())))
                         .sceneCacheBytes;
@@ -635,9 +651,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                         [this] { return stopping || !queue.empty(); });
             if (!stopping && queue.empty()) {
                 lock.unlock();
-                if (device && options.processingPhasePolicy)
-                    static_cast<void>(options.processingPhasePolicy->reportDevice(
-                        device->ownershipEpoch(), device->availableAllocationBudget()));
+                reportDevice();
                 continue;
             }
             // Shutdown drains every queued request as a typed cancellation, then exits. A request
@@ -653,9 +667,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             queue.pop_front();
         }
 
-        if (device && options.processingPhasePolicy)
-            static_cast<void>(options.processingPhasePolicy->reportDevice(
-                device->ownershipEpoch(), device->availableAllocationBudget()));
+        reportDevice();
 
         if (active->cancellation.isCancellationRequested() || stopRequested.load()) {
             std::lock_guard lock(mutex);
@@ -744,10 +756,23 @@ GpuProcessFrameEvaluator::~GpuProcessFrameEvaluator() {
     }
 }
 
+void GpuProcessFrameEvaluator::Impl::reportDevice() {
+    if (!device || !options.processingPhasePolicy)
+        return;
+    auto live = device->availableAllocationBudget();
+    const auto wanted =
+        deviceReclaimBytes(*deviceReclaim, live, options.processingPhasePolicy->headroom().vramBytes);
+    if (wanted != 0 && cache && cache->reclaim(wanted) != 0)
+        live = device->availableAllocationBudget();
+    static_cast<void>(options.processingPhasePolicy->reportDevice(device->ownershipEpoch(), live));
+}
+
 std::unique_ptr<GpuProcessFrameEvaluator>
 GpuProcessFrameEvaluator::create(const GpuProcessFrameEvaluatorOptions& options) {
     auto impl = std::make_unique<Impl>();
     impl->options = options;
+    if (options.enabled && options.processingPhasePolicy)
+        registerDeviceReclaim(*options.processingPhasePolicy, impl->deviceReclaim);
     auto* implPointer = impl.get();
     if (options.enabled) {
         impl->thread = std::jthread([implPointer] { implPointer->runOwner(); });

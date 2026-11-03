@@ -252,6 +252,11 @@ class PreviewFrameCache final : public QObject {
     // that still hold it, so no live lease is invalidated. CPU entries are never touched by these
     // limits.
     void setGpuResidentLimits(std::size_t maxBytes, std::size_t maxEntries);
+    // Evict-on-demand of finished resident frames (#425): drops least-recently-used GPU-resident
+    // entries until at least `bytes` are released or none is left, when work waits for device
+    // memory the device caches could not give back. Returns the bytes released. Same reference-only
+    // eviction as the limits: a live lease stays valid. CPU entries are never touched.
+    std::size_t evictGpuResidentBytes(std::size_t bytes);
     // Actual resident bytes and resident entry count retained right now. Deliberately distinct from
     // residentBytes()/size(), which count EVERY entry (CPU and resident).
     [[nodiscard]] std::size_t gpuResidentBytes() const noexcept { return gpuResidentBytes_; }

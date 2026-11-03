@@ -2,12 +2,16 @@
 
 // Capacity-aware admission policy for the GPU-resident preview route.
 //
-// The resident frame cache must never be sized from host RAM alone: a large RAM-preview budget is
-// not evidence of usable VRAM. This slice resolves the real device allocation budget on the GPU
-// owner thread (render::GpuDevice::availableAllocationBudget()) and partitions ONE resident pool
-// into the shared frame-cache, lease-registry, scene-cache, and per-request sub-budgets so no
-// ledger can overcommit the device. Every value stays finite, is never raised above the artist's
-// explicit configured ceiling, and an unknown device budget falls back to a small safe pool.
+// The resident frame cache must never be sized from host RAM: a large RAM-preview budget is not
+// evidence of usable VRAM. The GPU owner thread resolves the real device allocation budget
+// (render::GpuDevice::availableAllocationBudget()) into ONE device pool. Usable VRAM (the driver's
+// live budget minus the VRAM headroom preference, applied by GpuProcessingPhasePolicy at every
+// admission and native allocation) is the only device ceiling (#425): the frame-cache,
+// lease-registry, scene-cache and per-request ledgers are NOT partitioned by fixed fractions. Each
+// is the device pool, or a smaller explicit configured ceiling, and none is additive with another.
+// Caches are evicted on demand when work waits for device memory. Every value stays finite, is
+// never raised above an explicit configured ceiling, and an unknown device budget falls back to a
+// small safe pool.
 //
 // Pure functions only: no device, no thread, no allocation. The owner thread produces the resolved
 // capacity and the clamps; tests exercise the policy with synthetic budgets.
@@ -46,26 +50,8 @@ struct GpuResidentCapacity final {
     friend bool operator==(const GpuResidentCapacity&, const GpuResidentCapacity&) = default;
 };
 
-// A nominal DEVICE_LOCAL heap size is not available VRAM, so its planning limit keeps this
-// conservative fraction. A live MemoryBudget already reports available space and is used in full.
-// Rooted foreground requests separately sample free capacity and real phase claims.
-inline constexpr std::uint64_t kResidentCapacityClaimDivisor = 2;
-
-// Safe total pool when the device budget is genuinely unknown.
+// Safe pool when the device budget is genuinely unknown.
 inline constexpr std::uint64_t kUnknownResidentPoolBytes = 256ULL * 1024ULL * 1024ULL;
-// The 50/20/30 lease/scene/request split of the resident pool. The per-request ledger is the only
-// one whose frames are RGBA32F working images; a single source-over/translation step
-// simultaneously holds the accumulator, the foreground input, and its own new output, plus the
-// native op's real VMA/status/staging overhead. At 3/5 the lease starved that ledger and refused
-// ordinary full-resolution compositions that fit the device. The lease still keeps 4/5 of its half
-// of the pool for the resident frame cache; the exact sum is always the configured pool, so the
-// total can never exceed the device claim or the artist's ceiling.
-inline constexpr std::uint64_t kResidentLeaseNumerator = 1;
-inline constexpr std::uint64_t kResidentLeaseDenominator = 2;
-inline constexpr std::uint64_t kResidentSceneDenominator = 5;
-// The resident cache references at most 4/5 of the lease ledger; the remaining 1/5 is headroom for
-// leases that are in flight or currently presented but not yet retained by the cache.
-inline constexpr std::uint64_t kResidentCacheHeadroomDenominator = 5;
 // Finite metadata limits independent of image extent. Actual native byte admission remains
 // authoritative. One eighth of the lease slots stays outside the cache for active/tombstoned work.
 inline constexpr std::uint64_t kResidentCacheEntryCeiling = 4096;
@@ -82,9 +68,9 @@ struct GpuResidentConfiguredBudgets final {
                            const GpuResidentConfiguredBudgets&) = default;
 };
 
-// The resolved resident admission plan. `poolBytes` is the total device pool the route may use;
-// `leaseBytes` includes the cache sublimit plus in-flight/presented headroom, and lease + scene +
-// request never exceed the pool.
+// The resolved resident admission plan. `poolBytes` is the device pool the route may use; every
+// ledger is at most the pool and they are not additive: what each actually holds is real device
+// memory, admitted against usable VRAM when it was allocated and evicted on demand.
 struct GpuResidentCapacityPlan final {
     // True only for a plan the GPU owner actually resolved and published. A configured host-only
     // plan or a default-constructed plan is NOT resolved, so a consumer can tell "not resolved yet"
@@ -109,32 +95,21 @@ struct GpuResidentCapacityPlan final {
 gpuResidentCapacityFromAllocationBudget(const render::GpuAllocationBudget& allocation) noexcept;
 
 // Stable construction limit for rooted retention and producer pipelines. Live free bytes can be
-// zero during startup and must not become a lifetime cache/registry/image ceiling. A reported
-// DEVICE_LOCAL heap is only a nominal size and remains subject to the conservative claim divisor;
-// actual allocation still needs the current foreground and shared-root admission checks.
+// zero during startup and must not become a lifetime cache/registry/image ceiling, so this is the
+// whole DEVICE_LOCAL heap; actual allocation still needs the current foreground and shared-root
+// admission checks, which apply the live budget minus the VRAM headroom.
 [[nodiscard]] GpuResidentCapacity
 gpuResidentConstructionCapacity(const GpuResidentCapacity& observed) noexcept;
 
-namespace gpu_resident_capacity_detail {
-
-// Overflow-safe proportional share used where the exact 128-bit multiply path is unavailable. It
-// computes an estimate of value*numerator/denominator and then clamps into [0, min(value,
-// numerator)], so a caller relying on "share <= numerator" can never overcommit even when the host
-// long double is only 64-bit. Exposed so the portable path can be tested directly.
-[[nodiscard]] std::uint64_t scaledShareClamped(std::uint64_t value, std::uint64_t numerator,
-                                               std::uint64_t denominator) noexcept;
-
-} // namespace gpu_resident_capacity_detail
-
-// Pure host-configured partition of an explicit ceiling. Used at construction, before any device
-// exists, to set the upper bounds the owner later clamps. A zero ceiling yields an all-zero plan
-// (an explicit "no resident caching" choice is respected, never floored upward).
+// Pure host-configured plan for an explicit ceiling: every ledger is that ceiling (no partition).
+// Used at construction, before any device exists, to set the upper bounds the owner later clamps.
+// A zero ceiling yields an all-zero plan (an explicit "no resident caching" choice is respected,
+// never floored upward).
 [[nodiscard]] GpuResidentCapacityPlan
 gpuResidentCapacityPlanConfigured(std::uint64_t configuredCeilingBytes) noexcept;
 
-// Pure capacity-aware clamp. When the configured route already fits the resolved pool, every
-// configured value is preserved exactly; otherwise each ledger is clamped to its pool share so the
-// total can never overcommit the device. An unknown budget uses the safe fallback pool.
+// Pure capacity-aware clamp: each ledger is its configured value clamped to the resolved device
+// pool, independently (no proportional share). An unknown budget uses the safe fallback pool.
 [[nodiscard]] GpuResidentCapacityPlan
 gpuResidentCapacityPlanFor(const GpuResidentConfiguredBudgets& configured,
                            const GpuResidentCapacity& capacity) noexcept;
@@ -142,7 +117,7 @@ gpuResidentCapacityPlanFor(const GpuResidentConfiguredBudgets& configured,
 // A rooted foreground request may use device space that cache/lease ceilings have not actually
 // claimed. This is a NON-additive admission ceiling, sampled on the GPU owner: MemoryBudget is
 // already free space after all VMA allocations, while a nominal/unknown report subtracts the
-// generation's actually owned image bytes from its conservative planning limit. The shared phase
+// generation's actually owned image bytes from the heap size. The shared phase
 // reservation and native allocation checks still bound active work; cache targets are retention
 // preferences, not reservations that reduce an otherwise idle foreground request.
 [[nodiscard]] std::uint64_t

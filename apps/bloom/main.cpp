@@ -88,6 +88,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <thread>
 
@@ -323,19 +324,20 @@ int main(int argc, char* argv[]) try {
         bloom::runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
     gpuPreviewDisplayOptions.presentation =
         bloom::runtime::GpuPreviewDisplayServicePresentationMode::Disabled;
-    // Align the resident lease registry with the artist's UI frame-cache budget so the registry can
-    // publish every lease the cache can reference, with bounded in-flight/visible headroom and a
-    // hard VRAM ceiling. No live lease/pin is ever invalidated; pressure takes the CPU fallback.
+    // Device retention is not derived from host memory (#425): the resident lease registry, scene
+    // cache and resident frame cache have no ceiling of their own here. The GPU owner clamps them
+    // to the device, usable VRAM (the live budget minus the VRAM headroom) bounds every
+    // allocation, and the caches are evicted when work waits for device memory.
     const auto gpuResidentBudgetPlan =
-        bloom::ui::gpuResidentBudgetPlanFor(cacheBudgets.previewFrameCacheByteBudget);
+        bloom::ui::gpuResidentBudgetPlanFor(std::numeric_limits<std::size_t>::max());
     bloom::ui::applyGpuResidentBudgetPlan(gpuPreviewDisplayOptions, gpuResidentBudgetPlan);
     // Omit the request override: the shared delivered root view, not this cold cache partition,
     // selects each request. The native owner separately resolves its finite physical pool.
     gpuPreviewDisplayOptions.previewByteAllowance.reset();
-    // The shared frame cache gets the matching additive GPU-resident sublimits. Its overall CPU
-    // cache budget is unchanged; only the bounded resident subset is capped, and it evicts LRU
-    // resident entries (dropping the cache's reference only) before the registry can refuse a
-    // publishable lease. No live lease is invalidated.
+    // The shared frame cache's GPU-resident limit follows the owner-resolved device pool through
+    // the bootstrap's status poll. Its overall CPU cache budget is unchanged; resident entries are
+    // evicted LRU (dropping the cache's reference only) when the owner asks for device memory. No
+    // live lease is invalidated.
     bloom::ui::applyGpuResidentCacheLimits(*previewFrameCache, gpuResidentBudgetPlan);
     // The coverage cache is shared across every GPU-scene request. The media context is NOT
     // captured once here: makeSessionRefreshingGpuSceneStage copies the evaluator's current

@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -338,6 +339,61 @@ void cachesYieldToWork() {
                              : "the export frame is admitted at the next sample");
         ledger.unregisterCache(&cached);
     }
+}
+
+// #425: usable VRAM (the live budget minus the VRAM headroom) is the only device ceiling. A device
+// cache may fill what fits; a frame whose need fits usable VRAM but not what the cache holds waits
+// (it is never refused), the cache's owner evicts the shortfall, and the frame is admitted on the
+// next device report. A live budget below the headroom (another program took VRAM) asks the
+// caches for the difference.
+void deviceCachesYieldToWork() {
+    GpuProcessingPhasePolicy policy(32);
+    policy.setHeadroom({.ramBytes = 0, .vramBytes = 2 * kGiB});
+    deliverHost(policy, 20 * kGiB, 1);
+    reportDevice(policy, 1, 22 * kGiB);
+    // A scene-cache image retained from an earlier frame: 16 GiB of root-owned device memory.
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    auto earlier = policy.reserve(frame());
+    require(earlier.lease != nullptr, "the earlier frame is admitted");
+    auto cached = NativeImageStorageToken::reserve(earlier.lease, 16 * kGiB, local, Clock::now());
+    require(cached.token.has_value(), "the cache image is admitted against usable VRAM");
+    earlier.lease.reset();
+    reportDevice(policy, 1, 6 * kGiB); // The driver now sees the cache's 16 GiB in use.
+    auto request = std::make_shared<GpuDeviceReclaimRequest>();
+    std::atomic<int> woke{0};
+    registerDeviceReclaim(policy, request, [&] { ++woke; });
+
+    const auto big = frame(6 * kGiB);
+    const auto waiting = policy.reserve(big);
+    require(waiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                waiting.domain == GpuProcessingPhaseDomain::Device,
+            "a need that fits usable VRAM but not beside the cache waits; it is not refused");
+    require(request->pending() && woke == 1, "the waiting frame asks the device caches to evict");
+    const auto need = policy.lastAwaitingNeed();
+    const auto wanted = deviceReclaimBytes(
+        *request, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                   .device_local_bytes = 24 * kGiB,
+                   .available_bytes = 6 * kGiB},
+        2 * kGiB);
+    require(need && wanted == need->shortfallBytes && wanted != 0 && !request->pending(),
+            "the owner takes exactly the waiting shortfall");
+
+    cached.token.reset(); // The owner's eviction releases the cache image.
+    reportDevice(policy, 1, 22 * kGiB);
+    require(policy.reserve(big).status == GpuProcessingPhaseAdmission::Accepted,
+            "the frame is admitted once the cache gave its memory back");
+
+    const auto pressure = [&](const GpuAllocationBudgetSource source, const std::uint64_t free) {
+        return deviceReclaimBytes(*request,
+                                  {.source = source,
+                                   .device_local_bytes = 24 * kGiB,
+                                   .available_bytes = free},
+                                  2 * kGiB);
+    };
+    require(pressure(GpuAllocationBudgetSource::MemoryBudget, 1 * kGiB) == 1 * kGiB &&
+                pressure(GpuAllocationBudgetSource::MemoryBudget, 3 * kGiB) == 0 &&
+                pressure(GpuAllocationBudgetSource::DeviceLocalEstimate, 0) == 0,
+            "free VRAM below the headroom asks the caches for the difference, live budgets only");
 }
 
 // Preview first (#413) never starves the frame being prepared. During a RAM Preview fill a frame
@@ -773,6 +829,7 @@ int main() {
         retentionIsEvictedBeforeWaiting();
         cachesYieldToWork();
         previewFillWorkIsNotStarved();
+        deviceCachesYieldToWork();
         deviceGrowthBeyondTheClaimUsesLiveRoom();
         deviceClaimsFollowDeviceStages();
         deviceNeedFollowsMeasuredPeaks();

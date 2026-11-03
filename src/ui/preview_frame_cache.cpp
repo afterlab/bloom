@@ -726,6 +726,21 @@ void PreviewFrameCache::setGpuResidentLimits(const std::size_t maxBytes,
     evictGpuResidentToLimits();
 }
 
+std::size_t PreviewFrameCache::evictGpuResidentBytes(const std::size_t bytes) {
+    std::size_t released = 0;
+    while (released < bytes && !residentOrder_.empty()) {
+        const auto victim = residentOrder_.back();
+        released += victim->bytes;
+        ++statistics_.gpuResidentEvictions;
+        ++statistics_.evictions;
+        counters_.evicted(victim->bytes);
+        if (!entryIsLive(*victim))
+            ++statistics_.staleDrops;
+        removeAt(victim);
+    }
+    return released;
+}
+
 void PreviewFrameCache::evictGpuResidentToLimits() {
     // The resident set is bounded independently of the overall cache budget so it can never outgrow
     // the service's lease registry. Entries are MRU-first, so the last resident entry is the least
