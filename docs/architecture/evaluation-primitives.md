@@ -334,6 +334,54 @@ the existing executor allocation, cancellation, cache pin and proven-retirement 
 numeric parity, warm-cache and batch checks are included in the existing harnesses and remain
 subject to their device qualification; macOS/Windows retain the explicit CPU fallback contract.
 
+### Transform 2D
+
+`bloom.transform-2d` schema 1 (#336) lowers through the image-effect boundary to
+`Transform2DKernel` and reuses the Layer Output's raster resampling rather than a second affine
+implementation. It exposes the Layer Output vocabulary: `translate` (Vec2d, full-resolution pixels,
+default `{0, 0}`), `pivot` (Vec2d offset from the centre of the input's content bounds, default
+`{0, 0}`), `scale` (Vec2d factors, default `{1, 1}`) and `rotation` (clockwise degrees, default `0`).
+All four are animatable and each has an operand socket, so a value-graph driver can feed it.
+`extent` and `filter` are constant inline selectors without sockets. Values must be finite and are
+otherwise unbounded: a negative scale mirrors, rotation winds past a full turn, and a zero scale on
+either axis collapses the image.
+
+For input content-bounds centre `c`, the map is `q = c + pivot + translate + R(rotation) * S(scale)
+* (p - (c + pivot))`, which is exactly a Layer Output with `anchor = pivot` and `position = c +
+pivot + translate`. The CPU reference resamples with `render::LayerTransform` and
+`layerTransformBilinearRow`, the same row the Layer stage uses. It interpolates premultiplied RGBA
+directly, preserves finite signed/HDR RGB and partial alpha, and uses exact transparent-black taps
+outside the source data window. Quarter turns and whole-pixel translations interpolate nothing, and
+proxy frames conjugate the full-resolution map by the per-axis proxy factors.
+
+`extent` chooses the output data window. **Transformed** (0, default) keeps the full transformed
+support, including overscan outside the display window, like a Layer. **Input** (1) clips it to the
+input data window, and **Display** (2) clips it to the input display window. The display window and
+pixel aspect always follow the input. Content bounds also follow the input, so a downstream Layer
+places the same frame and the authored movement stays visible. A zero scale, or support that misses
+the selected extent, publishes no image without a diagnostic, as a collapsed Layer does. Support
+beyond the +/-2^24 device coordinate range, or a non-finite value, fails with an explicit diagnostic.
+An identity transform (no translation, unit scale, a whole-turn rotation) with the Transformed or
+Input extent is an exact passthrough. **Bilinear** (0) is the only `filter` in schema 1, and it has
+no downsampling prefilter.
+
+GPU preparation emits the Layer stage's raster commands for the same geometry. A pure move becomes
+the exact TranslationOpacity pass, and every other map becomes a resident `GpuSceneAffineCommand`
+(`AffineBilinearV1`) built from the same author-space matrix. A collapsed or fully clipped transform
+emits no command. Preview and every final route go through the same production scene executor, and
+no CPU-rendered output is uploaded. Parity follows the affine backend contract: 2e-6 abs-or-rel on all
+components, with bit-exact alpha at the 0/1 endpoints. The required coverage fixtures use dyadic
+coefficients so that the coverage gate's bit-exact alpha check holds by construction.
+
+Cache identity covers the sampled values, the input content-bounds centre, extent, filter, input
+identity, windows/PAR, proxy and ROI. The executor independently keys the actual matrix or
+translation, the windows and the shader artifact. Animated or driven values make the operation and
+everything downstream time dependent. The effect input keeps full support for ROI requests. CPU
+work checks cancellation per row and before publication, reports row progress, and refuses an
+output that exceeds the remaining pixel budget. Native work uses the executor's existing
+allocation, cancellation, cache pin and proven-retirement ownership. macOS and Windows keep the
+explicit CPU fallback contract until native qualification.
+
 ### Blending
 
 The Layer Stack stage folds each entry through one blend kernel carrying that entry's own Layer Output

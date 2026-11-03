@@ -299,6 +299,22 @@ constantMatchesSchema(const std::string_view schemaKey,
         return std::holds_alternative<bool>(constant.value);
     if (schemaKey == "bloom.rotate-90.quarter-turns")
         return std::holds_alternative<std::int64_t>(constant.value);
+    if (schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
+        schemaKey == "bloom.transform-2d.scale") {
+        // Finite, otherwise unbounded, like the Layer Output transform: a negative scale mirrors
+        // and a zero scale collapses the image to no pixels rather than being refused.
+        const auto* value = std::get_if<Vec2d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y);
+    }
+    if (schemaKey == "bloom.transform-2d.rotation") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value);
+    }
+    if (schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter") {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 &&
+               *value <= (schemaKey == "bloom.transform-2d.extent" ? 2 : 0);
+    }
     if (schemaKey.starts_with("bloom.resize-fit.")) {
         if (schemaKey == "bloom.resize-fit.bypass")
             return std::holds_alternative<bool>(constant.value);
@@ -408,6 +424,7 @@ constantMatchesSchema(const std::string_view schemaKey,
 [[nodiscard]] bool isValidSourceForSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
     if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
+         schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter" ||
          schemaKey == "bloom.shape.path") &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;

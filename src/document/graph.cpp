@@ -147,7 +147,7 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
         validate(expected);
     if (node.schemaVersion == 1 &&
         (node.typeId == "bloom.flip" || node.typeId == "bloom.rotate-90" ||
-         node.typeId == "bloom.resize")) {
+         node.typeId == "bloom.resize" || node.typeId == "bloom.transform-2d")) {
         if (const auto* definition = registry.find(node.typeId, node.schemaVersion))
             for (const auto& parameter : definition->parameters)
                 validate({parameter.role, parameter.schemaKey, parameter.required});

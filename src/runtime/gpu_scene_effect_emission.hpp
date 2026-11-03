@@ -28,6 +28,7 @@
 #include "layer_parent_transform.hpp"
 #include "pointwise_image_effect.hpp"
 #include "resize_fit_geometry.hpp"
+#include "transform_2d_geometry.hpp"
 #include "separable_image_effect.hpp"
 
 #include "layer_mask_sampling.hpp"
@@ -178,6 +179,7 @@ struct GpuSceneEffectEmission final {
 };
 
 #include "gpu_scene_resize_fit_emission.ipp"
+#include "gpu_scene_transform_2d_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -280,6 +282,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel))
         return emitResizeFitCommand(*kernel, effect.input, operationIndex, ctx, cancellation, emit,
                                     charge, chargeCoverage, result);
+    if (const auto* kernel = std::get_if<Transform2DKernel>(&effect.kernel))
+        return emitTransform2DCommand(*kernel, effect.input, operationIndex, ctx, cancellation,
+                                      emit, charge, chargeCoverage, result);
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);

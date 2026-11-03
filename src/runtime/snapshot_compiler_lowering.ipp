@@ -1251,6 +1251,23 @@ lowerImageEffect(const document::NodeRecord& node,
                                            : runtime::CanvasImageEffect::Pad,
                                        margins}};
     }
+    if (node.typeId == "bloom.transform-2d") {
+        const auto translate = compiledVec2Parameter(findParameterBinding(node, "translate"));
+        const auto pivot = compiledVec2Parameter(findParameterBinding(node, "pivot"));
+        const auto scale = compiledVec2Parameter(findParameterBinding(node, "scale"));
+        const auto rotation = compiledScalarParameter(findParameterBinding(node, "rotation"));
+        const auto* extent = parameterConstant<std::int64_t>(findParameterBinding(node, "extent"));
+        const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
+        if (translate && pivot && scale && rotation && extent && *extent >= 0 && *extent <= 2 &&
+            filter && *filter == 0)
+            return runtime::CompiledImageEffect{
+                node.id, *input,
+                runtime::Transform2DKernel{*translate, *pivot, *scale, *rotation,
+                                           static_cast<runtime::Transform2DExtent>(*extent),
+                                           *filter}};
+        addTopologyFailure(node.id, "Transform 2D parameters could not be lowered.");
+        return std::nullopt;
+    }
     if (node.typeId == "bloom.resize" || node.typeId == "bloom.fit") {
         const auto* width = parameterConstant<std::int64_t>(findParameterBinding(node, "width"));
         const auto* height = parameterConstant<std::int64_t>(findParameterBinding(node, "height"));

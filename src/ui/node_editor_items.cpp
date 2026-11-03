@@ -150,6 +150,8 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Resize");
     if (typeId == "bloom.fit")
         return QCoreApplication::translate("node_editor", "Fit");
+    if (typeId == "bloom.transform-2d")
+        return QCoreApplication::translate("node_editor", "Transform 2D");
     if (typeId == "pixelAspectNumerator")
         return QCoreApplication::translate("node_editor", "Pixel Aspect Numerator");
     if (typeId == "pixelAspectDenominator")

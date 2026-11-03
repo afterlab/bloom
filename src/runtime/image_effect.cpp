@@ -63,6 +63,87 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
                                                   std::string reason) {
     return {code, DiagnosticSeverity::Error, {}, "Resize/Fit: " + reason, std::move(reason)};
 }
+[[nodiscard]] EvaluationDiagnostic transformFailure(const EvaluationDiagnosticCode code,
+                                                    std::string reason) {
+    return {code, DiagnosticSeverity::Error, {}, "Transform 2D: " + reason, std::move(reason)};
+}
+
+// #336: one inverse-mapped premultiplied bilinear resample through the Layer Output's own
+// LayerTransform row reference. The display window and pixel aspect are retained; the data window is the
+// geometry's checked extent. Rows are cancellable and nothing partial is published.
+[[nodiscard]] ImageEffectResult
+applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage& input,
+                 const std::size_t pixelBudget, const CancellationToken& cancellation,
+                 const OperationIndex operation, const EvaluationProgressCallback& progress,
+                 const double horizontalScale, const double verticalScale) {
+    ImageEffectResult result;
+    if (cancellation.isCancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
+    const auto& inputDescriptor = *input.descriptor();
+    const auto geometry =
+        resolveTransform2DGeometry(prepared, inputDescriptor, horizontalScale, verticalScale);
+    if (!geometry) {
+        result.diagnostic = transformFailure(
+            EvaluationDiagnosticCode::InvalidParameter,
+            "the transformed image exceeds the supported coordinate range or is not finite");
+        return result;
+    }
+    if (!geometry->window) {
+        result.empty = true;
+        return result;
+    }
+    const auto window = *geometry->window;
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        window, inputDescriptor.displayWindow(), inputDescriptor.pixelAspect());
+    if (!descriptor) {
+        result.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidParameter,
+                                             "the output descriptor is invalid");
+        return result;
+    }
+    auto target = render::Rgba32fImageBuilder::create(*descriptor.value(), pixelBudget);
+    if (!target) {
+        result.diagnostic = transformFailure(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                                             "the output exceeds the pixel storage budget");
+        return result;
+    }
+    const auto source = input.view();
+    if (!source) {
+        result.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                             "the input image is invalid");
+        return result;
+    }
+    const auto rows = window.extent().height();
+    reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, rows});
+    for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
+        if (cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        const auto row = target.value()->row(y);
+        if (!row || render::layerTransformBilinearRow(*source.value(), window, y,
+                                                      *geometry->transform, *row.value())) {
+            result.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                                 "the resample produced an invalid row");
+            return result;
+        }
+        reportProgress(progress, {EvaluationProgressStage::Operation, operation,
+                                  static_cast<std::uint64_t>(y - window.originY() + 1), rows});
+    }
+    if (cancellation.isCancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
+    auto frozen = std::move(*target.value()).freeze();
+    if (!frozen) {
+        result.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                             "output validation failed");
+        return result;
+    }
+    result.image = std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value()));
+    return result;
+}
 } // namespace
 
 PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effect,
@@ -74,7 +155,8 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const double horizontalScale,
                                                 const double verticalScale,
                                                 const std::optional<std::int64_t> sampledChannel,
-                                                std::shared_ptr<const PreparedLayerMasks> layerMasks) {
+                                                std::shared_ptr<const PreparedLayerMasks> layerMasks,
+                                                const std::optional<Transform2DValues> transform2D) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
@@ -162,6 +244,26 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
     }
     if (const auto* kernel = std::get_if<ResizeFitKernel>(&effect.kernel)) {
         prepared.resizeFit = *kernel;
+        return prepared;
+    }
+    if (const auto* kernel = std::get_if<Transform2DKernel>(&effect.kernel)) {
+        if (!transform2D || !validTransform2DKernel(*kernel) ||
+            !validTransform2DValues(*transform2D)) {
+            prepared.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidParameter,
+                                                   "parameters are not evaluable");
+            return prepared;
+        }
+        prepared.transform2D = PreparedTransform2D{kernel->extent, kernel->filter, *transform2D};
+        OperationKey key;
+        key.add(std::string("transform-2d-bilinear-v1"));
+        key.add(kernel->extent);
+        key.add(kernel->filter);
+        const auto& values = *transform2D;
+        for (const double value :
+             {values.translate.x, values.translate.y, values.pivot.x, values.pivot.y,
+              values.scale.x, values.scale.y, values.rotation, values.centre.x, values.centre.y})
+            key.add(value);
+        prepared.cacheIdentity = key.bytes();
         return prepared;
     }
     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
@@ -294,6 +396,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.blur)
         return applySeparableBlur(*effect.blur, input, pixelBudget, cancellation, operation,
                                   progress);
+    if (effect.transform2D)
+        return applyTransform2D(*effect.transform2D, input, pixelBudget, cancellation, operation,
+                                progress, horizontalScale, verticalScale);
     ImageEffectResult result;
     if (effect.canvas) {
         if (cancellation.isCancellationRequested()) {

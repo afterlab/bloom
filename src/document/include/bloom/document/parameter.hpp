@@ -273,7 +273,9 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kAnchorParameterSchemaKey || schemaKey == kScaleParameterSchemaKey ||
            schemaKey == kGradientStartParameterSchemaKey ||
            schemaKey == kGradientEndParameterSchemaKey ||
-           schemaKey == kVector2ValueParameterSchemaKey;
+           schemaKey == kVector2ValueParameterSchemaKey ||
+           schemaKey == "bloom.transform-2d.translate" ||
+           schemaKey == "bloom.transform-2d.pivot" || schemaKey == "bloom.transform-2d.scale";
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -300,6 +302,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
            schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
            schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius" ||
+           schemaKey == "bloom.transform-2d.rotation" ||
            schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
            schemaKey == kLayerMaskOpacitySchemaKey;
 }

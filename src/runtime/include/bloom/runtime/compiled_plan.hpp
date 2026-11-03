@@ -284,6 +284,21 @@ struct ResizeFitKernel final {
     std::int64_t policy = 0;
     friend bool operator==(const ResizeFitKernel&, const ResizeFitKernel&) = default;
 };
+// #336 standalone Transform 2D. One inverse-mapped premultiplied bilinear resample with the Layer
+// Output vocabulary: translate, pivot (an offset from the centre of the input's content bounds),
+// per-axis scale and clockwise rotation in degrees, all animatable or driven. Extent chooses the
+// output data window: the full transformed support, clipped to the input data window, or clipped
+// to the input display window. Bilinear is the only filter (0), shared with Layer Output.
+enum class Transform2DExtent : std::uint8_t { Transformed, Input, Display };
+struct Transform2DKernel final {
+    CompiledVec2Parameter translate;
+    CompiledVec2Parameter pivot;
+    CompiledVec2Parameter scale;
+    CompiledScalarParameter rotation;
+    Transform2DExtent extent = Transform2DExtent::Transformed;
+    std::int64_t filter = 0;
+    friend bool operator==(const Transform2DKernel&, const Transform2DKernel&) = default;
+};
 // Neighborhood filters operate on associated RGBA, including coverage. Radius is finite full-
 // resolution pixels in [0,256]; Gaussian sigma is radius/3 and support is ceil(radius).
 enum class SeparableBlurKind : std::uint8_t { Gaussian, Box };
@@ -320,7 +335,7 @@ struct LayerMaskKernel final {
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
-                 SeparableBlurKernel, LayerMaskKernel>;
+                 SeparableBlurKernel, LayerMaskKernel, Transform2DKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

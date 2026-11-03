@@ -16,7 +16,9 @@ the final session/audio integration group passes 21 cases at `79a81217`. Native 
 repeated after changes confined to audio, undo, recovery and test fixtures. This is bounded local
 Linux evidence, not final-source qualification of every export route or Windows/macOS execution.
 
-Standalone Transform 2D, Matte Blur and chunks #338–#349 remain planned. The inventory below records
+Standalone Transform 2D is implemented by #336 (see
+[evaluation primitives](../architecture/evaluation-primitives.md#transform-2d)). Matte Blur and
+chunks #338–#349 remain planned. The inventory below records
 the original audit baseline rather than claiming those delivered nodes remain absent.
 
 ## Verified inventory

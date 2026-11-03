@@ -87,6 +87,9 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                                driven(combine->drivenChannel);
                     if (const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel))
                         return parameter(blur->radius);
+                    if (const auto* transform = std::get_if<Transform2DKernel>(&step.kernel))
+                        return parameter(transform->translate) || parameter(transform->pivot) ||
+                               parameter(transform->scale) || parameter(transform->rotation);
                     if (const auto* masks = std::get_if<LayerMaskKernel>(&step.kernel))
                         return std::ranges::any_of(masks->masks, [&](const auto& mask) {
                             return std::holds_alternative<CompiledPathCurve>(mask.path.source) ||

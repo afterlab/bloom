@@ -147,6 +147,37 @@ template <typename Definition>
                        std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
                    !definition.layerSlotInput && !definition.audioLayerSlotInput;
         }
+        if (definition.key.typeId == "bloom.transform-2d") {
+            return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
+                   hasLeadingImageInput(definition, "input") &&
+                   definition.parameters.size() == 6 &&
+                   hasParameter(definition, 0, "translate", "bloom.transform-2d.translate",
+                                ParameterValueKind::Vec2d, true) &&
+                   hasParameter(definition, 1, "pivot", "bloom.transform-2d.pivot",
+                                ParameterValueKind::Vec2d, true) &&
+                   hasParameter(definition, 2, "scale", "bloom.transform-2d.scale",
+                                ParameterValueKind::Vec2d, true) &&
+                   hasParameter(definition, 3, "rotation", "bloom.transform-2d.rotation",
+                                ParameterValueKind::Float64, true) &&
+                   hasParameter(definition, 4, "extent", "bloom.transform-2d.extent",
+                                ParameterValueKind::Integer) &&
+                   hasParameter(definition, 5, "filter", "bloom.transform-2d.filter",
+                                ParameterValueKind::Integer) &&
+                   [&] {
+                       for (std::size_t index = 0; index < 4; ++index) {
+                           const auto& socket = definition.inputs[index + 1];
+                           const auto& parameter = definition.parameters[index];
+                           if (socket.name != parameter.role || socket.required ||
+                               socket.valueKind !=
+                                   socketKindForParameterValueKind(parameter.valueKind))
+                               return false;
+                       }
+                       return true;
+                   }() &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
         if (definition.key.typeId == "bloom.image-mix" ||
             definition.key.typeId == "bloom.set-alpha") {
             const bool mix = definition.key.typeId == "bloom.image-mix";
@@ -719,6 +750,35 @@ template <typename Definition>
     return definition;
 }
 
+// #336 standalone Transform 2D. The four transform values are animatable and each has an operand
+// socket; extent and filter are inline selectors with no socket (they choose the output window
+// and resampler at compile time).
+[[nodiscard]] NodeDefinition transform2DDefinition() {
+    using bloom::document::Vec2d;
+    return {{"bloom.transform-2d", 1},
+            NodeLoweringKind::ImageEffect,
+            {{"input", SocketValueKind::Image},
+             {"translate", SocketValueKind::Vector2, false},
+             {"pivot", SocketValueKind::Vector2, false},
+             {"scale", SocketValueKind::Vector2, false},
+             {"rotation", SocketValueKind::Scalar, false}},
+            {{"image", SocketValueKind::Image}},
+            {{"translate", "bloom.transform-2d.translate", ParameterValueKind::Vec2d, true, true,
+              Vec2d{}},
+             {"pivot", "bloom.transform-2d.pivot", ParameterValueKind::Vec2d, true, true, Vec2d{}},
+             {"scale", "bloom.transform-2d.scale", ParameterValueKind::Vec2d, true, true,
+              Vec2d{1.0, 1.0}},
+             {"rotation", "bloom.transform-2d.rotation", ParameterValueKind::Float64, true, true,
+              0.0},
+             {"extent", "bloom.transform-2d.extent", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}},
+             {"filter", "bloom.transform-2d.filter", ParameterValueKind::Integer, true, false,
+              std::int64_t{0}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Transform};
+}
+
 [[nodiscard]] NodeDefinition cstDefinition() {
     return {
         {"bloom.ocio-colour-space-transform", 1},
@@ -1073,6 +1133,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         discreteImageDefinition(true),
         resizeFitDefinition(false),
         resizeFitDefinition(true),
+        transform2DDefinition(),
         blurDefinition("bloom.gaussian-blur"),
         blurDefinition("bloom.box-blur"),
         videoDefinition(),

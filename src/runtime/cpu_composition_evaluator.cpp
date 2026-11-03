@@ -10,6 +10,7 @@
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
 #include "resize_fit_geometry.hpp"
+#include "transform_2d_geometry.hpp"
 #include "video_source.hpp"
 #include <bloom/media/video/colour.hpp>
 #include <bloom/render/path_raster.hpp>
@@ -494,6 +495,13 @@ enum class ScalarDomain : std::uint8_t {
                 }
                 if (const auto* resize = std::get_if<ResizeFitKernel>(&effect.kernel))
                     validKernel = detail::validResizeFitKernel(*resize);
+                if (const auto* transform = std::get_if<Transform2DKernel>(&effect.kernel))
+                    validKernel =
+                        detail::validTransform2DKernel(*transform) &&
+                        hasValidVec2CurveReference(transform->translate, plan, index, failure) &&
+                        hasValidVec2CurveReference(transform->pivot, plan, index, failure) &&
+                        hasValidVec2CurveReference(transform->scale, plan, index, failure) &&
+                        hasValidScalarCurveReference(transform->rotation, plan, index, failure);
                 if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
                     validKernel = static_cast<unsigned>(blur->kind) <= 1 &&
                                   static_cast<unsigned>(blur->edge) <= 1 &&
@@ -1196,6 +1204,13 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
                         static_cast<void>(registerScalar(
                             blur->radius, "radius", ScalarDomain::BlurRadius, operationSubject));
+                    if (const auto* transform = std::get_if<Transform2DKernel>(&effect.kernel))
+                        static_cast<void>(
+                            registerVec2(transform->translate, "translate", operationSubject) &&
+                            registerVec2(transform->pivot, "pivot", operationSubject) &&
+                            registerVec2(transform->scale, "scale", operationSubject) &&
+                            registerScalar(transform->rotation, "rotation",
+                                           ScalarDomain::Unbounded, operationSubject));
                     if (const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel)) {
                         constexpr std::array<std::string_view, 4> fields{"left", "top", "right",
                                                                          "bottom"};
@@ -2073,6 +2088,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
                     effect && (std::holds_alternative<DiscreteImageKernel>(effect->kernel) ||
                                std::holds_alternative<ResizeFitKernel>(effect->kernel) ||
+                               std::holds_alternative<Transform2DKernel>(effect->kernel) ||
                                std::holds_alternative<SeparableBlurKernel>(effect->kernel)))
                     fullSupport[effect->input.value()] = true;
             }
@@ -2270,6 +2286,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (sampled)
                         pointwiseAmount = sampled->value;
                 }
+                std::optional<detail::Transform2DValues> transform2D;
+                if (const auto* transform = std::get_if<Transform2DKernel>(&effect->kernel)) {
+                    const auto translate =
+                        detail::resolveParameter(transform->translate, *plan, resolved);
+                    const auto pivot = detail::resolveParameter(transform->pivot, *plan, resolved);
+                    const auto scale = detail::resolveParameter(transform->scale, *plan, resolved);
+                    const auto rotation =
+                        detail::resolveParameter(transform->rotation, *plan, resolved);
+                    if (translate && pivot && scale && rotation)
+                        transform2D = detail::Transform2DValues{
+                            translate->value, pivot->value, scale->value, rotation->value,
+                            bounds[effect->input.value()].output.centre()};
+                }
                 std::shared_ptr<const detail::PreparedLayerMasks> layerMasks;
                 if (const auto* masks = std::get_if<LayerMaskKernel>(&effect->kernel)) {
                     const auto maskTime =
@@ -2285,12 +2314,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         : imageEffectContext()->prepare(
                               *effect, request.colorIntent, mediaBase, cancellation,
                               pointwiseAmount, canvasMargins, resolved.horizontalScale,
-                              resolved.verticalScale, sampledChannel, std::move(layerMasks));
+                              resolved.verticalScale, sampledChannel, std::move(layerMasks),
+                              transform2D);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&
-                    std::holds_alternative<SeparableBlurKernel>(effect->kernel))
-                    return EvaluationResult::failed(*preparedEffect->diagnostic);
+                    (std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
+                     std::holds_alternative<Transform2DKernel>(effect->kernel))) {
+                    auto failure = *preparedEffect->diagnostic;
+                    failure.subject = operationSubject;
+                    return EvaluationResult::failed(std::move(failure));
+                }
                 if (preparedEffect->diagnostic) {
                     auto warning = *preparedEffect->diagnostic;
                     warning.subject = operationSubject;
@@ -2593,6 +2627,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(blur->kind);
                                 key.add(blur->edge);
                                 parameter(blur->radius);
+                            }
+                            if (const auto* transform =
+                                    std::get_if<Transform2DKernel>(&step.kernel)) {
+                                key.add(std::string{"transform-2d-bilinear-v1"});
+                                key.add(transform->extent);
+                                key.add(transform->filter);
+                                parameter(transform->translate);
+                                parameter(transform->pivot);
+                                parameter(transform->scale);
+                                parameter(transform->rotation);
                             }
                             if (const auto* file = std::get_if<FileTransformKernel>(&step.kernel)) {
                                 key.add(file->lutAssetId);
@@ -3129,19 +3173,29 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     }
                                     if (std::holds_alternative<DiscreteImageKernel>(
                                             effect.kernel) ||
-                                        preparedEffect->resizeFit || preparedEffect->blur) {
+                                        preparedEffect->resizeFit || preparedEffect->blur ||
+                                        preparedEffect->transform2D) {
                                         operationFailure = std::move(*result.diagnostic);
                                         return;
                                     }
                                     imageWarnings.push_back(std::move(*result.diagnostic));
                                     effectApplicationFailed = true;
                                     contentHashes[index] += ":effect-failed";
+                                } else if (result.empty) {
+                                    // A degenerate or fully clipped Transform 2D publishes no
+                                    // image, as a collapsed layer does.
+                                    slots[index] = nullptr;
                                 } else if (result.image) {
                                     slots[index] = std::move(result.image);
-                                    bounds[index].local = detail::boundsForWindow(
-                                        slots[index]->descriptor()->dataWindow(),
-                                        resolved.horizontalScale, resolved.verticalScale);
-                                    bounds[index].output = bounds[index].local;
+                                    // Transform 2D moves pixels within its input's content frame:
+                                    // the content bounds follow the input, so a downstream Layer
+                                    // places the same frame and the authored transform shows.
+                                    if (!preparedEffect->transform2D) {
+                                        bounds[index].local = detail::boundsForWindow(
+                                            slots[index]->descriptor()->dataWindow(),
+                                            resolved.horizontalScale, resolved.verticalScale);
+                                        bounds[index].output = bounds[index].local;
+                                    }
                                 }
                             }
                             reportProgress(progress, {.stage = EvaluationProgressStage::Operation,

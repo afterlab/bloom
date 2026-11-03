@@ -4,6 +4,7 @@
 #include "canvas_image_effect.hpp"
 #include "separable_image_effect.hpp"
 #include "layer_mask_coverage.hpp"
+#include "transform_2d_geometry.hpp"
 
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
@@ -25,6 +26,7 @@ struct PreparedImageEffect final {
     std::optional<DiscreteImageKernel> discrete;
     std::optional<ResizeFitKernel> resizeFit;
     std::optional<PreparedSeparableBlur> blur;
+    std::optional<PreparedTransform2D> transform2D;
     // ADR 0028: prepared layer-mask geometry (null for every other kernel).
     std::shared_ptr<const PreparedLayerMasks> masks;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
@@ -42,6 +44,7 @@ struct PreparedImageEffect final {
                          (!canvas || canvas->identity()) && (!masks || masks->masks.empty()) &&
                          (!discrete || discrete->identity()) &&
                          (!pointwise || pointwise->identity()) && (!blur || blur->identity()) &&
+                         (!transform2D || transform2D->identity()) &&
                          (!processor || processor->isIdentity()) &&
                          (!afterProcessor || afterProcessor->isIdentity()) &&
                          (!fileProcessor || fileProcessor->isIdentity())
@@ -62,7 +65,8 @@ class ImageEffectContext final {
                                               double horizontalScale = 1.0,
                                               double verticalScale = 1.0,
                                               std::optional<std::int64_t> sampledChannel = {},
-                                              std::shared_ptr<const PreparedLayerMasks> layerMasks = {});
+                                              std::shared_ptr<const PreparedLayerMasks> layerMasks = {},
+                                              std::optional<Transform2DValues> transform2D = {});
 
   private:
     std::mutex mutex_;
@@ -73,6 +77,8 @@ struct ImageEffectResult final {
     std::shared_ptr<const render::Rgba32fImage> image;
     std::optional<EvaluationDiagnostic> diagnostic;
     bool cancelled = false;
+    // A successful evaluation that publishes no image (a degenerate or fully clipped Transform 2D).
+    bool empty = false;
 };
 
 [[nodiscard]] ImageEffectResult
