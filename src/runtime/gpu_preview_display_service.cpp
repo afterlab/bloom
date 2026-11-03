@@ -177,12 +177,27 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 observed = core->wakeGeneration;
             }
             bool progressed = false;
+            // Owner wall time by loop phase (#477): where the single GPU-owner thread spends a
+            // frame, and how long it sits idle waiting for work or a fence.
+            auto mark = std::chrono::steady_clock::now();
+            const auto charge = [&mark](std::atomic<std::uint64_t>& counter) noexcept {
+                const auto now = std::chrono::steady_clock::now();
+                counter.fetch_add(
+                    static_cast<std::uint64_t>(std::max<std::int64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(now - mark).count(),
+                        0)),
+                    std::memory_order_relaxed);
+                mark = now;
+            };
             try {
                 const auto before = nativeProgress(core);
                 static_cast<void>(core->lease->dispatchOne());
+                charge(core->counterOwnerDispatchNanoseconds);
                 detail::processPreviewStages(core);
                 detail::processNativeDisplay(core);
+                charge(core->counterOwnerStageNanoseconds);
                 detail::processResidentNativeDisplay(core);
+                charge(core->counterOwnerResidentNanoseconds);
                 detail::processServiceCachePurge(core);
                 detail::pollServiceQueueTimings(core);
                 // Presentation must be pumped on every iteration, even when no preview task is
@@ -198,10 +213,13 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
                 // A single iteration fault must not terminate the service thread; there is no
                 // reporting channel on this owner loop, so the fault is deliberately contained.
             }
+            charge(core->counterOwnerServiceNanoseconds);
             // A step that started, completed or changed phase lets the next one start at once;
             // only a pending fence or an idle owner waits.
-            if (!progressed)
+            if (!progressed) {
                 waitForWake(core, observed, /*wakeOnStopping=*/true);
+                charge(core->counterOwnerWaitNanoseconds);
+            }
         }
         drainService(core);
     } catch (...) {
@@ -610,6 +628,16 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
         core.counterCompletedStepContinuations.load(std::memory_order_relaxed);
     result.counters.packedTransferNanoseconds =
         core.counterPackedTransferNanoseconds.load(std::memory_order_relaxed);
+    result.counters.ownerDispatchNanoseconds =
+        core.counterOwnerDispatchNanoseconds.load(std::memory_order_relaxed);
+    result.counters.ownerStageNanoseconds =
+        core.counterOwnerStageNanoseconds.load(std::memory_order_relaxed);
+    result.counters.ownerResidentNanoseconds =
+        core.counterOwnerResidentNanoseconds.load(std::memory_order_relaxed);
+    result.counters.ownerServiceNanoseconds =
+        core.counterOwnerServiceNanoseconds.load(std::memory_order_relaxed);
+    result.counters.ownerWaitNanoseconds =
+        core.counterOwnerWaitNanoseconds.load(std::memory_order_relaxed);
     result.counters.residentCompletions =
         core.counterResidentCompletions.load(std::memory_order_relaxed);
     result.counters.residentFailures = core.counterResidentFailures.load(std::memory_order_relaxed);

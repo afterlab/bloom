@@ -1035,6 +1035,19 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"packedTransferSeconds\":"
          << 1e-9 * static_cast<double>(after.packedTransferNanoseconds -
                                        before.packedTransferNanoseconds)
+         << ",\"ownerDispatchSeconds\":"
+         << 1e-9 * static_cast<double>(after.ownerDispatchNanoseconds -
+                                       before.ownerDispatchNanoseconds)
+         << ",\"ownerStageSeconds\":"
+         << 1e-9 * static_cast<double>(after.ownerStageNanoseconds - before.ownerStageNanoseconds)
+         << ",\"ownerResidentSeconds\":"
+         << 1e-9 * static_cast<double>(after.ownerResidentNanoseconds -
+                                       before.ownerResidentNanoseconds)
+         << ",\"ownerServiceSeconds\":"
+         << 1e-9 * static_cast<double>(after.ownerServiceNanoseconds -
+                                       before.ownerServiceNanoseconds)
+         << ",\"ownerWaitSeconds\":"
+         << 1e-9 * static_cast<double>(after.ownerWaitNanoseconds - before.ownerWaitNanoseconds)
          << ",\"admissionRefusals\":" << after.gpuAdmissionRefusals - before.gpuAdmissionRefusals
          << ",\"residentDetail\":" << benchJson(service.status().residentDetail)
          << ",\"hostCapacityBytes\":" << claims.hostCapacityBytes.value_or(0)

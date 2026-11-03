@@ -266,6 +266,11 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterProcessingFenceObservationNanoseconds{0};
     std::atomic<std::uint64_t> counterCompletedStepContinuations{0};
     std::atomic<std::uint64_t> counterPackedTransferNanoseconds{0};
+    std::atomic<std::uint64_t> counterOwnerDispatchNanoseconds{0};
+    std::atomic<std::uint64_t> counterOwnerStageNanoseconds{0};
+    std::atomic<std::uint64_t> counterOwnerResidentNanoseconds{0};
+    std::atomic<std::uint64_t> counterOwnerServiceNanoseconds{0};
+    std::atomic<std::uint64_t> counterOwnerWaitNanoseconds{0};
     std::atomic<std::uint64_t> counterResidentCompletions{0};
     std::atomic<std::uint64_t> counterPackedTransfers{0};
     std::atomic<std::uint64_t> counterPackedTransferredBytes{0};

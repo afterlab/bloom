@@ -235,6 +235,13 @@ Every measurement is a fresh process.
   over the measured window (from the preview service counters), with `residentGraphJobs`,
   `nativeDispatches` and `uploadsAhead` (uploads the scene executor began ahead of their own step,
   beside another native job, #405).
+- **GPU owner thread** (#477): `ownerDispatchSeconds`, `ownerStageSeconds`,
+  `ownerResidentSeconds`, `ownerServiceSeconds` and `ownerWaitSeconds` split the preview service's
+  owner-thread wall time over the measured window by loop phase: scheduler GPU tasks, preview stage
+  results and the general native display, the resident scene executor (uploads, recording,
+  submission, fence polls and the packed transfer), housekeeping (cache purge, queue timings,
+  presentation, capacity refresh), and idle waits for work or a fence. The first four are the
+  owner's busy time; busy over `fillSeconds` is its share of the fill.
 - **Host preparation** (#422): `windowCpuSeconds` is the process CPU time over the measured window
   (fills and playback), `uploadBytes` the host-to-device bytes uploaded in it (from the GPU
   transfer telemetry), and `decodeStageSeconds` and `colourConvertStageSeconds` the summed wall time

@@ -165,6 +165,16 @@ struct GpuPreviewDisplayServiceCounters final {
     std::uint64_t processingFenceObservationNanoseconds = 0;
     std::uint64_t completedStepContinuations = 0;
     std::uint64_t packedTransferNanoseconds = 0;
+    // GPU-owner thread wall time by service-loop phase (#477): scheduler GPU tasks run on the
+    // owner; preview stage results and the general native display; the resident scene executor
+    // (upload, record, submit, fence polls, packed transfer); cache purge, queue timings,
+    // presentation and capacity refresh; and idle waits for new work or a pending fence. Busy is
+    // the first four.
+    std::uint64_t ownerDispatchNanoseconds = 0;
+    std::uint64_t ownerStageNanoseconds = 0;
+    std::uint64_t ownerResidentNanoseconds = 0;
+    std::uint64_t ownerServiceNanoseconds = 0;
+    std::uint64_t ownerWaitNanoseconds = 0;
     // Resident graph jobs that produced a published native or GPU-prepared packed frame.
     std::uint64_t residentCompletions = 0;
     // Resident graph jobs that failed, timed out, or were cancelled after admission.
