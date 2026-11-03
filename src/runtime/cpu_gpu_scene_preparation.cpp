@@ -230,6 +230,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::uint64_t coverageAllowance = request.pixelStorageByteLimit;
     if (phase_.policy && !phaseLease) {
         auto envelope = phase_.envelope;
+        bool derivedCeiling = false;
         if (envelope.native && !envelope.requestedExecutorBytes && phase_.policy->budgetView()) {
             const auto delivered = phase_.policy->budgetView()->load();
             if (!delivered || !delivered->fresh()) {
@@ -242,15 +243,26 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             envelope.requestedExecutorBytes =
                 phase_.policy->snapshot().reservations.deviceCapacityBytes.value_or(0);
+            derivedCeiling = true;
+        }
+        if (envelope.native && envelope.requestedExecutorBytes) {
             // The executor needs at least the plan's preflight live-image peak (one float frame
-            // at minimum); the ceiling above is only an upper bound shared with other phases.
+            // at minimum), whether its ceiling was derived above or stated by the caller (a final
+            // render, #417); the ceiling is only an upper bound shared with other phases.
             const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
             const auto frameBytes = static_cast<std::uint64_t>(extent.width()) * extent.height() *
                                     sizeof(render::Rgba32f);
-            envelope.minimumExecutorBytes = std::min(
-                *envelope.requestedExecutorBytes,
-                std::max({envelope.minimumExecutorBytes, frameBytes,
-                          static_cast<std::uint64_t>(frameResolved.peakPixelStorageBytes)}));
+            const auto peak = std::max(
+                frameBytes, static_cast<std::uint64_t>(frameResolved.peakPixelStorageBytes));
+            const auto ceiling = *envelope.requestedExecutorBytes;
+            if (derivedCeiling)
+                envelope.minimumExecutorBytes =
+                    std::min(ceiling, std::max(envelope.minimumExecutorBytes, peak));
+            else if (envelope.minimumExecutorBytes <= ceiling)
+                // A stated minimum is raised toward the peak within the stated ceiling, never
+                // lowered; one above the ceiling stays an invalid request.
+                envelope.minimumExecutorBytes =
+                    std::max(envelope.minimumExecutorBytes, std::min(ceiling, peak));
         }
         const auto extent = frameResolved.imageDescriptor.dataWindow().extent();
         envelope.pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
