@@ -345,7 +345,7 @@ struct SequenceFrameRange {
 // `progress` reports the listing as (found, 0) and the reading as (read, members). With `range`,
 // only the members numbered within it are read; none there is "No frames in the frame range".
 // Numbered files form a sequence only when two of them (ignoring `range`) have consecutive frame
-// numbers; otherwise the manifest has no members and `path` is a still. Several files numbered
+// numbers or three share one constant step (1, 3, 5); otherwise the manifest has no members and `path` is a still. Several files numbered
 // with one frame keep one (the picked file, then one with its padding and extension spelling, then
 // the first file name) with a diagnostic naming the files left out.
 [[nodiscard]] ImageResult<SequenceManifest>
@@ -358,8 +358,8 @@ scanSequence(const std::filesystem::path& path, const CancelImageWork& cancel = 
 // or a format that never sequences. Names only; no file system access beyond absolute().
 [[nodiscard]] std::optional<std::string> sequenceKey(const std::filesystem::path& path);
 // Whether `path`'s numbered group is an image sequence: two of its files, ignoring any frame
-// range, have consecutive frame numbers. Lists the directory only, stopping at the first such
-// pair. False for a name without a frame number. True for an unreadable directory, which
+// range, have consecutive frame numbers or three share one
+// constant step. Lists the directory only, stopping at the first such pair or triple. False for a name without a frame number. True for an unreadable directory, which
 // scanSequence() reports. Nullopt when cancelled.
 [[nodiscard]] std::optional<bool> formsSequence(const std::filesystem::path& path,
                                                 const CancelImageWork& cancel = {});

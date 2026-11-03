@@ -677,6 +677,27 @@ int main() {
                      "one consecutive pair makes the group a sequence");
     }
     {
+        // Sequences rendered on twos or tens: three frames at one constant step are a sequence,
+        // two files or uneven numbers are not.
+        for (const auto* name : {"twos0001.png", "twos0003.png"})
+            png(scratch.file(name));
+        check.expect(media::formsSequence(scratch.file("twos0003.png")) == false,
+                     "two frames a step apart are not yet a sequence");
+        png(scratch.file("twos0005.png"));
+        check.expect(media::formsSequence(scratch.file("twos0003.png")) == true &&
+                         media::scanSequence(scratch.file("twos0001.png")).value->members.size() ==
+                             3U,
+                     "frames on twos form a sequence");
+        for (const auto* name : {"tens0010.png", "tens0020.png", "tens0030.png"})
+            png(scratch.file(name));
+        check.expect(media::formsSequence(scratch.file("tens0020.png")) == true,
+                     "frames 10, 20, 30 form a sequence");
+        for (const auto* name : {"cam_2041.png", "cam_2077.png", "cam_3105.png", "cam_4000.png"})
+            png(scratch.file(name));
+        check.expect(media::formsSequence(scratch.file("cam_2077.png")) == false,
+                     "uneven frame numbers stay stills");
+    }
+    {
         // #458: several files numbered with one frame keep one of them and say so; the scan
         // never fails. The picked file wins its frame, then the file written like it.
         png(scratch.file("dup.1.png"));

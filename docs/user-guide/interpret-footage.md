@@ -75,7 +75,8 @@ The **Import Media** dialog sets how footage is first read, under **Files of typ
 
 - **Import numbered images as a sequence** (on by default). Off, each numbered file you chose is
   imported as its own still. Numbered images of one name with no two consecutive frame numbers
-  are always imported as stills (see [Assets](assets.md#import-options)).
+  and no three at one constant step (on twos: 1, 3, 5) are
+  always imported as stills (see [Assets](assets.md#import-options)).
 - **Skip missing frames** gives a new sequence **Missing Frames: Skip them**.
 - **Only frames** *first* **to** *last* reads only those numbered frames of each sequence; the rest
   are not read at all. The range stays with the sequence: **Reload Footage** and **Relink** read the

@@ -60,8 +60,9 @@ struct ListedMembers {
     std::size_t duplicateFrames = 0;
     std::string diagnostic;
     bool mixedPadding = false;
-    // Two files of the group, ignoring any frame range, are numbered n and n + 1. A group without
-    // such a pair (camera files IMG_2041, IMG_2077, IMG_3105) is not a sequence: each is a still.
+    // The group, ignoring any frame range, has two files numbered n and n + 1, or three at one
+    // constant step (on twos: 1, 3, 5). A group without (camera files IMG_2041, IMG_2077,
+    // IMG_3105) is not a sequence: each is a still.
     bool consecutive = false;
     bool exceeded = false;
     bool cancelled = false;
@@ -83,6 +84,24 @@ bool preferred(const Candidate& left, const Candidate& right) {
     if (left.writtenAlike != right.writtenAlike)
         return left.writtenAlike;
     return left.path.filename().native() < right.path.filename().native();
+}
+// Whether `frame` and frames already seen make three frames at one constant step (1, 3, 5 or
+// 0010, 0020, 0030): a sequence rendered on twos or threes. Bounded per file so a directory of
+// unrelated camera numbers stays linear in practice; frames too large to add safely are skipped.
+bool completesStep(const std::unordered_set<std::int64_t>& seen, const std::int64_t frame) {
+    constexpr std::size_t kMaxProbe = 1024;
+    constexpr std::int64_t kMaxFrame = std::int64_t{1} << 40;
+    if (seen.size() > kMaxProbe || frame > kMaxFrame || seen.contains(frame))
+        return false;
+    for (const auto other : seen) {
+        if (other > kMaxFrame)
+            continue;
+        // `frame` ends the run, starts it, or is its middle.
+        if (seen.contains(2 * other - frame) || seen.contains(2 * frame - other) ||
+            ((other + frame) % 2 == 0 && seen.contains((other + frame) / 2)))
+            return true;
+    }
+    return false;
 }
 // Every directory entry numbered like `name`, without opening any of them. `progress` gets the
 // running count with a zero total: the total is what this pass discovers. `untilConsecutive`
@@ -124,7 +143,8 @@ ListedMembers listMembers(const std::filesystem::path& path, const NumberedName&
             const auto frame = candidate->frame;
             listed.consecutive =
                 (frame > 0 && seen.contains(frame - 1)) ||
-                (frame < std::numeric_limits<std::int64_t>::max() && seen.contains(frame + 1));
+                (frame < std::numeric_limits<std::int64_t>::max() && seen.contains(frame + 1)) ||
+                completesStep(seen, frame);
             if (listed.consecutive) {
                 seen = {};
                 if (untilConsecutive)
@@ -254,7 +274,7 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
             return {{}, {}, true};
         if (!listed.diagnostic.empty())
             return {{}, std::move(listed.diagnostic)};
-        // Numbered files without two consecutive frame numbers are not a sequence: the picked
+        // Numbered files without consecutive or constant-step frame numbers are not a sequence: the picked
         // file is a still, as an unnumbered name is.
         if (!listed.consecutive)
             return {SequenceManifest{}, {}};

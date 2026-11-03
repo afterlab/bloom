@@ -53,7 +53,8 @@ The **Import Media** dialog has its options under **Files of type** (see
 - **Import numbered images as a sequence** (on by default) makes the numbered images of one name an
   image sequence; turn it off to import each file you chose as its own still. The frame number is
   the last run of digits in the name. Images of one name make a sequence only when at least two of
-  them have consecutive frame numbers, so camera files such as `IMG_2041.jpg`, `IMG_2077.jpg` and
+  them have consecutive frame numbers or at least three share one constant step (frames 1, 3, 5
+  rendered on twos, or 10, 20, 30), so camera files such as `IMG_2041.jpg`, `IMG_2077.jpg` and
   `IMG_3105.jpg` import as separate stills. When several files have the same frame number
   (`shot.1.png` and `shot.01.png`), the sequence uses one of them: the file you chose, otherwise
   the one written like it (same digit count and extension spelling), otherwise the first by name.
