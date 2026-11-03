@@ -885,6 +885,19 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                       device.peakPhaseDeviceAllocationBytes <= device.peakPhaseDeviceNeedBytes &&
                       device.releasedPhaseDeviceNeedBytes <= 2 * device.releasedPhaseDevicePeakBytes,
                   "preview device needs cover the measured allocation within a factor of two");
+    std::cout << "PACKED_HOST_SOURCE phases=" << device.finishedSourcePhases
+              << " needSum=" << device.finishedPhaseSourceNeedBytes
+              << " retainedSum=" << device.finishedPhaseRetainedSourceBytes
+              << " maxNeed=" << device.peakPhaseSourceNeedBytes
+              << " maxRetained=" << device.peakPhaseRetainedSourceBytes << '\n';
+    // #472: host source needs follow what a frame retains (the stated need once per envelope,
+    // then the measured retention plus a quarter), so they cover it within a factor of two.
+    checks.expect(device.finishedSourcePhases != 0 &&
+                      device.finishedPhaseRetainedSourceBytes <=
+                          device.finishedPhaseSourceNeedBytes &&
+                      device.finishedPhaseSourceNeedBytes <=
+                          2 * device.finishedPhaseRetainedSourceBytes,
+                  "preview source needs cover the retained sources within a factor of two");
     if (sustained && !partial)
         exercisePackedStress(checks, fixture, options, temporary, viewer, session, controller, ram,
                              scheduler, service, processingPolicy, coverageCache, retainedTimes,
