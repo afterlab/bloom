@@ -604,7 +604,7 @@ void exportReveal() {
         const auto entry = listed.substr(at, listed.find(R"({"name":)", at + 1) - at);
         expect(contains(entry, R"("readOnlyHint":true)") &&
                    contains(entry, R"("openWorldHint":false)") &&
-                   contains(entry, R"("job":{"type":"integer","minimum":1})"),
+                   contains(entry, R"("job":{"type":"integer","minimum":1)"),
                "export.reveal is read-only with an optional job id: " + entry);
         // A port bound on stdio would still not be reached: there is no window.
         bool reached = false;
