@@ -134,7 +134,20 @@ to the documented per-finite-component 2e-6 RGB parity tolerance with bit-exact 
 endpoints rather than a universal exactness claim, so no O(width*height) host metadata loop and no
 host pixel resampling occurs. `GpuBlend` runs `BlendV1`
 for any `core::BlendMode` over two resident images, and `GpuPointResample` runs `PointResampleV1`,
-the bit-exact nearest-neighbour gather the media-image proxy path uses. `GpuProcessReadback` and
+the bit-exact nearest-neighbour gather the media-image proxy path uses. `GpuImageUpload` also
+accepts decoded media in its native sample layout (`render::NativeSampleImage`, #422): 8-bit 4:2:0
+or 16-bit 4:4:4:4 YUV(A) planes, packed 16-bit RGBA, or packed binary16 RGBA. The planes are copied
+as they are into one storage staging buffer and `SampleConvertV1` widens them on the device to the
+resident RGBA32F working image: the YUV matrix and range, the 4:2:0 chroma filter, bit-depth
+expansion, the binary16 decode with the OpenEXR ingest repair policy, alpha association and the
+#381 stored-samples encoding. `render::convertNativeSamples` is its CPU reference and reproduces the
+decoders' own CPU conversions value for value. Every division (by a code range or by alpha) is an
+exact integer long division of the significands that rounds to nearest even, and every other step
+is one correctly rounded add, subtract or multiply marked `precise`, so the config-managed route is
+bit-exact against the CPU reference; only the legacy BT.709 and sRGB inverse curves (transfer 1, 6
+and 13), which use `pow` and which the config-managed route never selects, are held to the 2e-6
+tolerance. The upload's cache identity folds the decode identity, the kernel's SPIR-V digest and
+every conversion parameter. `GpuProcessReadback` and
 `GpuOutputColorReadback` are the single bounded, cancellable device-to-host transfers reserved for
 the final export boundary, never the preview path. All primitives share one bounded policy:
 owner-thread operations, explicit byte budgets checked against actual VMA allocation sizes and the
@@ -195,8 +208,12 @@ IDs, operation indexes, or the revision. `ImageSource`/`VideoSource` leaves deco
 task thread through the evaluator's own entry points and publish a frozen upload command; when the
 shared GPU color context is available, a real input-to-working OCIO transform and a fractional
 proxy point-resample then run as GPU commands over that upload, so the decoded samples are not
-color-converted on the host. Without that context the leaf keeps the connected CPU conversion path
-as the fallback. The upload/source semantic key contains no node id, plan index, frame time, or
+color-converted on the host. On that route a video frame, a PNG or JPEG still and an all-half
+OpenEXR colour layer publish their native samples (#422) and the host builds no float frame at
+all: the upload carries the decoder's planes and `SampleConvertV1` produces the working image on
+the device. Only a still without a native form (TIFF, a FLOAT or UINT OpenEXR layer, a missing
+sequence frame) still uploads its raw RGBA32F decode. Without that context the leaf keeps the
+connected CPU conversion path as the fallback. The upload/source semantic key contains no node id, plan index, frame time, or
 layer transform; a reachable unsupported layer is screened before any decode. `GpuSceneCoverageCache` is a bounded transactional LRU keyed on raster
 geometry alone. No converted upload is retained between builds (ADR 0037). `GpuSceneExecutor` (`gpu_scene_executor.hpp`) drives
 one immutable `PreparedGpuScene` as a bounded sequence of already-typed native operations on an
@@ -258,7 +275,13 @@ geometry, and the shared scene builder/executor now emit and dispatch it while r
 device provenance and dispatch counters; the native coverage fixture owns that evidence. A requested
 region of interest is likewise a Required route (`feature.roi`): the prepared scene clips its native
 output to the requested data window exactly as the CPU evaluator does, preserving native windows and
-pixel aspect, with a native ROI fixture and missed-GPU detection.
+pixel aspect, with a native ROI fixture and missed-GPU detection. Widening decoded media samples to
+the working image is pixel work too (#422): each layout in `render::kNativeSampleLayouts` is a
+Required `feature.media.native_samples.<layout>` axis (`yuv420p8`, `yuva444p16`, `rgba16`,
+`rgba_half`; a new layout fails the build until it is listed). Each fixture prepares a production
+video or still scene on the GPU colour route, fails unless its upload carries that layout's native
+samples rather than a host float frame, and the native gate executes it against the CPU oracle.
+Media decode and decompression stay in the host-preparation list.
 
 Preview and final rendering are both required. Interactive viewer preview, RAM preview fill and
 playback, still-frame export, sequence/range export, video export, and headless/scripted render are

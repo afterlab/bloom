@@ -1848,8 +1848,27 @@ row y reads chroma coordinate y/2 - 1/4 (issue #393 corrected a y/2 - 1/8 coordi
 shift). Exact-value regression tests: `bloom.media.video-session` (a ProRes 422 HQ Cr step between
 rows 23 and 24 stays a step; 4:2:0 row weights 0, 1/4, 3/4, 1). `src/media/video` performs the
 matrix/range step and `src/color` applies the resolved OCIO input-id-to-working-space transform on
-straight RGB before alpha is restored; the GPU route uploads the same host-prepared pre-OCIO RGB
-and runs that transform as a GPU OCIO effect.
+straight RGB before alpha is restored. The GPU route does no pixel work on the host (#422):
+`media::video::videoNativeSamples` hands the decoded planes over in their native layout (YUV420P8,
+YUVA444P16 or RGBA16) with the matrix coefficients, range, transfer and stored-samples flag the
+host conversion would apply, and `SampleConvertV1` produces the same pre-OCIO RGB on the device,
+bit for bit against `render::convertNativeSamples` (the CPU reference, which equals
+`videoToInputColorSpace` and `videoToStoredSamples` value for value). The OCIO transform then runs
+as a GPU effect. Media decode (container I/O, decompression and the worker's chroma
+reconstruction to YUVA444P16) stays host preparation; the colour transform does not.
+
+Still images follow the same split. `media::decodeImageSamples` returns a raw decode's samples
+without widening them: the 16-bit RGBA samples of a PNG or JPEG, or the binary16 RGBA of an
+OpenEXR colour layer whose channels are all HALF and unsubsampled (Y/YA layers replicate Y; a layer
+without alpha is opaque). Its repaired-pixel count is the float decode's, computed from the half
+bits. TIFF stills, FLOAT or UINT OpenEXR layers and subsampled layers report
+`NativeSamplesUnavailable` and the GPU route uploads their float decode. Regression tests:
+`bloom.media.image_native_samples` (PNG grey, grey+alpha, RGB and RGBA at 8 and 16 bits, JPEG,
+premultiplied, straight, unlabelled, alpha-free, luminance, tiled and repaired half OpenEXR, every
+alpha association, raw and stored), `bloom.media.video-session` (every matrix and range on
+synthetic YUV420P8 and YUVA444P16 frames, RGBA16, and decoded H.264, HLG, ProRes 4:2:2, ProRes
+4444 and RGB TIFF-in-MOV frames, under every transfer override) and
+`bloom.render.gpu_sample_convert` (device parity per layout).
 
 Issue #365 interpretation rules:
 

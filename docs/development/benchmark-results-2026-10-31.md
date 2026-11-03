@@ -390,6 +390,59 @@ resolution, inside the same 20G scope with the GPU lock held, one run per cell, 
 - The per-stage wall times (`uploadFenceSeconds`, `processingFenceSeconds`) now overlap and are
   larger after the change; they are no longer additive.
 
+### Native-sample upload (#422)
+
+Since #422 the GPU colour route uploads decoded media in its native layout and `SampleConvertV1`
+converts it to the working image on the device (see
+[the GPU backend](../architecture/gpu-backend.md) and [media I/O](../architecture/media-io.md)).
+Before, the host built a full-resolution RGBA32F frame for every source and uploaded that.
+Measured on single-source A projects of the `standard` suite and on the `layers` L25 stack (1080p
+EXR half PIZ), Full cold fill and a 6 s Full cold playback, inside the same 20G scope with the GPU
+lock held, one run per cell, on 2026-11-03:
+
+- **Before:** main 77ccc307d with the #422 harness fields (`windowCpuSeconds`, `uploadBytes`,
+  `decodeStageSeconds`, `colourConvertStageSeconds`; see [benchmarks](benchmarks.md)).
+- **After:** the same tree with #422.
+
+"Host CPU" is `windowCpuSeconds` and "upload" is `uploadBytes`, both per filled frame. "Convert" is
+the fill's total `ColourConvert` stage time, the host conversion #422 removes. "Phase peak" is
+`peakPhaseDeviceAllocationBytes`.
+
+| Cell | Fill fps | Playback fps | Host CPU per frame | Upload per frame | Convert | Phase peak |
+|---|---|---|---|---|---|---|
+| 1080p H.264 | 84.5 → 112.3 | 22.8 → 23.0 | 72 → 33 ms | 33.2 → 3.1 MB | 6.6 s → 0 | 0.25 → 0.22 GB |
+| 1080p HEVC 10-bit | 47.9 → 38.9 ‡ | 22.8 → 23.0 | 69 → 47 ms | 33.2 → 16.6 MB | 4.2 s → 0 | 0.25 → 0.23 GB |
+| 1080p ProRes 4444 | 41.8 → 40.8 ‡ | 22.8 → 22.7 | 71 → 48 ms | 33.2 → 16.6 MB | 4.3 s → 0 | 0.25 → 0.23 GB |
+| 1080p PNG16 | 49.1 → 54.0 | 22.3 → 22.5 | 169 → 150 ms | 33.2 → 16.6 MB | 0 → 0 | 0.25 → 0.23 GB |
+| 1080p EXR half PIZ | 68.7 → 108.4 | 23.0 → 23.2 | 118 → 71 ms | 33.2 → 16.6 MB | 0 → 0 | 0.23 → 0.19 GB |
+| 2160p H.264 | 16.1 → 47.9 | 2.3 → 22.7 | 254 → 50 ms | 132.7 → 12.4 MB | 24.4 s → 0 | 0.94 → 0.82 GB |
+| 2160p HEVC 10-bit | 11.2 → 11.4 | 1.8 → 2.5 | 270 → 117 ms | 132.7 → 66.4 MB | 17.7 s → 0 | 0.94 → 0.87 GB |
+| 2160p ProRes 4444 | 9.2 → 8.9 | 6.8 → 10.0 | 270 → 113 ms | 132.7 → 66.4 MB | 16.9 s → 0 | 0.94 → 0.87 GB |
+| 2160p PNG16 | 12.7 → 15.9 | 5.3 → 9.3 | 653 → 542 ms | 132.7 → 66.4 MB | 0 → 0 | 0.94 → 0.87 GB |
+| 2160p EXR half PIZ | 13.6 → 38.0 | 5.0 → 22.5 | 565 → 238 ms | 132.7 → 66.4 MB | 0 → 0 | 0.87 → 0.74 GB |
+| L25 (1080p EXR half stack) | 2.48 → 3.30 | 0.17 → 1.0 | 2.04 → 1.01 s | 2,223 → 524 MB | 36.3 s → 0 | 1.20 → 0.93 GB |
+
+‡ Single runs of a worker-decode-bound cell. Two more after-runs of 1080p HEVC 10-bit filled at 56.1
+and 55.6 fps and one more of 1080p ProRes 4444 at 46.5 fps, so these two cells move within
+run-to-run spread.
+
+- **The host no longer converts.** The `ColourConvert` stage is 0 in every cell, and host CPU per
+  filled frame falls 11–80 %. 8-bit 4:2:0 video crosses as 1.5 bytes per pixel instead of 16,
+  16-bit 4:4:4:4 video and PNG/JPEG stills as 8, half OpenEXR as 8. A still's widening to float
+  was part of its decode stage, which shrinks with it: EXR half PIZ 18.0 → 9.0 s over the 1080p fill
+  and 105.9 → 36.7 s over the 2160p fill.
+- **Fills bound by that conversion speed up:** 2160p H.264 fills 3.0× faster and plays back in real
+  time (2.3 → 22.7 fps, 117 → 0 dropped frames); 2160p EXR half fills 2.8× faster and plays in real
+  time (102 → 0 dropped). The L25 stack uploads a quarter of the bytes and fills 33 % faster; its
+  host CPU per frame halves.
+- **What still bounds a cell is decode.** 10-bit HEVC and ProRes 4444 are decoded in the media
+  worker, which reconstructs their chroma to 16-bit 4:4:4:4 there; their fill rate is unchanged
+  within the spread, and 2160p HEVC 10-bit still drops frames in playback. PNG16 is bound by PNG
+  decompression (`decodeStageSeconds` 102 s of the 2160p fill).
+- The device claim peaks are unchanged (1.58 GB at 1080p, 1.71 GB at 2160p, 2.32 GB for L25), the
+  phase peaks fall by the smaller staging, and every cell ran on the GPU route with 0 CPU-fallback
+  frames.
+
 ## Conditions
 
 - **Host crash, 2026-10-31 16:14 local.** The first after-run queue ran one runner for the whole
