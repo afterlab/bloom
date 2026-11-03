@@ -36,6 +36,12 @@ std::uint64_t McpServerServiceDriver::connectClient(McpClientInfo info) {
     return client->id;
 }
 
+std::size_t McpServerServiceDriver::openConnections() const {
+    auto& s = *service_.state_;
+    const std::lock_guard lock(s.factsMutex);
+    return s.openConnections;
+}
+
 namespace {
 std::shared_ptr<Client> find(McpServerService::State& s, const std::uint64_t id) {
     for (const auto& [session, client] : s.sessions) {

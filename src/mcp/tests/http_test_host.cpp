@@ -5,12 +5,16 @@
 //
 // usage: bloom_mcp_http_test_host --port <n> --folder <dir> [--header-timeout-ms <n>]
 // Prints "READY <port>" or "REFUSED <reason>", then follows commands on stdin, one per line:
-// start, stop, regenerate, quit (end of input also quits). The token is in <dir>/mcp/token.
+// start, stop, regenerate, await-connections <n>, quit (end of input also quits). The token is in
+// <dir>/mcp/token. "DONE <line>" answers each one once it has taken effect: regenerate once the
+// new token is in force (or the attempt failed), await-connections once exactly <n> HTTP
+// connections are open, so the test waits on the server's state rather than on a delay.
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/mcp/server_service.hpp>
+#include <bloom/mcp/testing/server_service_driver.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -157,6 +161,13 @@ int main(int argc, char** argv) {
             }
             commands.closed = true;
         });
+        const mcp::testing::McpServerServiceDriver driver(service);
+        const auto turn = [&] {
+            service.pump();
+            queue->pump();
+            static_cast<void>(live.drainOne(committer));
+            std::this_thread::sleep_for(1ms);
+        };
         bool quit = exitCode != 0;
         while (!quit) {
             std::deque<std::string> lines;
@@ -171,15 +182,25 @@ int main(int argc, char** argv) {
                     static_cast<void>(service.stop());
                 else if (line == "start")
                     static_cast<void>(service.start());
-                else if (line == "regenerate")
-                    static_cast<void>(service.regenerateToken());
+                else if (line == "regenerate") {
+                    if (service.regenerateToken().accepted) {
+                        const auto settled = [&] {
+                            const auto state = service.snapshot()->token.state;
+                            return state != mcp::McpTokenState::Regenerating &&
+                                   state != mcp::McpTokenState::Loading;
+                        };
+                        while (!settled())
+                            turn();
+                    }
+                } else if (line.starts_with("await-connections ")) {
+                    const auto wanted = std::stoul(line.substr(line.find(' ') + 1));
+                    while (driver.openConnections() != wanted)
+                        turn();
+                }
                 std::cout << "DONE " << line << std::endl;
             }
             quit = quit || commands.closed;
-            service.pump();
-            queue->pump();
-            static_cast<void>(live.drainOne(committer));
-            std::this_thread::sleep_for(1ms);
+            turn();
         }
         service.beginShutdown();
         const auto stopDeadline = std::chrono::steady_clock::now() + 30s;

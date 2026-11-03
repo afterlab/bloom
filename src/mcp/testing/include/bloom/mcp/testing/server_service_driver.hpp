@@ -4,6 +4,7 @@
 #include <bloom/platform/loopback_listener.hpp>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -48,6 +49,10 @@ class McpServerServiceDriver final {
     // Scripts the token: Loading, Regenerating, Unavailable (with `reason`) or Ready (with
     // `token`, which must be well formed).
     void setToken(McpTokenState state, std::string token = {}, std::string reason = {});
+
+    // The HTTP connections the server holds open right now (accepted and not yet closed); a
+    // connection over McpServerLimits::connections is answered 503 and never counted.
+    [[nodiscard]] std::size_t openConnections() const;
 
     // Holds 127.0.0.1:<port> so McpServerService::start() is refused with PortInUse naming it.
     // Null when the port could not be bound by the test itself.

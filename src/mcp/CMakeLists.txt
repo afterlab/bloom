@@ -96,7 +96,7 @@ if(BUILD_TESTING)
     )
     # Streamable HTTP over a real loopback socket against a headless McpServerService.
     add_executable(bloom_mcp_http_test_host tests/http_test_host.cpp)
-    target_link_libraries(bloom_mcp_http_test_host PRIVATE bloom_mcp)
+    target_link_libraries(bloom_mcp_http_test_host PRIVATE bloom_mcp bloom_mcp_testing)
     bloom_enable_warnings(bloom_mcp_http_test_host)
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)

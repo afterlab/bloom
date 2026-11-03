@@ -320,18 +320,22 @@ class Conformance(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 8)
 
     def test_connection_limit(self):
+        # Earlier cases' connections close on the server's own threads; start from none open.
+        self.host.command('await-connections 0')
         sockets = []
         try:
             for _ in range(16):
                 sockets.append(socket.create_connection(('127.0.0.1', self.host.port), timeout=10))
-            time.sleep(0.3)
+            # A connect completes in the kernel's backlog before the server accepts it, so wait
+            # until the server holds all sixteen before the seventeenth must be refused.
+            self.host.command('await-connections 16')
             with socket.create_connection(('127.0.0.1', self.host.port), timeout=10) as extra:
                 answer = extra.recv(65536)
                 self.assertTrue(answer.startswith(b'HTTP/1.1 503'), answer)
         finally:
             for item in sockets:
                 item.close()
-        time.sleep(0.3)
+        self.host.command('await-connections 0')
 
     def test_client_limit(self):
         clients = [Client(self.host) for _ in range(8)]
@@ -361,12 +365,8 @@ class Lifecycle(unittest.TestCase):
             old = first.token
             client = Client(first)
             client.initialize()
+            # Answered once the regenerated token is in force, not merely written to the file.
             first.command('regenerate')
-            for _ in range(200):
-                if first.token != old:
-                    break
-                time.sleep(0.02)
-            time.sleep(0.2)
             self.assertNotEqual(first.token, old)
             self.assertEqual(Client(first, token=old).request(body=INIT)[0], 401)
             # The regenerated token ended the client's session.
