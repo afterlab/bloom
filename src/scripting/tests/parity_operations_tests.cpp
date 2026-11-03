@@ -500,6 +500,36 @@ void nullArguments() {
            "a null argument parses as an omitted one");
 }
 
+// #434 O8: an export output that names a built-in preset and gives no settings takes that preset's
+// settings, so a ProRes job is a ProRes job and its .mov destination is accepted; a preset that
+// cannot be resolved is refused with its name instead of silently becoming H.264 MP4.
+void exportPresetOutputs() {
+    Fixture fixture;
+    const auto addJob = [&](const std::string& output) {
+        return fixture.run("bloom.export.add-job",
+                           {{"composition", Value(StableId{fixture.main.value()})},
+                            {"outputs", Value(ValueArray{Value(output)})}});
+    };
+    auto added = addJob(R"({"preset":"builtin:prores-422hq-mov",)"
+                        R"("destination":{"path":"Exports/{name}.mov"}})");
+    const auto jobs = Fixture::outputs<document::ExportJobId>(added, "exportJob");
+    expect(added.succeeded() && jobs.size() == 1, "a job with a preset-only output is added");
+    if (jobs.empty())
+        return;
+    fixture.refresh();
+    const auto* job = fixture.snapshot->project().findExportJob(jobs.front());
+    expect(job != nullptr && job->outputs.size() == 1 &&
+               job->outputs.front().presetId == "builtin:prores-422hq-mov" &&
+               job->outputs.front().settings.format == document::ExportFormat::ProResMov &&
+               job->outputs.front().destination.path == "Exports/{name}.mov",
+           "the output takes the ProRes preset's settings and keeps its .mov destination");
+
+    auto unknown = addJob(R"({"preset":"builtin:no-such-preset"})");
+    expect(!unknown.succeeded() && unknown.diagnostic &&
+               unknown.diagnostic->message.find("builtin:no-such-preset") != std::string::npos,
+           "an unknown preset without settings is refused by name");
+}
+
 void projectItems() {
     Fixture fixture;
     auto folder = fixture.run("bloom.asset.create-folder", {{"name", Value("Shots")}});
@@ -584,6 +614,7 @@ int main() {
     pathValues();
     addFeedingInserts();
     nullArguments();
+    exportPresetOutputs();
     projectItems();
     colorSettings();
     descriptions();

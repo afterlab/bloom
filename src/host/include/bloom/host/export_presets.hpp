@@ -316,12 +316,16 @@ exportSourceAvailability(const document::ExportOutputSettings& settings,
                          const std::optional<std::string>& audioSourceRefusal);
 // The document 1.29 `settings` object and a whole output ({"preset", "settings", "destination",
 // "enabled", "importIntoAssets"}) as compact JSON, for scripting, MCP and "copy as command".
-// Parsing validates the record; the parsed output has no id (the add operation allocates it).
+// Parsing validates the record; the parsed output has no id (the add operation allocates it). An
+// output that names a built-in `preset` and leaves `settings` out takes that preset's settings; a
+// preset this function cannot resolve then refuses the output. A refusal writes its reason to
+// `reason` when one is given.
 [[nodiscard]] std::string exportSettingsToJson(const document::ExportOutputSettings& settings);
 [[nodiscard]] std::optional<document::ExportOutputSettings>
 exportSettingsFromJson(std::string_view json);
 [[nodiscard]] std::string exportOutputToJson(const document::ExportOutput& output);
-[[nodiscard]] std::optional<document::ExportOutput> exportOutputFromJson(std::string_view json);
+[[nodiscard]] std::optional<document::ExportOutput>
+exportOutputFromJson(std::string_view json, std::string* reason = nullptr);
 // A built-in preset by id (pure; independent of encoders and of any catalogue instance). Its
 // platformAvailability is not evaluated here.
 [[nodiscard]] std::optional<ExportPreset> builtInExportPreset(std::string_view id);

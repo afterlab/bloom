@@ -113,8 +113,11 @@ validation and undo: `bloom.export.add-job` (returns `exportJob` and one `export
 `bloom.export.set-output-settings`, `set-output-destination`, `set-output-enabled`,
 `set-output-import` and `bloom.export.apply-preset`. An output travels as the document 1.29 JSON
 object: `{"preset", "settings": {"format", "codecProfile", ...}, "destination": {"portability",
-"path", "overwrite"}, "enabled", "importIntoAssets"}`. Without `outputs`, `add-job` adds one H.264
-MP4 output at `Exports/{name}.mp4`.
+"path", "overwrite"}, "enabled", "importIntoAssets"}`, each field optional. An output that names a
+built-in `preset` and gives no `settings` takes that preset's settings, as `apply-preset` does
+(`{"preset": "builtin:prores-422hq-mov", "destination": {"path": "Exports/{name}.mov"}}`); a preset
+that is not built in needs `settings`, and a refused output says why. Without `outputs`, `add-job`
+adds one H.264 MP4 output at `Exports/{name}.mp4`.
 
 **Session calls** act on runtime state only (never undoable, never saved): `export.start`,
 `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`,

@@ -345,20 +345,35 @@ std::string exportOutputToJson(const document::ExportOutput& output) {
     return out;
 }
 
-std::optional<document::ExportOutput> exportOutputFromJson(const std::string_view json) {
-    if (json.size() > (1U << 20U))
+std::optional<document::ExportOutput> exportOutputFromJson(const std::string_view json,
+                                                           std::string* reason) {
+    const auto refuse = [reason](std::string why) -> std::optional<document::ExportOutput> {
+        if (reason != nullptr)
+            *reason = std::move(why);
         return std::nullopt;
+    };
+    if (json.size() > (1U << 20U))
+        return refuse("The output is larger than 1 MiB.");
     const auto parsed = Parser(json).parse();
     if (!parsed)
-        return std::nullopt;
+        return refuse("The output is not a JSON object.");
     document::ExportOutput output;
     if (const auto* preset = string(*parsed, "preset"))
         output.presetId = *preset;
     if (const auto* settings = parsed->find("settings")) {
         auto value = settingsFrom(*settings);
         if (!value)
-            return std::nullopt;
+            return refuse("Its \"settings\" are not valid document 1.29 output settings.");
         output.settings = std::move(*value);
+    } else if (!output.presetId.empty()) {
+        // A preset named without settings is a request for that preset's settings, exactly as
+        // bloom.export.apply-preset gives them; never the default H.264 settings under its name.
+        const auto preset = builtInExportPreset(output.presetId);
+        if (!preset)
+            return refuse("\"" + output.presetId +
+                          "\" is not a built-in preset (export.presets lists them); name a "
+                          "built-in preset or give \"settings\".");
+        output.settings = preset->settings;
     }
     if (const auto* destination = parsed->find("destination")) {
         if (const auto* portability = string(*destination, "portability"))
@@ -368,7 +383,8 @@ std::optional<document::ExportOutput> exportOutputFromJson(const std::string_vie
         if (const auto* overwrite = string(*destination, "overwrite")) {
             const auto policy = document::parseExportOverwrite(*overwrite);
             if (!policy)
-                return std::nullopt;
+                return refuse("Its destination \"overwrite\" is not \"ask\", \"replace\" or "
+                              "\"refuse\".");
             output.destination.overwrite = *policy;
         }
     }
@@ -378,8 +394,9 @@ std::optional<document::ExportOutput> exportOutputFromJson(const std::string_vie
         output.importIntoAssets = *import;
     auto probe = output;
     probe.id = document::ExportOutputId::fromRaw(1);
-    if (!document::validateExportOutput(probe).ok())
-        return std::nullopt;
+    if (const auto validation = document::validateExportOutput(probe); !validation.ok())
+        return refuse(validation.issues().empty() ? std::string("The output is not valid.")
+                                                  : validation.issues().front().message + ".");
     return output;
 }
 

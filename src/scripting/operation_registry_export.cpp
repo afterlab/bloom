@@ -138,7 +138,10 @@ rangeArguments(const Arguments& arguments, const std::string& op, OperationCreat
 
 const std::string kOutputSummary =
     R"(One output as JSON: {"preset": id, "settings": {document 1.29 settings}, )"
-    R"("destination": {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}.)";
+    R"("destination": {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}; every )"
+    R"(field is optional. A built-in "preset" (export.presets lists them) with no "settings" takes )"
+    R"(that preset's settings; "settings" given with it override them. "overwrite" is "ask", )"
+    R"("replace" or "refuse"; an output with no destination path must be given one before Start.)";
 
 } // namespace
 
@@ -215,10 +218,12 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
                     return argumentFailure(op, "outputs", "Expected an array of JSON strings.");
                 for (const auto& item : *list) {
                     const auto* text = std::get_if<std::string>(&item.storage);
-                    auto output = text ? host::exportOutputFromJson(*text) : std::nullopt;
+                    std::string reason = "An output is not a JSON string.";
+                    auto output = text ? host::exportOutputFromJson(*text, &reason) : std::nullopt;
                     if (!output)
                         return argumentFailure(op, "outputs",
-                                               "An output is not valid JSON. " + kOutputSummary);
+                                               "Output " + std::to_string(job.outputs.size()) +
+                                                   " is refused: " + reason + " " + kOutputSummary);
                     job.outputs.push_back(std::move(*output));
                 }
             }
@@ -335,10 +340,13 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
         [](const std::string& op, const Arguments& args, const OperationContext& context) {
             const auto job = idArgument<ExportJobId>(args, "job");
             const auto text = textArgument(args, "output");
-            auto output = text ? host::exportOutputFromJson(*text) : std::nullopt;
-            if (!job || !output)
+            std::string reason = "Expected an output as a JSON string.";
+            auto output = text ? host::exportOutputFromJson(*text, &reason) : std::nullopt;
+            if (!job)
+                return argumentFailure(op, "job", "Expected a job id.");
+            if (!output)
                 return argumentFailure(op, "output",
-                                       "Expected a job id and an output. " + kOutputSummary);
+                                       "The output is refused: " + reason + " " + kOutputSummary);
             output->settings = explicitView(std::move(output->settings), context);
             return made(std::make_unique<commands::AddExportOutput>(*job, std::move(*output)));
         });
