@@ -193,6 +193,8 @@ std::string valueText(const document::ParameterValue& value) {
         return "a vector3";
     if (std::holds_alternative<core::Color4d>(value))
         return "a color";
+    if (std::holds_alternative<document::PathValue>(value))
+        return "a path";
     return "this value";
 }
 

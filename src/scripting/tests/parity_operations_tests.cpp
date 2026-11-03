@@ -355,6 +355,67 @@ void parameterOperations() {
     expect(!stale.succeeded(), "an unknown parameter is refused");
 }
 
+// #434 O2/O3: one path object for shape outlines, masks and Path parameters. add-shape takes the
+// same {closed, anchors: [{point, inHandle, outHandle, mode}]} object add-mask takes, and
+// set-source repoints a Path parameter at a new outline after the layer exists.
+void pathValues() {
+    Fixture fixture;
+    const auto anchor = [](const double x, const double y,
+                           const std::optional<document::Vec2d> in = std::nullopt,
+                           const std::optional<document::Vec2d> out = std::nullopt,
+                           const document::PathAnchorMode mode = document::PathAnchorMode::Corner) {
+        return document::PathAnchor{.point = {x, y}, .inHandle = in, .outHandle = out, .mode = mode};
+    };
+    document::PathValue outline;
+    outline.closed = true;
+    outline.anchors = {anchor(0, 0), anchor(100, 0, document::Vec2d{80, -20},
+                                             document::Vec2d{120, 20},
+                                             document::PathAnchorMode::Mirrored),
+                       anchor(50, 80)};
+    auto shape = fixture.run("bloom.layer.add-shape",
+                             {{"composition", Value(StableId{fixture.main.value()})},
+                              {"kind", Value("path")},
+                              {"path", Value(outline)}});
+    expect(shape.succeeded(), "add-shape takes the shared path object");
+    fixture.refresh();
+    document::ParameterId pathParameter;
+    for (const auto& record : fixture.composition(fixture.main).parameters().records())
+        if (const auto* constant = std::get_if<document::ConstantValueSource>(&record.source);
+            constant != nullptr && std::holds_alternative<document::PathValue>(constant->value))
+            pathParameter = record.id;
+    expect(pathParameter.isValid(), "the path shape stores its outline in a Path parameter");
+    if (!pathParameter.isValid())
+        return;
+    const auto stored = [&] {
+        fixture.refresh();
+        const auto* record = fixture.composition(fixture.main).parameters().find(pathParameter);
+        const auto* constant =
+            record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+        const auto* path = constant ? std::get_if<document::PathValue>(&constant->value) : nullptr;
+        return path ? std::optional(*path) : std::nullopt;
+    };
+    expect(stored() == outline, "the outline, handles and anchor mode are kept as authored");
+
+    document::PathValue replacement;
+    replacement.closed = false;
+    replacement.anchors = {anchor(10, 10), anchor(200, 40, std::nullopt, std::nullopt,
+                                                  document::PathAnchorMode::Corner)};
+    auto repointed = fixture.run("bloom.parameter.set-source",
+                                 {{"composition", Value(StableId{fixture.main.value()})},
+                                  {"parameter", Value(StableId{pathParameter.value()})},
+                                  {"value", Value(replacement)}});
+    expect(repointed.succeeded() && stored() == replacement,
+           "set-source repoints a Path parameter at a new outline");
+    expect(fixture.session->undo().succeeded() && stored() == outline,
+           "undo restores the previous outline");
+    auto wrongKind = fixture.run("bloom.parameter.set-source",
+                                 {{"composition", Value(StableId{fixture.main.value()})},
+                                  {"parameter", Value(StableId{pathParameter.value()})},
+                                  {"value", Value(1.0)}});
+    expect(!wrongKind.succeeded() && stored() == outline,
+           "a number on a Path parameter is refused");
+}
+
 void projectItems() {
     Fixture fixture;
     auto folder = fixture.run("bloom.asset.create-folder", {{"name", Value("Shots")}});
@@ -436,6 +497,7 @@ int main() {
     addFromAssets();
     nodeOperations();
     parameterOperations();
+    pathValues();
     projectItems();
     colorSettings();
     descriptions();

@@ -303,7 +303,11 @@ composition's frame rate, later frame counts in it use the new rate.
 number, `true`/`false` for a Boolean, text for a String, `[x, y]`, `[x, y, z]` or `[r, g, b, a]`,
 and for an Integer or enumeration a whole number or the member's name (`"screen"`, `"Ping-pong"`;
 case, spaces, hyphens and underscores do not matter, so `"ping_pong"` names Ping-pong). Reading an enumeration parameter back
-(`query` `kind` `parameter`) returns both its stored `value` and its `label`. A value out of range is refused with what the parameter
+(`query` `kind` `parameter`) returns both its stored `value` and its `label`. A Path parameter (a shape's outline) takes a path object, the same one
+`bloom.layer.add-shape` (`kind` `"path"`) and the mask operations take: `{"closed": bool,
+"anchors": [{"point": [x, y], "inHandle": [x, y] or null, "outHandle": [x, y] or null, "mode":
+"corner" | "mirrored" | "aligned" | "free" | "auto"}]}`, where `mode` is optional and inferred from the
+handles. A value out of range is refused with what the parameter
 accepts, for example "Parameter 31 (points of node 7, bloom.shape) cannot take 2; it takes a whole
 number in 3..64." A Boolean parameter such as a shape's `fillEnabled` or `strokeEnabled` can be
 driven by a Boolean value node: `{"driverNode": <id>, "driverPort": "result"}` with

@@ -141,6 +141,10 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     if (const auto* result = std::get_if<std::string>(&value.storage)) {
         return document::ParameterValue(*result);
     }
+    // A shape or mask outline: the same path object add-shape and add-mask take.
+    if (const auto* result = std::get_if<document::PathValue>(&value.storage)) {
+        return result->isValid() ? std::optional(document::ParameterValue(*result)) : std::nullopt;
+    }
     const auto authoredValue = animationValueOf(value);
     if (!authoredValue.has_value()) {
         return std::nullopt;
@@ -326,6 +330,23 @@ path(const Arguments& arguments, const std::string& operationId, const std::stri
                     return result != nullptr && result->isValid() ? std::optional(*result)
                                                                   : std::nullopt;
                 });
+}
+
+// The one path object every path argument takes and shows (shape outlines, masks, Path
+// parameters), described once so its anchor modes are visible before a call is refused.
+const std::string kPathObject =
+    "A path object {\"closed\": bool, \"anchors\": [{\"point\": [x, y], \"inHandle\": [x, y] "
+    "or null, \"outHandle\": [x, y] or null, \"mode\": \"corner\", \"mirrored\", "
+    "\"aligned\", \"free\" or \"auto\" (optional; inferred from the handles)}, ...]}.";
+
+[[nodiscard]] document::PathValue examplePath() {
+    document::PathValue path;
+    path.closed = true;
+    path.anchors = {{{0.0, 0.0}, std::nullopt, std::nullopt},
+                    {{100.0, 0.0}, std::nullopt, std::nullopt},
+                    {{100.0, 100.0}, std::nullopt, std::nullopt},
+                    {{0.0, 100.0}, std::nullopt, std::nullopt}};
+    return path;
 }
 
 [[nodiscard]] std::optional<document::Vec3d>
@@ -2544,11 +2565,8 @@ OperationRegistry OperationRegistry::builtIn() {
                "First point of a line shape."),
          maybe("lineEnd", ValueKind::Vec2, document::Vec2d{100.0, 0.0},
                "Second point of a line shape."),
-         maybe("path", ValueKind::Array,
-               ValueArray{Value(ValueArray{Value(0.0), Value(0.0)}),
-                          Value(ValueArray{Value(100.0), Value(0.0)})},
-               "Path anchors as (x, y) or (x, y, inX, inY, outX, outY)."),
-         maybe("pathClosed", ValueKind::Boolean, false, "Whether a path shape is closed.")},
+         maybe("path", ValueKind::Path, examplePath(),
+               "The outline of a \"path\" shape, in the same form masks take. " + kPathObject)},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -2565,40 +2583,9 @@ OperationRegistry OperationRegistry::builtIn() {
             geometry.size = vec2(args, op, "size", error, false);
             geometry.lineStart = vec2(args, op, "lineStart", error, false);
             geometry.lineEnd = vec2(args, op, "lineEnd", error, false);
-            const auto closed = boolean(args, op, "pathClosed", error, false);
+            geometry.path = path(args, op, "path", error, false);
             if (error) {
                 return error;
-            }
-            if (const auto* anchors = findArgument(args, "path")) {
-                const auto* array = std::get_if<ValueArray>(&anchors->storage);
-                if (array == nullptr || array->empty()) {
-                    return failure(op, "path", "expects at least one anchor");
-                }
-                document::PathValue value;
-                for (const auto& item : *array) {
-                    const auto* entry = std::get_if<ValueArray>(&item.storage);
-                    if (entry == nullptr || (entry->size() != 2 && entry->size() != 6)) {
-                        return failure(op, "path",
-                                       "expects (x, y) or (x, y, inX, inY, outX, outY) anchors");
-                    }
-                    std::array<double, 6> numbers{};
-                    for (std::size_t index = 0; index < entry->size(); ++index) {
-                        const auto component = numericOf((*entry)[index]);
-                        if (!component.has_value() || !std::isfinite(*component)) {
-                            return failure(op, "path", "expects finite anchor coordinates");
-                        }
-                        numbers[index] = *component;
-                    }
-                    document::PathAnchor anchor{
-                        .point = {numbers[0], numbers[1]}, .inHandle = {}, .outHandle = {}};
-                    if (entry->size() == 6) {
-                        anchor.inHandle = document::Vec2d{numbers[2], numbers[3]};
-                        anchor.outHandle = document::Vec2d{numbers[4], numbers[5]};
-                    }
-                    value.anchors.push_back(anchor);
-                }
-                value.closed = closed.value_or(false);
-                geometry.path = std::move(value);
             }
             return OperationCreateResult(
                 std::make_unique<commands::AddShapeLayer>(
@@ -2918,19 +2905,11 @@ OperationRegistry OperationRegistry::builtIn() {
     const auto maskArgument = [] {
         return need("mask", ValueKind::Id, StableId{1}, "The layer mask to edit.");
     };
-    const auto examplePath = [] {
-        document::PathValue path;
-        path.closed = true;
-        path.anchors = {{{0.0, 0.0}, std::nullopt, std::nullopt},
-                        {{100.0, 0.0}, std::nullopt, std::nullopt},
-                        {{100.0, 100.0}, std::nullopt, std::nullopt},
-                        {{0.0, 100.0}, std::nullopt, std::nullopt}};
-        return path;
-    };
     add("bloom.layer.add-mask",
         {compositionArgument(), layerArgument(),
          need("path", ValueKind::Path, examplePath(),
-              "The mask outline in the layer's content space (closed to cover an area)."),
+              "The mask outline in the layer's content space (closed to cover an area). " +
+                  kPathObject),
          maybe("mode", ValueKind::Integer, std::int64_t{1},
                "0 None, 1 Add, 2 Subtract, 3 Intersect, 4 Difference. Defaults to Add."),
          maybe("name", ValueKind::String, "Mask 1", "The mask name. Defaults to Mask N.")},
@@ -2959,7 +2938,7 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.set-mask-path",
         {compositionArgument(), layerArgument(), maskArgument(),
          need("path", ValueKind::Path, examplePath(),
-              "The new outline in the layer's content space."),
+              "The new outline in the layer's content space. " + kPathObject),
          timeArgument()},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
@@ -2996,7 +2975,8 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.stop-animating-mask-path",
         {compositionArgument(), layerArgument(), maskArgument(),
          need("path", ValueKind::Path, examplePath(),
-              "The constant outline the mask keeps once its keys are removed.")},
+              "The constant outline the mask keeps once its keys are removed. " +
+                  kPathObject)},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -3551,7 +3531,9 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.parameter.set-source",
         {compositionArgument(),
          need("parameter", ValueKind::Id, StableId{1}, "The parameter to repoint."),
-         alternative("value", ValueKind::Value, 1.0, "A constant value."),
+         alternative("value", ValueKind::Value, 1.0,
+                     "A constant value in the parameter's kind; a Path parameter takes the path "
+                     "object add-shape and add-mask take."),
          maybe("curve", ValueKind::Id, StableId{1}, "An existing animation curve."),
          maybe("driverNode", ValueKind::Id, StableId{1}, "A value-graph node that drives it."),
          maybe("driverPort", ValueKind::String, "output", "The driving node's output port.")},
@@ -3570,7 +3552,8 @@ OperationRegistry OperationRegistry::builtIn() {
             if (const auto* constant = findArgument(args, "value")) {
                 authoredValue = parameterValueOf(*constant);
                 if (!authoredValue.has_value()) {
-                    return failure(op, "value", "expects a number, text, vector or color");
+                    return failure(op, "value",
+                                   "expects a number, text, vector, color or a valid path");
                 }
             }
             if (curve.has_value()) {

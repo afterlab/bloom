@@ -225,9 +225,11 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
         return yyjson_is_int(value) || (yyjson_is_arr(value) && yyjson_arr_size(value) == 2 &&
                                         yyjson_is_int(yyjson_arr_get_first(value)));
     case Kind::Value:
-        // A number, a vector or colour, true/false for a Boolean parameter, or text for a String
-        // parameter or an enumeration member named by its label ("screen").
+        // A number, a vector or colour, true/false for a Boolean parameter, text for a String
+        // parameter or an enumeration member named by its label ("screen"), or a path object for
+        // a Path parameter.
         return yyjson_is_num(value) || yyjson_is_bool(value) || yyjson_is_str(value) ||
+               yyjson_is_obj(value) ||
                (yyjson_is_arr(value) && yyjson_arr_size(value) >= 2 && yyjson_arr_size(value) <= 4);
     case Kind::Vec2:
     case Kind::Vec3:
