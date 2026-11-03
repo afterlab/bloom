@@ -103,3 +103,86 @@ invalidation. Compiler tests cover lowering, mute pass-through and an empty upst
 Properties and archive tests cover add, wiring, undo/redo, refusals and reopen. The native
 image-effect harness runs Coverage through the Gaussian Transparent/Clamp, proxy/ROI, warm
 zero-dispatch and changed-radius cases at the 2e-6/exact-alpha gate.
+
+## Matte Erode and Matte Dilate
+
+`bloom.matte-erode` and `bloom.matte-dilate`, schema 1 (#338), shrink and grow an ADR 0028 Mask.
+They have exactly Matte Blur's sockets and controls: a required Mask `input`, a Mask `mask` output,
+the animatable/drivable `bloom.blur.radius` (`0..256` full-resolution pixels, default `0`) and the
+constant `bloom.blur.edge` selector (`0` Transparent, default; `1` Clamp). The Add menu lists both
+under Filters. Radius zero is an exact storage alias, and the supports, proxy scaling, bounds,
+budget, cancellation and failure rules are the Gaussian Blur rules above.
+
+They lower to the same `SeparableBlurKernel` with `BlurChannels::Coverage` and the morphology kinds
+`SeparableBlurKind::Erode` and `Dilate` (refused with any other channel policy). The structuring
+element is the separable square of `2 * ceil(radius * scale) + 1` taps per axis: whole taps weigh
+exactly 1, and for a fractional radius the two outermost taps weigh the fraction, so an animated
+radius grows smoothly. Each pass reads only alpha. Dilate starts at 0 and takes
+`max(m, w * a)`; Erode starts at 1 and takes `min(m, fma(w, a, 1 - w))`, a weighted tap blending
+its coverage toward the neutral 1. Both clamp to `[0,1]` and write the coverage to every channel,
+so the output is always the Mask transport. An integer radius is therefore an exact square
+minimum/maximum of coverage.
+
+Transparent reads coverage outside the input data window as zero: Dilate grows the window by the
+halo, while Erode keeps the input window (its halo would hold only zeros) and erodes from the data
+window's edges. Clamp extends the edge coverage and keeps the input window for both. A muted
+filter passes its Mask through, and an empty upstream Mask stays empty, as for Matte Blur.
+
+The kind enters the operation and scene identity through the kernel kind and its unnormalized
+weights, and the prepare key through an appended kind (absent for Gaussian/Box, whose keys keep
+their bytes). The GPU route emits the same two resident `ProcessNeighborhood` commands from a
+morphology variant of the generated program (semantics
+`bloom.render.separable-erode.coverage.v1` / `bloom.render.separable-dilate.coverage.v1`), through
+the same scene builder, executor, admission, caches, cancellation and retirement for preview and
+final render. Both nodes are classified by the Required `node.bloom.matte-erode` and
+`node.bloom.matte-dilate` coverage fixtures (Mask node -> filter -> Image Mix mask, Transparent and
+Clamp, full frame and ROI) under the existing `effect.SeparableBlurKernel`; there is no exception.
+
+Tests: the direct CPU test compares both against an independent two-dimensional square
+minimum/maximum (with the fractional outer taps) over signed/HDR RGB, the all-channel write, the
+windows at the image boundary, budget refusal, cancellation between passes and the generated
+programs. Evaluator tests cover identity, warm reuse, radius/edge/kind invalidation, animation and
+ROI. Compiler, command, Properties and archive tests cover lowering, mute pass-through, add, wiring,
+undo/redo, refusals and reopen. The native image-effect harness runs both kinds through the
+Transparent/Clamp, proxy/ROI, warm zero-dispatch and changed-radius cases at the 2e-6/exact-alpha
+gate.
+
+## Luma Key
+
+`bloom.luma-key`, schema 1 (#338), keys an Image into an ADR 0028 Mask: a required Image `input`
+and a Mask `mask` output, so it feeds Image Mix's `mask`, Matte Blur, Matte Erode or Matte Dilate,
+never an Image socket. Its controls are the animatable/drivable `low` (`bloom.luma-key.low`,
+default `0`) and `high` (`bloom.luma-key.high`, default `1`) luma thresholds, each finite in
+`[-1e6, 1e6]`, and the constant `invert` Boolean (`bloom.luma-key.invert`, default false). The Add
+menu lists it under Compositing.
+
+The luma is the track-matte Luma: Rec. 709 weights `0.2126, 0.7152, 0.0722` over scene-linear
+colour, unclamped, so HDR and negative values key by their real luma. The coverage is the pixel's
+alpha times a linear ramp of its straight-colour luma from `low` (zero) to `high` (full), so partial
+alpha scales the key and a transparent pixel has no coverage under either polarity; `invert`
+reverses the ramp. `high <= low` is a hard key at `low` (`luma >= low` is covered, or `luma < low`
+when inverted). Both routes evaluate it without a per-pixel division over premultiplied RGBA:
+`luma_p = fma(0.0722, b, fma(0.7152, g, 0.2126 * r))`, `d = fma(-pivot, a, luma_p)` and coverage
+`clamp(d * slope, 0, a)`, with `pivot = low, slope = 1/(high - low)` (or `pivot = high,
+slope = -1/(high - low)` when inverted) prepared once in binary32 on the host. The coverage is
+written to every channel over the input's data and display windows; outside the data window the
+Mask is zero. A muted Luma Key is an empty Mask (an Image never passes through as a Mask), and an
+empty upstream Image keys to an empty Mask.
+
+The prepared mode, pivot and slope form the effect identity; the thresholds, invert and source
+identity enter the operation key, and animated or driven thresholds propagate time dependence. ROI
+evaluation is pointwise. The kernel is the `LumaKeyKernel` alternative, classified Required as
+`effect.LumaKeyKernel` and covered with the Required `node.bloom.luma-key` fixture (an image keyed
+by ramp, inverted ramp and hard key, read by Image Mix's mask, full frame and ROI). The GPU route
+emits one resident `ProcessNeighborhood` command from one fixed program (semantics
+`bloom.render.luma-key.v1`) whose storage buffer holds the prepared values, so keyed thresholds
+change only data and the command identity, never the shader. It runs through the same scene
+builder, executor, admission, caches, cancellation and retirement for preview and final render.
+
+Tests: the direct CPU test checks the ramp, inverted and hard keys against an independent
+double-precision luma over HDR, negative and partial-alpha pixels, the windows, budget refusal,
+cancellation and the generated program. Evaluator tests cover warm reuse, threshold/invert
+invalidation, animation and ROI. Compiler, command, Properties and archive tests cover lowering,
+mute and empty propagation, add, wiring, undo/redo, refusals and reopen. The native image-effect
+harness runs ramp, inverted, hard and HDR keys plus a warm zero-dispatch and a changed-threshold
+run at the 2e-6/exact-alpha gate.

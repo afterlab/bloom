@@ -301,7 +301,10 @@ struct Transform2DKernel final {
 };
 // Neighborhood filters operate on associated RGBA, including coverage. Radius is finite full-
 // resolution pixels in [0,256]; Gaussian sigma is radius/3 and support is ceil(radius).
-enum class SeparableBlurKind : std::uint8_t { Gaussian, Box };
+// Erode and Dilate (#338 Matte Erode/Dilate) are the same separable neighborhood as a morphology:
+// a square of whole taps whose outermost taps weigh a fractional radius's fraction, reduced by
+// minimum (Erode) or maximum (Dilate) instead of a weighted sum. They are Coverage only.
+enum class SeparableBlurKind : std::uint8_t { Gaussian, Box, Erode, Dilate };
 enum class BlurEdgeMode : std::uint8_t { Transparent, Clamp };
 // Rgba filters every associated channel (Gaussian Blur, Box Blur). Coverage (#337 Matte Blur)
 // filters only alpha and writes the result to every channel, the ADR 0028 Mask transport.
@@ -336,10 +339,19 @@ struct LayerMaskKernel final {
     std::vector<CompiledLayerMask> masks;
     friend bool operator==(const LayerMaskKernel&, const LayerMaskKernel&) = default;
 };
+// #338 Luma Key: an Image to an ADR 0028 Mask. The Rec. 709 luma of the straight colour is ramped
+// from `low` (zero) to `high` (full) and scaled by the pixel's alpha, so a transparent pixel has no
+// coverage under either polarity; `invert` reverses the ramp. `high <= low` is a hard key at `low`.
+struct LumaKeyKernel final {
+    CompiledScalarParameter low;
+    CompiledScalarParameter high;
+    bool invert = false;
+    friend bool operator==(const LumaKeyKernel&, const LumaKeyKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
-                 SeparableBlurKernel, LayerMaskKernel, Transform2DKernel>;
+                 SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel>;
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

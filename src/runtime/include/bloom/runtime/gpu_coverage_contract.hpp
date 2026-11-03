@@ -113,6 +113,7 @@ BLOOM_GPU_REQUIRED_EFFECT(ResizeFitKernel, "Resize/Fit bilinear kernel");
 BLOOM_GPU_REQUIRED_EFFECT(SeparableBlurKernel, "premultiplied separable neighborhood filter");
 BLOOM_GPU_REQUIRED_EFFECT(LayerMaskKernel, "layer mask coverage (ADR 0028)");
 BLOOM_GPU_REQUIRED_EFFECT(Transform2DKernel, "Transform 2D bilinear affine kernel");
+BLOOM_GPU_REQUIRED_EFFECT(LumaKeyKernel, "Luma Key image-to-Mask coverage kernel");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

@@ -2,6 +2,7 @@
 
 #include "footage_interpretation_pass.hpp"
 #include "layer_mask_coverage.hpp"
+#include "luma_key_image_effect.hpp"
 #include "separable_image_effect.hpp"
 #include <bloom/color/gpu_shader_compiler.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -69,6 +70,17 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
     // Appended only when set, so every Rgba blur keeps its exact pre-#337 prepare key bytes.
     if (transform.blurCoverage)
         appendText(bytes, "blur-coverage");
+    // Appended only for the #338 morphology kinds and Luma Key, so every earlier key keeps its
+    // exact bytes.
+    if (transform.blurKind >= static_cast<std::uint8_t>(SeparableBlurKind::Erode)) {
+        appendText(bytes, "blur-kind");
+        appendU64(bytes, transform.blurKind);
+    }
+    if (transform.kind == GpuOcioTransformKind::LumaKey) {
+        appendText(bytes, "luma-key");
+        for (const auto value : transform.lumaKey)
+            appendF64(bytes, static_cast<double>(value));
+    }
     appendU64(bytes, transform.maskData.size());
     bytes.insert(bytes.end(), transform.maskData.begin(), transform.maskData.end());
     appendU64(bytes, transform.footagePass.size());
@@ -275,7 +287,10 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
             return detail::buildSeparableBlurProgram(transform.blurWeights, transform.blurVertical,
                                                      static_cast<BlurEdgeMode>(transform.blurEdge),
                                                      transform.blurCoverage ? BlurChannels::Coverage
-                                                                            : BlurChannels::Rgba);
+                                                                            : BlurChannels::Rgba,
+                                                     static_cast<SeparableBlurKind>(transform.blurKind));
+        case GpuOcioTransformKind::LumaKey:
+            return detail::buildLumaKeyProgram(transform.lumaKey);
         case GpuOcioTransformKind::LayerMask:
             return detail::buildLayerMaskProgram(transform.maskData);
         case GpuOcioTransformKind::FootageInterpretation:

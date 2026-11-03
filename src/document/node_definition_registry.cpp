@@ -147,8 +147,11 @@ template <typename Definition>
                        std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
                    !definition.layerSlotInput && !definition.audioLayerSlotInput;
         }
-        // #337 Matte Blur filters an ADR 0028 Mask: Mask in, Mask out, never an Image.
-        if (definition.key.typeId == "bloom.matte-blur") {
+        // #337 Matte Blur, #338 Matte Erode and Matte Dilate filter an ADR 0028 Mask: Mask in,
+        // Mask out, never an Image.
+        if (definition.key.typeId == "bloom.matte-blur" ||
+            definition.key.typeId == "bloom.matte-erode" ||
+            definition.key.typeId == "bloom.matte-dilate") {
             return definition.key.schemaVersion == 1 &&
                    definition.inputs ==
                        std::vector<InputPortDefinition>{
@@ -159,6 +162,24 @@ template <typename Definition>
                                 ParameterValueKind::Float64, true) &&
                    hasParameter(definition, 1, "edge", "bloom.blur.edge",
                                 ParameterValueKind::Integer) &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"mask", SocketValueKind::Mask}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
+        // #338 Luma Key: an Image in, an ADR 0028 Mask out, never an Image output.
+        if (definition.key.typeId == "bloom.luma-key") {
+            return definition.key.schemaVersion == 1 &&
+                   definition.inputs ==
+                       std::vector<InputPortDefinition>{{"input", SocketValueKind::Image},
+                                                        {"low", SocketValueKind::Scalar, false},
+                                                        {"high", SocketValueKind::Scalar, false}} &&
+                   definition.parameters.size() == 3 &&
+                   hasParameter(definition, 0, "low", "bloom.luma-key.low",
+                                ParameterValueKind::Float64, true) &&
+                   hasParameter(definition, 1, "high", "bloom.luma-key.high",
+                                ParameterValueKind::Float64, true) &&
+                   hasParameter(definition, 2, "invert", "bloom.luma-key.invert",
+                                ParameterValueKind::Boolean) &&
                    definition.outputs ==
                        std::vector<OutputPortDefinition>{{"mask", SocketValueKind::Mask}} &&
                    !definition.layerSlotInput && !definition.audioLayerSlotInput;
@@ -922,10 +943,11 @@ template <typename Definition>
 }
 
 // #337 Matte Blur: the Gaussian Blur controls over Mask coverage. The input is required, like
-// every image effect's; an empty upstream Mask propagates as an empty Mask.
-[[nodiscard]] NodeDefinition matteBlurDefinition() {
+// every image effect's; an empty upstream Mask propagates as an empty Mask. #338 Matte Erode and
+// Matte Dilate share the same Mask sockets and radius/edge controls.
+[[nodiscard]] NodeDefinition matteFilterDefinition(const char* typeId) {
     return {
-        {"bloom.matte-blur", 1},
+        {typeId, 1},
         NodeLoweringKind::ImageEffect,
         {{"input", SocketValueKind::Mask}, {"radius", SocketValueKind::Scalar, false}},
         {{"mask", SocketValueKind::Mask}},
@@ -934,6 +956,22 @@ template <typename Definition>
         std::nullopt,
         NodeCardinality::Many,
         NodeCategory::Compositing};
+}
+
+// #338 Luma Key: animatable/drivable low and high luma thresholds and a constant invert.
+[[nodiscard]] NodeDefinition lumaKeyDefinition() {
+    return {{"bloom.luma-key", 1},
+            NodeLoweringKind::ImageEffect,
+            {{"input", SocketValueKind::Image},
+             {"low", SocketValueKind::Scalar, false},
+             {"high", SocketValueKind::Scalar, false}},
+            {{"mask", SocketValueKind::Mask}},
+            {{"low", "bloom.luma-key.low", ParameterValueKind::Float64, true, true, 0.0},
+             {"high", "bloom.luma-key.high", ParameterValueKind::Float64, true, true, 1.0},
+             {"invert", "bloom.luma-key.invert", ParameterValueKind::Boolean, true, false, false}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Compositing};
 }
 
 [[nodiscard]] NodeDefinition imageDefinition() {
@@ -1167,7 +1205,10 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         transform2DDefinition(),
         blurDefinition("bloom.gaussian-blur"),
         blurDefinition("bloom.box-blur"),
-        matteBlurDefinition(),
+        matteFilterDefinition("bloom.matte-blur"),
+        matteFilterDefinition("bloom.matte-erode"),
+        matteFilterDefinition("bloom.matte-dilate"),
+        lumaKeyDefinition(),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),

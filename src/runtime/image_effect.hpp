@@ -4,6 +4,7 @@
 #include "canvas_image_effect.hpp"
 #include "separable_image_effect.hpp"
 #include "layer_mask_coverage.hpp"
+#include "luma_key_image_effect.hpp"
 #include "transform_2d_geometry.hpp"
 
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
@@ -27,6 +28,8 @@ struct PreparedImageEffect final {
     std::optional<ResizeFitKernel> resizeFit;
     std::optional<PreparedSeparableBlur> blur;
     std::optional<PreparedTransform2D> transform2D;
+    // #338 Luma Key: never an identity, since it turns an Image into a Mask.
+    std::optional<PreparedLumaKey> lumaKey;
     // ADR 0028: prepared layer-mask geometry (null for every other kernel).
     std::shared_ptr<const PreparedLayerMasks> masks;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
@@ -36,7 +39,7 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        if (resizeFit)
+        if (resizeFit || lumaKey)
             return false;
         return !diagnostic && !cancelled
                    ? (!combine || (combine->mode == ImageCombineMode::Mix &&
@@ -66,7 +69,8 @@ class ImageEffectContext final {
                                               double verticalScale = 1.0,
                                               std::optional<std::int64_t> sampledChannel = {},
                                               std::shared_ptr<const PreparedLayerMasks> layerMasks = {},
-                                              std::optional<Transform2DValues> transform2D = {});
+                                              std::optional<Transform2DValues> transform2D = {},
+                                              std::optional<std::array<double, 2>> lumaKeyRange = {});
 
   private:
     std::mutex mutex_;

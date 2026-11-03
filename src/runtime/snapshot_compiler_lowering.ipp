@@ -251,7 +251,15 @@ lower(const std::vector<document::NodeId>& order) {
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput &&
             definition->lowering != runtime::NodeLoweringKind::ImageEffect)
             continue;
-        const auto input = firstImageInput(*node);
+        auto input = firstImageInput(*node);
+        // #338 Luma Key reads an Image and publishes a Mask, so muted it carries nothing through
+        // (an empty Mask), but an empty Image upstream makes its Mask empty too.
+        if (!input && !isMuted(id))
+            for (const auto& candidate : definition->inputs)
+                if (candidate.valueKind == runtime::SocketValueKind::Image) {
+                    input = document::NodeInputRef{id, candidate.name};
+                    break;
+                }
         const auto edge = input ? std::ranges::find_if(reachableEdges_,
                                                        [&](const auto* candidate) {
                                                            return candidate->destination == *input;
@@ -1219,17 +1227,33 @@ lowerImageEffect(const document::NodeRecord& node,
                                                  : runtime::SeparableBlurKind::Box,
                                              *radius, static_cast<runtime::BlurEdgeMode>(*edge)}};
     }
-    // #337 Matte Blur: the Gaussian kernel over the Mask's coverage alone.
-    if (node.typeId == "bloom.matte-blur") {
+    // #337 Matte Blur: the Gaussian kernel over the Mask's coverage alone. #338 Matte Erode and
+    // Matte Dilate: the same separable neighborhood reduced by minimum or maximum.
+    if (node.typeId == "bloom.matte-blur" || node.typeId == "bloom.matte-erode" ||
+        node.typeId == "bloom.matte-dilate") {
         const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
         const auto* edge = parameterConstant<std::int64_t>(findParameterBinding(node, "edge"));
+        const auto kind = node.typeId == "bloom.matte-erode"    ? runtime::SeparableBlurKind::Erode
+                          : node.typeId == "bloom.matte-dilate" ? runtime::SeparableBlurKind::Dilate
+                                                                : runtime::SeparableBlurKind::Gaussian;
         if (radius && edge && *edge >= 0 && *edge <= 1)
             return runtime::CompiledImageEffect{
                 node.id, *input,
-                runtime::SeparableBlurKernel{runtime::SeparableBlurKind::Gaussian, *radius,
+                runtime::SeparableBlurKernel{kind, *radius,
                                              static_cast<runtime::BlurEdgeMode>(*edge),
                                              runtime::BlurChannels::Coverage}};
-        addTopologyFailure(node.id, "Matte Blur parameters could not be lowered.");
+        addTopologyFailure(node.id, "Matte filter parameters could not be lowered.");
+        return std::nullopt;
+    }
+    // #338 Luma Key: an Image to a Mask.
+    if (node.typeId == "bloom.luma-key") {
+        const auto low = compiledScalarParameter(findParameterBinding(node, "low"));
+        const auto high = compiledScalarParameter(findParameterBinding(node, "high"));
+        const auto* invert = parameterConstant<bool>(findParameterBinding(node, "invert"));
+        if (low && high && invert)
+            return runtime::CompiledImageEffect{node.id, *input,
+                                                runtime::LumaKeyKernel{*low, *high, *invert}};
+        addTopologyFailure(node.id, "Luma Key parameters could not be lowered.");
         return std::nullopt;
     }
     const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {

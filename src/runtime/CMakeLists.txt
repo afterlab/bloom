@@ -143,6 +143,7 @@ target_sources(
         gpu_scene_media_layer.hpp
         image_effect.cpp
         layer_mask_coverage.cpp
+        luma_key_image_effect.cpp
         separable_image_effect.cpp
         image_effect.hpp
         discrete_image_effect.hpp

@@ -105,6 +105,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         : definition_.schemaKey == "bloom.rotate-90.quarter-turns" ? tr("Quarter turns (clockwise)")
         : definition_.schemaKey == "bloom.blur.radius"             ? tr("Radius (pixels)")
         : definition_.schemaKey == "bloom.blur.edge"               ? tr("Edges")
+        : definition_.schemaKey == "bloom.luma-key.low"            ? tr("Low luma")
+        : definition_.schemaKey == "bloom.luma-key.high"           ? tr("High luma")
+        : definition_.schemaKey == "bloom.luma-key.invert"         ? tr("Invert key")
         : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
         : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
         : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey

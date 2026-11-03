@@ -18,6 +18,7 @@
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/runtime/gpu_ocio_command.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +58,10 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // #381: the footage interpretation pass (alpha, deinterlace) over stored samples; its
     // parameters (`footagePass`, detail::FootagePass::parameters()) are baked into the shader.
     FootageInterpretation = 9,
+    // #338 Luma Key: one fixed neighbourhood program over the resident input; `lumaKey` (the
+    // prepared pivot, slope and mode) is its storage-buffer data, part of the prepare key and the
+    // command identity, so keyed thresholds never recompile.
+    LumaKey = 10,
 };
 
 struct GpuOcioTransformSpec final {
@@ -74,6 +79,11 @@ struct GpuOcioTransformSpec final {
     std::uint8_t blurEdge = 0;
     // SeparableBlur only: filter alpha alone and write it to every channel (#337 Matte Blur).
     bool blurCoverage = false;
+    // SeparableBlur only: the SeparableBlurKind. Erode (2) and Dilate (3) reduce Coverage by
+    // minimum/maximum (#338); Gaussian and Box share the weighted-sum program.
+    std::uint8_t blurKind = 0;
+    // LumaKey only: detail::lumaKeyProgramData.
+    std::array<float, 4> lumaKey{};
     // LayerMask only.
     std::vector<std::byte> maskData;
     // FootageInterpretation only.

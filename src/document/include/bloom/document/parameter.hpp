@@ -188,6 +188,9 @@ inline constexpr double kMaximumTextSizePixels = 4096.0;
 // Neighborhood v1 authors at most 513 coefficients per axis at full resolution. Larger
 // unsupported radii are rejected explicitly, never silently clamped by preview or final render.
 inline constexpr double kMaximumBlurRadiusPixels = 256.0;
+// #338 Luma Key thresholds are luma values bounded to [-1e6, 1e6], so every value the key prepares
+// (the ramp's reciprocal included) stays a normal binary32 number on the CPU and GPU routes.
+inline constexpr double kMaximumLumaKeyThreshold = 1.0e6;
 // The size a newly authored text layer starts at.
 inline constexpr double kDefaultTextSizePixels = 72.0;
 
@@ -302,7 +305,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.pad.left" || schemaKey == "bloom.pad.top" ||
            schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
            schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius" ||
-           schemaKey == "bloom.transform-2d.rotation" ||
+           schemaKey == "bloom.transform-2d.rotation" || schemaKey == "bloom.luma-key.low" ||
+           schemaKey == "bloom.luma-key.high" ||
            schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
            schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -369,6 +373,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
         return value >= 0.0 && value <= 16777216.0;
     if (schemaKey == "bloom.blur.radius")
         return value >= 0.0 && value <= kMaximumBlurRadiusPixels;
+    if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high")
+        return value >= -kMaximumLumaKeyThreshold && value <= kMaximumLumaKeyThreshold;
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

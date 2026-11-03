@@ -132,6 +132,10 @@ const std::vector<Entry>& table() {
         // Image effects.
         {"bloom.blur.radius", pixels(0.0, kMaximumBlurRadiusPixels, 64.0)},
         {"bloom.blur.edge", choice()},
+        {"bloom.luma-key.low", number(-kMaximumLumaKeyThreshold, kMaximumLumaKeyThreshold, 0.0, 1.0,
+                                      0.01, 3)},
+        {"bloom.luma-key.high", number(-kMaximumLumaKeyThreshold, kMaximumLumaKeyThreshold, 0.0,
+                                       1.0, 0.01, 3)},
         {"bloom.exposure.stops", number(kLowest, kHighest, -4.0, 4.0, 0.1, 2)},
         {"bloom.offset.amount", number(kLowest, kHighest, -1.0, 1.0, 0.01, 3)},
         {"bloom.multiply.factor", number(kLowest, kHighest, 0.0, 2.0, 0.01, 3)},

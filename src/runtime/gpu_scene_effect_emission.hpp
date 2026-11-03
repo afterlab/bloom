@@ -26,6 +26,7 @@
 #include "gpu_scene_vector_emission.hpp"
 #include "input_color_context.hpp"
 #include "layer_parent_transform.hpp"
+#include "luma_key_image_effect.hpp"
 #include "pointwise_image_effect.hpp"
 #include "resize_fit_geometry.hpp"
 #include "transform_2d_geometry.hpp"
@@ -451,9 +452,10 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* canvas = std::get_if<CanvasImageKernel>(&effect.kernel);
     const auto* blurKernel = std::get_if<SeparableBlurKernel>(&effect.kernel);
     const auto* masksKernel = std::get_if<LayerMaskKernel>(&effect.kernel);
+    const auto* lumaKeyKernel = std::get_if<LumaKeyKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
-        blurKernel == nullptr && masksKernel == nullptr) {
+        blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
     }
@@ -557,8 +559,24 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             leg.blurVertical = axis == 1;
             leg.blurEdge = static_cast<std::uint8_t>(blur->edge);
             leg.blurCoverage = blur->channels == BlurChannels::Coverage;
+            leg.blurKind = static_cast<std::uint8_t>(blur->kind);
             legs.push_back(std::move(leg));
         }
+    } else if (lumaKeyKernel != nullptr) {
+        // #338: the CPU reference's prepared key as the one fixed program's data. Never an
+        // identity for an input with pixels; an input with no image stays empty (below).
+        const auto low = resolveParameter(lumaKeyKernel->low, plan, resolved);
+        const auto high = resolveParameter(lumaKeyKernel->high, plan, resolved);
+        const auto key =
+            prepareLumaKey(*lumaKeyKernel, low ? std::optional{low->value} : std::nullopt,
+                           high ? std::optional{high->value} : std::nullopt);
+        if (!key)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Luma Key thresholds are out of domain");
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::LumaKey;
+        leg.lumaKey = lumaKeyProgramData(*key);
+        legs.push_back(std::move(leg));
     } else if (masksKernel != nullptr) {
         // ADR 0028: the CPU reference's prepared geometry, uploaded as data to the one fixed
         // neighbourhood program that runs the same per-pixel coverage math on the resident input.

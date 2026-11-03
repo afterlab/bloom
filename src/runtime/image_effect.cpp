@@ -156,7 +156,8 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
                                                 const double verticalScale,
                                                 const std::optional<std::int64_t> sampledChannel,
                                                 std::shared_ptr<const PreparedLayerMasks> layerMasks,
-                                                const std::optional<Transform2DValues> transform2D) {
+                                                const std::optional<Transform2DValues> transform2D,
+                                                const std::optional<std::array<double, 2>> lumaKeyRange) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
@@ -264,6 +265,23 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
               values.scale.x, values.scale.y, values.rotation, values.centre.x, values.centre.y})
             key.add(value);
         prepared.cacheIdentity = key.bytes();
+        return prepared;
+    }
+    if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel)) {
+        prepared.lumaKey =
+            prepareLumaKey(*key, lumaKeyRange ? std::optional{(*lumaKeyRange)[0]} : std::nullopt,
+                           lumaKeyRange ? std::optional{(*lumaKeyRange)[1]} : std::nullopt);
+        if (!prepared.lumaKey) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Luma Key thresholds are out of domain");
+            return prepared;
+        }
+        OperationKey keyIdentity;
+        keyIdentity.add(std::string("luma-key-v1"));
+        keyIdentity.add(prepared.lumaKey->mode);
+        keyIdentity.add(static_cast<double>(prepared.lumaKey->pivot));
+        keyIdentity.add(static_cast<double>(prepared.lumaKey->slope));
+        prepared.cacheIdentity = keyIdentity.bytes();
         return prepared;
     }
     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
@@ -399,6 +417,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.blur)
         return applySeparableBlur(*effect.blur, input, pixelBudget, cancellation, operation,
                                   progress);
+    if (effect.lumaKey)
+        return applyLumaKey(*effect.lumaKey, input, pixelBudget, cancellation, operation,
+                            progress);
     if (effect.transform2D)
         return applyTransform2D(*effect.transform2D, input, pixelBudget, cancellation, operation,
                                 progress, horizontalScale, verticalScale);

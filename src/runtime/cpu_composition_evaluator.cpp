@@ -306,6 +306,7 @@ enum class ScalarDomain : std::uint8_t {
     Dimension,
     Positive,
     BlurRadius,
+    LumaKeyThreshold,
 };
 
 [[nodiscard]] bool withinScalarDomain(const ScalarDomain domain, const double value) noexcept {
@@ -322,6 +323,8 @@ enum class ScalarDomain : std::uint8_t {
         return value > 0.0 && value <= document::kMaximumTextSizePixels;
     case ScalarDomain::BlurRadius:
         return value >= 0.0 && value <= document::kMaximumBlurRadiusPixels;
+    case ScalarDomain::LumaKeyThreshold:
+        return std::abs(value) <= document::kMaximumLumaKeyThreshold;
     }
     return false;
 }
@@ -340,6 +343,8 @@ enum class ScalarDomain : std::uint8_t {
         return "Text size is outside its domain";
     case ScalarDomain::BlurRadius:
         return "Blur radius is outside its domain";
+    case ScalarDomain::LumaKeyThreshold:
+        return "Luma Key threshold is outside its domain";
     }
     return "Scalar parameter is outside its domain";
 }
@@ -503,10 +508,11 @@ enum class ScalarDomain : std::uint8_t {
                         hasValidVec2CurveReference(transform->scale, plan, index, failure) &&
                         hasValidScalarCurveReference(transform->rotation, plan, index, failure);
                 if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
-                    validKernel = static_cast<unsigned>(blur->kind) <= 1 &&
-                                  static_cast<unsigned>(blur->edge) <= 1 &&
-                                  static_cast<unsigned>(blur->channels) <= 1 &&
+                    validKernel = detail::validSeparableBlurKernelShape(*blur) &&
                                   hasValidScalarCurveReference(blur->radius, plan, index, failure);
+                if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel))
+                    validKernel = hasValidScalarCurveReference(key->low, plan, index, failure) &&
+                                  hasValidScalarCurveReference(key->high, plan, index, failure);
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
@@ -1205,6 +1211,12 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
                         static_cast<void>(registerScalar(
                             blur->radius, "radius", ScalarDomain::BlurRadius, operationSubject));
+                    if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel))
+                        static_cast<void>(
+                            registerScalar(key->low, "low", ScalarDomain::LumaKeyThreshold,
+                                           operationSubject) &&
+                            registerScalar(key->high, "high", ScalarDomain::LumaKeyThreshold,
+                                           operationSubject));
                     if (const auto* transform = std::get_if<Transform2DKernel>(&effect.kernel))
                         static_cast<void>(
                             registerVec2(transform->translate, "translate", operationSubject) &&
@@ -2300,6 +2312,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             translate->value, pivot->value, scale->value, rotation->value,
                             bounds[effect->input.value()].output.centre()};
                 }
+                std::optional<std::array<double, 2>> lumaKeyRange;
+                if (const auto* key = std::get_if<LumaKeyKernel>(&effect->kernel)) {
+                    const auto low = detail::resolveParameter(key->low, *plan, resolved);
+                    const auto high = detail::resolveParameter(key->high, *plan, resolved);
+                    if (low && high)
+                        lumaKeyRange = std::array{low->value, high->value};
+                }
                 std::shared_ptr<const detail::PreparedLayerMasks> layerMasks;
                 if (const auto* masks = std::get_if<LayerMaskKernel>(&effect->kernel)) {
                     const auto maskTime =
@@ -2316,12 +2335,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                               *effect, request.colorIntent, mediaBase, cancellation,
                               pointwiseAmount, canvasMargins, resolved.horizontalScale,
                               resolved.verticalScale, sampledChannel, std::move(layerMasks),
-                              transform2D);
+                              transform2D, lumaKeyRange);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&
                     (std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
-                     std::holds_alternative<Transform2DKernel>(effect->kernel))) {
+                     std::holds_alternative<Transform2DKernel>(effect->kernel) ||
+                     std::holds_alternative<LumaKeyKernel>(effect->kernel))) {
                     auto failure = *preparedEffect->diagnostic;
                     failure.subject = operationSubject;
                     return EvaluationResult::failed(std::move(failure));
@@ -2630,6 +2650,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 if (blur->channels == BlurChannels::Coverage)
                                     key.add(std::string{"coverage"});
                                 parameter(blur->radius);
+                            }
+                            if (const auto* luma = std::get_if<LumaKeyKernel>(&step.kernel)) {
+                                key.add(std::string{"luma-key-v1"});
+                                key.add(luma->invert);
+                                parameter(luma->low);
+                                parameter(luma->high);
                             }
                             if (const auto* transform =
                                     std::get_if<Transform2DKernel>(&step.kernel)) {
@@ -3177,7 +3203,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     if (std::holds_alternative<DiscreteImageKernel>(
                                             effect.kernel) ||
                                         preparedEffect->resizeFit || preparedEffect->blur ||
-                                        preparedEffect->transform2D) {
+                                        preparedEffect->transform2D || preparedEffect->lumaKey) {
                                         operationFailure = std::move(*result.diagnostic);
                                         return;
                                     }

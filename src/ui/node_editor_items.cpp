@@ -68,7 +68,8 @@ QString nodeCategoryName(const document::NodeCategory category) {
 QString nodeCategoryName(const QString& category) { return category; }
 QString nodeCategoryName(const document::NodeDefinition& definition) {
     const auto& type = definition.key.typeId;
-    if (type == "bloom.gaussian-blur" || type == "bloom.box-blur" || type == "bloom.matte-blur")
+    if (type == "bloom.gaussian-blur" || type == "bloom.box-blur" || type == "bloom.matte-blur" ||
+        type == "bloom.matte-erode" || type == "bloom.matte-dilate")
         return QCoreApplication::translate("node_editor", "Filters");
     if (type == document::kTimeValueNodeType || type == document::kFrameNumberNodeType ||
         type == document::kFrameRateNodeType || type == document::kSecondsToFramesNodeType ||
@@ -124,6 +125,12 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Box Blur");
     if (typeId == "bloom.matte-blur")
         return QCoreApplication::translate("node_editor", "Matte Blur");
+    if (typeId == "bloom.matte-erode")
+        return QCoreApplication::translate("node_editor", "Matte Erode");
+    if (typeId == "bloom.matte-dilate")
+        return QCoreApplication::translate("node_editor", "Matte Dilate");
+    if (typeId == "bloom.luma-key")
+        return QCoreApplication::translate("node_editor", "Luma Key");
     if (typeId == "bloom.exposure")
         return QCoreApplication::translate("node_editor", "Exposure");
     if (typeId == "bloom.offset")

@@ -19,6 +19,13 @@ std::vector<float> weights(const SeparableBlurKind kind, const double radius) {
     // Box covers [-radius, radius] continuously: whole taps weigh 1 and the outermost taps of a
     // fractional radius weigh its fraction, so an animated radius grows smoothly between integers.
     const double boxEdge = radius - std::floor(radius);
+    // #338 morphology: the Box taps unnormalized. Whole taps weigh exactly 1, so an integer
+    // radius is a plain minimum/maximum over the square.
+    if (kind == SeparableBlurKind::Erode || kind == SeparableBlurKind::Dilate) {
+        if (boxEdge > 0.0)
+            result.front() = result.back() = static_cast<float>(boxEdge);
+        return result;
+    }
     double total = 0.0;
     for (int i = -support; i <= support; ++i) {
         const double value = kind == SeparableBlurKind::Box
@@ -47,16 +54,17 @@ std::optional<PreparedSeparableBlur> prepareSeparableBlur(const SeparableBlurKer
         !std::isfinite(verticalScale) || horizontalScale <= 0.0 || verticalScale <= 0.0 ||
         *radius * horizontalScale > static_cast<double>(kMaximumSeparableBlurSupport) ||
         *radius * verticalScale > static_cast<double>(kMaximumSeparableBlurSupport) ||
-        static_cast<unsigned>(kernel.kind) > 1 || static_cast<unsigned>(kernel.edge) > 1 ||
-        static_cast<unsigned>(kernel.channels) > 1)
+        !validSeparableBlurKernelShape(kernel))
         return {};
     return PreparedSeparableBlur{weights(kernel.kind, *radius * horizontalScale),
                                  weights(kernel.kind, *radius * verticalScale), kernel.edge,
-                                 kernel.channels};
+                                 kernel.channels, kernel.kind};
 }
 std::optional<render::ImageWindow> blurOutputWindow(const PreparedSeparableBlur& blur,
                                                     const render::ImageWindow input) {
-    if (blur.edge == BlurEdgeMode::Clamp)
+    // Erode never grows coverage: outside its input every whole centre tap reads zero, so the
+    // halo would hold only zeros and the window stays the input's.
+    if (blur.edge == BlurEdgeMode::Clamp || blur.kind == SeparableBlurKind::Erode)
         return input;
     const auto x = static_cast<std::int64_t>(blur.horizontal.size() / 2);
     const auto y = static_cast<std::int64_t>(blur.vertical.size() / 2);
@@ -86,6 +94,8 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
         return failed(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
                       "Blur intermediate and output exceed the pixel budget");
     const bool coverage = blur.channels == BlurChannels::Coverage;
+    const bool erode = blur.kind == SeparableBlurKind::Erode;
+    const bool morphology = erode || blur.kind == SeparableBlurKind::Dilate;
     std::shared_ptr<const render::Rgba32fImage> intermediate;
     for (unsigned axis = 0; axis < 2; ++axis) {
         if (cancellation.isCancellationRequested())
@@ -107,6 +117,10 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
                     cancellation.isCancellationRequested())
                     return ImageEffectResult{{}, {}, true};
                 std::array<float, 4> sum{};
+                // #338: Erode starts from full coverage and takes the minimum, Dilate starts from
+                // zero and takes the maximum. The device program performs the same operations.
+                if (erode)
+                    sum[3] = 1.0F;
                 for (std::int64_t tap = -support; tap <= support; ++tap) {
                     const auto shifted = [](const std::int64_t value, const std::int64_t delta) {
                         if (delta < 0 && value < std::numeric_limits<std::int64_t>::min() - delta)
@@ -124,10 +138,21 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
                                         sourceWindow.maxYExclusive() - 1);
                     }
                     const auto sample = source.read(sx, sy);
+                    const auto weight = coefficients[static_cast<std::size_t>(tap + support)];
+                    if (erode) {
+                        // A tap outside the source is transparent: zero coverage. The fraction
+                        // of an outer tap blends its coverage toward the neutral 1.
+                        const float a = sample ? sample.value()->alpha() : 0.0F;
+                        sum[3] = std::min(sum[3], std::fma(weight, a, 1.0F - weight));
+                        continue;
+                    }
                     if (!sample)
                         continue;
                     const auto p = *sample.value();
-                    const auto weight = coefficients[static_cast<std::size_t>(tap + support)];
+                    if (morphology) {
+                        sum[3] = std::max(sum[3], weight * p.alpha());
+                        continue;
+                    }
                     if (coverage) {
                         sum[3] = std::fma(p.alpha(), weight, sum[3]);
                         continue;
@@ -162,11 +187,14 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
 }
 render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const float> coefficients,
                                                        const bool vertical, const BlurEdgeMode edge,
-                                                       const BlurChannels channels) {
+                                                       const BlurChannels channels,
+                                                       const SeparableBlurKind kind) {
     const bool coverage = channels == BlurChannels::Coverage;
+    const bool erode = kind == SeparableBlurKind::Erode;
+    const bool dilate = kind == SeparableBlurKind::Dilate;
     if (coefficients.empty() || coefficients.size() > 2 * kMaximumSeparableBlurSupport + 1 ||
-        coefficients.size() % 2 != 1 || static_cast<unsigned>(edge) > 1 ||
-        static_cast<unsigned>(channels) > 1)
+        coefficients.size() % 2 != 1 ||
+        !validSeparableBlurKernelShape(SeparableBlurKernel{kind, {}, edge, channels}))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     std::string shader = "const float bloom_blur_weights[] = float[](";
     for (std::size_t i = 0; i < coefficients.size(); ++i) {
@@ -181,34 +209,65 @@ render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const flo
         shader.append(literal, text.ptr);
     }
     const auto support = std::to_string(coefficients.size() / 2);
-    shader += ");\nvec4 bloom_separable_blur(ivec2 c) {\n"
-              " ivec2 size = imageSize(bloom_ocio_input);\n precise vec4 sum = vec4(0.0);\n"
-              " for (int i = -" +
-              support + "; i <= " + support +
-              "; ++i) {\n"
-              "  ivec2 p = c + ivec2(" +
-              (vertical ? std::string("0, i") : std::string("i, 0")) + ");\n";
-    if (edge == BlurEdgeMode::Clamp)
-        shader += "  p = clamp(p, ivec2(0), size - ivec2(1));\n";
-    else
-        shader += "  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) continue;\n";
-    if (coverage)
-        shader += "  sum.a = fma(imageLoad(bloom_ocio_input, p).a, bloom_blur_weights[i + " +
-                  support +
-                  "], sum.a);\n"
-                  " }\n return vec4(clamp(sum.a, 0.0, 1.0));\n}\n";
-    else
-        shader += "  sum = fma(imageLoad(bloom_ocio_input, p), vec4(bloom_blur_weights[i + " +
-                  support +
-                  "]), sum);\n"
-                  " }\n sum.a = clamp(sum.a, 0.0, 1.0);\n return sum;\n}\n";
+    if (erode || dilate) {
+        // #338: the CPU pass operation for operation. Erode reads a tap outside the input as zero
+        // coverage (Transparent) and folds fma(w, a, 1 - w) by minimum from 1; Dilate skips it and
+        // folds w * a by maximum from 0.
+        shader += ");\nvec4 bloom_separable_blur(ivec2 c) {\n"
+                  " ivec2 size = imageSize(bloom_ocio_input);\n precise float m = " +
+                  std::string(erode ? "1.0" : "0.0") + ";\n for (int i = -" + support +
+                  "; i <= " + support + "; ++i) {\n  ivec2 p = c + ivec2(" +
+                  (vertical ? std::string("0, i") : std::string("i, 0")) +
+                  ");\n  float w = bloom_blur_weights[i + " + support + "];\n";
+        if (edge == BlurEdgeMode::Clamp)
+            shader += "  p = clamp(p, ivec2(0), size - ivec2(1));\n";
+        if (erode) {
+            shader += edge == BlurEdgeMode::Clamp
+                          ? "  float a = imageLoad(bloom_ocio_input, p).a;\n"
+                          : "  float a = (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, "
+                            "size))) ? 0.0 : imageLoad(bloom_ocio_input, p).a;\n";
+            shader += "  precise float t = fma(w, a, 1.0 - w);\n  m = min(m, t);\n";
+        } else {
+            if (edge != BlurEdgeMode::Clamp)
+                shader += "  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) "
+                          "continue;\n";
+            shader += "  precise float t = w * imageLoad(bloom_ocio_input, p).a;\n"
+                      "  m = max(m, t);\n";
+        }
+        shader += " }\n return vec4(clamp(m, 0.0, 1.0));\n}\n";
+    } else {
+        shader += ");\nvec4 bloom_separable_blur(ivec2 c) {\n"
+                  " ivec2 size = imageSize(bloom_ocio_input);\n precise vec4 sum = vec4(0.0);\n"
+                  " for (int i = -" +
+                  support + "; i <= " + support +
+                  "; ++i) {\n"
+                  "  ivec2 p = c + ivec2(" +
+                  (vertical ? std::string("0, i") : std::string("i, 0")) + ");\n";
+        if (edge == BlurEdgeMode::Clamp)
+            shader += "  p = clamp(p, ivec2(0), size - ivec2(1));\n";
+        else
+            shader +=
+                "  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) continue;\n";
+        if (coverage)
+            shader += "  sum.a = fma(imageLoad(bloom_ocio_input, p).a, bloom_blur_weights[i + " +
+                      support +
+                      "], sum.a);\n"
+                      " }\n return vec4(clamp(sum.a, 0.0, 1.0));\n}\n";
+        else
+            shader += "  sum = fma(imageLoad(bloom_ocio_input, p), vec4(bloom_blur_weights[i + " +
+                      support +
+                      "]), sum);\n"
+                      " }\n sum.a = clamp(sum.a, 0.0, 1.0);\n return sum;\n}\n";
+    }
     render::OcioGpuProgramDesc program;
     program.stage = render::OcioGpuProgramStage::ProcessNeighborhood;
     program.functionName = "bloom_separable_blur";
     program.resourcePrefix = "bloom_blur_";
     program.shaderText = std::move(shader);
-    program.semanticsId =
-        coverage ? "bloom.render.separable-blur.coverage.v1" : "bloom.render.separable-blur.v1";
+    program.semanticsId = erode      ? "bloom.render.separable-erode.coverage.v1"
+                          : dilate   ? "bloom.render.separable-dilate.coverage.v1"
+                          : coverage ? "bloom.render.separable-blur.coverage.v1"
+                                     : "bloom.render.separable-blur.v1";
     program.shaderTextDigest = render::computeOcioGpuShaderTextDigest(program.shaderText);
     program.resourceDigest = render::computeOcioGpuResourceDigest(program);
     program.contentIdentity = render::computeOcioGpuContentIdentity(

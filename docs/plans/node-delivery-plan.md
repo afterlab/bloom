@@ -18,8 +18,10 @@ Linux evidence, not final-source qualification of every export route or Windows/
 
 Standalone Transform 2D is implemented by #336 (see
 [evaluation primitives](../architecture/evaluation-primitives.md#transform-2d)). Matte Blur is
-implemented by #337 (see [image filters](../architecture/image-filters.md#matte-blur)). Chunks
-#338–#349 remain planned. The inventory below records
+implemented by #337 (see [image filters](../architecture/image-filters.md#matte-blur)). Luma Key,
+Matte Erode and Matte Dilate are implemented by #338 (see
+[image filters](../architecture/image-filters.md#luma-key)). Chunks #339–#349 remain planned. The
+inventory below records
 the original audit baseline rather than claiming those delivered nodes remain absent.
 
 ## Verified inventory
@@ -105,7 +107,7 @@ Depends on #334.
 
 ### 7. [#338: Luma Key, Matte Erode and Matte Dilate](https://github.com/kinetik-gg/bloom/issues/338)
 
-Reuse explicit color/channel coverage and morphology. Test HDR/partial alpha, inverted keys, image boundaries, radius changes and cancellation.
+Reuse explicit color/channel coverage and morphology. Test HDR/partial alpha, inverted keys, image boundaries, radius changes and cancellation. Implemented: Luma Key (Image to Mask, track-matte Rec. 709 luma) and Matte Erode/Matte Dilate (minimum/maximum variants of the #337 separable neighborhood over a Mask).
 
 Depends on #334, #337.
 

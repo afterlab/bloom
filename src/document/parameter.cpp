@@ -295,8 +295,14 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<std::string>(&constant.value);
         return value && value->size() <= 256 && value->find('\0') == std::string::npos;
     }
-    if (schemaKey == "bloom.flip.horizontal" || schemaKey == "bloom.flip.vertical")
+    if (schemaKey == "bloom.flip.horizontal" || schemaKey == "bloom.flip.vertical" ||
+        schemaKey == "bloom.luma-key.invert")
         return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high") {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               isScalarWithinSchemaDomain(schemaKey, *value);
+    }
     if (schemaKey == "bloom.rotate-90.quarter-turns")
         return std::holds_alternative<std::int64_t>(constant.value);
     if (schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
