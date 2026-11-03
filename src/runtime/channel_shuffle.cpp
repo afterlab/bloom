@@ -118,10 +118,12 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
     }
     bool anchored = false;
     for (std::size_t slot = 0; slot < 4; ++slot) {
-        auto resolved = resolveChannelSlot(resolution.channels, shuffle.mapping[slot]);
+        auto resolved = resolveChannelSlot(resolution.channels, shuffle.mapping[slot], slot);
         if (!resolved) {
-            result.warning = "Shuffle names a channel that is not in its input: " +
-                             shuffle.mapping[slot];
+            result.warning =
+                shuffle.mapping[slot].empty()
+                    ? "Shuffle input has no color layer for its default slots"
+                    : "Shuffle names a channel that is not in its input: " + shuffle.mapping[slot];
             result.cacheKey = key.bytes();
             return result;
         }

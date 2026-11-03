@@ -34,11 +34,11 @@ NodeDefinition cryptomatteDefinition() {
                         std::nullopt,
                         NodeCardinality::Many,
                         NodeCategory::Compositing};
-    // The Cryptomatte layer type name (`CryptoObject`, `CryptoMaterial`, `CryptoAsset`, ...).
+    // The Cryptomatte layer type name (`CryptoObject`, `CryptoMaterial`, `CryptoAsset`, ...). Empty
+    // (the default, #487) reads the first Cryptomatte layer the channel set carries.
     node.parameters.push_back({std::string(kCryptomatteLayerParameterRole),
                                std::string(kCryptomatteLayerParameterSchemaKey),
-                               ParameterValueKind::String, true, false,
-                               std::string("CryptoObject")});
+                               ParameterValueKind::String, true, false, std::string{}});
     // The matte list: comma-separated names (a literal comma is written `\,`), or `<hex>` raw IDs.
     node.parameters.push_back({std::string(kCryptomatteMattesParameterRole),
                                std::string(kCryptomatteMattesParameterSchemaKey),
@@ -57,10 +57,12 @@ NodeDefinition channelShuffleDefinition() {
                         std::nullopt,
                         NodeCardinality::Many,
                         NodeCategory::Compositing};
-    // A slot names a source channel, or the constants "0" and "1".
-    node.parameters.push_back(text(type, "red", "R"));
-    node.parameters.push_back(text(type, "green", "G"));
-    node.parameters.push_back(text(type, "blue", "B"));
+    // A slot names a source channel, or the constants "0" and "1". An empty slot (the default,
+    // #487) reads the input's default colour layer: the root R/G/B when present, else the first
+    // layer carrying R, G and B -- so a rootless multi-layer render shuffles its beauty pass.
+    node.parameters.push_back(text(type, "red", ""));
+    node.parameters.push_back(text(type, "green", ""));
+    node.parameters.push_back(text(type, "blue", ""));
     node.parameters.push_back(text(type, "alpha", "1"));
     node.parameters.push_back({"mode", std::string(type) + ".mode", ParameterValueKind::Integer,
                                true, false, kChannelShuffleColourMode});

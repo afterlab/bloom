@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/core/safe_parse.hpp>
+#include <bloom/document/data_block.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 
 #include <array>
@@ -193,6 +194,31 @@ inline constexpr std::string_view kDataBlockParameterRole = "block";
     return kernel == ValueUtilityKernel::DataSample || kernel == ValueUtilityKernel::RampSample ||
            kernel == ValueUtilityKernel::TableLookup || kernel == ValueUtilityKernel::PointSetRead;
 }
+
+// #487: the data-block kind each reader samples; nullopt for every other kernel.
+[[nodiscard]] constexpr std::optional<DataBlockKind>
+dataBlockReaderKind(const ValueUtilityKernel kernel) noexcept {
+    switch (kernel) {
+    case ValueUtilityKernel::DataSample:
+        return DataBlockKind::Curve;
+    case ValueUtilityKernel::RampSample:
+        return DataBlockKind::Ramp;
+    case ValueUtilityKernel::TableLookup:
+        return DataBlockKind::Table;
+    case ValueUtilityKernel::PointSetRead:
+        return DataBlockKind::PointSet;
+    default:
+        return std::nullopt;
+    }
+}
+
+class Project;
+// #487: the block a data reader reads. A positive `stored` id names it (nullptr when that block is
+// gone); 0, the default, reads the project's first block of the reader's kind, so a reader added
+// to a project that holds a matching block reads it without a blank choice first.
+[[nodiscard]] const DataBlockRecord* resolveDataBlockReaderBlock(const Project& project,
+                                                                 ValueUtilityKernel kernel,
+                                                                 std::int64_t stored) noexcept;
 
 // Whether this readout's value is a property of the COMPOSITION rather than of the frame being
 // rendered. The three that are get lowered to a constant -- a plan is compiled from one document

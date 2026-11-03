@@ -1,5 +1,7 @@
 #include "channel_resolution.hpp"
 
+#include <bloom/runtime/channel_inspection_listing.hpp>
+
 #include <algorithm>
 #include <array>
 
@@ -102,7 +104,20 @@ bool matchesChannelPattern(const std::string_view pattern,
 }
 
 std::optional<ResolvedChannel> resolveChannelSlot(const std::span<const ResolvedChannel> set,
-                                                  const std::string_view slot) {
+                                                  const std::string_view requested,
+                                                  const std::size_t slotIndex) {
+    std::string defaulted;
+    if (requested.empty()) {
+        std::vector<std::string> names;
+        names.reserve(set.size());
+        for (const auto& channel : set)
+            names.push_back(channel.name);
+        const auto channel = defaultShuffleSlotChannel(names, slotIndex);
+        if (!channel)
+            return std::nullopt;
+        defaulted = *channel;
+    }
+    const std::string_view slot = requested.empty() ? std::string_view(defaulted) : requested;
     if (slot == "0" || slot == "1") {
         ResolvedChannel constant;
         constant.name = std::string(slot);
@@ -185,10 +200,12 @@ ChannelResolution resolveChannelExpression(const CompiledChannelExpression& expr
             }
             constexpr std::array<std::string_view, 4> kSuffixes{"R", "G", "B", "A"};
             for (std::size_t slot = 0; slot < 4; ++slot) {
-                auto mapped = resolveChannelSlot(values[step.input], step.mapping[slot]);
+                auto mapped = resolveChannelSlot(values[step.input], step.mapping[slot], slot);
                 if (!mapped) {
-                    result.error = "Shuffle names a channel that is not in its input: " +
-                                   step.mapping[slot];
+                    result.error = step.mapping[slot].empty()
+                                       ? "Shuffle input has no color layer for its default slots"
+                                       : "Shuffle names a channel that is not in its input: " +
+                                             step.mapping[slot];
                     return result;
                 }
                 mapped->name = step.layer.empty() ? std::string(kSuffixes[slot])

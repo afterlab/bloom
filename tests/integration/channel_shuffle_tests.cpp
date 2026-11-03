@@ -319,6 +319,46 @@ void shuffleChain() {
            "a Shuffle channel output renames mapped channels into a layer");
 }
 
+// #487: an empty Shuffle slot (the default) reads the default colour layer's channel.
+void defaultSlots() {
+    using Names = std::vector<std::string>;
+    const Names root{"R", "G", "B", "A", "diffuse.R", "diffuse.G", "diffuse.B"};
+    const Names rootless{"ViewLayer.Depth.Z", "ViewLayer.Combined.R", "ViewLayer.Combined.G",
+                         "ViewLayer.Combined.B", "ViewLayer.Combined.A"};
+    const Names data{"depth.Z", "N.X", "N.Y"};
+    expect(runtime::defaultShuffleSlotChannel(root, 0) == std::optional<std::string>("R") &&
+               runtime::defaultShuffleSlotChannel(root, 3) == std::optional<std::string>("A"),
+           "the root colour layer is the default when present");
+    expect(runtime::defaultShuffleSlotChannel(rootless, 2) ==
+                   std::optional<std::string>("ViewLayer.Combined.B") &&
+               runtime::defaultShuffleSlotChannel(rootless, 3) ==
+                   std::optional<std::string>("ViewLayer.Combined.A"),
+           "a rootless render defaults to its first layer carrying R, G and B");
+    expect(!runtime::defaultShuffleSlotChannel(data, 0) &&
+               !runtime::defaultShuffleSlotChannel(Names{"R", "G", "B"}, 3),
+           "a set without a colour layer (or alpha) has no default channel");
+
+    Fixture fixture("default-slots");
+    const auto shuffle = fixture.add(document::kChannelShuffleNodeType);
+    fixture.connect(fixture.source, document::kImageSourceChannelsOutputPort, shuffle,
+                    document::kChannelSetPort);
+    fixture.connect(shuffle, document::kChannelShuffleImagePort, fixture.layer,
+                    document::kLayerOutputContentInputPort);
+    const auto defaulted = fixture.frame();
+    expect(near(defaulted.pixels[0].red(), 0.25F) && near(defaulted.pixels[0].green(), 0.125F) &&
+               near(defaulted.pixels[0].blue(), 0.0F) && near(defaulted.pixels[0].alpha(), 1.0F),
+           "a new Shuffle's default slots read the root R, G and B");
+    // A Shuffle inside a channel expression resolves its default slots the same way.
+    const auto rename = fixture.add(document::kChannelShuffleNodeType);
+    fixture.connect(fixture.source, document::kImageSourceChannelsOutputPort, rename,
+                    document::kChannelSetPort);
+    fixture.set(rename, "layer", std::string("view"));
+    fixture.connect(rename, document::kChannelSetPort, shuffle, document::kChannelSetPort);
+    fixture.set(shuffle, "red", std::string("view.G"));
+    expect(near(fixture.frame().pixels[0].red(), 0.125F),
+           "a renaming Shuffle's default slots carry the root colour channels");
+}
+
 void viewerInspection() {
     Fixture fixture("inspect");
     runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
@@ -333,6 +373,10 @@ void viewerInspection() {
     expect(listing.diagnostic.empty() && has("RGB (RGB)") && has("diffuse (RGB)") &&
                has("depth.Z") && has("A"),
            "the Viewer lists every channel and each RGB layer of a channel set");
+    expect(listing.layers == std::vector<std::string>{"", "depth", "diffuse"} &&
+               std::ranges::find(listing.channels, "depth.Z") != listing.channels.end() &&
+               listing.channels.size() == 8,
+           "the listing names every channel and layer for the pickers (#487)");
 
     const auto inspection = runtime::ChannelInspection{
         fixture.source, std::string(document::kImageSourceChannelsOutputPort), {"depth.Z"}};
@@ -396,6 +440,7 @@ int main() {
     try {
         imageLayerSelection();
         shuffleChain();
+        defaultSlots();
         viewerInspection();
         outputChannelLayers();
     } catch (const std::exception& error) {

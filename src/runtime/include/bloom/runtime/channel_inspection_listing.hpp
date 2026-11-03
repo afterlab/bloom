@@ -10,6 +10,8 @@
 #include <bloom/runtime/evaluation.hpp>
 
 #include <filesystem>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -25,11 +27,22 @@ struct ChannelInspectionChoice final {
 
 struct ChannelInspectionListing final {
     std::vector<ChannelInspectionChoice> choices;
+    // #487: every resolved channel name and every layer (empty: the root layer), in channel order,
+    // for the Shuffle slot pickers and the channel/layer checklists.
+    std::vector<std::string> channels;
+    std::vector<std::string> layers;
     // Why the channel set could not be listed (empty on success).
     std::string diagnostic;
 };
 
 class SnapshotCompiler;
+
+// #487: the channel an empty Shuffle slot reads (`slot` 0-3: R, G, B, A) -- the root layer's when
+// the root carries R, G and B, else the first layer (in channel order) that does, as #478 defaults
+// an Image's colour layer. Nullopt when no layer carries R, G and B, or (alpha) that layer has no
+// A.
+[[nodiscard]] std::optional<std::string>
+defaultShuffleSlotChannel(std::span<const std::string> channelNames, std::size_t slot);
 
 // Worker-only: compiles `node`'s ChannelSet `port`, captures and probes its sources at `time`
 // (identity-verified, like evaluation) and lists the resolved channels and RGB layers.

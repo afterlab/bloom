@@ -541,10 +541,11 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         }
         std::optional<document::DataBlockRecord> dataBlock;
         if (document::isDataBlockReader(descriptor->kernel)) {
-            if (selectors.empty() || selectors.front() <= 0)
+            // #487: 0 (the default) reads the project's first block of the reader's kind.
+            if (selectors.empty())
                 return std::nullopt;
-            const auto* block = request_.snapshot.project().findDataBlock(
-                document::DataBlockRecordId::fromRaw(static_cast<std::uint64_t>(selectors.front())));
+            const auto* block = document::resolveDataBlockReaderBlock(
+                request_.snapshot.project(), descriptor->kernel, selectors.front());
             if (block == nullptr)
                 return std::nullopt;
             dataBlock = *block;

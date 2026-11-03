@@ -39,10 +39,12 @@ struct ChannelResolution final {
 resolveChannelExpression(const CompiledChannelExpression& expression,
                          std::span<const media::ImagePartInfo* const> parts);
 
-// A Shuffle slot: a channel of `set` by name, or the constants "0" and "1". Nullopt when the named
-// channel is absent.
-[[nodiscard]] std::optional<ResolvedChannel> resolveChannelSlot(std::span<const ResolvedChannel> set,
-                                                                std::string_view slot);
+// A Shuffle slot: a channel of `set` by name, or the constants "0" and "1". An empty slot (#487)
+// reads the default colour layer's channel for its position (`slotIndex` 0-3: R, G, B, A; see
+// runtime::defaultShuffleSlotChannel). Nullopt when the named channel is absent.
+[[nodiscard]] std::optional<ResolvedChannel>
+resolveChannelSlot(std::span<const ResolvedChannel> set, std::string_view slot,
+                   std::size_t slotIndex);
 
 // Comma-separated channel patterns: an exact channel name, a layer name (every channel of the
 // layer), a glob over full names with `*` and `?`, or `@role` (color, alpha, luminance, depth,

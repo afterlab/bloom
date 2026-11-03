@@ -1307,7 +1307,13 @@ plans evaluate unchanged; only their version-bearing identities change.
   `coverage`, `data`). An Image source whose color `image` output feeds nothing compiles no image
   operation.
 - *Shuffle is the pixel operation.* `CompiledChannelShuffle` holds the expression, four slots (a
-  resolved channel name or the constants `0` and `1`), a mode and `associated`. At evaluation the
+  resolved channel name or the constants `0` and `1`), a mode and `associated`. An empty slot (the
+  default for red, green and blue since #487; alpha defaults to `1`) reads the input's default
+  color layer: the root `R`/`G`/`B` (and `A`) when the root carries R, G and B, else the first layer
+  in channel order that does (`runtime::defaultShuffleSlotChannel`), so a rootless multi-layer
+  render shuffles its beauty pass. Without such a layer the slot is the warning "Shuffle input has
+  no color layer for its default slots". The resolved channel enters the keys exactly as a named
+  one. At evaluation the
   expression is resolved against the identity-verified probes (host parameter resolution shared by
   the CPU evaluator, GPU preparation, the Viewer listing and layered output). The gather reads only
   the named channels of each contributing source into one RGBA image in the anchor source's frame
@@ -1340,7 +1346,8 @@ no existing plan evaluates differently.
   the ADR 0028 Mask transport (premultiplied white with the coverage in all four channels), and
   `image`, the input image times the coverage (matte in alpha) through the existing MultiplyAlpha
   combine, or the white matte itself without an input image. There is no implicit Mask/Image
-  conversion. Parameters: `layer` (the Cryptomatte type, default `CryptoObject`) and `mattes` (the
+  conversion. Parameters: `layer` (the Cryptomatte type; empty, the default since #487, reads the first
+  Cryptomatte layer the channel set carries) and `mattes` (the
   selection, in the common matte-list syntax: comma-separated, `\,` escapes a comma, `<1.23e-05>` or
   `<0xHEX>` is a raw ID). A muted Cryptomatte isolates nothing: its Mask is empty and its Image
   passes through.
@@ -1353,7 +1360,8 @@ no existing plan evaluates differently.
   hash.
 - *Ranks.* The layer's rank pairs are `<layer>NN` channels in rank order: `00` R/G, `00` B/A, `01`
   R/G, ... (`R/G/B/A`, `r/g/b/a` and `red/green/blue/alpha` suffixes). A missing layer is the
-  warning "The channel set has no Cryptomatte layer named X" and an empty matte.
+  warning "The channel set has no Cryptomatte layer named X" (or, for the empty default with no
+  Cryptomatte layer at all, "The channel set has no Cryptomatte layer") and an empty matte.
 - *Coverage.* For each pixel, in rank order, `c = clamp(c + (bits(id) is selected ? coverage : 0),
   0, 1)` in Float32, published as `(c, c, c, c)`. The CPU reference and the GPU kernel apply exactly
   this order, so they are bit-identical.

@@ -12,6 +12,13 @@ filesystem I/O at evaluation time.
   produce typed diagnostics.
 - `Point Set` exposes the point count and the indexed Vec3 point.
 
+Each reader samples one block kind: Curve, Ramp, Table and Point Set respectively. A stored block
+id names the block; `0`, the default, reads the project's first block of the reader's kind
+(`document::resolveDataBlockReaderBlock`, #487), so a reader added to a project that holds a
+matching block reads it at once. Properties and the node card offer the block as a dropdown of the
+project's blocks of that kind (never an id field); with none, the dropdown says so and the reader
+reports "The selected data block is unavailable".
+
 These are new node types only. Existing documents compile with the same plan and retain their
 identity goldens.
 

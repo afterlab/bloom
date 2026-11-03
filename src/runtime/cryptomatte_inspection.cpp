@@ -80,10 +80,12 @@ listCryptomatteLayers(const SnapshotCompiler& compiler, const document::Snapshot
         return listing;
     }
     listing.layers = detail::cryptomatteLayers(sources.resolution.channels);
+    // #487: an empty (default) layer reads the first Cryptomatte layer present.
+    const auto layer =
+        detail::resolveCryptomatteLayer(sources.resolution.channels, compiled.cryptomatte->layer);
     // The manifest travels in the metadata of the part holding the ranks: decode one rank channel
     // to read it.
-    const auto ranks =
-        detail::cryptomatteRanks(sources.resolution.channels, compiled.cryptomatte->layer);
+    const auto ranks = detail::cryptomatteRanks(sources.resolution.channels, layer);
     if (ranks.empty())
         return listing;
     const auto channel = std::ranges::find(sources.resolution.channels, ranks.front().id,
@@ -101,8 +103,7 @@ listCryptomatteLayers(const SnapshotCompiler& compiler, const document::Snapshot
         {}, media::kMaxImageStorageBytes);
     if (!decoded.value || !*decoded.value)
         return listing;
-    const auto manifest =
-        detail::cryptomatteManifest((*decoded.value)->metadata(), compiled.cryptomatte->layer);
+    const auto manifest = detail::cryptomatteManifest((*decoded.value)->metadata(), layer);
     listing.manifest = manifest.present;
     for (const auto& [name, id] : manifest.entries)
         listing.names.push_back(name);

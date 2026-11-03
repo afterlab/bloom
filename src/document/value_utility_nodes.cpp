@@ -1,6 +1,7 @@
 #include <bloom/document/value_utility_nodes.hpp>
 
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/project.hpp>
 #include <bloom/document/value_nodes.hpp>
 
 #include <algorithm>
@@ -583,6 +584,21 @@ const ValueUtilityDescriptor* findValueUtilityDescriptor(const std::string_view 
     const auto* const match =
         std::ranges::find(kDescriptors, typeId, &ValueUtilityDescriptor::typeId);
     return match == kDescriptors.end() ? nullptr : match;
+}
+
+const DataBlockRecord* resolveDataBlockReaderBlock(const Project& project,
+                                                   const ValueUtilityKernel kernel,
+                                                   const std::int64_t stored) noexcept {
+    if (stored > 0)
+        return project.findDataBlock(
+            DataBlockRecordId::fromRaw(static_cast<std::uint64_t>(stored)));
+    const auto kind = dataBlockReaderKind(kernel);
+    if (stored < 0 || !kind)
+        return nullptr;
+    for (const auto& block : project.typedDataBlocks())
+        if (block.kind == *kind && std::holds_alternative<DataBlockRecordId>(block.id))
+            return &block;
+    return nullptr;
 }
 
 } // namespace bloom::document

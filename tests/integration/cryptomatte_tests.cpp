@@ -291,6 +291,14 @@ void imageInputAndMute() {
     expect(missing.warned("no Cryptomatte layer named CryptoMaterial") &&
                missing.pixels[0].alpha() == 0.0F,
            "a missing Cryptomatte layer is reported and isolates nothing");
+    // #487: the default (empty) layer reads the first Cryptomatte layer the set carries.
+    f.run<commands::SetNodeParameterValue>(f.composition, f.cryptomatte,
+                                           std::string(document::kCryptomatteLayerParameterRole),
+                                           document::ParameterValue{std::string{}});
+    const auto defaulted = f.frame();
+    expect(!defaulted.warned("Cryptomatte layer") &&
+               std::abs(defaulted.pixels[6].red() - 0.7F) < 1e-6F,
+           "an empty Cryptomatte layer reads the first layer present");
 }
 
 } // namespace

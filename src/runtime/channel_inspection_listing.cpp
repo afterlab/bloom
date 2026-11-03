@@ -20,6 +20,35 @@ constexpr std::array<std::array<std::string_view, 3>, 4> kTriples{{{"R", "G", "B
 
 } // namespace
 
+std::optional<std::string>
+defaultShuffleSlotChannel(const std::span<const std::string> channelNames, const std::size_t slot) {
+    if (slot > 3)
+        return std::nullopt;
+    const auto has = [&](const std::string& name) {
+        return std::ranges::find(channelNames, name) != channelNames.end();
+    };
+    const auto colourLayer = [&](const std::string& prefix) {
+        return has(prefix + "R") && has(prefix + "G") && has(prefix + "B");
+    };
+    std::optional<std::string> prefix;
+    if (colourLayer({}))
+        prefix = std::string{};
+    for (const auto& name : channelNames) {
+        if (prefix)
+            break;
+        const auto dot = name.rfind('.');
+        if (dot != std::string::npos && colourLayer(name.substr(0, dot + 1)))
+            prefix = name.substr(0, dot + 1);
+    }
+    if (!prefix)
+        return std::nullopt;
+    constexpr std::array<std::string_view, 4> kSuffixes{"R", "G", "B", "A"};
+    auto channel = *prefix + std::string(kSuffixes[slot]);
+    if (!has(channel))
+        return std::nullopt;
+    return channel;
+}
+
 ChannelInspectionListing
 listChannelInspectionChoices(const SnapshotCompiler& compiler, const document::Snapshot& snapshot,
                              const document::CompositionId composition, const document::NodeId node,
@@ -97,8 +126,11 @@ listChannelInspectionChoices(const SnapshotCompiler& compiler, const document::S
             }
         }
     }
-    for (const auto& channel : resolution.channels)
+    for (const auto& channel : resolution.channels) {
         listing.choices.push_back({channel.name, {channel.name}});
+        listing.channels.push_back(channel.name);
+    }
+    listing.layers = std::move(layers);
     return listing;
 }
 

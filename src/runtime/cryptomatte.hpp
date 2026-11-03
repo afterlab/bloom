@@ -67,6 +67,10 @@ struct CryptomatteRank final {
 cryptomatteRanks(std::span<const ResolvedChannel> channels, std::string_view layer);
 // The Cryptomatte type names present among `channels` (layers `<name>NN` with rank pairs).
 [[nodiscard]] std::vector<std::string> cryptomatteLayers(std::span<const ResolvedChannel> channels);
+// #487: the layer a Cryptomatte reads -- `layer` as authored, or (empty, the default) the first
+// Cryptomatte layer present among `channels`, as #478 defaults an Image's colour layer.
+[[nodiscard]] std::string resolveCryptomatteLayer(std::span<const ResolvedChannel> channels,
+                                                  std::string_view layer);
 
 // Coverage of one rank-pair image (R = ID bits, G = coverage) accumulated onto `previous`.
 [[nodiscard]] float accumulateCryptomatteCoverage(float previous, float idBits, float coverage,

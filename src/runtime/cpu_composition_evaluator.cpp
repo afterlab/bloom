@@ -545,7 +545,8 @@ enum class ScalarDomain : std::uint8_t {
                     if (!valid)
                         return false;
                 }
-                return !steps.empty() && !cryptomatte.layer.empty() &&
+                // #487: an empty layer is the default (the first Cryptomatte layer present).
+                return !steps.empty() &&
                        plan.operationAssetsValid(OperationIndex::fromRaw(index)) &&
                        std::ranges::all_of(cryptomatte.channels.sources, [](const auto& source) {
                            return source.loopMode >= 0 && source.loopMode <= 2 &&

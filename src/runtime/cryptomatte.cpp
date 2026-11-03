@@ -285,6 +285,14 @@ std::vector<std::string> cryptomatteLayers(const std::span<const ResolvedChannel
     return layers;
 }
 
+std::string resolveCryptomatteLayer(const std::span<const ResolvedChannel> channels,
+                                    const std::string_view layer) {
+    if (!layer.empty())
+        return std::string(layer);
+    auto layers = cryptomatteLayers(channels);
+    return layers.empty() ? std::string{} : std::move(layers.front());
+}
+
 float accumulateCryptomatteCoverage(const float previous, const float idBits, const float coverage,
                                     const std::span<const std::uint32_t> ids) noexcept {
     const auto bits = std::bit_cast<std::uint32_t>(idBits);
@@ -330,9 +338,13 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
         result.warning = result.channels.warning;
         return result;
     }
-    result.ranks = cryptomatteRanks(result.channels.resolution.channels, cryptomatte.layer);
+    result.layer = resolveCryptomatteLayer(result.channels.resolution.channels, cryptomatte.layer);
+    result.ranks = cryptomatteRanks(result.channels.resolution.channels, result.layer);
     if (result.ranks.empty()) {
-        result.warning = "The channel set has no Cryptomatte layer named " + cryptomatte.layer;
+        result.warning =
+            cryptomatte.layer.empty()
+                ? std::string("The channel set has no Cryptomatte layer")
+                : "The channel set has no Cryptomatte layer named " + cryptomatte.layer;
         return result;
     }
     const auto& channels = result.channels.resolution.channels;
