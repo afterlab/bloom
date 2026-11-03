@@ -185,7 +185,8 @@ output as needed.
 
 Select the source or its layer to choose the referenced composition in Properties. **Open** switches
 to that composition so you can edit its contents. Changes appear wherever it is used. **Time Offset**
-delays the source in seconds; **Time Scale** sets its playback speed. **Hold** stops on the last frame,
+delays the source in seconds, holding its first frame until then (a negative offset starts it that
+many seconds in); **Time Scale** sets its playback speed. **Hold** stops on the last frame,
 **Loop** repeats, and **Ping-pong** alternates forward and backward; inside a layer they keep doing so
 past the composition's duration, under a Time Remap too. Bloom refuses a reference that
 would create a cycle. If a source composition is deleted, choose a replacement in Properties.

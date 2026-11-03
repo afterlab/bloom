@@ -409,6 +409,24 @@ void loopingSourceInsideLayer() {
            "a Ping-pong source reflects past its duration");
 }
 
+// #434 T3: a composition source's time offset is in seconds: a positive offset delays the source
+// (its first frame holds until then) and a negative one starts it later in its own time.
+void compositionSourceOffset() {
+    NestedFixture fixture;
+    const auto at0 = fixture.covered(at(0));
+    const auto atHalf = fixture.covered(at(1, 2));
+    const auto atOne = fixture.covered(at(1));
+    const auto atOneHalf = fixture.covered(at(3, 2));
+    fixture.setSource("timeOffset", 0.5);
+    expect(fixture.covered(at(0)) == at0 && fixture.covered(at(1, 2)) == at0 &&
+               fixture.covered(at(1)) == atHalf,
+           "a positive offset delays the source by that many seconds");
+    fixture.setSource("timeOffset", -0.5);
+    expect(fixture.covered(at(0)) == atHalf && fixture.covered(at(1, 2)) == atOne &&
+               fixture.covered(at(1)) == atOneHalf,
+           "a negative offset starts the source that many seconds in");
+}
+
 template <typename Operation, typename... Arguments>
 bool execute(document::Document& document, commands::CommandStack& commands,
              Arguments&&... arguments) {
@@ -776,6 +794,7 @@ int main() {
         compileFailureNamesItsSubject();
         remapWrapsWithLayerLoop();
         loopingSourceInsideLayer();
+        compositionSourceOffset();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
