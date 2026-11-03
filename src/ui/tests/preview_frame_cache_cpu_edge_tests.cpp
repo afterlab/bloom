@@ -25,9 +25,11 @@
 #include <QCoreApplication>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -311,6 +313,31 @@ int main(int argc, char** argv) {
                                     "ending the fill restores normal yielding");
             }
             ledger.unregisterCache(&intermediates);
+        }
+
+        // #462: a budget the ledger applies under its lock is announced after the ledger returns,
+        // so an observer that reads the ledger back (the status bar, the background fill) never
+        // runs inside its lock. A burst of changes is announced once.
+        {
+            runtime::MemoryBudgetLedger ledger(std::size_t{64} << 30, std::size_t{64} << 30);
+            PreviewFrameCache cache(std::size_t{1} << 20, ledger);
+            int announced = 0;
+            bool insideLedger = false;
+            std::future<runtime::MemoryBudgetState> probe;
+            QObject::connect(&cache, &PreviewFrameCache::byteBudgetChanged, [&] {
+                if (++announced != 1)
+                    return;
+                probe = std::async(std::launch::async, [&ledger] { return ledger.state(); });
+                insideLedger = probe.wait_for(std::chrono::seconds(2)) != std::future_status::ready;
+            });
+            cache.setByteBudget(std::size_t{2} << 20);
+            cache.setByteBudget(std::size_t{3} << 20);
+            QCoreApplication::sendPostedEvents(&cache);
+            if (probe.valid())
+                static_cast<void>(probe.get());
+            expectations.expect(announced == 1 && !insideLedger &&
+                                    cache.byteBudget() == std::size_t{3} << 20,
+                                "a ledger-applied budget is announced once, outside its lock");
         }
 
         // ADR 0037 rule 3: the source working set releases decoded sources outside the playback

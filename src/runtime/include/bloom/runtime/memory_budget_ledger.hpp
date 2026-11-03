@@ -285,7 +285,7 @@ class MemoryBudgetLedger final {
     [[nodiscard]] MemoryBudgetState pollHostLocked(MachineMemorySample sample,
                                                    Clock::time_point now);
     std::size_t physicalMemory_;
-    // Recursive only for readback from synchronous UI budget-change notifications.
+    // Recursive only for a pool that reads the ledger back from its own budget callback.
     mutable std::recursive_mutex mutex_;
     std::map<const void*, Cache> caches_;
     MemoryBudgetState state_;

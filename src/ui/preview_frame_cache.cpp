@@ -150,8 +150,10 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
             byteBudget_ = bytes;
             if (!pressure)
                 evictToBudget();
+            // The ledger applies budgets under its own lock; observers read it back and
+            // restart work, so they hear about the change after it returns.
             if (changed)
-                emit byteBudgetChanged();
+                scheduleByteBudgetNotification();
         },
         runtime::MemoryBudgetOwnerKind::ReusableRetention,
         runtime::MemoryEvictionPriority::FinishedPreview);
@@ -162,6 +164,18 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
 }
 
 PreviewFrameCache::~PreviewFrameCache() { ledger_.unregisterCache(this); }
+
+void PreviewFrameCache::scheduleByteBudgetNotification() {
+    if (byteBudgetNotificationPending_.exchange(true))
+        return;
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            byteBudgetNotificationPending_ = false;
+            emit byteBudgetChanged();
+        },
+        Qt::QueuedConnection);
+}
 
 void PreviewFrameCache::scheduleNotification() {
     if (!notificationTimer_.isActive()) {
@@ -318,8 +332,7 @@ PreviewFrameCache::InsertResult PreviewFrameCache::insert(const PreparedPreviewF
                     std::min(granted, std::numeric_limits<std::size_t>::max() - byteBudget_);
                 statistics_.previewFirstYieldedBytes += granted;
                 // Observers re-enter this cache; tell them after the insert returns.
-                QMetaObject::invokeMethod(
-                    this, [this] { emit byteBudgetChanged(); }, Qt::QueuedConnection);
+                scheduleByteBudgetNotification();
             }
         }
         if (hostCharge > byteBudget_)

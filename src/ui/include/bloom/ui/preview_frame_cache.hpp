@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QTimer>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -289,6 +290,8 @@ class PreviewFrameCache final : public QObject {
   signals:
     // Cache mutations coalesce for 50ms; a burst produces one ruler repaint notification.
     void contentsChanged();
+    // Delivered from the event loop, once per burst of budget changes: never while the memory
+    // ledger is applying budgets under its lock, nor from inside an insert.
     void byteBudgetChanged();
     // Exact retention deltas are delivered synchronously to the RAM coverage index. The existing
     // coalesced contentsChanged signal remains the paint notification.
@@ -314,11 +317,13 @@ class PreviewFrameCache final : public QObject {
     using EntryIterator = Entries::iterator;
     using RangeIndex = std::multimap<RangeKey, EntryIterator, RangeLess>;
     void scheduleNotification();
+    void scheduleByteBudgetNotification();
     // A resident entry is live exactly while its lease is; a CPU entry is always live. An
     // invalidated resident lease is never a hit and is never listed by contains()/timesFor().
     [[nodiscard]] static bool entryIsLive(const Entry& entry) noexcept;
     QTimer notificationTimer_;
     QTimer residentRefreshTimer_;
+    std::atomic<bool> byteBudgetNotificationPending_{false};
     InsertAllocation insertAllocationFault_ = InsertAllocation::None;
     void allocationCheckpoint(InsertAllocation boundary);
     struct Entry final {
