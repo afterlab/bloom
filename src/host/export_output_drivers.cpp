@@ -834,6 +834,18 @@ class ImageDriver final : public DriverBase {
         } else if (outcome) {
             ++report_.verification.provenance.cpuReferenceFrames;
             route_ = ExportDeviceRoute::CpuReference;
+            // A device-required run never publishes a CPU reference frame.
+            if (input_.requireDevice && !stopRequested_) {
+                log(runtime::DiagnosticSeverity::Error, "export.device.required",
+                    "This frame was evaluated on the CPU reference path; the export requires a "
+                    "GPU device",
+                    next_);
+                return fail(failure(ExportFailureCode::ResourceRefused, "export.device.required",
+                                    "Bloom couldn't render frame " + std::to_string(next_) +
+                                        " on a GPU device, and this export requires one, so it "
+                                        "stopped before writing the frame.",
+                                    next_));
+            }
             if (report_.verification.provenance.cpuReferenceFrames == 1)
                 log(runtime::DiagnosticSeverity::Warning, "export.device.cpu-reference",
                     "This frame was evaluated on the CPU reference path", next_);
@@ -1246,6 +1258,13 @@ class MediaDriver final : public DriverBase {
         if (!dependencies_.retirement) {
             fail(failure(ExportFailureCode::Internal, "export.retirement.missing",
                          "Movie export needs the encoder retirement owner"));
+            return;
+        }
+        // The movie is published once, after its last frame, so a CPU reference frame could only
+        // be detected after publication. Refuse before any frame instead of claiming the device.
+        if (input_.requireDevice) {
+            fail(failure(ExportFailureCode::PreflightRefused, "export.device.required",
+                         "Requiring a GPU device is available for image outputs only"));
             return;
         }
         const auto* composition = input_.snapshot.project().findComposition(input_.composition);

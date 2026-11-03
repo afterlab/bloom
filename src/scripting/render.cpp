@@ -164,6 +164,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     auto* publications = session.publicationCoordinator();
     if (!format || artifacts == nullptr || publications == nullptr)
         return failed("Export services are unavailable");
+    if (request.requireDevice && !document::isImageExportFormat(*format))
+        return failed("Requiring a GPU device is available for image presets only");
 
     // The transient job: one output, never saved. It replaces an existing file only when the
     // caller opted in (#453); otherwise every frame's publication refuses an existing file.
@@ -214,6 +216,23 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
 
     // One caller-owned root shared by still/range/concurrent requests, including CPU fallback.
     injectedGpuProvider->prepare(scheduler);
+    if (request.requireDevice) {
+        // The bootstrap ends on success, failure, cancellation or shutdown. Without a device the
+        // render fails here, before any frame is evaluated on the CPU.
+        while (!injectedGpuProvider->prepared()) {
+            if (request.cancelled && request.cancelled()) {
+                auto cancelled = failed("The render was cancelled");
+                cancelled.diagnosticCode = RenderDiagnosticCode::Cancelled;
+                return cancelled;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (!injectedGpuProvider->deviceAvailable()) {
+            auto refused = failed("The render requires a GPU device, and none is available");
+            refused.diagnosticCode = RenderDiagnosticCode::DeviceRequired;
+            return refused;
+        }
+    }
     const bool media = !document::isImageExportFormat(*format);
     const auto retirement = media ? host::SequenceExportRetirementOwnerV1::create() : nullptr;
     host::ExportEncoderStatus encoders;
@@ -233,7 +252,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                                           .artifactByteLimit = std::nullopt}},
         .encoders = encoders,
         .owner = {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},
-        .group = std::nullopt};
+        .group = std::nullopt,
+        .requireDevice = request.requireDevice};
     RenderResult result = failed({});
     {
         host::ExportJobRunner runner(
@@ -279,6 +299,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             result.publishedFrames = verification.artifacts.publishedArtifacts;
             result.preservationReport = reportText(request.preset, verification, result.succeeded);
             result.gpuEvaluatedFrames = provenance.gpuFrames;
+            result.cpuReferenceFrames = provenance.cpuReferenceFrames;
             result.gpuNativeDispatches = provenance.gpuNativeDispatches;
             result.gpuReadbacks = provenance.gpuReadbacks;
             result.gpuReadbackSubmissions = provenance.gpuReadbackSubmissions;
@@ -299,6 +320,10 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                 result.diagnostic = "The render did not pass verification";
             else
                 result.diagnostic = "The render did not publish";
+            const auto& failure =
+                runner.failure() ? runner.failure() : (state ? state->failure : std::nullopt);
+            if (!runner.stopped() && failure && failure->diagnosticCode == "export.device.required")
+                result.diagnosticCode = RenderDiagnosticCode::DeviceRequired;
             collectLog();
             if (!details.empty())
                 result.diagnostic += " Details: " + details;

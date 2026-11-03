@@ -67,8 +67,8 @@ class ExportProviderTeardown final {
 void printUsage() {
     std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
-                 "<dir> [--replace] | export --project <file> (--all | --job <id>...) [--replace] "
-                 "[--save]\n";
+                 "<dir> [--replace] [--require-device] | export --project <file> "
+                 "(--all | --job <id>...) [--replace] [--save]\n";
 }
 
 [[nodiscard]] std::optional<std::string> readText(const std::filesystem::path& path) {
@@ -334,10 +334,15 @@ frameRange(std::string_view value) {
     std::optional<output::OutputPresetV1> selectedPreset;
     std::filesystem::path outputDirectory;
     bool replace = false;
+    bool requireDevice = false;
     for (int index = 2; index < argc; ++index) {
         const std::string_view option = argv[index];
         if (option == "--replace") {
             replace = true;
+            continue;
+        }
+        if (option == "--require-device") {
+            requireDevice = true;
             continue;
         }
         if ((option == "--project" || option == "--out" || option == "--preset" ||
@@ -430,14 +435,25 @@ frameRange(std::string_view value) {
                                                 .range = range,
                                                 .preset = *selectedPreset,
                                                 .destination = destination,
-                                                .replaceExisting = replace},
+                                                .replaceExisting = replace,
+                                                .requireDevice = requireDevice},
                                                {}, gpuProvider);
     providerTeardown.finish();
     std::cout << result.preservationReport << '\n';
+    // Which device evaluated the frames (#452): a CPU reference frame is reported, never hidden.
+    std::cout << "device gpu-frames=" << result.gpuEvaluatedFrames
+              << " cpu-reference-frames=" << result.cpuReferenceFrames << '\n';
     if (!result.succeeded) {
-        std::cerr << "error[bloom-cli.render]: " << result.diagnostic << '\n';
+        std::cerr << (result.diagnosticCode == scripting::RenderDiagnosticCode::DeviceRequired
+                          ? "error[bloom-cli.render.device-required]: "
+                          : "error[bloom-cli.render]: ")
+                  << result.diagnostic << '\n';
         return 5;
     }
+    if (result.cpuReferenceFrames > 0)
+        std::cerr << "warning[bloom-cli.render.cpu-reference]: " << result.cpuReferenceFrames
+                  << " frame(s) were evaluated on the CPU reference path; pass --require-device "
+                     "to fail instead\n";
     std::cout << "rendered " << result.publishedFrames << " frame(s) to " << outputDirectory
               << '\n';
     return 0;

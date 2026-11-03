@@ -2,7 +2,9 @@
 // host::ExportJobRunner. This test keeps the previous Render::run implementation verbatim as the
 // reference (legacyRender) and proves the new route writes the same files with the same bytes for
 // the deterministic image formats, a still and a range, and the same result summary.
+#include <bloom/core/file_uri.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/host/export_job_runner.hpp>
 #include <bloom/host/frame_export_publication.hpp>
 #include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -445,6 +447,116 @@ void compare(const std::filesystem::path& legacy, const std::filesystem::path& c
                label + ": identical bytes for " + name);
 }
 
+// #452: a device-required render never publishes a CPU reference frame. The provider here is
+// disabled, which is the same "no device" the CLI and Python see on a machine without one.
+void testRequireDevice(Session& session, runtime::TaskScheduler& scheduler,
+                       const runtime::SnapshotCompiler& compiler,
+                       const std::shared_ptr<host::GpuExportProvider>& provider,
+                       const std::filesystem::path& root) {
+    const auto composition = session.snapshot().project().compositions().front().id();
+    const auto still = [&](const std::filesystem::path& destination, const bool requireDevice,
+                           const output::OutputPresetV1 preset =
+                               output::OutputPresetV1::PngRgba8SrgbV1) {
+        return Render::run(session, scheduler, compiler,
+                           RenderRequest{.composition = composition,
+                                         .frame = 1,
+                                         .range = std::nullopt,
+                                         .preset = preset,
+                                         .destination = destination,
+                                         .requireDevice = requireDevice},
+                           root / "scratch-device", provider);
+    };
+    std::filesystem::create_directories(root / "device");
+    const auto refused = still(root / "device/required.png", true);
+    expect(!refused.succeeded && refused.diagnosticCode == RenderDiagnosticCode::DeviceRequired,
+           "require-device without a device fails with DeviceRequired: " + refused.diagnostic);
+    expect(!std::filesystem::exists(root / "device/required.png"),
+           "require-device without a device publishes nothing");
+    expect(refused.gpuEvaluatedFrames == 0 && refused.cpuReferenceFrames == 0,
+           "no frame is evaluated once the missing device is known");
+    const auto media =
+        still(root / "device/required.mov", true, output::OutputPresetV1::ProResMovV1);
+    expect(!media.succeeded && !std::filesystem::exists(root / "device/required.mov"),
+           "require-device refuses a movie preset it cannot enforce before publication");
+
+    // Without the requirement the same render takes the labelled CPU reference path.
+    const auto cpu = still(root / "device/cpu.png", false);
+    expect(cpu.succeeded && cpu.publishedFrames == 1 && cpu.gpuEvaluatedFrames == 0 &&
+               cpu.cpuReferenceFrames == 1,
+           "a CPU render reports its CPU reference frame explicitly");
+
+    // The per-frame guard behind the early check: a runner told to require a device refuses the
+    // CPU frame before it is published, even when the caller skipped the device check.
+    const auto source = session.renderSourceSnapshot();
+    const auto* record = source.snapshot.project().findComposition(composition);
+    document::ExportJob job;
+    job.id = document::ExportJobId::fromRaw(1);
+    job.composition = composition;
+    job.render.range = document::ExportRange{document::ExportRangeKind::Frame, 1, 1};
+    document::ExportOutput out;
+    out.id = document::ExportOutputId::fromRaw(1);
+    out.settings.format = document::ExportFormat::Png;
+    out.settings.includeAudio = false;
+    const auto destination =
+        std::filesystem::absolute(root / "device/runner.png").lexically_normal();
+    out.destination = {.portability = "external",
+                       .path = *core::fileUriFromAbsolutePath(destination),
+                       .overwrite = document::ExportOverwritePolicy::Refuse};
+    job.outputs.push_back(out);
+    const auto range = host::resolveExportRange(job, source.snapshot.project());
+    expect(range.has_value() && record != nullptr && source.colorSettings.has_value(),
+           "the runner request resolves");
+    if (!range || record == nullptr || !source.colorSettings)
+        return;
+    host::ExportDestinationContext context;
+    context.compositionName = record->name();
+    context.range = *range;
+    auto resolved = host::resolveDestination(job, out, context);
+    host::ExportEncoderStatus encoders;
+    encoders.probed = true;
+    host::ExportJobRunRequest runRequest{
+        .snapshot = source.snapshot,
+        .job = job,
+        .compositionName = record->name(),
+        .range = *range,
+        .colorSettings = *source.colorSettings,
+        .assetBaseDirectory = source.assetBaseDirectory,
+        .outputs = {host::ExportRunOutput{.record = out,
+                                          .context = context,
+                                          .destination = std::move(resolved),
+                                          .confirmedFiles = {},
+                                          .artifactByteLimit = std::nullopt}},
+        .encoders = encoders,
+        .owner = {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},
+        .group = std::nullopt,
+        .requireDevice = true};
+    host::ExportJobRunner runner(
+        host::ExportJobRunnerDependencies{.scheduler = scheduler,
+                                          .compiler = compiler,
+                                          .publications = *session.publicationCoordinator(),
+                                          .artifacts = *session.artifactCoordinator(),
+                                          .ledger =
+                                              std::make_shared<output::ExportResourceLedgerV1>(),
+                                          .gpu = provider,
+                                          .retirement = nullptr,
+                                          .displayProcessor = nullptr,
+                                          .scratchDirectory = root / "scratch-device"},
+        std::move(runRequest));
+    while (!runner.finished()) {
+        runner.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const auto outputs = runner.outputs();
+    const auto& failure = runner.failure();
+    expect(!outputs.empty() && outputs.front().state == host::ExportOutputState::Failed &&
+               outputs.front().published.empty() && failure &&
+               failure->diagnosticCode == "export.device.required" &&
+               failure->code == host::ExportFailureCode::ResourceRefused,
+           "the runner refuses a CPU reference frame under require-device");
+    expect(!std::filesystem::exists(destination),
+           "the refused CPU reference frame is never published");
+}
+
 void testParity() {
     auto created = Session::createNew("Parity", "Composition", core::RationalTime::fromInteger(2));
     expect(static_cast<bool>(created), "session");
@@ -543,6 +655,7 @@ void testParity() {
                                      {}, provider);
     expect(!outside.succeeded && outside.diagnostic == "Frame is outside the composition range",
            "a frame outside the composition is refused as before");
+    testRequireDevice(*session, scheduler, compiler, provider, root);
     expect(provider->shutdownAndWait(std::chrono::seconds(10)), "the provider retires");
     scheduler.beginShutdown();
     while (!scheduler.isQuiescent())

@@ -8,7 +8,8 @@ bloom-cli new <file>
 bloom-cli open <file>
 bloom-cli run <script.json>
 bloom-cli render [--project <file>] (--frame N | --range A-B) \
-  --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir> [--replace]
+  --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir> [--replace] \
+  [--require-device]
 bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save]
 ```
 
@@ -53,6 +54,13 @@ They measure the layers with the CPU reference evaluation before the step runs; 
 preservation report and only exits successfully after publication completes. A file that already
 exists is replaced only with `--replace`; without it the command fails and leaves the file as it
 was.
+
+`render` also prints `device gpu-frames=N cpu-reference-frames=M`: how many frames the GPU evaluated
+and how many took the CPU reference path. Without a GPU device, Bloom renders on the CPU reference
+path and prints `warning[bloom-cli.render.cpu-reference]`. With `--require-device`, the command
+fails with `error[bloom-cli.render.device-required]` and a non-zero exit status instead: when no
+device is available it fails before evaluating anything, and a frame the CPU evaluated anyway is
+refused before it is written. `--require-device` covers the PNG and OpenEXR presets.
 
 Example scripts live in [`examples/scripting`](../../examples/scripting/).
 

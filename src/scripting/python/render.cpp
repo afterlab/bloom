@@ -37,6 +37,8 @@ const char* diagnosticCode(const RenderDiagnosticCode code) {
         return "missing-processing-root";
     case RenderDiagnosticCode::Cancelled:
         return "cancelled";
+    case RenderDiagnosticCode::DeviceRequired:
+        return "device-required";
     }
     return "";
 }

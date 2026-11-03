@@ -31,11 +31,16 @@ struct RenderRequest final {
     // #453: an existing file is never replaced unless the caller opts in. With false, a frame
     // whose file exists fails the render and the file is untouched.
     bool replaceExisting = false;
+    // #452, AGENTS.md "GPU Coverage And Final Render": with true, the render fails instead of
+    // taking the CPU reference path. No device fails before any frame is evaluated, and a frame the
+    // CPU evaluated anyway is refused before it is published. Image presets only.
+    bool requireDevice = false;
 };
 
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not
-// already published remains.
-enum class RenderDiagnosticCode { None, MissingProcessingRoot, Cancelled };
+// already published remains. `DeviceRequired`: the request required a GPU device and none was
+// available, or a frame was evaluated on the CPU reference path; that frame was not published.
+enum class RenderDiagnosticCode { None, MissingProcessingRoot, Cancelled, DeviceRequired };
 
 struct RenderResult final {
     bool succeeded = false;
@@ -46,6 +51,9 @@ struct RenderResult final {
     // it never enters preservation identity or the approval digest. All zero when no provider was
     // injected/available or every frame took the CPU reference path.
     std::uint64_t gpuEvaluatedFrames = 0;
+    // Frames evaluated on the CPU reference path (no device, or a scene/recovery the GPU route
+    // could not admit). Explicit, never folded into gpuEvaluatedFrames.
+    std::uint64_t cpuReferenceFrames = 0;
     std::uint64_t gpuNativeDispatches = 0;
     // The real final device-to-host readback submission count. `gpuReadbacks` is the pre-existing
     // compatibility name for this same genuine counter (one final readback per evaluated frame);

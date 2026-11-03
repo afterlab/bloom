@@ -20,6 +20,7 @@ struct ExportDriverInput final {
     ExportResolvedRange range;
     ExportEncoderStatus encoders;
     runtime::TaskOwner owner;
+    bool requireDevice = false;
 };
 
 struct ExportDriverReport final {

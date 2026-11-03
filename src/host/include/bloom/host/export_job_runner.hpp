@@ -88,6 +88,10 @@ struct ExportJobRunRequest final {
     ExportEncoderStatus encoders;
     runtime::TaskOwner owner{runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)};
     std::optional<runtime::TaskGroupId> group;
+    // AGENTS.md "GPU Coverage And Final Render": a frame the CPU reference path evaluated fails
+    // the output before it is published (ResourceRefused, `export.device.required`) instead of
+    // taking the labelled CPU fallback. Image outputs only; a movie output refuses to start.
+    bool requireDevice = false;
 };
 
 enum class ExportJobRunPhase : std::uint8_t {
