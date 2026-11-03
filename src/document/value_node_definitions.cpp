@@ -121,7 +121,7 @@ struct KindVocabulary final {
 
 [[nodiscard]] NodeDefinition scalarMathDefinition() {
     using namespace bloom::document;
-    // Five operand sockets, one definition, 24 operations. The widest operation (Remap) reads five,
+    // Five operand sockets, one definition, 27 operations. The widest operation (Remap) reads five,
     // so five is what the node declares; the card hides the rows the live operation does not read
     // rather than showing operands it would silently ignore.
     std::vector<InputPortDefinition> inputs;

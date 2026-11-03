@@ -77,6 +77,12 @@ constexpr std::array kSignatures{
                              "bloom.core.scalar.smootherstep",
                              {"lowerEdge", "upperEdge", "value", "", ""},
                              3},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Sine, "bloom.core.scalar.sine", {"angleRadians", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Cosine, "bloom.core.scalar.cosine", {"angleRadians", "", "", "", ""}, 1},
+    ScalarPrimitiveSignature{
+        ScalarPrimitive::Power, "bloom.core.scalar.power", {"base", "exponent", "", "", ""}, 2},
 };
 
 template <bloom::core::primitives::PrimitiveFloat T> struct Evaluation final {
@@ -294,6 +300,23 @@ template <bloom::core::primitives::PrimitiveFloat T>
         const auto cubed = squared * factor.value;
         const auto polynomial = (factor.value * ((factor.value * T{6}) - T{15})) + T{10};
         return finiteResult(cubed * polynomial);
+    }
+    case ScalarPrimitive::Sine:
+        return finiteResult(std::sin(inputs[0]));
+    case ScalarPrimitive::Cosine:
+        return finiteResult(std::cos(inputs[0]));
+    case ScalarPrimitive::Power: {
+        const auto base = inputs[0];
+        const auto exponent = inputs[1];
+        // A negative base has a real result only for an integral exponent.
+        if (base < T{0} && std::trunc(exponent) != exponent) {
+            return failure<T>(ScalarEvaluationError::OutsideDomain);
+        }
+        // Zero raised to a negative power is a pole, not an overflow.
+        if (base == T{0} && exponent < T{0}) {
+            return failure<T>(ScalarEvaluationError::DivideByZero);
+        }
+        return finiteResult(std::pow(base, exponent));
     }
     case ScalarPrimitive::Invalid:
         return failure<T>(ScalarEvaluationError::UnknownPrimitive);

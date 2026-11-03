@@ -366,7 +366,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             return std::nullopt;
         }
         // Exactly the chosen operation's own arity: the node declares five operand sockets so one
-        // definition serves all 24 operations, and lowering only the ones this operation reads is
+        // definition serves all 27 operations, and lowering only the ones this operation reads is
         // what keeps the unused sockets from reaching a kernel that would reject the call.
         const auto arity = scalarOperationOperandCount(*operation);
         std::vector<runtime::CompiledValueOperand> operands;

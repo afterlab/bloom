@@ -69,6 +69,9 @@ static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Add) == 0);
 static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Mix) == 9);
 static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Absolute) == 10);
 static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Smootherstep) == 23);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Sine) == 24);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Cosine) == 25);
+static_assert(static_cast<std::uint8_t>(ScalarPrimitive::Power) == 26);
 static_assert(static_cast<std::uint8_t>(ScalarEvaluationError::NonFiniteResult) == 8);
 static_assert(static_cast<std::uint8_t>(ScalarEvaluationError::OutsideDomain) == 9);
 
@@ -144,10 +147,10 @@ template <typename T, std::size_t Size>
 void testSignatures(Expectations& expectations) {
     using namespace bloom::core::primitives;
     const auto signatures = scalarPrimitiveSignatures();
-    expectations.expect(kScalarPrimitiveSemanticsVersion == 2,
+    expectations.expect(kScalarPrimitiveSemanticsVersion == 3,
                         "the extended scalar semantics revision is explicit");
-    expectations.expect(signatures.size() == 24,
-                        "the first two tranches have exactly twenty-four operations");
+    expectations.expect(signatures.size() == 27,
+                        "the three tranches have exactly twenty-seven operations");
 
     constexpr std::array expected{
         ScalarPrimitiveSignature{
@@ -225,6 +228,14 @@ void testSignatures(Expectations& expectations) {
                                  "bloom.core.scalar.smootherstep",
                                  {"lowerEdge", "upperEdge", "value", "", ""},
                                  3},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Sine, "bloom.core.scalar.sine", {"angleRadians", "", "", "", ""}, 1},
+        ScalarPrimitiveSignature{ScalarPrimitive::Cosine,
+                                 "bloom.core.scalar.cosine",
+                                 {"angleRadians", "", "", "", ""},
+                                 1},
+        ScalarPrimitiveSignature{
+            ScalarPrimitive::Power, "bloom.core.scalar.power", {"base", "exponent", "", "", ""}, 2},
     };
 
     std::unordered_set<std::string_view> ids;
@@ -464,6 +475,9 @@ template <typename T> void testNonFiniteInputs(Expectations& expectations) {
         Case{ScalarPrimitive::Step, {T{1}, T{2}, T{0}, T{0}, T{0}}, 2},
         Case{ScalarPrimitive::Smoothstep, {T{0}, T{1}, T{0.5}, T{0}, T{0}}, 3},
         Case{ScalarPrimitive::Smootherstep, {T{0}, T{1}, T{0.5}, T{0}, T{0}}, 3},
+        Case{ScalarPrimitive::Sine, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Cosine, {T{1}, T{0}, T{0}, T{0}, T{0}}, 1},
+        Case{ScalarPrimitive::Power, {T{2}, T{3}, T{0}, T{0}, T{0}}, 2},
     };
     constexpr std::array nonFinite{std::numeric_limits<T>::quiet_NaN(),
                                    std::numeric_limits<T>::infinity(),
@@ -763,6 +777,50 @@ template <typename T> void testStepAndSmoothIntervals(Expectations& expectations
         "smooth interpolation normalizes opposite-sign extreme finite bounds without overflow");
 }
 
+template <typename T> void testTrigonometryAndPower(Expectations& expectations) {
+    const auto closeTo = [](const ScalarResult<T>& result, const T expected) {
+        return result.hasValue() &&
+               std::abs(*result.value() - expected) <= T{4} * std::numeric_limits<T>::epsilon();
+    };
+    const T pi = T{3.14159265358979323846L};
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Sine, std::array<T, 1>{T{0}}), T{0}) &&
+            hasSignedZero(evaluate(ScalarPrimitive::Sine, std::array<T, 1>{-T{0}}), true) &&
+            hasValue(evaluate(ScalarPrimitive::Cosine, std::array<T, 1>{T{0}}), T{1}) &&
+            closeTo(evaluate(ScalarPrimitive::Sine, std::array<T, 1>{pi / T{2}}), T{1}) &&
+            closeTo(evaluate(ScalarPrimitive::Cosine, std::array<T, 1>{pi}), T{-1}) &&
+            closeTo(evaluate(ScalarPrimitive::Sine, std::array<T, 1>{pi / T{6}}), T{0.5}),
+        "sine and cosine take radians and hit their exact and near-exact reference points");
+    const auto bigSine =
+        evaluate(ScalarPrimitive::Sine, std::array<T, 1>{std::numeric_limits<T>::max()});
+    expectations.expect(bigSine.hasValue() && std::abs(*bigSine.value()) <= T{1},
+                        "sine of the largest finite angle stays within [-1, 1]");
+    const auto big =
+        evaluate(ScalarPrimitive::Cosine, std::array<T, 1>{std::numeric_limits<T>::max()});
+    expectations.expect(big.hasValue() && std::abs(*big.value()) <= T{1},
+                        "cosine of the largest finite angle stays within [-1, 1]");
+
+    expectations.expect(
+        hasValue(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{2}, T{10}}), T{1024}) &&
+            hasValue(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{-2}, T{3}}), T{-8}) &&
+            hasValue(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{-2}, T{2}}), T{4}) &&
+            hasValue(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{0}, T{0}}), T{1}) &&
+            hasValue(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{9}, T{0.5}}), T{3}) &&
+            hasValue(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{4}, T{-1}}), T{0.25}) &&
+            hasValue(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{0}, T{2}}), T{0}),
+        "power produces exact integral, root, negative-exponent and zero-base results");
+    expectations.expect(
+        hasError(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{-8}, T{0.5}}),
+                 ScalarEvaluationError::OutsideDomain) &&
+            hasError(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{0}, T{-1}}),
+                     ScalarEvaluationError::DivideByZero) &&
+            hasError(evaluate(ScalarPrimitive::Power, std::array<T, 2>{-T{0}, T{-3}}),
+                     ScalarEvaluationError::DivideByZero) &&
+            hasError(evaluate(ScalarPrimitive::Power, std::array<T, 2>{T{10}, T{1000}}),
+                     ScalarEvaluationError::NonFiniteResult),
+        "power reports a negative base with a fractional exponent, a zero pole and overflow");
+}
+
 template <typename T> void testGoldenBitPatterns(Expectations& expectations);
 
 template <> void testGoldenBitPatterns<float>(Expectations& expectations) {
@@ -818,6 +876,7 @@ template <typename T> void runTypedTests(Expectations& expectations) {
     testUnarySignsAndDomains<T>(expectations);
     testRoundingFractionAndModulo<T>(expectations);
     testStepAndSmoothIntervals<T>(expectations);
+    testTrigonometryAndPower<T>(expectations);
     testGoldenBitPatterns<T>(expectations);
 }
 

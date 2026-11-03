@@ -35,10 +35,13 @@ enum class ScalarPrimitive : std::uint8_t {
     Step,
     Smoothstep,
     Smootherstep,
+    Sine,
+    Cosine,
+    Power,
     Invalid = 0xFF,
 };
 
-inline constexpr std::uint32_t kScalarPrimitiveSemanticsVersion = 2;
+inline constexpr std::uint32_t kScalarPrimitiveSemanticsVersion = 3;
 
 struct ScalarPrimitiveSignature final {
     ScalarPrimitive primitive;

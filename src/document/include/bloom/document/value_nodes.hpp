@@ -35,7 +35,7 @@ inline constexpr std::string_view kValueParameterRole = "value";
 inline constexpr std::string_view kResultPortName = "result";
 
 // A Math node's operand sockets. Deliberately structural names rather than semantic ones: ONE
-// definition serves all 24 scalar operations, whose operands mean different things in each
+// definition serves all 27 scalar operations, whose operands mean different things in each
 // (Remap's five are a value and two ranges; Mix's three are two endpoints and a factor). The card
 // RELABELS each visible row with the live operation's own input name from
 // core::primitives::scalarPrimitiveSignature(), so the artist reads "sourceMinimum" while the

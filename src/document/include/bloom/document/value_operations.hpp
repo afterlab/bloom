@@ -20,14 +20,14 @@ namespace bloom::document {
 // saved document.
 //
 // A Math node's operation is the exception that needs no enumeration of its own: it IS
-// core::primitives::ScalarPrimitive, whose 24 members are already frozen with their own semantics
+// core::primitives::ScalarPrimitive, whose 27 members are already frozen with their own semantics
 // version, so the mapping below names that vocabulary rather than copying it.
 
 // Every scalar operation a Math node offers, in the order every surface offers them: the binary
 // arithmetic first, then the combining forms, then the unary shaping operations, then the rounding
 // family, then the interval operations. This is the frozen ScalarPrimitive set verbatim --
 // Invalid excluded, because it names the absence of an operation rather than one.
-inline constexpr std::array<core::primitives::ScalarPrimitive, 24> kScalarOperations{
+inline constexpr std::array<core::primitives::ScalarPrimitive, 27> kScalarOperations{
     core::primitives::ScalarPrimitive::Add,         core::primitives::ScalarPrimitive::Subtract,
     core::primitives::ScalarPrimitive::Multiply,    core::primitives::ScalarPrimitive::Divide,
     core::primitives::ScalarPrimitive::MultiplyAdd, core::primitives::ScalarPrimitive::Minimum,
@@ -40,6 +40,8 @@ inline constexpr std::array<core::primitives::ScalarPrimitive, 24> kScalarOperat
     core::primitives::ScalarPrimitive::Truncate,    core::primitives::ScalarPrimitive::Fraction,
     core::primitives::ScalarPrimitive::Modulo,      core::primitives::ScalarPrimitive::Step,
     core::primitives::ScalarPrimitive::Smoothstep,  core::primitives::ScalarPrimitive::Smootherstep,
+    core::primitives::ScalarPrimitive::Sine,        core::primitives::ScalarPrimitive::Cosine,
+    core::primitives::ScalarPrimitive::Power,
 };
 
 inline constexpr auto kDefaultScalarOperation = core::primitives::ScalarPrimitive::Add;

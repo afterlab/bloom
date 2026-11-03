@@ -309,6 +309,16 @@ conversions and the logic stayed in `Utilities`, because a predicate and a wire 
 | Hue Shift | `color` Color, `degrees` Scalar | `result` Color | Hue is periodic, so the shift wraps rather than clamping |
 | Luminance | `color` Color | `result` Scalar | Rec.709 weights through `bloom/core/color.hpp`, never retyped in a kernel. Alpha takes no part |
 
+### Sine, Cosine and Power
+
+The existing `Math` node's `operation` selector offers Sine, Cosine and Power (stored values 24, 25
+and 26) beside the other scalar primitives, so they need no node type, command or schema of their
+own. Sine and Cosine read `angleRadians` as RADIANS (the other angle nodes here use degrees; wire a
+degrees value through Multiply by pi/180 first). Power reads `base` and `exponent`. Failures
+(negative base with a fractional exponent, zero to a negative power, overflow) take the same
+fallback path as every other Math failure. See the conformance policy in
+`evaluation-primitives.md`.
+
 ### One rounding rule
 
 `Rounding`, `Snap`, `Scalar To Integer` and the existing `Math` node's rounding operations all route
