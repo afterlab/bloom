@@ -303,6 +303,24 @@ bloom::media::provider::FrameProduct yuv420(std::array<unsigned, 2> cb, std::arr
     frame.planes.push_back(plane(2, 1, {cr[0], cr[1]}));
     return frame;
 }
+// In-order requests let the worker decode the next frame before it is asked for. Whatever
+// follows (the frame decoded ahead, a jump back, a jump forward, a run to the end of the stream
+// where the frame ahead does not exist), every request returns its own exact frame.
+void decodeAhead(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    ::setenv("BLOOM_VIDEO_HARDWARE_DECODE", "0", 1);
+    const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
+    video::VideoDecodeSession session(directory / "numbered-h264.mp4");
+    const auto probe = std::get<provider::ProbeResult>(session.probe());
+    for (const auto n : {40U, 41U, 42U, 43U, 3U, 4U, 5U, 30U, 31U, 44U, 45U, 46U, 47U, 2U, 3U}) {
+        const auto result = session.frame(probe, 0, n, 0, nullptr, {}, {}, {}, {}, preview);
+        check(std::holds_alternative<Frame>(result), "decode-ahead request decodes");
+        check(frameLuma(std::get<Frame>(result)) == 16 + n * 3,
+              "a request after decode-ahead returns its own exact frame");
+    }
+    ::unsetenv("BLOOM_VIDEO_HARDWARE_DECODE");
+}
+
 void colourInterpretation(const std::filesystem::path& directory) {
     using namespace bloom::media;
     const auto window = bloom::render::ImageWindow::create(0, 0, 4, 2);
@@ -917,6 +935,7 @@ int main(int argc, char** argv) {
         waiterAdmission();
         run(argv[1]);
         retainedRouting(argv[1]);
+        decodeAhead(argv[1]);
         colourInterpretation(argv[1]);
         chromaSiting(argv[1]);
         nativeSamples(argv[1]);

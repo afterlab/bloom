@@ -9,6 +9,10 @@ class DecodeSession final {
     explicit DecodeSession(bool hardware = false);
     ~DecodeSession();
     [[nodiscard]] provider::Payload call(const provider::CallRequest& request);
+    // Called after a reply is written, before the next request is read. When software video
+    // frames are being requested in order, decodes the next one so it is ready when asked for:
+    // the worker's decode then overlaps the host's handling of the frame it just sent.
+    void decodeAhead();
 
   private:
     struct State;

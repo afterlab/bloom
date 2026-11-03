@@ -17,6 +17,12 @@ struct Device final {
         return {};
     }
 };
+// The same request for another frame of the same stream.
+[[nodiscard]] bool sameVideoRequest(const provider::CallRequest& a, const provider::CallRequest& b) {
+    return a.capability == b.capability && a.source == b.source && a.width == b.width &&
+           a.height == b.height && a.stream == b.stream && a.samples == b.samples &&
+           a.sourceDigest == b.sourceDigest && a.snapshotBytes == b.snapshotBytes;
+}
 } // namespace
 struct DecodeSession::State final {
     explicit State(bool hardwareValue) : hardware(hardwareValue) {}
@@ -33,7 +39,15 @@ struct DecodeSession::State final {
     std::size_t node = 0;
     Device device;
     bool parityProven = false;
+    // Sequential software video requests: the last one served, whether it followed the one
+    // before it, and the next frame decoded ahead of its request.
+    std::optional<provider::CallRequest> lastVideo;
+    bool sequential = false;
+    std::optional<std::pair<provider::CallRequest, provider::FrameProduct>> ahead;
     void reset() {
+        lastVideo.reset();
+        sequential = false;
+        ahead.reset();
         input.reset();
         cursor = {};
         videoStream.reset();
@@ -102,6 +116,16 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
             state.cursor = {};
         }
         if (!state.hardware) {
+            state.sequential = state.lastVideo && sameVideoRequest(*state.lastVideo, request) &&
+                               state.lastVideo->frame + 1 == request.frame;
+            state.lastVideo = request;
+            if (state.ahead && sameVideoRequest(state.ahead->first, request) &&
+                state.ahead->first.frame == request.frame) {
+                auto result = std::move(state.ahead->second);
+                state.ahead.reset();
+                return result;
+            }
+            state.ahead.reset();
             auto result = video(*state.input, request, nullptr, &state.cursor);
             state.videoStream = request.stream;
             return result;
@@ -151,6 +175,24 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
     } catch (const std::filesystem::filesystem_error&) {
         state.reset();
         return provider::Unavailable{provider::Error::Io, "Media file unavailable"};
+    }
+}
+void DecodeSession::decodeAhead() {
+    auto& state = *state_;
+    if (state.hardware || !state.sequential || state.ahead || !state.lastVideo || !state.input)
+        return;
+    auto next = *state.lastVideo;
+    ++next.frame;
+    try {
+        av_log_set_level(AV_LOG_ERROR);
+        // The same retained decoder and cursor the request would use, one frame early: the bytes
+        // are those the request would decode. Past the end, or on any failure, nothing is held
+        // and the session resets exactly as a failed request does, so the next request reopens
+        // the source and decodes (and reports) its frame itself.
+        auto product = video(*state.input, next, nullptr, &state.cursor);
+        state.ahead.emplace(std::move(next), std::move(product));
+    } catch (...) {
+        state.reset();
     }
 }
 provider::Payload call(const provider::CallRequest& request, bool hardware) {

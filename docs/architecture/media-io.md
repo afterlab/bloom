@@ -1836,7 +1836,17 @@ fell back to software as designed.
 
 Decoded planes cross the worker pipe without digests (provider schema 8; see
 [frame output](frame-output.md)): the message is length-checked and every consumer of the
-immutable product (the decoded cache and color conversion) checks structure and budget. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
+immutable product (the decoded cache and color conversion) checks structure and budget.
+
+A retained software decoder pipelines in-order requests: after sending a frame, while the host
+handles it, the worker decodes the next frame of the same request when the last two requests were
+consecutive, and serves it at once when it is asked for. Any other request discards it; past the
+end of the stream, or on any failure, the session resets exactly as after a failed request. The
+worker keeps frame-sized allocations in its heap (glibc `M_MMAP_THRESHOLD` 32 MiB) instead of
+mapping and faulting in each frame again, about 21,000 page faults per 1080p frame, and Linux worker
+pipes use 1 MiB buffers. On the 1080p ProRes 422 HQ benchmark shot (project B) a RAM preview fill
+went from 21.6 to 29.4 fps at Full and from 22.7 to 28.6 fps at Quarter (benchmark runner, warm); hardware decode is
+unchanged. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
 Thumbnail and waveform/audio buffers reuse the existing bounded preview storage after the same
 content check; scrubbing does not decode the complete audio clip again.
 No operation-cache or memory-ledger implementation changes are required.

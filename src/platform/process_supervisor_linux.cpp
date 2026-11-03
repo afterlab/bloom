@@ -41,6 +41,7 @@ class Fd final {
   private:
     int fd_;
 };
+constexpr int kPipeBufferBytes = 1 << 20;
 bool makePipe(std::array<Fd, 2>& ends) {
     std::array<int, 2> raw{};
     if (::pipe2(raw.data(), O_CLOEXEC) != 0)
@@ -56,6 +57,10 @@ bool makePipe(std::array<Fd, 2>& ends) {
         }
         ends[i] = Fd(high);
     }
+    // Media frames are megabytes: a larger pipe buffer moves them in a few large copies instead
+    // of thousands of 64 KiB round trips between the processes. Best effort; the default stays
+    // correct when the system limit is lower.
+    static_cast<void>(::fcntl(ends[0].get(), F_SETPIPE_SZ, kPipeBufferBytes));
     return true;
 }
 class SpawnActions final {

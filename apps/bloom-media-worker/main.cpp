@@ -38,6 +38,11 @@ int main(int argc, char** argv) {
     // Decoder threads would otherwise each reserve a 64 MiB malloc arena inside the bounded
     // media-v1 address space.
     mallopt(M_ARENA_MAX, 4);
+    // Frame planes and messages are megabytes each. Above the default threshold every one is a
+    // fresh mapping whose pages fault in again on every frame (about 21,000 faults per 1080p
+    // frame); kept in the heap, a freed frame's memory is reused by the next.
+    mallopt(M_MMAP_THRESHOLD, 32 << 20);
+    mallopt(M_TRIM_THRESHOLD, 256 << 20);
 #endif
     bool retainedVideo = false;
 #ifdef BLOOM_FAKE_WORKER
@@ -170,6 +175,10 @@ int main(int argc, char** argv) {
                 kind = provider::MessageKind::EncodedChunk;
             if (!worker::write({kind, session, sequence, std::move(payload)}))
                 return 9;
+#if !defined(BLOOM_FAKE_WORKER) && !defined(BLOOM_VIDEOTOOLBOX_WORKER)
+            if (decoder && kind == provider::MessageKind::Frame)
+                decoder->decodeAhead();
+#endif
         }
     } catch (const std::exception&) {
         return 10;
