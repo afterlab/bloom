@@ -533,6 +533,13 @@ std::string_view ResolvedBloomNeutralConfig::sRgbTextureColorSpaceId() const& no
 std::string_view ResolvedBloomNeutralConfig::rec709VideoColorSpaceId() const& noexcept {
     return rec709VideoColorSpaceId_;
 }
+const DisplayViewEntry*
+viewerDefaultDisplayView(const std::span<const DisplayViewEntry> displays) noexcept {
+    const auto found =
+        std::ranges::find_if(displays, [](const auto& entry) { return entry.isViewerDefault; });
+    return found == displays.end() ? nullptr : &*found;
+}
+
 std::string_view displayViewLabel(const std::string_view ocioName) noexcept {
     // Bloom Neutral v1's display and view share its output colour space's identifier.
     if (ocioName == "srgb_rec709_display")

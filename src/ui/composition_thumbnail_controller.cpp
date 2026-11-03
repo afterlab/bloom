@@ -1,7 +1,9 @@
 #include <bloom/ui/composition_thumbnail_controller.hpp>
 
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/prepared_preview_frame.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
@@ -88,7 +90,8 @@ void CompositionThumbnailController::request(const document::CompositionId compo
     if (!preparation_ || !extent || !colorIntent || bridge_.isShuttingDown())
         return;
     // The composition's start, at a proxy extent, through the same preparation the Viewer's
-    // analysis uses; the display transform is the session's default view.
+    // analysis uses; the display transform is the Viewer's default display/view (resolved on the
+    // worker), never the config's own default view, which under ACES CG is a tone map.
     runtime::PreviewRequestIdentity identity;
     identity.projectId = snapshot.project().id();
     identity.compositionId = composition;
@@ -109,7 +112,15 @@ void CompositionThumbnailController::request(const document::CompositionId compo
             using Result = runtime::TaskResult<std::shared_ptr<const Prepared>>;
             if (context.isCancellationRequested())
                 return Result::cancelled();
-            auto prepared = preparation(snapshot, identity, limit, {}, context);
+            auto request = identity;
+            if (const auto config = runtime::detail::resolveInputColorConfig(request.colorIntent))
+                if (const auto* pair = color::viewerDefaultDisplayView(config->displays())) {
+                    request.displayName = pair->display;
+                    request.viewName = pair->view;
+                }
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            auto prepared = preparation(snapshot, request, limit, {}, context);
             if (context.isCancellationRequested())
                 return Result::cancelled();
             const auto& value = prepared.value();

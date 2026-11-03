@@ -1207,8 +1207,7 @@ void AssetController::startThumbnails() {
             std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> thumbnailDisplay;
             std::string thumbnailDisplayIdentity = "unavailable";
             if (auto config = runtime::detail::resolveInputColorConfig(colorIntent)) {
-                auto built = color::buildBloomNeutralCpuDisplayProcessor(*config);
-                auto handle = std::move(built).takeHandle();
+                auto handle = detail::buildAssetThumbnailDisplayProcessor(*config);
                 if (handle) {
                     const auto identity = detail::assetThumbnailDisplayCacheIdentity(*handle);
                     if (identity) {

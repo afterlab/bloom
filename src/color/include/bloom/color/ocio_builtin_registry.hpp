@@ -95,6 +95,12 @@ struct DisplayViewEntry final {
     friend bool operator==(const DisplayViewEntry&, const DisplayViewEntry&) = default;
 };
 
+// The entry marked isViewerDefault: the pair the Viewer starts on, which asset, node and
+// composition thumbnails also use and which a new export output records (issue #409). Null only
+// for an empty list (a resolved config always marks one).
+[[nodiscard]] const DisplayViewEntry*
+viewerDefaultDisplayView(std::span<const DisplayViewEntry> displays) noexcept;
+
 // The name an artist reads for an OCIO display or view name. The OCIO built-in configs name their
 // displays and views for people ("sRGB - Display", "ACES 1.0 - SDR Video") and come back unchanged;
 // Bloom Neutral names its single display and view by its interchange identifier

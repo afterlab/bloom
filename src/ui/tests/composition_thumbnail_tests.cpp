@@ -8,6 +8,8 @@
 #include <QThread>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
@@ -151,6 +153,40 @@ int main(int argc, char** argv) {
     expect(waitUntil([&] { return centre(*thumbnail).blue() > 200; }),
            "the header updates to the edited composition");
     expect(fixture.thumbnails.current(composition), "the frame now matches the revision");
+
+    // Issue #409: under ACES CG the thumbnail uses the Viewer's default display/view (sRGB -
+    // Display / Un-tone-mapped), not the config's tone-mapped default: scene-linear 18% gray is
+    // sRGB code value 118, as the Viewer shows it.
+    {
+        const auto revision = color::ocioBuiltInContentRevision(
+            color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+        expect(revision.has_value(), "the ACES config is available");
+        if (revision) {
+            Fixture aces;
+            auto settings = aces.session.colorSettings();
+            settings.processColorSpaceId = std::string(color::kAcesCgV1SceneLinearColorSpaceId);
+            settings.ocioConfig.locator =
+                document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)};
+            settings.ocioConfig.expectedRevision = {
+                .algorithm = document::OcioRevisionAlgorithm::Sha256, .digest = *revision};
+            aces.session.setColorSettings(settings);
+            expect(aces.session.addSolidLayer("Gray", core::Color4d{0.18, 0.18, 0.18, 1.0}),
+                   "gray solid added");
+            const auto id = aces.session.compositionId();
+            (void)aces.thumbnails.thumbnail(id); // asks for the frame on a worker
+            expect(waitUntil([&] {
+                       (void)aces.thumbnails.thumbnail(id);
+                       return aces.thumbnails.current(id);
+                   }),
+                   "the ACES composition frame is prepared");
+            const auto image = aces.thumbnails.thumbnail(id);
+            const auto gray =
+                image.isNull() ? QColor{} : image.pixelColor(image.width() / 2, image.height() / 2);
+            std::cerr << "  ACES composition thumbnail centre: " << gray.red() << '\n';
+            expect(gray.red() >= 116 && gray.red() <= 119,
+                   "the ACES composition thumbnail shows 18% gray un-tone-mapped (118)");
+        }
+    }
 
     if (failures != 0)
         return 1;

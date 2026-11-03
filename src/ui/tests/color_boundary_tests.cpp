@@ -1,4 +1,6 @@
 #include "asset_thumbnail_display.hpp"
+
+#include <algorithm>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_frame.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -482,6 +484,9 @@ void migrationPin() {
                reopened.snapshot().revision() == revision && reopenedStack.size() == 0,
            "migrated old document keeps every stored color number; UI adds no command");
 }
+// Issue #409: asset (and node card) thumbnails display through the Viewer's default pair, never
+// the configuration's own default view: un-tone-mapped sRGB under ACES CG, the single neutral
+// pair under Bloom Neutral.
 void acesThumbnailDisplayPin() {
     const auto revision = color::ocioBuiltInContentRevision(
         color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
@@ -494,20 +499,37 @@ void acesThumbnailDisplayPin() {
     if (!resolution.ready())
         return;
     auto config = std::move(resolution).takeResolved();
-    auto built = color::buildBloomNeutralCpuDisplayProcessor(*config);
-    expect(built.succeeded(), "ACES thumbnail display processor builds");
-    if (!built.succeeded())
+    auto handle = ui::detail::buildAssetThumbnailDisplayProcessor(*config);
+    expect(handle.has_value(), "ACES thumbnail display processor builds");
+    auto untone =
+        color::buildCpuDisplayProcessorForView(*config, "sRGB - Display", "Un-tone-mapped");
+    auto toneMapped = color::buildBloomNeutralCpuDisplayProcessor(*config);
+    expect(untone.succeeded() && toneMapped.succeeded(), "ACES comparison processors build");
+    if (!handle || !untone.succeeded() || !toneMapped.succeeded())
         return;
-    auto handle = std::move(built).takeHandle();
-    const auto pixel = render::Rgba32f::fromPremultiplied(1.0F, 1.0F, 1.0F, 1.0F);
-    expect(pixel.hasValue(), "ACES thumbnail white pixel constructs");
-    if (!pixel || !handle)
+    const auto same = [](const color::PreparedCpuDisplayProcessorHandle& left,
+                         const color::PreparedCpuDisplayProcessorHandle& right) {
+        return std::ranges::equal(left.identity().canonicalBytes(),
+                                  right.identity().canonicalBytes());
+    };
+    expect(same(*handle, *untone.handle()),
+           "ACES thumbnail uses the Viewer's sRGB - Display / Un-tone-mapped default");
+    expect(!same(*handle, *toneMapped.handle()),
+           "ACES thumbnail does not use the config's tone-mapped default view");
+    const auto pixel = render::Rgba32f::fromPremultiplied(0.18F, 0.18F, 0.18F, 1.0F);
+    expect(pixel.hasValue(), "ACES thumbnail gray pixel constructs");
+    if (!pixel)
         return;
     const std::array source{*pixel.value()};
     std::array<float, 4> scratch{};
     std::array<render::Rgba8, 1> thumbnail{};
+    std::array<render::Rgba8, 1> graded{};
     expect(ui::detail::packAssetThumbnailRow(*handle, source, scratch, thumbnail),
            "ACES thumbnail uses qualified display packing");
+    expect(ui::detail::packAssetThumbnailRow(*toneMapped.handle(), source, scratch, graded),
+           "ACES tone-mapped comparison packs");
+    expect(thumbnail[0].red >= 117 && thumbnail[0].red <= 118 && thumbnail[0].red != graded[0].red,
+           "ACES thumbnail shows 18% gray as sRGB 118, not the ACES tone map");
     const auto window = render::ImageWindow::create(0, 0, 1, 1);
     if (!window)
         return;
@@ -527,9 +549,8 @@ void acesThumbnailDisplayPin() {
     if (!view)
         return;
     auto displayed = color::produceBloomNeutralDisplayFrame(*handle, *view.value(), 1, 1024);
-    expect(displayed.hasValue() && displayed.value()->pixels()[0] == thumbnail[0] &&
-               thumbnail[0].red < 255 && thumbnail[0].green < 255 && thumbnail[0].blue < 255,
-           "ACES thumbnail matches qualified display output, not fixed sRGB white");
+    expect(displayed.hasValue() && displayed.value()->pixels()[0] == thumbnail[0],
+           "ACES thumbnail matches qualified display output");
     const auto defaultIdentity = ui::detail::assetThumbnailDisplayCacheIdentity(*handle);
     auto review = color::buildBloomNeutralCpuDisplayProcessor(*config, "Rec.1886 Rec.709 - Display",
                                                               "ACES 1.0 - SDR Video");
@@ -541,6 +562,19 @@ void acesThumbnailDisplayPin() {
                    defaultIdentity != reviewIdentity,
                "thumbnail proxy key changes with qualified display identity");
     }
+
+    auto neutralResolution = color::resolveOcioBuiltIn(
+        color::OcioConfigLocatorKind::BloomBuiltIn, color::kBloomNeutralV1ConfigUri,
+        color::kBloomNeutralV1ConfigDigest, "lin_rec709_scene");
+    auto neutral = std::move(neutralResolution).takeResolved();
+    expect(neutral.has_value(), "Bloom Neutral thumbnail config resolves");
+    if (!neutral)
+        return;
+    const auto neutralThumbnail = ui::detail::buildAssetThumbnailDisplayProcessor(*neutral);
+    auto neutralDefault = color::buildBloomNeutralCpuDisplayProcessor(*neutral);
+    expect(neutralThumbnail && neutralDefault.succeeded() &&
+               same(*neutralThumbnail, *neutralDefault.handle()),
+           "a Bloom Neutral thumbnail keeps its single display/view (unchanged identity)");
 }
 } // namespace
 int main(int argc, char** argv) try {
