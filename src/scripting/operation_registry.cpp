@@ -2975,8 +2975,7 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.stop-animating-mask-path",
         {compositionArgument(), layerArgument(), maskArgument(),
          need("path", ValueKind::Path, examplePath(),
-              "The constant outline the mask keeps once its keys are removed. " +
-                  kPathObject)},
+              "The constant outline the mask keeps once its keys are removed. " + kPathObject)},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);

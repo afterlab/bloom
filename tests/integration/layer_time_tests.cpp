@@ -326,8 +326,8 @@ struct NestedFixture {
         return result;
     }
     NestedFixture() {
-        const auto format = *document::CompositionFormat::create(
-            16, 4, core::PixelAspectRatio::square(), rate(24));
+        const auto format =
+            *document::CompositionFormat::create(16, 4, core::PixelAspectRatio::square(), rate(24));
         run<commands::AddComposition>("Inner", format, rate(24), at(2));
         inner = document.snapshot().project().compositions().back().id();
         const auto solid =

@@ -133,14 +133,15 @@ inline std::optional<OperationResult> validateGraph(
 // mattes. A parent link and a matte share one same-time evaluation order (docs/architecture/
 // layer-graph-model.md, Transform Parenting), so that layer would wait on itself. The generic cycle
 // refusal is replaced by one that names both layers and the way out.
-inline std::optional<OperationResult> matteParentedToItsTarget(const document::CanonicalGraph& graph) {
+inline std::optional<OperationResult>
+matteParentedToItsTarget(const document::CanonicalGraph& graph) {
     for (const auto& target : graph.layerOutputs()) {
         if (!target.trackMatte)
             continue;
         const auto source = target.trackMatte->source;
         std::size_t remaining = graph.layerOutputs().size();
-        for (const auto* layer = graph.findLayer(source); layer != nullptr && layer->parent &&
-                                                          remaining-- > 0;
+        for (const auto* layer = graph.findLayer(source);
+             layer != nullptr && layer->parent && remaining-- > 0;
              layer = graph.findLayer(*layer->parent)) {
             if (*layer->parent != target.layerId)
                 continue;
@@ -155,7 +156,8 @@ inline std::optional<OperationResult> matteParentedToItsTarget(const document::C
                                               : " through " + name(layer->layerId)) +
                     ". Bloom evaluates a parent link and a matte in one order, so a layer's matte "
                     "cannot be its own child; unparent the matte layer or matte with a copy of it "
-                    "that is not parented to " + name(target.layerId) + ".");
+                    "that is not parented to " +
+                    name(target.layerId) + ".");
         }
     }
     return std::nullopt;

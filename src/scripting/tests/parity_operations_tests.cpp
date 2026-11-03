@@ -124,9 +124,10 @@ void layerOperations() {
     expect(fixture.stack(fixture.main).size() == 3, "redo restores the copy");
 
     // #434 O5: a layer named N times is copied N times, one "layer" output per mention.
-    auto repeated = fixture.run("bloom.layer.duplicate",
-                                {{"composition", Value(StableId{fixture.main.value()})},
-                                 {"layers", Value(ids({blue.value(), blue.value(), blue.value()}))}});
+    auto repeated =
+        fixture.run("bloom.layer.duplicate",
+                    {{"composition", Value(StableId{fixture.main.value()})},
+                     {"layers", Value(ids({blue.value(), blue.value(), blue.value()}))}});
     const auto repeatedCopies = Fixture::outputs<document::LayerId>(repeated, "layer");
     stack = fixture.stack(fixture.main);
     expect(repeated.succeeded() && repeatedCopies.size() == 3 && stack.size() == 6 &&
@@ -382,13 +383,14 @@ void pathValues() {
                            const std::optional<document::Vec2d> in = std::nullopt,
                            const std::optional<document::Vec2d> out = std::nullopt,
                            const document::PathAnchorMode mode = document::PathAnchorMode::Corner) {
-        return document::PathAnchor{.point = {x, y}, .inHandle = in, .outHandle = out, .mode = mode};
+        return document::PathAnchor{
+            .point = {x, y}, .inHandle = in, .outHandle = out, .mode = mode};
     };
     document::PathValue outline;
     outline.closed = true;
-    outline.anchors = {anchor(0, 0), anchor(100, 0, document::Vec2d{80, -20},
-                                             document::Vec2d{120, 20},
-                                             document::PathAnchorMode::Mirrored),
+    outline.anchors = {anchor(0, 0),
+                       anchor(100, 0, document::Vec2d{80, -20}, document::Vec2d{120, 20},
+                              document::PathAnchorMode::Mirrored),
                        anchor(50, 80)};
     auto shape = fixture.run("bloom.layer.add-shape",
                              {{"composition", Value(StableId{fixture.main.value()})},
@@ -455,8 +457,8 @@ void addFeedingInserts() {
     const auto layerNode = boundary->nodeId;
     const document::InputPortRef image =
         document::NodeInputRef{layerNode, std::string(document::kLayerOutputContentInputPort)};
-    const auto feeding = [&](const document::InputPortRef& input)
-        -> std::optional<document::OutputPortRef> {
+    const auto feeding =
+        [&](const document::InputPortRef& input) -> std::optional<document::OutputPortRef> {
         fixture.refresh();
         for (const auto& edge : fixture.composition(fixture.main).graph().edges())
             if (edge.destination == input)
@@ -466,11 +468,12 @@ void addFeedingInserts() {
     const auto original = feeding(image);
     expect(original.has_value(), "the solid feeds the layer's image");
 
-    auto added = fixture.run("bloom.node.add-feeding",
-                             {{"composition", Value(StableId{fixture.main.value()})},
-                              {"nodeType", Value("bloom.ocio-colour-space-transform")},
-                              {"node", Value(StableId{layerNode.value()})},
-                              {"port", Value(std::string(document::kLayerOutputContentInputPort))}});
+    auto added =
+        fixture.run("bloom.node.add-feeding",
+                    {{"composition", Value(StableId{fixture.main.value()})},
+                     {"nodeType", Value("bloom.ocio-colour-space-transform")},
+                     {"node", Value(StableId{layerNode.value()})},
+                     {"port", Value(std::string(document::kLayerOutputContentInputPort))}});
     const auto inserted = Fixture::outputs<document::NodeId>(added, "editorNode");
     expect(added.succeeded() && inserted.size() == 1, "add-feeding adds the transform");
     if (inserted.empty() || !original)

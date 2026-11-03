@@ -230,7 +230,8 @@ OperationResult AddEditorNode::apply(document::Draft& draft) const {
                 draft.project().findComposition(composition_)->graph().outputKind(*previous);
             std::optional<document::InputPortRef> upstream;
             if (definition->layerSlotInput && previousKind == definition->layerSlotInput->valueKind)
-                upstream = document::LayerStackInputRef{*node, {}, definition->layerSlotInput->role};
+                upstream =
+                    document::LayerStackInputRef{*node, {}, definition->layerSlotInput->role};
             for (const auto& input : definition->inputs)
                 if (!upstream && previousKind == input.valueKind)
                     upstream = document::NodeInputRef{*node, input.name};
