@@ -4,6 +4,7 @@
 #include <bloom/core/sha256.hpp>
 #include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/render/native_samples.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -80,6 +81,9 @@ enum class ImageDiagnosticCode : std::uint8_t {
     ChannelNotFound,
     NoColourChannels,
     UnsupportedChannelSetFormat,
+    // #422: the source has no native-sample decode (TIFF, a FLOAT or UINT OpenEXR colour layer, a
+    // converted interpretation); the float decode applies.
+    NativeSamplesUnavailable,
 };
 
 using ImageChannelSampleKind = render::ChannelSampleKind;
@@ -226,6 +230,19 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
             const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
             std::size_t hostByteBudget = kMaxImageStorageBytes,
             ImageDecodeStatistics* statistics = nullptr);
+
+// #422: the raw decode's samples in their native layout, for the GPU route: a PNG or JPEG's 16-bit
+// RGBA samples, or an all-half OpenEXR colour layer's binary16 samples, with the SampleConvertV1
+// parameters that make render::convertNativeSamples(result) equal decodeImage(revision,
+// interpretation) value for value (and the same repaired-pixel count). `interpretation` must be a
+// raw one (ImageColorSpace::Raw without an input colour space). Any other source or interpretation
+// (TIFF, a FLOAT or UINT OpenEXR layer) returns NativeSamplesUnavailable and the caller decodes to
+// float instead.
+[[nodiscard]] ImageResult<std::shared_ptr<const render::NativeSampleImage>>
+decodeImageSamples(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
+                   const CancelImageWork& cancel = {},
+                   std::size_t hostByteBudget = kMaxImageStorageBytes,
+                   ImageDecodeStatistics* statistics = nullptr);
 
 // ADR 0026 channel-set decode. `part` selects an OpenEXR part (empty: the first); `channels` names
 // the channels to decode in order (empty: every channel of the part). Values are source values:

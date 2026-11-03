@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
 namespace bloom::color {
 // H.273 Rec.709 matrix; samples are in 8-bit code units, transfer 1=709,13=sRGB,8=linear.
 [[nodiscard]] std::array<float, 3> rec709YuvToSceneLinear(float luma, float cb, float cr,
@@ -9,4 +10,9 @@ namespace bloom::color {
 // BT.709 is bit-identical to rec709YuvToSceneLinear; other codes return NaN.
 [[nodiscard]] std::array<float, 3> yuvToSceneLinear(float luma, float cb, float cr, bool limited,
                                                     std::int32_t transfer, std::int32_t matrix);
+// The four non-trivial coefficients of the YUV matrix exactly as yuvToSceneLinear evaluates it:
+// R = yy + [0] * v, G = (yy - [1] * u) - [2] * v, B = yy + [3] * u. Each is the same binary32
+// expression yuvToSceneLinear computes, so a kernel multiplying by them reproduces it (#422).
+// Unsupported matrix codes return nullopt.
+[[nodiscard]] std::optional<std::array<float, 4>> yuvMatrixCoefficients(std::int32_t matrix);
 } // namespace bloom::color

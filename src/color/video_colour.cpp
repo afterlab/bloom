@@ -41,4 +41,16 @@ std::array<float, 3> yuvToSceneLinear(float luma, float cb, float cr, bool limit
         inverse(yy - 2.0F * kb * (1.0F - kb) / kg * u - 2.0F * kr * (1.0F - kr) / kg * v, transfer),
         inverse(yy + 2.0F * (1.0F - kb) * u, transfer)};
 }
+std::optional<std::array<float, 4>> yuvMatrixCoefficients(const std::int32_t matrix) {
+    if (matrix == 1)
+        return std::array<float, 4>{1.5748F, 0.18732427F, 0.46812427F, 1.8556F};
+    const auto [kr, kb] = matrix == 9                  ? std::pair{0.2627F, 0.0593F}
+                          : matrix == 5 || matrix == 6 ? std::pair{0.299F, 0.114F}
+                                                       : std::pair{-1.0F, -1.0F};
+    if (kr < 0)
+        return std::nullopt;
+    const auto kg = 1.0F - kr - kb;
+    return std::array<float, 4>{2.0F * (1.0F - kr), 2.0F * kb * (1.0F - kb) / kg,
+                                2.0F * kr * (1.0F - kr) / kg, 2.0F * (1.0F - kb)};
+}
 } // namespace bloom::color

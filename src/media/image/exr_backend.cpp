@@ -774,6 +774,166 @@ decodeExrParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interp
                           pixelBudget);
 }
 
+// #422: the selected colour layer's binary16 samples interleaved as R, G, B, A (Y in lane 0 for a
+// luminance layer), read by OpenEXR without any conversion. The ingest repairs the float decode
+// would make are counted from the bits; SampleConvertV1 applies them on the device.
+static ImageResult<ExrHalfSamples>
+decodeExrHalfParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interpretation,
+                   const CancelImageWork& cancel, const std::size_t pixelBudget) {
+    using Decoded = ExrHalfSamples;
+    if (const auto error = validateVersion(static_cast<std::uint32_t>(input.version())))
+        return failure<Decoded>(*error, "OpenEXR version or flags are unsupported");
+    const auto index = findPartIndex(input, interpretation.part);
+    if (!index)
+        return failure<Decoded>(ImageDiagnosticCode::PartNotFound,
+                                "The selected OpenEXR part is not present");
+    ImageDiagnosticCode error = ImageDiagnosticCode::InvalidHeader;
+    const auto& header = input.header(*index);
+    const auto layout = inspectHeader(header, interpretation.layer, error);
+    if (!layout)
+        return failure<Decoded>(error, "OpenEXR header is unsupported or invalid");
+    if (!interpretation.layer.empty() && !layout->layerFound)
+        return failure<Decoded>(ImageDiagnosticCode::LayerNotFound,
+                                "The selected OpenEXR layer is not present");
+    if (!layout->colour)
+        return failure<Decoded>(ImageDiagnosticCode::NoColourChannels,
+                                "No color layer — use Channels");
+    // Only an all-HALF, unsubsampled colour layer crosses as native samples; FLOAT and UINT
+    // channels keep the float decode.
+    const std::size_t laneCount = layout->luminance ? 1U : 3U;
+    for (std::size_t lane = 0; lane < 4; ++lane) {
+        if (lane >= laneCount && lane != 3)
+            continue;
+        if (lane == 3 && !layout->hasAlpha)
+            continue;
+        const auto* channel = header.channels().findChannel(layout->colourNames[lane]);
+        if (channel == nullptr || channel->type != Imf::HALF || channel->xSampling != 1 ||
+            channel->ySampling != 1)
+            return failure<Decoded>(ImageDiagnosticCode::NativeSamplesUnavailable,
+                                    "OpenEXR colour channels are not all half");
+    }
+    const auto width = layout->width;
+    const auto height = layout->height;
+    std::uint64_t bytes = 0;
+    if (!detail::checkedSizeProduct(width, height, bytes) ||
+        !detail::checkedSizeProduct(bytes, 8U, bytes) || bytes > pixelBudget)
+        return failure<Decoded>(ImageDiagnosticCode::PixelBudgetExceeded,
+                                "Decoded samples exceed the pixel storage budget");
+    if (cancelled(cancel))
+        return failure<Decoded>(ImageDiagnosticCode::Cancelled, "Image decode cancelled");
+    Decoded decoded;
+    decoded.layout.dataX = layout->dataWindow.min.x;
+    decoded.layout.dataY = layout->dataWindow.min.y;
+    decoded.layout.width = width;
+    decoded.layout.height = height;
+    decoded.layout.displayX = layout->displayWindow.min.x;
+    decoded.layout.displayY = layout->displayWindow.min.y;
+    decoded.layout.displayWidth = layout->displayWidth;
+    decoded.layout.displayHeight = layout->displayHeight;
+    decoded.layout.luminance = layout->luminance;
+    decoded.layout.hasAlpha = layout->hasAlpha;
+    decoded.layout.premultiplied =
+        (interpretation.alphaAssociation == ImageAlphaAssociation::Auto
+             ? layout->alphaAssociation
+             : interpretation.alphaAssociation) == ImageAlphaAssociation::Premultiplied;
+    auto storage = std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(bytes));
+    const auto rowStride = static_cast<std::size_t>(width) * 8U;
+    constexpr std::uint64_t kBandTargetBytes = std::uint64_t{1024} * 1024U;
+    std::uint64_t chunkRows = layout->tiled
+                                  ? std::max<std::uint64_t>(1U, layout->tileHeight)
+                                  : std::max<std::uint64_t>(1U, kBandTargetBytes / rowStride);
+    chunkRows = std::min(chunkRows, height);
+    Imf::InputPart part(input, *index);
+    Imf::FrameBuffer frameBuffer;
+    // Slices address absolute data-window coordinates; the buffer starts at the data window.
+    auto* const base = reinterpret_cast<char*>(storage->data());
+    const auto origin = Imath::V2i(layout->dataWindow.min.x, layout->dataWindow.min.y);
+    const auto insert = [&](const std::string& name, const std::size_t lane) {
+        frameBuffer.insert(name, Imf::Slice::Make(Imf::HALF, base + lane * 2U, origin,
+                                                  static_cast<std::int64_t>(width),
+                                                  static_cast<std::int64_t>(height), 8U,
+                                                  rowStride));
+    };
+    insert(layout->colourNames[0], 0);
+    if (!layout->luminance) {
+        insert(layout->colourNames[1], 1);
+        insert(layout->colourNames[2], 2);
+    }
+    if (layout->hasAlpha)
+        insert(layout->colourNames[3], 3);
+    part.setFrameBuffer(frameBuffer);
+    std::uint64_t completed = 0;
+    while (completed < height) {
+        if (cancelled(cancel))
+            return failure<Decoded>(ImageDiagnosticCode::Cancelled, "Image decode cancelled");
+        const auto first = layout->tiled ? (completed / chunkRows) * chunkRows : completed;
+        const auto count = std::min(chunkRows, height - first);
+        const auto firstY = static_cast<std::int64_t>(layout->dataWindow.min.y) +
+                            static_cast<std::int64_t>(first);
+        part.readPixels(static_cast<int>(firstY),
+                        static_cast<int>(firstY + static_cast<std::int64_t>(count) - 1));
+        completed = first + count;
+    }
+    if (!part.isComplete())
+        return failure<Decoded>(ImageDiagnosticCode::Truncated, "OpenEXR pixel data is truncated");
+    decoded.repairedPixels = countExrHalfRepairs(*storage, decoded.layout, interpretation.storedSamples);
+    decoded.bytes = std::move(storage);
+    return {std::move(decoded), {}};
+}
+
+ImageResult<ExrHalfSamples> decodeExrHalfSamples(const std::span<const std::byte> bytes,
+                                                 const ImageInterpretation& interpretation,
+                                                 const CancelImageWork& cancel,
+                                                 const std::size_t budget) {
+    try {
+        RevisionStream stream(bytes);
+        Imf::MultiPartInputFile input(stream, 1);
+        return decodeExrHalfParts(input, interpretation, cancel, budget);
+    } catch (const std::bad_alloc&) {
+        return failure<ExrHalfSamples>(ImageDiagnosticCode::AllocationFailure,
+                                       "OpenEXR decode allocation failed");
+    } catch (...) {
+        return failure<ExrHalfSamples>(ImageDiagnosticCode::Truncated,
+                                       "OpenEXR revision pixel data could not be decoded");
+    }
+}
+
+std::uint64_t countExrHalfRepairs(const std::span<const std::byte> bytes,
+                                  const ExrHalfLayout& layout, const bool storedSamples) noexcept {
+    const auto half = [&](const std::size_t offset) {
+        return static_cast<std::uint32_t>(std::to_integer<std::uint32_t>(bytes[offset]) |
+                                          (std::to_integer<std::uint32_t>(bytes[offset + 1]) << 8U));
+    };
+    const auto nonFinite = [](const std::uint32_t bits) { return (bits & 0x7C00U) == 0x7C00U; };
+    std::uint64_t repaired = 0;
+    const auto pixels = static_cast<std::size_t>(layout.width) * static_cast<std::size_t>(layout.height);
+    for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
+        const auto offset = pixel * 8U;
+        std::array<std::uint32_t, 4> lanes{half(offset), half(offset + 2), half(offset + 4),
+                                           layout.hasAlpha ? half(offset + 6) : 0x3C00U};
+        if (layout.luminance)
+            lanes[1] = lanes[2] = lanes[0];
+        bool flagged = false;
+        for (auto& lane : lanes)
+            if (nonFinite(lane)) {
+                lane = 0;
+                flagged = true;
+            }
+        const auto alpha = lanes[3];
+        const bool negative = (alpha & 0x8000U) != 0 && (alpha & 0x7FFFU) != 0;
+        const bool aboveOne = (alpha & 0x8000U) == 0 && alpha > 0x3C00U;
+        flagged = flagged || negative || aboveOne;
+        const bool zeroAlpha = negative || (alpha & 0x7FFFU) == 0;
+        // Premultiplied RGB at zero alpha (additive emission) is dropped and reported.
+        if (!storedSamples && layout.premultiplied && zeroAlpha &&
+            ((lanes[0] & 0x7FFFU) != 0 || (lanes[1] & 0x7FFFU) != 0 || (lanes[2] & 0x7FFFU) != 0))
+            flagged = true;
+        if (flagged)
+            ++repaired;
+    }
+    return repaired;
+}
+
 ImageResult<ImageProbe> probeExr(const std::span<const std::byte> bytes,
                                  const core::Sha256Digest digest, const CancelImageWork& cancel) {
     if (cancelled(cancel))

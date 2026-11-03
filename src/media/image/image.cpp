@@ -3,6 +3,7 @@
 #include "image_work_statistics.hpp"
 #include "stb_image_adapter.hpp"
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
@@ -687,6 +688,136 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
         return decodeImageImpl({}, &revision, interpretation, std::move(processor), cancel,
                                progress, hostByteBudget - revision.retainedBytes(),
                                revision.probe().contentDigest, nullptr);
+    }();
+    if (!decoded.value)
+        decodeTime.cancel();
+    else
+        decodeTime.end();
+    if (statistics)
+        statistics->repairedPixels = decoded.repairedPixels;
+    return decoded;
+}
+
+// #422: a still's decoded samples in their native layout for the GPU route. PNG and JPEG keep the
+// decoder's 16-bit RGBA samples and an all-half OpenEXR colour layer its binary16 samples; the
+// SampleConvertV1 parameters reproduce decodeImage's raw conversion of the same interpretation.
+static ImageResult<std::shared_ptr<const render::NativeSampleImage>>
+decodeImageSamplesImpl(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
+                       const CancelImageWork& cancel, const std::size_t pixelBudget) {
+    using Decoded = std::shared_ptr<const render::NativeSampleImage>;
+    static_assert(std::endian::native == std::endian::little,
+                  "native samples are uploaded as little-endian words");
+    const auto unavailable = [](std::string detail) {
+        return ImageResult<Decoded>{{}, std::move(detail), false,
+                                    ImageDiagnosticCode::NativeSamplesUnavailable};
+    };
+    // Only the raw decode (no colour conversion) has a native-sample form.
+    if (interpretation.colorSpace != ImageColorSpace::Raw ||
+        !interpretation.inputColorSpaceId.empty())
+        return unavailable("Only a raw decode has native samples");
+    const auto bytes = revision.bytes();
+    const auto view = bytes.first(std::min(bytes.size(), kImageHeaderBytes));
+    render::NativeSampleConversion conversion;
+    conversion.storedSamples = interpretation.storedSamples;
+    if (isExrMagic(view)) {
+        auto decoded = detail::decodeExrHalfSamples(bytes, interpretation, cancel, pixelBudget);
+        if (!decoded.value)
+            return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
+        const auto& layout = decoded.value->layout;
+        const auto data = render::ImageWindow::create(layout.dataX, layout.dataY, layout.width,
+                                                      layout.height);
+        const auto display = render::ImageWindow::create(
+            layout.displayX, layout.displayY, layout.displayWidth, layout.displayHeight);
+        if (!data || !display)
+            return {{}, "OpenEXR image window is invalid", false,
+                    ImageDiagnosticCode::InvalidDataWindow};
+        const auto descriptor = render::Rgba32fImageDescriptor::create(
+            *data.value(), *display.value(), core::PixelAspectRatio::square());
+        if (!descriptor)
+            return {{}, "OpenEXR image descriptor is invalid", false,
+                    ImageDiagnosticCode::InvalidDataWindow};
+        conversion.layout = render::NativeSampleLayout::RgbaHalf;
+        conversion.alpha = layout.premultiplied ? render::NativeSampleAlpha::Premultiplied
+                                                : render::NativeSampleAlpha::Straight;
+        conversion.luminance = layout.luminance;
+        conversion.hasAlpha = layout.hasAlpha;
+        const auto& storage = decoded.value->bytes;
+        const render::NativeSamplePlane plane{std::span<const std::byte>(*storage),
+                                              static_cast<std::uint32_t>(layout.width),
+                                              static_cast<std::uint32_t>(layout.height),
+                                              static_cast<std::uint32_t>(layout.width * 8U)};
+        auto samples = render::NativeSampleImage::create(*descriptor.value(), conversion,
+                                                         std::span(&plane, 1), storage);
+        if (!samples)
+            return {{}, "OpenEXR samples do not match their layout", false,
+                    ImageDiagnosticCode::DecodeFailed};
+        ImageResult<Decoded> result{*samples.value(), {}};
+        result.repairedPixels = decoded.value->repairedPixels;
+        return result;
+    }
+    if (isTiffMagic(view))
+        return unavailable("TIFF stills are decoded by a provider");
+    detail::ImageInfo info;
+    if (!detail::imageInfo(bytes, info) || !validInfo(info))
+        return {{}, "Invalid PNG/JPEG header or image dimensions", false,
+                ImageDiagnosticCode::InvalidHeader};
+    if (cancelled(cancel))
+        return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+    auto decodedSamples = detail::imageSamples(bytes, info, pixelBudget);
+    if (decodedSamples.empty())
+        return {{}, "PNG/JPEG decode failed or exceeded the pixel budget", false,
+                ImageDiagnosticCode::DecodeFailed};
+    if (cancelled(cancel))
+        return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+    const auto width = static_cast<std::uint32_t>(info.width);
+    const auto height = static_cast<std::uint32_t>(info.height);
+    const auto window = render::ImageWindow::create(0, 0, width, height);
+    if (!window)
+        return {{}, "Invalid PNG/JPEG image dimensions", false, ImageDiagnosticCode::InvalidHeader};
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *window.value(), *window.value(), core::PixelAspectRatio::square());
+    if (!descriptor)
+        return {{}, "Invalid PNG/JPEG image dimensions", false, ImageDiagnosticCode::InvalidHeader};
+    // The raw decode unpremultiplies a still declared premultiplied before associating alpha.
+    conversion.layout = render::NativeSampleLayout::Rgba16;
+    conversion.alpha = interpretation.alphaAssociation == ImageAlphaAssociation::Premultiplied
+                           ? render::NativeSampleAlpha::Unpremultiply
+                           : render::NativeSampleAlpha::Straight;
+    auto storage = std::make_shared<const std::vector<std::uint16_t>>(std::move(decodedSamples));
+    const render::NativeSamplePlane plane{
+        std::as_bytes(std::span<const std::uint16_t>(*storage)), width, height, width * 8U};
+    auto samples = render::NativeSampleImage::create(*descriptor.value(), conversion,
+                                                     std::span(&plane, 1), storage);
+    if (!samples)
+        return {{}, "PNG/JPEG samples do not match their layout", false,
+                ImageDiagnosticCode::DecodeFailed};
+    return {*samples.value(), {}};
+}
+
+ImageResult<std::shared_ptr<const render::NativeSampleImage>>
+decodeImageSamples(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
+                   const CancelImageWork& cancel, const std::size_t hostByteBudget,
+                   ImageDecodeStatistics* statistics) {
+    if (statistics)
+        *statistics = {};
+    if (cancelled(cancel))
+        return {{}, {}, true, ImageDiagnosticCode::Cancelled};
+    if (revision.retainedBytes() >= hostByteBudget)
+        return {{},
+                "Image revision and decode exceed the host byte budget",
+                false,
+                ImageDiagnosticCode::PixelBudgetExceeded};
+    core::telemetry::StageTimer decodeTime(core::telemetry::Stage::Decode);
+    auto decoded = [&] {
+        const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
+        try {
+            return decodeImageSamplesImpl(revision, interpretation, cancel,
+                                          hostByteBudget - revision.retainedBytes());
+        } catch (const std::exception&) {
+            return ImageResult<std::shared_ptr<const render::NativeSampleImage>>{
+                {}, "Image decode allocation or I/O failed", false,
+                ImageDiagnosticCode::AllocationFailure};
+        }
     }();
     if (!decoded.value)
         decodeTime.cancel();

@@ -34,6 +34,16 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_media_image_test)
     bloom_add_test(NAME bloom.media.image COMMAND bloom_media_image_test LABELS unit media)
 
+    add_executable(bloom_media_image_native_samples_test tests/image_native_samples_tests.cpp)
+    target_link_libraries(bloom_media_image_native_samples_test PRIVATE bloom_media_image
+        bloom_render bloom_output ZLIB::ZLIBSTATIC OpenEXR::OpenEXR)
+    target_include_directories(bloom_media_image_native_samples_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/output/tests ${CMAKE_CURRENT_SOURCE_DIR})
+    bloom_enable_warnings(bloom_media_image_native_samples_test)
+    bloom_enable_strict_floating_point(bloom_media_image_native_samples_test)
+    bloom_add_test(NAME bloom.media.image_native_samples
+        COMMAND bloom_media_image_native_samples_test LABELS unit media)
+
     add_executable(bloom_media_exr_channel_test tests/exr_channel_tests.cpp)
     target_link_libraries(bloom_media_exr_channel_test PRIVATE bloom_media_image bloom_output
         ZLIB::ZLIBSTATIC OpenEXR::OpenEXR)

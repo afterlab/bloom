@@ -2,6 +2,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/media/provider/contract.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/render/native_samples.hpp>
 #include <functional>
 #include <memory>
 #include <string>
@@ -94,4 +95,13 @@ videoToInputColorSpace(const media::provider::FrameProduct& frame, std::uint32_t
 videoToStoredSamples(const media::provider::FrameProduct& frame, std::uint32_t overrideTransfer,
                      std::string_view inputColorSpaceId, render::Rgba32fImageDescriptor composition,
                      std::size_t byteBudget, const std::function<bool()>& cancel = {});
+// #422: the frame's decoded planes in their native layout with the SampleConvertV1 parameters
+// videoToInputColorSpace (or, with `storedSamples`, videoToStoredSamples) would apply at full
+// resolution, for the GPU route to upload and convert on the device. No sample is converted on
+// the host; the result keeps `frame` alive. render::convertNativeSamples of the result equals the
+// matching CPU conversion value for value, and it refuses exactly what that conversion refuses.
+[[nodiscard]] media::provider::Result<std::shared_ptr<const render::NativeSampleImage>>
+videoNativeSamples(const std::shared_ptr<const media::provider::FrameProduct>& frame,
+                   std::uint32_t overrideTransfer, std::string_view inputColorSpaceId,
+                   render::Rgba32fImageDescriptor composition, bool storedSamples);
 } // namespace bloom::media::video

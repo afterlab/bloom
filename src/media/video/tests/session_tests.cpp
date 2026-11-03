@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/colour.hpp>
@@ -665,6 +666,140 @@ void chromaSiting(const std::filesystem::path& directory) {
               "left-sited 4:2:0 chroma is centred between its two luma rows");
     }
 }
+// #422: a frame's native samples convert through render::convertNativeSamples (the CPU reference
+// of SampleConvertV1) to exactly the image the host conversions produce, for every decoded layout,
+// matrix, range, transfer override and the stored-samples form, and refuse what they refuse.
+bloom::media::provider::CpuPlane noisePlane(std::uint32_t width, std::uint32_t height,
+                                            std::uint32_t bytesPerSample, std::uint32_t pad,
+                                            std::uint32_t seed) {
+    bloom::media::provider::CpuPlane plane;
+    plane.width = width;
+    plane.height = height;
+    plane.stride = width * bytesPerSample + pad;
+    plane.bytes.resize(static_cast<std::size_t>(plane.stride) * height);
+    for (auto& byte : plane.bytes) {
+        seed ^= seed << 13U;
+        seed ^= seed >> 17U;
+        seed ^= seed << 5U;
+        byte = static_cast<std::byte>(seed >> 24U);
+    }
+    plane.digest = bloom::media::provider::digestBytes(plane.bytes);
+    return plane;
+}
+bool identicalImages(const bloom::render::Rgba32fImage& a, const bloom::render::Rgba32fImage& b) {
+    if (a.descriptor() == nullptr || b.descriptor() == nullptr ||
+        a.descriptor()->dataWindow() != b.descriptor()->dataWindow() ||
+        a.descriptor()->displayWindow() != b.descriptor()->displayWindow() ||
+        a.pixels().size() != b.pixels().size())
+        return false;
+    const auto bits = [](float value) { return std::bit_cast<std::uint32_t>(value); };
+    for (std::size_t index = 0; index < a.pixels().size(); ++index) {
+        const auto& left = a.pixels()[index];
+        const auto& right = b.pixels()[index];
+        if (bits(left.red()) != bits(right.red()) || bits(left.green()) != bits(right.green()) ||
+            bits(left.blue()) != bits(right.blue()) || bits(left.alpha()) != bits(right.alpha()))
+            return false;
+    }
+    return true;
+}
+std::size_t nativeSampleParity(const std::shared_ptr<const bloom::media::provider::FrameProduct>& frame,
+                               const std::string& label) {
+    using namespace bloom::media;
+    const auto window =
+        bloom::render::ImageWindow::create(0, 0, frame->planes[0].width, frame->planes[0].height);
+    const auto display = bloom::render::ImageWindow::create(-2, 3, frame->planes[0].width + 7,
+                                                            frame->planes[0].height + 1);
+    const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(
+        *window.value(), *display.value(), bloom::core::PixelAspectRatio::square());
+    const std::size_t budget = std::size_t{1} << 31U;
+    std::size_t compared = 0;
+    for (std::uint32_t override = 0; override <= 3; ++override) {
+        for (const bool stored : {false, true}) {
+            for (const std::string_view id : {std::string_view("space"), std::string_view{}}) {
+                if (!stored && id.empty())
+                    continue;
+                const auto expected =
+                    stored ? video::videoToStoredSamples(*frame, override, id, *descriptor.value(),
+                                                         budget)
+                           : video::videoToInputColorSpace(*frame, override, id,
+                                                           *descriptor.value(), 1, 1, budget);
+                const auto samples =
+                    video::videoNativeSamples(frame, override, id, *descriptor.value(), stored);
+                const auto variant = label + " override " + std::to_string(override) +
+                                     (stored ? " stored" : "") + (id.empty() ? " unmanaged" : "");
+                const auto* image = std::get_if<bloom::render::Rgba32fImage>(&expected);
+                const auto* native =
+                    std::get_if<std::shared_ptr<const bloom::render::NativeSampleImage>>(&samples);
+                check((image == nullptr) == (native == nullptr),
+                      ("native samples refuse exactly what the host conversion refuses: " + variant)
+                          .c_str());
+                if (image == nullptr || native == nullptr)
+                    continue;
+                const auto converted = bloom::render::convertNativeSamples(**native, budget);
+                check(converted.hasValue() && identicalImages(*image, *converted.value()),
+                      ("the reference conversion equals the host conversion exactly: " + variant)
+                          .c_str());
+                ++compared;
+            }
+        }
+    }
+    return compared;
+}
+void nativeSamples(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    using bloom::render::NativeSampleLayout;
+    std::size_t compared = 0;
+    // Synthetic noise at odd extents with padded strides: every matrix and range tag, 4:2:0 8-bit,
+    // 16-bit 4:4:4:4 with alpha and 16-bit RGBA.
+    for (const std::int32_t matrix : {1, 5, 6, 9, 10, 2}) {
+        for (const std::int32_t range : {0, 1, 2}) {
+            auto yuv = std::make_shared<provider::FrameProduct>();
+            yuv->format = provider::PixelFormat::Yuv420p8;
+            yuv->colour = {1, 1, matrix, range};
+            yuv->planes.push_back(noisePlane(37, 23, 1, 3, 11U + static_cast<unsigned>(matrix)));
+            yuv->planes.push_back(noisePlane(19, 12, 1, 5, 23U + static_cast<unsigned>(range)));
+            yuv->planes.push_back(noisePlane(19, 12, 1, 0, 37U));
+            compared += nativeSampleParity(yuv, "yuv420p8 matrix " + std::to_string(matrix) +
+                                                    " range " + std::to_string(range));
+            auto wide = std::make_shared<provider::FrameProduct>();
+            wide->format = provider::PixelFormat::Yuva444p16;
+            wide->colour = {9, 1, matrix, range};
+            for (std::uint32_t plane = 0; plane < 4; ++plane)
+                wide->planes.push_back(noisePlane(33, 9, 2, plane * 2, 41U + plane));
+            compared += nativeSampleParity(wide, "yuva444p16 matrix " + std::to_string(matrix) +
+                                                     " range " + std::to_string(range));
+        }
+    }
+    auto rgb = std::make_shared<provider::FrameProduct>();
+    rgb->format = provider::PixelFormat::Rgba16;
+    rgb->colour = {1, 13, 0, 2};
+    rgb->planes.push_back(noisePlane(31, 7, 8, 8, 59U));
+    compared += nativeSampleParity(rgb, "rgba16");
+    // Decoded fixtures of each provider layout.
+    for (const auto& [name, layout] : std::array<std::pair<const char*, NativeSampleLayout>, 5>{
+             {{"numbered-h264.mp4", NativeSampleLayout::Yuv420p8},
+              {"hlg2020-h264.mp4", NativeSampleLayout::Yuv420p8},
+              {"chroma-edge-422.mov", NativeSampleLayout::Yuva444p16},
+              {"alpha-prores.mov", NativeSampleLayout::Yuva444p16},
+              {"rgb-tiff.mov", NativeSampleLayout::Rgba16}}}) {
+        video::VideoDecodeSession session(directory / name);
+        const auto probe = std::get<provider::ProbeResult>(session.probe());
+        const auto decoded = session.frame(probe, 0, 0, 0, nullptr);
+        check(std::holds_alternative<Frame>(decoded), "a native-sample fixture decodes");
+        const auto& frame = std::get<Frame>(decoded);
+        const auto window = bloom::render::ImageWindow::create(0, 0, frame->planes[0].width,
+                                                               frame->planes[0].height);
+        const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(
+            *window.value(), *window.value(), bloom::core::PixelAspectRatio::square());
+        const auto samples = video::videoNativeSamples(frame, 0, "space", *descriptor.value(), false);
+        const auto* native =
+            std::get_if<std::shared_ptr<const bloom::render::NativeSampleImage>>(&samples);
+        check(native != nullptr && (*native)->conversion().layout == layout,
+              (std::string("the decoded frame keeps its native layout: ") + name).c_str());
+        compared += nativeSampleParity(frame, name);
+    }
+    check(compared > 200, "the native-sample parity sweep compared real conversions");
+}
 // Issue #398: WebM is a video container, and a codec this build cannot decode is refused at probe
 // by name instead of falling through to the still-image reader.
 void undecodableCodec(const std::filesystem::path& directory) {
@@ -789,6 +924,7 @@ int main(int argc, char** argv) {
         retainedRouting(argv[1]);
         colourInterpretation(argv[1]);
         chromaSiting(argv[1]);
+        nativeSamples(argv[1]);
         undecodableCodec(argv[1]);
         vp9AndAv1(BLOOM_MEDIA_CODEC_FIXTURES);
         timingAndLayout(argv[1]);

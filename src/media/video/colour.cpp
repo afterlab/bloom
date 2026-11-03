@@ -119,22 +119,18 @@ float chroma(const CpuPlane& plane, const std::uint32_t x, const std::uint32_t y
     return top * (1.0F - fy) + bottom * fy;
 }
 
-[[nodiscard]] Result<render::Rgba32fImage>
-convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
-             const std::string_view inputColorSpaceId,
-             const std::shared_ptr<const bloom::color::CpuColorSpaceProcessor>& processor,
-             render::Rgba32fImageDescriptor composition, const double horizontalScale,
-             const double verticalScale, const std::size_t byteBudget,
-             const std::function<bool()>& cancel, const bool configManaged,
-             const bool applyProcessor, const bool storedSamples = false) {
-    // The frame was digest-verified when it crossed the worker boundary and is immutable since.
-    if (!validLayout(frame) || overrideTransfer > 3 || !std::isfinite(horizontalScale) ||
-        !std::isfinite(verticalScale) || horizontalScale <= 0 || horizontalScale > 1 ||
-        verticalScale <= 0 || verticalScale > 1)
-        return Unavailable{Error::InvalidValue, "Invalid video color request"};
-    if (configManaged && applyProcessor && processor == nullptr)
-        return Unavailable{Error::InvalidValue,
-                           "A config-managed video conversion needs a color processor"};
+// The per-frame conversion every video path shares: the stream's tags with the missing ones
+// filled, the inverse transfer, and the qualified layout. Refuses exactly what the CPU conversion
+// refuses, with the same diagnostics.
+struct VideoConversionPlan final {
+    ColourTags tags;
+    std::int32_t transfer = 8;
+    bool rgbCoded = false;
+    bool wide = false;
+};
+[[nodiscard]] Result<VideoConversionPlan>
+planVideoConversion(const FrameProduct& frame, const std::uint32_t overrideTransfer,
+                    const std::string_view inputColorSpaceId, const bool configManaged) {
     // The same convention the resolver applies to the stream (owner decision 2026-10-24); a frame
     // carries no rate, and the BT.470BG and SMPTE 170M matrices are identical.
     auto tags = assumeMissingVideoColour(frame.colour,
@@ -190,6 +186,29 @@ convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
         return Unavailable{Error::Unavailable,
                            "RGB-coded video is interpreted only through the color config" +
                                std::string(kOverride)};
+    return VideoConversionPlan{tags, transfer, rgbCoded, wide};
+}
+
+[[nodiscard]] Result<render::Rgba32fImage>
+convertVideo(const FrameProduct& frame, const std::uint32_t overrideTransfer,
+             const std::string_view inputColorSpaceId,
+             const std::shared_ptr<const bloom::color::CpuColorSpaceProcessor>& processor,
+             render::Rgba32fImageDescriptor composition, const double horizontalScale,
+             const double verticalScale, const std::size_t byteBudget,
+             const std::function<bool()>& cancel, const bool configManaged,
+             const bool applyProcessor, const bool storedSamples = false) {
+    // The frame was digest-verified when it crossed the worker boundary and is immutable since.
+    if (!validLayout(frame) || overrideTransfer > 3 || !std::isfinite(horizontalScale) ||
+        !std::isfinite(verticalScale) || horizontalScale <= 0 || horizontalScale > 1 ||
+        verticalScale <= 0 || verticalScale > 1)
+        return Unavailable{Error::InvalidValue, "Invalid video color request"};
+    if (configManaged && applyProcessor && processor == nullptr)
+        return Unavailable{Error::InvalidValue,
+                           "A config-managed video conversion needs a color processor"};
+    const auto planned = planVideoConversion(frame, overrideTransfer, inputColorSpaceId, configManaged);
+    if (const auto* error = std::get_if<Unavailable>(&planned))
+        return *error;
+    const auto& [tags, transfer, rgbCoded, wide] = std::get<VideoConversionPlan>(planned);
     const auto width = frame.planes[0].width, height = frame.planes[0].height;
     const auto w = static_cast<std::uint32_t>(std::max(1.0, std::ceil(width * horizontalScale)));
     const auto h = static_cast<std::uint32_t>(std::max(1.0, std::ceil(height * verticalScale)));
@@ -432,6 +451,58 @@ videoToInputColorSpace(const FrameProduct& frame, const std::uint32_t overrideTr
                         /*configManaged=*/!inputColorSpaceId.empty(),
                         /*applyProcessor=*/false);
 }
+media::provider::Result<std::shared_ptr<const render::NativeSampleImage>>
+videoNativeSamples(const std::shared_ptr<const FrameProduct>& frame,
+                   const std::uint32_t overrideTransfer, const std::string_view inputColorSpaceId,
+                   const render::Rgba32fImageDescriptor composition, const bool storedSamples) {
+    if (frame == nullptr || !validLayout(*frame) || overrideTransfer > 3)
+        return Unavailable{Error::InvalidValue, "Invalid video color request"};
+    const bool configManaged = !inputColorSpaceId.empty();
+    const auto planned =
+        planVideoConversion(*frame, overrideTransfer, inputColorSpaceId, configManaged);
+    if (const auto* error = std::get_if<Unavailable>(&planned))
+        return *error;
+    const auto& plan = std::get<VideoConversionPlan>(planned);
+    render::NativeSampleConversion conversion;
+    conversion.layout = plan.rgbCoded ? render::NativeSampleLayout::Rgba16
+                        : plan.wide   ? render::NativeSampleLayout::Yuva444p16
+                                      : render::NativeSampleLayout::Yuv420p8;
+    conversion.alpha = render::NativeSampleAlpha::Straight;
+    conversion.storedSamples = storedSamples;
+    conversion.limitedRange = plan.tags.range == 1;
+    conversion.transfer = plan.transfer;
+    if (!plan.rgbCoded) {
+        const auto coefficients = color::yuvMatrixCoefficients(plan.tags.matrix);
+        if (!coefficients)
+            return Unavailable{Error::InvalidValue, "Video pixel is invalid"};
+        conversion.redFromCr = (*coefficients)[0];
+        conversion.greenFromCb = (*coefficients)[1];
+        conversion.greenFromCr = (*coefficients)[2];
+        conversion.blueFromCb = (*coefficients)[3];
+    }
+    const auto window =
+        render::ImageWindow::create(0, 0, frame->planes[0].width, frame->planes[0].height);
+    if (!window)
+        return Unavailable{Error::Oversized, "Video output extent exceeds limits"};
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        *window.value(), composition.displayWindow(), composition.pixelAspect());
+    if (!descriptor)
+        return Unavailable{Error::InvalidValue, "Video descriptor is invalid"};
+    std::array<render::NativeSamplePlane, render::kMaxNativeSamplePlanes> planes{};
+    const auto count = std::min(frame->planes.size(), planes.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& plane = frame->planes[index];
+        planes[index] = {std::span<const std::byte>(plane.bytes), plane.width, plane.height,
+                         plane.stride};
+    }
+    // The decoded frame owns the planes; the samples keep it alive until the upload completes.
+    auto samples = render::NativeSampleImage::create(
+        *descriptor.value(), conversion, std::span(planes.data(), count), frame);
+    if (!samples)
+        return Unavailable{Error::InvalidValue, "Video planes do not match their layout"};
+    return *samples.value();
+}
+
 media::provider::Result<render::Rgba32fImage>
 videoToStoredSamples(const FrameProduct& frame, const std::uint32_t overrideTransfer,
                      const std::string_view inputColorSpaceId,
