@@ -38,6 +38,9 @@
 #include <tuple>
 
 #include <array>
+#include <algorithm>
+#include <set>
+#include <map>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -108,6 +111,7 @@ int main(const int argc, char** argv) {
                 return 1;
             }
             std::cout << "NOTE: no compatible Vulkan device; the native route was not executed\n";
+            testSharedFootagePreparedOnce(expectations, nullptr, evaluator, fixture, ocioContext);
         } else {
             testColdBuilderToExecutor(expectations, *device.device, evaluator, fixture,
                                       ocioContext);
@@ -120,6 +124,8 @@ int main(const int argc, char** argv) {
             testPlayerReferenceVideo(expectations, *device.device, options.fixtures, ocioContext);
             testPqInputSweep(expectations, *device.device, evaluator, ocioContext);
             testMultilayerNoColourLayerNative(expectations, *device.device, ocioContext);
+            testSharedFootagePreparedOnce(expectations, device.device.get(), evaluator, fixture,
+                                          ocioContext);
         }
 
         if (!expectations.ok()) {

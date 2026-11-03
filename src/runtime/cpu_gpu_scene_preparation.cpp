@@ -464,6 +464,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::vector<bool> textConsumed(operationCount, false);
     std::vector<bool> shapeConsumed(operationCount, false);
 
+    // #386: footage several layers use is uploaded and converted once per scene.
+    detail::GpuSceneMediaCommandMemo mediaCommands;
     const auto emit = [&](GpuSceneCommand command) -> GpuSceneCommandIndex {
         const auto index = static_cast<GpuSceneCommandIndex>(commands.size());
         std::visit([index](auto& item) { item.index = index; }, command);
@@ -625,7 +627,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto error = detail::buildAndEmitMediaLeaf(
                 operation, operationIndex, clockRequest, *plan, resolved, media, ocioContext_,
                 remainingBudget, hScale, vScale, chargeRetained, chargeTransient, cancellation,
-                mediaStatistics, emit, outputWindowOf[index], commandForOperation[index],
+                mediaStatistics, emit, mediaCommands, outputWindowOf[index],
+                commandForOperation[index],
                 keyOf[index], leaf);
             if (error) {
                 // PixelStorageBudgetExceeded names the request's own byte budget. When the

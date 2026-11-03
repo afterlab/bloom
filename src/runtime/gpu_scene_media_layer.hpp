@@ -19,6 +19,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace bloom::render {
 class NativeSampleImage;
@@ -31,6 +32,15 @@ namespace bloom::runtime::detail {
 // would be exceeded. Shared with the solid coverage path's charger via the common header alias.
 using GpuSceneMediaChargeBytes = std::function<std::optional<GpuSceneLeafFailure>(
     const void* backing, std::uint64_t retainedBytes)>;
+
+// One scene build's media commands by content identity (#386). Leaves of the same build whose
+// upload, footage pass, matte, proxy gather or colour conversion has the same semantic key reuse
+// the command already emitted instead of emitting an equal one, so footage that several layers use
+// is uploaded and converted once per frame and every layer consumes that one resident image. The
+// keys are the same content-addressed identities the executor's cache uses across frames, so equal
+// keys already mean equal pixels; the executor counts each consumer and releases the shared image
+// after the last one.
+using GpuSceneMediaCommandMemo = std::unordered_map<std::string, GpuSceneCommandIndex>;
 
 // Screens every reachable layer for an unsupported blend or transform BEFORE any media is resolved
 // or decoded. Returns a failure when the whole graph must fail closed, or nullopt to continue. An
@@ -97,34 +107,40 @@ buildVideoUploadLeaf(const CompiledVideoSource& source, const EvaluationRequest&
 // charged (the raw upload and the effect output are resident concurrently). On success `command`
 // and `semanticKey` are the final command index and key; `leaf` is consumed. Returns a failure only
 // for a genuinely malformed leaf or an exceeded budget. Defined here so the builder orchestrator
-// stays concerned with graph shape rather than media command construction.
+// stays concerned with graph shape rather than media command construction. A command whose key is
+// already in `memo` is not emitted or charged again; the leaf continues from the existing one.
 template <typename Emit, typename Charge>
 [[nodiscard]] std::optional<GpuSceneLeafFailure>
 emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafResult& leaf,
-                      Charge&& charge, Emit&& emit, GpuSceneCommandIndex& command,
-                      std::string& semanticKey) {
+                      Charge&& charge, Emit&& emit, GpuSceneMediaCommandMemo& memo,
+                      GpuSceneCommandIndex& command, std::string& semanticKey) {
     if (!leaf.descriptor.has_value()) {
         return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
                                    "the upload leaf produced no image descriptor"};
     }
     const std::string uploadKey =
         leaf.uploadSemanticKey.empty() ? leaf.semanticKey : leaf.uploadSemanticKey;
+    // Emits `item` under `key` unless this build already holds that command; returns its index.
+    const auto emitOnce = [&memo, &emit](const std::string& key, auto&& item) {
+        if (const auto found = memo.find(key); found != memo.end()) {
+            return found->second;
+        }
+        const GpuSceneCommandIndex index = emit(std::forward<decltype(item)>(item));
+        memo.emplace(key, index);
+        return index;
+    };
     GpuSceneUploadCommand upload{.sourceOperation = operationIndex,
                                  .image = std::move(leaf.image),
                                  .descriptor = *leaf.descriptor,
                                  .samples = std::move(leaf.samples),
                                  .semanticKey = uploadKey};
-    GpuSceneCommandIndex current = emit(std::move(upload));
+    GpuSceneCommandIndex current = emitOnce(uploadKey, std::move(upload));
     std::string currentKey = uploadKey;
     // The window the resample reads: the matte for a Cryptomatte leaf, else the upload.
     auto currentWindow = leaf.descriptor->dataWindow();
     // #381: the footage interpretation pass over the full-resolution stored samples, before any
     // proxy resample (deinterlacing needs every row) and before the color transform.
     if (leaf.interpretation != nullptr) {
-        const auto extent = currentWindow.extent();
-        if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
-            return error;
-        }
         GpuSceneOcioEffectCommand pass{.index = kInvalidGpuSceneCommand,
                                        .sourceOperation = operationIndex,
                                        .input = current,
@@ -137,14 +153,17 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
         pass.semanticKey = makeGpuSceneOcioEffectSemanticKey(
             pass.inputKey, pass.program->identity(), pass.outputWindow, pass.pixelAspect);
         currentKey = pass.semanticKey;
-        current = emit(std::move(pass));
+        if (!memo.contains(currentKey)) {
+            const auto extent = currentWindow.extent();
+            if (const auto error =
+                    charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+                return error;
+            }
+        }
+        current = emitOnce(currentKey, std::move(pass));
     }
     if (leaf.cryptomatte.has_value()) {
         const auto& matte = leaf.cryptomatte->output;
-        const auto extent = matte.dataWindow().extent();
-        if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
-            return error;
-        }
         GpuSceneCryptomatteCommand coverage{.index = kInvalidGpuSceneCommand,
                                             .sourceOperation = operationIndex,
                                             .input = current,
@@ -162,7 +181,14 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
             coverage.preview);
         currentKey = coverage.semanticKey;
         currentWindow = coverage.outputWindow;
-        current = emit(std::move(coverage));
+        if (!memo.contains(currentKey)) {
+            const auto extent = matte.dataWindow().extent();
+            if (const auto error =
+                    charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+                return error;
+            }
+        }
+        current = emitOnce(currentKey, std::move(coverage));
     }
     // A proxied leaf (identity or non-identity) keeps the full-resolution upload and gathers the
     // proxy on the GPU; a non-identity transform then runs the OCIO CST over that proxy geometry.
@@ -170,10 +196,6 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     // output is charged (it is resident alongside the input for the duration of the gather until
     // the input pin is consumed by the next step).
     if (leaf.resample.has_value()) {
-        const auto extent = leaf.resample->output.dataWindow().extent();
-        if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
-            return error;
-        }
         GpuScenePointResampleCommand resample{.index = kInvalidGpuSceneCommand,
                                               .sourceOperation = operationIndex,
                                               .input = current,
@@ -191,7 +213,14 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
             resample.horizontalScale, resample.verticalScale, resample.pixelAspect,
             "point-resample-v1");
         currentKey = resample.semanticKey;
-        current = emit(std::move(resample));
+        if (!memo.contains(currentKey)) {
+            const auto extent = leaf.resample->output.dataWindow().extent();
+            if (const auto error =
+                    charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+                return error;
+            }
+        }
+        current = emitOnce(currentKey, std::move(resample));
     }
     if (leaf.program == nullptr) {
         command = current;
@@ -206,10 +235,6 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
                                                        : leaf.descriptor->displayWindow();
     const auto ocioAspect = leaf.resample.has_value() ? leaf.resample->output.pixelAspect()
                                                       : leaf.descriptor->pixelAspect();
-    const auto extent = ocioWindow.extent();
-    if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
-        return error;
-    }
     GpuSceneOcioEffectCommand ocio{.index = kInvalidGpuSceneCommand,
                                    .sourceOperation = operationIndex,
                                    .input = current,
@@ -222,7 +247,13 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     ocio.semanticKey = makeGpuSceneOcioEffectSemanticKey(ocio.inputKey, ocio.program->identity(),
                                                          ocio.outputWindow, ocio.pixelAspect);
     semanticKey = ocio.semanticKey;
-    command = emit(std::move(ocio));
+    if (!memo.contains(semanticKey)) {
+        const auto extent = ocioWindow.extent();
+        if (const auto error = charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+            return error;
+        }
+    }
+    command = emitOnce(semanticKey, std::move(ocio));
     return std::nullopt;
 }
 
@@ -258,8 +289,8 @@ template <typename Emit, typename ChargeRetained, typename ChargeTransient>
     const GpuSceneOcioContext& ocioContext, const std::uint64_t pixelBudget, const double hScale,
     const double vScale, ChargeRetained&& chargeRetained, ChargeTransient&& chargeTransient,
     const CancellationToken& cancellation, GpuSceneMediaStatistics& statistics, Emit&& emit,
-    std::optional<render::ImageWindow>& outputWindow, GpuSceneCommandIndex& command,
-    std::string& semanticKey, GpuSceneUploadLeafResult& leaf) {
+    GpuSceneMediaCommandMemo& memo, std::optional<render::ImageWindow>& outputWindow,
+    GpuSceneCommandIndex& command, std::string& semanticKey, GpuSceneUploadLeafResult& leaf) {
     // The RAW upload is a host-resident allocation and is charged against the retained-byte
     // allowance; the point-resample and OCIO outputs are GPU-transient and charged through the
     // transient charge (which is a no-op under main's host-only accounting, since the executor's
@@ -293,7 +324,8 @@ template <typename Emit, typename ChargeRetained, typename ChargeTransient>
         return std::nullopt;
     }
     outputWindow = leaf.outputWindow;
-    return emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit, command, semanticKey);
+    return emitMediaLeafCommands(operationIndex, leaf, chargeTransient, emit, memo, command,
+                                 semanticKey);
 }
 
 // The bounded GPU colour split leaves. They call prepareImageColorLeaf()/prepareVideoColorLeaf(),

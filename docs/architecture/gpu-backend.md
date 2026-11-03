@@ -215,7 +215,13 @@ the device. Only a still without a native form (TIFF, a FLOAT or UINT OpenEXR la
 sequence frame) still uploads its raw RGBA32F decode. Without that context the leaf keeps the
 connected CPU conversion path as the fallback. The upload/source semantic key contains no node id, plan index, frame time, or
 layer transform; a reachable unsupported layer is screened before any decode. `GpuSceneCoverageCache` is a bounded transactional LRU keyed on raster
-geometry alone. No converted upload is retained between builds (ADR 0037). `GpuSceneExecutor` (`gpu_scene_executor.hpp`) drives
+geometry alone. No converted upload is retained between builds (ADR 0037). Within one build,
+media commands with the same semantic key are emitted once (#386): footage that several layers use
+is uploaded once, and its footage interpretation pass, Cryptomatte matte, proxy point-resample and
+input-to-working OCIO conversion each run once, with every layer consuming that one resident image.
+Equal keys are the identities `GpuSceneCache` already reuses across frames, and the executor counts
+each consumer before it releases the shared image. A nested composition's child build keeps its own
+commands. `GpuSceneExecutor` (`gpu_scene_executor.hpp`) drives
 one immutable `PreparedGpuScene` as a bounded sequence of already-typed native operations on an
 existing `GpuDevice`; `begin` validates and flattens the reachable DAG consulting `GpuSceneCache`
 first, so a warm unchanged output performs zero native dispatches, `poll` is non-blocking and starts

@@ -90,8 +90,9 @@ void testSharedSourceBackingCharge(Expectations& expectations,
                 backing = upload->image.get();
             }
         }
-        expectations.expect(uploads == 3 && sameBacking,
-                            "all three aliases retain the same immutable pixels");
+        // #386: the aliases share one upload command, so the footage is uploaded once.
+        expectations.expect(uploads == 1 && sameBacking && backing != nullptr,
+                            "all three aliases share one upload of the same immutable pixels");
     }
 
     const auto distinct = sharedSourcePlan({firstAsset, secondAsset}, 55000);
