@@ -267,6 +267,52 @@ against 1.2–1.4 GB of Bloom's own device storage. See [device claims follow de
 A first after run that also sampled glibc's `mallinfo2()` every 250 ms lost 5–45% of fill fps
 (720p 79.7 fps): it locks every heap arena. The harness does not sample it.
 
+### Multi-layer RAM Preview fills (#415)
+
+Since #413, `Ordinary` pools hold their size during a fill. The question was whether a
+composition with a reusable working set larger than what the operation cache held at the start
+of the fill would then miss for the whole fill. Measured on the `layers` suite (1080p EXR half
+plus the L mix; L10, L25 and L50), Full cold, inside the same 20G scope, on 2026-11-03:
+
+- **Before #413:** main 3d559ed1e.
+- **Main:** 5ad4dc717, with the fill operation-cache fields added to the harness.
+- **Main, no hold:** the same build with the hold disabled, for this measurement only. During a
+  fill, `Ordinary` pools grew into free memory as they do outside one. This is a diagnostic
+  variant, not shipped code.
+
+"Kept" is `cachedFrames` of 240. Hits are `fillOperationHits` over hits plus misses. The pool and
+claim figures come from `memoryAtPeak`.
+
+| Cell | Before #413: fps, kept, hits | Main: fps, kept, hits | Main, no hold: fps, kept, hits |
+|---|---|---|---|
+| L10 | 7.60, 142 (`PartialBudget`), 84.3% | 8.28, 240, 88.6% | 8.23, 240, 89.2% |
+| L25 | 1.33, 6 (`PartialBudget`), 0.2% | 1.95, 7 (`PartialBudget`), 0.0% | 2.00, 7 (`PartialBudget`), 1.7% |
+| L50 | 0.33, 0 (not finished at 600 s) | 0.64, 0 (not finished at 600 s) | 0.57, 0 (not finished at 600 s) |
+
+**The hold does not regress these fills.**
+
+- **L10:** the reusable working set fits in what the operation cache holds when the fill starts.
+  Main's cache was held at 0.72 GB and peaked at 0.71 GB. Without the hold it reached 0.94 GB, for
+  about the same hit rate and fps.
+- **Before #413 (L10):** the operation cache grew to 8.7 GB, mostly prepared uploads, so only 142
+  frames stayed cached.
+
+**What limits L25 and L50 is the same before and after #413.** Host admission claims for the
+frames in flight take nearly all usable memory:
+
+- Eight frames in flight claim 15–16 GB of the 16.8–17.4 GB usable, about 1.9 GB per frame.
+- The process's anonymous memory peaks at only 1.5–2.7 GB.
+- Pools never grow into memory claimed by active work, so the preview cache holds 0 bytes and is
+  given no budget. Every finished frame is evicted on insertion (L50 on main: 384 prepared, 384
+  evicted). The operation cache stays at 0 (hits 0–1.7%). The fill re-prepares frames until it
+  times out (L50), or ends `PartialBudget` with 6–7 frames (L25).
+- Before #413 the same happened, with claims of 12.8–13.1 GB against 12.5–13.1 GB usable.
+- Lifting the hold changes nothing in these cells: with the claims in place, there is no free
+  memory for any pool to grow into.
+
+Every cell ran on the GPU route with 0 CPU-fallback frames. The L50 "no hold" run overlapped a
+build of the before tree.
+
 ## Conditions
 
 - **Host crash, 2026-10-31 16:14 local.** The first after-run queue ran one runner for the whole
