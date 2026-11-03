@@ -649,6 +649,12 @@ seeks. Frames the device consumes while the ring is empty are counted, and the m
 the mix stays on the device clock after an underrun (most visibly the first callbacks after start)
 instead of lagging it for the rest of the run.
 
+A mix edit while playing takes the same path (#459). Replacing the clips (a published mix after a
+mute, solo, level or layer edit), updating a clip's level, mute or solo, and adding, removing or
+clearing clips each discard the queued frames at the next callback and re-mix them from the edited
+clips, so the edit is heard after at most one device buffer instead of after the whole ring
+(16,384 frames, about 341 ms at 48 kHz) drains.
+
 Composition sources retain the evaluator's ordered offset, scale and loop mappings on each leaf
 clip. The application attaches a time mapper alongside the shared decoded buffer; the mixer worker
 applies it per output sample before the leaf clip's start/end checks and sample-rate conversion. An

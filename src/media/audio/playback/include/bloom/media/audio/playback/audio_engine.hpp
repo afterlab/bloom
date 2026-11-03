@@ -114,6 +114,9 @@ class AudioEngine final {
     AudioEngine(AudioEngine&&) = delete;
     AudioEngine& operator=(AudioEngine&&) = delete;
 
+    // Every clip edit is heard after at most one device buffer while playing: frames already
+    // queued for the device but not yet heard are discarded at the next callback and re-mixed from
+    // the edited clips, exactly as a mid-play loop change is (see setLoopRange).
     [[nodiscard]] ClipId addClip(AudioClip clip);
     void replaceClips(std::vector<AudioClip> clips);
     void clearClips() noexcept;
@@ -199,7 +202,9 @@ class AudioEngine final {
     static void backendCallback(void* userData, std::span<float> output) noexcept;
     void mixerLoop() noexcept;
     bool produceBlock(std::size_t frames) noexcept;
-    // Both require controlMutex_.
+    // These require controlMutex_. requestRewindLocked asks a playing mixer to discard and re-mix
+    // the audio queued for the device, and returns whether the mixer then needs wakeMixer().
+    [[nodiscard]] bool requestRewindLocked() noexcept;
     [[nodiscard]] bool settleRewind() noexcept;
     void applyLoop(std::uint64_t producedFrame) noexcept;
     [[nodiscard]] std::int64_t loopedFrame(std::int64_t absoluteFrame) const noexcept;
@@ -218,6 +223,7 @@ class AudioEngine final {
     [[nodiscard]] ClipMix clipMix(const AudioClip& clip) const;
     // Requires controlMutex_: grows the mixer's interpolation scratch to cover `mix`.
     void reserveScratchLocked(const AudioClip& clip, const ClipMix& mix);
+    void wakeMixer() noexcept;
     void joinMixer() noexcept;
 
     std::unique_ptr<Backend> backend_;

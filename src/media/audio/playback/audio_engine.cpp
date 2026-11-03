@@ -360,12 +360,20 @@ void AudioEngine::reserveScratchLocked(const AudioClip& clip, const ClipMix& mix
 
 AudioEngine::ClipId AudioEngine::addClip(AudioClip clip) {
     auto mix = clipMix(clip);
-    std::scoped_lock lock(controlMutex_);
-    clipMixes_.reserve(clips_.size() + 1U);
-    reserveScratchLocked(clip, mix);
-    clips_.push_back(std::move(clip));
-    clipMixes_.push_back(std::move(mix));
-    return clips_.size() - 1U;
+    ClipId id = 0;
+    bool rewound = false;
+    {
+        std::scoped_lock lock(controlMutex_);
+        clipMixes_.reserve(clips_.size() + 1U);
+        reserveScratchLocked(clip, mix);
+        clips_.push_back(std::move(clip));
+        clipMixes_.push_back(std::move(mix));
+        id = clips_.size() - 1U;
+        rewound = requestRewindLocked();
+    }
+    if (rewound)
+        wakeMixer();
+    return id;
 }
 
 void AudioEngine::replaceClips(std::vector<AudioClip> clips) {
@@ -375,32 +383,46 @@ void AudioEngine::replaceClips(std::vector<AudioClip> clips) {
     mixes.reserve(clips.size());
     for (const auto& clip : clips)
         mixes.push_back(clipMix(clip));
+    bool rewound = false;
     {
         std::scoped_lock lock(controlMutex_);
         for (std::size_t index = 0; index < clips.size(); ++index)
             reserveScratchLocked(clips[index], mixes[index]);
         clips_.swap(clips);
         clipMixes_.swap(mixes);
+        // Audio already queued for the device was mixed from the old clips; re-mix it (#459).
+        rewound = requestRewindLocked();
     } // Old decoded refs are released outside the mixer mutex.
+    if (rewound)
+        wakeMixer();
 }
 
 void AudioEngine::clearClips() noexcept {
     std::vector<AudioClip> old;
     std::vector<ClipMix> oldMixes;
+    bool rewound = false;
     {
         std::scoped_lock lock(controlMutex_);
         old.swap(clips_);
         oldMixes.swap(clipMixes_);
+        rewound = requestRewindLocked();
     }
+    if (rewound)
+        wakeMixer();
 }
 
 bool AudioEngine::removeClip(const ClipId id) {
-    std::scoped_lock lock(controlMutex_);
-    if (id >= clips_.size()) {
-        return false;
+    {
+        std::scoped_lock lock(controlMutex_);
+        if (id >= clips_.size()) {
+            return false;
+        }
+        clips_.erase(clips_.begin() + static_cast<std::ptrdiff_t>(id));
+        clipMixes_.erase(clipMixes_.begin() + static_cast<std::ptrdiff_t>(id));
+        if (!requestRewindLocked())
+            return true;
     }
-    clips_.erase(clips_.begin() + static_cast<std::ptrdiff_t>(id));
-    clipMixes_.erase(clipMixes_.begin() + static_cast<std::ptrdiff_t>(id));
+    wakeMixer();
     return true;
 }
 
@@ -409,13 +431,18 @@ bool AudioEngine::updateClip(const ClipId id, const float level, const bool mute
     if (!std::isfinite(level)) {
         return false;
     }
-    std::scoped_lock lock(controlMutex_);
-    if (id >= clips_.size()) {
-        return false;
+    {
+        std::scoped_lock lock(controlMutex_);
+        if (id >= clips_.size()) {
+            return false;
+        }
+        clips_[id].level = level;
+        clips_[id].muted = muted;
+        clips_[id].solo = solo;
+        if (!requestRewindLocked())
+            return true;
     }
-    clips_[id].level = level;
-    clips_[id].muted = muted;
-    clips_[id].solo = solo;
+    wakeMixer();
     return true;
 }
 
@@ -556,14 +583,26 @@ bool AudioEngine::setLoopRange(const std::optional<LoopRange> range) noexcept {
             return true;
         }
         loopDirty_ = true;
-        // A rewind already in progress covers this change too: the mixer has pushed nothing since
-        // it was requested, and applies the newest requested loop once it settles.
-        auto idle = Rewind::Idle;
-        (void)rewind_.compare_exchange_strong(idle, Rewind::Requested, std::memory_order_acq_rel);
+        // The mixer applies the newest requested loop once the rewind settles.
+        (void)requestRewindLocked();
     }
+    wakeMixer();
+    return true;
+}
+
+bool AudioEngine::requestRewindLocked() noexcept {
+    if (!playing_.load(std::memory_order_acquire))
+        return false;
+    // A rewind already in progress covers this change too: the mixer has pushed nothing since it
+    // was requested, and re-mixes under the newest state once it settles.
+    auto idle = Rewind::Idle;
+    (void)rewind_.compare_exchange_strong(idle, Rewind::Requested, std::memory_order_acq_rel);
+    return true;
+}
+
+void AudioEngine::wakeMixer() noexcept {
     ringWakeEpoch_.fetch_add(1, std::memory_order_release);
     ringWakeEpoch_.notify_all();
-    return true;
 }
 
 std::optional<LoopRange> AudioEngine::loopRange() const {

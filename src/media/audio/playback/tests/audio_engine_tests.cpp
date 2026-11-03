@@ -512,6 +512,55 @@ void testMidPlayLoopChangeRewindsQueuedAudio(Expectations& expectations) {
                   "mid-play loop changes re-mix queued audio gaplessly from the device position");
 }
 
+// #459: a mix edit while the threaded mixer has queued audio ahead of the device is heard at the
+// next device callback, not after the whole queue (16,384 frames, about 341 ms at 48 kHz) drains.
+// Each kind of edit (replace, level/mute/solo update, add, remove, clear) re-mixes exactly the
+// unheard frames, with no gap and no repeated or skipped frame.
+void testMidPlayMixEditsRemixQueuedAudio(Expectations& expectations) {
+    auto backendOwner = std::make_unique<ManualBackend>();
+    auto* device = backendOwner.get();
+    AudioEngine engine(std::move(backendOwner), AudioEngine::Config{8, 1, 64});
+    const auto buffer = monoBuffer(ramp(256));
+    engine.replaceClips({AudioClip{buffer, time(0), 1.0F, false, false}});
+    expectations.expect(!engine.play(time(0)).has_value(), "threaded mixer starts");
+    std::vector<float> heard;
+    const auto pull = [&](const std::size_t frames) {
+        expectations.expect(waitForQueued(engine, frames),
+                            "mixer queues audio ahead of the device");
+        const auto output = device->pull(frames);
+        heard.insert(heard.end(), output.begin(), output.end());
+    };
+    // Every edit lands with the ring full; the next pull still plays 4 frames as already mixed.
+    const auto edit = [&](const auto& change) {
+        expectations.expect(waitForQueued(engine, 64), "the ring is full before the edit");
+        change();
+        pull(4);
+        pull(4);
+    };
+    pull(4);
+    edit([&] { engine.replaceClips({AudioClip{buffer, time(0), 2.0F, false, false}}); });
+    edit([&] { expectations.expect(engine.updateClip(0, 2.0F, true, false), "mute updates"); });
+    edit(
+        [&] { static_cast<void>(engine.addClip(AudioClip{buffer, time(0), 1.0F, false, false})); });
+    edit([&] { expectations.expect(engine.removeClip(0), "the muted clip is removed"); });
+    edit([&] { engine.clearClips(); });
+    engine.stop();
+    // Frame n plays source n at the level in force when it was mixed: x1 for frames 0..7, x2 for
+    // 8..15, muted for 16..23, the added unity clip for 24..39 (the removed clip was muted), then
+    // silence once cleared.
+    std::vector<float> expected;
+    for (std::int64_t frame = 0; frame < 44; ++frame) {
+        const auto source = static_cast<float>(frame + 1);
+        expected.push_back(frame < 8    ? source
+                           : frame < 16 ? 2.0F * source
+                           : frame < 24 ? 0.0F
+                           : frame < 40 ? source
+                                        : 0.0F);
+    }
+    expectSamples(expectations, heard, expected,
+                  "mid-play mix edits are heard at the next device callback");
+}
+
 [[nodiscard]] std::vector<float> sine(const double frequency, const std::uint32_t rate,
                                       const std::size_t frames) {
     constexpr double pi = 3.14159265358979323846;
@@ -625,6 +674,7 @@ int main() {
     testLoopRangeValidationAndClearing(expectations);
     testUnderrunKeepsMixOnDeviceClock(expectations);
     testMidPlayLoopChangeRewindsQueuedAudio(expectations);
+    testMidPlayMixEditsRemixQueuedAudio(expectations);
     testRateConversionInterpolates(expectations);
     testRateConversionRejectsAliases(expectations);
     testStreamedRateConversionReadsForward(expectations);
