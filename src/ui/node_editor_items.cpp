@@ -68,7 +68,7 @@ QString nodeCategoryName(const document::NodeCategory category) {
 QString nodeCategoryName(const QString& category) { return category; }
 QString nodeCategoryName(const document::NodeDefinition& definition) {
     const auto& type = definition.key.typeId;
-    if (type == "bloom.gaussian-blur" || type == "bloom.box-blur")
+    if (type == "bloom.gaussian-blur" || type == "bloom.box-blur" || type == "bloom.matte-blur")
         return QCoreApplication::translate("node_editor", "Filters");
     if (type == document::kTimeValueNodeType || type == document::kFrameNumberNodeType ||
         type == document::kFrameRateNodeType || type == document::kSecondsToFramesNodeType ||
@@ -122,6 +122,8 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Gaussian Blur");
     if (typeId == "bloom.box-blur")
         return QCoreApplication::translate("node_editor", "Box Blur");
+    if (typeId == "bloom.matte-blur")
+        return QCoreApplication::translate("node_editor", "Matte Blur");
     if (typeId == "bloom.exposure")
         return QCoreApplication::translate("node_editor", "Exposure");
     if (typeId == "bloom.offset")

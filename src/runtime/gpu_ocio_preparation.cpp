@@ -66,6 +66,9 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
         appendF64(bytes, static_cast<double>(weight));
     appendU64(bytes, transform.blurVertical);
     appendU64(bytes, transform.blurEdge);
+    // Appended only when set, so every Rgba blur keeps its exact pre-#337 prepare key bytes.
+    if (transform.blurCoverage)
+        appendText(bytes, "blur-coverage");
     appendU64(bytes, transform.maskData.size());
     bytes.insert(bytes.end(), transform.maskData.begin(), transform.maskData.end());
     appendU64(bytes, transform.footagePass.size());
@@ -270,7 +273,9 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
                 transform.processSpaceId, transform.workingSpaceId, {}, cancel);
         case GpuOcioTransformKind::SeparableBlur:
             return detail::buildSeparableBlurProgram(transform.blurWeights, transform.blurVertical,
-                                                     static_cast<BlurEdgeMode>(transform.blurEdge));
+                                                     static_cast<BlurEdgeMode>(transform.blurEdge),
+                                                     transform.blurCoverage ? BlurChannels::Coverage
+                                                                            : BlurChannels::Rgba);
         case GpuOcioTransformKind::LayerMask:
             return detail::buildLayerMaskProgram(transform.maskData);
         case GpuOcioTransformKind::FootageInterpretation:

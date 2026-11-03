@@ -10,8 +10,8 @@ Updated: 2026-11-03
 neighborhood effects. Both expose an animatable/drivable `radius` in full-resolution image pixels
 and an `edge` selector: `0` Transparent (default), `1` Clamp. Radius zero is an exact storage alias.
 They use the ordinary Add Node, parameter commands, undo/redo and project parameter codec. The
-Properties radius field displays pixels; the Add menu lists both under Filters. This delivery adds
-exactly these two nodes. Matte Blur remains a separate catalogue candidate.
+Properties radius field displays pixels; the Add menu lists both under Filters. Matte Blur (below)
+reuses the same kernel for Mask coverage.
 
 The v1 algorithm supports authored radius `0..256`, at most 513 coefficients per full-resolution
 axis. Horizontal and vertical support independently use `ceil(radius * resolutionScale)`.
@@ -61,3 +61,45 @@ radius/edge invalidation, animation and ROI/full-render equality. Required cover
 both authoring nodes and the shared kernel. The native image-effect harness contains Gaussian/Box,
 Transparent/Clamp, odd nonuniform proxy/ROI, exact-alpha/RGB oracle, warm zero-dispatch and changed-
 radius cases. Native execution is deferred to the grouped gate; fixture presence is not parity proof.
+
+## Matte Blur
+
+`bloom.matte-blur`, schema 1 (#337), filters an ADR 0028 Mask: its required `input` and its
+`mask` output are `SocketValueKind::Mask`, so it connects from the Mask node or Cryptomatte's
+matte and feeds Image Mix's `mask`, never an Image socket. It reuses the Gaussian Blur controls and
+schema keys unchanged: animatable/drivable `bloom.blur.radius` (`0..256` full-resolution pixels,
+default `0`) and the constant `bloom.blur.edge` selector (`0` Transparent, default; `1` Clamp). It
+is Gaussian only; there is no kernel selector. The Add menu lists it under Filters.
+
+It lowers to the same `SeparableBlurKernel` with `BlurChannels::Coverage`. The coefficients,
+supports, bounds, proxy scaling, halo/data-window, ROI, budget, cancellation and failure rules are
+exactly the Gaussian Blur rules above. Coverage reads only the input alpha, accumulates it with the
+same ordered binary32 fused multiply-add as the Rgba path, clamps it to `[0,1]` after each pass, and
+writes it to every channel. The output is therefore always the Mask transport (premultiplied white)
+even if an input's RGB differs from its alpha, and its coverage is bit-identical to the alpha a
+Gaussian Blur of the same input and radius produces. Transparent treats coverage outside the input
+data window as zero and grows the window by the halo; Clamp extends the edge coverage. Radius zero
+is an exact storage alias.
+
+Muting Matte Blur passes its Mask through (the mute rule's carried input is the first Mask input of
+a node with only Mask outputs, in both the compiler and render reachability). An empty upstream Mask
+makes Matte Blur empty, and an empty Mask connected to Image Mix is materialized as the transparent
+image: zero coverage.
+
+The channel policy enters the effect, operation and scene identity only when Coverage, so every
+Gaussian/Box key keeps its earlier bytes. The GPU route emits the same two resident
+`ProcessNeighborhood` commands from a Coverage variant of the generated program (semantics
+`bloom.render.separable-blur.coverage.v1`, its own content identity and prepare key), through the
+same scene builder, executor, admission, caches, cancellation and retirement for preview and final
+render. It is classified by the Required `node.bloom.matte-blur` coverage fixture (Mask node ->
+Matte Blur -> Image Mix mask, Transparent and Clamp, full frame and ROI) under the existing
+`effect.SeparableBlurKernel`; there is no exception.
+
+Tests: the direct CPU test compares Coverage with an independent two-dimensional convolution of
+alpha over signed/HDR RGB, checks the all-channel write, windows, budget refusal, cancellation
+between passes and the generated program. Evaluator tests cover identity, warm reuse, a memo key
+separate from the Rgba blur's (with bit-identical alpha), ROI, animation and radius/edge
+invalidation. Compiler tests cover lowering, mute pass-through and an empty upstream Mask; command,
+Properties and archive tests cover add, wiring, undo/redo, refusals and reopen. The native
+image-effect harness runs Coverage through the Gaussian Transparent/Clamp, proxy/ROI, warm
+zero-dispatch and changed-radius cases at the 2e-6/exact-alpha gate.

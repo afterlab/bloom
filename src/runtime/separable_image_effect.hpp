@@ -12,6 +12,7 @@ struct PreparedSeparableBlur final {
     std::vector<float> horizontal;
     std::vector<float> vertical;
     BlurEdgeMode edge = BlurEdgeMode::Transparent;
+    BlurChannels channels = BlurChannels::Rgba;
     [[nodiscard]] bool identity() const noexcept {
         return horizontal.size() == 1 && vertical.size() == 1;
     }
@@ -27,6 +28,8 @@ prepareSeparableBlur(const SeparableBlurKernel&, std::optional<double> radius,
                                                    const CancellationToken&, OperationIndex,
                                                    const EvaluationProgressCallback&);
 // Host preparation emits only normalized coefficient GLSL. Pixels stay resident on the device.
+// Coverage filters alpha alone and writes it to every channel, exactly as the CPU pass does.
 [[nodiscard]] render::OcioGpuProgramResult
-buildSeparableBlurProgram(std::span<const float> weights, bool vertical, BlurEdgeMode edge);
+buildSeparableBlurProgram(std::span<const float> weights, bool vertical, BlurEdgeMode edge,
+                          BlurChannels channels = BlurChannels::Rgba);
 } // namespace bloom::runtime::detail

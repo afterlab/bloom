@@ -108,7 +108,7 @@ The full, current priority order lives in [issue #384](https://github.com/kineti
 
 **Next: core compositing**
 
-- Levels, Curves and Hue/Saturation; Luma Key, matte blur, erode and dilate; Drop Shadow, Glow and
+- Levels, Curves and Hue/Saturation; Luma Key, erode and dilate; Drop Shadow, Glow and
   Light Wrap; a standalone Transform node.
 - Cryptomatte and node mattes as masks, and proxy generation.
 

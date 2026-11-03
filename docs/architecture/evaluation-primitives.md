@@ -73,7 +73,8 @@ Storage resemblance does not imply semantic interchangeability:
   coverage in `[0, 1]` over composition pixel space, transported privately as premultiplied white
   (every channel holds the coverage; consumers read alpha; zero outside its data window). It
   connects only to Mask inputs, with no conversion to or from Image in either direction. The Mask
-  node produces one; Image Mix's optional `mask` input consumes one (factor × mask per pixel).
+  node produces one; Image Mix's optional `mask` input consumes one (factor × mask per pixel);
+  Matte Blur filters one into another ([image filters](image-filters.md#matte-blur)).
 - Depth, normals, motion vectors, UVs, object IDs, and arbitrary data channels are not color.
 - A uniform value, per-element field, image grid, and variable-length list are different shapes even
   when their element type matches.
@@ -1270,7 +1271,9 @@ That harness and the required coverage gate must run on a device before claiming
 
 Gaussian Blur and Box Blur share the CPU/GPU kernel, explicit data-window halo and edge policy
 defined in [Image Filters](image-filters.md). Unlike pointwise color kernels, they filter associated
-RGBA and may expand the data window. Preview and final rendering use the same production scene path.
+RGBA and may expand the data window. Matte Blur (#337) runs the same Gaussian kernel with the
+Coverage channel policy over a Mask: alpha only, written to every channel. Preview and final
+rendering use the same production scene path.
 
 ## Channel sets and Shuffle
 

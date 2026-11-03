@@ -72,6 +72,8 @@ struct GpuOcioTransformSpec final {
     std::vector<float> blurWeights;
     bool blurVertical = false;
     std::uint8_t blurEdge = 0;
+    // SeparableBlur only: filter alpha alone and write it to every channel (#337 Matte Blur).
+    bool blurCoverage = false;
     // LayerMask only.
     std::vector<std::byte> maskData;
     // FootageInterpretation only.

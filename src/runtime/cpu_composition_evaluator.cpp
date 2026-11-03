@@ -505,6 +505,7 @@ enum class ScalarDomain : std::uint8_t {
                 if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel))
                     validKernel = static_cast<unsigned>(blur->kind) <= 1 &&
                                   static_cast<unsigned>(blur->edge) <= 1 &&
+                                  static_cast<unsigned>(blur->channels) <= 1 &&
                                   hasValidScalarCurveReference(blur->radius, plan, index, failure);
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
@@ -2626,6 +2627,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (const auto* blur = std::get_if<SeparableBlurKernel>(&step.kernel)) {
                                 key.add(blur->kind);
                                 key.add(blur->edge);
+                                if (blur->channels == BlurChannels::Coverage)
+                                    key.add(std::string{"coverage"});
                                 parameter(blur->radius);
                             }
                             if (const auto* transform =

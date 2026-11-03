@@ -16,12 +16,21 @@ firstImageInput(const document::NodeRecord& node) const {
     // bypass to pass through. The composition Output carries pixels -- it is where they end -- and
     // since task FIX1, item H it publishes no socket at all, so it is named here rather than
     // failing the test and taking its own input edge out of the reachable set when muted.
-    if (definition == nullptr ||
-        (!hasImageOutput(*definition) &&
-         definition->lowering != runtime::NodeLoweringKind::CompositionOutput))
+    // A Mask-only node (#337 Matte Blur) carries its first Mask input through the same way; the
+    // twin in document/render_reachability.cpp applies the identical rule.
+    if (definition == nullptr)
         return std::nullopt;
+    const bool maskOnly =
+        !hasImageOutput(*definition) &&
+        std::ranges::any_of(definition->outputs, [](const auto& output) {
+            return output.valueKind == runtime::SocketValueKind::Mask;
+        });
+    if (!hasImageOutput(*definition) && !maskOnly &&
+        definition->lowering != runtime::NodeLoweringKind::CompositionOutput)
+        return std::nullopt;
+    const auto carried = maskOnly ? runtime::SocketValueKind::Mask : runtime::SocketValueKind::Image;
     for (const auto& input : definition->inputs) {
-        if (input.valueKind == runtime::SocketValueKind::Image)
+        if (input.valueKind == carried)
             return document::NodeInputRef{node.id, input.name};
     }
     const auto* stack = composition_->graph().merge(node.id);

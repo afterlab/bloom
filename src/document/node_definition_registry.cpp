@@ -147,6 +147,22 @@ template <typename Definition>
                        std::vector<OutputPortDefinition>{{"image", SocketValueKind::Image}} &&
                    !definition.layerSlotInput && !definition.audioLayerSlotInput;
         }
+        // #337 Matte Blur filters an ADR 0028 Mask: Mask in, Mask out, never an Image.
+        if (definition.key.typeId == "bloom.matte-blur") {
+            return definition.key.schemaVersion == 1 &&
+                   definition.inputs ==
+                       std::vector<InputPortDefinition>{
+                           {"input", SocketValueKind::Mask},
+                           {"radius", SocketValueKind::Scalar, false}} &&
+                   definition.parameters.size() == 2 &&
+                   hasParameter(definition, 0, "radius", "bloom.blur.radius",
+                                ParameterValueKind::Float64, true) &&
+                   hasParameter(definition, 1, "edge", "bloom.blur.edge",
+                                ParameterValueKind::Integer) &&
+                   definition.outputs ==
+                       std::vector<OutputPortDefinition>{{"mask", SocketValueKind::Mask}} &&
+                   !definition.layerSlotInput && !definition.audioLayerSlotInput;
+        }
         if (definition.key.typeId == "bloom.transform-2d") {
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
                    hasLeadingImageInput(definition, "input") &&
@@ -905,6 +921,21 @@ template <typename Definition>
         NodeCategory::Color};
 }
 
+// #337 Matte Blur: the Gaussian Blur controls over Mask coverage. The input is required, like
+// every image effect's; an empty upstream Mask propagates as an empty Mask.
+[[nodiscard]] NodeDefinition matteBlurDefinition() {
+    return {
+        {"bloom.matte-blur", 1},
+        NodeLoweringKind::ImageEffect,
+        {{"input", SocketValueKind::Mask}, {"radius", SocketValueKind::Scalar, false}},
+        {{"mask", SocketValueKind::Mask}},
+        {{"radius", "bloom.blur.radius", ParameterValueKind::Float64, true, true, 0.0},
+         {"edge", "bloom.blur.edge", ParameterValueKind::Integer, true, false, std::int64_t{0}}},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Compositing};
+}
+
 [[nodiscard]] NodeDefinition imageDefinition() {
     using namespace bloom::document;
     return {
@@ -1136,6 +1167,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         transform2DDefinition(),
         blurDefinition("bloom.gaussian-blur"),
         blurDefinition("bloom.box-blur"),
+        matteBlurDefinition(),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),

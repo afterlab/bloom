@@ -2,7 +2,7 @@
 
 Status: first 18 nodes implemented and locally checked; later chunks remain planned
 
-Updated: 2026-10-23
+Updated: 2026-11-03
 
 Owner: [issue #331](https://github.com/kinetik-gg/bloom/issues/331).
 
@@ -17,8 +17,9 @@ repeated after changes confined to audio, undo, recovery and test fixtures. This
 Linux evidence, not final-source qualification of every export route or Windows/macOS execution.
 
 Standalone Transform 2D is implemented by #336 (see
-[evaluation primitives](../architecture/evaluation-primitives.md#transform-2d)). Matte Blur and
-chunks #338–#349 remain planned. The inventory below records
+[evaluation primitives](../architecture/evaluation-primitives.md#transform-2d)). Matte Blur is
+implemented by #337 (see [image filters](../architecture/image-filters.md#matte-blur)). Chunks
+#338–#349 remain planned. The inventory below records
 the original audit baseline rather than claiming those delivered nodes remain absent.
 
 ## Verified inventory
@@ -97,7 +98,7 @@ Depends on #335.
 
 ### 6. [#337: Gaussian Blur, Box Blur and Matte Blur](https://github.com/kinetik-gg/bloom/issues/337)
 
-One separable neighborhood primitive, halo/ROI planning, explicit edges and alpha/coverage behavior. The current scoped delivery implements Gaussian Blur and Box Blur only; Matte Blur remains separate. This is the dependency for shadows/glow, not three separate engines.
+One separable neighborhood primitive, halo/ROI planning, explicit edges and alpha/coverage behavior. Gaussian Blur, Box Blur and Matte Blur (a Mask-to-Mask Coverage variant of the same kernel) are implemented. This is the dependency for shadows/glow, not three separate engines.
 
 Depends on #334.
 

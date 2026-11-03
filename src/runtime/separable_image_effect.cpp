@@ -47,10 +47,12 @@ std::optional<PreparedSeparableBlur> prepareSeparableBlur(const SeparableBlurKer
         !std::isfinite(verticalScale) || horizontalScale <= 0.0 || verticalScale <= 0.0 ||
         *radius * horizontalScale > static_cast<double>(kMaximumSeparableBlurSupport) ||
         *radius * verticalScale > static_cast<double>(kMaximumSeparableBlurSupport) ||
-        static_cast<unsigned>(kernel.kind) > 1 || static_cast<unsigned>(kernel.edge) > 1)
+        static_cast<unsigned>(kernel.kind) > 1 || static_cast<unsigned>(kernel.edge) > 1 ||
+        static_cast<unsigned>(kernel.channels) > 1)
         return {};
     return PreparedSeparableBlur{weights(kernel.kind, *radius * horizontalScale),
-                                 weights(kernel.kind, *radius * verticalScale), kernel.edge};
+                                 weights(kernel.kind, *radius * verticalScale), kernel.edge,
+                                 kernel.channels};
 }
 std::optional<render::ImageWindow> blurOutputWindow(const PreparedSeparableBlur& blur,
                                                     const render::ImageWindow input) {
@@ -83,6 +85,7 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
     if (bytes > budget / 2)
         return failed(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
                       "Blur intermediate and output exceed the pixel budget");
+    const bool coverage = blur.channels == BlurChannels::Coverage;
     std::shared_ptr<const render::Rgba32fImage> intermediate;
     for (unsigned axis = 0; axis < 2; ++axis) {
         if (cancellation.isCancellationRequested())
@@ -124,13 +127,20 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
                     if (!sample)
                         continue;
                     const auto p = *sample.value();
-                    const std::array channels{p.red(), p.green(), p.blue(), p.alpha()};
                     const auto weight = coefficients[static_cast<std::size_t>(tap + support)];
+                    if (coverage) {
+                        sum[3] = std::fma(p.alpha(), weight, sum[3]);
+                        continue;
+                    }
+                    const std::array channels{p.red(), p.green(), p.blue(), p.alpha()};
                     for (std::size_t channel = 0; channel < 4; ++channel)
                         sum[channel] = std::fma(channels[channel], weight, sum[channel]);
                 }
-                auto pixel = render::Rgba32f::fromPremultiplied(sum[0], sum[1], sum[2],
-                                                                std::clamp(sum[3], 0.0F, 1.0F));
+                // Coverage writes the filtered alpha to every channel (premultiplied white).
+                const auto alpha = std::clamp(sum[3], 0.0F, 1.0F);
+                auto pixel =
+                    coverage ? render::Rgba32f::fromPremultiplied(alpha, alpha, alpha, alpha)
+                             : render::Rgba32f::fromPremultiplied(sum[0], sum[1], sum[2], alpha);
                 if (!pixel)
                     return failed(EvaluationDiagnosticCode::InvalidPixel,
                                   "Blur produced nonfinite HDR pixels");
@@ -151,10 +161,12 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
     return {std::move(intermediate), {}, false};
 }
 render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const float> coefficients,
-                                                       const bool vertical,
-                                                       const BlurEdgeMode edge) {
+                                                       const bool vertical, const BlurEdgeMode edge,
+                                                       const BlurChannels channels) {
+    const bool coverage = channels == BlurChannels::Coverage;
     if (coefficients.empty() || coefficients.size() > 2 * kMaximumSeparableBlurSupport + 1 ||
-        coefficients.size() % 2 != 1 || static_cast<unsigned>(edge) > 1)
+        coefficients.size() % 2 != 1 || static_cast<unsigned>(edge) > 1 ||
+        static_cast<unsigned>(channels) > 1)
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
     std::string shader = "const float bloom_blur_weights[] = float[](";
     for (std::size_t i = 0; i < coefficients.size(); ++i) {
@@ -180,15 +192,23 @@ render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const flo
         shader += "  p = clamp(p, ivec2(0), size - ivec2(1));\n";
     else
         shader += "  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) continue;\n";
-    shader += "  sum = fma(imageLoad(bloom_ocio_input, p), vec4(bloom_blur_weights[i + " + support +
-              "]), sum);\n"
-              " }\n sum.a = clamp(sum.a, 0.0, 1.0);\n return sum;\n}\n";
+    if (coverage)
+        shader += "  sum.a = fma(imageLoad(bloom_ocio_input, p).a, bloom_blur_weights[i + " +
+                  support +
+                  "], sum.a);\n"
+                  " }\n return vec4(clamp(sum.a, 0.0, 1.0));\n}\n";
+    else
+        shader += "  sum = fma(imageLoad(bloom_ocio_input, p), vec4(bloom_blur_weights[i + " +
+                  support +
+                  "]), sum);\n"
+                  " }\n sum.a = clamp(sum.a, 0.0, 1.0);\n return sum;\n}\n";
     render::OcioGpuProgramDesc program;
     program.stage = render::OcioGpuProgramStage::ProcessNeighborhood;
     program.functionName = "bloom_separable_blur";
     program.resourcePrefix = "bloom_blur_";
     program.shaderText = std::move(shader);
-    program.semanticsId = "bloom.render.separable-blur.v1";
+    program.semanticsId =
+        coverage ? "bloom.render.separable-blur.coverage.v1" : "bloom.render.separable-blur.v1";
     program.shaderTextDigest = render::computeOcioGpuShaderTextDigest(program.shaderText);
     program.resourceDigest = render::computeOcioGpuResourceDigest(program);
     program.contentIdentity = render::computeOcioGpuContentIdentity(

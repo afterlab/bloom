@@ -556,6 +556,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             leg.blurWeights = axis == 0 ? blur->horizontal : blur->vertical;
             leg.blurVertical = axis == 1;
             leg.blurEdge = static_cast<std::uint8_t>(blur->edge);
+            leg.blurCoverage = blur->channels == BlurChannels::Coverage;
             legs.push_back(std::move(leg));
         }
     } else if (masksKernel != nullptr) {

@@ -115,15 +115,21 @@ class GraphView final {
   private:
     [[nodiscard]] std::optional<InputPortRef> firstImageInput(const NodeRecord& node) const {
         const auto* definition = this->definition(node);
-        const bool imageOutput = definition != nullptr &&
-                                 std::ranges::any_of(definition->outputs, [](const auto& output) {
-                                     return output.valueKind == SocketValueKind::Image;
-                                 });
-        if (definition == nullptr ||
-            (!imageOutput && definition->lowering != NodeLoweringKind::CompositionOutput))
+        const auto hasOutput = [definition](const SocketValueKind kind) {
+            return definition != nullptr &&
+                   std::ranges::any_of(definition->outputs, [kind](const auto& output) {
+                       return output.valueKind == kind;
+                   });
+        };
+        const bool imageOutput = hasOutput(SocketValueKind::Image);
+        // A Mask-only node (#337 Matte Blur) carries its first Mask input, as the compiler does.
+        const bool maskOnly = !imageOutput && hasOutput(SocketValueKind::Mask);
+        if (definition == nullptr || (!imageOutput && !maskOnly &&
+                                      definition->lowering != NodeLoweringKind::CompositionOutput))
             return std::nullopt;
+        const auto carried = maskOnly ? SocketValueKind::Mask : SocketValueKind::Image;
         for (const auto& input : definition->inputs) {
-            if (input.valueKind == SocketValueKind::Image)
+            if (input.valueKind == carried)
                 return NodeInputRef{node.id, input.name};
         }
         const auto* stack = merge(node.id);

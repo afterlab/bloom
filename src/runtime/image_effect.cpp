@@ -282,6 +282,9 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         blurKey.add(std::string("vertical"));
         for (const auto weight : prepared.blur->vertical)
             blurKey.add(double(weight));
+        // Appended only when set, so every Rgba blur keeps its exact pre-#337 key bytes.
+        if (blur->channels == BlurChannels::Coverage)
+            blurKey.add(std::string("coverage"));
         prepared.cacheIdentity = blurKey.bytes();
         return prepared;
     }

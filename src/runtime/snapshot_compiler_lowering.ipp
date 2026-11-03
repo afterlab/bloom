@@ -474,12 +474,17 @@ lower(const std::vector<document::NodeId>& order) {
             node->typeId == "bloom.multiply-alpha") {
             const auto* second =
                 fixedInputEdge(nodeId, node->typeId == "bloom.image-mix" ? "second" : "matte");
-            if (second && emptyImages_.contains(second->source.nodeId) &&
-                !indices.contains(second->source.nodeId)) {
-                const auto empty = runtime::OperationIndex::fromRaw(operations.size());
-                operations.emplace_back(runtime::CompiledMerge{second->source.nodeId, {}});
-                indices.emplace(second->source.nodeId, empty);
-            }
+            // Image Mix's connected Mask may be empty too (a muted Mask node, or a Matte Blur
+            // of one, #337): the same transparent image, so the mask is zero coverage.
+            const auto* mask =
+                node->typeId == "bloom.image-mix" ? fixedInputEdge(nodeId, "mask") : nullptr;
+            for (const auto* edge : {second, mask})
+                if (edge && emptyImages_.contains(edge->source.nodeId) &&
+                    !indices.contains(edge->source.nodeId)) {
+                    const auto empty = runtime::OperationIndex::fromRaw(operations.size());
+                    operations.emplace_back(runtime::CompiledMerge{edge->source.nodeId, {}});
+                    indices.emplace(edge->source.nodeId, empty);
+                }
             // #361: Set Alpha's and Multiply Alpha's matte is optional. An unconnected matte is the
             // same transparent matte as a connected empty one (zero coverage, full when inverted),
             // owned by the combine node itself because there is no source node to name.
@@ -1213,6 +1218,19 @@ lowerImageEffect(const document::NodeRecord& node,
                                                  ? runtime::SeparableBlurKind::Gaussian
                                                  : runtime::SeparableBlurKind::Box,
                                              *radius, static_cast<runtime::BlurEdgeMode>(*edge)}};
+    }
+    // #337 Matte Blur: the Gaussian kernel over the Mask's coverage alone.
+    if (node.typeId == "bloom.matte-blur") {
+        const auto radius = compiledScalarParameter(findParameterBinding(node, "radius"));
+        const auto* edge = parameterConstant<std::int64_t>(findParameterBinding(node, "edge"));
+        if (radius && edge && *edge >= 0 && *edge <= 1)
+            return runtime::CompiledImageEffect{
+                node.id, *input,
+                runtime::SeparableBlurKernel{runtime::SeparableBlurKind::Gaussian, *radius,
+                                             static_cast<runtime::BlurEdgeMode>(*edge),
+                                             runtime::BlurChannels::Coverage}};
+        addTopologyFailure(node.id, "Matte Blur parameters could not be lowered.");
+        return std::nullopt;
     }
     const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
         if (node.typeId == "bloom.exposure")

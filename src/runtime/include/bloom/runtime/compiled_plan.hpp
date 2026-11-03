@@ -303,10 +303,14 @@ struct Transform2DKernel final {
 // resolution pixels in [0,256]; Gaussian sigma is radius/3 and support is ceil(radius).
 enum class SeparableBlurKind : std::uint8_t { Gaussian, Box };
 enum class BlurEdgeMode : std::uint8_t { Transparent, Clamp };
+// Rgba filters every associated channel (Gaussian Blur, Box Blur). Coverage (#337 Matte Blur)
+// filters only alpha and writes the result to every channel, the ADR 0028 Mask transport.
+enum class BlurChannels : std::uint8_t { Rgba, Coverage };
 struct SeparableBlurKernel final {
     SeparableBlurKind kind = SeparableBlurKind::Gaussian;
     CompiledScalarParameter radius;
     BlurEdgeMode edge = BlurEdgeMode::Transparent;
+    BlurChannels channels = BlurChannels::Rgba;
     friend bool operator==(const SeparableBlurKernel&, const SeparableBlurKernel&) = default;
 };
 // ADR 0028 layer masks. A path parameter is a constant or an inline Path curve.
