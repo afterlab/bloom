@@ -18,7 +18,13 @@ class MediaDiskCache;
 namespace bloom::runtime::detail {
 struct ImageSourceSelection {
     std::filesystem::path path;
+    // The source's identity: the asset or member content digest, or for a sequence member import
+    // stamped without reading it (#473) its provisional identity
+    // (document::sequenceMemberIdentity). Every cache key below is made from it.
     core::Sha256Digest digest;
+    // #473: the stamp a stamped member's file must still carry; its bytes are verified by it
+    // rather than by `digest`.
+    std::optional<media::ImageSourceStamp> expectedStamp;
     media::ImageInterpretation interpretation;
     std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
     std::string resolvedInputColorSpaceName;
@@ -66,6 +72,8 @@ imageSourceAlphaAssociation(const CompiledImageSource& source);
 struct ImageSourceReadAheadTarget final {
     std::filesystem::path path;
     core::Sha256Digest digest;
+    // #473: a stamped member is captured against its stamp instead of `digest`.
+    std::optional<media::ImageSourceStamp> stamp;
     std::string revisionKey;
 };
 // The distinct sequence members the next `frames` composition frames after `time` select (start

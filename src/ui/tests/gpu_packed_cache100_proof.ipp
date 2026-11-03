@@ -129,7 +129,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                                       .toEncoded()
                                       .toStdString()};
                 sequence.manifest.members.push_back(
-                    {frame, std::move(locator), probe.value->contentDigest});
+                    {frame, std::move(locator), probe.value->contentDigest, std::nullopt});
                 std::cout << "PACKED_INPUT member=" << frame << " path=" << path
                           << " sha256=" << member["sha256"].toString().toStdString()
                           << " sourceColorTag=" << probe.value->colorSpaceTag
@@ -166,7 +166,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                              static_cast<std::size_t>(sequence.width) * sequence.height,
                              ExrPixel{static_cast<float>(index + 1) / 128.0F, 0.3F, 0.7F, 1.0F}));
             const auto member = imageAsset(path, "Distinct packed member", 901);
-            sequence.manifest.members.push_back({index, member.locator, member.contentDigest});
+            sequence.manifest.members.push_back({index, member.locator, member.contentDigest, std::nullopt});
 #if defined(__linux__)
             if (gColdFootage) {
                 // Measurement: drop the footage from the page cache so the fill reads from disk.
@@ -181,7 +181,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
         }
     }
     sequence.locator = sequence.manifest.members.front().locator;
-    sequence.contentDigest = sequence.manifest.members.front().contentDigest;
+    sequence.contentDigest = *sequence.manifest.members.front().contentDigest;
     fixture.evaluator.operationCache()->setByteBudget(256ULL << 20);
     const auto rate = document::FrameRate::create(controlledRate, 1);
     if (!rate)
@@ -788,7 +788,7 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
                                 nullptr);
                         source->asset->kind = document::AssetKind::Image;
                         source->asset->locator = expectedMember.locator;
-                        source->asset->contentDigest = expectedMember.contentDigest;
+                        source->asset->contentDigest = *expectedMember.contentDigest;
                         source->asset->manifest = {};
                         source->asset->frames = 0;
                     }

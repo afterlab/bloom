@@ -246,7 +246,10 @@ std::filesystem::path nativePath(const QString& text) {
 }
 struct ThumbnailSelection {
     std::filesystem::path path;
+    // The source identity the keys are made from (a stamped member's provisional identity, #473).
     core::Sha256Digest digest;
+    // The SHA-256 of the bytes the probe verified, which every decode below must read again.
+    core::Sha256Digest fileDigest;
     media::ImageInterpretation interpretation;
     std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
     std::string inputColorSpaceName;
@@ -345,6 +348,7 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
     const auto* locator = &asset.locator;
     selected.digest = asset.contentDigest;
     std::int64_t memberFrame = 0;
+    std::optional<media::ImageSourceStamp> stamp;
     if (asset.kind == document::AssetKind::Sequence) {
         // #381: the asset's rate, Loop count and the node's start and loop, as the renderer.
         const auto offset = asset.manifest.members.empty()
@@ -361,7 +365,10 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
             frame.member = held == asset.manifest.members.begin() ? &*held : &*std::prev(held);
         }
         locator = &frame.member->locator;
-        selected.digest = frame.member->contentDigest;
+        selected.digest = document::sequenceMemberIdentity(*frame.member);
+        if (frame.member->stamp)
+            stamp = media::ImageSourceStamp{frame.member->stamp->size,
+                                            frame.member->stamp->modifiedNanoseconds};
         memberFrame = frame.member->frame;
     }
     selected.path = media::resolveImagePath(locator->path, locator->relinkHint, directory);
@@ -377,9 +384,17 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
         : mode != document::AssetAlphaMode::Guess ? media::ImageAlphaAssociation::Straight
         : source.premultiply                      ? media::ImageAlphaAssociation::Straight
                                                   : media::ImageAlphaAssociation::Premultiplied;
+    // #473: a member import stamped without reading it is read here first, and only while its
+    // file keeps the stamp import listed, before and after the probe.
+    const auto stampedBefore = stamp ? media::observeImageSourceStamp(selected.path) : std::nullopt;
     const auto probe =
         media::probeImage(selected.path, [&] { return cancel.isCancellationRequested(); });
-    selected.available = probe.value && probe.value->contentDigest == selected.digest;
+    selected.available =
+        probe.value &&
+        (stamp ? stampedBefore == stamp && media::observeImageSourceStamp(selected.path) == stamp
+               : probe.value->contentDigest == selected.digest);
+    if (selected.available)
+        selected.fileDigest = probe.value->contentDigest;
     selected.sourcePresent = selected.available;
     selected.part = source.part;
     if (selected.available) {
@@ -674,15 +689,23 @@ void AssetController::requestImageParts(const document::AssetId id) {
         [locator = asset->kind == document::AssetKind::Sequence && !asset->manifest.members.empty()
                        ? asset->manifest.members.front().locator
                        : asset->locator,
-         fileDigest = asset->kind == document::AssetKind::Sequence &&
-                              !asset->manifest.members.empty()
-                          ? asset->manifest.members.front().contentDigest
-                          : asset->contentDigest,
+         fileDigest =
+             asset->kind == document::AssetKind::Sequence && !asset->manifest.members.empty()
+                 ? asset->manifest.members.front().contentDigest
+                 : std::optional(asset->contentDigest),
+         // #473: a first member import stamped without reading it is verified by its stamp.
+         stamp = asset->kind == document::AssetKind::Sequence && !asset->manifest.members.empty() &&
+                         asset->manifest.members.front().stamp
+                     ? std::optional(media::ImageSourceStamp{
+                           asset->manifest.members.front().stamp->size,
+                           asset->manifest.members.front().stamp->modifiedNanoseconds})
+                     : std::nullopt,
          digest = asset->contentDigest, base = baseDirectory()](runtime::TaskContext& context) {
             using Result = runtime::TaskResult<std::shared_ptr<ImageParts>>;
             if (context.isCancellationRequested())
                 return Result::cancelled();
             const auto path = media::resolveImagePath(locator.path, locator.relinkHint, base);
+            const auto stampedBefore = stamp ? media::observeImageSourceStamp(path) : std::nullopt;
             auto probe = media::probeImage(path, [&context] {
                 return context.isCancellationRequested();
             });
@@ -691,7 +714,9 @@ void AssetController::requestImageParts(const document::AssetId id) {
             auto result = std::make_shared<ImageParts>();
             result->digest = digest;
             // A changed file is not listed: the pickers show the parts of the verified bytes.
-            if (probe.value && probe.value->contentDigest == fileDigest)
+            if (probe.value &&
+                (stamp ? stampedBefore == stamp && media::observeImageSourceStamp(path) == stamp
+                       : probe.value->contentDigest == fileDigest))
                 result->parts = std::move(probe.value->parts);
 
             return Result::succeeded(std::move(result));
@@ -1289,7 +1314,7 @@ void AssetController::startThumbnails() {
                     }
                     proxyCounters->miss();
                     preview.image = detail::dataChannelThumbnail(
-                        selected.path, selected.digest, selected.part,
+                        selected.path, selected.fileDigest, selected.part,
                         [&] { return context.isCancellationRequested(); });
                     if (!preview.image.isNull())
                         keepProxy(preview.key, preview.image);
@@ -1322,12 +1347,12 @@ void AssetController::startThumbnails() {
                 auto decoded =
                     selected.footagePass.empty()
                         ? media::cache::decodeThroughDiskCache(
-                              selected.path, selected.interpretation, selected.digest,
-                              selected.diskCacheKey, diskCache, /*writeAsync=*/false, cancelled,
-                              {}, media::kMaxImageStorageBytes, selected.inputProcessor)
+                              selected.path, selected.interpretation, selected.fileDigest,
+                              selected.diskCacheKey, diskCache, /*writeAsync=*/false, cancelled, {},
+                              media::kMaxImageStorageBytes, selected.inputProcessor)
                         : detail::decodeInterpretedThumbnail(
                               *source.asset, selected.path, selected.interpretation,
-                              selected.digest, selected.firstRow, selected.inputProcessor.get(),
+                              selected.fileDigest, selected.firstRow, selected.inputProcessor.get(),
                               cancelled);
                 if (!decoded.value.has_value())
                     preview.problem = decoded.diagnostic.empty() ? "The image could not be decoded"

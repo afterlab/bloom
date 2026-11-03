@@ -13,6 +13,7 @@ namespace bloom::platform {
 // bytes. Any difference (touch, rewrite, rename-over, another volume) forces a fresh hash.
 struct FileIdentity final {
     std::uint64_t size = 0;
+    // Nanoseconds since the Unix epoch on every platform (persisted by #473 sequence stamps).
     std::int64_t modifiedNanoseconds = 0;
     std::int64_t changedNanoseconds = 0;
     std::uint64_t volume = 0;

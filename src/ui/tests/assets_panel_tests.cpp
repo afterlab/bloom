@@ -64,9 +64,11 @@ document::AssetRecord sequenceAsset(const std::uint64_t id, const std::string& n
     for (std::int64_t frame = 1; frame <= 24; ++frame)
         asset.manifest.members.push_back(
             {frame,
-             {"file", "project-relative", name + "." + std::to_string(1000 + frame).substr(1) + ".png",
+             {"file", "project-relative",
+              name + "." + std::to_string(1000 + frame).substr(1) + ".png",
               "file:///media/" + name + ".png"},
-             {}});
+             bloom::core::Sha256Digest{},
+             std::nullopt});
     asset.folder = folder;
     return asset;
 }

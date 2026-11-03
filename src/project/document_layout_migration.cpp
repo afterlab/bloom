@@ -157,7 +157,8 @@ enum class Step {
     NodeGroupColors,
     KeyframeHandleModes,
     WebmExportFormats,
-    FootageInterpretation
+    FootageInterpretation,
+    SequenceMemberStamps
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -199,6 +200,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // the stream pixel aspect ratio are optional and absent at their defaults, which reproduce the
     // previous playback exactly.
     if (step == Step::FootageInterpretation)
+        return false;
+    // Sequence member stamps (1.34 -> 1.35, #473) are version-only: a stamp replaces a member's
+    // digest only in a document written at 1.35, and every older member keeps its digest.
+    if (step == Step::SequenceMemberStamps)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -386,6 +391,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::KeyframeHandleModes   ? "{\"major\":1,\"minor\":32}"
                            : step == Step::WebmExportFormats     ? "{\"major\":1,\"minor\":33}"
                            : step == Step::FootageInterpretation ? "{\"major\":1,\"minor\":34}"
+                           : step == Step::SequenceMemberStamps  ? "{\"major\":1,\"minor\":35}"
                                                                  : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -951,6 +957,13 @@ MigrationStepOutcome migrateFootageInterpretationV1_33(const JsonValue& root,
                                                        std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "33") ||
         !transform(root, Scope::Root, Step::FootageInterpretation, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateSequenceMemberStampsV1_34(const JsonValue& root,
+                                                      std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "34") ||
+        !transform(root, Scope::Root, Step::SequenceMemberStamps, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

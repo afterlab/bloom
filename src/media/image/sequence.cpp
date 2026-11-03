@@ -267,8 +267,9 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
         manifest.padding = name->padding;
         manifest.pattern =
             name->prefix + std::string(name->padding, '#') + name->suffix + name->extension;
-        // Pass 1 lists the members (directory entries only); pass 2 reads and hashes each one,
-        // which is the slow part, so progress can report a known total while it runs.
+        // Pass 1 lists the members (directory entries only); pass 2 stamps each one (#473: one
+        // stat, no read), so the asset is usable at once however far away the files are. Each
+        // member's bytes are read and digested when it is first needed.
         auto listed = listMembers(path, *name, cancel, progress, range);
         if (listed.cancelled)
             return {{}, {}, true};
@@ -299,18 +300,16 @@ ImageResult<SequenceManifest> scanSequence(const std::filesystem::path& path,
         for (const auto& [frame, member] : listed.members) {
             if (cancel && cancel())
                 return {{}, {}, true};
-            const auto probe = probeImage(member, cancel);
-            if (!probe.value.has_value()) {
-                if (probe.cancelled || (cancel && cancel()))
-                    return {{}, {}, true};
+            const auto stamp = observeImageSourceStamp(member);
+            if (!stamp) {
                 // ADR 0026 / #373 batch policy: one unreadable member never aborts the sequence.
                 // It is reported and its frame becomes a gap that holds the preceding frame.
                 if (++failedMembers <= kMaxReportedMemberFailures)
-                    manifest.diagnostics.push_back(
-                        "Frame " + std::to_string(frame) +
-                        " is unreadable and is treated as a gap: " + probe.diagnostic);
+                    manifest.diagnostics.push_back("Frame " + std::to_string(frame) +
+                                                   " is unreadable and is treated as a gap: "
+                                                   "Image file is missing or unreadable");
             } else {
-                manifest.members.push_back({frame, member, probe.value->contentDigest});
+                manifest.members.push_back({frame, member, *stamp});
             }
             if (progress)
                 progress(++read, total);

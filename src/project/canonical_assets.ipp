@@ -125,9 +125,26 @@ emitFootageInterpretation(EmitState& state,
         for (const auto& member : asset.manifest.members) {
             if (!state.ok(writer.beginObject()) || !emitNamedSigned(state, "frame", member.frame) ||
                 !state.ok(writer.memberName("locator")) ||
-                !emitAssetLocator(state, member.locator) ||
-                !state.ok(writer.memberName("contentDigest")) ||
-                !emitAssetDigest(state, member.contentDigest) || !state.ok(writer.endObject()))
+                !emitAssetLocator(state, member.locator))
+                return false;
+            // Document 1.35 (#473): the content digest when import read the member, else the
+            // file stamp it listed.
+            if (member.contentDigest) {
+                if (!state.ok(writer.memberName("contentDigest")) ||
+                    !emitAssetDigest(state, *member.contentDigest))
+                    return false;
+            } else if (member.stamp) {
+                const auto size = bloom::project::formatCanonicalUInt64(member.stamp->size);
+                if (!state.ok(writer.memberName("stamp")) || !state.ok(writer.beginObject()) ||
+                    !state.ok(writer.memberName("size")) ||
+                    !state.ok(writer.stringValue(size.view())) ||
+                    !emitNamedSigned(state, "modified", member.stamp->modifiedNanoseconds) ||
+                    !state.ok(writer.endObject()))
+                    return false;
+            } else {
+                return false;
+            }
+            if (!state.ok(writer.endObject()))
                 return false;
         }
         if (!state.ok(writer.endArray()) || !state.ok(writer.memberName("gaps")) ||

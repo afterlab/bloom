@@ -104,10 +104,11 @@ void testSparseSequenceManifest(ExpectationContext& expectations) {
     asset.manifest.padding = 1;
     asset.manifest.first = 0;
     asset.manifest.last = std::numeric_limits<std::int64_t>::max();
-    asset.manifest.members.push_back({0, asset.locator, {}});
+    asset.manifest.members.push_back({0, asset.locator, bloom::core::Sha256Digest{}, std::nullopt});
     auto lastLocator = asset.locator;
     lastLocator.path = "sparse.9223372036854775807.png";
-    asset.manifest.members.push_back({asset.manifest.last, lastLocator, {}});
+    asset.manifest.members.push_back(
+        {asset.manifest.last, lastLocator, bloom::core::Sha256Digest{}, std::nullopt});
     expectations.expect(asset.manifest.hasGaps() && asset.validate().ok(),
                         "sparse sequence validates without enumerating missing frames");
     asset.manifest.gaps.push_back(1);
@@ -136,7 +137,8 @@ void testLargeImageMetadata(ExpectationContext& expectations) {
     auto second = sequence.locator;
     second.path = "plate.0002.exr";
     second.relinkHint = "file:///plate.0002.exr";
-    sequence.manifest.members = {{1, sequence.locator, {}}, {2, second, {}}};
+    sequence.manifest.members = {{1, sequence.locator, bloom::core::Sha256Digest{}, std::nullopt},
+                                 {2, second, bloom::core::Sha256Digest{}, std::nullopt}};
     expectations.expect(sequence.validate().ok(),
                         "wide EXR sequence metadata is valid without decoding frames");
 

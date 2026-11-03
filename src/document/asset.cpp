@@ -5,8 +5,22 @@
 #include <bloom/document/persisted_text.hpp>
 
 #include <limits>
+#include <span>
+#include <string>
 
 namespace bloom::document {
+core::Sha256Digest sequenceMemberIdentity(const AssetSequenceMember& member) {
+    if (member.contentDigest || !member.stamp)
+        return member.contentDigest.value_or(core::Sha256Digest{});
+    std::string text = "BloomSequenceMemberStamp";
+    for (const auto& part :
+         {member.locator.path, member.locator.relinkHint, std::to_string(member.stamp->size),
+          std::to_string(member.stamp->modifiedNanoseconds)}) {
+        text.push_back('\0');
+        text += part;
+    }
+    return core::Sha256Hasher::hash(std::as_bytes(std::span(text))).value_or(core::Sha256Digest{});
+}
 namespace {
 bool validLocator(const AssetLocator& locator) {
     if (locator.kind == "file") {
@@ -188,9 +202,10 @@ ValidationResult AssetRecord::validate() const {
         std::size_t gapIndex = 0;
         for (const auto& member : manifest.members) {
             if (member.frame <= previous || member.frame > manifest.last ||
-                !validLocator(member.locator)) {
+                !validLocator(member.locator) ||
+                member.contentDigest.has_value() == member.stamp.has_value()) {
                 result.add(ValidationCode::InvalidValue, "manifest.members",
-                           "Invalid sequence member order or locator");
+                           "Invalid sequence member order, locator or identity");
                 return result;
             }
             if (!manifest.gaps.empty()) {

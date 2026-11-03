@@ -27,6 +27,17 @@ inline constexpr std::size_t kMaxSequenceEntries = 100000;
 using CancelImageWork = std::function<bool()>;
 using ImageProgress = std::function<void(std::uint64_t, std::uint64_t)>;
 template <typename T> struct ImageResult;
+// #473: a file's length and modification time (nanoseconds since the Unix epoch), as
+// platform::observeFileIdentity() reports them. A sequence member whose bytes import did not read
+// is identified by its stamp until a read proves its bytes; a different stamp is a changed file.
+struct ImageSourceStamp {
+    std::uint64_t size = 0;
+    std::int64_t modifiedNanoseconds = 0;
+    friend bool operator==(const ImageSourceStamp&, const ImageSourceStamp&) = default;
+};
+// The stamp of `path` now (one stat, no read), or nullopt when it is missing or not a regular file.
+[[nodiscard]] std::optional<ImageSourceStamp>
+observeImageSourceStamp(const std::filesystem::path& path);
 enum class ImageColorSpace : std::uint8_t { Auto, Srgb, Linear, Raw };
 enum class ImageAlphaAssociation : std::uint8_t { Auto, Straight, Premultiplied };
 struct ImageInterpretation {
@@ -210,16 +221,19 @@ class ImageSourceRevision final {
         : bytes_(std::move(bytes)), probe_(std::move(probe)), captureStatistics_(statistics) {}
     friend ImageResult<std::shared_ptr<const ImageSourceRevision>>
     captureImageSourceRevision(const std::filesystem::path&, std::size_t, const CancelImageWork&,
-                               std::optional<core::Sha256Digest>);
+                               std::optional<core::Sha256Digest>, std::optional<ImageSourceStamp>);
     std::vector<std::byte> bytes_;
     ImageProbe probe_;
     ImageSourceCaptureStatistics captureStatistics_;
 };
 
+// `expectedStamp` (#473) admits the bytes only when the file's stamp before and after the read is
+// that stamp (DigestMismatch otherwise): a sequence member read for the first time after import.
 [[nodiscard]] ImageResult<std::shared_ptr<const ImageSourceRevision>>
 captureImageSourceRevision(const std::filesystem::path& path, std::size_t hostByteBudget,
                            const CancelImageWork& cancel = {},
-                           std::optional<core::Sha256Digest> expectedDigest = {});
+                           std::optional<core::Sha256Digest> expectedDigest = {},
+                           std::optional<ImageSourceStamp> expectedStamp = {});
 
 // The revision remains live throughout decode. Its encoded storage is subtracted from the total
 // host allowance before admitting codec staging and output. No path is reopened and no hash
@@ -312,7 +326,8 @@ template <typename T> struct ImageResult {
 struct SequenceMember {
     std::int64_t frame = 0;
     std::filesystem::path path;
-    core::Sha256Digest contentDigest;
+    // #473: what the listing observed; the bytes are not read.
+    ImageSourceStamp stamp;
 };
 struct SequenceManifest {
     std::string pattern;
@@ -358,13 +373,16 @@ struct SequenceFrameRange {
     std::int64_t first = 0;
     std::int64_t last = 0;
 };
-// Lists the members of `path`'s sequence (no file is opened), then reads and hashes each one.
-// `progress` reports the listing as (found, 0) and the reading as (read, members). With `range`,
-// only the members numbered within it are read; none there is "No frames in the frame range".
+// Lists the members of `path`'s sequence, then stamps each one (#473: one stat per member; no
+// member is opened, read or hashed). `progress` reports the listing as (found, 0) and the stamping
+// as (stamped, members). With `range`, only the members numbered within it are kept; none there is
+// "No frames in the frame range". A member that cannot be stamped is reported and becomes a gap
+// (ADR 0026 / #373); one whose bytes turn out unreadable is found when it is first read.
 // Numbered files form a sequence only when two of them (ignoring `range`) have consecutive frame
-// numbers or three share one constant step (1, 3, 5); otherwise the manifest has no members and `path` is a still. Several files numbered
-// with one frame keep one (the picked file, then one with its padding and extension spelling, then
-// the first file name) with a diagnostic naming the files left out.
+// numbers or three share one constant step (1, 3, 5); otherwise the manifest has no members and
+// `path` is a still. Several files numbered with one frame keep one (the picked file, then one with
+// its padding and extension spelling, then the first file name) with a diagnostic naming the files
+// left out.
 [[nodiscard]] ImageResult<SequenceManifest>
 scanSequence(const std::filesystem::path& path, const CancelImageWork& cancel = {},
              const ImageProgress& progress = {},

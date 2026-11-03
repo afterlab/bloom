@@ -45,6 +45,9 @@ class GpuProcessingPhasePolicy;
 struct MediaSourceStamp final {
     std::string path;
     core::Sha256Digest digest{};
+    // #473: a sequence member import stamped without reading it is current while its file keeps
+    // this stamp; `digest` is then its provisional identity.
+    std::optional<document::AssetFileStamp> fileStamp;
 
     friend bool operator==(const MediaSourceStamp&, const MediaSourceStamp&) = default;
 };

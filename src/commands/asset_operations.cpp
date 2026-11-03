@@ -261,13 +261,14 @@ struct PreparedItem final {
 };
 // Probes, hashes and (for numbered images) scans one item. Nothing it prepares is visible to the
 // batch until it returns Prepared, so an interrupted item leaves no partial record behind.
-// The manifest digest: every member's frame and content digest, in order.
+// The manifest digest: every member's frame and identity (its content digest, or the provisional
+// identity of its file stamp, #473), in order.
 std::optional<core::Sha256Digest>
 sequenceDigest(const std::vector<document::AssetSequenceMember>& members) {
     core::Sha256Hasher hasher;
     for (const auto& member : members) {
         const auto frame = std::to_string(member.frame) + ":";
-        const auto digest = member.contentDigest.toLowercaseHex();
+        const auto digest = document::sequenceMemberIdentity(member).toLowercaseHex();
         if (!hasher.update(std::as_bytes(std::span(frame))) ||
             !hasher.update(std::as_bytes(std::span(digest))))
             return std::nullopt;
@@ -384,12 +385,15 @@ PreparedItem prepareItem(const std::filesystem::path& path,
         return PreparedItem::failed(sequence.diagnostic);
     }
     // A frame range that leaves out the picked file takes the size and alpha from a frame it
-    // keeps, not from the file it left out.
+    // keeps, not from the file it left out. That one member is the only one read (#473); every
+    // other member is read and digested when it is first needed.
     const auto& members = sequence.value->members;
+    auto probedPath = path;
     if (!members.empty() && std::ranges::none_of(members, [&](const auto& member) {
             return member.path.filename() == path.filename();
         })) {
-        probe = media::probeImage(members.front().path, cancel);
+        probedPath = members.front().path;
+        probe = media::probeImage(probedPath, cancel);
         if (!probe.value.has_value()) {
             if (probe.cancelled)
                 return PreparedItem::interrupted();
@@ -399,11 +403,9 @@ PreparedItem prepareItem(const std::filesystem::path& path,
     document::AssetRecord asset;
     asset.locator = locator(path, projectDirectory);
     asset.contentDigest = probe.value->contentDigest;
-    // A frame range holding one frame imports that frame as a still.
-    if (sequence.value->members.size() == 1 && sequence.value->members.front().path != path) {
+    // A frame range holding one frame imports that frame (the one probed) as a still.
+    if (sequence.value->members.size() == 1 && sequence.value->members.front().path != path)
         asset.locator = locator(sequence.value->members.front().path, projectDirectory);
-        asset.contentDigest = sequence.value->members.front().contentDigest;
-    }
     asset.width = probe.value->width;
     asset.height = probe.value->height;
     // New imports keep the legacy interpretation at Auto.  The probe's format,
@@ -423,9 +425,18 @@ PreparedItem prepareItem(const std::filesystem::path& path,
         asset.manifest.first = scan.first;
         asset.manifest.last = scan.last;
         asset.manifest.gaps = scan.gaps;
-        for (const auto& member : scan.members)
-            asset.manifest.members.push_back(
-                {member.frame, locator(member.path, projectDirectory), member.contentDigest});
+        // The probed member keeps the digest of the bytes just read; the others their stamp.
+        for (const auto& member : scan.members) {
+            document::AssetSequenceMember entry;
+            entry.frame = member.frame;
+            entry.locator = locator(member.path, projectDirectory);
+            if (member.path.filename() == probedPath.filename())
+                entry.contentDigest = probe.value->contentDigest;
+            else
+                entry.stamp =
+                    document::AssetFileStamp{member.stamp.size, member.stamp.modifiedNanoseconds};
+            asset.manifest.members.push_back(std::move(entry));
+        }
         const auto digest = sequenceDigest(asset.manifest.members);
         if (!digest)
             return PreparedItem::failed("Sequence digest failed");
@@ -734,9 +745,13 @@ OperationResult RelinkAsset::apply(document::Draft& draft) const {
         if (member == replacement.manifest.members.end())
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "The chosen file is not a frame of its sequence");
+        // The chosen file is the member import read, so its digest is known.
+        if (!member->contentDigest)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "The chosen file could not be read");
         replacement.kind = document::AssetKind::Image;
         replacement.locator = member->locator;
-        replacement.contentDigest = member->contentDigest;
+        replacement.contentDigest = *member->contentDigest;
         replacement.manifest = {};
     }
     // A sequence keeps the frame range it was imported with.

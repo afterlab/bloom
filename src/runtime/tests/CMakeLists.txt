@@ -229,6 +229,14 @@ target_link_libraries(bloom_image_source_test PRIVATE bloom_runtime_evaluator bl
 bloom_enable_warnings(bloom_image_source_test)
 bloom_add_test(NAME bloom.runtime.image-source COMMAND bloom_image_source_test LABELS unit runtime media)
 
+# #473: lazy image-sequence import (one member read at import, digest on first read, change and
+# unreadable-frame detection, save/reopen with partial digests).
+add_executable(bloom_lazy_sequence_import_test ${PROJECT_SOURCE_DIR}/tests/integration/lazy_sequence_import_tests.cpp)
+target_include_directories(bloom_lazy_sequence_import_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.. ${PROJECT_SOURCE_DIR}/src/media/image/tests)
+target_link_libraries(bloom_lazy_sequence_import_test PRIVATE bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_lazy_sequence_import_test)
+bloom_add_test(NAME bloom.runtime.lazy-sequence-import COMMAND bloom_lazy_sequence_import_test LABELS unit runtime media persistence)
+
 add_executable(bloom_runtime_shape_sources_test ${PROJECT_SOURCE_DIR}/tests/shape_sources_tests.cpp)
 target_link_libraries(bloom_runtime_shape_sources_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
 bloom_enable_warnings(bloom_runtime_shape_sources_test)

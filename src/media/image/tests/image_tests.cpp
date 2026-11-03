@@ -16,6 +16,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/media/image.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -628,14 +629,41 @@ int main() {
             bad.write("v/1\x01garbage", 12);
         }
         exr(scratch.file("broken.0003.exr"), false, Imf::HALF);
+        // #473: the scan stamps members without reading them, so a member whose bytes are not an
+        // image is found when it is first read (and becomes a gap then), not here.
+        const auto before = bloom::platform::sourceReadWork();
         const auto sequence = media::scanSequence(scratch.file("broken.0001.exr"));
-        check.expect(sequence.value.has_value() && sequence.value->members.size() == 2 &&
-                         sequence.value->gaps == std::vector<std::int64_t>{2} &&
-                         std::ranges::any_of(sequence.value->diagnostics,
+        check.expect(bloom::platform::sourceReadWork().fullReads == before.fullReads,
+                     "a sequence scan reads no member");
+        const auto stamp = media::observeImageSourceStamp(scratch.file("broken.0002.exr"));
+        check.expect(sequence.value.has_value() && sequence.value->members.size() == 3 &&
+                         sequence.value->gaps.empty() && stamp &&
+                         sequence.value->members[1].stamp == *stamp,
+                     "every listed member carries its file's stamp, readable or not");
+        // A member that cannot even be stamped (here a directory) is a reported gap.
+        std::filesystem::create_directory(scratch.file("broken.0004.exr"));
+        exr(scratch.file("broken.0005.exr"), false, Imf::HALF);
+        const auto gapped = media::scanSequence(scratch.file("broken.0001.exr"));
+        check.expect(gapped.value.has_value() && gapped.value->members.size() == 4 &&
+                         gapped.value->gaps == std::vector<std::int64_t>{4} &&
+                         std::ranges::any_of(gapped.value->diagnostics,
                                              [](const std::string& line) {
-                                                 return line.starts_with("Frame 2 is unreadable");
+                                                 return line.starts_with("Frame 4 is unreadable");
                                              }),
-                     "an unreadable sequence member is a reported gap, not a failed scan");
+                     "an unstampable sequence member is a reported gap, not a failed scan");
+        // A capture against a stamp admits the file only while it keeps that stamp.
+        const auto path = scratch.file("broken.0003.exr");
+        const auto current = media::observeImageSourceStamp(path);
+        check.expect(current && media::captureImageSourceRevision(
+                                    path, media::kMaxImageStorageBytes, {}, {}, *current)
+                                    .value.has_value(),
+                     "a stamped capture reads the file that carries the stamp");
+        auto stale = *current;
+        stale.modifiedNanoseconds -= 1000000000;
+        const auto refused =
+            media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, {}, stale);
+        check.expect(!refused.value && refused.code == media::ImageDiagnosticCode::DigestMismatch,
+                     "a stamped capture refuses a file whose stamp changed");
     }
     {
         png(scratch.file("stereo0001_left.png"));

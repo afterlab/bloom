@@ -19,6 +19,7 @@ namespace {
 struct Source final {
     std::string path;
     core::Sha256Digest recorded{};
+    std::optional<document::AssetFileStamp> stamp;
 };
 
 void collectAsset(const document::AssetRecord& asset, const std::filesystem::path& base,
@@ -26,13 +27,13 @@ void collectAsset(const document::AssetRecord& asset, const std::filesystem::pat
     if (asset.manifest.members.empty()) {
         sources.push_back(
             {media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base).string(),
-             asset.contentDigest});
+             asset.contentDigest, std::nullopt});
         return;
     }
     for (const auto& member : asset.manifest.members)
         sources.push_back(
             {media::resolveImagePath(member.locator.path, member.locator.relinkHint, base).string(),
-             member.contentDigest});
+             document::sequenceMemberIdentity(member), member.stamp});
 }
 
 void collectPlan(const CompiledCompositionPlan& plan, const std::filesystem::path& base,
@@ -60,6 +61,13 @@ void collectPlan(const CompiledCompositionPlan& plan, const std::filesystem::pat
 
 // The identity-verified digest of a source (ADR 0025): the registry's cheap observation when it
 // still vouches for a full hash, otherwise one full hash pass that the registry then records.
+// #473: whether a stamped member's file still carries the stamp import listed (one stat).
+bool carriesStamp(const std::string& path, const document::AssetFileStamp& stamp) {
+    const auto identity = platform::observeFileIdentity(path);
+    return identity && identity->size == stamp.size &&
+           identity->modifiedNanoseconds == stamp.modifiedNanoseconds;
+}
+
 std::optional<core::Sha256Digest> verifiedDigest(const std::string& path) {
     const auto observed = platform::observeSource(path);
     if (observed.digest)
@@ -110,17 +118,28 @@ compositeFrameKeyFor(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                 return std::nullopt;
             continue;
         }
-        // The file must be exactly the content the document recorded, as for a fresh render.
+        // The file must be exactly the content the document recorded, as for a fresh render: its
+        // digest, or for a member import did not read the stamp it listed (#473), so building the
+        // key never reads a member's bytes.
+        if (source.stamp) {
+            if (!carriesStamp(source.path, *source.stamp))
+                return std::nullopt;
+            key.media.push_back(
+                {.path = source.path, .digest = source.recorded, .fileStamp = source.stamp});
+            continue;
+        }
         const auto digest = verifiedDigest(source.path);
         if (!digest || *digest != source.recorded)
             return std::nullopt;
-        key.media.push_back({.path = source.path, .digest = *digest});
+        key.media.push_back({.path = source.path, .digest = *digest, .fileStamp = {}});
     }
     return key;
 }
 
 bool compositeFrameMediaCurrent(const CompositeFrameKey& key) {
     return std::all_of(key.media.begin(), key.media.end(), [](const MediaSourceStamp& source) {
+        if (source.fileStamp)
+            return carriesStamp(source.path, *source.fileStamp);
         const auto observed = platform::observeSource(source.path);
         return observed.digest && *observed.digest == source.digest;
     });

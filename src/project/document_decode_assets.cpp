@@ -88,14 +88,43 @@ bool manifest(const JsonValue& node, DecodeState& state, const std::string& path
         return false;
     }
     constexpr std::array<std::string_view, 3> memberKeys{"frame", "locator", "contentDigest"};
+    // Document 1.35 (#473): a member import did not read carries its file stamp instead.
+    constexpr std::array<std::string_view, 3> stampedKeys{"frame", "locator", "stamp"};
+    constexpr std::array<std::string_view, 2> stampKeys{"size", "modified"};
     for (const auto& value : members[4]->arrayElements()) {
         std::vector<const JsonValue*> fields;
         document::AssetSequenceMember member;
-        if (!matchOrderedMembers(value, memberKeys, false, state, path, fields) ||
+        const bool stamped = state.documentMinor >= 35 && value.kind() == JsonValueKind::Object &&
+                             value.findMember("stamp") != nullptr;
+        if (!matchOrderedMembers(value, stamped ? stampedKeys : memberKeys, false, state, path,
+                                 fields) ||
             !integer(*fields[0], state, path, member.frame) ||
-            !locator(*fields[1], state, path, member.locator) ||
-            !digest(*fields[2], state, path, member.contentDigest))
+            !locator(*fields[1], state, path, member.locator))
             return false;
+        if (stamped) {
+            std::vector<const JsonValue*> stampFields;
+            document::AssetFileStamp stamp;
+            if (!matchOrderedMembers(*fields[2], stampKeys, false, state, path, stampFields) ||
+                !integer(*stampFields[1], state, path, stamp.modifiedNanoseconds))
+                return false;
+            const auto size = stampFields[0]->asString();
+            if (!size) {
+                state.fail(DocumentDecodeError::WrongValueKind, path);
+                return false;
+            }
+            const auto parsed = parseCanonicalAllocatorHighWater(*size);
+            if (!parsed) {
+                state.fail(DocumentDecodeError::DomainViolation, path);
+                return false;
+            }
+            stamp.size = *parsed.value();
+            member.stamp = stamp;
+        } else {
+            core::Sha256Digest memberDigest;
+            if (!digest(*fields[2], state, path, memberDigest))
+                return false;
+            member.contentDigest = memberDigest;
+        }
         out.members.push_back(std::move(member));
     }
     for (const auto& value : members[5]->arrayElements()) {

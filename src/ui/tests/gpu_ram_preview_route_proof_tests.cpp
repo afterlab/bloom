@@ -259,10 +259,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 path, 1920, 1080,
                 std::vector<ExrPixel>(std::size_t{1920} * 1080, ExrPixel{red, 0.3F, 0.7F, 1.0F}));
             const auto member = imageAsset(path, "RAM sequence member", 901);
-            sequenceAsset.manifest.members.push_back({index, member.locator, member.contentDigest});
+            sequenceAsset.manifest.members.push_back(
+                {index, member.locator, member.contentDigest, std::nullopt});
         }
         sequenceAsset.locator = sequenceAsset.manifest.members.front().locator;
-        sequenceAsset.contentDigest = sequenceAsset.manifest.members.front().contentDigest;
+        sequenceAsset.contentDigest = *sequenceAsset.manifest.members.front().contentDigest;
         fixture.evaluator.operationCache()->setByteBudget(std::size_t{256} * 1024 * 1024);
     }
     const auto duration = core::RationalTime::create(frameCount, kFrameRate);

@@ -104,7 +104,8 @@ document::AssetRecord sequence(const std::uint64_t id) {
             {frame,
              {"file", "project-relative", "shot.000" + std::to_string(frame) + ".png",
               "file:///media/shot.png"},
-             {}});
+             bloom::core::Sha256Digest{},
+             std::nullopt});
     asset.manifest.gaps = {3};
     return asset;
 }

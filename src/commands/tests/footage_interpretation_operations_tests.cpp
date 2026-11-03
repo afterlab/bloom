@@ -48,7 +48,8 @@ document::AssetRecord sequence(const AssetId id) {
             {frame,
              {"file", "project-relative", "shot." + std::to_string(frame) + ".png",
               "file:///shot.png"},
-             {}});
+             bloom::core::Sha256Digest{},
+             std::nullopt});
     return asset;
 }
 

@@ -269,16 +269,36 @@ std::filesystem::path resolveImagePath(std::string_view relativePath, std::strin
     }
     return core::absolutePathFromFileUri(relinkHint).value_or(std::filesystem::path{});
 }
+std::optional<ImageSourceStamp> observeImageSourceStamp(const std::filesystem::path& path) {
+    const auto identity = platform::observeFileIdentity(path);
+    if (!identity)
+        return std::nullopt;
+    return ImageSourceStamp{identity->size, identity->modifiedNanoseconds};
+}
 ImageResult<std::shared_ptr<const ImageSourceRevision>>
 captureImageSourceRevision(const std::filesystem::path& path, const std::size_t hostByteBudget,
                            const CancelImageWork& cancel,
-                           const std::optional<core::Sha256Digest> expectedDigest) {
+                           const std::optional<core::Sha256Digest> expectedDigest,
+                           const std::optional<ImageSourceStamp> expectedStamp) {
     try {
         if (cancelled(cancel))
             return {{}, {}, true, ImageDiagnosticCode::Cancelled};
         ImageSourceCaptureStatistics statistics;
         auto ioStart = detail::ImageWorkClock::now();
         const auto observedBefore = platform::observeFileIdentity(path);
+        const auto stampOf = [](const platform::FileIdentity& identity) {
+            return ImageSourceStamp{identity.size, identity.modifiedNanoseconds};
+        };
+        const auto changedSinceImport = [] {
+            return ImageResult<std::shared_ptr<const ImageSourceRevision>>{
+                {},
+                "Image file changed since it was imported; reload the footage",
+                false,
+                ImageDiagnosticCode::DigestMismatch};
+        };
+        // #473: no byte is read from a file that is no longer the one import stamped.
+        if (expectedStamp && observedBefore && stampOf(*observedBefore) != *expectedStamp)
+            return changedSinceImport();
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         if (!input)
             return {{},
@@ -338,10 +358,15 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
         const auto digest = hasher.finalize();
         detail::addImageWork(statistics.hashNanoseconds, detail::imageWorkNanoseconds(hashStart));
         platform::recordFullSourceRead(bytes.size());
-        if (const auto observedAfter = platform::observeFileIdentity(path);
-            observedBefore && observedAfter && *observedBefore == *observedAfter &&
-            observedAfter->size == bytes.size())
+        const auto observedAfter = platform::observeFileIdentity(path);
+        const bool unchanged = observedBefore && observedAfter &&
+                               *observedBefore == *observedAfter &&
+                               observedAfter->size == bytes.size();
+        if (unchanged)
             platform::verifiedSourceDigests().record(path, *observedAfter, digest);
+        // The bytes stand for the stamp only when the file kept it across the whole read.
+        if (expectedStamp && (!unchanged || stampOf(*observedAfter) != *expectedStamp))
+            return changedSinceImport();
         if (expectedDigest && digest != *expectedDigest)
             return {{},
                     "Image content changed; relink the asset",

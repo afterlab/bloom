@@ -1,12 +1,14 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/media/image.hpp>
 #include <bloom/runtime/source_working_set.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,8 @@ class ImageSequenceReadAhead final {
     struct Request final {
         std::filesystem::path path;
         core::Sha256Digest digest;
+        // #473: a member import stamped without reading it is captured against its stamp.
+        std::optional<media::ImageSourceStamp> stamp;
         std::string revisionKey;
         std::size_t byteBudget = 0;
         // The composition frame the capture is for (ADR 0037): its entry is tagged with it, so it

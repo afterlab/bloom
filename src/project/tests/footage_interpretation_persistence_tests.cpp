@@ -163,7 +163,7 @@ void roundTrip() {
                plain.find("\"loopCount\"") == std::string::npos &&
                plain.find("\"missingFrames\"") == std::string::npos,
            "default members are absent");
-    expect(!decodes(replaceRegex(text, R"("minor": 34(\s*\}))", "\"minor\": 33$1")),
+    expect(!decodes(replaceRegex(text, R"("minor": 35(\s*\}))", "\"minor\": 33$1")),
            "a document claiming 1.33 cannot carry the 1.34 members");
     expect(!decodes(replaceRegex(text, R"("loopCount": 3)", "\"loopCount\": 1")),
            "a default value written out is refused");
@@ -188,7 +188,8 @@ void sequenceMembers() {
         asset.manifest.members.push_back(
             {frame,
              {"file", "project-relative", "shot." + std::to_string(frame) + ".png", "file:///s"},
-             {}});
+             bloom::core::Sha256Digest{},
+             std::nullopt});
     asset.manifest.gaps = {2};
     asset.interpretation.frameRate = *FrameRate::create(25, 1);
     asset.interpretation.missingFrames = AssetMissingFrames::Nothing;
@@ -223,7 +224,8 @@ void importMembers() {
         asset.manifest.members.push_back(
             {frame,
              {"file", "project-relative", "shot." + std::to_string(frame) + ".png", "file:///s"},
-             {}});
+             bloom::core::Sha256Digest{},
+             std::nullopt});
     asset.manifest.gaps = {4};
     asset.manifest.range = AssetSequenceRange{2, 9};
     asset.interpretation.missingFrames = AssetMissingFrames::Skip;
@@ -275,7 +277,7 @@ void importMembers() {
     expect(decoded.size() == 2 && decoded[0] == asset && decoded[1] == still,
            "Skip, the frame range and the still duration round-trip exactly");
     // A 1.33 reader keeps unknown trailing members aside and reads the 1.33 meaning.
-    const auto older = decodeText(replaceRegex(text, R"("minor": 34(\s*\}))", "\"minor\": 33$1"));
+    const auto older = decodeText(replaceRegex(text, R"("minor": 35(\s*\}))", "\"minor\": 33$1"));
     expect(older.size() == 2 &&
                older[0].interpretation.missingFrames == AssetMissingFrames::HoldPrevious &&
                !older[0].manifest.range && !older[1].interpretation.stillDuration,
@@ -285,7 +287,7 @@ void importMembers() {
 }
 void migration() {
     const auto current = encode(makeDocument("01:00:00:00", 2));
-    const auto older = replaceRegex(current, R"("minor": 34(\s*\}))", "\"minor\": 33$1");
+    const auto older = replaceRegex(current, R"("minor": 35(\s*\}))", "\"minor\": 33$1");
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
     expect(static_cast<bool>(parsed), "1.33 document parses");

@@ -248,6 +248,7 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
             ++use.frame;
         requests.push_back({.path = std::move(target.path),
                             .digest = target.digest,
+                            .stamp = target.stamp,
                             .revisionKey = std::move(target.revisionKey),
                             .byteBudget = byteBudget(request.pixelStorageByteLimit),
                             .use = use});

@@ -93,12 +93,28 @@ struct AssetLocator {
     std::string relinkHint;
     friend bool operator==(const AssetLocator&, const AssetLocator&) = default;
 };
+// Document 1.35 (#473): a sequence member whose bytes import did not read. Its file's length and
+// modification time (nanoseconds since the Unix epoch) when import listed it stand for the bytes
+// until a read proves them; a file whose length or time differs is a changed frame.
+struct AssetFileStamp {
+    std::uint64_t size = 0;
+    std::int64_t modifiedNanoseconds = 0;
+    friend bool operator==(const AssetFileStamp&, const AssetFileStamp&) = default;
+};
 struct AssetSequenceMember {
     std::int64_t frame = 0;
     AssetLocator locator;
-    core::Sha256Digest contentDigest;
+    // Exactly one of the two: the SHA-256 of the bytes import read (the member it probed, and every
+    // member of a sequence imported before 1.35), or the stamp import listed.
+    std::optional<core::Sha256Digest> contentDigest;
+    std::optional<AssetFileStamp> stamp;
     friend bool operator==(const AssetSequenceMember&, const AssetSequenceMember&) = default;
 };
+// A member's cache and manifest identity: its content digest, or for a stamped member the
+// provisional SHA-256 over "BloomSequenceMemberStamp", NUL, the locator path, NUL, the relink hint,
+// NUL, the decimal size, NUL and the decimal modification time. Path + size + time, so two frames
+// with one size and time never share an identity.
+[[nodiscard]] core::Sha256Digest sequenceMemberIdentity(const AssetSequenceMember& member);
 // The numbered frames an import was limited to (document 1.34): Reload Footage reads only these.
 struct AssetSequenceRange {
     std::int64_t first = 0;

@@ -19,7 +19,20 @@
 
 namespace bloom::platform {
 namespace {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+// A FILETIME (100 ns ticks since 1601-01-01) as nanoseconds since the Unix epoch, the unit POSIX
+// reports, so a modification time recorded on one platform compares on another (#473 stamps).
+std::int64_t unixNanoseconds(const LONGLONG ticks) {
+    constexpr LONGLONG kUnixEpochTicks = 116444736000000000LL;
+    constexpr auto kLimit = std::numeric_limits<std::int64_t>::max() / 100;
+    const auto sinceEpoch = ticks - kUnixEpochTicks;
+    if (sinceEpoch > kLimit)
+        return std::numeric_limits<std::int64_t>::max();
+    if (sinceEpoch < -kLimit)
+        return std::numeric_limits<std::int64_t>::min();
+    return static_cast<std::int64_t>(sinceEpoch) * 100;
+}
+#else
 std::int64_t nanoseconds(const timespec& value) {
     constexpr std::int64_t billion = 1000000000;
     const auto seconds = static_cast<std::int64_t>(value.tv_sec);
@@ -91,7 +104,7 @@ std::optional<FileIdentity> observeFileIdentity(const std::filesystem::path& pat
         return {};
     FileIdentity identity;
     identity.size = static_cast<std::uint64_t>(standard.EndOfFile.QuadPart);
-    identity.modifiedNanoseconds = basic.LastWriteTime.QuadPart;
+    identity.modifiedNanoseconds = unixNanoseconds(basic.LastWriteTime.QuadPart);
     identity.changedNanoseconds = basic.ChangeTime.QuadPart;
     FILE_ID_INFO id{};
     if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id))) {

@@ -263,6 +263,11 @@ migrateWebmExportFormatsV1_32(const JsonValue& root, std::pmr::memory_resource* 
 [[nodiscard]] MigrationStepOutcome
 migrateFootageInterpretationV1_33(const JsonValue& root, std::pmr::memory_resource* resource,
                                   std::pmr::vector<char>& output);
+// Sequence member stamps, document 1.34 -> 1.35 (#473): version-only. A sequence member may carry
+// the file stamp import listed instead of a content digest; every older member has its digest.
+[[nodiscard]] MigrationStepOutcome
+migrateSequenceMemberStampsV1_34(const JsonValue& root, std::pmr::memory_resource* resource,
+                                 std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -297,7 +302,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 30}, {1, 31}, migrateNodeGroupColorsV1_30},
     MigrationStepDescriptor{{1, 31}, {1, 32}, migrateKeyframeHandleModesV1_31},
     MigrationStepDescriptor{{1, 32}, {1, 33}, migrateWebmExportFormatsV1_32},
-    MigrationStepDescriptor{{1, 33}, {1, 34}, migrateFootageInterpretationV1_33}};
+    MigrationStepDescriptor{{1, 33}, {1, 34}, migrateFootageInterpretationV1_33},
+    MigrationStepDescriptor{{1, 34}, {1, 35}, migrateSequenceMemberStampsV1_34}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

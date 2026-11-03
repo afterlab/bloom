@@ -69,6 +69,30 @@ missingFrameImage(const std::size_t budget) {
         return {{}, "Image source pixel validation failed"};
     return {std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())), {}};
 }
+// Whether a capture failed because the bytes are not an image Bloom reads (#473), as opposed to
+// a missing, changed, unreadable-for-now or over-budget file, or a cancellation.
+bool unreadableImage(const media::ImageDiagnosticCode code) noexcept {
+    using Code = media::ImageDiagnosticCode;
+    switch (code) {
+    case Code::InvalidMagic:
+    case Code::InvalidHeader:
+    case Code::UnsupportedVersion:
+    case Code::UnsupportedDeepImage:
+    case Code::UnsupportedMultipart:
+    case Code::UnsupportedTiledLevels:
+    case Code::UnsupportedChannels:
+    case Code::UnsupportedChannelType:
+    case Code::InvalidDataWindow:
+    case Code::DimensionsExceeded:
+    case Code::Truncated:
+    case Code::DecodeFailed:
+    case Code::ProviderMissing:
+    case Code::ProviderFailed:
+        return true;
+    default:
+        return false;
+    }
+}
 } // namespace
 
 media::ImageAlphaAssociation imageSourceAlphaAssociation(const CompiledImageSource& source) {
@@ -124,14 +148,19 @@ imageSequenceReadAheadTargets(const CompiledImageSource& source, const core::Rat
         const auto* member = selectSequenceMember(source, *next, rate).member;
         if (!member || member == current)
             continue;
-        auto key = imageSourceRevisionKey(member->contentDigest, member->locator, base);
+        const auto identity = document::sequenceMemberIdentity(*member);
+        auto key = imageSourceRevisionKey(identity, member->locator, base);
         if (std::ranges::any_of(targets,
                                 [&key](const auto& target) { return target.revisionKey == key; }))
             continue;
-        targets.push_back({.path = media::resolveImagePath(member->locator.path,
-                                                           member->locator.relinkHint, base),
-                           .digest = member->contentDigest,
-                           .revisionKey = std::move(key)});
+        targets.push_back(
+            {.path =
+                 media::resolveImagePath(member->locator.path, member->locator.relinkHint, base),
+             .digest = identity,
+             .stamp = member->stamp ? std::optional(media::ImageSourceStamp{
+                                          member->stamp->size, member->stamp->modifiedNanoseconds})
+                                    : std::nullopt,
+             .revisionKey = std::move(key)});
     }
     return targets;
 }
@@ -153,83 +182,149 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     const document::AssetLocator* locator = &asset.locator;
     selected.digest = asset.contentDigest;
     std::int64_t memberFrame = 0;
+    // #381: a missing frame shows nothing; no file is read.
+    const auto missingFrame = [&](const std::int64_t frame) {
+        selected.missingFrame = true;
+        selected.available = true;
+        selected.frameWidth = asset.width;
+        selected.frameHeight = asset.height;
+        OperationKey key;
+        key.add(std::string{"missing-sequence-frame-v1"});
+        const auto digest = asset.contentDigest.toLowercaseHex();
+        key.add(std::string(digest.begin(), digest.end()));
+        key.add(frame);
+        key.add(asset.width);
+        key.add(asset.height);
+        selected.cacheKey = key.bytes();
+        selected.decodeKey = key.digest();
+    };
+    const document::AssetSequenceMember* chosen = nullptr;
+    // A member's identity and, for a member import stamped without reading it (#473), the stamp
+    // its bytes must still carry.
+    const auto choose = [&](const document::AssetSequenceMember& member) {
+        chosen = &member;
+        locator = &member.locator;
+        selected.digest = document::sequenceMemberIdentity(member);
+        selected.expectedStamp =
+            member.stamp ? std::optional(media::ImageSourceStamp{member.stamp->size,
+                                                                 member.stamp->modifiedNanoseconds})
+                         : std::nullopt;
+        memberFrame = member.frame;
+    };
     if (asset.kind == document::AssetKind::Sequence) {
         const auto member = selectSequenceMember(source, time, rate);
         if (member.missing) {
-            // #381: a missing frame shows nothing; no file is read.
-            selected.missingFrame = true;
-            selected.available = true;
-            selected.frameWidth = asset.width;
-            selected.frameHeight = asset.height;
-            OperationKey key;
-            key.add(std::string{"missing-sequence-frame-v1"});
-            const auto digest = asset.contentDigest.toLowercaseHex();
-            key.add(std::string(digest.begin(), digest.end()));
-            key.add(member.frame);
-            key.add(asset.width);
-            key.add(asset.height);
-            selected.cacheKey = key.bytes();
-            selected.decodeKey = key.digest();
+            missingFrame(member.frame);
             return selected;
         }
         if (!member.member) {
             selected.warning = member.warning;
             return selected;
         }
-        locator = &member.member->locator;
-        selected.digest = member.member->contentDigest;
-        memberFrame = member.member->frame;
+        choose(*member.member);
         if (asset.manifest.hasGaps() &&
             asset.interpretation.missingFrames == document::AssetMissingFrames::HoldPrevious)
             selected.warning = "Sequence gaps hold the preceding frame";
     }
-    const auto revisionKeyText = imageSourceRevisionKey(selected.digest, *locator, base);
-    const auto revisionGeneration =
-        revisionCache ? std::optional{revisionCache->decodedMediaGeneration()} : std::nullopt;
-    if (cancel.isCancellationRequested()) {
-        selected.cancelled = true;
-        return selected;
-    }
-    if (revisionCache) {
-        if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{},
-                                                    OperationCacheEntryKind::DecodedMedia);
-            cached && cached->sourceRevision &&
-            cached->sourceRevision->retainedBytes() < hostByteBudget) {
-            if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
-                selected.sourceRevision = cached->sourceRevision;
-                selected.retainedRevision = true;
-            } else {
-                // Revalidate: the retained bytes stand for the original only while a cheap identity
-                // observation still matches the one that bracketed a full hash of this digest.
-                selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
-                const auto observed = platform::observeSource(selected.path);
-                if (observed.digest && *observed.digest == selected.digest &&
-                    cached->sourceRevision->probe().contentDigest == selected.digest) {
+    media::ImageResult<std::shared_ptr<const media::ImageSourceRevision>> capture;
+    // The verified revision of the chosen file: a retained one, or one captured now. A digest
+    // member's bytes must hash to its digest; a stamped member's file must still carry its stamp,
+    // and the digest the first read records (ADR 0025 memo) then stands for its bytes.
+    const auto captureChosen = [&] {
+        selected.sourceRevision = nullptr;
+        selected.retainedRevision = false;
+        selected.budgetExceeded = false;
+        capture = {};
+        const auto revisionKeyText = imageSourceRevisionKey(selected.digest, *locator, base);
+        const auto revisionGeneration =
+            revisionCache ? std::optional{revisionCache->decodedMediaGeneration()} : std::nullopt;
+        if (cancel.isCancellationRequested()) {
+            selected.cancelled = true;
+            return false;
+        }
+        if (revisionCache) {
+            if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{},
+                                                        OperationCacheEntryKind::DecodedMedia);
+                cached && cached->sourceRevision &&
+                cached->sourceRevision->retainedBytes() < hostByteBudget) {
+                if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
                     selected.sourceRevision = cached->sourceRevision;
                     selected.retainedRevision = true;
+                } else {
+                    // Revalidate: the retained bytes stand for the original only while a cheap
+                    // identity observation still matches the one that bracketed a full hash of
+                    // them (and, for a stamped member, the stamp import listed).
+                    selected.path =
+                        media::resolveImagePath(locator->path, locator->relinkHint, base);
+                    const auto observed = platform::observeSource(selected.path);
+                    const auto& retainedDigest = cached->sourceRevision->probe().contentDigest;
+                    const bool current =
+                        observed.digest && *observed.digest == retainedDigest &&
+                        (selected.expectedStamp ? observed.identity &&
+                                                      media::ImageSourceStamp{
+                                                          observed.identity->size,
+                                                          observed.identity->modifiedNanoseconds} ==
+                                                          *selected.expectedStamp
+                                                : retainedDigest == selected.digest);
+                    if (current) {
+                        selected.sourceRevision = cached->sourceRevision;
+                        selected.retainedRevision = true;
+                    }
                 }
             }
         }
+        if (!selected.sourceRevision) {
+            selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
+            capture = media::captureImageSourceRevision(
+                selected.path, hostByteBudget, [&] { return cancel.isCancellationRequested(); },
+                selected.expectedStamp ? std::nullopt : std::optional(selected.digest),
+                selected.expectedStamp);
+            selected.sourceRevision = capture.value ? *capture.value : nullptr;
+            selected.cancelled = capture.cancelled;
+            selected.budgetExceeded =
+                !selected.sourceRevision &&
+                capture.code == media::ImageDiagnosticCode::PixelBudgetExceeded;
+            if (selected.sourceRevision && revisionCache && allowRevisionInsertion)
+                revisionCache->store(revisionKeyText, document::Revision{},
+                                     {.image = {},
+                                      .values = {},
+                                      .bounds = {},
+                                      .sourceRevision = selected.sourceRevision},
+                                     OperationCacheEntryKind::DecodedMedia, revisionGeneration,
+                                     linearPass);
+        }
+        return true;
+    };
+    // Cancelled before anything was read: nothing more to describe.
+    if (!captureChosen())
+        return selected;
+    // ADR 0026 / #373 (#473): a stamped member whose bytes turn out not to be a readable image is
+    // reported and becomes a gap, found at its first read rather than at import. It shows what a
+    // gap shows: nothing when the asset shows nothing for missing frames, else the preceding
+    // readable member (a bounded walk back; none left shows nothing).
+    constexpr std::size_t kMaxHeldUnreadable = 8;
+    std::string unreadable;
+    for (std::size_t held = 0; chosen != nullptr && selected.expectedStamp &&
+                               !selected.sourceRevision && unreadableImage(capture.code);
+         ++held) {
+        if (unreadable.empty())
+            unreadable = "Frame " + std::to_string(chosen->frame) +
+                         " is unreadable and is treated as a gap: " + capture.diagnostic;
+        const auto index = static_cast<std::size_t>(chosen - asset.manifest.members.data());
+        if (asset.interpretation.missingFrames == document::AssetMissingFrames::Nothing ||
+            index == 0 || held >= kMaxHeldUnreadable) {
+            const auto frame = chosen->frame;
+            selected = {};
+            missingFrame(frame);
+            selected.warning = std::move(unreadable);
+            return selected;
+        }
+        choose(asset.manifest.members[index - 1]);
+        if (!captureChosen())
+            return selected;
     }
-    media::ImageResult<std::shared_ptr<const media::ImageSourceRevision>> capture;
-    if (!selected.sourceRevision) {
-        selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
-        capture = media::captureImageSourceRevision(
-            selected.path, hostByteBudget, [&] { return cancel.isCancellationRequested(); },
-            selected.digest);
-        selected.sourceRevision = capture.value ? *capture.value : nullptr;
-        selected.cancelled = capture.cancelled;
-        selected.budgetExceeded = !selected.sourceRevision &&
-                                  capture.code == media::ImageDiagnosticCode::PixelBudgetExceeded;
-        if (selected.sourceRevision && revisionCache && allowRevisionInsertion)
-            revisionCache->store(revisionKeyText, document::Revision{},
-                                 {.image = {},
-                                  .values = {},
-                                  .bounds = {},
-                                  .sourceRevision = selected.sourceRevision},
-                                 OperationCacheEntryKind::DecodedMedia, revisionGeneration,
-                                 linearPass);
-    }
+    if (!unreadable.empty())
+        selected.warning = std::move(unreadable);
     const auto input = document::effectiveAssetInputColor(asset.interpretation, source.colorSpace,
                                                           source.inputColorSpaceId);
     selected.interpretation.colorSpace = static_cast<media::ImageColorSpace>(input.colorSpace);
@@ -238,7 +333,18 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     selected.interpretation.part = source.part;
     selected.interpretation.layer = source.layer;
     selected.available = selected.sourceRevision != nullptr &&
-                         selected.sourceRevision->probe().contentDigest == selected.digest;
+                         (selected.expectedStamp ||
+                          selected.sourceRevision->probe().contentDigest == selected.digest);
+    // #473: a stamped frame whose file changed (or went missing) since import is never served
+    // from the old bytes; the warning names the frame.
+    if (!selected.available && chosen != nullptr && selected.expectedStamp &&
+        !selected.budgetExceeded)
+        selected.warning = "Frame " + std::to_string(chosen->frame) +
+                           (capture.code == media::ImageDiagnosticCode::FileUnavailable
+                                ? " is missing; relink the sequence in Assets"
+                            : capture.code == media::ImageDiagnosticCode::DigestMismatch
+                                ? " changed since it was imported; reload the footage in Assets"
+                                : ": " + capture.diagnostic);
     if (selected.available) {
         auto config = resolveInputColorConfig(colorIntent);
         if (!config) {
@@ -420,9 +526,11 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
         // the 256 MiB default; the decoder still enforces its own structural ceilings. No
         // artificial min() is applied here.
         auto decoded = media::cache::decodeThroughDiskCache(
-            selected.path, selected.interpretation, selected.digest, selected.diskCacheKey,
-            decodeDiskCache, /*writeAsync=*/true, [&] { return cancel.isCancellationRequested(); },
-            {}, budget, selected.inputProcessor, selected.sourceRevision, decodeStatistics);
+            selected.path, selected.interpretation,
+            selected.expectedStamp ? std::nullopt : std::optional(selected.digest),
+            selected.diskCacheKey, decodeDiskCache, /*writeAsync=*/true,
+            [&] { return cancel.isCancellationRequested(); }, {}, budget, selected.inputProcessor,
+            selected.sourceRevision, decodeStatistics);
         if (!decoded.value.has_value())
             return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
         image = std::move(*decoded.value);
