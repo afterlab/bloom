@@ -3,9 +3,11 @@
 // case whose whole claim is that nothing is drawn.
 
 #include <timeline_graph_math.hpp>
+#include <timeline_key_time.hpp>
 #include <timeline_keyframe_time.hpp>
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -1191,6 +1193,102 @@ void testFitSelectionAndPan() {
            "and values with it");
 }
 
+// #461: the graph is on the composition axis the dope sheet uses. A layer that starts at 2 s and
+// plays at double speed stores its keys in layer time tau = (t - 2) * 2, so its keys at tau 1, 3, 5
+// are drawn, sampled, dragged and inserted at composition 2.5, 3.5, 4.5 -- never at the raw stored
+// time, which would draw them early and skewed.
+void testGraphFollowsTheLayerClock() {
+    GraphFixture fixture(makeProject("Graph layer clock"));
+    const auto curveId = seedOpacity(fixture.session.session);
+    fixture.expandAndShowGraph();
+    auto& session = fixture.session.session;
+    const auto& boundary = session.composition()->graph().layerOutputs().front();
+    const auto layerId = boundary.layerId;
+    {
+        commands::Transaction edit("Retime", session.snapshot().revision());
+        edit.emplace<commands::SetLayerTiming>(session.compositionId(), layerId, time(2), time(0),
+                                               boundary.endPoint(time(10)),
+                                               *document::LayerSpeed::create(2, 1));
+        if (!session.executeTransaction(std::move(edit)).changed())
+            fail("the layer must retime");
+    }
+    QCoreApplication::processEvents();
+    const auto clock = session.keyClockForCurve(curveId);
+    if (!clock.has_value() || clock->startTime != time(2))
+        fail("the opacity keys must be on the retimed layer's clock");
+    const auto before = *scalarCurve(session, curveId);
+    const ui::GraphCurveId graphCurve{curveId, std::nullopt};
+    const auto axis = fixture.editor.rulerForTest()->axisForWidth(fixture.view->width());
+    if (!axis.has_value())
+        fail("the layer clock axis must resolve");
+
+    bool placed = true;
+    for (const auto& [index, composition] :
+         {std::pair{std::size_t{0}, time(5, 2)}, std::pair{std::size_t{1}, time(7, 2)},
+          std::pair{std::size_t{2}, time(9, 2)}}) {
+        const auto center = fixture.view->keyCenter(graphCurve, before.keyframes[index].id);
+        placed = placed && center.has_value() &&
+                 std::abs(center->x() - axis->pixelForTime(composition)) < 1e-6;
+    }
+    expect(placed, "each key is drawn at its stored time projected through the layer clock");
+
+    const auto compiled = runtime::compileAnimationCurve(before);
+    const auto viewport = fixture.view->viewportFor(graphCurve);
+    const auto [top, band] = fixture.view->valueBandForTest();
+    bool sampled = true;
+    for (const auto& point : fixture.view->polylineForTest(graphCurve)) {
+        const auto at = ui::keyPointerOffset(axis->secondsForPixel(point.x()));
+        const auto stored = at ? ui::keyTimeOfCompositionTime(clock, *at) : std::nullopt;
+        const auto value = stored ? runtime::sampleAnimationCurve(compiled, *stored).value
+                                  : std::nullopt;
+        if (!value.has_value() ||
+            std::abs(point.y() - ui::pixelForValue(viewport, *value, top, band)) > 1e-9) {
+            sampled = false;
+            break;
+        }
+    }
+    expect(sampled, "every painted column samples the curve at its layer time");
+    expect(std::abs(fixture.view->plottedAt(graphCurve, 3.0) - 0.35) < 1e-9,
+           "composition 3 s is layer time 2 s, halfway between the first two keys");
+    fixture.view->setGraphType(ui::GraphType::Speed);
+    expect(std::abs(fixture.view->plottedAt(graphCurve, 3.0) - 0.3) < 1e-6,
+           "the Speed Graph reads value per composition second: 0.15/s at double speed is 0.3/s");
+    fixture.view->setGraphType(ui::GraphType::Value);
+    QCoreApplication::processEvents();
+
+    // A horizontal drag lands on the composition time the pointer names, stored on the layer clock.
+    fixture.view->setSnappingEnabled(true);
+    const auto from = fixture.view->keyCenter(graphCurve, before.keyframes[1].id);
+    if (!from.has_value())
+        fail("the dragged key must have a pixel");
+    fixture.drag(*from, QPointF(axis->pixelForTime(time(3)), from->y()));
+    const auto* moved = scalarCurve(session, curveId);
+    const auto key = moved != nullptr ? std::ranges::find(moved->keyframes, before.keyframes[1].id,
+                                                          &document::ScalarKeyframe::id)
+                                      : decltype(moved->keyframes.begin()){};
+    expect(moved != nullptr && key != moved->keyframes.end() && key->time == time(2),
+           "a drag to composition 3 s stores layer time (3 - 2) * 2 = 2 s");
+    expect(session.undo() && *scalarCurve(session, curveId) == before, "and undoes exactly");
+    QCoreApplication::processEvents();
+
+    // A double-click on the curve inserts at the layer time under the pointer, with the value the
+    // curve already has there.
+    const QPointF point(axis->pixelForTime(time(3)), ui::pixelForValue(viewport, 0.35, top, band));
+    const auto hit = fixture.view->hitTestForTest(point);
+    expect(hit.has_value() && hit->kind == ui::GraphHit::Kind::Segment,
+           "the projected curve hit-tests where it is drawn");
+    fixture.mouse(QEvent::MouseButtonDblClick, point);
+    QCoreApplication::processEvents();
+    const auto* inserted = scalarCurve(session, curveId);
+    const auto at = inserted != nullptr
+                        ? std::ranges::find(inserted->keyframes, time(2),
+                                            &document::ScalarKeyframe::time)
+                        : decltype(inserted->keyframes.begin()){};
+    expect(inserted != nullptr && inserted->keyframes.size() == before.keyframes.size() + 1 &&
+               at != inserted->keyframes.end() && std::abs(at->value - 0.35) < 1e-9,
+           "composition 3 s inserts the key at layer time 2 s with the curve's own value");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1225,5 +1323,6 @@ int main(int argc, char** argv) {
     testCurveColors();
     testGridFollowsTheRulerAndTheGutter();
     testFitSelectionAndPan();
+    testGraphFollowsTheLayerClock();
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -166,8 +166,16 @@ class TimelineGraphView final : public QWidget {
     [[nodiscard]] double bandHeight() const noexcept;
     // `preview` reads the live drag's previewed curve when one exists; gesture arithmetic reads the
     // curve as it was at the press.
+    // A curve's keys with their times in COMPOSITION time: the stored key time projected through
+    // the owning layer's clock (ADR 0024), exactly as the dope sheet draws them. Everything the
+    // graph draws, hit-tests and drags is on that axis; commands get stored key times back.
     [[nodiscard]] std::vector<document::ScalarKeyframe> keysFor(const GraphCurveId& curve,
                                                                 bool preview = true) const;
+    [[nodiscard]] std::optional<document::LayerTiming>
+    clockFor(document::AnimationCurveId curveId) const;
+    // The stored key time a composition time in seconds samples the curve at.
+    [[nodiscard]] std::optional<core::RationalTime> sampleTimeFor(const GraphCurveId& curve,
+                                                                  double seconds) const;
     [[nodiscard]] const runtime::ValidatedScalarCurve* compiledFor(const GraphCurveId& curve) const;
     void refreshCurves();
     [[nodiscard]] std::vector<double> plottedExtent(const GraphCurveId& curve) const;
@@ -210,6 +218,7 @@ class TimelineGraphView final : public QWidget {
     // The parameter each drawn curve belongs to, resolved by the same walk that derived the curve
     // set, so an insert gesture never has to search the store a second time for a different answer.
     std::map<document::AnimationCurveId, document::ParameterId> owners_;
+    std::map<document::AnimationCurveId, std::optional<document::LayerTiming>> clocks_;
     GraphType graphType_{};
     bool normalized_ = false;
     // Real-unit windows, per curve AND graph type: a value in degrees and a speed in degrees per
@@ -262,6 +271,8 @@ class TimelineGraphView final : public QWidget {
     document::Revision gestureRevision_{};
     std::vector<KeyframeSelection> gestureKeys_;
     std::vector<commands::KeyframePaste> gestureData_;
+    // gestureData_'s times projected to composition time, index for index.
+    std::vector<core::RationalTime> gestureTimes_;
     std::vector<commands::KeyframeMove> pendingMoves_;
     std::vector<commands::KeyframeValueEdit> pendingValues_;
     std::vector<commands::KeyframeHandleEdit> pendingHandles_;

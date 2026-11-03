@@ -4,6 +4,7 @@
 #include <bloom/ui/timeline_graph_view.hpp>
 
 #include "timeline_graph_math.hpp"
+#include "timeline_key_time.hpp"
 #include "timeline_keyframe_time.hpp"
 
 #include <bloom/commands/transaction.hpp>
@@ -114,6 +115,7 @@ void TimelineGraphView::cancelGesture() {
     pressed_.reset();
     gestureKeys_.clear();
     gestureData_.clear();
+    gestureTimes_.clear();
     pendingMoves_.clear();
     pendingValues_.clear();
     pendingHandles_.clear();
@@ -168,7 +170,7 @@ void TimelineGraphView::updateKeyDrag(const QMouseEvent& event) {
     const auto axis = ruler_.axisForWidth(width());
     const auto* composition = session_.composition();
     if (!axis.has_value() || composition == nullptr || gestureData_.empty() ||
-        !pressed_.has_value())
+        gestureTimes_.size() != gestureData_.size() || !pressed_.has_value())
         return;
     const auto pressedTime = pressed_->time;
     pendingMoves_.clear();
@@ -191,7 +193,9 @@ void TimelineGraphView::updateKeyDrag(const QMouseEvent& event) {
     }
 
     // TIME. The same helpers, the same snap targets and the same clamp the lane drag uses -- a key
-    // must not move differently because the artist is looking at a curve.
+    // must not move differently because the artist is looking at a curve. Like the lane drag, the
+    // whole computation is in composition time (gestureTimes_, pressed_->time); each move is
+    // converted back to its key's own clock only when it is queued.
     double targetSeconds = pressedTime.toSeconds();
     if (moveTime) {
         targetSeconds +=
@@ -228,15 +232,13 @@ void TimelineGraphView::updateKeyDrag(const QMouseEvent& event) {
                    : keyPointerOffset(targetSeconds));
     if (!requestedTarget.has_value())
         return;
-    const auto [firstKey, lastKey] = std::minmax_element(
-        gestureData_.begin(), gestureData_.end(),
-        [](const auto& left, const auto& right) { return left.time < right.time; });
+    const auto [firstKey, lastKey] = std::minmax_element(gestureTimes_.begin(), gestureTimes_.end());
     const auto epsilon = core::RationalTime::create(-1, 1'000'000'000);
     const auto lastInstant =
         epsilon.has_value() ? offsetKeyTime(composition->duration(), *epsilon) : std::nullopt;
-    const auto minimum = keyTimeDifference(core::RationalTime{}, firstKey->time);
+    const auto minimum = keyTimeDifference(core::RationalTime{}, *firstKey);
     const auto maximum =
-        lastInstant.has_value() ? keyTimeDifference(*lastInstant, lastKey->time) : std::nullopt;
+        lastInstant.has_value() ? keyTimeDifference(*lastInstant, *lastKey) : std::nullopt;
     const auto requested = keyTimeDifference(*requestedTarget, pressedTime);
     if (!requested.has_value() || !minimum.has_value() || !maximum.has_value() ||
         *minimum > *maximum)
@@ -247,16 +249,19 @@ void TimelineGraphView::updateKeyDrag(const QMouseEvent& event) {
         snapGuide_.reset();
 
     for (std::size_t index = 0; index < gestureData_.size(); ++index) {
-        const auto time = offsetKeyTime(gestureData_[index].time, offset);
-        if (!time.has_value()) {
+        const auto& key = gestureKeys_[index];
+        const auto time = offsetKeyTime(gestureTimes_[index], offset);
+        const auto stored = time.has_value() && *time != gestureTimes_[index]
+                                ? keyTimeOfCompositionTime(clockFor(key.curveId), *time)
+                                : std::optional{gestureData_[index].time};
+        if (!time.has_value() || !stored.has_value()) {
             pendingMoves_.clear();
             pendingValues_.clear();
             previewGesture();
             return;
         }
-        const auto& key = gestureKeys_[index];
-        if (moveTime && *time != gestureData_[index].time)
-            pendingMoves_.push_back({{key.curveId, key.keyframeId, key.component}, *time});
+        if (moveTime && *stored != gestureData_[index].time)
+            pendingMoves_.push_back({{key.curveId, key.keyframeId, key.component}, *stored});
         if (!moveValue)
             continue;
         const auto curve = curveOf(key);
@@ -587,14 +592,18 @@ void TimelineGraphView::mousePressEvent(QMouseEvent* event) {
         gesture_ = Gesture::Keys;
         gestureKeys_ = session_.selection().keyframes;
         gestureData_ = session_.selectedKeyframeData();
+        // Stored key times to composition time, once, so the whole drag runs on the graph's axis.
+        for (std::size_t index = 0; index < gestureKeys_.size() && index < gestureData_.size();
+             ++index)
+            gestureTimes_.push_back(
+                projectedKeyTime(clockFor(gestureKeys_[index].curveId), gestureData_[index].time));
         if (graphType_ == GraphType::Speed)
-            for (std::size_t index = 0; index < gestureKeys_.size() && index < gestureData_.size();
-                 ++index)
+            for (std::size_t index = 0; index < gestureTimes_.size(); ++index)
                 if (const auto curve = curveOf(gestureKeys_[index]))
                     for (const bool outgoing : {true, false})
                         pressedSpeeds_.push_back(
                             {gestureKeys_[index], outgoing,
-                             plottedAt(*curve, gestureData_[index].time.toSeconds(), outgoing)});
+                             plottedAt(*curve, gestureTimes_[index].toSeconds(), outgoing)});
         copying_ = event->modifiers().testFlag(Qt::AltModifier);
         event->accept();
         return;
@@ -708,14 +717,18 @@ void TimelineGraphView::mouseDoubleClickEvent(QMouseEvent* event) {
                                       axis->frameIndexForPixel(
                                           static_cast<int>(std::lround(event->position().x()))))
                   : keyPointerOffset(axis->secondsForPixel(event->position().x()));
-    if (!snapped.has_value())
+    // The pointer names a composition time; the key is stored on its parameter's own clock.
+    const auto keyTime = snapped.has_value()
+                             ? keyTimeOfCompositionTime(clockFor(hit->curve.curveId), *snapped)
+                             : std::nullopt;
+    if (!keyTime.has_value())
         return;
     if (hit->curve.component.has_value()) {
         const auto owner = owners_.find(hit->curve.curveId);
         if (owner != owners_.end())
-            (void)session_.toggleKeyframe(owner->second, *hit->curve.component, *snapped);
+            (void)session_.toggleKeyframe(owner->second, *hit->curve.component, *keyTime);
     } else {
-        (void)session_.insertKeyframeAtTime(hit->curve.curveId, *snapped);
+        (void)session_.insertKeyframeAtTime(hit->curve.curveId, *keyTime);
     }
     event->accept();
 }

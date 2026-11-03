@@ -3,6 +3,7 @@
 #include "animation_components.hpp"
 #include "timeline_graph_math.hpp"
 #include "timeline_key_glyph.hpp"
+#include "timeline_key_time.hpp"
 #include "timeline_keyframe_time.hpp"
 
 #include <bloom/ui/timeline_frame_math.hpp>
@@ -275,7 +276,7 @@ const QPainterPath& TimelineGraphView::pathFor(const GraphCurveId& curve,
             modes.push_back(key.outgoingInterpolation);
         }
         const auto sample = [&](const double seconds) {
-            const auto offset = keyPointerOffset(seconds);
+            const auto offset = sampleTimeFor(curve, seconds);
             const auto sampled =
                 offset ? compiled.sample(*offset) : runtime::AnimationSampleResult<double>{};
             return sampled.value.value_or(0.0);
@@ -283,7 +284,7 @@ const QPainterPath& TimelineGraphView::pathFor(const GraphCurveId& curve,
         bool started = false;
         for (int x = gutterWidth(); x < width(); ++x) {
             const double seconds = axis->secondsForPixel(x);
-            const auto offset = keyPointerOffset(seconds);
+            const auto offset = sampleTimeFor(curve, seconds);
             if (!offset.has_value())
                 continue;
             ++work_.curveSamples;
@@ -339,6 +340,7 @@ void TimelineGraphView::setEntries(const std::vector<TimelineLayerEntry>& entrie
 void TimelineGraphView::refreshCurves() {
     std::vector<GraphCurveId> curves;
     owners_.clear();
+    clocks_.clear();
     const auto* composition = session_.composition();
     if (composition != nullptr) {
         for (const auto& [parameterId, selectedComponent] : parameters_) {
@@ -352,6 +354,9 @@ void TimelineGraphView::refreshCurves() {
             if (record == nullptr)
                 continue;
             owners_.emplace(source->curveId, parameterId);
+            // The clock the dope sheet projects this parameter's keys through, resolved once per
+            // document state rather than per key or per pixel column.
+            clocks_.emplace(source->curveId, session_.keyClockForParameter(parameterId));
             std::visit(
                 [&](const auto& curve) {
                     using Curve = std::decay_t<decltype(curve)>;
@@ -386,14 +391,33 @@ void TimelineGraphView::refreshCurves() {
 
 std::vector<document::ScalarKeyframe> TimelineGraphView::keysFor(const GraphCurveId& curve,
                                                                  const bool preview) const {
-    if (preview)
-        if (const auto* previewed = session_.keyframePreviewCurve(curve.curveId))
-            return keysOfRecord(*previewed, curve);
-    const auto* composition = session_.composition();
-    const auto* record =
-        composition != nullptr ? composition->animationCurves().find(curve.curveId) : nullptr;
-    return record == nullptr ? std::vector<document::ScalarKeyframe>{}
-                             : keysOfRecord(*record, curve);
+    const document::AnimationCurveRecord* record =
+        preview ? session_.keyframePreviewCurve(curve.curveId) : nullptr;
+    if (record == nullptr) {
+        const auto* composition = session_.composition();
+        record =
+            composition != nullptr ? composition->animationCurves().find(curve.curveId) : nullptr;
+    }
+    if (record == nullptr)
+        return {};
+    auto keys = keysOfRecord(*record, curve);
+    const auto clock = clockFor(curve.curveId);
+    for (auto& key : keys)
+        key.time = projectedKeyTime(clock, key.time);
+    return keys;
+}
+
+std::optional<document::LayerTiming>
+TimelineGraphView::clockFor(const document::AnimationCurveId curveId) const {
+    if (const auto known = clocks_.find(curveId); known != clocks_.end())
+        return known->second;
+    return session_.keyClockForCurve(curveId);
+}
+
+std::optional<core::RationalTime> TimelineGraphView::sampleTimeFor(const GraphCurveId& curve,
+                                                                   const double seconds) const {
+    const auto time = keyPointerOffset(seconds);
+    return time ? keyTimeOfCompositionTime(clockFor(curve.curveId), *time) : std::nullopt;
 }
 
 const runtime::ValidatedScalarCurve*
@@ -430,8 +454,8 @@ double TimelineGraphView::plottedAt(const GraphCurveId& curve, const double seco
     const auto* compiled = compiledFor(curve);
     if (compiled == nullptr)
         return 0.0;
-    const auto sample = [compiled](const double at) {
-        const auto offset = keyPointerOffset(at);
+    const auto sample = [&](const double at) {
+        const auto offset = sampleTimeFor(curve, at);
         const auto sampled =
             offset ? compiled->sample(*offset) : runtime::AnimationSampleResult<double>{};
         return sampled.value.value_or(0.0);
@@ -596,7 +620,7 @@ std::vector<QPointF> TimelineGraphView::polylineForTest(const GraphCurveId& curv
     points.reserve(static_cast<std::size_t>(std::max(0, width())));
     for (int x = 0; x < width(); ++x) {
         const double seconds = axis->secondsForPixel(x);
-        if (!keyPointerOffset(seconds).has_value())
+        if (!sampleTimeFor(curve, seconds).has_value())
             continue;
         points.emplace_back(x, lens.pixelFor(plottedAt(curve, seconds)));
     }

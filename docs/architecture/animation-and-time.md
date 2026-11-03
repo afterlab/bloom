@@ -1427,6 +1427,11 @@ content time  c   = outOfExtent(timeRemap enabled ? exact(timeRemap sampled at t
   Merges, nested layers, composition sources, and the value nodes that drive those operations. A value
   node driving the layer's own parameters evaluates at `tau`.
 - Moving `startTime` therefore moves every key of the layer and its upstream without rewriting a key.
+- The Timeline's key lanes and the Graph Editor share one composition axis: both project a stored key
+  time through the owning layer's clock (`t = startTime + tau / speed`) to draw, hit-test, snap and
+  drag it, the graph samples each column at that column's layer time (its Speed Graph reads value per
+  composition second), and every move or insert converts the composition time back to the key's
+  clock before it reaches a command.
 
 `startTime` is exact and may be negative or beyond the duration; `speed` is an exact positive
 rational in `[1/1000, 1000]`. `contentExtent` is `Unbounded`, `Fixed{duration, frameRate}` or
