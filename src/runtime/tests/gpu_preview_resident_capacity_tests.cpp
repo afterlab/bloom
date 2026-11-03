@@ -176,12 +176,25 @@ void testRootedForegroundUsesOwnedCapacity() {
            "live MemoryBudget already subtracts owned VMA images exactly once");
     expect(bloom::runtime::gpuResidentForegroundRequestBudget(knownCapacity(0), 0) == 0,
            "known-zero free VRAM refuses foreground admission");
+    // #425: a scene cache that fills the device gives way to work, so its bytes are room for the
+    // request rather than a reason to refuse it; the credit never exceeds the device.
+    expect(bloom::runtime::gpuResidentForegroundRequestBudget(knownCapacity(1ULL * kGib), 0,
+                                                              6ULL * kGib) == 1ULL * kGib,
+           "the credit never exceeds the device-local size");
+    auto filled = knownCapacity(1ULL * kGib);
+    filled.deviceLocalBytes = 24ULL * kGib;
+    expect(bloom::runtime::gpuResidentForegroundRequestBudget(filled, 0, 6ULL * kGib) ==
+               7ULL * kGib,
+           "a live budget credits the reclaimable scene cache back to the request");
 
     GpuResidentCapacity nominal;
     nominal.source = GpuResidentCapacitySource::DeviceLocalEstimate;
     nominal.availableBytes = 16ULL * kGib;
     expect(bloom::runtime::gpuResidentForegroundRequestBudget(nominal, 17ULL * kGib) == 0,
            "nominal ownership beyond the heap saturates at zero");
+    expect(bloom::runtime::gpuResidentForegroundRequestBudget(nominal, 10ULL * kGib, 4ULL * kGib) ==
+               10ULL * kGib,
+           "a nominal heap charges owned images except the reclaimable cache");
     expect(bloom::runtime::gpuResidentForegroundRequestBudget(GpuResidentCapacity{},
                                                               32ULL * kMib) == 224ULL * kMib,
            "unresolved capacity retains its bounded fallback after owned-image charges");

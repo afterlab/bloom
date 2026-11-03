@@ -120,9 +120,12 @@ gpuResidentCapacityPlanFor(const GpuResidentConfiguredBudgets& configured,
 // generation's actually owned image bytes from the heap size. The shared phase
 // reservation and native allocation checks still bound active work; cache targets are retention
 // preferences, not reservations that reduce an otherwise idle foreground request.
+// `reclaimableCacheBytes` is what the owner's scene cache retains: it gives way when work
+// waits for device memory (#425), so it is room for the request, not a reason to refuse it.
 [[nodiscard]] std::uint64_t
 gpuResidentForegroundRequestBudget(const GpuResidentCapacity& capacity,
-                                   std::uint64_t ownedImageBytes) noexcept;
+                                   std::uint64_t ownedImageBytes,
+                                   std::uint64_t reclaimableCacheBytes = 0) noexcept;
 
 // One request's DEVICE-stage byte budget: the caller's host/decode pixel-storage ceiling clamped
 // down to the owner-resolved GPU request ceiling. A host ceiling larger than device capacity is

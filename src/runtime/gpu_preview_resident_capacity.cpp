@@ -104,15 +104,22 @@ GpuResidentCapacityPlan gpuResidentCapacityPlanFor(const GpuResidentConfiguredBu
 }
 
 std::uint64_t gpuResidentForegroundRequestBudget(const GpuResidentCapacity& capacity,
-                                                 const std::uint64_t ownedImageBytes) noexcept {
+                                                 const std::uint64_t ownedImageBytes,
+                                                 const std::uint64_t reclaimableCacheBytes) noexcept {
     if (capacity.source == GpuResidentCapacitySource::MemoryBudget) {
-        // The live budget already subtracts VMA usage, including retained and in-flight images.
-        return capacity.availableBytes;
+        // The live budget already subtracts VMA usage, including retained and in-flight images;
+        // the reclaimable cache is credited back, never beyond the device.
+        const auto credited = capacity.availableBytes + reclaimableCacheBytes;
+        const auto bounded = credited < capacity.availableBytes ? capacity.availableBytes : credited;
+        return capacity.deviceLocalBytes != 0 ? std::min(bounded, capacity.deviceLocalBytes)
+                                              : bounded;
     }
     // A nominal heap size is not free space: subtract the generation's exact image ownership (a
-    // pinned or retiring image remains charged). The shared phase policy applies the headroom.
+    // pinned or retiring image remains charged; a reclaimable cache image does not). The shared
+    // phase policy applies the headroom.
     const std::uint64_t planningLimit = devicePoolBytes(capacity);
-    return ownedImageBytes < planningLimit ? planningLimit - ownedImageBytes : 0;
+    const std::uint64_t held = ownedImageBytes - std::min(ownedImageBytes, reclaimableCacheBytes);
+    return held < planningLimit ? planningLimit - held : 0;
 }
 
 } // namespace bloom::runtime

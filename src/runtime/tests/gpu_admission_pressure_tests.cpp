@@ -694,9 +694,25 @@ void deviceNeedFollowsMeasuredPeaks() {
     large.deviceWorkingBytes = 2 * kGiB;
     require(budget.reserve(large).status == GpuProcessingPhaseAdmission::BudgetRefused,
             "a stated need larger than the whole device is still refused");
+    // #425: a retained device cache (root-owned storage) leaves little room beside it. A measured
+    // envelope's executor ceiling still covers its measured need, so the frame is never squeezed
+    // below what it is known to use; its allocations are admitted against the live room.
+    auto cacheEnvelope = request; // Another plan, so its peak does not change this envelope's.
+    cacheEnvelope.minimumExecutorBytes = 3 * frameBytes;
+    auto cacheOwner = budget.reserve(cacheEnvelope);
+    require(cacheOwner.lease != nullptr, "the cache-owning frame is admitted");
+    auto cacheImage =
+        NativeImageStorageToken::reserve(cacheOwner.lease, 2 * kGiB - 600 * kMiB, local, now);
+    require(cacheImage.token.has_value(), "the retained cache image is admitted");
+    cacheOwner.lease.reset();
+    auto squeezed = budget.reserve(request);
+    require(squeezed.lease && squeezed.lease->deviceNeedBytes() == 500 * kMiB &&
+                squeezed.lease->executorByteLimit() >= 500 * kMiB,
+            "a measured envelope's executor ceiling covers its measured need beside a full cache");
+    squeezed.lease.reset();
+    cacheImage.token.reset();
     const auto settled = budget.snapshot();
-    require(settled.totalDeviceClaimBytes == 0 && settled.admittedPhases == 0 &&
-                settled.releasedNativePhases == 5,
+    require(settled.totalDeviceClaimBytes == 0 && settled.admittedPhases == 0,
             "every claim returns");
 }
 

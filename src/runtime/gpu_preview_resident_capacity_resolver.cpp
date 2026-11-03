@@ -154,7 +154,10 @@ void refreshResidentForegroundCapacity(
     }
     if (core->gpuStageFunction != nullptr && usesLiveForegroundDefault(*core)) {
         core->effectivePreviewByteAllowance.store(
-            gpuResidentForegroundRequestBudget(capacity, ownedImageBytes),
+            gpuResidentForegroundRequestBudget(
+                capacity, ownedImageBytes,
+                core->residentSceneCache != nullptr ? core->residentSceneCache->retainedBytes()
+                                                    : 0),
             std::memory_order_relaxed);
     }
 }

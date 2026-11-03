@@ -739,6 +739,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         }
         // Size the need from what phases of this envelope actually allocated (#417): the stated
         // need covers the working allowance's ceiling, which a phase often does not use.
+        const std::uint64_t statedDeviceNeed = deviceNeed;
         deviceNeed = detail::measuredNeedLocked(state_->measuredDevicePeaks, envelopeKey(request),
                                                 deviceNeed);
         const std::uint64_t deviceRemaining =
@@ -752,6 +753,13 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
             request.minimumExecutorBytes,
             std::min(request.requestedExecutorBytes,
                      remaining(deviceRemaining, request.deviceWorkingBytes)));
+        // Never below a measured need (#417): the most native storage phases of this envelope
+        // held, plus a quarter, which fits the remaining room. Retained device caches are claims
+        // that give way on demand (#425), so a cache that fills the device must not squeeze the
+        // executor below what it is known to use. A stated need keeps the working allowance apart.
+        if (deviceNeed < statedDeviceNeed)
+            executorBytes =
+                std::max(executorBytes, std::min(request.requestedExecutorBytes, deviceNeed));
         if (request.requestedExecutorBytes != 0 && executorBytes == 0) {
             return deviceNeed >= *counters.deviceCapacityBytes
                        ? refused(GpuProcessingPhaseDomain::Device)
