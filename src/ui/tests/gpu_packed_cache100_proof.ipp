@@ -862,6 +862,29 @@ int runPackedCache100(const TestOptions& options, QTemporaryDir& temporary, cons
               << " transferSource=" << afterWarm.packedRetainedSourceBytes
               << " transferStaging=" << afterWarm.packedRetainedStagingBytes
               << " transferHost=" << afterWarm.packedRetainedHostBytes << '\n';
+    // #417: device admission claims follow real device allocation. A phase claims its device
+    // need only during its own device stage, so the claims are the root's native storage plus the
+    // needs of the stages running (the executing frame and one finishing), never the sum over
+    // every frame in flight.
+    const auto device = processingPolicy->snapshot().reservations;
+    std::cout << "PACKED_DEVICE_CLAIMS peakInFlight=" << ram.peakInFlightFrames()
+              << " peakClaim=" << device.peakTotalDeviceClaimBytes
+              << " peakOwned=" << device.peakOwnedNativeBytes
+              << " phases=" << device.releasedNativePhases
+              << " needSum=" << device.releasedPhaseDeviceNeedBytes
+              << " phasePeakSum=" << device.releasedPhaseDevicePeakBytes
+              << " maxNeed=" << device.peakPhaseDeviceNeedBytes
+              << " maxPhasePeak=" << device.peakPhaseDeviceAllocationBytes << '\n';
+    checks.expect(device.releasedNativePhases != 0 && device.peakOwnedNativeBytes != 0 &&
+                      device.peakTotalDeviceClaimBytes <=
+                          device.peakOwnedNativeBytes + 2 * device.peakPhaseDeviceNeedBytes,
+                  "device claims stay within real allocation plus the running stages' needs");
+    // Needs are sized from this envelope's measured peaks after its first frame: they cover what
+    // the phases allocated and stay within twice it (the stated need alone was 4.5 times it).
+    checks.expect(device.releasedPhaseDevicePeakBytes <= device.releasedPhaseDeviceNeedBytes &&
+                      device.peakPhaseDeviceAllocationBytes <= device.peakPhaseDeviceNeedBytes &&
+                      device.releasedPhaseDeviceNeedBytes <= 2 * device.releasedPhaseDevicePeakBytes,
+                  "preview device needs cover the measured allocation within a factor of two");
     if (sustained && !partial)
         exercisePackedStress(checks, fixture, options, temporary, viewer, session, controller, ram,
                              scheduler, service, processingPolicy, coverageCache, retainedTimes,
