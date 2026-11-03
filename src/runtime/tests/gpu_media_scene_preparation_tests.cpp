@@ -58,6 +58,7 @@ int main() {
         testImmutableSourceRevisionReuse(expectations, fixture);
         testGestureSourceRevisionIsReadOnly(expectations, fixture);
         testRevalidatedFramesReadNothing(expectations, fixture);
+        testLinearPassLayersShareOneCapture(expectations, fixture);
         testSequenceReadAhead(expectations, fixture);
         testExrDataWindowRegistration(expectations);
         testExrNonFiniteRepair(expectations);

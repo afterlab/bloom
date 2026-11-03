@@ -22,6 +22,7 @@
 // Both families select through the production functions, so there is no competing media path.
 
 #include "cpu_composition_evaluator_support.hpp"
+#include "image_source.hpp"
 
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
@@ -60,8 +61,11 @@ class GpuSceneBuildUploads final {
     findSamples(const std::string& key) const;
     void shareSamples(const std::string& key,
                       std::shared_ptr<const render::NativeSampleImage> samples);
+    // Image source revisions captured by earlier leaves of this build.
+    [[nodiscard]] detail::ImageSourceRevisionMemo& revisions() noexcept { return revisions_; }
 
   private:
+    detail::ImageSourceRevisionMemo revisions_;
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<const render::Rgba32fImage>> images_;
     std::unordered_map<std::string, std::shared_ptr<const render::NativeSampleImage>> samples_;

@@ -271,6 +271,13 @@ owner between the two caches on every frame, dropping each decode session with i
 snapshot, so every frame copied and hashed the whole file again (a 206 MB ProRes 422 HQ source,
 227 captures in a 240-frame export; 0.127 to 0.077 s per frame).
 
+Layers of one image source share its capture within a frame. A linear pass stores a source
+revision only when its key is offered a second time, so the second layer that read a footage frame
+read and hashed the file again; the scene build now keeps the revisions its earlier leaves
+captured (one capture per frame instead of two on the three-layer benchmark shot). The worker
+verifies an encoded frame's plane digest once, when it decodes the message; the encoder no longer
+hashes the planes a second time.
+
 ## Preservation And Loss Report
 
 Before a file task is admitted, the output adapter produces a deterministic `OutputAnalysis` with

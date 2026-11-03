@@ -6,8 +6,11 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -64,6 +67,20 @@ struct ImageSourceSelection {
 // node's Premultiply switch.
 [[nodiscard]] media::ImageAlphaAssociation
 imageSourceAlphaAssociation(const CompiledImageSource& source);
+// The source revisions one evaluation (one scene build) has already captured, by revision key.
+// Several layers reading the same file at the same time share the revision the first verified
+// instead of reading and hashing the file again. The revision cache cannot serve that within a
+// linear pass, which stores a key only when it is offered a second time. Thread-safe.
+class ImageSourceRevisionMemo final {
+  public:
+    [[nodiscard]] std::shared_ptr<const media::ImageSourceRevision>
+    find(const std::string& key) const;
+    void share(const std::string& key, std::shared_ptr<const media::ImageSourceRevision> revision);
+
+  private:
+    mutable std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_ptr<const media::ImageSourceRevision>> revisions_;
+};
 // The revision-cache key of one immutable image file (selectImageSource stores captures under it).
 [[nodiscard]] std::string imageSourceRevisionKey(const core::Sha256Digest& digest,
                                                  const document::AssetLocator& locator,
@@ -89,7 +106,7 @@ imageSequenceReadAheadTargets(const CompiledImageSource& source, core::RationalT
     OperationCache* revisionCache = nullptr,
     MediaSourceRevisionPolicy revisionPolicy = MediaSourceRevisionPolicy::Revalidate,
     std::size_t hostByteBudget = media::kMaxImageStorageBytes, bool allowRevisionInsertion = true,
-    LinearPassRetention* linearPass = nullptr);
+    LinearPassRetention* linearPass = nullptr, ImageSourceRevisionMemo* buildRevisions = nullptr);
 // CACHE-1: how evaluateImageSource() may use the evaluator's shared memory cache for an
 // already-verified, immutable native decoded still-image. This governs only the source decode
 // entry; derived operation memoization is gated separately by the evaluator's own `cache` pointer.

@@ -558,7 +558,8 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
+        context.buildUploads ? &context.buildUploads->revisions() : nullptr);
     recordSourceRevisionWork(selection, statistics);
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {
@@ -632,7 +633,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
+        context.buildUploads ? &context.buildUploads->revisions() : nullptr);
     recordSourceRevisionWork(selection, statistics);
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {

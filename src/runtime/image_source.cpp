@@ -165,13 +165,33 @@ imageSequenceReadAheadTargets(const CompiledImageSource& source, const core::Rat
     return targets;
 }
 
+std::shared_ptr<const media::ImageSourceRevision>
+ImageSourceRevisionMemo::find(const std::string& key) const {
+    const std::lock_guard lock(mutex_);
+    const auto found = revisions_.find(key);
+    return found == revisions_.end() ? nullptr : found->second;
+}
+
+void ImageSourceRevisionMemo::share(const std::string& key,
+                                    std::shared_ptr<const media::ImageSourceRevision> revision) {
+    if (!revision)
+        return;
+    try {
+        const std::lock_guard lock(mutex_);
+        revisions_.try_emplace(key, std::move(revision));
+    } catch (const std::bad_alloc&) {
+        // Sharing is an optimization inside one evaluation; a later layer captures its own.
+    }
+}
+
 ImageSourceSelection
 selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                   document::FrameRate rate, const std::filesystem::path& base,
                   const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                   OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
                   const std::size_t hostByteBudget, const bool allowRevisionInsertion,
-                  LinearPassRetention* const linearPass) {
+                  LinearPassRetention* const linearPass,
+                  ImageSourceRevisionMemo* const buildRevisions) {
     ImageSourceSelection selected;
     if (!source.asset) {
         selected.warning = "Image asset is missing; choose an asset or relink in Assets";
@@ -242,6 +262,16 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
             selected.cancelled = true;
             return false;
         }
+        // Captured earlier in this same evaluation: the file was read and verified a moment ago.
+        if (buildRevisions) {
+            if (auto shared = buildRevisions->find(revisionKeyText);
+                shared && shared->retainedBytes() < hostByteBudget) {
+                selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
+                selected.sourceRevision = std::move(shared);
+                selected.retainedRevision = true;
+                return true;
+            }
+        }
         if (revisionCache) {
             if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{},
                                                         OperationCacheEntryKind::DecodedMedia);
@@ -284,6 +314,8 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
             selected.budgetExceeded =
                 !selected.sourceRevision &&
                 capture.code == media::ImageDiagnosticCode::PixelBudgetExceeded;
+            if (selected.sourceRevision && buildRevisions)
+                buildRevisions->share(revisionKeyText, selected.sourceRevision);
             if (selected.sourceRevision && revisionCache && allowRevisionInsertion)
                 revisionCache->store(revisionKeyText, document::Revision{},
                                      {.image = {},

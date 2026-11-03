@@ -421,6 +421,53 @@ void testRevalidatedFramesReadNothing(Expectations& expectations, const MediaFix
     expectations.expect(builder.build(plan, request).hasValue(), "restored content verifies again");
 }
 
+// Two layers of one source in a linear pass (an export). The pass stores a source revision only
+// when its key is offered a second time, so before the build shared its captures the second layer
+// read and hashed the file again on every frame.
+void testLinearPassLayersShareOneCapture(Expectations& expectations, const MediaFixture& fixture) {
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(fixture.directory);
+    auto context = deterministicMediaContext(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    constexpr std::uint64_t idBase = 4700;
+    const auto parameter = [](const std::uint64_t raw) {
+        return bloom::document::ParameterId::fromRaw(raw);
+    };
+    std::vector<CompiledOperation> operations;
+    std::vector<CompiledMergeInput> inputs;
+    for (std::uint64_t layer = 0; layer < 2; ++layer) {
+        const auto base = idBase + layer * 20;
+        const LayerIds ids{parameter(base + 0), parameter(base + 1), parameter(base + 2),
+                           parameter(base + 3), parameter(base + 4), parameter(base + 5)};
+        const auto source = OperationIndex::fromRaw(static_cast<std::uint32_t>(operations.size()));
+        operations.emplace_back(
+            bloom::runtime::CompiledImageSource{bloom::document::NodeId::fromRaw(base + 10),
+                                                fixture.asset, 0, 0, 0, std::string{}, false});
+        const auto output = OperationIndex::fromRaw(static_cast<std::uint32_t>(operations.size()));
+        operations.emplace_back(
+            layerOutput(bloom::document::NodeId::fromRaw(base + 11),
+                        bloom::document::LayerId::fromRaw(base + 12), source, ids,
+                        LayerValues{.position = {1.0 + static_cast<double>(layer), 2.0}}));
+        inputs.push_back(CompiledMergeInput{bloom::document::LayerSlotId::fromRaw(base + 13),
+                                            bloom::document::LayerId::fromRaw(base + 12), output});
+    }
+    operations.emplace_back(
+        CompiledMerge{bloom::document::NodeId::fromRaw(idBase + 60), std::move(inputs)});
+    operations.emplace_back(CompiledCompositionOutput{bloom::document::NodeId::fromRaw(idBase + 61),
+                                                      OperationIndex::fromRaw(4)});
+    const auto plan = publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, format(8, 8),
+        std::move(operations), OperationIndex::fromRaw(5)});
+    auto request = requestFor(*plan);
+    request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Revalidate;
+    request.requireVerifiedMediaSources = true;
+    request.linearPass = std::make_shared<bloom::runtime::LinearPassRetention>();
+    const auto built = builder.build(plan, request);
+    expectations.expect(built && built.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
+                            built.scene->mediaStatistics().sourceRevisionCacheHits == 1,
+                        "linear pass: two layers of one source capture it once per frame");
+}
+
 void testGestureSourceRevisionIsReadOnly(Expectations& checks, const MediaFixture& fixture) {
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(fixture.directory);
