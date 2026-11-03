@@ -56,18 +56,6 @@ std::string_view timeModeName(const document::LayerTimeMode mode) {
     return index < names.size() ? names[index] : "none";
 }
 
-std::string_view interpolationName(const document::KeyframeInterpolation interpolation) {
-    switch (interpolation) {
-    case document::KeyframeInterpolation::Hold:
-        return "hold";
-    case document::KeyframeInterpolation::Linear:
-        return "linear";
-    case document::KeyframeInterpolation::EaseInOut:
-        return "ease-in-out";
-    }
-    return "linear";
-}
-
 const document::Composition& compositionArgument(const document::Snapshot& snapshot,
                                                  yyjson_val* arguments) {
     if (!member(arguments, "composition"))
@@ -264,6 +252,8 @@ struct KeyRow final {
     document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
     document::KeyframeHandle outgoing;
     document::KeyframeHandle incoming;
+    document::KeyframeEasingParameters easing;
+    document::KeyframeHandleMode handleMode = document::KeyframeHandleMode::Free;
 };
 
 std::string number(const double value) {
@@ -281,7 +271,9 @@ void scalarRows(std::vector<KeyRow>& rows, const std::vector<document::ScalarKey
                         .value = number(key.value),
                         .interpolation = key.outgoingInterpolation,
                         .outgoing = key.outgoingHandle,
-                        .incoming = key.incomingHandle});
+                        .incoming = key.incomingHandle,
+                        .easing = key.easing,
+                        .handleMode = key.handleMode});
 }
 
 template <std::size_t Count>
@@ -344,7 +336,9 @@ yyjson_mut_val* keyframesQuery(Json& out, yyjson_mut_val* result,
                                     .value = scripting::parameterValueJson(key.value),
                                     .interpolation = key.outgoingInterpolation,
                                     .outgoing = key.outgoingHandle,
-                                    .incoming = key.incomingHandle});
+                                    .incoming = key.incomingHandle,
+                                    .easing = key.easing,
+                                    .handleMode = key.handleMode});
             }
         },
         *record);
@@ -368,13 +362,24 @@ yyjson_mut_val* keyframesQuery(Json& out, yyjson_mut_val* result,
         const auto handle = [](const document::KeyframeHandle& value) {
             return "{\"time\":" + number(value.time) + ",\"value\":" + number(value.value) + "}";
         };
-        text += (index == offset ? "" : ",") + std::string("{\"keyframe\":") +
-                std::to_string(row.keyframe) + ",\"component\":" +
-                (row.component ? "\"" + std::string(*row.component) + "\"" : std::string("null")) +
-                ",\"time\":" + scripting::timeJson(row.time, rate) + ",\"value\":" + row.value +
-                ",\"interpolation\":\"" + std::string(interpolationName(row.interpolation)) +
-                "\",\"outgoingHandle\":" + handle(row.outgoing) +
-                ",\"incomingHandle\":" + handle(row.incoming) + "}";
+        text +=
+            (index == offset ? "" : ",") + std::string("{\"keyframe\":") +
+            std::to_string(row.keyframe) + ",\"component\":" +
+            (row.component ? "\"" + std::string(*row.component) + "\"" : std::string("null")) +
+            ",\"time\":" + scripting::timeJson(row.time, rate) + ",\"value\":" + row.value +
+            ",\"interpolation\":\"" +
+            std::string(document::keyframeInterpolationToken(row.interpolation)) +
+            "\",\"interpolationId\":" +
+            std::to_string(static_cast<std::uint64_t>(row.interpolation)) +
+            ",\"outgoingHandle\":" + handle(row.outgoing) +
+            ",\"incomingHandle\":" + handle(row.incoming) + ",\"ease\":\"" +
+            std::string(document::keyframeEasingToken(row.easing.easing)) +
+            "\",\"back\":" + number(row.easing.back) +
+            ",\"amplitude\":" + number(row.easing.amplitude) +
+            ",\"period\":" + number(row.easing.period) + ",\"handleMode\":\"" +
+            std::string(document::keyframeHandleModeToken(row.handleMode)) +
+            "\",\"handleModeId\":" + std::to_string(static_cast<std::uint64_t>(row.handleMode)) +
+            "}";
     }
     out.set(result, "composition", out.number(comp.id().value()));
     out.set(result, "parameter", parameterId ? out.number(parameterId->value()) : out.null());
@@ -471,7 +476,7 @@ yyjson_mut_val* compositionRecord(Json& out, const document::Composition& compos
     auto* color = out.array();
     for (const auto channel : {background.red, background.green, background.blue, background.alpha})
         out.append(color, out.real(channel));
-    out.set(record, "background", color);
+    out.set(record, "backgroundColor", color);
     out.set(record, "workingColorSpace",
             composition.workingColorSpaceId() ? out.text(*composition.workingColorSpaceId())
                                               : out.null());

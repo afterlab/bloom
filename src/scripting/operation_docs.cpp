@@ -31,6 +31,24 @@ constexpr std::string_view kPixelUnit =
 // clang-format off
 constexpr std::array kNotes{
     // --- animation ----------------------------------------------------------------------------
+    OperationNotes{"bloom.animation.easy-ease",
+        "Applies Easy Ease to keys: the eased side gets a Bezier handle of 33.33% influence and "
+        "zero speed, as F9 does in the Graph Editor.",
+        "", "bloom.animation.set-keyframes-easing query:keyframes",
+        "A key address names no key => read the curve and key ids with query "
+        "{kind:\"keyframes\", parameter}."},
+    OperationNotes{"bloom.animation.set-keyframes-easing",
+        "Sets the easing equation parameters of keys (which end eases, Back's overshoot, Elastic's "
+        "amplitude and period) and optionally switches their outgoing interpolation. Keys keep "
+        "their times and values.",
+        "", "bloom.animation.easy-ease bloom.animation.set-keyframes-handle-mode query:keyframes",
+        "A key address names no key => read the curve and key ids with query "
+        "{kind:\"keyframes\", parameter}."},
+    OperationNotes{"bloom.animation.set-keyframes-handle-mode",
+        "Sets how the two handles of keys relate: free, aligned or auto. Auto recomputes the "
+        "handles in the same undo step.",
+        "", "bloom.animation.set-keyframes-easing query:keyframes",
+        "The mode is not free, aligned or auto => pass one of the listed values."},
     OperationNotes{"bloom.animation.convert-to-constant",
         "Stops animating a parameter: removes its curve and keeps one constant value, as turning "
         "off the key diamond in Properties does.",
@@ -323,6 +341,20 @@ constexpr std::array kNotes{
     OperationNotes{"bloom.layer.set-enabled",
         "Shows or hides a layer (the Timeline eye).", "", "query:layers", ""},
     OperationNotes{"bloom.layer.set-solo", "Solos or unsolos a layer.", "", "query:layers", ""},
+    OperationNotes{"bloom.layer.set-shy",
+        "Marks a layer shy: hidden from the layer table while its shy filter is on. It never "
+        "changes the render.",
+        "", "query:layers", ""},
+    OperationNotes{"bloom.layer.set-name-follows-source",
+        "Makes a layer show its source's name and follow it when the source is renamed, or stops "
+        "following. Renaming the layer stops it following.",
+        "", "bloom.layer.rename query:layers",
+        "The layer has no source => only a layer with an asset or nested composition source can "
+        "follow a name."},
+    OperationNotes{"bloom.node-group.set-color",
+        "Sets a node group's frame colour, or clears it to the neutral frame when `color` is "
+        "omitted.",
+        "", "query:nodes", ""},
     OperationNotes{"bloom.layer.set-locked",
         "Locks or unlocks a layer. A locked layer and the nodes it depends on refuse edits.", "",
         "query:layers", ""},
@@ -559,7 +591,34 @@ void refine(const std::string& op, ArgumentSchema& argument) {
     if (argument.context == ContextSource::Layers)
         argument.unit = "array of layer ids (query:layers .id); defaults to the selected layers";
 
-    if (name == "interpolation") {
+    if (name == "ease" && op == "bloom.animation.set-keyframes-easing") {
+        choose(argument, {{"auto", "The usual default: out for back, bounce and elastic"},
+                          {"in", "Ease in"},
+                          {"out", "Ease out"},
+                          {"in-out", "Ease in and out"}});
+        argument.defaultText = "auto";
+    } else if (name == "mode" && op == "bloom.animation.set-keyframes-handle-mode") {
+        choose(argument, {{"free", "Independent handles"},
+                          {"aligned", "Editing one handle keeps the other collinear"},
+                          {"auto", "Auto Clamped handles, recomputed from the neighbouring keys"}});
+    } else if (name == "side" && op == "bloom.animation.easy-ease") {
+        choose(argument, {{"both", "Easy Ease (F9)"},
+                          {"in", "Easy Ease In (Shift+F9)"},
+                          {"out", "Easy Ease Out (Ctrl+Shift+F9)"}});
+        argument.defaultText = "both";
+    } else if (name == "anchor" && op == "bloom.layer.set-anchor-preset") {
+        choose(argument, {{"top-left", "Top left"},
+                          {"top", "Top centre"},
+                          {"top-right", "Top right"},
+                          {"left", "Middle left"},
+                          {"center", "Centre"},
+                          {"right", "Middle right"},
+                          {"bottom-left", "Bottom left"},
+                          {"bottom", "Bottom centre"},
+                          {"bottom-right", "Bottom right"}});
+    } else if (name == "point" && op == "bloom.cryptomatte.pick") {
+        argument.unit = kPixelUnit;
+    } else if (name == "interpolation") {
         choose(argument, {{"hold", "Hold"}, {"linear", "Linear"}, {"ease-in-out", "Ease In-Out"}});
         if (!argument.required)
             argument.defaultText = "linear";

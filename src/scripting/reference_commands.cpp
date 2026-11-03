@@ -57,7 +57,7 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "frameRateNumerator, frameRateDenominator, pixelAspect:[n, d], duration:" +
              std::string(time) + ", start:" + std::string(time) +
              " (the timecode label of frame 0), dropFrame, workArea:{start, end}|null (end "
-             "exclusive), background:[r, g, b, a] (display-only), workingColorSpace|null, "
+             "exclusive), backgroundColor:[r, g, b, a] (display-only), workingColorSpace|null, "
              "safeAreas:{action, title}, layerCount, folder|null}]}",
          {}, R"({"name":"query","arguments":{"kind":"compositions"}})");
     kind("layers", "A composition's layers, topmost first, with timing, masks and parameter ids.",
@@ -66,7 +66,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "node's roles (a solid's color, a text layer's text, size, font, ...) the same way. "
          "Pass those ids to bloom.parameter.set-source or the animation operations.",
          "{revision, composition, records:[{id, name, index (0 is topmost), slot, merge, "
-         "layerOutputNode, sourceNode|null, sourceType|null, enabled, solo, locked, "
+         "layerOutputNode, sourceNode|null, sourceType|null, enabled, solo, locked, shy, "
+         "nameFollowsSource, sourceName?, "
          "labelColor:[r, g, b]|null, parent|null, start:" +
              std::string(time) + ", end:" + std::string(time) +
              " (exclusive), timing:{startTime, speed:[n, d], before, after, extent}, "
@@ -167,8 +168,10 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "{revision, composition, parameter|null, curve, valueKind, frameRate:[n, d], "
          "records:[{keyframe, component|null, time:" +
              std::string(time) +
-             ", value, interpolation:\"hold\"|\"linear\"|\"ease-in-out\", "
-             "outgoingHandle:{time, value}, incomingHandle:{time, value}}], totalRecords, "
+             ", value, interpolation (a token from query enums: hold, linear, ease-in-out, "
+             "sine, quad, ... elastic), interpolationId, outgoingHandle:{time, value}, "
+             "incomingHandle:{time, value}, ease, back, amplitude, period, handleMode, "
+             "handleModeId}], totalRecords, "
              "nextCursor|null}",
          {composition,
           {.name = "parameter",
@@ -184,6 +187,11 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
           page,
           cursor},
          R"({"name":"query","arguments":{"kind":"keyframes","composition":1,"parameter":5}})");
+    kind("enums", "The keyframe vocabularies with their tokens and stable ids.",
+         "interpolation, ease, handleMode and easyEase: each value has an id, a token the "
+         "animation operations take, and a label.",
+         "{revision, records:[{enum, values:[{id, token, label}]}]}", {},
+         R"({"name":"query","arguments":{"kind":"enums"}})");
     kind("assets", "Every asset: kind, file, size, folder and tags.", {},
          "{revision, records:[{id, name, kind:\"image\"|\"sequence\"|\"audio\"|\"font\"|\"video\""
          "|\"lut\", path, width, height, frames, digest, folder|null, tags}], folders:[{id, "

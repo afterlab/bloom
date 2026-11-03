@@ -180,7 +180,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
                                {"keyframes", "An animated parameter's keys (pageable)"},
                                {"assets", "Every asset"},
                                {"operations", "Every operation schema"},
-                               {"context", "The editor context contextual arguments use"}}},
+                               {"context", "The editor context contextual arguments use"},
+                               {"enums", "Keyframe interpolation, ease and handle-mode tokens"}}},
                   {.name = "composition",
                    .type = "integer",
                    .summary = "The composition, for layers, nodes, parameters, parameter, "
@@ -568,7 +569,9 @@ void addTools(std::vector<ReferenceEntry>& out) {
          "Wait until an export job (or every active job) finishes, with progress when the "
          "request carries a progress token.",
          true},
-        {"export.presets", "The export presets available on this computer.", true},
+        {"export.presets",
+         "The export presets available on this computer, optionally for one job's composition.",
+         true},
         {"export.script",
          "A script that recreates an export job and starts it (bloom-cli JSON or Python).", true},
     }};
@@ -629,6 +632,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
                                   .summary = "The longest wait.",
                                   .unit = "milliseconds",
                                   .range = "1..86400000"}});
+        if (name == "export.presets")
+            addArguments(value,
+                         {{.name = "job",
+                           .type = "integer",
+                           .summary = "Make availability reflect this job's composition (for "
+                                      "example a source whose audio the export cannot decode "
+                                      "disables every preset that carries audio).",
+                           .unit = "export job id",
+                           .range = ">= 1"}});
         if (name == "export.script")
             addArguments(value, {{.name = "job",
                                   .type = "integer",

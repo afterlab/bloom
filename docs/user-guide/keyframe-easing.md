@@ -118,5 +118,5 @@ Interpolation names are `hold` (or `constant`), `linear`, `ease-in-out` (or `bez
 
 Keyframes read back through `bloom.data` with `interpolation_name`, `ease`, `back`, `amplitude` and
 `period` and `handle_mode`, and layers with `shy` and `name_follows_source`. Over MCP, `query` with `kind: "layers"`
-or `kind: "keyframes"` (and a `composition`) returns the same fields, and `kind: "enums"` lists the
+or `kind: "keyframes"` (a `composition` and a `parameter` or `curve`) returns the same fields, and `kind: "enums"` lists the
 interpolation, ease, handle mode and Easy Ease names with their ids. Keys also carry `handleMode`.

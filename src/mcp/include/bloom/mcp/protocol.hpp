@@ -194,7 +194,8 @@ enum class McpToolExecution : std::uint8_t { Inline = 0, Task = 1 };
     const auto index = static_cast<std::uint8_t>(tool);
     return (index >= static_cast<std::uint8_t>(McpTool::ProjectSave) &&
             index <= static_cast<std::uint8_t>(McpTool::ExportReveal)) ||
-           index >= static_cast<std::uint8_t>(McpTool::ProjectSaveCopy);
+           (index >= static_cast<std::uint8_t>(McpTool::ProjectSaveCopy) &&
+            index <= static_cast<std::uint8_t>(McpTool::CompositionDeletePreset));
 }
 
 // ---------------------------------------------------------------------------------------------

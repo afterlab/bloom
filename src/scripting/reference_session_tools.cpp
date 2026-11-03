@@ -14,6 +14,9 @@ constexpr std::string_view kTimeUnit =
     "frames at the composition's frame rate (an integer), or exact seconds as "
     "[numerator, denominator]";
 
+constexpr std::string_view kPixelUnit =
+    "composition pixels: x to the right, y down, origin at the frame's top-left corner";
+
 ReferenceError refusal(std::string code, std::string when, std::string remedy) {
     return makeError(std::move(code), std::move(when), std::move(remedy));
 }
@@ -196,11 +199,13 @@ void windowTools(std::vector<ReferenceEntry>& out) {
     addRelated(reveal, {"composition.activate", "transport", "query:context"});
     out.push_back(std::move(reveal));
 
-    auto select = makeEntry(ReferenceKind::Tool, "selection.set", "window",
-                            "Set, add to, remove from or clear the selected layers and nodes.",
-                            "Desktop application only. Operations whose layer, layers or "
-                            "selection argument is contextual then default to it. Never changes "
-                            "the project.");
+    auto select = makeEntry(
+        ReferenceKind::Tool, "selection.set", "window",
+        "Set, add to, remove from or clear the selected layers and nodes, or use the Select "
+        "menu's all, invert and linked modes.",
+        "Desktop application only. Operations whose layer, layers or "
+        "selection argument is contextual then default to it. Never changes "
+        "the project.");
     select.effects = live;
     addArguments(select, {composition,
                           {.name = "layers",
@@ -220,7 +225,19 @@ void windowTools(std::vector<ReferenceEntry>& out) {
                            .choices = {{"set", "Select exactly these"},
                                        {"add", "Add them"},
                                        {"remove", "Remove them"},
-                                       {"clear", "Select nothing"}}}});
+                                       {"clear", "Select nothing"},
+                                       {"all-layers", "Every layer of the composition"},
+                                       {"all-nodes", "Every node of the composition"},
+                                       {"invert-layers", "Invert the active composition's "
+                                                         "layer selection"},
+                                       {"invert-nodes", "Invert the active composition's "
+                                                        "node selection"},
+                                       {"linked-upstream", "Nodes feeding `nodes` (or the "
+                                                           "selected nodes) through links and "
+                                                           "driver bindings"},
+                                       {"linked-downstream", "Nodes fed by `nodes` (or the "
+                                                             "selected nodes) through links and "
+                                                             "driver bindings"}}}});
     select.result = windowResult;
     select.errors = windowErrors();
     addExamples(
@@ -256,7 +273,9 @@ void windowTools(std::vector<ReferenceEntry>& out) {
                                           {"step-forward", "One frame forward"},
                                           {"step-backward", "One frame back"},
                                           {"go-to-start", "First frame"},
-                                          {"go-to-end", "Last frame"}}},
+                                          {"go-to-end", "Last frame"},
+                                          {"ram-preview", "Cache the work area, then play it "
+                                                          "(the RAM Preview button)"}}},
                              {.name = "composition",
                               .type = "integer",
                               .summary = "The composition time counts in.",
@@ -272,37 +291,68 @@ void windowTools(std::vector<ReferenceEntry>& out) {
     addRelated(transport, {"editor.reveal", "concept:time"});
     out.push_back(std::move(transport));
 
-    auto viewer = makeEntry(ReferenceKind::Tool, "viewer.set", "window",
-                            "Set the Viewer's display, view, exposure, channel and zoom.",
-                            "Desktop application only. Display settings never reach a render, "
-                            "an export, a capture or the project. Only the given fields change.");
+    auto viewer = makeEntry(
+        ReferenceKind::Tool, "viewer.set", "window",
+        "Set the Viewer's display, view, exposure, gamma, channel, zoom, resolution, look, "
+        "background, transparency grid and region of interest.",
+        "Desktop application only. Display settings never reach a render, "
+        "an export, a capture or the project. Only the given fields change.");
     viewer.effects = live;
-    addArguments(viewer, {{.name = "display",
-                           .type = "string",
-                           .summary = "The OCIO display; empty returns to the project default.",
-                           .range = "at most 256 bytes"},
-                          {.name = "view",
-                           .type = "string",
-                           .summary = "The OCIO view; empty returns to the project default.",
-                           .range = "at most 256 bytes"},
-                          {.name = "exposure",
-                           .type = "number",
-                           .summary = "Viewer exposure.",
-                           .unit = "stops",
-                           .range = "-64..64"},
-                          {.name = "channel",
-                           .type = "string",
-                           .summary = "Which channels the Viewer shows.",
-                           .choices = {{"rgba", "RGBA"},
-                                       {"rgb", "RGB"},
-                                       {"red", "Red"},
-                                       {"green", "Green"},
-                                       {"blue", "Blue"},
-                                       {"alpha", "Alpha"}}},
-                          {.name = "zoom",
-                           .type = "string or number",
-                           .summary = "\"fit\", \"actual-size\", or a factor where 1.0 is 100%.",
-                           .range = "a factor in (0, 64]"}});
+    addArguments(
+        viewer,
+        {{.name = "display",
+          .type = "string",
+          .summary = "The OCIO display; empty returns to the project default.",
+          .range = "at most 256 bytes"},
+         {.name = "view",
+          .type = "string",
+          .summary = "The OCIO view; empty returns to the project default.",
+          .range = "at most 256 bytes"},
+         {.name = "exposure",
+          .type = "number",
+          .summary = "Viewer exposure.",
+          .unit = "stops",
+          .range = "-64..64"},
+         {.name = "channel",
+          .type = "string",
+          .summary = "Which channels the Viewer shows.",
+          .choices = {{"rgba", "RGBA"},
+                      {"rgb", "RGB"},
+                      {"red", "Red"},
+                      {"green", "Green"},
+                      {"blue", "Blue"},
+                      {"alpha", "Alpha"}}},
+         {.name = "zoom",
+          .type = "string or number",
+          .summary = "\"fit\", \"actual-size\", or a factor where 1.0 is 100%.",
+          .range = "a factor in (0, 64]"},
+         {.name = "gamma",
+          .type = "number",
+          .summary = "Viewer gamma; 1.0 is neutral.",
+          .range = "(0, 10]"},
+         {.name = "resolution",
+          .type = "string",
+          .summary = "The preview resolution.",
+          .choices = {{"auto", "Chosen from the zoom"},
+                      {"full", "Full resolution"},
+                      {"half", "Half resolution"},
+                      {"quarter", "Quarter resolution"}}},
+         {.name = "look", .type = "boolean", .summary = "Whether the view's look is applied."},
+         {.name = "background",
+          .type = "string",
+          .summary = "The surround behind the frame.",
+          .choices = {{"solid", "The interface colour"},
+                      {"gray", "Gray"},
+                      {"black", "Black"},
+                      {"white", "White"}}},
+         {.name = "transparencyGrid",
+          .type = "boolean",
+          .summary = "Whether transparent areas show a checkerboard."},
+         {.name = "regionOfInterest",
+          .type = "object or null",
+          .summary = "The region the Viewer renders, as {x, y, width, height}; "
+                     "null clears it. Clipped to the frame.",
+          .unit = kPixelUnit}});
     viewer.result = windowResult;
     viewer.errors = windowErrors();
     addExamples(viewer,
@@ -311,11 +361,234 @@ void windowTools(std::vector<ReferenceEntry>& out) {
     out.push_back(std::move(viewer));
 }
 
+void parityTools(std::vector<ReferenceEntry>& out) {
+    const ReferenceEffects live{.liveOnly = true};
+    const std::string windowResult = "{succeeded, message?}";
+    const auto notLive = windowErrors();
+    const auto simple = [&](std::string name, std::string area, std::string summary,
+                            std::string notes, const ReferenceEffects effects,
+                            std::vector<ArgumentSpec> arguments, std::string result,
+                            std::string example, std::vector<ReferenceError> errors,
+                            std::vector<std::string_view> related) {
+        auto value = makeEntry(ReferenceKind::Tool, name, std::move(area), std::move(summary),
+                               std::move(notes));
+        value.effects = effects;
+        for (const auto& argument : arguments)
+            addArguments(value, {argument});
+        value.result = std::move(result);
+        value.errors = std::move(errors);
+        addExamples(value, {{"mcp", std::move(example)}});
+        for (const auto& relatedName : related)
+            addRelated(value, {relatedName});
+        out.push_back(std::move(value));
+    };
+    const auto withRefusals = [&](std::vector<ReferenceError> extra) {
+        extra.insert(extra.end(), notLive.begin(), notLive.end());
+        return extra;
+    };
+
+    simple(
+        "project.save-copy", "project",
+        "Write a byte-for-byte copy of a read-only project to a new .bloom file (File > Save "
+        "a Copy).",
+        "For a newer or preserved document that Save cannot rewrite. The open project stays "
+        "where it is.",
+        fileEffects(),
+        {{.name = "path",
+          .type = "string",
+          .required = true,
+          .summary = "The file to write.",
+          .unit = "an absolute path ending in .bloom whose folder exists",
+          .range = "1..4096 bytes"},
+         {.name = "replace",
+          .type = "boolean",
+          .summary = "Replace an existing file at path.",
+          .defaultValue = "false"}},
+        "{succeeded, event (project.copy-saved), path, projectName, message?}",
+        R"({"name":"project.save-copy","arguments":{"path":"/projects/copy.bloom"}})",
+        withRefusals({refusal("bloom.mcp.invalid-argument", "the project is editable",
+                              "use project.save-as"),
+                      refusal("bloom.mcp.destination-exists", "a file exists at path",
+                              "pass replace:true or choose another path"),
+                      refusal("bloom.mcp.path-invalid", "path is relative or its folder is missing",
+                              "pass an absolute path in an existing folder")}),
+        {"project.save-as", "project.open"});
+
+    simple("project.cancel-open", "project",
+           "Abandon the project open in progress (File > Cancel Open).",
+           "The project that was open stays. Cancels an open started by the artist or an agent.",
+           live, {}, windowResult, R"({"name":"project.cancel-open","arguments":{}})",
+           withRefusals(
+               {refusal("bloom.mcp.invalid-argument", "nothing is opening", "nothing to cancel")}),
+           {"project.open"});
+
+    simple("export.reveal", "window",
+           "Bring the Export editor into view and optionally select a job (Jobs > Show in "
+           "Export).",
+           "Export queue edits never reveal the panel by themselves; call this when the artist "
+           "should see the queue. Never changes the project or its undo history.",
+           live,
+           {{.name = "job",
+             .type = "integer",
+             .summary = "The job to select.",
+             .unit = "export job id (export.status)",
+             .range = ">= 1"}},
+           windowResult, R"({"name":"export.reveal","arguments":{"job":1}})", windowErrors(),
+           {"export.status", "editor.reveal"});
+
+    simple("profiler.snapshot", "telemetry",
+           "Bloom's runtime telemetry now: memory, GPU, CPU per executor pool, tasks, stage "
+           "timings, playback and RAM Preview rates, and helper processes.",
+           "Absent values are null, never 0. Counters are cumulative, so rates come from two "
+           "snapshots. snapshot.schemaVersion names the field set. Read-only; holds no session "
+           "lease, so it answers while a project opens.",
+           readOnlyEffects(), {}, "{succeeded, snapshot:{schemaVersion, ...}}",
+           R"({"name":"profiler.snapshot","arguments":{}})", commonToolErrors(), {});
+
+    simple("preferences.get", "application",
+           "The application preferences (Edit > Preferences) as {key: value}.",
+           "Playback, memory and media cache, timeline, node graph, Viewer defaults and guides, "
+           "import defaults, sounds and notifications. Per-user settings, never project truth.",
+           {.readOnly = true, .liveOnly = true}, {}, "{succeeded, preferences:{key: value}}",
+           R"({"name":"preferences.get","arguments":{}})", notLive, {"preferences.set"});
+
+    simple("preferences.set", "application",
+           "Change application preferences as the Preferences window's OK does.",
+           "Every entry is checked first; an unknown key or a value out of range refuses the "
+           "whole call naming the key. Then all are saved and applied to the open editors "
+           "together. Not undoable and not in the project. preferences.get lists the keys.",
+           live,
+           {{.name = "preferences",
+             .type = "object",
+             .required = true,
+             .summary = "The preferences to change, as {key: value}.",
+             .unit = "each value a boolean, number or string, in the preference's own unit "
+                     "(preferences.get)",
+             .range = "1..64 entries"}},
+           windowResult,
+           R"({"name":"preferences.set","arguments":{"preferences":{"playback.loop":true}}})",
+           withRefusals({refusal("bloom.mcp.busy", "a modal dialog is open",
+                                 "retry when the artist closes it")}),
+           {"preferences.get"});
+
+    simple("cache.purge", "application", "Clear derived caches (Edit > Purge).",
+           "Derived state only: the project, its revision and undo history are untouched. Source "
+           "files are never touched.",
+           live,
+           {{.name = "cache",
+             .type = "string",
+             .required = true,
+             .summary = "Which cache to clear.",
+             .choices = {{"preview", "The RAM preview and operation caches"},
+                         {"media", "The decoded media cache and its disk store"}}}},
+           windowResult, R"({"name":"cache.purge","arguments":{"cache":"preview"}})",
+           withRefusals({refusal("bloom.mcp.busy", "a purge is running", "retry shortly")}),
+           {"jobs.list"});
+
+    simple("jobs.list", "application",
+           "The Jobs panel's rows: imports, previews, thumbnails, purges and export runs.",
+           "An export run's row names its export job.", {.readOnly = true, .liveOnly = true}, {},
+           "{succeeded, jobs:[{id, name, phase, state, completed, total, canCancel, "
+           "cancellationRequested, exportJob}]}",
+           R"({"name":"jobs.list","arguments":{}})", notLive, {"jobs.cancel"});
+
+    simple("jobs.cancel", "application",
+           "The Jobs panel's Cancel for one job: cooperative cancellation of a queued or running "
+           "job.",
+           "An export run cannot be cancelled here; use export.stop.", live,
+           {{.name = "job",
+             .type = "integer",
+             .required = true,
+             .summary = "The job to cancel.",
+             .unit = "Jobs panel job id (jobs.list)",
+             .range = ">= 1"}},
+           windowResult, R"({"name":"jobs.cancel","arguments":{"job":1}})",
+           withRefusals({refusal("bloom.mcp.unknown-target", "the panel does not list the job",
+                                 "re-read jobs.list"),
+                         refusal("bloom.mcp.invalid-argument", "the job cannot be cancelled here",
+                                 "an export run: use export.stop")}),
+           {"jobs.list", "export.stop"});
+
+    simple("asset.reveal", "window", "Reveal an asset's file in the platform's file manager.",
+           "Selects the file where the file manager can, else opens its folder. Never changes "
+           "the project.",
+           live,
+           {{.name = "asset",
+             .type = "integer",
+             .required = true,
+             .summary = "The asset.",
+             .unit = "asset id (query:assets)",
+             .range = ">= 1"}},
+           windowResult, R"({"name":"asset.reveal","arguments":{"asset":1}})",
+           withRefusals({refusal("bloom.mcp.invalid-argument",
+                                 "the asset has no file (a font or a data asset)",
+                                 "only file-backed assets can be revealed")}),
+           {"query:assets"});
+
+    simple("composition.presets", "application", "The Composition Settings dialog's presets.",
+           "The built-in sizes carry size and pixel aspect only; the artist's saved presets also "
+           "carry frame rate, duration, start timecode, drop-frame and background. Apply one "
+           "with bloom.composition.set-settings.",
+           {.readOnly = true, .liveOnly = true}, {},
+           "{succeeded, presets:[{name, builtIn, width, height, pixelAspect, ...}]}",
+           R"({"name":"composition.presets","arguments":{}})", notLive,
+           {"composition.save-preset", "bloom.composition.set-settings"});
+
+    simple("composition.save-preset", "application",
+           "Save a composition's settings as a named preset (Save as preset in Composition "
+           "Settings).",
+           "Saves size, pixel aspect, frame rate, duration, start timecode, drop-frame and "
+           "background. A per-user setting, never project truth or undo.",
+           live,
+           {{.name = "composition",
+             .type = "integer",
+             .required = true,
+             .summary = "The composition to save.",
+             .unit = "composition id (query:compositions)",
+             .range = ">= 1"},
+            {.name = "name",
+             .type = "string",
+             .required = true,
+             .summary = "The new preset's name.",
+             .range = "1..256 bytes, not already used"}},
+           windowResult,
+           R"({"name":"composition.save-preset","arguments":{"composition":1,"name":"HD 24"}})",
+           withRefusals({}), {"composition.presets"});
+
+    simple("composition.rename-preset", "application",
+           "Rename a saved composition preset (not a built-in one).", "", live,
+           {{.name = "name",
+             .type = "string",
+             .required = true,
+             .summary = "The saved preset to rename.",
+             .range = "1..256 bytes"},
+            {.name = "newName",
+             .type = "string",
+             .required = true,
+             .summary = "Its new name.",
+             .range = "1..256 bytes, not already used"}},
+           windowResult,
+           R"({"name":"composition.rename-preset","arguments":{"name":"HD 24","newName":"HD"}})",
+           withRefusals({}), {"composition.presets"});
+
+    simple("composition.delete-preset", "application", "Delete a saved composition preset.",
+           "A per-user setting, so Undo cannot restore it; an agent call is the confirmation.",
+           live,
+           {{.name = "name",
+             .type = "string",
+             .required = true,
+             .summary = "The saved preset to delete.",
+             .range = "1..256 bytes"}},
+           windowResult, R"({"name":"composition.delete-preset","arguments":{"name":"HD"}})",
+           withRefusals({}), {"composition.presets"});
+}
+
 } // namespace
 
 void addSessionToolEntries(std::vector<ReferenceEntry>& out) {
     projectTools(out);
     windowTools(out);
+    parityTools(out);
 }
 
 } // namespace bloom::scripting::detail

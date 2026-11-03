@@ -2,9 +2,9 @@
 // transport: the export queue's absence, and (live host) the session and UI seams of
 // live_ui_port.hpp. One stdio transport check: it stops while its input is idle.
 
+#include <bloom/document/project.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/testing/fake_export_runner.hpp>
-#include <bloom/document/project.hpp>
 #include <bloom/mcp/server_core.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -223,8 +223,7 @@ void parityTools() {
         for (const auto* name :
              {"project.save-copy", "project.cancel-open", "preferences.get", "preferences.set",
               "cache.purge", "jobs.list", "jobs.cancel", "asset.reveal", "composition.presets",
-              "composition.save-preset", "composition.rename-preset",
-              "composition.delete-preset"})
+              "composition.save-preset", "composition.rename-preset", "composition.delete-preset"})
             expect(contains(listed, std::string(R"("name":")") + name + "\""),
                    std::string("tools/list lists ") + name);
         expect(contains(listed, R"("regionOfInterest")") && contains(listed, R"("gamma")"),
@@ -254,18 +253,18 @@ void parityTools() {
 
         // The evaluated project edits work on the headless session.
         const auto before = server.session->snapshot().revision();
-        result = server.call("transact",
-                             R"({"expectedRevision":)" + std::to_string(before.value()) +
-                                 R"(,"operations":[{"op":"bloom.layer.add-solid","args":{)"
-                                 R"("composition":1,"name":"Card","color":[1,1,1,1]}}]})");
+        result =
+            server.call("transact", R"({"expectedRevision":)" + std::to_string(before.value()) +
+                                        R"(,"operations":[{"op":"bloom.layer.add-solid","args":{)"
+                                        R"("composition":1,"name":"Card","color":[1,1,1,1]}}]})");
         const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
         const auto layer = firstMatch(layers, R"re("records":\[\{"id":(\d+))re");
         const auto revision = server.session->snapshot().revision().value();
-        result = server.call(
-            "transact", R"({"expectedRevision":)" + std::to_string(revision) +
-                            R"(,"operations":[{"op":"bloom.layer.set-anchor-preset","args":{)"
-                            R"("composition":1,"layer":)" +
-                            layer + R"(,"anchor":"bottom-right","time":0}}]})");
+        result = server.call("transact",
+                             R"({"expectedRevision":)" + std::to_string(revision) +
+                                 R"(,"operations":[{"op":"bloom.layer.set-anchor-preset","args":{)"
+                                 R"("composition":1,"layer":)" +
+                                 layer + R"(,"anchor":"bottom-right","time":0}}]})");
         expect(contains(result, R"("isError":false)") && contains(result, R"("succeeded":true)"),
                "set-anchor-preset applies headless: " + result);
         result = server.call("history", R"({"action":"undo","expectedRevision":)" +
@@ -299,10 +298,10 @@ void parityTools() {
         return mcp::McpUiResult{};
     };
     port.preferences = [] {
-        return std::vector<mcp::McpPreference>{{.key = "loopPlayback", .value = true},
-                                               {.key = "soundVolume", .value = 40.0},
-                                               {.key = "timelineTimeFormat",
-                                                .value = std::string("frames")}};
+        return std::vector<mcp::McpPreference>{
+            {.key = "loopPlayback", .value = true},
+            {.key = "soundVolume", .value = 40.0},
+            {.key = "timelineTimeFormat", .value = std::string("frames")}};
     };
     port.setPreferences = [&](const std::vector<mcp::McpPreference>& entries) {
         set = entries;
@@ -376,20 +375,21 @@ void parityTools() {
     };
     Live server(std::move(port));
 
-    auto result = server.call(
-        "viewer.set", R"({"gamma":2.2,"resolution":"half","background":"black",)"
-                      R"("transparencyGrid":true,"look":false,)"
-                      R"("regionOfInterest":{"x":10,"y":20,"width":30,"height":40}})");
+    auto result =
+        server.call("viewer.set", R"({"gamma":2.2,"resolution":"half","background":"black",)"
+                                  R"("transparencyGrid":true,"look":false,)"
+                                  R"("regionOfInterest":{"x":10,"y":20,"width":30,"height":40}})");
     expect(viewer.gamma == 2.2 && viewer.resolution == mcp::McpViewerResolution::Half &&
                viewer.background == mcp::McpViewerBackground::Black &&
-               viewer.transparencyGrid == true && viewer.look == false &&
-               viewer.regionOfInterest && *viewer.regionOfInterest &&
-               (*viewer.regionOfInterest)->width == 30.0 && !viewer.exposure,
+               viewer.transparencyGrid == true && viewer.look == false && viewer.regionOfInterest &&
+               *viewer.regionOfInterest && (*viewer.regionOfInterest)->width == 30.0 &&
+               !viewer.exposure,
            "viewer.set passes the new fields: " + result);
     result = server.call("viewer.set", R"({"regionOfInterest":null})");
     expect(viewer.regionOfInterest && !*viewer.regionOfInterest,
            "a null region clears it: " + result);
-    result = server.call("viewer.set", R"({"regionOfInterest":{"x":0,"y":0,"width":0,"height":4}})");
+    result =
+        server.call("viewer.set", R"({"regionOfInterest":{"x":0,"y":0,"width":0,"height":4}})");
     expect(contains(result, "at least 1 x 1"), "an empty region is refused: " + result);
     result = server.call("viewer.set", R"({"resolution":"eighth"})");
     expect(contains(result, "auto, full, half or quarter"), "an unknown resolution: " + result);
@@ -414,9 +414,9 @@ void parityTools() {
     expect(contains(result, R"("loopPlayback":true)") && contains(result, R"("soundVolume":40)") &&
                contains(result, R"("timelineTimeFormat":"frames")"),
            "preferences.get reads the port: " + result);
-    result = server.call("preferences.set",
-                         R"({"preferences":{"loopPlayback":false,"soundVolume":10,)"
-                         R"("timelineTimeFormat":"timecode"}})");
+    result =
+        server.call("preferences.set", R"({"preferences":{"loopPlayback":false,"soundVolume":10,)"
+                                       R"("timelineTimeFormat":"timecode"}})");
     expect(contains(result, R"("succeeded":true)") && set.size() == 3,
            "preferences.set passes every entry: " + result);
     result = server.call("preferences.set", R"({"preferences":{"loopPlayback":[1]}})");
@@ -448,8 +448,8 @@ void parityTools() {
     static_cast<void>(
         server.call("composition.rename-preset", R"({"name":"Card","newName":"Plate"})"));
     result = server.call("composition.delete-preset", R"({"name":"Plate"})");
-    expect(presetCalls == std::vector<std::string>{"save 1 Card", "rename Card Plate",
-                                                   "delete Plate"} &&
+    expect(presetCalls ==
+                   std::vector<std::string>{"save 1 Card", "rename Card Plate", "delete Plate"} &&
                contains(result, "bloom.mcp.unknown-target"),
            "the preset tools reach the port in order: " + result);
 }
@@ -617,7 +617,8 @@ void exportReveal() {
         for (auto* server : {&stdio, &bound})
             for (const auto* arguments : {"{}", R"({"job":3})"}) {
                 const auto result = server->call("export.reveal", arguments);
-                expect(contains(result, "bloom.mcp.not-live") && contains(result, R"("isError":true)"),
+                expect(contains(result, "bloom.mcp.not-live") &&
+                           contains(result, R"("isError":true)"),
                        "stdio export.reveal answers not-live: " + result);
             }
         expect(!reached, "stdio never calls the port");
@@ -648,7 +649,8 @@ void exportReveal() {
            "job 0 is an invalid argument and never reaches the port: " + result);
     result = server.call("export.reveal", R"({"composition":1})");
     expect(contains(result, R"("error")") && asked.size() == 3, "unknown arguments are refused");
-    expect(server.session->snapshot().revision() == before, "export.reveal never edits the project");
+    expect(server.session->snapshot().revision() == before,
+           "export.reveal never edits the project");
 }
 
 // The id after the first `"job":` of a response.
@@ -794,9 +796,11 @@ void animationReadBack() {
             R"({"op":"bloom.animation.set-keyframe-at-time-for-parameter","args":{"composition":1,)"
             R"("parameter":)" +
             opacity + R"(,"time":)" + at + "}}"));
-    auto keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
+    const auto keyframesQuery =
+        R"({"kind":"keyframes","composition":1,"parameter":)" + opacity + "}";
+    auto keyframes = server.call("query", keyframesQuery);
     const auto curve = firstMatch(keyframes, R"re("curve":(\d+))re");
-    const auto key = firstMatch(keyframes, R"re("keys":\[\{"id":(\d+))re");
+    const auto key = firstMatch(keyframes, R"re("keyframe":(\d+))re");
     expect(!curve.empty() && !key.empty() && contains(keyframes, R"("interpolation":"linear")"),
            "keyframes read back with their interpolation token: " + keyframes);
     result = transact(R"({"op":"bloom.animation.set-keyframes-easing","args":{"composition":1,)"
@@ -805,7 +809,7 @@ void animationReadBack() {
                       R"(]],"interpolation":"elastic","ease":"out","amplitude":2.0}},)"
                       R"({"op":"bloom.layer.set-shy","args":{"composition":1,"layer":)" +
                       layer + R"(,"shy":true}})");
-    keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
+    keyframes = server.call("query", keyframesQuery);
     expect(contains(keyframes, R"("interpolation":"elastic")") &&
                contains(keyframes, R"("interpolationId":12)") &&
                contains(keyframes, R"("ease":"out")") && contains(keyframes, R"("amplitude":2)"),
@@ -819,7 +823,7 @@ void animationReadBack() {
         transact(R"({"op":"bloom.animation.set-keyframes-handle-mode","args":{"composition":1,)"
                  R"("keys":[[)" +
                  curve + "," + key + R"(]],"mode":"auto"}})");
-    keyframes = server.call("query", R"({"kind":"keyframes","composition":1})");
+    keyframes = server.call("query", keyframesQuery);
     expect(contains(keyframes, R"("handleMode":"auto")") &&
                contains(keyframes, R"("handleModeId":2)"),
            "set-keyframes-handle-mode reads back: " + result + keyframes);

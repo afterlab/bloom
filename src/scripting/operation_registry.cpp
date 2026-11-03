@@ -1819,11 +1819,11 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("skipMissingFrames", ValueKind::Boolean, false,
                "A new sequence plays the frames it has back to back (Missing Frames: Skip)."),
          maybe("sequenceFrameRate", ValueKind::String, "24",
-               "The rate a new sequence assumes, as \"24\", \"23.976\" or \"n/d\"; omit to "
-               "match the composition. The Import preference \"Sequence frame rate\"."),
+               "The rate a new sequence assumes, as 24, 23.976 or n/d; omit to match the "
+               "composition. The Import preference Sequence frame rate."),
          maybe("stillDuration", ValueKind::Integer, std::int64_t{5},
                "Exact time. A new still's length (seconds, or [numerator, denominator]); omit "
-               "for the composition's length. The Import preference \"Still duration\".")},
+               "for the composition's length. The Import preference Still duration.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto paths = strings(args, op, "paths", error);

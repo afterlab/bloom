@@ -132,7 +132,7 @@ class ParityOperations(unittest.TestCase):
             'projectDirectory': str(root), 'asSequence': False, 'stillDuration': 5}}])
         self.assertTrue(stills['succeeded'], stills)
         records = assets()
-        self.assertEqual([record['kind'] for record in records], [0, 0], 'two stills')
+        self.assertEqual([record['kind'] for record in records], ['image', 'image'], 'two stills')
         self.assertEqual(records[0]['interpretation']['stillDuration'], [5, 1])
         self.assertTrue(self.server.history('undo')['succeeded'])
         sequence = self.server.transact([{'op': 'bloom.asset.import', 'args': {

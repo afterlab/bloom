@@ -53,7 +53,11 @@ void everyOperationIsDescribed() {
             const auto& summary = argument.summary;
             const bool listsValues = (contains(summary, "\"") && contains(summary, " or ")) ||
                                      contains(summary, "0 None") || contains(summary, "0 Alpha");
-            if (listsValues && argument.kind != ValueKind::Array)
+            // A structured object (a path, or an output given as JSON) describes its fields, not a
+            // closed vocabulary.
+            const bool structured = argument.kind == ValueKind::Array ||
+                                    argument.kind == ValueKind::Path || contains(summary, "JSON");
+            if (listsValues && !structured)
                 expect(!argument.choices.empty(), where + " names values but lists no choices");
         }
     }
@@ -181,8 +185,8 @@ void everyChoiceParameterHasValues() {
             // the project, not from a closed list.
             const auto& key = parameter.schemaKey;
             if (key == "bloom.composition-source.composition" || key == "bloom.data.block" ||
-                key == "bloom.ocio-file.lut" ||
-                contains(key, ".part") || contains(key, ".layer") || contains(key, "matte-id"))
+                key == "bloom.ocio-file.lut" || contains(key, ".part") || contains(key, ".layer") ||
+                contains(key, "matte-id"))
                 continue;
             expect(!parameterChoices(key).empty(), definition.key.typeId + "." + parameter.role +
                                                        " (" + key + ") is a Choice without values");

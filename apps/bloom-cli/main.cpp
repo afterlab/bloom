@@ -69,7 +69,8 @@ class ExportProviderTeardown final {
 void printUsage() {
     std::cerr << "usage: bloom-cli new <file> | open <file> | run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
-                 "<dir> [--replace] [--require-device] | export --project <file> (--all | --job <id>...) [--replace] [--save] | "
+                 "<dir> [--replace] [--require-device] | export --project <file> (--all | --job "
+                 "<id>...) [--replace] [--save] | "
                  "help [<name>] [--json]\n"
                  "Run `bloom-cli help` for every command, operation and tool, or `bloom-cli help "
                  "<command>` for one in full.\n";

@@ -145,11 +145,6 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return sequential({"Clip", "Grow"});
     if (schemaKey == "bloom.channel-shuffle.mode")
         return {{"Color", kChannelShuffleColourMode}, {"Raw", kChannelShuffleRawMode}};
-    if (schemaKey == kTextFontParameterSchemaKey)
-        return {{"DejaVu Sans", kTextFontDejaVuSans},
-                {"Inter Regular", kTextFontInterRegular},
-                {"Inter Medium", kTextFontInterMedium},
-                {"Inter SemiBold", kTextFontInterSemiBold}};
     if (schemaKey == kScalarOperationParameterSchemaKey) {
         Options options;
         for (const auto operation : kScalarOperations) {

@@ -125,13 +125,14 @@ class Reference(unittest.TestCase):
             arguments = {argument['name']: argument for argument in entry['entry']['arguments']}
             for name, schema in tool['inputSchema']['properties'].items():
                 where = f"{tool['name']}.{name}"
-                self.assertIn(name, arguments, f'{where} is not in the reference')
-                self.assertTrue(schema.get('description'), f'{where} has no description')
-                self.assertTrue(arguments[name]['type'], where)
-                if 'enum' in schema:
-                    self.assertEqual(sorted(schema['enum']),
-                                     sorted(choice['value'] for choice in
-                                            arguments[name]['choices']), where)
+                with self.subTest(where):
+                    self.assertIn(name, arguments, f'{where} is not in the reference')
+                    self.assertTrue(schema.get('description'), f'{where} has no description')
+                    self.assertTrue(arguments[name]['type'], where)
+                    if 'enum' in schema:
+                        self.assertEqual(sorted(schema['enum']),
+                                         sorted(choice['value'] for choice in
+                                                arguments[name]['choices']), where)
 
     def test_every_operation_is_in_the_index(self):
         index = self.server.tool('help', {})
@@ -235,7 +236,7 @@ class ReadBack(unittest.TestCase):
     def test_composition_timing_round_trips(self):
         record = self.composition_record()
         for field in ('duration', 'start', 'workArea', 'frameRate', 'fps', 'pixelAspect',
-                      'background', 'safeAreas', 'layerCount', 'dropFrame'):
+                      'backgroundColor', 'safeAreas', 'layerCount', 'dropFrame'):
             self.assertIn(field, record)
         rate = record['frameRate']
         self.server.transact(('bloom.composition.set-work-area', {

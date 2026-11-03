@@ -6,7 +6,7 @@ from typing import Any
 from .data import Proxy
 
 Time = int | tuple[int, int] | Fraction | float
-Value = float | bool | str | tuple[float, ...]
+Value = float | bool | str | tuple[float, ...] | Mapping[str, Any]
 Path = Mapping[str, Any]
 
 class Operation:
@@ -248,6 +248,61 @@ class AnimationOps:
         Related: bloom.animation.delete-keyframe, query:keyframes, transact
         """
         ...
+    def easy_ease(self, keys: tuple, side: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.animation.easy-ease  (operation, animation)
+        Applies Easy Ease to keys: the eased side gets a Bezier handle of 33.33% influence and zero
+        speed, as F9 does in the Graph Editor.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          keys  array  required
+              Key addresses as (curve, keyframe) or (curve, keyframe, component).
+          side  str  optional, default both
+              Easy Ease, as in a layer-based compositor: "both" (F9, the default), "in" (Shift+F9) or
+              "out" (Ctrl+Shift+F9). The eased side gets a Bezier handle of 33.33% influence and zero
+              speed.
+              Values:
+                "both"  Easy Ease (F9)
+                "in"  Easy Ease In (Shift+F9)
+                "out"  Easy Ease Out (Ctrl+Shift+F9)
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: A key address names no key
+              Do: read the curve and key ids with query {kind:"keyframes", parameter}.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.animation.easy-ease","args":{"keys":[[1,1]]}}]}}
+          Python:
+            bloom.ops.animation.easy_ease(keys=((1, 1),))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.animation.easy-ease","args":{"keys":[[1,1]]}}]
+
+        Related: bloom.animation.set-keyframes-easing, query:keyframes, transact
+        """
+        ...
     def insert_color4_keyframe(self, curve: int | Proxy, value: tuple[float, float, float, float], interpolation: str = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.animation.insert-color4-keyframe  (operation, animation)
         Adds a key to all four channels of a colour curve at `time`.
@@ -258,7 +313,7 @@ class AnimationOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           curve  id  required
-              The colour curve to key.
+              The color curve to key.
               Unit: animation curve id (query:keyframes, or the parameter's curveId)
               Range: >= 1
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
@@ -266,11 +321,13 @@ class AnimationOps:
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
               denominator]
           value  color4  required
-              The colour at that time.
+              The color at that time.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -329,7 +386,9 @@ class AnimationOps:
               The scalar value at that time.
               Unit: the animated parameter's own stored units (query:parameter reports them)
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -392,7 +451,9 @@ class AnimationOps:
               The value at that time.
               Unit: the animated parameter's own stored units (query:parameter reports them)
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -451,7 +512,9 @@ class AnimationOps:
               The value at that time.
               Unit: the animated parameter's own stored units (query:parameter reports them)
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -835,7 +898,8 @@ class AnimationOps:
               Unit: keyframe id (query:keyframes)
               Range: >= 1
           interpolation  str  required
-              "hold", "linear" or "ease-in-out".
+              "hold" (Constant), "linear", "ease-in-out" (Bezier), or an easing equation: "sine",
+              "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce", "elastic".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -929,6 +993,132 @@ class AnimationOps:
         Related: query:keyframes, transact
         """
         ...
+    def set_keyframes_easing(self, keys: tuple, interpolation: str = ..., ease: str = ..., back: float = ..., amplitude: float = ..., period: float = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.animation.set-keyframes-easing  (operation, animation)
+        Sets the easing equation parameters of keys (which end eases, Back's overshoot, Elastic's
+        amplitude and period) and optionally switches their outgoing interpolation. Keys keep their
+        times and values.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          keys  array  required
+              Key addresses as (curve, keyframe) or (curve, keyframe, component).
+          interpolation  str  optional, default linear
+              Also switch the keys' outgoing interpolation, e.g. "elastic". Omit to keep it.
+              Values:
+                "hold"  Hold
+                "linear"  Linear
+                "ease-in-out"  Ease In-Out
+          ease  str  optional, default auto
+              Which end the easing equation applies to: "auto" (the usual default: out for back, bounce
+              and elastic, in otherwise), "in", "out" or "in-out".
+              Values:
+                "auto"  The usual default: out for back, bounce and elastic
+                "in"  Ease in
+                "out"  Ease out
+                "in-out"  Ease in and out
+          back  float  optional
+              Back's overshoot (the usual default 1.70158). Any finite number.
+          amplitude  float  optional
+              Elastic's amplitude in the curve's value units (default 0.8); zero or more.
+          period  float  optional
+              Elastic's period in seconds (default 4.1 frames at 24 fps); 0 is the usual automatic
+              period.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: A key address names no key
+              Do: read the curve and key ids with query {kind:"keyframes", parameter}.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.animation.set-keyframes-easing","args":{"keys":[[1,1]]}}]}}
+          Python:
+            bloom.ops.animation.set_keyframes_easing(keys=((1, 1),))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.animation.set-keyframes-easing","args":{"keys":[[1,1]]}}]
+
+        Related: bloom.animation.easy-ease, bloom.animation.set-keyframes-handle-mode, query:keyframes,
+        transact
+        """
+        ...
+    def set_keyframes_handle_mode(self, keys: tuple, mode: str, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.animation.set-keyframes-handle-mode  (operation, animation)
+        Sets how the two handles of keys relate: free, aligned or auto. Auto recomputes the handles in
+        the same undo step.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          keys  array  required
+              Key addresses as (curve, keyframe) or (curve, keyframe, component).
+          mode  str  required
+              How the keys' two handles relate: "free" (independent), "aligned" (editing one keeps the
+              other collinear) or "auto" (the usual Auto Clamped handles, recomputed from the
+              neighboring keys). Free and aligned move no handle and never change the render; auto
+              recomputes the handles in the same undo step.
+              Values:
+                "free"  Independent handles
+                "aligned"  Editing one handle keeps the other collinear
+                "auto"  Auto Clamped handles, recomputed from the neighbouring keys
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The mode is not free, aligned or auto
+              Do: pass one of the listed values.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.animation.set-keyframes-handle-mode","args":{"keys":[[1,1]],"mode":"auto"}}]}}
+          Python:
+            bloom.ops.animation.set_keyframes_handle_mode(keys=((1, 1),), mode="auto")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.animation.set-keyframes-handle-mode","args":{"keys":[[1,1]],"mode":"auto"}}]
+
+        Related: bloom.animation.set-keyframes-easing, query:keyframes, transact
+        """
+        ...
     def set_keyframes_interpolation(self, keys: tuple, interpolation: str, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.animation.set-keyframes-interpolation  (operation, animation)
         Sets the outgoing interpolation of several keys in one step.
@@ -941,7 +1131,8 @@ class AnimationOps:
           keys  array  required
               Key addresses as (curve, keyframe) or (curve, keyframe, component).
           interpolation  str  required
-              "hold", "linear" or "ease-in-out".
+              "hold" (Constant), "linear", "ease-in-out" (Bezier), or an easing equation: "sine",
+              "quad", "cubic", "quart", "quint", "expo", "circ", "back", "bounce", "elastic".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -1000,11 +1191,13 @@ class AnimationOps:
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
               denominator]
           value  color4  required
-              The new colour.
+              The new color.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -1067,7 +1260,9 @@ class AnimationOps:
               The new value.
               Unit: the animated parameter's own stored units (query:parameter reports them)
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -1130,7 +1325,9 @@ class AnimationOps:
               The new value.
               Unit: the animated parameter's own stored units (query:parameter reports them)
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -1193,7 +1390,9 @@ class AnimationOps:
               The new value.
               Unit: the animated parameter's own stored units (query:parameter reports them)
           interpolation  str  optional, default linear
-              Outgoing ease: "hold", "linear" or "ease-in-out". Defaults to "linear".
+              Outgoing interpolation: "hold", "linear", "ease-in-out" (Bezier), or one of Robert
+              Penner's easing equations "sine", "quad", "cubic", "quart", "quint", "expo", "circ",
+              "back", "bounce", "elastic". Defaults to "linear".
               Values:
                 "hold"  Hold
                 "linear"  Linear
@@ -1352,13 +1551,15 @@ class AssetOps:
               Unit: zero-based position
               Range: >= 0
           portability  str  optional, default system
-              Locator portability: "system", "builtin" or "project-relative".
+              Locator portability: "system" (path is an absolute file path) or "builtin" (an embedded
+              face).
               Values:
                 "system"  System font
                 "builtin"  Built-in font
                 "project-relative"  Project-relative file
           relinkHint  str  optional
-              A relink hint to remember.
+              Required: for "system", the path's file:// URI (it must start with "file:"); for
+              "builtin", "font:" followed by a face name.
           name  str  optional
               The asset name.
           tags  array  optional
@@ -1395,7 +1596,7 @@ class AssetOps:
         Related: bloom.asset.relink-font, query:assets, transact
         """
         ...
-    def import_(self, paths: tuple, projectDirectory: str, folder: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def import_(self, paths: tuple, projectDirectory: str, folder: int | Proxy = ..., asSequence: bool = ..., firstFrame: int = ..., lastFrame: int = ..., skipMissingFrames: bool = ..., sequenceFrameRate: str = ..., stillDuration: int = ...) -> Mapping[str, Any] | None:
         """bloom.asset.import  (operation, asset)
         Imports media files and folders into Assets in one step: hashes and probes each file (image
         sequences are detected from numbered names) and adds one asset per item. Files the project
@@ -1412,6 +1613,21 @@ class AssetOps:
               The Assets folder the new assets land in. Omit for the project root.
               Unit: Assets folder id (query:assets .folder)
               Range: >= 1
+          asSequence  bool  optional
+              Numbered images become one image sequence (default); false imports each as its own still.
+          firstFrame  int  optional
+              With lastFrame: import only these numbered frames of each sequence; Reload Footage keeps
+              the range.
+          lastFrame  int  optional
+              The last numbered frame of the range, with firstFrame.
+          skipMissingFrames  bool  optional
+              A new sequence plays the frames it has back to back (Missing Frames: Skip).
+          sequenceFrameRate  str  optional
+              The rate a new sequence assumes, as 24, 23.976 or n/d; omit to match the composition. The
+              Import preference Sequence frame rate.
+          stillDuration  int  optional
+              Exact time. A new still's length (seconds, or [numerator, denominator]); omit for the
+              composition's length. The Import preference Still duration.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -1651,13 +1867,15 @@ class AssetOps:
               Unit: zero-based position
               Range: >= 0
           portability  str  optional, default system
-              Locator portability: "system", "builtin" or "project-relative".
+              Locator portability: "system" (path is an absolute file path) or "builtin" (an embedded
+              face).
               Values:
                 "system"  System font
                 "builtin"  Built-in font
                 "project-relative"  Project-relative file
           relinkHint  str  optional
-              A relink hint to remember.
+              Required: for "system", the path's file:// URI (it must start with "file:"); for
+              "builtin", "font:" followed by a face name.
           name  str  optional
               The asset name.
           tags  array  optional
@@ -1693,6 +1911,57 @@ class AssetOps:
             bloom-cli run edits.json   # [{"op":"bloom.asset.relink-font","args":{"asset":1,"path":"/usr/share/fonts/DejaVuSans.ttf","digest":"0000000000000000000000000000000000000000000000000000000000000000"}}]
 
         Related: bloom.asset.ensure-font, transact
+        """
+        ...
+    def reload(self, asset: int | Proxy) -> Mapping[str, Any] | None:
+        """bloom.asset.reload  (operation, asset)
+        Reads an asset's own file again, as Reload Footage in the Assets panel does: the media is probed
+        again the way the asset was imported (a still stays a still, a sequence keeps its frame range)
+        and the asset takes the file's current size, duration and digest. The probe runs when the
+        operation is created, off the UI thread, and stops when the request is cancelled. Reload several
+        assets by giving one operation per asset. Outputs: none. Errors: "Asset N does not exist"; "A
+        font reloads from the system catalogue" - use bloom.asset.relink-font; "The asset has no file to
+        read" - a data asset or an empty or unusable locator; the probe's own reason when the file is
+        missing or unreadable (bloom.asset.relink then points the asset at another file);
+        bloom.scripting.cancelled. Undo: one step restores the asset as it was. MCP example:
+        {"op":"bloom.asset.reload","args":{"asset":3}}.
+
+        Arguments:
+          asset  id  required
+              Id. The asset to read again.
+              Unit: asset id (query:assets)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.asset.reload","args":{"asset":1}}]}}
+          Python:
+            bloom.ops.asset.reload(asset=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.asset.reload","args":{"asset":1}}]
+
+        Related: transact
         """
         ...
     def remove(self, asset: int | Proxy) -> Mapping[str, Any] | None:
@@ -1928,7 +2197,7 @@ class AssetOps:
                 "linear"  Linear
                 "raw"  Raw
           inputColorSpaceId  str  optional
-              An exact colour-space id in the selected OCIO config; clears the legacy choice.
+              An exact color-space id in the selected OCIO config; clears the legacy choice.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -1963,6 +2232,100 @@ class AssetOps:
             bloom-cli run edits.json   # [{"op":"bloom.asset.set-input-color","args":{"asset":1}}]
 
         Related: query:assets, transact
+        """
+        ...
+    def set_interpretation(self, assets: tuple, frameRate: str = ..., startTime: int = ..., dropFrame: bool = ..., sourceTimecode: bool = ..., alpha: str = ..., invertAlpha: bool = ..., matteColor: tuple = ..., fieldOrder: str = ..., deinterlace: bool = ..., pixelAspect: str = ..., loop: int = ..., missingFrames: str = ..., stillDuration: int = ..., compositionLength: bool = ..., legacy: str = ..., inputColorSpaceId: str = ...) -> Mapping[str, Any] | None:
+        """bloom.asset.set-interpretation  (operation, asset)
+        Sets how footage is interpreted, as OK in the Assets panel's Interpret Footage dialog does: only
+        the members given change, on every listed image, sequence or video, in ONE undo step. A member a
+        kind does not have is skipped for that asset (a still has no frame rate, a video no missing
+        frames). frameRate: a sequence's assumed rate or a video's conformed rate, as "24", "23.976"
+        (24000/1001), "29.97" (30000/1001) or "n/d"; "" restores the file's rate (a sequence then
+        advances one member per composition frame). startTime: the start timecode override as an exact
+        time (seconds, or [numerator, denominator]), with dropFrame; sourceTimecode: true restores the
+        source's own. alpha: "guess" (the file's declared association), "ignore", "straight" or
+        "premultiplied" (matted with matteColor, three numbers 0-1 in the file's encoding). invertAlpha,
+        deinterlace: true or false. fieldOrder: "file", "progressive", "upper" or "lower". pixelAspect:
+        "n/d" (for example "10/11", "2/1") or "file". loop: 1-1000 passes. missingFrames: "hold",
+        "nothing" or "skip" (play the frames that exist back to back). stillDuration: a still's length
+        as an exact time (seconds, or [numerator, denominator]); compositionLength: true restores the
+        composition's length. legacy and inputColorSpaceId: the input color as
+        bloom.asset.set-input-color takes it ("raw" is Preserve RGB, "linear" Interpret as Linear). A
+        layer whose out point ended with its footage follows the new length. Errors: "Asset does not
+        exist"; "Interpret Footage applies to images, sequences and videos" when no listed asset is
+        footage; a value out of range names its member. Undo: one step. MCP example:
+        {"op":"bloom.asset.set-interpretation","args":{"assets":[3],"frameRate":"23.976","loop":2,"startTime":3600}}.
+
+        Arguments:
+          assets  array  required
+              Array of asset ids. The footage to interpret.
+          frameRate  str  optional
+              Text. Assumed or conformed rate.
+          startTime  int  optional
+              Exact time. The start timecode override (3600 is 01:00:00:00).
+          dropFrame  bool  optional
+              Boolean. Label the override with drop-frame timecode (29.97 and 59.94).
+          sourceTimecode  bool  optional
+              Boolean. true restores the source's own start timecode.
+          alpha  str  optional
+              guess, ignore, straight or premultiplied.
+          invertAlpha  bool  optional
+              Boolean. Invert the alpha channel.
+          matteColor  array  optional
+              Three numbers 0-1. The premultiplied matte color.
+          fieldOrder  str  optional
+              file, progressive, upper or lower.
+          deinterlace  bool  optional
+              Boolean. Deinterlace the fields.
+          pixelAspect  str  optional
+              Text. n/d, or file.
+          loop  int  optional
+              Integer 1-1000. Passes of the footage.
+          missingFrames  str  optional
+              hold, nothing or skip.
+          stillDuration  int  optional
+              Exact time. A still's length (5 is five seconds).
+          compositionLength  bool  optional
+              Boolean. true gives a still the composition's length again.
+          legacy  str  optional, default auto
+              auto, srgb, linear or raw.
+              Values:
+                "auto"  Auto
+                "srgb"  sRGB
+                "linear"  Linear
+                "raw"  Raw
+          inputColorSpaceId  str  optional
+              An exact color-space id in the selected OCIO config.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.asset.set-interpretation","args":{"assets":[1]}}]}}
+          Python:
+            bloom.ops.asset.set_interpretation(assets=(1,))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.asset.set-interpretation","args":{"assets":[1]}}]
+
+        Related: transact
         """
         ...
     def set_tags(self, assets: tuple, tags: tuple) -> Mapping[str, Any] | None:
@@ -2038,7 +2401,8 @@ class CompositionOps:
               Unit: frames per second as numerator / denominator (24000/1001 is 23.976)
               Range: 1..4294967295
           background  color4  optional
-              Background colour. Defaults to opaque black.
+              Viewer background color, display only: renders and exports keep alpha. Defaults to opaque
+              black.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1; display-only: renders, exports
               and captures keep alpha and do not include the background
@@ -2089,7 +2453,7 @@ class CompositionOps:
         Arguments:
           template  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
               Id. The composition whose settings fill what the footage does not state (pixel aspect,
-              background, working colour space, safe areas). Defaults to the current composition.
+              background, working color space, safe areas). Defaults to the current composition.
               Unit: stable id (a positive integer)
               Range: >= 1
           assets  array  required
@@ -2264,7 +2628,7 @@ class CompositionOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           color  color4  required
-              The background colour.
+              The Viewer background color, display only: renders and exports keep alpha.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1; display-only: renders, exports
               and captures keep alpha and do not include the background
@@ -2540,14 +2904,14 @@ class CompositionOps:
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
               denominator]
           dropFrame  bool  optional
-              Drop-frame timecode labels (honoured at 29.97 and 59.94 fps).
+              Drop-frame timecode labels (honored at 29.97 and 59.94 fps).
           background  color4  optional
-              Background colour.
+              Viewer background color, display only: renders and exports keep alpha.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1; display-only: renders, exports
               and captures keep alpha and do not include the background
           workingColorSpace  str  optional
-              Working colour space id; an empty string follows the project.
+              Working color space id; an empty string follows the project.
               Unit: a scene-linear colour space name of the project's OCIO config; empty follows the
               project
           actionSafe  float  optional
@@ -2559,7 +2923,7 @@ class CompositionOps:
               Unit: fraction of the frame, 0..1
               Range: 0..1
           anchor  int  optional, default 4 (centre)
-              Resize anchor 0..8 (row * 3 + column); 4 keeps content centred.
+              Resize anchor 0..8 (row * 3 + column); 4 keeps content centered.
               Range: 0..8
               Values:
                 0  Top left
@@ -2663,6 +3027,80 @@ class CompositionOps:
         ...
 
 composition: CompositionOps
+
+class CryptomatteOps:
+    def pick(self, node: int | Proxy, point: tuple[float, float], mode: str = ..., *, composition: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+        """bloom.cryptomatte.pick  (operation, cryptomatte)
+        Adds the object under a composition point to a Cryptomatte node's matte list, or removes it, as
+        clicking (or Alt-clicking) with the Viewer's Cryptomatte eyedropper does. `point` is in
+        composition pixels at composition resolution (what capture shows): it is mapped into the
+        Cryptomatte's channel set through the evaluated transform of the layer that shows the node, and
+        the object with the largest coverage at that pixel of the node's selected Cryptomatte layer is
+        read at `time` (through that layer's own time). The pixel ID read-back runs when the operation
+        is created, off the UI thread, and stops when the request is cancelled. The matte is stored by
+        its manifest name, or as its raw ID when the manifest does not name it; mode "add" leaves a
+        matte already listed alone and "remove" leaves an unlisted one alone. To choose mattes by name
+        instead, set the node's "mattes" text with bloom.node.set-parameter-value. Outputs: none; query
+        the node's "mattes" parameter for the list. Errors: "Node N is not a Cryptomatte node"; "The
+        Cryptomatte is not shown by a layer" - connect it to a layer first; "No object under the point"
+        - the point is outside the layer's content or no object covers it; the read's own reason (a
+        missing channel set, no Cryptomatte layer); bloom.scripting.cancelled. Undo: one step. MCP
+        example: {"op":"bloom.cryptomatte.pick","args":{"node":7,"point":[960,540]}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Cryptomatte node.
+              Unit: node id (query:nodes)
+              Range: >= 1
+          point  vec2  required
+              [x, y] in composition pixels, as capture shows the frame.
+              Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
+          mode  str  optional
+              "add" (the default) adds the object to the matte list; "remove" removes it, as Alt-click
+              does.
+          time  time  optional, defaults to the playhead (frame 0 headless) (context time)
+              The time whose frame is read. Defaults to the current playhead time.
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.cryptomatte.pick","args":{"node":1,"point":[960,540]}}]}}
+          Python:
+            bloom.ops.cryptomatte.pick(node=1, point=(960, 540))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.cryptomatte.pick","args":{"node":1,"point":[960,540]}}]
+
+        Related: transact
+        """
+        ...
+
+cryptomatte: CryptomatteOps
 
 class DataBlockOps:
     def create(self, typeId: str, mediaType: str, kind: str = ..., payloadKind: str = ..., payload: tuple = ..., text: str = ..., createdAt: str = ..., schemaMajor: int = ..., schemaMinor: int = ..., tags: tuple = ...) -> Mapping[str, Any] | None:
@@ -2963,7 +3401,10 @@ class ExportOps:
           outputs  array  optional
               Outputs as JSON strings; omitted adds one H.264 MP4 output. One output as JSON: {"preset":
               id, "settings": {document 1.29 settings}, "destination": {"portability", "path",
-              "overwrite"}, "enabled", "importIntoAssets"}.
+              "overwrite"}, "enabled", "importIntoAssets"}; every field is optional. A built-in "preset"
+              (export.presets lists them) with no "settings" takes that preset's settings; "settings"
+              given with it override them. "overwrite" is "ask", "replace" or "refuse"; an output with
+              no destination path must be given one before Start.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -3007,7 +3448,10 @@ class ExportOps:
               Range: >= 1
           output  str  required
               One output as JSON: {"preset": id, "settings": {document 1.29 settings}, "destination":
-              {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}.
+              {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}; every field is
+              optional. A built-in "preset" (export.presets lists them) with no "settings" takes that
+              preset's settings; "settings" given with it override them. "overwrite" is "ask", "replace"
+              or "refuse"; an output with no destination path must be given one before Start.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -3730,18 +4174,18 @@ class LayerOps:
         the compositions; the first item is the uppermost layer. Placement: all new layers go on top of
         the stack (placement "top", the default), below every layer ("bottom"), or directly above the
         layer `before` ("before"). The first layer starts at `time` snapped to the nearest composition
-        frame; with sequence=true each next layer starts where the one before ends (Alt-drop, After
-        Effects' Sequence Layers), otherwise all start at `time`. Side effects: adds a source node and a
-        Layer Output node per item to the composition graph and a stack slot on the output Merge; nested
-        layers also route audio. Does not import files: run bloom.asset.import first and pass the asset
-        ids it outputs. Outputs: one "layer" output per item, in item order (layer ids). Errors: "This
-        item cannot be a layer here" - an id that is not an image, sequence, video or audio asset (fonts
-        and LUTs are not layers), a missing asset or composition, or the target composition itself; pass
-        only footage and other compositions. "Nothing to add" - both arrays empty. "The layer to insert
-        above no longer exists" - `before` is not a layer of this composition. A composition that would
-        nest itself (a cycle) is rejected. Undo: one step, the transaction label (the UI uses "Add
-        Layer", "Add Composition Layer" or "Add N Layers"). MCP example:
-        {"op":"bloom.layer.add-from-assets","args":{"assets":[3,4],"time":0,"sequence":true}}.
+        frame; with sequence=true each next layer starts where the one before ends (Alt-drop, a
+        compositor's sequence-layers command), otherwise all start at `time`. Side effects: adds a
+        source node and a Layer Output node per item to the composition graph and a stack slot on the
+        output Merge; nested layers also route audio. Does not import files: run bloom.asset.import
+        first and pass the asset ids it outputs. Outputs: one "layer" output per item, in item order
+        (layer ids). Errors: "This item cannot be a layer here" - an id that is not an image, sequence,
+        video or audio asset (fonts and LUTs are not layers), a missing asset or composition, or the
+        target composition itself; pass only footage and other compositions. "Nothing to add" - both
+        arrays empty. "The layer to insert above no longer exists" - `before` is not a layer of this
+        composition. A composition that would nest itself (a cycle) is rejected. Undo: one step, the
+        transaction label (the UI uses "Add Layer", "Add Composition Layer" or "Add N Layers"). MCP
+        example: {"op":"bloom.layer.add-from-assets","args":{"assets":[3,4],"time":0,"sequence":true}}.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -3872,7 +4316,10 @@ class LayerOps:
               Unit: layer id (query:layers .id)
               Range: >= 1
           path  path  required
-              The mask outline in the layer's content space (closed to cover an area).
+              The mask outline in the layer's content space (closed to cover an area). A path object
+              {"closed": bool, "anchors": [{"point": [x, y], "inHandle": [x, y] or null, "outHandle":
+              [x, y] or null, "mode": "corner", "mirrored", "aligned", "free" or "auto" (optional;
+              inferred from the handles)}, ...]}.
               Unit: {closed, anchors:[{point:[x, y], inHandle:[x, y]|null, outHandle:[x, y]|null,
               mode?}]} in the layer's content-space pixels; handles are relative to their anchor point
           mode  int  optional, default 1 (Add)
@@ -3918,7 +4365,7 @@ class LayerOps:
         Related: bloom.layer.set-mask-path, query:layers, transact
         """
         ...
-    def add_shape(self, kind: str, position: tuple[float, float] = ..., size: tuple[float, float] = ..., lineStart: tuple[float, float] = ..., lineEnd: tuple[float, float] = ..., path: tuple = ..., pathClosed: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_shape(self, kind: str, position: tuple[float, float] = ..., size: tuple[float, float] = ..., lineStart: tuple[float, float] = ..., lineEnd: tuple[float, float] = ..., path: Path = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-shape  (operation, layer)
         Adds a shape layer (rectangle, ellipse, triangle, polygon, star, line or a path) on top of the
         layer stack. Fill, stroke and other shape parameters are edited afterwards with
@@ -3940,7 +4387,7 @@ class LayerOps:
                 "line"  Line
                 "path"  Path
           position  vec2  optional, default the composition centre
-              Layer position. Defaults to the composition centre.
+              Layer position. Defaults to the composition center.
               Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
           size  vec2  optional, default [400, 300]
               Shape size.
@@ -3951,10 +4398,13 @@ class LayerOps:
           lineEnd  vec2  optional
               Second point of a line shape.
               Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
-          path  array  optional
-              Path anchors as (x, y) or (x, y, inX, inY, outX, outY).
-          pathClosed  bool  optional
-              Whether a path shape is closed.
+          path  path  optional
+              The outline of a "path" shape, in the same form masks take. A path object {"closed": bool,
+              "anchors": [{"point": [x, y], "inHandle": [x, y] or null, "outHandle": [x, y] or null,
+              "mode": "corner", "mirrored", "aligned", "free" or "auto" (optional; inferred from the
+              handles)}, ...]}.
+              Unit: {closed, anchors:[{point:[x, y], inHandle:[x, y]|null, outHandle:[x, y]|null,
+              mode?}]} in the layer's content-space pixels; handles are relative to their anchor point
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -4000,11 +4450,11 @@ class LayerOps:
           name  str  required
               The layer name.
           color  color4  required
-              The solid colour as (r, g, b, a).
+              The solid color as (r, g, b, a).
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1
           position  vec2  optional, default the composition centre
-              Layer position. Defaults to the composition centre.
+              Layer position. Defaults to the composition center.
               Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
           opacity  float  optional, default 1
               Layer opacity in 0..1. Defaults to 1.
@@ -4061,7 +4511,7 @@ class LayerOps:
           text  str  required
               The text content.
           position  vec2  optional, default the composition centre
-              Layer position. Defaults to the composition centre.
+              Layer position. Defaults to the composition center.
               Unit: composition pixels: x to the right, y down, origin at the frame's top-left corner
           opacity  float  optional, default 1
               Layer opacity in 0..1. Defaults to 1.
@@ -4072,7 +4522,7 @@ class LayerOps:
               Unit: pixels (em size)
               Range: >= 0
           color  color4  optional
-              Fill colour. Defaults to opaque white.
+              Fill color. Defaults to opaque white.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1
 
@@ -4121,7 +4571,7 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           edge  str  required
-              The edge or centre to line up: "left", "horizontal-centre", "right", "top",
+              The edge or center to line up: "left", "horizontal-centre", "right", "top",
               "vertical-middle" or "bottom".
               Values:
                 "left"  Left
@@ -4384,7 +4834,7 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           axis  str  required
-              Space the layers' centres evenly along "horizontal" or "vertical". Needs three or more
+              Space the layers' centers evenly along "horizontal" or "vertical". Needs three or more
               layers.
               Values:
                 "horizontal"  Horizontal
@@ -4444,11 +4894,11 @@ class LayerOps:
         Duplicates layers, as Duplicate Layer in the Viewer's context menu does: each layer's Layer
         Output node is copied with its parameters, keyframes, masks, timing, parent and matte, reading
         the same source as the original, and the copy takes a new stack slot directly below the
-        original. Layers duplicated together keep their parent and matte links among the copies.
-        Outputs: one "layer" output per copy in argument order, plus "layer.<original>" -> copy,
-        "node.<original>" -> copied node and "slot.<original>" -> new slot. Errors: "Layer N is not in
-        the composition" - a stale or foreign layer id; "Driven parameters cannot be deeply duplicated"
-        - a parameter driven by a node link. Undo: one step. MCP example:
+        original. Layers duplicated together keep their parent and matte links among the copies. A layer
+        named N times is copied N times. Outputs: one "layer" output per copy in argument order, plus
+        "layer.<original>" -> copy, "node.<original>" -> copied node and "slot.<original>" -> new slot.
+        Errors: "Layer N is not in the composition" - a stale or foreign layer id; "Driven parameters
+        cannot be deeply duplicated" - a parameter driven by a node link. Undo: one step. MCP example:
         {"op":"bloom.layer.duplicate","args":{"layers":[2]}}.
 
         Arguments:
@@ -4791,6 +5241,80 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
+    def set_anchor_preset(self, anchor: str, *, composition: int | Proxy = ..., layer: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.set-anchor-preset  (operation, layer)
+        Moves a layer's anchor point to one of the nine points of its local bounds, as the anchor grid
+        in Properties > Transform does: the bounds are the layer's evaluated content at `time` (measured
+        on the CPU reference path when the operation is created, off the UI thread), and the anchor
+        becomes half the bounds' width and height times the point's column and row offset (-1, 0 or 1).
+        A constant anchor is replaced; an animated anchor gets a key at the layer's own key time for
+        `time`. Position is not changed, so the layer moves on screen exactly as it does when the artist
+        clicks the grid. Outputs: none. Errors: "anchor expects ..." - not one of the nine names; "Layer
+        N does not exist"; "The layer is locked"; "The layer has no anchor point"; "The anchor is driven
+        by a node" - disconnect it first; "The layer has no visible bounds at this time" - it is outside
+        its range, disabled or empty; bloom.scripting.layer-bounds-unavailable when the composition
+        cannot be evaluated; bloom.scripting.cancelled. Undo: one step. MCP example:
+        {"op":"bloom.layer.set-anchor-preset","args":{"layer":4,"anchor":"center"}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              Id. The layer whose anchor moves. Defaults to the selected layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          anchor  str  required
+              The point of the local bounds: "top-left", "top", "top-right", "left", "center", "right",
+              "bottom-left", "bottom" or "bottom-right".
+              Values:
+                "top-left"  Top left
+                "top"  Top centre
+                "top-right"  Top right
+                "left"  Middle left
+                "center"  Centre
+                "right"  Middle right
+                "bottom-left"  Bottom left
+                "bottom"  Bottom centre
+                "bottom-right"  Bottom right
+          time  time  optional, defaults to the playhead (frame 0 headless) (context time)
+              The time whose evaluated bounds are used, and where an animated anchor is keyed. Defaults
+              to the current playhead time.
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.set-anchor-preset","args":{"anchor":"center"}}]}}
+          Python:
+            bloom.ops.layer.set_anchor_preset(anchor="center")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.set-anchor-preset","args":{"anchor":"center"}}]
+
+        Related: transact
+        """
+        ...
     def set_enabled(self, enabled: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-enabled  (operation, layer)
         Shows or hides a layer (the Timeline eye).
@@ -4852,7 +5376,7 @@ class LayerOps:
               Unit: layer id (query:layers .id)
               Range: >= 1
           color  vec3  optional, default no label
-              Label colour as (r, g, b) in 0..255. Omit to clear the label.
+              Label color as (r, g, b) in 0..255. Omit to clear the label.
               Unit: label colour as [r, g, b], each an integer 0..255
               Range: 0..255
 
@@ -5063,7 +5587,10 @@ class LayerOps:
               Unit: mask id (query:layers .masks)
               Range: >= 1
           path  path  required
-              The new outline in the layer's content space.
+              The new outline in the layer's content space. A path object {"closed": bool, "anchors":
+              [{"point": [x, y], "inHandle": [x, y] or null, "outHandle": [x, y] or null, "mode":
+              "corner", "mirrored", "aligned", "free" or "auto" (optional; inferred from the handles)},
+              ...]}.
               Unit: {closed, anchors:[{point:[x, y], inHandle:[x, y]|null, outHandle:[x, y]|null,
               mode?}]} in the layer's content-space pixels; handles are relative to their anchor point
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
@@ -5103,6 +5630,59 @@ class LayerOps:
         Related: bloom.layer.animate-mask-path, transact
         """
         ...
+    def set_name_follows_source(self, follows: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.set-name-follows-source  (operation, layer)
+        Makes a layer show its source's name and follow it when the source is renamed, or stops
+        following. Renaming the layer stops it following.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          follows  bool  required
+              Whether the layer shows its source's name (an asset's or a nested composition's) and
+              follows it when the source is renamed. True renames the layer to the source's name; it is
+              refused for a layer without a source. Renaming the layer sets it false.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The layer has no source
+              Do: only a layer with an asset or nested composition source can follow a name.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.set-name-follows-source","args":{"follows":true}}]}}
+          Python:
+            bloom.ops.layer.set_name_follows_source(follows=True)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.set-name-follows-source","args":{"follows":true}}]
+
+        Related: bloom.layer.rename, query:layers, transact
+        """
+        ...
     def set_parent(self, parent: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-parent  (operation, layer)
         Parents a layer to another layer's transform, or clears the parent.
@@ -5117,7 +5697,7 @@ class LayerOps:
               Unit: layer id (query:layers .id)
               Range: >= 1
           parent  id  optional
-              The parent layer. Omit to clear the parent.
+              The parent layer. Omit it, or pass null, to clear the parent.
               Unit: layer id (query:layers .id)
               Range: >= 1
 
@@ -5210,6 +5790,55 @@ class LayerOps:
             bloom-cli run edits.json   # [{"op":"bloom.layer.set-range","args":{"start":0,"end":24}}]
 
         Related: bloom.layer.set-timing, query:layers, transact
+        """
+        ...
+    def set_shy(self, shy: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.set-shy  (operation, layer)
+        Marks a layer shy: hidden from the layer table while its shy filter is on. It never changes the
+        render.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          shy  bool  required
+              Whether the layer is shy: hidden from the layer table while its shy filter is on. It never
+              changes the render.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.set-shy","args":{"shy":true}}]}}
+          Python:
+            bloom.ops.layer.set_shy(shy=True)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.set-shy","args":{"shy":true}}]
+
+        Related: query:layers, transact
         """
         ...
     def set_solo(self, solo: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
@@ -5516,7 +6145,10 @@ class LayerOps:
               Unit: mask id (query:layers .masks)
               Range: >= 1
           path  path  required
-              The constant outline the mask keeps once its keys are removed.
+              The constant outline the mask keeps once its keys are removed. A path object {"closed":
+              bool, "anchors": [{"point": [x, y], "inHandle": [x, y] or null, "outHandle": [x, y] or
+              null, "mode": "corner", "mirrored", "aligned", "free" or "auto" (optional; inferred from
+              the handles)}, ...]}.
               Unit: {closed, anchors:[{point:[x, y], inHandle:[x, y]|null, outHandle:[x, y]|null,
               mode?}]} in the layer's content-space pixels; handles are relative to their anchor point
 
@@ -5893,11 +6525,13 @@ class NodeOps:
         Adds a node that feeds an existing input, in one step, as dragging a wire backwards from an
         input socket to empty canvas and picking a node from the search does: the new node's first
         output whose value kind matches the input is connected to `node`.`port` (or to a new slot of a
-        Merge stack when `role` is given), replacing what fed it. The node is placed to the left of
-        `node`, in the nearest free spot. Outputs: "node", "editorNode" (both the new node id) and
-        "parameter.<role>". Errors: "Node has no compatible socket" - no output of the new type matches
-        the input's value kind; unknown node type or input; "No active composition". Undo: one step. MCP
-        example:
+        Merge stack when `role` is given). When that input was already fed, the new node is inserted
+        into the link: what fed the input now feeds the new node's layer stack or first input of the
+        same kind (a node with no such input, such as a value node, replaces the link). The node is
+        placed to the left of `node`, in the nearest free spot. Outputs: "node", "editorNode" (both the
+        new node id) and "parameter.<role>". Errors: "Node has no compatible socket" - no output of the
+        new type matches the input's value kind; unknown node type or input; "No active composition".
+        Undo: one step. MCP example:
         {"op":"bloom.node.add-feeding","args":{"nodeType":"bloom.value-scalar","node":5,"port":"radius"}}.
 
         Arguments:
@@ -6491,12 +7125,12 @@ class NodeOps:
         """bloom.node.set-parameter-value  (operation, node)
         Sets one node parameter to a constant by its role, as the Properties panel's typed controls do:
         dropdowns (an enum index, as `integer`), switches (`boolean`), text fields (`text`), numbers
-        (`number`) and vectors or colours (`vector`, 2 to 4 numbers). Give one value argument; if
-        several are given the first of integer, number, boolean, text, vector is used. A role the node
-        type declares as optional and the node does not hold yet is created, as the panel does. An
-        animated or driven parameter becomes a constant. Outputs: "parameter" when an optional parameter
-        was created. Errors: "Node does not exist"; "The node has no such optional parameter" - a role
-        the node type does not declare (query kind=node-types lists the roles); "The value violates the
+        (`number`) and vectors or colors (`vector`, 2 to 4 numbers). Give one value argument; if several
+        are given the first of integer, number, boolean, text, vector is used. A role the node type
+        declares as optional and the node does not hold yet is created, as the panel does. An animated
+        or driven parameter becomes a constant. Outputs: "parameter" when an optional parameter was
+        created. Errors: "Node does not exist"; "The node has no such optional parameter" - a role the
+        node type does not declare (query kind=node-types lists the roles); "The value violates the
         parameter schema" - the wrong value kind or a value out of range. Undo: one step. MCP example:
         {"op":"bloom.node.set-parameter-value","args":{"node":5,"role":"blendMode","integer":3}}.
 
@@ -6521,7 +7155,7 @@ class NodeOps:
           text  str  optional
               String. A text value.
           vector  value  optional
-              Value. A vec2 [x, y], vec3 [x, y, z] or colour [r, g, b, a] (scene-linear, alpha 0..1).
+              Value. A vec2 [x, y], vec3 [x, y, z] or color [r, g, b, a] (scene-linear, alpha 0..1).
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -6801,6 +7435,54 @@ class NodeGroupOps:
         Related: query:nodes, transact
         """
         ...
+    def set_color(self, group: int | Proxy, color: tuple[float, float, float] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.node-group.set-color  (operation, node-group)
+        Sets a node group's frame colour, or clears it to the neutral frame when `color` is omitted.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          group  id  required
+              The group to tint.
+              Unit: node group id (query:nodes .group)
+              Range: >= 1
+          color  vec3  optional
+              Frame color as (r, g, b) in 0..255. Omit to clear it to the neutral frame.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.node-group.set-color","args":{"group":1}}]}}
+          Python:
+            bloom.ops.node_group.set_color(group=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.node-group.set-color","args":{"group":1}}]
+
+        Related: query:nodes, transact
+        """
+        ...
     def set_members(self, group: int | Proxy, *, composition: int | Proxy = ..., members: tuple = ...) -> Mapping[str, Any] | None:
         """bloom.node-group.set-members  (operation, node-group)
         Sets the nodes a group frames.
@@ -6931,7 +7613,8 @@ class ParameterOps:
               Unit: parameter id (query:layers .parameters, query:nodes .parameters)
               Range: >= 1
           value  value  optional
-              A constant value. Give exactly one of value, curve or driverNode.
+              A constant value; a Path parameter takes the path object add-shape and add-mask take. Give
+              exactly one of value, curve or driverNode.
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
           curve  id  optional
               An existing animation curve, instead of value.
