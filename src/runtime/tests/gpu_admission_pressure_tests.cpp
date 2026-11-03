@@ -1,7 +1,8 @@
 // Admission by actual capacity and actual need: pressure, waits and true exhaustion.
 //
-// Usable capacity is measured capacity minus the headroom preferences. A phase claims its need
-// (fixed output, 3x its minimum source bytes, device working plus minimum executor bytes); its
+// Usable capacity is measured capacity minus the headroom preferences. A phase claims its host need
+// (fixed output, 3x its minimum source bytes) at admission and its device need (working plus
+// minimum executor bytes, or the measured peak of its envelope) during its device stage; its
 // requested source/executor values are unclaimed ceilings. A need that fits the usable capacity
 // but not what other work holds now waits (AwaitingCapacity) and is admitted on release. Only a
 // need larger than the whole usable capacity is refused (BudgetRefused).
@@ -122,6 +123,14 @@ void contentionWaitsAndResumesOnRelease() {
     auto first = policy.reserve(frame());
     auto second = policy.reserve(frame());
     require(first.lease && second.lease, "two frames fit the small device");
+    // Both run their device stages, which claim their device needs.
+    const auto now = Clock::now();
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    auto firstStage = NativeImageStorageToken::reserve(first.lease, kMiB, local, now);
+    auto secondStage = NativeImageStorageToken::reserve(second.lease, kMiB, local, now);
+    require(firstStage.token && secondStage.token &&
+                policy.usableCapacity().deviceClaimBytes == 2 * perFrameDevice,
+            "two running device stages claim their needs");
     const auto seen = policy.usableCapacity().admissionRevision;
     auto third = policy.reserve(frame());
     require(third.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
@@ -131,6 +140,7 @@ void contentionWaitsAndResumesOnRelease() {
     std::thread waiter(
         [&] { woke = policy.waitForAdmissionChange(seen, {}, std::chrono::seconds(10)); });
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    firstStage.token.reset();
     first.lease.reset();
     waiter.join();
     require(woke.load(), "a release wakes the waiting request");
@@ -142,6 +152,7 @@ void contentionWaitsAndResumesOnRelease() {
                                            std::chrono::milliseconds(100)) &&
                 Clock::now() - start < std::chrono::seconds(2),
             "an unchanged root ends the wait at its bound so the caller re-checks cancellation");
+    secondStage.token.reset();
 }
 
 void exhaustionIsRefusedWithReadableCounters() {
@@ -423,11 +434,18 @@ void strictViewerPriority() {
     auto first = policy.reserve(exportFrame, start);
     auto second = policy.reserve(exportFrame, start);
     require(first.lease && second.lease, "with an idle Viewer exports use the whole root");
+    // Both export frames run their device stages, allocating their whole need (so the measured
+    // peaks of this envelope keep the need at its stated size).
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    auto firstStage = NativeImageStorageToken::reserve(first.lease, perFrameDevice, local, start);
+    auto secondStage = NativeImageStorageToken::reserve(second.lease, perFrameDevice, local, start);
+    require(firstStage.token && secondStage.token, "the export device stages start");
     // A Viewer frame now waits for device room; while it waits no export frame is granted.
     const auto viewerWaiting = policy.reserve(frame(), start);
     require(viewerWaiting.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
                 policy.viewerPriority(start).waiting,
             "the Viewer request waits for device room and is recorded as waiting");
+    firstStage.token.reset();
     first.lease.reset();
     const auto yielded = policy.reserve(exportFrame, start);
     require(yielded.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
@@ -437,7 +455,11 @@ void strictViewerPriority() {
     require(viewer.lease && policy.viewerPriority(start).active &&
                 !policy.viewerPriority(start).waiting,
             "the Viewer is admitted and becomes active");
+    auto viewerStage =
+        NativeImageStorageToken::reserve(viewer.lease, perFrameDevice, local, start);
+    require(viewerStage.token.has_value(), "the Viewer device stage starts");
     // While the Viewer is active an export frame must leave the Viewer's need free.
+    secondStage.token.reset();
     second.lease.reset();
     const auto spare = policy.reserve(exportFrame, start);
     require(spare.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
@@ -462,10 +484,11 @@ void deviceGrowthBeyondTheClaimUsesLiveRoom() {
                                  .requestedExecutorBytes = 5000,
                                  .minimumExecutorBytes = 60,
                                  .sourceFree = true});
-    require(grant.lease && grant.lease->deviceClaimBytes() == 100 &&
-                grant.lease->executorByteLimit() == 960,
-            "the phase claims working + minimum and keeps the live room as its ceiling");
-    require(budget.snapshot().totalDeviceClaimBytes == 100, "only the need is claimed");
+    require(grant.lease && grant.lease->deviceNeedBytes() == 100 &&
+                grant.lease->deviceClaimBytes() == 0 && grant.lease->executorByteLimit() == 960,
+            "the phase needs working + minimum and keeps the live room as its ceiling");
+    require(budget.snapshot().totalDeviceClaimBytes == 0,
+            "nothing is claimed before the device stage");
     const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
     auto image = NativeImageStorageToken::reserve(grant.lease, 600, local, now);
     require(image.token.has_value() && budget.snapshot().totalDeviceClaimBytes == 600,
@@ -474,17 +497,150 @@ void deviceGrowthBeyondTheClaimUsesLiveRoom() {
                                  .deviceWorkingBytes = 300,
                                  .minimumExecutorBytes = 0,
                                  .sourceFree = true});
-    require(other.lease != nullptr, "another phase takes the remaining room");
+    require(other.lease != nullptr, "another phase is admitted into the remaining room");
+    auto otherStage = NativeImageStorageToken::reserve(other.lease, 1, local, now);
+    require(otherStage.token && budget.snapshot().totalDeviceClaimBytes == 900,
+            "its device stage takes the remaining room");
     auto denied = NativeImageStorageToken::reserve(grant.lease, 200, local, now);
     require(!denied.token && denied.domain == GpuProcessingPhaseDomain::Device,
             "growth beyond the live room is refused at allocation");
     image.token.reset();
+    otherStage.token.reset();
     other.lease.reset();
     grant.lease.reset();
     const auto empty = budget.snapshot();
     require(empty.totalDeviceClaimBytes == 0 && empty.deviceReservedBytes == 0 &&
                 empty.admittedPhases == 0,
             "growth and claims are returned exactly");
+}
+
+// #417: phases run their device stages one at a time, so device admission claims a phase's need
+// only from its first native allocation until it holds no native storage. Work whose need fits
+// the measured free device memory is admitted beside other admitted work; real allocations are
+// still checked against the live room, so an allocation that does not fit is refused.
+void deviceClaimsFollowDeviceStages() {
+    GpuProcessingPhasePolicy policy(32);
+    policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    deliverHost(policy, 60 * kGiB, 1);
+    // A 2160p preview frame: the working allowance plus one float frame of executor minimum. The
+    // device has room for two and a half of those needs, not the eight frames' sum.
+    const std::uint64_t pixels = 3840ULL * 2160;
+    const auto need = 832 * kMiB + pixels * 16;
+    reportDevice(policy, 1, 2 * need + need / 2);
+    auto envelope = frame(832 * kMiB);
+    envelope.pixels = pixels;
+    envelope.minimumSourceBytes = pixels * 16;
+    envelope.minimumExecutorBytes = pixels * 16;
+    std::vector<GpuProcessingPhaseGrant> grants;
+    for (int index = 0; index < 8; ++index) {
+        grants.push_back(policy.reserve(envelope));
+        require(grants.back().status == GpuProcessingPhaseAdmission::Accepted,
+                "eight frames whose need fits the free device memory are all admitted");
+    }
+    require(policy.usableCapacity().deviceClaimBytes == 0,
+            "admitted phases that hold no device memory claim none");
+    const auto now = std::chrono::steady_clock::now();
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    auto first = NativeImageStorageToken::reserve(grants[0].lease, 600 * kMiB, local, now);
+    require(first.token && policy.usableCapacity().deviceClaimBytes == need &&
+                grants[0].lease->deviceClaimBytes() == need - 600 * kMiB,
+            "the first allocation of a device stage claims the phase's whole need");
+    auto more = NativeImageStorageToken::reserve(grants[0].lease, 300 * kMiB, local, now);
+    require(more.token && policy.usableCapacity().deviceClaimBytes == need,
+            "allocations within the need come out of the stage claim");
+    auto second = NativeImageStorageToken::reserve(grants[1].lease, 100 * kMiB, local, now);
+    require(second.token && policy.usableCapacity().deviceClaimBytes == 2 * need,
+            "a second concurrent stage claims its own need while the room holds it");
+    // The third need no longer fits the live room: the stage claims nothing up front and each
+    // allocation is admitted against what is actually free.
+    const auto room = need / 2;
+    auto third = NativeImageStorageToken::reserve(grants[2].lease, room / 2, local, now);
+    require(third.token && policy.usableCapacity().deviceClaimBytes == 2 * need + room / 2,
+            "without room for its whole need a stage still allocates what fits");
+    auto refused = NativeImageStorageToken::reserve(grants[2].lease, room, local, now);
+    require(!refused.token && refused.status == GpuProcessingPhaseAdmission::BudgetRefused &&
+                refused.domain == GpuProcessingPhaseDomain::Device,
+            "an allocation larger than the live device room is refused, never over-committed");
+    auto late = policy.reserve(envelope);
+    require(late.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                late.domain == GpuProcessingPhaseDomain::Device,
+            "a new phase waits while running stages actually hold the device");
+    first.token.reset();
+    require(policy.usableCapacity().deviceClaimBytes == 2 * need + room / 2,
+            "freed storage returns to its stage's claim while the stage holds storage");
+    more.token.reset();
+    require(policy.usableCapacity().deviceClaimBytes == need + room / 2 &&
+                grants[0].lease->deviceClaimBytes() == 0,
+            "the stage ends when the phase holds no storage and its claim is released at once");
+    auto restarted = NativeImageStorageToken::reserve(grants[0].lease, 100 * kMiB, local, now);
+    require(restarted.token && policy.usableCapacity().deviceClaimBytes == 2 * need + room / 2,
+            "a later stage of the same phase claims its need again");
+    auto whole = envelope;
+    whole.deviceWorkingBytes = 3 * need;
+    require(policy.reserve(whole).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a need larger than the whole usable device is refused");
+    restarted.token.reset();
+    second.token.reset();
+    third.token.reset();
+    grants.clear();
+    const auto settled = policy.snapshot().reservations;
+    require(settled.totalDeviceClaimBytes == 0 && settled.deviceReservedBytes == 0 &&
+                settled.releasedNativePhases == 8 && settled.peakPhaseDeviceNeedBytes == need &&
+                settled.peakPhaseDeviceAllocationBytes == 900 * kMiB &&
+                settled.peakOwnedNativeBytes == 1000 * kMiB + room / 2 &&
+                settled.peakTotalDeviceClaimBytes == 2 * need + room / 2,
+            "claims, allocations and their peaks are returned and recorded exactly");
+    require(settled.peakTotalDeviceClaimBytes <=
+                settled.peakOwnedNativeBytes + 2 * settled.peakPhaseDeviceNeedBytes,
+            "claims stay within the real allocation plus the needs of the running stages");
+}
+
+// #417: the stated device need is a ceiling-sized estimate (the working allowance covers the OCIO
+// arm's and the transfer's ceilings). Once a phase of the same stated envelope has been released,
+// later phases need the largest measured peak plus a quarter, never more than the stated need; an
+// allocation beyond it is still admitted against the live room.
+void deviceNeedFollowsMeasuredPeaks() {
+    GpuProcessingPhaseBudget budget;
+    const auto now = std::chrono::steady_clock::now();
+    budget.setHostCapacity(64 * kGiB, true, now + std::chrono::seconds(60));
+    budget.setDeviceCapacity(2 * kGiB, true);
+    const std::uint64_t frameBytes = 1920ULL * 1080 * 16;
+    const GpuProcessingPhaseRequest request{.fixedHostBytes = 64 * kMiB,
+                                            .deviceWorkingBytes = 832 * kMiB,
+                                            .requestedExecutorBytes = 2 * kGiB,
+                                            .minimumExecutorBytes = frameBytes,
+                                            .sourceFree = true};
+    const auto stated = 832 * kMiB + frameBytes;
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    const auto run = [&](const GpuProcessingPhaseRequest& envelope, const std::uint64_t bytes) {
+        auto grant = budget.reserve(envelope);
+        require(grant.lease != nullptr, "the frame is admitted");
+        const auto need = grant.lease->deviceNeedBytes();
+        auto image = NativeImageStorageToken::reserve(grant.lease, bytes, local, now);
+        require(image.token.has_value(), "the frame allocates what it uses");
+        return need;
+    };
+    require(run(request, 200 * kMiB) == stated, "the first frame of an envelope needs the stated");
+    require(run(request, 400 * kMiB) == 250 * kMiB,
+            "the next frame needs the measured peak plus a quarter");
+    require(budget.snapshot().peakTotalDeviceClaimBytes <= stated &&
+                budget.snapshot().peakOwnedNativeBytes == 400 * kMiB,
+            "an allocation beyond the measured need is admitted against the live room");
+    require(run(request, 10 * kMiB) == 500 * kMiB, "the largest measured peak is kept");
+    require(run(request, 10 * kMiB) == 500 * kMiB,
+            "a frame that ended early never lowers the need");
+    auto other = request;
+    other.minimumExecutorBytes = 2 * frameBytes;
+    require(run(other, kMiB) == 832 * kMiB + 2 * frameBytes,
+            "another envelope (another plan) starts from its own stated need");
+    auto large = request;
+    large.deviceWorkingBytes = 2 * kGiB;
+    require(budget.reserve(large).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a stated need larger than the whole device is still refused");
+    const auto settled = budget.snapshot();
+    require(settled.totalDeviceClaimBytes == 0 && settled.admittedPhases == 0 &&
+                settled.releasedNativePhases == 5,
+            "every claim returns");
 }
 } // namespace
 
@@ -553,6 +709,8 @@ int main() {
         cachesYieldToWork();
         previewFillWorkIsNotStarved();
         deviceGrowthBeyondTheClaimUsesLiveRoom();
+        deviceClaimsFollowDeviceStages();
+        deviceNeedFollowsMeasuredPeaks();
         pendingClaimsExcludeAllocatedBacking();
     } catch (const std::exception& error) {
         std::cerr << "admission pressure: " << error.what() << '\n';

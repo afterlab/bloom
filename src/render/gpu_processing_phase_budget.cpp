@@ -57,6 +57,21 @@ void GpuProcessingPhaseLease::releaseLocked() noexcept {
     counters.totalHostClaimBytes -= remainingHostBytes_;
     counters.deviceReservedBytes -= deviceClaimBytes_;
     counters.totalDeviceClaimBytes -= deviceClaimBytes_;
+    if (deviceBytes_ != 0 && !unproven_ && peakAllocatedDeviceBytes_ != 0)
+        detail::recordMeasuredDevicePeakLocked(
+            *state_,
+            {envelopeWorkingBytes_, envelopeMinimumExecutorBytes_, envelopeFixedHostBytes_,
+             envelopeMinimumSourceBytes_},
+            peakAllocatedDeviceBytes_);
+    if (deviceBytes_ != 0) {
+        ++counters.releasedNativePhases;
+        counters.releasedPhaseDeviceNeedBytes += deviceNeedBytes_;
+        counters.releasedPhaseDevicePeakBytes += peakAllocatedDeviceBytes_;
+        counters.peakPhaseDeviceNeedBytes =
+            std::max(counters.peakPhaseDeviceNeedBytes, deviceNeedBytes_);
+        counters.peakPhaseDeviceAllocationBytes =
+            std::max(counters.peakPhaseDeviceAllocationBytes, peakAllocatedDeviceBytes_);
+    }
     --counters.admittedPhases;
     incrementSaturating(counters.admissionRevision);
     if (unproven_) {
@@ -128,6 +143,11 @@ void ProcessingHostBackingToken::releaseAfterFree() noexcept {
 }
 } // namespace detail
 
+std::uint64_t GpuProcessingPhaseLease::peakDeviceAllocationBytes() const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    return peakAllocatedDeviceBytes_;
+}
+
 std::uint64_t GpuProcessingPhaseLease::revisionAfterOwnRelease() const noexcept {
     const std::lock_guard lock(state_->mutex);
     return admissionRevision_ == std::numeric_limits<std::uint64_t>::max() ? admissionRevision_
@@ -138,6 +158,19 @@ bool GpuProcessingPhaseLease::drawDeviceLocked(const std::uint64_t bytes) noexce
     auto& counters = state_->counters;
     if (bytes > remainingDeviceBytes_)
         return false;
+    // The first allocation of a device stage claims the phase's whole need when the live device
+    // room holds it, so the rest of the stage cannot be crowded out. Without that room it claims
+    // nothing up front and every allocation is admitted against live capacity, as growth is.
+    // Callers have checked this draw against live capacity, so it cannot fail after the claim.
+    if (allocatedDeviceBytes_ == 0 && deviceClaimBytes_ == 0 && deviceNeedBytes_ != 0 &&
+        counters.deviceCapacityBytes &&
+        deviceNeedBytes_ <= remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes)) {
+        deviceClaimBytes_ = deviceNeedBytes_;
+        counters.deviceReservedBytes += deviceNeedBytes_;
+        counters.totalDeviceClaimBytes += deviceNeedBytes_;
+        counters.peakDeviceReservedBytes =
+            std::max(counters.peakDeviceReservedBytes, counters.deviceReservedBytes);
+    }
     const auto fromClaim = std::min(bytes, deviceClaimBytes_);
     const auto growth = bytes - fromClaim;
     if (growth != 0 &&
@@ -145,6 +178,8 @@ bool GpuProcessingPhaseLease::drawDeviceLocked(const std::uint64_t bytes) noexce
          growth > remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes)))
         return false;
     remainingDeviceBytes_ -= bytes;
+    allocatedDeviceBytes_ += bytes;
+    peakAllocatedDeviceBytes_ = std::max(peakAllocatedDeviceBytes_, allocatedDeviceBytes_);
     deviceClaimBytes_ -= fromClaim;
     counters.deviceReservedBytes -= fromClaim;
     counters.totalDeviceClaimBytes += growth;
@@ -152,11 +187,25 @@ bool GpuProcessingPhaseLease::drawDeviceLocked(const std::uint64_t bytes) noexce
 }
 
 void GpuProcessingPhaseLease::returnDeviceLocked(const std::uint64_t bytes) noexcept {
+    auto& counters = state_->counters;
     remainingDeviceBytes_ += bytes;
+    allocatedDeviceBytes_ -= std::min(bytes, allocatedDeviceBytes_);
+    // Within a stage, freed storage goes back to the phase's claim (up to its need) for its next
+    // allocation. Once the phase holds no native storage its device stage is over: the remaining
+    // claim is released, so a phase that is preparing, reading back or publishing claims nothing.
+    // Like any return of the phase's own storage this is quiet (no admission revision): waiters
+    // resume on the phase's release, so a failed attempt's own cleanup cannot retry itself. An
+    // unproven phase keeps its whole claim until it is proven retired, as before.
+    if (allocatedDeviceBytes_ == 0 && !unproven_) {
+        counters.deviceReservedBytes -= deviceClaimBytes_;
+        counters.totalDeviceClaimBytes -= deviceClaimBytes_ + bytes;
+        deviceClaimBytes_ = 0;
+        return;
+    }
     const auto refill = std::min(bytes, deviceNeedBytes_ - deviceClaimBytes_);
     deviceClaimBytes_ += refill;
-    state_->counters.deviceReservedBytes += refill;
-    state_->counters.totalDeviceClaimBytes -= bytes - refill;
+    counters.deviceReservedBytes += refill;
+    counters.totalDeviceClaimBytes -= bytes - refill;
 }
 
 bool GpuProcessingPhaseLease::finishSourcePreparation(
@@ -650,6 +699,13 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         if (deviceNeed > *counters.deviceCapacityBytes) {
             return refused(GpuProcessingPhaseDomain::Device);
         }
+        // Size the need from what phases of this envelope actually allocated (#417): the stated
+        // need covers the working allowance's ceiling, which a phase often does not use.
+        deviceNeed = detail::measuredDeviceNeedLocked(
+            *state_,
+            {request.deviceWorkingBytes, request.minimumExecutorBytes, request.fixedHostBytes,
+             request.minimumSourceBytes},
+            deviceNeed);
         const std::uint64_t deviceRemaining =
             remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes);
         if (deviceNeed > deviceRemaining) {
@@ -659,7 +715,8 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         // capacity allows, but claims only its stated minimum (its live-image peak) up front.
         executorBytes = std::max(
             request.minimumExecutorBytes,
-            std::min(request.requestedExecutorBytes, deviceRemaining - request.deviceWorkingBytes));
+            std::min(request.requestedExecutorBytes,
+                     remaining(deviceRemaining, request.deviceWorkingBytes)));
         if (request.requestedExecutorBytes != 0 && executorBytes == 0) {
             return deviceNeed >= *counters.deviceCapacityBytes
                        ? refused(GpuProcessingPhaseDomain::Device)
@@ -674,8 +731,15 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     lease->remainingUploadBytes_ = sourceCeiling;
     lease->deviceBytes_ = request.native ? request.deviceWorkingBytes + executorBytes : 0;
     lease->remainingDeviceBytes_ = lease->deviceBytes_;
-    lease->deviceClaimBytes_ = deviceNeed;
+    // The device need is checked here but claimed only when the phase's device stage begins (its
+    // first native allocation; see drawDeviceLocked): phases preparing on the CPU, waiting for
+    // the device or reading back hold no device claim, because they hold no device memory.
+    lease->deviceClaimBytes_ = 0;
     lease->deviceNeedBytes_ = deviceNeed;
+    lease->envelopeWorkingBytes_ = request.deviceWorkingBytes;
+    lease->envelopeMinimumExecutorBytes_ = request.minimumExecutorBytes;
+    lease->envelopeFixedHostBytes_ = request.fixedHostBytes;
+    lease->envelopeMinimumSourceBytes_ = request.minimumSourceBytes;
     lease->sourceBytes_ = sourceNeed;
     lease->sourceCeilingBytes_ = sourceCeiling;
     lease->executorBytes_ = executorBytes;
@@ -685,13 +749,12 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         state_->nextId == std::numeric_limits<std::uint64_t>::max() ? 0 : state_->nextId + 1;
     counters.hostReservedBytes += lease->hostBytes_;
     counters.totalHostClaimBytes += lease->hostBytes_;
-    counters.deviceReservedBytes += lease->deviceClaimBytes_;
-    counters.totalDeviceClaimBytes += lease->deviceClaimBytes_;
     ++counters.admittedPhases;
     counters.peakHostReservedBytes =
         std::max(counters.peakHostReservedBytes, counters.hostReservedBytes);
     counters.peakDeviceReservedBytes =
         std::max(counters.peakDeviceReservedBytes, counters.deviceReservedBytes);
+    detail::notePeaksLocked(counters);
     return {.status = GpuProcessingPhaseAdmission::Accepted,
             .domain = GpuProcessingPhaseDomain::None,
             .lease = std::move(lease),

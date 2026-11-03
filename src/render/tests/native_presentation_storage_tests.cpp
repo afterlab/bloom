@@ -22,6 +22,10 @@ void independentClaims() {
         budget.reserve({.fixedHostBytes = 100, .deviceWorkingBytes = 100, .sourceFree = true});
     require(phase.lease && phase.lease->rootIdentity() == budget.rootIdentity(),
             "stable exact root");
+    // The phase runs its device stage (one byte allocated), which claims its 100-byte need.
+    auto stage = NativeBufferStorageToken::reserve(phase.lease, 1, buffer());
+    require(stage.token && budget.snapshot().totalDeviceClaimBytes == 100,
+            "the processing phase's device stage claims its need");
     auto texture =
         NativeImageStorageToken::reservePresentation(budget.rootIdentity(), 400, image());
     auto params =
@@ -29,7 +33,7 @@ void independentClaims() {
     if (!texture.token || !params.token)
         throw std::runtime_error("independent presentation claims were refused");
     require(
-        texture.token && params.token && budget.snapshot().deviceReservedBytes == 100 &&
+        texture.token && params.token && budget.snapshot().deviceReservedBytes == 99 &&
             budget.snapshot().hostReservedBytes == 100 &&
             budget.snapshot().totalDeviceClaimBytes == 700 &&
             budget.snapshot().totalHostClaimBytes == 300 && budget.snapshot().admittedPhases == 1,
@@ -45,6 +49,7 @@ void independentClaims() {
     require(params.token->promote() && !params.token->reconcile(149, buffer(false)) &&
                 !params.token->releaseFailedAttemptAfterBackingDestroyed(phase.lease),
             "published presentation cannot reconcile or fold into an unrelated processing phase");
+    stage.token.reset();
     phase.lease.reset();
     require(budget.snapshot().admittedPhases == 0 && budget.snapshot().deviceReservedBytes == 0 &&
                 budget.snapshot().totalDeviceClaimBytes == 500 &&

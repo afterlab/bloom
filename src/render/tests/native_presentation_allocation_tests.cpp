@@ -89,8 +89,12 @@ void run(GpuDevice& device) {
         budget.reserve({.fixedHostBytes = 1, .deviceWorkingBytes = 1024, .sourceFree = true});
     require(phase.lease && device.retainProcessingPhase(phase.lease),
             "same-root frame is admitted");
-    require(budget.snapshot().deviceReservedBytes == 1024,
-            "existing presentation cannot borrow the same-root frame's working debit");
+    require(budget.snapshot().deviceReservedBytes == 0 &&
+                budget.snapshot().totalDeviceClaimBytes ==
+                    budget.snapshot().ownedPresentationImageBytes +
+                        budget.snapshot().ownedPresentationBufferBytes,
+            "existing presentation cannot borrow the same-root frame's working debit (the frame "
+            "claims its device need only in its device stage)");
     device.retireProcessingPhase(phase.lease->id(), true);
     phase.lease.reset();
     require(budget.snapshot().admittedPhases == 0 && budget.snapshot().ownedPresentationImages == 1,

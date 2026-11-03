@@ -94,9 +94,10 @@ void atomicAdmissionAndFreshness() {
     host.token.reset();
     device.token.reset();
     s = budget.snapshot();
-    require(s.deviceReservedBytes == 100 && s.totalDeviceClaimBytes == 100 &&
+    require(s.deviceReservedBytes == 0 && s.totalDeviceClaimBytes == 0 &&
                 s.totalHostClaimBytes == 10 && s.ownedNativeImages == 0,
-            "all provisional debits fold back once before phase release");
+            "all provisional debits fold back once; with no native storage left the device "
+            "stage ends and its claim is released before phase release");
     phase.lease.reset();
     empty(budget);
 }
@@ -273,10 +274,11 @@ void publishedPeakTurnover() {
         const auto revision = budget.snapshot().admissionRevision;
         image.token.reset(); // Caller has actually destroyed backing in native integration.
         const auto s = budget.snapshot();
-        require(s.deviceReservedBytes == 100 && s.totalDeviceClaimBytes == 100 &&
+        require(s.deviceReservedBytes == 0 && s.totalDeviceClaimBytes == 0 &&
                     s.totalHostClaimBytes == 10 && s.ownedNativeImages == 0 &&
                     s.admissionRevision == revision + 1,
-                "published destruction restores only exact live grant and independent revision");
+                "published destruction ends the device stage (no storage left, so no claim) "
+                "and is one independent revision");
     }
     auto retained = NativeImageStorageToken::reserve(phase.lease, 100, local());
     require(retained.token && token(retained).promote(), "last retained image published");
@@ -333,8 +335,8 @@ void overflowBound() {
     require(phase.lease != nullptr, "maximum native envelope is representable");
     const auto denied = NativeImageStorageToken::reserve(phase.lease, max, nonlocal());
     require(!denied.token && budget.snapshot().ownedNativeImages == 0 &&
-                budget.snapshot().totalDeviceClaimBytes == max,
-            "supplemental host overflow refused before native half changes");
+                budget.snapshot().totalDeviceClaimBytes == 0,
+            "supplemental host overflow refused before native half changes (no stage claim)");
     auto admitted = NativeImageStorageToken::reserve(phase.lease, max, local());
     require(admitted.token && token(admitted).reconcile(max - 1, local()) &&
                 token(admitted).promote(),

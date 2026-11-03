@@ -52,8 +52,10 @@ void testRetainedBuffers(Expectations& expectations, const GpuDeviceCreationOpti
     expectations.expect(
         budget.snapshot().ownedNativeBuffers == 0 &&
             budget.snapshot().admissionRevision == revision &&
-            budget.snapshot().deviceReservedBytes == phase.lease->deviceBytes(),
-        "failed internal UBO publication destroys backing before quiet prefix fold");
+            budget.snapshot().deviceReservedBytes == 0 &&
+            budget.snapshot().totalDeviceClaimBytes == 0,
+        "failed internal UBO publication destroys backing before quiet prefix fold (ending the "
+        "device stage)");
     device.retireProcessingPhase(phase.lease->id(), true);
     phase.lease.reset();
     phase = budget.reserve({.deviceWorkingBytes = bytes - 1});

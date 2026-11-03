@@ -19,6 +19,14 @@ void require(const bool value, const char* message) {
         throw std::runtime_error(message);
     }
 }
+constexpr NativeBufferStorageIdentity kDeviceLocal{
+    .allocatorGeneration = 1, .memoryType = 0, .heap = 0, .deviceLocal = true};
+// Starts a phase's device stage with one device-local byte, as its first native allocation does.
+NativeBufferStorageToken startDeviceStage(const std::shared_ptr<GpuProcessingPhaseLease>& lease) {
+    auto grant = NativeBufferStorageToken::reserve(lease, 1, kDeviceLocal);
+    require(grant.token.has_value(), "a device stage starts with its first native allocation");
+    return std::move(*grant.token);
+}
 GpuProcessingPhaseRequest request() {
     return {.fixedHostBytes = 10,
             .requestedSourceBytes = 20,
@@ -111,15 +119,23 @@ void sizingAndLifetime() {
     full.requestedExecutorBytes = gib;
     full.minimumExecutorBytes = 4 * fullPixels * 16;
     auto grant = budget.reserve(full);
-    // The executor ceiling is the live room; only working + minimum executor bytes are claimed.
+    // The executor ceiling is the live room; only working + minimum executor bytes are the need,
+    // and that need is claimed during the device stage only.
     require(
         grant.lease && grant.lease->sourceByteLimit() == 0 &&
             grant.lease->hostBytes() == full.fixedHostBytes && grant.lease->deviceBytes() == gib &&
-            grant.lease->deviceClaimBytes() ==
+            grant.lease->deviceNeedBytes() ==
                 full.deviceWorkingBytes + full.minimumExecutorBytes &&
-            budget.snapshot().totalDeviceClaimBytes ==
-                full.deviceWorkingBytes + full.minimumExecutorBytes,
-        "1080p source-free envelope claims its need and keeps the room as an unclaimed ceiling");
+            grant.lease->deviceClaimBytes() == 0 && budget.snapshot().totalDeviceClaimBytes == 0,
+        "1080p source-free envelope states its need and keeps the room as an unclaimed ceiling");
+    {
+        auto stage = startDeviceStage(grant.lease);
+        require(budget.snapshot().totalDeviceClaimBytes ==
+                    full.deviceWorkingBytes + full.minimumExecutorBytes,
+                "the device stage claims exactly the stated need");
+    }
+    require(budget.snapshot().totalDeviceClaimBytes == 0,
+            "the device stage releases its claim when the phase holds no native storage");
     auto alias = grant.lease;
     grant.lease->markUnproven();
     alias->markUnproven();
@@ -149,10 +165,12 @@ void sizingAndLifetime() {
     auto first = concurrent.reserve(fitting);
     require(first.lease && first.lease->executorByteLimit() == 500,
             "executor beyond a quarter admits when actual device capacity fits");
+    auto firstStage = startDeviceStage(first.lease);
     auto held = concurrent.reserve(fitting);
     require(!held.lease && held.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
                 held.domain == GpuProcessingPhaseDomain::Device,
-            "held device claims make a second phase that would overcommit wait");
+            "a running device stage's claim makes a second phase that would overcommit wait");
+    firstStage = {};
     first.lease.reset();
     held = concurrent.reserve(fitting);
     require(held.lease != nullptr, "retired claims restore paired admission");
@@ -323,6 +341,9 @@ void ceilingRequestsShareDevice() {
     auto prefetch = budget.reserve(ceiling);
     require(viewer.lease && fill.lease && prefetch.lease,
             "concurrent whole-device ceiling requests all admit while their minimum fits");
+    auto viewerStage = startDeviceStage(viewer.lease);
+    auto fillStage = startDeviceStage(fill.lease);
+    auto prefetchStage = startDeviceStage(prefetch.lease);
     require(viewer.lease->deviceBytes() >= ceiling.minimumExecutorBytes &&
                 fill.lease->deviceBytes() >= ceiling.minimumExecutorBytes &&
                 budget.snapshot().deviceReservedBytes <= gib,
@@ -385,8 +406,9 @@ void contention() {
         }
     }
     require(accepted == 2 && waiting == contenders - 2 && snapshot.hostReservedBytes == 140 &&
-                snapshot.deviceReservedBytes == 60 && snapshot.budgetRefusals == 0,
-            "competing requests never acquire a partial or over-capacity pair; the rest wait");
+                snapshot.deviceReservedBytes == 0 && snapshot.budgetRefusals == 0,
+            "competing requests never acquire a partial or over-capacity pair; the rest wait "
+            "(admitted phases claim device memory only in their device stage)");
     for (auto& grant : grants) {
         grant.lease.reset();
     }

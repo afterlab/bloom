@@ -260,7 +260,9 @@ libraries and the driver's host heap, and allocator overhead. The packed route k
 GPU-resident preview frames, so the device pool total is 0; the driver reports 0.6–1.0 GB for the
 process (work in flight and upload images). The processing policy's `deviceClaimBytes` at the same
 samples was 0.4–9.3 GB: device admission reserves more than it allocates, so the claims are not a
-measure of device memory.
+measure of device memory. (#417 later made a phase claim its device need only during its device
+stage and sized it from measured peaks; the same 2160p png16 fills then claimed 1.7–2.4 GB at peak
+against 1.2–1.4 GB of Bloom's own device storage. See [device claims follow device stages](../architecture/gpu-backend.md).)
 
 A first after run that also sampled glibc's `mallinfo2()` every 250 ms lost 5–45% of fill fps
 (720p 79.7 fps): it locks every heap arena. The harness does not sample it.

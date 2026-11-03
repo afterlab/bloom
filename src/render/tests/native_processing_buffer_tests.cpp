@@ -98,8 +98,10 @@ void backingAndRefusal(GpuDevice& device) {
                     state->nativeBufferBackingsDestroyed ==
                         destroyed + (fault == Fault::Allocation ? 0 : 1) &&
                     !device.nativeBufferStorageRefusal() &&
-                    budget.snapshot().deviceReservedBytes == lease->deviceBytes(),
-                "fault destroys actual backing before quiet foldback, without capacity retry");
+                    budget.snapshot().deviceReservedBytes == 0 &&
+                    budget.snapshot().totalDeviceClaimBytes == 0,
+                "fault destroys actual backing before quiet foldback (ending the device stage), "
+                "without capacity retry");
         retire(device, budget, lease);
     }
 }
@@ -227,8 +229,10 @@ void productionCycles(GpuDevice& device) {
     auto externalPhase = failedPhase;
     require(display.display->discardRetiredFailure(device) &&
                 budget.snapshot().ownedNativeBuffers == 0 &&
-                budget.snapshot().deviceReservedBytes == inputBackingBytes,
-            "proven failed producer destroys partial backing before quiet token foldback");
+                budget.snapshot().deviceReservedBytes == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 0,
+            "proven failed producer destroys partial backing before quiet token foldback, "
+            "ending its device stage");
     device.retireProcessingPhase(failedPhase->id(), true);
     failedPhase.reset();
     require(budget.snapshot().admittedPhases == 1 &&

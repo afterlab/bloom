@@ -92,8 +92,9 @@ void pairedAdmissionAndReconcile() {
     device.token.reset();
     require(budget.snapshot().admissionRevision + 1 == watermark &&
                 budget.snapshot().hostReservedBytes == 80 &&
-                budget.snapshot().deviceReservedBytes == 100,
-            "provisional foldback is quiet and restores the whole admitted envelope");
+                budget.snapshot().deviceReservedBytes == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 0,
+            "provisional foldback is quiet, restores the host envelope and ends the device stage");
     phase.lease.reset();
     require(budget.snapshot().admissionRevision == watermark,
             "only actual final phase release advances own R+1");
@@ -117,12 +118,17 @@ void grandfatheredConversionAndLifetime() {
     budget.setDeviceCapacity(1000, true);
     auto phase = budget.reserve(request());
     require(phase.lease != nullptr, "original grant admitted from a fresh delivery");
+    // The device need is claimed when the device stage starts, while the sample is fresh.
+    auto stage = NativeBufferStorageToken::reserve(phase.lease, 1, local());
+    require(stage.token && budget.snapshot().totalDeviceClaimBytes == 100,
+            "the device stage claims its need at its first allocation");
     budget.setHostCapacity(0, false, now - std::chrono::seconds(1));
     budget.setDeviceCapacity(0, false);
     auto admitted = NativeBufferStorageToken::reserve(phase.lease, 40, nonlocal());
     require(admitted.token && budget.snapshot().totalHostClaimBytes == 80 &&
                 budget.snapshot().totalDeviceClaimBytes == 100,
-            "already reserved paired conversion survives staleness and quota shrink");
+            "a conversion inside a running device stage survives staleness and quota shrink");
+    stage.token.reset();
     auto additive = NativeImageStorageToken::reserve(
         phase.lease, 1,
         {.allocatorGeneration = 7, .memoryType = 3, .heap = 0, .deviceLocal = false},
@@ -230,9 +236,10 @@ void protectedUploadPartition() {
     reused.token.reset();
     final.token.reset();
     require(budget.snapshot().hostReservedBytes == 400 &&
-                budget.snapshot().deviceReservedBytes == 300 &&
+                budget.snapshot().deviceReservedBytes == 0 &&
                 budget.snapshot().admissionRevision == revision,
-            "proven storage disposal quietly restores exact partitions, no fake retry revision");
+            "proven storage disposal quietly restores exact host partitions and ends the device "
+            "stage, no fake retry revision");
     auto wholeU = NativeBufferStorageToken::reserveUpload(phase.lease, 100, local());
     require(wholeU.token.has_value(), "all U is restored after every owned buffer is destroyed");
     wholeU.token.reset();
@@ -292,7 +299,7 @@ void movedUploadPartition() {
     const auto outputRevision = outputRoot.snapshot().admissionRevision;
     token(destination) = std::move(constructed);
     require(outputRoot.snapshot().hostReservedBytes == 80 &&
-                outputRoot.snapshot().deviceReservedBytes == 100 &&
+                outputRoot.snapshot().deviceReservedBytes == 0 &&
                 outputRoot.snapshot().ownedNativeBuffers == 0 &&
                 outputRoot.snapshot().admissionRevision == outputRevision &&
                 !NativeBufferStorageToken::reserveUpload(outputPhase.lease, 1, local()).token,
@@ -305,8 +312,8 @@ void movedUploadPartition() {
     destination.token.reset();
     require(uploadRoot.snapshot().admissionRevision == uploadRevision &&
                 uploadRoot.snapshot().hostReservedBytes == 400 &&
-                uploadRoot.snapshot().deviceReservedBytes == 300,
-            "moved upload disposal restores exact debit quietly");
+                uploadRoot.snapshot().deviceReservedBytes == 0,
+            "moved upload disposal restores exact host debit quietly and ends the device stage");
     auto reusable = NativeBufferStorageToken::reserveUpload(uploadPhase.lease, 100, nonlocal());
     require(reusable.token && uploadRoot.snapshot().ownedNonlocalNativeBufferHostBytes == 100,
             "partition tag survives both moves and restores whole U only to its origin");
@@ -320,6 +327,10 @@ void grandfatheredProtectedUpload() {
     budget.setDeviceCapacity(1000, true);
     auto phase = budget.reserve(mediaRequest());
     require(phase.lease != nullptr, "media phase admitted before readiness/shrink transition");
+    // The device stage, and with it the device claim, starts before the transition.
+    auto stage = NativeBufferStorageToken::reserve(phase.lease, 1, local());
+    require(stage.token && budget.snapshot().totalDeviceClaimBytes == 300,
+            "the device stage claims its need at its first allocation");
     budget.setHostCapacity(1, false, Clock::now() - std::chrono::seconds(1));
     budget.setDeviceCapacity(1, false);
     const auto revision = budget.snapshot().admissionRevision;
@@ -327,6 +338,7 @@ void grandfatheredProtectedUpload() {
     require(upload.token && budget.snapshot().totalHostClaimBytes == 400 &&
                 budget.snapshot().totalDeviceClaimBytes == 300,
             "conversion of already admitted U is grandfathered under staleness/shrink");
+    stage.token.reset();
     phase.lease.reset();
     require(budget.snapshot().admittedPhases == 1,
             "pending buffer retains exact phase and protected estimates until actual disposal");
@@ -361,11 +373,12 @@ void nonemptyCrossRootMove() {
     token(old) = std::move(token(incoming));
     incoming.token.reset();
     require(first.snapshot().ownedNativeBuffers == 0 && first.snapshot().hostReservedBytes == 30 &&
-                first.snapshot().deviceReservedBytes == 30 &&
+                first.snapshot().deviceReservedBytes == 0 &&
                 first.snapshot().totalHostClaimBytes == 30 &&
-                first.snapshot().totalDeviceClaimBytes == 30 &&
+                first.snapshot().totalDeviceClaimBytes == 0 &&
                 first.snapshot().admissionRevision == oldRevision,
-            "nonempty replacement quietly folds the previous exact-root debit once");
+            "nonempty replacement quietly folds the previous exact-root debit once and ends "
+            "that phase's device stage");
     require(second.snapshot().ownedNativeBuffers == 1 &&
                 second.snapshot().ownedNativeBufferBytes == 30 &&
                 second.snapshot().totalDeviceClaimBytes == 50 &&
@@ -393,8 +406,10 @@ void processingHeadroomAndPartitions() {
     require(phase.lease != nullptr, "processing phase admitted with full protected host grant");
     auto denied = NativeBufferStorageToken::reserveProcessing(phase.lease, 1, nonlocal());
     require(!denied.token && denied.domain == GpuProcessingPhaseDomain::Host &&
-                budget.snapshot().deviceReservedBytes == 300,
-            "processing cannot spend output or source partitions as supplemental host credit");
+                budget.snapshot().deviceReservedBytes == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 0,
+            "processing cannot spend output or source partitions as supplemental host credit, "
+            "and a refused first allocation starts no device stage");
     budget.setHostCapacity(550, true);
     auto processing = NativeBufferStorageToken::reserveProcessing(phase.lease, 150, nonlocal());
     require(processing.token && budget.snapshot().totalHostClaimBytes == 550 &&
@@ -455,7 +470,7 @@ void processingFreshnessAndOverflow() {
     denied = NativeBufferStorageToken::reserveProcessing(phase.lease, 1, nonlocal());
     require(!denied.token && denied.domain == GpuProcessingPhaseDomain::Host &&
                 budget.snapshot().totalHostClaimBytes == maximum &&
-                budget.snapshot().deviceReservedBytes == maximum,
+                budget.snapshot().deviceReservedBytes == 0,
             "supplemental host addition rejects overflow before atomic native conversion");
     phase.lease.reset();
     empty(budget);
@@ -502,9 +517,11 @@ void retainedProcessingOwnership() {
                 token(prefix).releaseFailedAttemptAfterBackingDestroyed(phase.lease),
             "only exact root/phase may quietly fold destroyed failed-prefix backing");
     require(budget.snapshot().admissionRevision == before.admissionRevision &&
-                budget.snapshot().deviceReservedBytes == 100 &&
+                budget.snapshot().deviceReservedBytes == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 0 &&
                 budget.snapshot().totalHostClaimBytes == 80,
-            "failed publication foldback conserves origin debit without self-retry pulse");
+            "failed publication foldback conserves origin debit (its device stage ends with "
+            "its last storage) without self-retry pulse");
     prefix.token.reset();
     auto transient = NativeBufferStorageToken::reserve(phase.lease, 20, local());
     require(transient.token && !token(transient).canPromote() && !token(transient).promote(),

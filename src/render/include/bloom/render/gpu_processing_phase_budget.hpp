@@ -25,8 +25,15 @@ class ProcessingHostStorageToken;
 using GpuProcessingRootIdentity = std::shared_ptr<const detail::GpuProcessingPhaseBudgetState>;
 
 // Admission of simultaneous processing phases against measured capacity. Each phase claims its
-// stated need (fixed output/metadata, 3x the minimum source bytes, device working bytes plus the
-// minimum executor bytes); requested source/executor values are ceilings that are not claimed.
+// stated host need (fixed output/metadata, 3x the minimum source bytes) at admission. Its device
+// need (device working bytes plus the minimum executor bytes) must fit the free device capacity
+// at admission but is claimed only during the phase's device stage: from its first native
+// allocation until it holds no native storage. Phases run their device stages one at a time per
+// device, so summing every admitted phase's device need would reserve several times the device
+// memory in use (#417). Once a phase with the same stated envelope has been released, the need is
+// the smaller of the stated need and its largest measured device peak plus a quarter; only a need
+// larger than the whole capacity by the stated values is refused. Requested source/executor
+// values are ceilings that are not claimed.
 // Runtime owns process/device sampling and injects resolved capacity; this class performs no I/O.
 struct GpuProcessingPhaseRequest final {
     std::uint64_t fixedHostBytes = 0;
@@ -109,6 +116,18 @@ struct GpuProcessingPhaseSnapshot final {
     std::size_t ownedPresentationBuffers = 0;
     std::uint64_t peakHostReservedBytes = 0;
     std::uint64_t peakDeviceReservedBytes = 0;
+    // High-water marks of the device claims (totalDeviceClaimBytes) and of the root's own native
+    // allocations (ownedNativeImageBytes + ownedNativeBufferBytes), for comparing what admission
+    // reserves with what Bloom actually allocated.
+    std::uint64_t peakTotalDeviceClaimBytes = 0;
+    std::uint64_t peakOwnedNativeBytes = 0;
+    // Released native phases: how many, the sum of their stated device needs and of the most
+    // native storage each held at one time, and the largest need and largest such peak.
+    std::uint64_t releasedNativePhases = 0;
+    std::uint64_t releasedPhaseDeviceNeedBytes = 0;
+    std::uint64_t releasedPhaseDevicePeakBytes = 0;
+    std::uint64_t peakPhaseDeviceNeedBytes = 0;
+    std::uint64_t peakPhaseDeviceAllocationBytes = 0;
     std::size_t admittedPhases = 0;
     std::size_t unprovenPhases = 0;
     std::size_t requestCapacity = 0;
@@ -144,10 +163,16 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] std::uint64_t sourceClaimBytes() const noexcept { return sourceBytes_; }
     // Logical upload occupancy ceiling; uploads acquire their actual host backing separately.
     [[nodiscard]] std::uint64_t uploadByteLimit() const noexcept { return sourceCeilingBytes_; }
-    // Device ceiling: the live room at admission. Only working + minimum executor bytes are
-    // claimed up front; native allocations beyond that claim are admitted against live capacity.
+    // Device ceiling: the live room at admission. The device need (working + minimum executor
+    // bytes) is checked at admission and claimed only for the phase's device stage, from its
+    // first native allocation until it holds none; allocations beyond the need are admitted
+    // against live capacity.
     [[nodiscard]] std::uint64_t executorByteLimit() const noexcept { return executorBytes_; }
     [[nodiscard]] std::uint64_t deviceClaimBytes() const noexcept { return deviceClaimBytes_; }
+    // The device need claimed during the device stage, and the most native storage (images and
+    // buffers) this phase has held at one time so far.
+    [[nodiscard]] std::uint64_t deviceNeedBytes() const noexcept { return deviceNeedBytes_; }
+    [[nodiscard]] std::uint64_t peakDeviceAllocationBytes() const noexcept;
     // After the complete scene has finished CPU preparation, retain its actual decoded backing.
     // Future native upload buffers acquire their actual host bytes at allocation, within the
     // original upload ceiling. Spent decode/conversion scratch must not block native execution.
@@ -162,9 +187,11 @@ class GpuProcessingPhaseLease final {
     void proveRetiredAfterDeviceIdle() noexcept;
 
   private:
-    // Callers hold state_->mutex. A draw first consumes this phase's unallocated device claim;
-    // any remainder is a new claim admitted against the live device capacity. A return puts the
-    // bytes back into this phase's claim, so the root total is unchanged.
+    // Callers hold state_->mutex. The first draw of a device stage claims the phase's device need
+    // when the live room holds it. A draw consumes this phase's unallocated device claim; any
+    // remainder is a new claim admitted against the live device capacity. A return puts the
+    // bytes back into this phase's claim (up to its need) while it still holds native storage;
+    // the return that leaves it none ends the stage and releases its whole remaining claim.
     [[nodiscard]] bool drawDeviceLocked(std::uint64_t bytes) noexcept;
     void releaseLocked() noexcept;
     void returnDeviceLocked(std::uint64_t bytes) noexcept;
@@ -193,9 +220,18 @@ class GpuProcessingPhaseLease final {
     std::uint64_t sourceCeilingBytes_ = 0;
     std::uint64_t executorBytes_ = 0;
     // Unallocated device bytes this phase holds in totalDeviceClaimBytes, at most its admitted
-    // need. Allocations beyond the need are separate live claims, returned to the root on release.
+    // need, and only during its device stage. Allocations beyond the need are separate live
+    // claims, returned to the root on release.
     std::uint64_t deviceClaimBytes_ = 0;
     std::uint64_t deviceNeedBytes_ = 0;
+    // Native storage this phase holds now, and the most it has held at one time.
+    std::uint64_t allocatedDeviceBytes_ = 0;
+    std::uint64_t peakAllocatedDeviceBytes_ = 0;
+    // The stated device envelope, under which the release records the measured peak.
+    std::uint64_t envelopeWorkingBytes_ = 0;
+    std::uint64_t envelopeMinimumExecutorBytes_ = 0;
+    std::uint64_t envelopeFixedHostBytes_ = 0;
+    std::uint64_t envelopeMinimumSourceBytes_ = 0;
     bool unproven_ = false;
     bool sourcePreparationFinished_ = false;
 };

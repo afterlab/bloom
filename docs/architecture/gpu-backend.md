@@ -1206,15 +1206,63 @@ no fraction, quarter, half-of-remaining share or whole-device ceiling. A policy 
 headroom until its composition root delivers the preference; the desktop applies the saved value
 at startup and on every Preferences change, and a headless export root applies the 2 GiB default.
 
-**Claims are needs.** A phase claims fixed output and metadata bytes, three times its minimum
-source bytes (decode, conversion and upload overlap), and on the device its working bytes plus its
-minimum executor bytes (the live-image peak). GPU scene preparation states the source need from
-the reachable decoded sources (one float frame per probed image or video source, the preflight
-live-image peak when an extent is unknown). Requested source and executor sizes are ceilings: a
-phase may grow toward them, but they are not claimed. A native image or buffer that exceeds the
-phase's remaining claim is admitted at allocation against the live device room, and released
-bytes return to the root. Retained products (RAM-preview frames, final products) stay charged while
-they live.
+**Claims are needs.** A phase claims fixed output and metadata bytes and three times its minimum
+source bytes (decode, conversion and upload overlap) on the host. Its device need is its working
+bytes plus its minimum executor bytes (the live-image peak; GPU scene preparation raises the
+minimum to the preflight live-image peak for previews and final renders alike). GPU scene
+preparation states the source need from the reachable decoded sources (one float frame per probed
+image or video source, the preflight live-image peak when an extent is unknown). Requested source
+and executor sizes are ceilings: a phase may grow toward them, but they are not claimed. Retained
+products (RAM-preview frames, final products) stay charged while they live.
+
+**Device claims follow device stages (#417).** The device need must fit the usable device capacity
+and what is free of it at admission, but it is claimed only while the phase runs its device stage:
+from its first native image or buffer allocation until it holds no native storage. A phase that is
+decoding, waiting for the device, reading back or publishing claims no device memory, because it
+holds none. Phases run their device stages one at a time per device, so claiming every admitted
+phase's need at admission reserved the sum over all frames in flight: in the #416 runs 9.3 GB was
+claimed at 2160p while the driver reported 1.0 GB for the process. At its first allocation a stage
+claims its whole need when the live device room holds it, so the rest of the stage cannot be
+crowded out; otherwise it claims nothing up front. Every allocation beyond the stage's remaining
+claim is admitted against the live device room and refused (`BudgetRefused`, domain Device) when it
+does not fit, so a real allocation never over-commits the device; the preview and final paths retry
+such a refusal after a release. Storage freed within a stage refills its claim up to the need; the
+stage's end releases the rest at once, quietly (the phase's own release is the wake-up, so a failed
+attempt's cleanup cannot retry itself). Device claims at any time are therefore the root's own
+native allocations plus the unallocated needs of the stages running.
+
+**Device needs follow measured peaks (#417).** The stated device need is ceiling-sized: the
+desktop's preview working allowance is the general OCIO arm's 512 MiB ceiling plus the 320 MiB
+packed-transfer allowance whatever the frame size. Each released phase records the most native
+storage it held at one time under its stated envelope (working bytes, minimum executor bytes,
+fixed host bytes and minimum source bytes: equal for the frames of one composition, resolution and
+plan). A later phase of the same envelope needs the largest recorded peak plus a quarter, never
+more than its stated need; the first phase of an envelope uses the stated need, and a phase that
+ended early never lowers it. The root keeps the 16 most recently used envelopes. Only a stated need
+larger than the whole usable device is refused; waiting and the stage claim use the measured need,
+and allocations beyond it are admitted against the live room like any other growth.
+
+Measured on the benchmark cells (RTX 4090, RAM fill at Full or an EXR export, peaks over the
+run; claims are `deviceClaimBytes`, own allocation is the root's native image and buffer storage,
+driver is the process's device memory as `nvidia-smi` reports it; the per-phase columns are means
+over the released phases):
+
+| Cell | Claims before | Claims after | Own allocation | Driver | Need / measured peak per phase |
+|---|---|---|---|---|---|
+| 2160p png16 A fill | 9.67 GB | 1.71 GB | 1.24 GB | 1.16 GB | 1.14 / 0.94 GB |
+| 2160p png16 B fill | 15.08 GB | 2.41 GB | 1.43 GB | 1.39–1.52 GB | 1.70 / 1.30 GB |
+| 1080p H.264 A fill | not measured | 1.59 GB | 0.82 GB | 0.84 GB | 0.33 / 0.25 GB |
+| 720p H.264 A fill | not measured | 1.46 GB | 0.71 GB | 0.83 GB | 0.16 / 0.11 GB |
+| 2160p png16 B EXR export | 3.90 GB | 3.70 GB | 3.27 GB | 3.27–3.34 GB | 1.20 / 1.77 GB |
+
+Stated bounds: device claims stay within the root's own allocation plus two phases' needs (the
+executing stage and one finishing); measured, the peak claims were 1.1 to 2.1 times the peak own
+allocation, the high end being the first frame of an envelope, which still uses the stated need.
+A preview phase's need averaged 1.2 to 1.5 times what it actually allocated. Before the change a
+final render stated one float frame as its executor minimum, so its need (0.40 GB in the export
+row) was a quarter of what a phase allocated; it now states the preflight live-image peak like a
+preview, and the rest is admitted against the live room as it is allocated. Fills and the export
+kept the same frames, fps and zero CPU fallback.
 
 **Waiting, not refusing.** A need that fits the usable capacity but not what other work holds right
 now returns `AwaitingCapacity` with its domain (Host, Device or RequestCount). Before answering, the

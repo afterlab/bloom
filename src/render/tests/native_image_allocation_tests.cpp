@@ -75,8 +75,9 @@ void actualAllocation(GpuDevice& device) {
     display.reset();
     process.reset();
     require(budget.snapshot().ownedNativeImages == 0 &&
-                budget.snapshot().deviceReservedBytes == admitted->deviceBytes(),
-            "actual backing destruction folds all provisional debits");
+                budget.snapshot().deviceReservedBytes == 0 &&
+                budget.snapshot().totalDeviceClaimBytes == 0,
+            "actual backing destruction folds all provisional debits and ends the device stage");
     device.retireProcessingPhase(admitted->id(), true);
     admitted.reset();
     for (const bool packed : {false, true}) {
@@ -161,7 +162,8 @@ void backingFaults(GpuDevice& device) {
             const auto remaining = budget.snapshot();
             require(remaining.ownedNativeImages == 0 && remaining.ownedNativeImageBytes == 0 &&
                         remaining.ownedNonlocalNativeHostBytes == 0 &&
-                        remaining.deviceReservedBytes == admitted->deviceBytes() &&
+                        remaining.deviceReservedBytes == 0 &&
+                        remaining.totalDeviceClaimBytes == 0 &&
                         !device.nativeImageStorageRefusal(),
                     "injected noncapacity faults return debit without fabricated retry metadata");
             device.retireProcessingPhase(admitted->id(), true);

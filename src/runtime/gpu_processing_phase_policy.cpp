@@ -477,7 +477,8 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
                 viewerWaitingAt_.reset();
                 viewerAdmittedAt_ = now;
                 viewerNeedHostBytes_ = hostNeed;
-                viewerNeedDeviceBytes_ = deviceNeed;
+                // The need the grant sized from measured peaks of this envelope (#417).
+                viewerNeedDeviceBytes_ = grant.lease ? grant.lease->deviceNeedBytes() : deviceNeed;
             } else if (grant.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity) {
                 viewerWaitingAt_ = now;
             }
@@ -667,9 +668,13 @@ std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy& policy,
     // device executes one scene at a time, so a few frames ahead keep decode, the GPU and the
     // readback overlapped, and more only hold memory. One run also sizes itself to at most a
     // quarter of the free capacity at its start, so it can never take most of the machine.
+    // Device stages run one at a time and a phase claims device memory only during its own
+    // stage, so the device need decides whether a frame fits at all, not how many are in flight.
     const auto threads = std::max(1U, std::thread::hardware_concurrency());
-    const auto withinQuarter = policy.framesThatFit(addSaturating(host, host * 3), device);
-    const auto fits = policy.framesThatFit(host, device);
+    if (policy.framesThatFit(0, device) == 0)
+        return 0;
+    const auto withinQuarter = policy.framesThatFit(addSaturating(host, host * 3), 0);
+    const auto fits = policy.framesThatFit(host, 0);
     const auto frames = std::max<std::size_t>(withinQuarter, std::min<std::size_t>(fits, 1));
     return std::min<std::size_t>({frames, threads, kMaximumPreviewFramesInFlight});
 }

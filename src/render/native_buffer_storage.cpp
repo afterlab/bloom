@@ -149,6 +149,7 @@ NativeBufferStorageGrant NativeBufferStorageToken::reserveInPartition(
     static_cast<void>(phase->drawDeviceLocked(bytes));
     counters.ownedNativeBufferBytes += bytes;
     ++counters.ownedNativeBuffers;
+    detail::notePeaksLocked(counters);
     if (!identity.deviceLocal) {
         if (supplementalHost) {
             counters.totalHostClaimBytes += bytes;

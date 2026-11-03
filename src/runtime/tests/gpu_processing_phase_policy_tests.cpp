@@ -795,8 +795,10 @@ void liveDeviceReportCreditsOnlyOwnedNativeBacking() {
                                .device_uuid = {1, 2, 3, 4}};
     require(policy.reportDevice(91, report), "one native owner reports live free bytes");
     auto phase = policy.reserve(preview(), now);
-    require(phase.lease != nullptr, "the native phase has a real reserved envelope");
-    const auto held = policy.snapshot().reservations.totalDeviceClaimBytes;
+    require(phase.lease != nullptr &&
+                policy.snapshot().reservations.totalDeviceClaimBytes == 0,
+            "the native phase has a real envelope, claimed only during its device stage");
+    const auto held = phase.lease->deviceNeedBytes();
     constexpr std::uint64_t backing = 16 * 1024 * 1024;
     auto image = NativeImageStorageToken::reserve(phase.lease, backing,
                                                   NativeImageStorageIdentity{91, 1, 0, true}, now);

@@ -181,6 +181,14 @@ void actualBufferStorage(GpuDevice& device) {
             "one-byte-short planned nonlocal host debit changes neither domain before backing");
         bufferFinish(device, phase, budget);
         phase = bufferPhase(device, budget, 1ULL << 20, 1ULL << 20);
+        // The device stage (and its claim) starts with a first allocation before the shrink.
+        auto stage = NativeBufferStorageToken::reserve(
+            phase, 1,
+            {.allocatorGeneration = device.ownershipEpoch(), .memoryType = 0, .heap = 0,
+             .deviceLocal = true});
+        bufferRequire(stage.token &&
+                          budget.snapshot().totalDeviceClaimBytes == phase->deviceNeedBytes(),
+                      "the device stage claims the phase's need at its first allocation");
         const auto beforeClaims = budget.snapshot();
         budget.setHostCapacity(0, false, std::chrono::steady_clock::time_point::min());
         budget.setDeviceCapacity(0, false);
@@ -197,6 +205,7 @@ void actualBufferStorage(GpuDevice& device) {
                 c.totalDeviceClaimBytes == beforeClaims.totalDeviceClaimBytes,
             "nonlocal host staging transfers once without an additive or duplicate claim");
         backing.clear();
+        stage.token.reset();
         bufferFinish(device, phase, budget);
         budget.setHostCapacity(1ULL << 30, true);
         budget.setDeviceCapacity(1ULL << 30, true);

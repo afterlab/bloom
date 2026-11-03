@@ -108,6 +108,7 @@ NativeImageStorageToken::reserve(const std::shared_ptr<GpuProcessingPhaseLease>&
     static_cast<void>(phase->drawDeviceLocked(bytes));
     counters.ownedNativeImageBytes += bytes;
     ++counters.ownedNativeImages;
+    detail::notePeaksLocked(counters);
     if (!identity.deviceLocal) {
         counters.ownedNonlocalNativeHostBytes += bytes;
         counters.totalHostClaimBytes += bytes;
