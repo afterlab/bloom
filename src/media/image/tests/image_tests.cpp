@@ -594,19 +594,21 @@ int main() {
     // Any name shape: the last digit run is the frame; prefix, suffix and padding are free.
     for (const auto* prefix : {"take.", "take_", "take", ""}) {
         png(scratch.file(std::string(prefix) + "0001.png"));
-        png(scratch.file(std::string(prefix) + "0003.png"));
+        png(scratch.file(std::string(prefix) + "0002.png"));
+        png(scratch.file(std::string(prefix) + "0004.png"));
         const auto sequence = media::scanSequence(scratch.file(std::string(prefix) + "0001.png"));
-        check.expect(sequence.value.has_value() && sequence.value->members.size() == 2 &&
-                         sequence.value->gaps == std::vector<std::int64_t>{2} &&
+        check.expect(sequence.value.has_value() && sequence.value->members.size() == 3 &&
+                         sequence.value->gaps == std::vector<std::int64_t>{3} &&
                          sequence.value->padding == 4,
                      "sequence form detects members, padding and gap");
     }
     {
         png(scratch.file("sparse.0.png"));
+        png(scratch.file("sparse.1.png"));
         png(scratch.file("sparse.9223372036854775807.png"));
         const auto sequence = media::scanSequence(scratch.file("sparse.0.png"));
         check.expect(
-            sequence.value.has_value() && sequence.value->members.size() == 2 &&
+            sequence.value.has_value() && sequence.value->members.size() == 3 &&
                 sequence.value->last == std::numeric_limits<std::int64_t>::max() &&
                 sequence.value->gaps.empty() && sequence.value->hasGaps(),
             "sparse sequence span is represented by adjacent members without gap allocation");
@@ -653,6 +655,49 @@ int main() {
                          sequence.value->first == 7 && sequence.value->last == 9 &&
                          !sequence.value->diagnostics.empty(),
                      "mixed padding and extension case still form one sequence, with a note");
+    }
+    {
+        // #458: numbered files without two consecutive frame numbers (camera files) are not a
+        // sequence; the picked file is a still and nothing else is listed or read for it.
+        for (const auto* name : {"IMG_2041.png", "IMG_2077.png", "IMG_3105.png"})
+            png(scratch.file(name));
+        const auto picked = scratch.file("IMG_2077.png");
+        const auto sequence = media::scanSequence(picked);
+        check.expect(sequence.value.has_value() && sequence.value->members.empty() &&
+                         media::formsSequence(picked) == false &&
+                         media::countSequenceMembers(picked) == 1U,
+                     "numbered files without consecutive frame numbers are stills");
+        // A frame range does not change what the group is.
+        const auto ranged = media::scanSequence(picked, {}, {}, media::SequenceFrameRange{0, 1});
+        check.expect(ranged.value.has_value() && ranged.value->members.empty(),
+                     "a frame range leaves a non-sequence a still");
+        png(scratch.file("IMG_2042.png"));
+        check.expect(media::formsSequence(picked) == true &&
+                         media::countSequenceMembers(picked) == 4U,
+                     "one consecutive pair makes the group a sequence");
+    }
+    {
+        // #458: several files numbered with one frame keep one of them and say so; the scan
+        // never fails. The picked file wins its frame, then the file written like it.
+        png(scratch.file("dup.1.png"));
+        png(scratch.file("dup.01.png"));
+        png(scratch.file("dup.2.png"));
+        const auto sequence = media::scanSequence(scratch.file("dup.2.png"));
+        check.expect(sequence.value.has_value() && sequence.value->members.size() == 2 &&
+                         sequence.value->members.front().path.filename() == "dup.1.png" &&
+                         std::ranges::any_of(sequence.value->diagnostics,
+                                             [](const std::string& line) {
+                                                 return line == "Frame 1 has 2 files; using "
+                                                                "dup.1.png and leaving out "
+                                                                "dup.01.png";
+                                             }),
+                     "duplicate frame numbers keep the file written like the picked one");
+        const auto picked = media::scanSequence(scratch.file("dup.01.png"));
+        check.expect(picked.value.has_value() && picked.value->members.size() == 2 &&
+                         picked.value->members.front().path.filename() == "dup.01.png",
+                     "duplicate frame numbers keep the picked file");
+        check.expect(media::countSequenceMembers(scratch.file("dup.2.png")) == 2U,
+                     "duplicate frame numbers count once");
     }
     for (std::size_t size = 1; size < 64; ++size) {
         const auto path = scratch.file("hostile.png");

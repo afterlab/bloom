@@ -74,11 +74,13 @@ source node's own input color in Properties still overrides the asset's.
 The **Import Media** dialog sets how footage is first read, under **Files of type**:
 
 - **Import numbered images as a sequence** (on by default). Off, each numbered file you chose is
-  imported as its own still.
+  imported as its own still. Numbered images of one name with no two consecutive frame numbers
+  are always imported as stills (see [Assets](assets.md#import-options)).
 - **Skip missing frames** gives a new sequence **Missing Frames: Skip them**.
 - **Only frames** *first* **to** *last* reads only those numbered frames of each sequence; the rest
   are not read at all. The range stays with the sequence: **Reload Footage** and **Relink** read the
-  same frames again. A range holding one frame imports that frame as a still.
+  same frames again. A range holding one frame imports that frame as a still. The size and alpha
+  come from the frames the range keeps, even when the file you chose is outside it.
 - **Create a composition** makes a composition from the imported footage, as **New Composition from
   Selection** does, and opens it.
 

@@ -14,6 +14,7 @@
 #include <cctype>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <span>
@@ -356,7 +357,7 @@ PreparedItem prepareItem(const std::filesystem::path& path,
         asset.duration = probe.value()->duration;
         return PreparedItem::prepared(std::move(asset));
     }
-    const auto probe = media::probeImage(path, cancel);
+    auto probe = media::probeImage(path, cancel);
     if (!probe.value.has_value()) {
         if (probe.cancelled)
             return PreparedItem::interrupted();
@@ -381,6 +382,19 @@ PreparedItem prepareItem(const std::filesystem::path& path,
         if (sequence.cancelled)
             return PreparedItem::interrupted();
         return PreparedItem::failed(sequence.diagnostic);
+    }
+    // A frame range that leaves out the picked file takes the size and alpha from a frame it
+    // keeps, not from the file it left out.
+    const auto& members = sequence.value->members;
+    if (!members.empty() && std::ranges::none_of(members, [&](const auto& member) {
+            return member.path.filename() == path.filename();
+        })) {
+        probe = media::probeImage(members.front().path, cancel);
+        if (!probe.value.has_value()) {
+            if (probe.cancelled)
+                return PreparedItem::interrupted();
+            return PreparedItem::failed(probe.diagnostic);
+        }
     }
     document::AssetRecord asset;
     asset.locator = locator(path, projectDirectory);
@@ -462,20 +476,34 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
     }
     // Items: chosen files in order, each chosen folder replaced by the media files below it
     // (sorted, hidden entries skipped), duplicates dropped, and the members of one image sequence
-    // collapsed to the first of them -- scanning that one finds the rest.
+    // collapsed to the first of them -- scanning that one finds the rest. Numbered files of one
+    // name collapse only when they form a sequence (#458): a group without two consecutive frame
+    // numbers, such as camera files, imports each file as a still. Each group's directory is
+    // listed once to decide, and the answer is kept per item.
     std::vector<std::filesystem::path> items;
+    std::vector<bool> sequenceItems;
     std::set<std::filesystem::path> seen;
-    std::set<std::string> sequences;
+    std::map<std::string, bool> sequences;
     const auto admit = [&](const std::filesystem::path& path) {
         std::error_code error;
         auto normal = std::filesystem::absolute(path, error);
         normal = (error ? path : normal).lexically_normal();
         if (!seen.insert(normal).second)
             return;
-        if (const auto key = options.sequences ? media::sequenceKey(path) : std::nullopt;
-            key && !sequences.insert(*key).second)
-            return;
+        bool sequence = false;
+        if (const auto key = options.sequences ? media::sequenceKey(path) : std::nullopt) {
+            auto group = sequences.find(*key);
+            if (group != sequences.end() && group->second)
+                return;
+            if (group == sequences.end())
+                // Cancelled: treated as a sequence; the next cancellation check stops the batch.
+                group = sequences
+                            .emplace(*key, media::formsSequence(path, stopRequested).value_or(true))
+                            .first;
+            sequence = group->second;
+        }
         items.push_back(path);
+        sequenceItems.push_back(sequence);
     };
     for (const auto& path : paths) {
         std::error_code error;
@@ -531,7 +559,7 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
     const auto total = items.size();
     std::vector<std::uint64_t> weights(total, 1);
     for (std::size_t index = 0; index < total; ++index) {
-        if (!options.sequences || !media::sequenceKey(items[index]))
+        if (!sequenceItems[index])
             continue;
         finding(items[index], 0, true);
         const auto counted = media::countSequenceMembers(
@@ -585,6 +613,8 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
             break;
         }
         PreparedItem item;
+        auto itemOptions = options;
+        itemOptions.sequences = sequenceItems[index];
         try {
             item = prepareItem(
                 path, projectDirectory, stopRequested,
@@ -595,7 +625,7 @@ ImportAssets::ImportAssets(const std::vector<std::filesystem::path>& paths,
                     const auto share = std::min(weight, read * weight / of);
                     reading(index, workBase + share, std::min(read, of), of);
                 },
-                options);
+                itemOptions);
         } catch (const std::exception& error) {
             item = PreparedItem::failed(error.what());
         }

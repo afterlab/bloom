@@ -254,10 +254,14 @@ int main(int argc, char* argv[]) {
         file.write(reinterpret_cast<const char*>(kGeneratedJpeg.data()),
                    static_cast<std::streamsize>(kGeneratedJpeg.size()));
     };
+    // Frames 1, 3 and 4: frame 2 is a held gap, and 3 and 4 are the consecutive pair that makes
+    // the numbered files a sequence (#458).
     write("frame.0001.jpg");
     write("frame.0003.jpg");
+    write("frame.0004.jpg");
     writeExr(folder / "exr.0001.exr");
     writeExr(folder / "exr.0003.exr");
+    writeExr(folder / "exr.0004.exr");
     const auto duration = bloom::core::RationalTime::create(1, 1);
     const auto atFour = bloom::core::RationalTime::create(4, 24);
     const auto atTwo = bloom::core::RationalTime::create(2, 24);

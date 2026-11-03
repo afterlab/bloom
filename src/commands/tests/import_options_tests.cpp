@@ -7,6 +7,7 @@
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/document/new_project.hpp>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -25,9 +26,21 @@ constexpr std::array<unsigned char, 70> kPixel{
     0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f, 0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47,
     0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
 
+// A 2x1 RGBA PNG, for frames whose size differs from kPixel's.
+constexpr std::array<unsigned char, 71> kWide{
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+    0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0xf4,
+    0x22, 0x7f, 0x8a, 0x00, 0x00, 0x00, 0x0e, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8,
+    0xcf, 0xc0, 0xf0, 0x1f, 0x84, 0x01, 0x11, 0xf7, 0x03, 0xfd, 0xfe, 0xad, 0xbb, 0x99, 0x00,
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+
 void writePixel(const std::filesystem::path& path) {
     std::ofstream out(path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(kPixel.data()), kPixel.size());
+}
+void writeWide(const std::filesystem::path& path) {
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(kWide.data()), kWide.size());
 }
 
 struct Fixture final {
@@ -265,6 +278,74 @@ void testReimportReturnsExistingAsset(TestContext& test) {
                     document.snapshot().project().assets().size() == 2,
                 "a batch names the held asset and the new one, one id per file in order");
 }
+// #458: numbered files of one name are a sequence only when two have consecutive frame numbers;
+// several files numbered with one frame keep one; a range that leaves out the picked file takes
+// the size from a frame it keeps.
+void testSequenceGrouping(TestContext& test) {
+    const auto directory = std::filesystem::current_path() / "sequence-grouping-fixtures";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory / "camera");
+    for (const auto* name : {"IMG_2041.png", "IMG_2077.png", "IMG_3105.png"})
+        writePixel(directory / "camera" / name);
+    for (const auto* name : {"take.1.png", "take.01.png", "take.2.png"})
+        writePixel(directory / name);
+    writePixel(directory / "range.0001.png");
+    writeWide(directory / "range.0002.png");
+    writeWide(directory / "range.0003.png");
+    const auto import = [&](std::vector<std::filesystem::path> files,
+                            const ImportOptions& options = {}) {
+        auto seed = document::makeNewProject("Group", "Main", core::RationalTime::fromInteger(10));
+        Document document(std::move(seed.project));
+        CommandStack stack(document);
+        (void)run(document, stack,
+                  std::make_unique<ImportAssets>(std::move(files), directory,
+                                                 std::function<bool()>{}, ImportProgressCallback{},
+                                                 options));
+        const auto assets = document.snapshot().project().assets();
+        return std::vector<document::AssetRecord>(assets.begin(), assets.end());
+    };
+    {
+        const auto folder = import({directory / "camera"});
+        test.expect(folder.size() == 3 && std::ranges::all_of(folder,
+                                                              [](const auto& asset) {
+                                                                  return asset.kind ==
+                                                                         AssetKind::Image;
+                                                              }),
+                    "a folder of camera files imports each as a still");
+        const auto one = import({directory / "camera" / "IMG_2077.png"});
+        test.expect(one.size() == 1 && one.front().kind == AssetKind::Image &&
+                        one.front().locator.path.ends_with("IMG_2077.png"),
+                    "a picked camera file imports as a still");
+        const auto both =
+            import({directory / "camera" / "IMG_2041.png", directory / "camera" / "IMG_3105.png"});
+        test.expect(both.size() == 2, "two picked camera files import as two stills");
+    }
+    {
+        const ImportAssets duplicate({directory / "take.01.png"}, directory);
+        test.expect(
+            duplicate.failures().empty() && duplicate.prepared().size() == 1 &&
+                duplicate.prepared().front().kind == AssetKind::Sequence &&
+                duplicate.prepared().front().manifest.members.size() == 2 &&
+                duplicate.prepared().front().manifest.members.front().locator.path.ends_with(
+                    "take.01.png"),
+            "duplicate frame numbers import the sequence with the picked file");
+    }
+    {
+        ImportOptions options;
+        options.frameRange = document::AssetSequenceRange{2, 3};
+        const auto ranged = import({directory / "range.0001.png"}, options);
+        test.expect(ranged.size() == 1 && ranged.front().kind == AssetKind::Sequence &&
+                        ranged.front().width == 2 && ranged.front().height == 1,
+                    "a range that leaves out the picked file takes its size from a kept frame");
+        options.frameRange = document::AssetSequenceRange{3, 3};
+        const auto still = import({directory / "range.0001.png"}, options);
+        test.expect(still.size() == 1 && still.front().kind == AssetKind::Image &&
+                        still.front().locator.path.ends_with("range.0003.png") &&
+                        still.front().width == 2,
+                    "a one-frame range takes the size of that frame");
+    }
+    std::filesystem::remove_all(directory);
+}
 } // namespace
 } // namespace bloom::commands::test
 
@@ -274,6 +355,7 @@ int main() {
         bloom::commands::test::testImportOptions(test);
         bloom::commands::test::testStillDuration(test);
         bloom::commands::test::testReimportReturnsExistingAsset(test);
+        bloom::commands::test::testSequenceGrouping(test);
     } catch (const std::exception& error) {
         test.fail(error.what());
     }
