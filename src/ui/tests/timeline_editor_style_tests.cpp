@@ -1861,6 +1861,20 @@ void testPropertyRows(Expectations& expectations) {
                                 fixture.commands.size() == history + 1,
                             "inline X commits the exact row parameter through its session setter");
     }
+    // The session hands its colour converter out only after the poll that announces it, and a row
+    // converts a picked colour through it, so wait for that announcement (as Properties' tests do)
+    // before driving the chip.
+    {
+        QElapsedTimer converterWait;
+        converterWait.start();
+        while (!fixture.session.colorConverterReady() && converterWait.elapsed() < 5'000) {
+            (void)fixture.session.colorConverter(document::kTextColorParameterSchemaKey);
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        QCoreApplication::processEvents();
+        expectations.expect(fixture.session.colorConverterReady(),
+                            "the session colour converter is published");
+    }
     for (auto* row : editor.findChildren<QWidget*>("timelinePropertyRow")) {
         if (!row->isVisible() || row->property("role").toString() != "color")
             continue;
