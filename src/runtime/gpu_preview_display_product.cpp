@@ -205,6 +205,8 @@ makeGpuNeutralDisplayPreview(const PreviewCpuStage& stage,
         // rejection-before-adoption that preserves the caller's bytes.
         std::vector<EvaluatedOperationBounds> bounds(processFrame->evaluatedBounds().begin(),
                                                      processFrame->evaluatedBounds().end());
+        // GpuNeutral names the display transform only. The process identity copied below is the
+        // CPU stage's, so the evaluated scene stays labelled CpuReference (#452).
         auto provenance = PreviewDisplayProvenance{.provider = PreviewDisplayProvider::GpuNeutral,
                                                    .gpuQualification = std::move(report)};
 

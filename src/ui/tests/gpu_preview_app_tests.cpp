@@ -35,6 +35,7 @@
 #include <bloom/ui/memory_budget_controller.hpp>
 #include <bloom/ui/preview_frame_cache.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
+#include <bloom/ui/window_status_bar.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -360,6 +361,15 @@ void testControllerGpuPathAndParity(Expectations& expectations, const Options& o
         expectations.expect(frame->provenance().provider ==
                                 runtime::PreviewDisplayProvider::GpuNeutral,
                             "the application frame carries actual GPU Neutral provenance");
+        // #452: only the display transform ran on the GPU; the scene came from the CPU stage, so
+        // the frame never reports a GPU render path.
+        expectations.expect(frame->processIdentity().provider ==
+                                runtime::EvaluationProvider::CpuReference,
+                            "the GPU Neutral frame keeps its CPU evaluation provenance");
+        const auto chip = ui::previewColorState(controller.state());
+        expectations.expect(chip.pathLabel == QStringLiteral("CPU") &&
+                                chip.text == QStringLiteral("CPU render · GPU display"),
+                            "the status bar reports a CPU render with a GPU display");
         // CPU oracle from the same plan/time/identity, evaluated once and mapped by the qualified
         // CPU display preparer.
         const auto processIdentity = frame->processIdentity();

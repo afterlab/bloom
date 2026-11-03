@@ -44,10 +44,17 @@ PreviewColorState previewColorState(const CompositionPreviewState& preview) {
         }
         // GPU provenance is reported honestly on the existing color chip: a display-only frame the
         // fixed GPU Neutral operation produced says so, and the qualification report it carries is
-        // PreviewOnly (RGB tolerance), so this never claims reference parity. CPU reference and
+        // PreviewOnly (RGB tolerance), so this never claims reference parity. Only its display
+        // transform ran on the GPU: the scene was evaluated by the CPU stage, so the render path
+        // follows the frame's evaluation provider and reads CPU (#452). CPU reference and
         // qualified-CPU frames keep their exact existing text.
         if (provider == runtime::PreviewDisplayProvider::GpuNeutral) {
-            return {WindowStatusBar::tr("GPU display"), kit::Color::Ok, WindowStatusBar::tr("GPU")};
+            const bool gpuEvaluated = preview.frame->processIdentity().provider ==
+                                      runtime::EvaluationProvider::GpuResident;
+            return gpuEvaluated ? PreviewColorState{WindowStatusBar::tr("GPU display"),
+                                                    kit::Color::Ok, WindowStatusBar::tr("GPU")}
+                                : PreviewColorState{WindowStatusBar::tr("CPU render · GPU display"),
+                                                    kit::Color::Ok, WindowStatusBar::tr("CPU")};
         }
         if (provider == runtime::PreviewDisplayProvider::GpuPreparedPacked) {
             return {WindowStatusBar::tr("GPU-prepared / CPU-painted"), kit::Color::Ok,

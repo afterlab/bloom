@@ -92,6 +92,9 @@ class GpuServiceGeneration;
 enum class PreviewDisplayProvider : std::uint8_t {
     CpuReference,
     CpuOcio,
+    // The display transform ran on the GPU Neutral op. It names the display stage only: the packed
+    // readback route evaluates the scene on the CPU stage, so the frame's process identity keeps
+    // EvaluationProvider::CpuReference and its render path is CPU.
     GpuNeutral,
     GpuResident,
     // Genuine GPU scene/display preparation; one final RGBA8 transfer, ordinary widget paint.

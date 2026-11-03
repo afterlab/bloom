@@ -273,7 +273,10 @@ routes on that same owner thread and scheduler lease:
   fallback and, when the report's measured eligible interval and the overhead-adjusted comparison
   admit it, runs one bounded native `OcioDisplayV1` dispatch producing packed RGBA8 with
   `PreviewDisplayProvider::GpuNeutral` provenance; otherwise the same evaluated stage is mapped by
-  the CPU display fallback and is never compiled or evaluated twice.
+  the CPU display fallback and is never compiled or evaluated twice. `GpuNeutral` names the display
+  transform only: the scene came from the CPU stage, so the frame's process identity keeps
+  `EvaluationProvider::CpuReference` and the status bar reports a CPU render path with a GPU
+  display.
 - The opt-in resident route (additive constructor) runs a genuine startup `qualifyResidentPreview()`,
   prepares the shared GPU scene on a CPU child, drives it through `GpuSceneExecutor` ->
   `GpuResidentDisplay` -> the resident product factory, and publishes an opaque owner-bound
