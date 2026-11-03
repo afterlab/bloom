@@ -49,6 +49,7 @@
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -244,7 +245,11 @@ struct GpuSceneExecutorBudgets final {
     // ceilings are forwarded to render::GpuOcioProgram::create.
     std::uint64_t maxOcioPrograms = 8;
     std::uint64_t maxOcioRetainedProgramBytes = 256ULL * 1024ULL * 1024ULL;
-    std::uint64_t maxOcioOwnedBytesPerProgram = 512ULL * 1024ULL * 1024ULL;
+    // No fixed per-program ceiling on the job's output image (#425, #474): a 4320p RGBA32F effect
+    // output alone is 506 MiB, and a fixed 512 MiB refused it beside the program's LUTs and sent
+    // the frame to the CPU. Each dispatch is bounded by its request's live byte budget, which
+    // follows usable VRAM (the live budget minus the VRAM headroom).
+    std::uint64_t maxOcioOwnedBytesPerProgram = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t maxOcioLutBytesPerProgram = 256ULL * 1024ULL * 1024ULL;
     // A native job that has not retired by this deadline is cancelled and failed closed.
     std::uint64_t jobDeadlineMilliseconds = 5000;
