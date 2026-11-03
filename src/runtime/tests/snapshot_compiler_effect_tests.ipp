@@ -407,3 +407,93 @@ void testImageCombineChannelLowering(Expectations& expectations) {
         }
     }
 }
+
+// #336: Transform 2D lowers through the image-effect operation with its parameter identities,
+// extent and filter; animated or driven transform values make it (and the output) time dependent.
+void testTransform2DLowering(Expectations& expectations) {
+    using namespace document;
+    auto project = makeProject(singleLayerOptions());
+    auto* composition = project.findComposition(kCompositionId);
+    auto& graph = composition->graph();
+    const auto effectId = NodeId::fromRaw(970);
+    const auto* definition = builtInNodeDefinitions().find("bloom.transform-2d", 1);
+    require(definition != nullptr && definition->parameters.size() == 6,
+            "Transform 2D definition has six parameters");
+    std::vector<ParameterBinding> bindings;
+    std::uint64_t next = 970;
+    for (const auto& parameter : definition->parameters) {
+        const auto id = ParameterId::fromRaw(next++);
+        auto value = parameter.defaultValue;
+        if (parameter.role == "translate")
+            value = Vec2d{12.5, -4.0};
+        if (parameter.role == "rotation")
+            value = 30.0;
+        if (parameter.role == "extent")
+            value = std::int64_t{2};
+        require(composition->parameters().insert({id, parameter.schemaKey, ConstantValueSource{value}}),
+                "Transform 2D parameter is valid");
+        bindings.push_back({parameter.role, id});
+    }
+    require(graph.addNode({effectId, "bloom.transform-2d", std::move(bindings), 1}),
+            "Transform 2D node is accepted");
+    require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+    require(graph.addEdge(
+                {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{effectId, "input"}}),
+            "source feeds Transform 2D");
+    require(graph.addEdge({EdgeId::fromRaw(970), {effectId, "image"},
+                           NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+            "Transform 2D feeds Layer");
+    expectations.expect(project.validate().ok(), "Transform 2D graph is valid document truth");
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto result = compile(std::move(project), registry);
+    expectations.expect(result.plan != nullptr, "Transform 2D graph compiles");
+    if (!result.plan)
+        return;
+    const auto effect = std::ranges::find_if(result.plan->operations(), [](const auto& op) {
+        return std::holds_alternative<runtime::CompiledImageEffect>(op);
+    });
+    require(effect != result.plan->operations().end(), "Transform 2D lowers to an image effect");
+    const auto* kernel = std::get_if<runtime::Transform2DKernel>(
+        &std::get<runtime::CompiledImageEffect>(*effect).kernel);
+    const auto* translate = kernel ? std::get_if<Vec2d>(&kernel->translate.source) : nullptr;
+    expectations.expect(kernel && kernel->translate.id == ParameterId::fromRaw(970) &&
+                            kernel->rotation.id == ParameterId::fromRaw(973) && translate &&
+                            *translate == Vec2d{12.5, -4.0} &&
+                            kernel->extent == runtime::Transform2DExtent::Display &&
+                            kernel->filter == 0,
+                        "Transform 2D lowering retains identities, values, extent and filter");
+    const auto effectIndex =
+        static_cast<std::size_t>(std::distance(result.plan->operations().begin(), effect));
+    expectations.expect(
+        !result.plan->operationTimeDependent(runtime::OperationIndex::fromRaw(effectIndex)),
+        "constant Transform 2D values remain time invariant");
+    auto animatedDefinition = result.plan->copyDefinition();
+    std::get<runtime::Transform2DKernel>(
+        std::get<runtime::CompiledImageEffect>(animatedDefinition.operations[effectIndex]).kernel)
+        .rotation.source = runtime::ScalarCurveIndex::fromRaw(0);
+    animatedDefinition.scalarCurves.push_back(runtime::CompiledScalarCurve{
+        AnimationCurveId::fromRaw(970),
+        {{KeyframeId::fromRaw(970), core::RationalTime::fromInteger(0), 0.0},
+         {KeyframeId::fromRaw(971), core::RationalTime::fromInteger(1), 90.0}}});
+    const auto animated =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(animatedDefinition));
+    expectations.expect(
+        animated->operationTimeDependent(runtime::OperationIndex::fromRaw(effectIndex)) &&
+            animated->operationTimeDependent(animated->output()),
+        "animated Transform 2D rotation invalidates itself and the downstream output");
+    auto drivenDefinition = result.plan->copyDefinition();
+    std::get<runtime::Transform2DKernel>(
+        std::get<runtime::CompiledImageEffect>(drivenDefinition.operations[effectIndex]).kernel)
+        .translate.source = runtime::ValueOutputIndex::fromRaw(0);
+    drivenDefinition.valueOperations = {{NodeId::fromRaw(980), runtime::ValueOutputIndex::fromRaw(0),
+                                         2, runtime::CompiledValueTime{}}};
+    drivenDefinition.valueOutputCount = 2;
+    const auto driven =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(drivenDefinition));
+    expectations.expect(
+        driven->operationTimeDependent(runtime::OperationIndex::fromRaw(effectIndex)) &&
+            driven->operationTimeDependent(driven->output()),
+        "driven Transform 2D translation invalidates itself and the downstream output");
+}

@@ -117,6 +117,49 @@ void discreteImageRows() {
     }
 }
 
+// #336: Transform 2D is discoverable through AddNode, shows every registry control in Properties,
+// and its Extent selector edits through command history with undo/redo.
+void transform2DRows() {
+    auto project =
+        document::makeNewProject("Transform", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    const auto node = addNode(session, "bloom.transform-2d");
+    expect(node.isValid(), "Transform 2D is discoverable through generic AddNode");
+    session.selectNode(node);
+    QCoreApplication::processEvents();
+    for (const auto* role : {"translate", "pivot", "scale", "rotation", "extent", "filter"})
+        expect(row(properties, role) != nullptr, "Transform 2D presents every registry control");
+    auto* extent = row(properties, "extent");
+    auto* selector = extent ? extent->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum")
+                            : nullptr;
+    expect(selector && selector->count() == 3 &&
+               selector->currentText() == QStringLiteral("Transformed"),
+           "Extent is a three-entry selector defaulting to Transformed");
+    auto* filter = row(properties, "filter");
+    auto* filters = filter ? filter->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum")
+                           : nullptr;
+    expect(filters && filters->count() == 1 && filters->currentText() == QStringLiteral("Bilinear"),
+           "Filter offers the single explicitly versioned Bilinear resampler");
+    if (selector) {
+        selector->chooseIndex(2);
+        const auto* record = [&]() -> const document::ParameterRecord* {
+            for (const auto& binding : session.composition()->graph().findNode(node)->parameters)
+                if (binding.role == "extent")
+                    return session.composition()->parameters().find(binding.parameterId);
+            return nullptr;
+        }();
+        expect(record && std::get<std::int64_t>(
+                             std::get<document::ConstantValueSource>(record->source).value) == 2,
+               "choosing Display publishes the stored extent through a command");
+        expect(session.undo(), "Transform 2D extent edit undoes");
+        expect(session.redo(), "Transform 2D extent edit redoes");
+    }
+}
+
 void colourEffectRows() {
     auto project = document::makeNewProject("Color", "Main", core::RationalTime::fromInteger(10));
     const auto composition = project.initialCompositionId;
@@ -732,6 +775,7 @@ int main(int argc, char** argv) try {
     drivenTextContent();
     colourEffectRows();
     discreteImageRows();
+    transform2DRows();
     widthRule();
     videoRows();
     QSettings().clear();

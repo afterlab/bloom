@@ -189,7 +189,7 @@ Authored authoredProject() {
     if (!authoredParameters) {
         throw std::runtime_error("fixture parameters");
     }
-    for (const auto* type : {"bloom.resize", "bloom.fit"}) {
+    for (const auto* type : {"bloom.resize", "bloom.fit", "bloom.transform-2d"}) {
         const auto* definition = document::builtInNodeDefinitions().find(type, 1);
         const auto nodeId = draft.ids().allocateNode();
         if (!definition || !nodeId)
@@ -204,6 +204,16 @@ Authored authoredProject() {
                 value = std::int64_t{2};
             if (parameter.role == "policy")
                 value = std::int64_t{1};
+            // #336 Transform 2D: signed sub-pixel translation, a mirrored nonuniform scale,
+            // a multi-turn rotation and the Display extent all reopen exactly.
+            if (parameter.role == "translate")
+                value = document::Vec2d{-12.25, 0.125};
+            if (parameter.role == "scale")
+                value = document::Vec2d{-1.5, 0.5};
+            if (parameter.role == "rotation")
+                value = 405.5;
+            if (parameter.role == "extent")
+                value = std::int64_t{2};
             if (!id || !composition.parameters().insert(
                            {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
                 throw std::runtime_error("Resize/Fit persisted parameter");
@@ -296,7 +306,7 @@ void roundTripAndReopen() {
     std::ranges::sort(canonicalRecords, {}, [](const auto& record) { return record.id.value(); });
     expect(std::ranges::equal(composition->graph().nodes(), canonicalNodes) &&
                std::ranges::equal(composition->parameters().records(), canonicalRecords),
-           "Resize/Fit node identities, output size, PAR and Fill policy reopen exactly");
+           "Resize/Fit and Transform 2D node identities and parameter values reopen exactly");
     const auto* vector3Constant =
         vector3 == nullptr ? nullptr : std::get_if<document::ConstantValueSource>(&vector3->source);
     const auto* vector3Value = vector3Constant == nullptr

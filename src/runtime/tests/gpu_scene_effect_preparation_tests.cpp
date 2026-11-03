@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -222,6 +223,114 @@ void testResizeFitPreparation(Expectations& expectations) {
                                     cpuRoi.frame()->processImage().descriptor()->dataWindow(),
                             "Resize/Fit preserves the production ROI route");
     }
+}
+
+// #336 Transform 2D: the production builder emits one real affine (no output descriptor: the
+// display window and PAR follow the input), its replay matches the CPU reference, the ROI route
+// agrees, identity aliases, and a degenerate scale publishes no command and a transparent frame.
+void testTransform2DPreparation(Expectations& expectations) {
+    using bloom::document::Vec2d;
+    using bloom::runtime::CompiledScalarParameter;
+    using bloom::runtime::CompiledVec2Parameter;
+    using bloom::runtime::Transform2DExtent;
+    using bloom::runtime::Transform2DKernel;
+    const auto kernelOf = [](const std::uint64_t base, const Vec2d translate, const Vec2d scale,
+                             const double rotation, const Transform2DExtent extent) {
+        return Transform2DKernel{CompiledVec2Parameter{ParameterId::fromRaw(base + 1), translate},
+                                 CompiledVec2Parameter{ParameterId::fromRaw(base + 2), Vec2d{1, -1}},
+                                 CompiledVec2Parameter{ParameterId::fromRaw(base + 3), scale},
+                                 CompiledScalarParameter{ParameterId::fromRaw(base + 4), rotation},
+                                 extent};
+    };
+    std::uint64_t base = 8300;
+    for (const auto extent : {Transform2DExtent::Transformed, Transform2DExtent::Input,
+                              Transform2DExtent::Display}) {
+        for (const auto& [translate, scale, rotation] :
+             {std::tuple{Vec2d{1.5, -0.75}, Vec2d{1, 1}, 0.0},
+              std::tuple{Vec2d{0.25, 0.5}, Vec2d{1.5, 0.5}, 30.0},
+              std::tuple{Vec2d{2, 1}, Vec2d{-1, 1}, 90.0}}) {
+            const auto plan = effectPlan({solidLeaf(base)},
+                                         kernelOf(base + 10, translate, scale, rotation, extent),
+                                         base + 50);
+            auto request = requestFor(*plan);
+            const auto prepared = CpuGpuSceneBuilder{}.build(plan, request);
+            expectations.expect(prepared.hasValue(),
+                                "Transform 2D prepares through the production builder");
+            if (!prepared) {
+                base += 100;
+                continue;
+            }
+            const auto command = prepared.scene->commandForOperation()[1];
+            const auto* emitted =
+                command < prepared.scene->commands().size() ? &prepared.scene->commands()[command]
+                                                            : nullptr;
+            const auto* affine =
+                emitted ? std::get_if<bloom::runtime::GpuSceneAffineCommand>(emitted) : nullptr;
+            const auto* translation =
+                emitted ? std::get_if<bloom::runtime::GpuSceneTranslationCommand>(emitted)
+                        : nullptr;
+            const bool moveOnly = scale == Vec2d{1, 1} && rotation == 0.0;
+            expectations.expect(
+                moveOnly ? translation && !translation->outputDisplayWindow &&
+                               translation->opacity == 1.0F
+                         : affine && !affine->outputDescriptor && affine->opacity == 1.0F,
+                "Transform 2D emits the Layer raster command (translation for a pure move, "
+                "affine otherwise) that keeps the input display window and pixel aspect");
+            CpuCompositionEvaluator evaluator;
+            const auto cpu = evaluator.evaluate(plan, request, {});
+            std::vector<std::shared_ptr<const Rgba32fImage>> images;
+            const bool replayed = replayScene(*prepared.scene, images);
+            bool matches = cpu.frame() && replayed && images[prepared.scene->outputCommand()];
+            if (matches) {
+                const auto expected = cpu.frame()->processImage().pixels();
+                const auto actual = images[prepared.scene->outputCommand()]->pixels();
+                matches = expected.size() == actual.size();
+                for (std::size_t i = 0; matches && i < expected.size(); ++i)
+                    for (std::size_t channel = 0; channel < 4; ++channel)
+                        matches =
+                            matches &&
+                            std::abs(expected[i].components()[channel] -
+                                     actual[i].components()[channel]) <=
+                                2e-6F * std::max(1.0F, std::abs(expected[i].components()[channel]));
+            }
+            expectations.expect(matches,
+                                "prepared Transform 2D command replay matches the CPU reference");
+            const auto roi = ImageWindow::create(2, 1, 3, 3);
+            request.roi = *roi.value();
+            const auto clipped = CpuGpuSceneBuilder{}.build(plan, request);
+            const auto cpuRoi = evaluator.evaluate(plan, request, {});
+            expectations.expect(clipped && cpuRoi.frame() &&
+                                    clipped.scene->outputDescriptor().dataWindow() ==
+                                        cpuRoi.frame()->processImage().descriptor()->dataWindow(),
+                                "Transform 2D preserves the production ROI route");
+            base += 100;
+        }
+    }
+    // Identity aliases the input; a degenerate scale publishes nothing on either route.
+    const auto identityPlan = effectPlan(
+        {solidLeaf(base)},
+        kernelOf(base + 10, Vec2d{}, Vec2d{1, 1}, 360.0, Transform2DExtent::Transformed),
+        base + 50);
+    const auto identity = CpuGpuSceneBuilder{}.build(identityPlan, requestFor(*identityPlan));
+    expectations.expect(identity && identity.scene->commandForOperation()[1] ==
+                                        identity.scene->commandForOperation()[0],
+                        "an identity Transform 2D aliases its input command");
+    base += 100;
+    const auto collapsedPlan = effectPlan(
+        {solidLeaf(base)},
+        kernelOf(base + 10, Vec2d{}, Vec2d{0, 1}, 0.0, Transform2DExtent::Transformed),
+        base + 50);
+    const auto collapsed = CpuGpuSceneBuilder{}.build(collapsedPlan, requestFor(*collapsedPlan));
+    const auto collapsedCpu =
+        CpuCompositionEvaluator{}.evaluate(collapsedPlan, requestFor(*collapsedPlan), {});
+    bool transparent = collapsedCpu.frame() != nullptr;
+    if (collapsedCpu.frame())
+        for (const auto pixel : collapsedCpu.frame()->processImage().pixels())
+            transparent = transparent && pixel.alpha() == 0.0F;
+    expectations.expect(collapsed && collapsed.scene->commandForOperation()[1] ==
+                                         bloom::runtime::kInvalidGpuSceneCommand &&
+                            transparent,
+                        "a degenerate Transform 2D publishes no command and no CPU pixels");
 }
 
 void testIdentityAndRefusals(Expectations& expectations) {
@@ -430,6 +539,7 @@ int main() {
     try {
         Expectations expectations;
         testResizeFitPreparation(expectations);
+        testTransform2DPreparation(expectations);
         testIdentityAndRefusals(expectations);
         testCanvasPreparation(expectations);
         testDiscretePreparation(expectations);

@@ -21,7 +21,7 @@ void expect(const bool condition, const char* message) {
 }
 
 void spatialImageBindings() {
-    for (const auto* type : {"bloom.flip", "bloom.rotate-90", "bloom.resize"}) {
+    for (const auto* type : {"bloom.flip", "bloom.rotate-90", "bloom.resize", "bloom.transform-2d"}) {
         for (const int mode : {0, 1, 2}) {
             auto initial = makeNewProject("Bindings", "Main", bloom::core::RationalTime::fromInteger(10));
             Document document(std::move(initial.project));

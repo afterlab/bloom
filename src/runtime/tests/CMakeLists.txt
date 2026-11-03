@@ -346,6 +346,13 @@ bloom_enable_warnings(bloom_runtime_resize_fit_kernel_test)
 bloom_enable_strict_floating_point(bloom_runtime_resize_fit_kernel_test)
 bloom_add_test(NAME bloom.runtime.resize-fit-kernel COMMAND bloom_runtime_resize_fit_kernel_test LABELS unit runtime render)
 
+add_executable(bloom_runtime_transform_2d_kernel_test transform_2d_kernel_tests.cpp)
+target_include_directories(bloom_runtime_transform_2d_kernel_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_transform_2d_kernel_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_transform_2d_kernel_test)
+bloom_enable_strict_floating_point(bloom_runtime_transform_2d_kernel_test)
+bloom_add_test(NAME bloom.runtime.transform-2d-kernel COMMAND bloom_runtime_transform_2d_kernel_test LABELS unit runtime render)
+
 # Bounded runtime qualification for the embedded Bloom Neutral v1 display operation. The hardware
 # body is compiled unconditionally and depends only on runtime create() availability, so the same
 # target runs against the CPU stub; --loader/--require-device are supplied by the local supervisor

@@ -1919,6 +1919,7 @@ int main() {
         testExposureOffsetLowering(expectations);
         testCanvasLowering(expectations);
         testBlurLowering(expectations);
+        testTransform2DLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

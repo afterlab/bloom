@@ -535,6 +535,34 @@ void testResizeFitParameters(TestContext& test) {
     }
 }
 
+// #336: Transform 2D is added, edited, undone and redone through the generic node commands, and
+// its schema refuses values the renderer could not honour.
+void testTransform2DParameters(TestContext& test) {
+    Fixture fixture;
+    const auto result = exercise<AddNode>(test, fixture, "bloom.transform-2d", Vec2d{});
+    const auto translate = result.outputId<ParameterId>("parameter.translate");
+    const auto scale = result.outputId<ParameterId>("parameter.scale");
+    const auto rotation = result.outputId<ParameterId>("parameter.rotation");
+    const auto extent = result.outputId<ParameterId>("parameter.extent");
+    const auto filter = result.outputId<ParameterId>("parameter.filter");
+    if (!translate || !scale || !rotation || !extent || !filter)
+        throw std::logic_error("Transform 2D exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *translate,
+                                       ConstantValueSource{Vec2d{-12.5, 40.0}});
+    (void)exercise<SetParameterSource>(test, fixture, *scale, ConstantValueSource{Vec2d{0.0, -2.0}});
+    (void)exercise<SetParameterSource>(test, fixture, *rotation, ConstantValueSource{-725.0});
+    (void)exercise<SetParameterSource>(test, fixture, *extent,
+                                       ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *translate,
+                               ConstantValueSource{Vec2d{std::numeric_limits<double>::infinity(), 0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *rotation,
+                               ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *extent,
+                               ConstantValueSource{std::int64_t{3}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *filter,
+                               ConstantValueSource{std::int64_t{1}});
+}
+
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
@@ -1481,6 +1509,7 @@ int main() {
         bloom::commands::test::testValidityQuery(test);
         bloom::commands::test::testAddAndLayout(test);
         bloom::commands::test::testResizeFitParameters(test);
+        bloom::commands::test::testTransform2DParameters(test);
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);

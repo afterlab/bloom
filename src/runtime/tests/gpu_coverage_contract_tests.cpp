@@ -355,6 +355,29 @@ displayProofRunner(const bool customView) {
                        {});
     addImageEffectPlan("effect.ResizeFitKernel", bloom::runtime::ResizeFitKernel{10, 7}, 103000,
                        "src/runtime Resize/Fit production affine preparation");
+    // #336 Transform 2D: a genuine quarter-turned, nonuniformly scaled, sub-pixel translated
+    // resample through the production resident affine preparation (never the identity alias or
+    // the translation pass). This gate requires bit-exact alpha everywhere, while the shared affine
+    // backend guarantees bit-exact alpha only at the 0/1 endpoints (gpu_affine.hpp), so these
+    // fixtures use dyadic coefficients whose inverse map is exact on both routes. Arbitrary
+    // rotations are verified at the documented 2e-6 gate by gpu_scene_effect_native.
+    const auto transform2D = [](const std::uint64_t base, const bloom::document::Vec2d translate,
+                                const bloom::document::Vec2d scale, const double rotation,
+                                const bloom::runtime::Transform2DExtent extent) {
+        return bloom::runtime::Transform2DKernel{
+            CompiledVec2Parameter{ParameterId::fromRaw(base + 1), translate},
+            CompiledVec2Parameter{ParameterId::fromRaw(base + 2), bloom::document::Vec2d{0.5, 0.25}},
+            CompiledVec2Parameter{ParameterId::fromRaw(base + 3), scale},
+            CompiledScalarParameter{ParameterId::fromRaw(base + 4), rotation}, extent};
+    };
+    addImageEffectPlan("effect.Transform2DKernel",
+                       transform2D(150000, {1.25, -0.5}, {2.0, 0.5}, 90.0,
+                                   bloom::runtime::Transform2DExtent::Transformed),
+                       150000, "src/runtime Transform 2D production affine preparation");
+    addImageEffectPlan("node.bloom.transform-2d",
+                       transform2D(151000, {-0.75, 1.5}, {0.5, 2.0}, -90.0,
+                                   bloom::runtime::Transform2DExtent::Display),
+                       151000, "src/runtime Transform 2D production affine preparation");
     add(
         "effect.CstKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/color OCIO image effect tests", [] { return runCstEffectFixture(101000); }, {},

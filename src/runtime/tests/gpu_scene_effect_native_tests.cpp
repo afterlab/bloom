@@ -729,6 +729,130 @@ void runResizeFit(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
     }
 }
 
+// #336 Transform 2D: the production builder's resident AffineBilinearV1 command against the CPU
+// reference at the documented 2e-6 gate, for an asymmetric stroked shape and a signed/HDR
+// translucent solid, every extent, a mirror, an exact quarter turn, a degenerate scale and a
+// proxy. Cold runs perform no executor readback, warm runs no new affine dispatch, and a changed
+// value dispatches again.
+void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::document::Vec2d;
+    using bloom::runtime::CompiledVec2Parameter;
+    using bloom::runtime::Transform2DExtent;
+    using bloom::runtime::Transform2DKernel;
+    const CpuGpuSceneBuilder builder;
+    const CpuCompositionEvaluator evaluator;
+    struct Case final {
+        Vec2d translate;
+        Vec2d scale;
+        double rotation;
+        Vec2d pivot;
+        Transform2DExtent extent;
+    };
+    const std::array cases{
+        Case{{1.5, -0.75}, {1, 1}, 0.0, {}, Transform2DExtent::Transformed},
+        Case{{0.25, 0.5}, {1.5, 0.5}, 30.0, {1, 0.5}, Transform2DExtent::Transformed},
+        Case{{2, 1}, {-1, 1}, 90.0, {}, Transform2DExtent::Transformed},
+        Case{{0, 0}, {1.25, 1.25}, 20.0, {}, Transform2DExtent::Display},
+        Case{{3, 0.5}, {1, 1}, -12.5, {}, Transform2DExtent::Input},
+        Case{{0, 0}, {0, 1}, 0.0, {}, Transform2DExtent::Transformed}};
+    std::uint64_t id = 26000;
+    for (const auto& item : cases) {
+        for (const bool shapeSource : {false, true}) {
+            for (const bool proxy : {false, true}) {
+                cache.clear();
+                const Transform2DKernel kernel{
+                    CompiledVec2Parameter{ParameterId::fromRaw(id + 30), item.translate},
+                    CompiledVec2Parameter{ParameterId::fromRaw(id + 31), item.pivot},
+                    CompiledVec2Parameter{ParameterId::fromRaw(id + 32), item.scale},
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 33), item.rotation},
+                    item.extent};
+                auto definition = effectPlan(CstKernel{}, id)->copyDefinition();
+                std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
+                if (shapeSource) {
+                    bloom::runtime::CompiledShape shape{};
+                    shape.sourceNodeId = NodeId::fromRaw(id + 1);
+                    shape.kind = bloom::document::ShapeKind::Line;
+                    shape.size = {ParameterId::fromRaw(id + 2), Vec2d{6, 3}};
+                    shape.fillEnabled = false;
+                    shape.fillColor = {ParameterId::fromRaw(id + 3),
+                                       Color4d{-0.25, 1.75, 0.5, 0.625}};
+                    shape.strokeEnabled = true;
+                    shape.strokeColor = {ParameterId::fromRaw(id + 4),
+                                         Color4d{-0.25, 1.75, 0.5, 0.625}};
+                    shape.strokeWidth = {ParameterId::fromRaw(id + 5), 1.5};
+                    shape.lineStart = {0, 0};
+                    shape.lineEnd = {6, 3};
+                    definition.operations[0] = shape;
+                }
+                const auto plan =
+                    std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+                auto request = requestFor(*plan);
+                if (proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(6, 5);
+                    request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+                }
+                const auto prepared = builder.build(plan, request);
+                const auto cpu = evaluator.evaluate(plan, request, {});
+                expectations.expect(prepared && cpu.frame(),
+                                    "Transform 2D native: production GPU/CPU routes prepare");
+                auto executor = GpuSceneExecutor::create(device, cache);
+                expectations.expect(executor.hasValue(), "Transform 2D native: executor creates");
+                if (!prepared || !cpu.frame() || !executor)
+                    continue;
+                const auto before = executor.executor->counters();
+                const auto cold = runScene(*executor.executor, prepared.scene);
+                const auto after = executor.executor->counters();
+                expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                        after.readbacks == before.readbacks,
+                                    "Transform 2D native: resident evaluation has no readback");
+                const auto pixels = cpu.frame()->processImage().pixels();
+                bool matches = cold.pixels.size() == pixels.size();
+                for (std::size_t i = 0; matches && i < pixels.size(); ++i)
+                    for (std::size_t channel = 0; channel < 4; ++channel) {
+                        const float actual = cold.pixels[i].components()[channel];
+                        const float expected = pixels[i].components()[channel];
+                        matches = matches && std::isfinite(actual) &&
+                                  std::abs(actual - expected) <=
+                                      2e-6F * std::max(1.0F, std::abs(expected));
+                        if (channel == 3 && (expected == 0 || expected == 1))
+                            matches = matches && actual == expected;
+                    }
+                const auto& descriptor = *cpu.frame()->processImage().descriptor();
+                expectations.expect(matches && cold.dataWindow == descriptor.dataWindow() &&
+                                        cold.displayWindow == descriptor.displayWindow() &&
+                                        cold.pixelAspect == descriptor.pixelAspect(),
+                                    "Transform 2D native: pixels, alpha/HDR and windows match CPU");
+                const auto resamples = [&executor] {
+                    const auto counters = executor.executor->counters();
+                    return counters.affineDispatches + counters.translationDispatches;
+                };
+                const auto coldResamples = resamples();
+                const auto warm = runScene(*executor.executor, prepared.scene);
+                expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                        resamples() == coldResamples,
+                                    "Transform 2D native: unchanged warm render dispatches nothing");
+                if (item.scale.x != 0) {
+                    auto changedDefinition = plan->copyDefinition();
+                    std::get<Transform2DKernel>(
+                        std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
+                        .translate.source = Vec2d{item.translate.x + 0.5, item.translate.y};
+                    const auto changed = std::make_shared<const CompiledCompositionPlan>(
+                        std::move(changedDefinition));
+                    const auto rebuilt = builder.build(changed, request);
+                    const auto dispatched = resamples();
+                    const auto moved = rebuilt ? runScene(*executor.executor, rebuilt.scene)
+                                               : decltype(cold){};
+                    expectations.expect(
+                        rebuilt && moved.pollResult == GpuSceneExecutorPollResult::Ready &&
+                            resamples() > dispatched,
+                        "Transform 2D native: a changed value invalidates the resident result");
+                }
+                id += 100;
+            }
+        }
+    }
+}
+
 void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::runtime::BlurEdgeMode;
     using bloom::runtime::SeparableBlurKernel;
@@ -827,6 +951,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runCanvas(expectations, device, cache);
     runDiscrete(expectations, device, cache);
     runResizeFit(expectations, device, cache);
+    runTransform2D(expectations, device, cache);
     runBlurs(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
