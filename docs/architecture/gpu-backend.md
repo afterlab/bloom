@@ -1206,8 +1206,9 @@ no fraction, quarter, half-of-remaining share or whole-device ceiling. A policy 
 headroom until its composition root delivers the preference; the desktop applies the saved value
 at startup and on every Preferences change, and a headless export root applies the 2 GiB default.
 
-**Claims are needs.** A phase claims fixed output and metadata bytes and three times its minimum
-source bytes (decode, conversion and upload overlap) on the host. Its device need is its working
+**Claims are needs.** A phase claims fixed output and metadata bytes and three times its source
+need (decode, conversion and upload overlap) on the host. The source need is its minimum source
+bytes until its envelope has been measured (see below). Its device need is its working
 bytes plus its minimum executor bytes (the live-image peak; GPU scene preparation raises the
 minimum to the preflight live-image peak for previews and final renders alike). GPU scene
 preparation states the source need from the reachable decoded sources (one float frame per probed
@@ -1263,6 +1264,25 @@ final render stated one float frame as its executor minimum, so its need (0.40 G
 row) was a quarter of what a phase allocated; it now states the preflight live-image peak like a
 preview, and the rest is admitted against the live room as it is allocated. Fills and the export
 kept the same frames, fps and zero CPU fallback.
+
+**Host source needs follow measured retention (#472).** The stated source need counts every
+reachable source reference as one float frame, but preparation decodes each distinct source once
+(layers that show the same media at the same time share one decoded backing). On the many-layer
+benchmark stacks (1080p, L25 and L50) the stated need was 2.8 and 6.3 times what a frame retained;
+the frames admitted claimed nearly all usable RAM while the process's anonymous memory was an
+eighth of it or less, so the preview cache was given no budget and kept no frames. With the
+measured need the same fills kept 225 and 240 of 240 frames (see the
+[benchmark results](../development/benchmark-results-2026-10-31.md)). Each phase that finishes source preparation
+records the deduplicated source bytes it retained under its stated envelope (the same key and the
+same 16 most recently used envelopes as the device peaks, kept separately). A later phase of the
+same envelope needs the largest recorded retention plus a quarter, never more than its stated
+minimum; its host claim is its fixed bytes plus three times that need while it prepares, and
+what it actually retains afterwards. The first phase of an envelope uses the stated need, and a
+phase that retained less never lowers it. The safety rules are unchanged: retention beyond the
+claim is charged as it is when preparation finishes, a phase's retained sources stay within the
+live room at its admission (its source ceiling), uploads and processing storage after the handoff
+are admitted against live capacity, and only a need larger than the whole usable capacity is
+refused. The Viewer's reserved need and the eviction shortfall use the same measured need.
 
 **Waiting, not refusing.** A need that fits the usable capacity but not what other work holds right
 now returns `AwaitingCapacity` with its domain (Host, Device or RequestCount). Before answering, the

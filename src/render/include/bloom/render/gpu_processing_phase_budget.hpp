@@ -25,7 +25,10 @@ class ProcessingHostStorageToken;
 using GpuProcessingRootIdentity = std::shared_ptr<const detail::GpuProcessingPhaseBudgetState>;
 
 // Admission of simultaneous processing phases against measured capacity. Each phase claims its
-// stated host need (fixed output/metadata, 3x the minimum source bytes) at admission. Its device
+// host need (fixed output/metadata, 3x its source need) at admission. The source need is the
+// stated minimum source bytes until a phase with the same stated envelope has finished source
+// preparation; then it is the smaller of the stated minimum and the largest source bytes such a
+// phase actually retained plus a quarter (#472). Its device
 // need (device working bytes plus the minimum executor bytes) must fit the free device capacity
 // at admission but is claimed only during the phase's device stage: from its first native
 // allocation until it holds no native storage. Phases run their device stages one at a time per
@@ -128,6 +131,14 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t releasedPhaseDevicePeakBytes = 0;
     std::uint64_t peakPhaseDeviceNeedBytes = 0;
     std::uint64_t peakPhaseDeviceAllocationBytes = 0;
+    // Phases that finished source preparation: how many, the sum of the source needs they claimed
+    // (3x of which covered decode, conversion and upload overlap) and of the source bytes they
+    // actually retained, and the largest need and largest retention (#472).
+    std::uint64_t finishedSourcePhases = 0;
+    std::uint64_t finishedPhaseSourceNeedBytes = 0;
+    std::uint64_t finishedPhaseRetainedSourceBytes = 0;
+    std::uint64_t peakPhaseSourceNeedBytes = 0;
+    std::uint64_t peakPhaseRetainedSourceBytes = 0;
     std::size_t admittedPhases = 0;
     std::size_t unprovenPhases = 0;
     std::size_t requestCapacity = 0;
@@ -157,7 +168,7 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }
     [[nodiscard]] std::uint64_t hostBytes() const noexcept { return hostBytes_; }
     [[nodiscard]] std::uint64_t deviceBytes() const noexcept { return deviceBytes_; }
-    // Ceiling for retained decoded sources: the room available at admission. Only the stated
+    // Ceiling for retained decoded sources: the room available at admission. Only the source
     // need (3 * sourceClaimBytes) is claimed; growth beyond it is reconciled at the handoff.
     [[nodiscard]] std::uint64_t sourceByteLimit() const noexcept { return sourceCeilingBytes_; }
     [[nodiscard]] std::uint64_t sourceClaimBytes() const noexcept { return sourceBytes_; }
@@ -173,7 +184,8 @@ class GpuProcessingPhaseLease final {
     // buffers) this phase has held at one time so far.
     [[nodiscard]] std::uint64_t deviceNeedBytes() const noexcept { return deviceNeedBytes_; }
     [[nodiscard]] std::uint64_t peakDeviceAllocationBytes() const noexcept;
-    // After the complete scene has finished CPU preparation, retain its actual decoded backing.
+    // After the complete scene has finished CPU preparation, retain its actual decoded backing
+    // (recorded as the measured retention of this phase's envelope).
     // Future native upload buffers acquire their actual host bytes at allocation, within the
     // original upload ceiling. Spent decode/conversion scratch must not block native execution.
     // Call once, before publishing the prepared scene to the device thread.
@@ -227,7 +239,8 @@ class GpuProcessingPhaseLease final {
     // Native storage this phase holds now, and the most it has held at one time.
     std::uint64_t allocatedDeviceBytes_ = 0;
     std::uint64_t peakAllocatedDeviceBytes_ = 0;
-    // The stated device envelope, under which the release records the measured peak.
+    // The stated envelope, under which the release records the measured device peak and the
+    // finished preparation the retained source bytes.
     std::uint64_t envelopeWorkingBytes_ = 0;
     std::uint64_t envelopeMinimumExecutorBytes_ = 0;
     std::uint64_t envelopeFixedHostBytes_ = 0;
@@ -357,6 +370,9 @@ class GpuProcessingPhaseBudget final {
     [[nodiscard]] RootedHostBackingSnapshot rootedHostBackingSnapshot() const noexcept;
     [[nodiscard]] GpuProcessingRootIdentity rootIdentity() const noexcept { return state_; }
     [[nodiscard]] GpuProcessingPhaseGrant reserve(const GpuProcessingPhaseRequest&) noexcept;
+    // The host need reserve() would claim for this request now: its fixed bytes plus three times
+    // its source need (the stated minimum, or its envelope's measured retention).
+    [[nodiscard]] std::uint64_t hostNeedBytes(const GpuProcessingPhaseRequest&) const noexcept;
 
   private:
     std::shared_ptr<detail::GpuProcessingPhaseBudgetState> state_;

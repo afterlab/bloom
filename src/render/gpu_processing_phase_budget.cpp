@@ -36,6 +36,10 @@ void retireHostBackingLocked(detail::GpuProcessingPhaseBudgetState& state,
         }
     }
 }
+detail::PhaseEnvelopeKey envelopeKey(const GpuProcessingPhaseRequest& request) noexcept {
+    return {request.deviceWorkingBytes, request.minimumExecutorBytes, request.fixedHostBytes,
+            request.minimumSourceBytes};
+}
 } // namespace
 
 GpuProcessingPhaseLease::GpuProcessingPhaseLease(
@@ -58,11 +62,10 @@ void GpuProcessingPhaseLease::releaseLocked() noexcept {
     counters.deviceReservedBytes -= deviceClaimBytes_;
     counters.totalDeviceClaimBytes -= deviceClaimBytes_;
     if (deviceBytes_ != 0 && !unproven_ && peakAllocatedDeviceBytes_ != 0)
-        detail::recordMeasuredDevicePeakLocked(
-            *state_,
-            {envelopeWorkingBytes_, envelopeMinimumExecutorBytes_, envelopeFixedHostBytes_,
-             envelopeMinimumSourceBytes_},
-            peakAllocatedDeviceBytes_);
+        detail::recordMeasuredPeakLocked(state_->measuredDevicePeaks,
+                                         {envelopeWorkingBytes_, envelopeMinimumExecutorBytes_,
+                                          envelopeFixedHostBytes_, envelopeMinimumSourceBytes_},
+                                         peakAllocatedDeviceBytes_);
     if (deviceBytes_ != 0) {
         ++counters.releasedNativePhases;
         counters.releasedPhaseDeviceNeedBytes += deviceNeedBytes_;
@@ -214,31 +217,48 @@ bool GpuProcessingPhaseLease::finishSourcePreparation(
     if (id_ == 0 || unproven_ || sourcePreparationFinished_ ||
         retainedSourceBytes > sourceCeilingBytes_ || remainingUploadBytes_ != sourceCeilingBytes_)
         return false;
-    // S/C/U protected preparation at the stated need before actual source sizes were known. Only
-    // the actual retained sources survive; sources beyond the stated need already exist in memory
-    // and are charged as they are. Uploads start after this handoff; their actual backing is
-    // admitted separately against live capacity.
+    // S/C/U protected preparation at the claimed source need before actual source sizes were
+    // known. Only the actual retained sources survive; sources beyond the need already exist in
+    // memory and are charged as they are. Uploads start after this handoff; their actual backing
+    // is admitted separately against live capacity. The retained bytes are recorded under the
+    // phase's envelope, so later phases of it claim from what a phase actually retains (#472).
+    auto& counters = state_->counters;
+    const auto record = [&] {
+        sourcePreparationFinished_ = true;
+        if (retainedSourceBytes != 0)
+            detail::recordMeasuredPeakLocked(state_->measuredSourceRetention,
+                                             {envelopeWorkingBytes_, envelopeMinimumExecutorBytes_,
+                                              envelopeFixedHostBytes_, envelopeMinimumSourceBytes_},
+                                             retainedSourceBytes);
+        ++counters.finishedSourcePhases;
+        counters.finishedPhaseSourceNeedBytes += sourceBytes_;
+        counters.finishedPhaseRetainedSourceBytes += retainedSourceBytes;
+        counters.peakPhaseSourceNeedBytes =
+            std::max(counters.peakPhaseSourceNeedBytes, sourceBytes_);
+        counters.peakPhaseRetainedSourceBytes =
+            std::max(counters.peakPhaseRetainedSourceBytes, retainedSourceBytes);
+    };
     const auto claimed = 3 * sourceBytes_;
     if (retainedSourceBytes > claimed) {
         const auto growth = retainedSourceBytes - claimed;
-        sourcePreparationFinished_ = true;
+        record();
         remainingHostBytes_ += growth;
         hostBytes_ += growth;
-        state_->counters.hostReservedBytes += growth;
-        state_->counters.totalHostClaimBytes += growth;
-        state_->counters.peakHostReservedBytes =
-            std::max(state_->counters.peakHostReservedBytes, state_->counters.hostReservedBytes);
+        counters.hostReservedBytes += growth;
+        counters.totalHostClaimBytes += growth;
+        counters.peakHostReservedBytes =
+            std::max(counters.peakHostReservedBytes, counters.hostReservedBytes);
         return true;
     }
     const auto released = claimed - retainedSourceBytes;
     if (released > remainingHostBytes_)
         return false;
-    sourcePreparationFinished_ = true;
+    record();
     remainingHostBytes_ -= released;
-    state_->counters.hostReservedBytes -= released;
-    state_->counters.totalHostClaimBytes -= released;
+    counters.hostReservedBytes -= released;
+    counters.totalHostClaimBytes -= released;
     if (released != 0) {
-        incrementSaturating(state_->counters.admissionRevision);
+        incrementSaturating(counters.admissionRevision);
         // This phase's own partial release must not make a later failed request retry itself.
         // Increment only its own watermark, preserving intervening independent release events.
         incrementSaturating(admissionRevision_);
@@ -599,6 +619,17 @@ RootedHostBackingSnapshot GpuProcessingPhaseBudget::rootedHostBackingSnapshot() 
     return state_->rootedHostBacking;
 }
 
+std::uint64_t
+GpuProcessingPhaseBudget::hostNeedBytes(const GpuProcessingPhaseRequest& request) const noexcept {
+    const std::lock_guard lock(state_->mutex);
+    const auto source =
+        request.sourceFree ? 0
+                           : detail::measuredNeed(state_->measuredSourceRetention,
+                                                  envelopeKey(request), request.minimumSourceBytes);
+    const auto max = std::numeric_limits<std::uint64_t>::max();
+    return source > (max - request.fixedHostBytes) / 3 ? max : request.fixedHostBytes + 3 * source;
+}
+
 GpuProcessingPhaseGrant
 GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noexcept {
     if (request.processingHostScratchBytes > request.fixedHostBytes ||
@@ -663,7 +694,14 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     if (state_->nextId == 0) {
         return {.status = GpuProcessingPhaseAdmission::SerialExhausted, .domain = {}, .lease = {}};
     }
-    const std::uint64_t sourceNeed = request.sourceFree ? 0 : request.minimumSourceBytes;
+    // Size the source need from what finished phases of this envelope actually retained (#472):
+    // the stated need sums every reachable source reference as a float frame, while preparation
+    // decodes each distinct source once.
+    const std::uint64_t sourceNeed =
+        request.sourceFree
+            ? 0
+            : detail::measuredNeedLocked(state_->measuredSourceRetention, envelopeKey(request),
+                                         request.minimumSourceBytes);
     const auto max = std::numeric_limits<std::uint64_t>::max();
     if (sourceNeed > (max - request.fixedHostBytes) / 3) {
         return refused(GpuProcessingPhaseDomain::Host);
@@ -701,11 +739,8 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         }
         // Size the need from what phases of this envelope actually allocated (#417): the stated
         // need covers the working allowance's ceiling, which a phase often does not use.
-        deviceNeed = detail::measuredDeviceNeedLocked(
-            *state_,
-            {request.deviceWorkingBytes, request.minimumExecutorBytes, request.fixedHostBytes,
-             request.minimumSourceBytes},
-            deviceNeed);
+        deviceNeed = detail::measuredNeedLocked(state_->measuredDevicePeaks, envelopeKey(request),
+                                                deviceNeed);
         const std::uint64_t deviceRemaining =
             remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes);
         if (deviceNeed > deviceRemaining) {

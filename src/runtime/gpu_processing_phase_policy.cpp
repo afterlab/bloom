@@ -434,7 +434,9 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
             now - *hostSampleAt_ > std::chrono::seconds(10)) {
             budget_.setHostCapacity(std::nullopt, false);
         }
-        const auto hostNeed = request->fixedHostBytes + 3 * request->minimumSourceBytes;
+        // The need the root would claim now: its source need follows the measured retention of
+        // this envelope once known (#472).
+        const auto hostNeed = budget_.hostNeedBytes(*request);
         const auto deviceNeed =
             request->native ? request->deviceWorkingBytes + request->minimumExecutorBytes : 0;
         const bool viewer = envelope.admissionClass == GpuAdmissionClass::Viewer;
@@ -476,7 +478,7 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
             if (grant.status == render::GpuProcessingPhaseAdmission::Accepted) {
                 viewerWaitingAt_.reset();
                 viewerAdmittedAt_ = now;
-                viewerNeedHostBytes_ = hostNeed;
+                viewerNeedHostBytes_ = grant.lease ? grant.lease->hostBytes() : hostNeed;
                 // The need the grant sized from measured peaks of this envelope (#417).
                 viewerNeedDeviceBytes_ = grant.lease ? grant.lease->deviceNeedBytes() : deviceNeed;
             } else if (grant.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity) {
@@ -490,7 +492,7 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
         // for the shortfall: the need minus what is free in that domain now.
         const bool device = grant.domain == render::GpuProcessingPhaseDomain::Device;
         const auto need = device ? request->deviceWorkingBytes + request->minimumExecutorBytes
-                                 : request->fixedHostBytes + 3 * request->minimumSourceBytes;
+                                 : budget_.hostNeedBytes(*request);
         const auto counters = budget_.snapshot();
         const auto capacity = device ? counters.deviceCapacityBytes : counters.hostCapacityBytes;
         const auto claims = device ? counters.totalDeviceClaimBytes : counters.totalHostClaimBytes;

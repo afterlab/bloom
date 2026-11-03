@@ -1,7 +1,8 @@
 // Admission by actual capacity and actual need: pressure, waits and true exhaustion.
 //
 // Usable capacity is measured capacity minus the headroom preferences. A phase claims its host need
-// (fixed output, 3x its minimum source bytes) at admission and its device need (working plus
+// (fixed output, 3x its minimum source bytes or the measured retention of its envelope) at
+// admission and its device need (working plus
 // minimum executor bytes, or the measured peak of its envelope) during its device stage; its
 // requested source/executor values are unclaimed ceilings. A need that fits the usable capacity
 // but not what other work holds now waits (AwaitingCapacity) and is admitted on release. Only a
@@ -642,6 +643,70 @@ void deviceNeedFollowsMeasuredPeaks() {
                 settled.releasedNativePhases == 5,
             "every claim returns");
 }
+
+// #472: the many-layer RAM Preview fill. A 1080p stack of 19 footage layers cycling through six
+// media (four 1080p, two 2160p) states every reference as a float frame (34 1080p frames), while
+// preparation decodes each distinct source once and retains 12 such frames. Eight frames in flight
+// at the stated need would claim all usable RAM; after the first frame has been measured they
+// claim from what a frame retains, and the rest stays free for the preview cache.
+void hostClaimsFollowRetainedSources() {
+    GpuProcessingPhasePolicy policy(32);
+    policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    deliverHost(policy, 17 * kGiB, 1);
+    reportDevice(policy, 1, 22 * kGiB);
+    const std::uint64_t pixels = 1920ULL * 1080;
+    const std::uint64_t frameBytes = pixels * 16;
+    const auto retained = 12 * frameBytes;
+    const GpuProcessingPhaseEnvelope envelope{.output = GpuProcessingPhaseOutput::PackedPreview,
+                                              .pixels = pixels,
+                                              .metadataBytes = 64 * kMiB,
+                                              .requestedSourceBytes = 64 * kGiB,
+                                              .minimumSourceBytes = 34 * frameBytes,
+                                              .requestedExecutorBytes = 64 * kGiB,
+                                              .minimumExecutorBytes = frameBytes,
+                                              .deviceWorkingBytes = 832 * kMiB};
+    std::vector<GpuProcessingPhaseGrant> grants;
+    for (int index = 0; index < 8; ++index) {
+        grants.push_back(policy.reserve(envelope));
+        if (!grants.back().lease)
+            break;
+    }
+    require(grants.size() < 8 &&
+                grants.back().status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "at the stated source need eight frames do not fit in 17 GiB");
+    const auto fixed = grants.front().lease->hostBytes() - 3 * 34 * frameBytes;
+    require(grants.front().lease->finishSourcePreparation(retained),
+            "the first frame finishes preparation with its distinct sources");
+    grants.clear();
+    for (int index = 0; index < 8; ++index) {
+        grants.push_back(policy.reserve(envelope));
+        require(grants.back().lease &&
+                    grants.back().lease->sourceClaimBytes() == retained + retained / 4,
+                "measured frames claim the retained sources plus a quarter");
+    }
+    const auto preparing = policy.usableCapacity();
+    require(preparing.hostClaimBytes == 8 * (fixed + 3 * (retained + retained / 4)) &&
+                preparing.hostFreeBytes > 3 * kGiB,
+            "eight preparing frames leave room for the preview cache");
+    for (auto& grant : grants)
+        require(grant.lease->finishSourcePreparation(retained), "each frame finishes preparation");
+    const auto prepared = policy.usableCapacity();
+    require(prepared.hostClaimBytes == 8 * (fixed + retained),
+            "prepared frames claim what they retain");
+    const auto settled = policy.snapshot().reservations;
+    require(settled.finishedSourcePhases == 9 &&
+                settled.finishedPhaseRetainedSourceBytes == 9 * retained &&
+                settled.finishedPhaseSourceNeedBytes ==
+                    34 * frameBytes + 8 * (retained + retained / 4),
+            "per-frame source needs and retention are recorded");
+    // Claims against measured use: every measured frame's need covers what it retained, within a
+    // quarter more (the stated need was 2.8 times it).
+    const auto measuredNeed = settled.finishedPhaseSourceNeedBytes - 34 * frameBytes;
+    require(measuredNeed >= 8 * retained && 4 * measuredNeed <= 5 * 8 * retained,
+            "measured source needs cover the retention within a quarter");
+    grants.clear();
+    require(policy.usableCapacity().hostClaimBytes == 0, "every claim returns");
+}
 } // namespace
 
 // Preview width is bounded by concurrency and by a quarter of the free capacity, never by how
@@ -711,6 +776,7 @@ int main() {
         deviceGrowthBeyondTheClaimUsesLiveRoom();
         deviceClaimsFollowDeviceStages();
         deviceNeedFollowsMeasuredPeaks();
+        hostClaimsFollowRetainedSources();
         pendingClaimsExcludeAllocatedBacking();
     } catch (const std::exception& error) {
         std::cerr << "admission pressure: " << error.what() << '\n';

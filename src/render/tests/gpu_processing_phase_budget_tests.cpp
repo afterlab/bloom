@@ -293,6 +293,72 @@ void finishedPreparationReleasesDecodeScratch() {
     require(budget.snapshot().admissionRevision == watermark,
             "own scratch release followed by teardown cannot create a self-retry loop");
 }
+// #472: the stated source need sums every reachable source reference as a float frame, while
+// preparation decodes each distinct source once. After a phase of the same envelope finished
+// preparation, later phases claim three times the largest retention plus a quarter (never more
+// than the stated need). Retention beyond the claim is still charged, a phase's sources stay
+// bounded by the live room at its admission, and a need that cannot fit is still refused.
+void sourceNeedFollowsMeasuredRetention() {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(10000, true);
+    budget.setDeviceCapacity(1000, true);
+    const GpuProcessingPhaseRequest stated{.fixedHostBytes = 100,
+                                           .requestedSourceBytes = 5000,
+                                           .minimumSourceBytes = 1000,
+                                           .deviceWorkingBytes = 10};
+    require(budget.hostNeedBytes(stated) == 3100,
+            "an unmeasured envelope needs its stated sources");
+    auto first = budget.reserve(stated);
+    require(first.lease && first.lease->sourceClaimBytes() == 1000 &&
+                budget.snapshot().totalHostClaimBytes == 3100,
+            "the first phase of an envelope claims 3x its stated source need");
+    require(first.lease->finishSourcePreparation(200) &&
+                budget.snapshot().totalHostClaimBytes == 300,
+            "finishing keeps only the retained sources");
+    require(budget.hostNeedBytes(stated) == 100 + 3 * 250,
+            "later phases need the measured retention plus a quarter");
+    auto second = budget.reserve(stated);
+    require(second.lease && second.lease->sourceClaimBytes() == 250 &&
+                second.lease->hostBytes() == 850 && second.lease->sourceByteLimit() == 5000 &&
+                budget.snapshot().totalHostClaimBytes == 300 + 850,
+            "a measured phase claims from the retention; its ceiling stays the live room");
+    require(second.lease->finishSourcePreparation(780) &&
+                budget.snapshot().totalHostClaimBytes == 300 + 100 + 780,
+            "retention beyond the claim is charged as it is");
+    require(budget.hostNeedBytes(stated) == 100 + 3 * 975, "the largest retention is kept");
+    first.lease.reset();
+    second.lease.reset();
+    auto light = budget.reserve(stated);
+    require(light.lease && light.lease->finishSourcePreparation(10) &&
+                budget.hostNeedBytes(stated) == 100 + 3 * 975,
+            "a phase that retained less never lowers the need");
+    light.lease.reset();
+    auto other = stated;
+    other.minimumSourceBytes = 2000;
+    require(budget.hostNeedBytes(other) == 6100,
+            "another envelope (another plan) starts from its own stated need");
+    auto huge = stated;
+    huge.minimumSourceBytes = huge.requestedSourceBytes = 5000;
+    require(budget.reserve(huge).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a need larger than the whole capacity is still refused");
+    budget.setHostCapacity(4000, true);
+    auto bounded = budget.reserve(stated);
+    require(bounded.lease && bounded.lease->sourceByteLimit() == 4000 - 3025 + 975,
+            "the sources a phase may retain are bounded by the live room at its admission");
+    require(budget.reserve(stated).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "a measured need that does not fit what is free now waits");
+    require(!bounded.lease->finishSourcePreparation(1951),
+            "retention beyond the admitted room is refused, never over-committed");
+    bounded.lease.reset();
+    const auto settled = budget.snapshot();
+    require(settled.totalHostClaimBytes == 0 && settled.admittedPhases == 0 &&
+                settled.finishedSourcePhases == 3 &&
+                settled.finishedPhaseSourceNeedBytes == 1000 + 250 + 975 &&
+                settled.finishedPhaseRetainedSourceBytes == 200 + 780 + 10 &&
+                settled.peakPhaseSourceNeedBytes == 1000 &&
+                settled.peakPhaseRetainedSourceBytes == 780,
+            "claims return and per-phase need and retention are recorded exactly");
+}
 void rootIdentity() {
     GpuProcessingPhaseBudget first;
     GpuProcessingPhaseBudget second;
@@ -427,6 +493,7 @@ int main() {
         ceilingRequestsShareDevice();
         retryWatermarks();
         finishedPreparationReleasesDecodeScratch();
+        sourceNeedFollowsMeasuredRetention();
         std::cout << "paired phase readiness/sizing/lifetime/32-way contention PASS\n";
         return 0;
     } catch (const std::exception& error) {

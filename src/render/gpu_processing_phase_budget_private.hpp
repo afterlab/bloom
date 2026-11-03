@@ -9,22 +9,28 @@
 #include <mutex>
 
 namespace bloom::render::detail {
-// The stated device envelope of a phase: phases with equal values (frames of one composition at one
-// resolution, with one plan) share their measured device peaks.
-struct DeviceEnvelopeKey final {
+// The stated envelope of a phase: phases with equal values (frames of one composition at one
+// resolution, with one plan) share their measured device peaks and retained source bytes.
+struct PhaseEnvelopeKey final {
     std::uint64_t workingBytes = 0;
     std::uint64_t minimumExecutorBytes = 0;
     std::uint64_t fixedHostBytes = 0;
     std::uint64_t minimumSourceBytes = 0;
-    friend bool operator==(const DeviceEnvelopeKey&, const DeviceEnvelopeKey&) = default;
+    friend bool operator==(const PhaseEnvelopeKey&, const PhaseEnvelopeKey&) = default;
 };
-// The largest device storage a released phase of this envelope held at one time.
-struct MeasuredDevicePeak final {
-    DeviceEnvelopeKey key;
+// The largest measured value of one kind (device storage held at one time by a released phase,
+// or source bytes retained by a phase that finished preparation) for one envelope.
+struct MeasuredEnvelopePeak final {
+    PhaseEnvelopeKey key;
     std::uint64_t peakBytes = 0;
     std::uint64_t lastUse = 0;
 };
-inline constexpr std::size_t kMeasuredDevicePeaks = 16;
+inline constexpr std::size_t kMeasuredEnvelopePeaks = 16;
+// The root keeps the most recently used envelopes of each kind, least recently used replaced first.
+struct MeasuredEnvelopePeaks final {
+    std::array<MeasuredEnvelopePeak, kMeasuredEnvelopePeaks> entries{};
+    std::uint64_t use = 0;
+};
 
 struct GpuProcessingPhaseBudgetState final {
     mutable std::mutex mutex;
@@ -39,9 +45,9 @@ struct GpuProcessingPhaseBudgetState final {
     std::shared_ptr<PackedHostRetirementState> retirement;
     std::chrono::steady_clock::time_point hostValidUntil =
         std::chrono::steady_clock::time_point::max();
-    // Measured per-envelope device peaks (#417), least recently used replaced first.
-    std::array<MeasuredDevicePeak, kMeasuredDevicePeaks> measuredDevicePeaks{};
-    std::uint64_t measuredDevicePeakUse = 0;
+    // Measured per-envelope device peaks (#417) and retained source bytes (#472).
+    MeasuredEnvelopePeaks measuredDevicePeaks;
+    MeasuredEnvelopePeaks measuredSourceRetention;
 };
 [[nodiscard]] inline std::uint64_t remaining(const std::uint64_t cap,
                                              const std::uint64_t reserved) noexcept {
@@ -65,15 +71,16 @@ inline void notePeaksLocked(GpuProcessingPhaseSnapshot& counters) noexcept {
     counters.peakOwnedNativeBytes = std::max(counters.peakOwnedNativeBytes, owned);
 }
 
-// The device need of a phase with this stated envelope: the stated need until a released phase
-// of the same envelope has been measured, then the smaller of the stated need and the largest
-// measured peak plus a quarter (allocations beyond it are admitted against the live room).
-[[nodiscard]] inline std::uint64_t measuredDeviceNeedLocked(GpuProcessingPhaseBudgetState& state,
-                                                            const DeviceEnvelopeKey& key,
-                                                            const std::uint64_t stated) noexcept {
-    for (auto& entry : state.measuredDevicePeaks) {
+// The need of a phase with this stated envelope: the stated need until a phase of the same
+// envelope has been measured, then the smaller of the stated need and the largest measured value
+// plus a quarter. Device peaks (#417) are recorded when a phase is released, retained source
+// bytes (#472) when a phase finishes source preparation; growth beyond the need is admitted
+// against the live room.
+[[nodiscard]] inline std::uint64_t measuredNeed(const MeasuredEnvelopePeaks& peaks,
+                                                const PhaseEnvelopeKey& key,
+                                                const std::uint64_t stated) noexcept {
+    for (const auto& entry : peaks.entries) {
         if (entry.peakBytes != 0 && entry.key == key) {
-            entry.lastUse = ++state.measuredDevicePeakUse;
             const auto margin = entry.peakBytes / 4 + (entry.peakBytes % 4 != 0 ? 1 : 0);
             const auto measured = entry.peakBytes > std::numeric_limits<std::uint64_t>::max() -
                                                         margin
@@ -84,12 +91,21 @@ inline void notePeaksLocked(GpuProcessingPhaseSnapshot& counters) noexcept {
     }
     return stated;
 }
-// Keeps the largest peak per envelope, so an early-ended phase never lowers a need.
-inline void recordMeasuredDevicePeakLocked(GpuProcessingPhaseBudgetState& state,
-                                           const DeviceEnvelopeKey& key,
-                                           const std::uint64_t peak) noexcept {
-    MeasuredDevicePeak* slot = nullptr;
-    for (auto& entry : state.measuredDevicePeaks) {
+// measuredNeed for an admission: also marks the envelope as recently used.
+[[nodiscard]] inline std::uint64_t measuredNeedLocked(MeasuredEnvelopePeaks& peaks,
+                                                      const PhaseEnvelopeKey& key,
+                                                      const std::uint64_t stated) noexcept {
+    for (auto& entry : peaks.entries) {
+        if (entry.peakBytes != 0 && entry.key == key)
+            entry.lastUse = ++peaks.use;
+    }
+    return measuredNeed(peaks, key, stated);
+}
+// Keeps the largest value per envelope, so an early-ended or lighter phase never lowers a need.
+inline void recordMeasuredPeakLocked(MeasuredEnvelopePeaks& peaks, const PhaseEnvelopeKey& key,
+                                     const std::uint64_t peak) noexcept {
+    MeasuredEnvelopePeak* slot = nullptr;
+    for (auto& entry : peaks.entries) {
         if (entry.peakBytes != 0 && entry.key == key) {
             slot = &entry;
             break;
@@ -101,7 +117,7 @@ inline void recordMeasuredDevicePeakLocked(GpuProcessingPhaseBudgetState& state,
     if (slot->peakBytes == 0 || !(slot->key == key))
         *slot = {.key = key, .peakBytes = 0, .lastUse = 0};
     slot->peakBytes = std::max(slot->peakBytes, peak);
-    slot->lastUse = ++state.measuredDevicePeakUse;
+    slot->lastUse = ++peaks.use;
 }
 
 struct PresentationAdmission final {
