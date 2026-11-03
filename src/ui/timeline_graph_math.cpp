@@ -177,20 +177,15 @@ double curveSpeed(const std::function<double(double)>& sample,
     if (keyTimes.size() < 2 || !std::isfinite(seconds))
         return 0.0;
     // The segment that owns `seconds`: the last key at or before it (outgoing), or the last key
-    // strictly before it (incoming), so a key's two sides can be read separately.
-    std::size_t index = keyTimes.size();
-    for (std::size_t candidate = 0; candidate + 1 < keyTimes.size(); ++candidate) {
-        const bool starts =
-            outgoing ? keyTimes[candidate] <= seconds : keyTimes[candidate] < seconds;
-        const bool ends =
-            outgoing ? seconds < keyTimes[candidate + 1] : seconds <= keyTimes[candidate + 1];
-        if (starts && ends) {
-            index = candidate;
-            break;
-        }
-    }
-    if (index >= keyTimes.size() || (index < interpolations.size() &&
-                                     interpolations[index] == document::KeyframeInterpolation::Hold))
+    // strictly before it (incoming), so a key's two sides can be read separately. A binary search,
+    // because the Speed Graph asks this at every pixel column of every curve.
+    const auto bound = outgoing ? std::upper_bound(keyTimes.begin(), keyTimes.end(), seconds)
+                                : std::lower_bound(keyTimes.begin(), keyTimes.end(), seconds);
+    if (bound == keyTimes.begin() || bound == keyTimes.end())
+        return 0.0;
+    const auto index = static_cast<std::size_t>(bound - keyTimes.begin()) - 1;
+    if (index < interpolations.size() &&
+        interpolations[index] == document::KeyframeInterpolation::Hold)
         return 0.0;
     const double start = keyTimes[index];
     const double end = keyTimes[index + 1];

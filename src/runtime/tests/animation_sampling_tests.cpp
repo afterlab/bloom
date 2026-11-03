@@ -533,6 +533,49 @@ void testValidationAndEnvironment(Expectations& expectations) {
     }
 }
 
+// The graph editor samples one table at every pixel column. A curve admitted once samples exactly
+// as the per-call sampler does -- value bits, error and segment -- so the editor's O(log keys)
+// column cost changes no number it draws.
+void testValidatedScalarCurve(Expectations& expectations) {
+    auto handled = easedSegment(-2.0, 5.0);
+    handled.keyframes[0].outgoingHandle = {0.8, 3.0};
+    handled.keyframes[1].incomingHandle = {0.2, -1.0};
+    auto invalid = scalarCurve();
+    invalid.keyframes[1].time = invalid.keyframes[0].time;
+    const std::array curves{scalarCurve(), easedUnitCurve(), handled, invalid};
+    const auto same = [](const runtime::AnimationSampleResult<double>& left,
+                         const runtime::AnimationSampleResult<double>& right) {
+        return left.error == right.error && left.segmentStart == right.segmentStart &&
+               left.value.has_value() == right.value.has_value() &&
+               (!left.value.has_value() || bits(*left.value) == bits(*right.value));
+    };
+    bool identical = true;
+    for (const auto& curve : curves) {
+        const runtime::ValidatedScalarCurve validated(curve);
+        for (std::int64_t step = -13; step <= 113 && identical; ++step) {
+            const auto at = time(step, 41);
+            identical = same(validated.sample(at), runtime::sampleAnimationCurve(curve, at));
+        }
+    }
+    expectations.expect(identical, "a once-admitted curve samples bit for bit as the per-call one");
+    expectations.expect(runtime::ValidatedScalarCurve(invalid).validation() ==
+                            runtime::AnimationSamplingError::InvalidCurve,
+                        "and carries the same admission refusal");
+
+    const runtime::ValidatedScalarCurve admitted(scalarCurve());
+    RoundingModeGuard guard;
+    if (std::fesetround(FE_DOWNWARD) == 0) {
+        expectations.expect(admitted.sample(time(1, 2)).error ==
+                                runtime::AnimationSamplingError::UnsupportedFloatingPointEnvironment,
+                            "an admitted curve still refuses a non-reference environment");
+        const runtime::ValidatedScalarCurve refused(scalarCurve());
+        static_cast<void>(std::fesetround(FE_TONEAREST));
+        expectations.expect(same(refused.sample(time(1, 2)),
+                                 runtime::sampleAnimationCurve(scalarCurve(), time(1, 2))),
+                            "and one admitted under it samples once the environment is restored");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -551,5 +594,6 @@ int main() {
     testHandleModeIsRenderNeutral(expectations);
     testColor4Sampling(expectations);
     testValidationAndEnvironment(expectations);
+    testValidatedScalarCurve(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

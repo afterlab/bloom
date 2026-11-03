@@ -30,7 +30,7 @@
 class QAction;
 
 namespace bloom::runtime {
-struct CompiledScalarCurve;
+class ValidatedScalarCurve;
 }
 
 namespace bloom::ui {
@@ -168,7 +168,7 @@ class TimelineGraphView final : public QWidget {
     // curve as it was at the press.
     [[nodiscard]] std::vector<document::ScalarKeyframe> keysFor(const GraphCurveId& curve,
                                                                 bool preview = true) const;
-    [[nodiscard]] const runtime::CompiledScalarCurve* compiledFor(const GraphCurveId& curve) const;
+    [[nodiscard]] const runtime::ValidatedScalarCurve* compiledFor(const GraphCurveId& curve) const;
     void refreshCurves();
     [[nodiscard]] std::vector<double> plottedExtent(const GraphCurveId& curve) const;
     [[nodiscard]] GraphNormalization normalizationOf(const GraphCurveId& curve) const;
@@ -221,7 +221,7 @@ class TimelineGraphView final : public QWidget {
     std::map<GraphCurveId, GraphNormalization> frozenNormalization_;
     // The compiled curves the polyline samples, rebuilt whenever the document revision or the live
     // preview moves so the painted line is always the CURRENT curve and never a stale table.
-    mutable std::map<GraphCurveId, runtime::CompiledScalarCurve> compiled_;
+    mutable std::map<GraphCurveId, runtime::ValidatedScalarCurve> compiled_;
     mutable std::uint64_t compiledRevision_ = 0;
     mutable std::uint64_t compiledPreview_ = 0;
     mutable bool compiledValid_ = false;
@@ -243,7 +243,7 @@ class TimelineGraphView final : public QWidget {
     };
     mutable std::map<GraphCurveId, CachedPath> paths_;
     [[nodiscard]] const QPainterPath& pathFor(const GraphCurveId& curve,
-                                              const runtime::CompiledScalarCurve& compiled) const;
+                                              const runtime::ValidatedScalarCurve& compiled) const;
     void invalidatePlayhead();
     void invalidateAll();
     std::optional<int> paintedPlayheadX_;

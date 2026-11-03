@@ -254,7 +254,7 @@ void TimelineGraphView::invalidatePlayhead() {
 }
 
 const QPainterPath& TimelineGraphView::pathFor(const GraphCurveId& curve,
-                                               const runtime::CompiledScalarCurve& compiled) const {
+                                               const runtime::ValidatedScalarCurve& compiled) const {
     const auto axis = ruler_.axisForWidth(width());
     const auto lens = lensFor(curve);
     auto& cached = paths_[curve];
@@ -276,8 +276,8 @@ const QPainterPath& TimelineGraphView::pathFor(const GraphCurveId& curve,
         }
         const auto sample = [&](const double seconds) {
             const auto offset = keyPointerOffset(seconds);
-            const auto sampled = offset ? runtime::sampleAnimationCurve(compiled, *offset)
-                                        : runtime::AnimationSampleResult<double>{};
+            const auto sampled =
+                offset ? compiled.sample(*offset) : runtime::AnimationSampleResult<double>{};
             return sampled.value.value_or(0.0);
         };
         bool started = false;
@@ -291,7 +291,7 @@ const QPainterPath& TimelineGraphView::pathFor(const GraphCurveId& curve,
             if (graphType_ == GraphType::Speed) {
                 quantity = curveSpeed(sample, times, modes, seconds);
             } else {
-                const auto sampled = runtime::sampleAnimationCurve(compiled, *offset);
+                const auto sampled = compiled.sample(*offset);
                 if (!sampled.value.has_value())
                     continue;
                 quantity = *sampled.value;
@@ -396,7 +396,7 @@ std::vector<document::ScalarKeyframe> TimelineGraphView::keysFor(const GraphCurv
                              : keysOfRecord(*record, curve);
 }
 
-const runtime::CompiledScalarCurve*
+const runtime::ValidatedScalarCurve*
 TimelineGraphView::compiledFor(const GraphCurveId& curve) const {
     const auto revision = session_.snapshot().revision().value();
     const auto preview = session_.keyframePreviewGeneration();
@@ -420,7 +420,9 @@ TimelineGraphView::compiledFor(const GraphCurveId& curve) const {
     auto built = compileRecord(*record, curve);
     if (!built.has_value())
         return nullptr;
-    return &compiled_.emplace(curve, std::move(*built)).first->second;
+    // Admitted once per table, so every column of the polyline pays only the interval search.
+    return &compiled_.emplace(curve, runtime::ValidatedScalarCurve(std::move(*built)))
+                .first->second;
 }
 
 double TimelineGraphView::plottedAt(const GraphCurveId& curve, const double seconds,
@@ -430,8 +432,8 @@ double TimelineGraphView::plottedAt(const GraphCurveId& curve, const double seco
         return 0.0;
     const auto sample = [compiled](const double at) {
         const auto offset = keyPointerOffset(at);
-        const auto sampled = offset ? runtime::sampleAnimationCurve(*compiled, *offset)
-                                    : runtime::AnimationSampleResult<double>{};
+        const auto sampled =
+            offset ? compiled->sample(*offset) : runtime::AnimationSampleResult<double>{};
         return sampled.value.value_or(0.0);
     };
     if (graphType_ == GraphType::Value)

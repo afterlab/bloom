@@ -35,6 +35,23 @@ template <typename Value> struct AnimationSampleResult final {
 sampleAnimationCurve(const CompiledScalarCurve& curve, core::RationalTime time,
                      const CancellationToken& cancellation) noexcept;
 
+// A scalar curve admitted ONCE and then sampled many times, for a caller that samples one table at
+// a run of times (the graph editor's polyline). sample(t) is bit for bit sampleAnimationCurve(curve,
+// t) -- the same admission result and the same interpolation body -- but the O(keys) admission is
+// paid at construction, so each sample costs only the O(log keys) interval search.
+class ValidatedScalarCurve final {
+  public:
+    explicit ValidatedScalarCurve(CompiledScalarCurve curve) noexcept;
+
+    [[nodiscard]] const CompiledScalarCurve& curve() const noexcept { return curve_; }
+    [[nodiscard]] AnimationSamplingError validation() const noexcept { return validation_; }
+    [[nodiscard]] AnimationSampleResult<double> sample(core::RationalTime time) const noexcept;
+
+  private:
+    CompiledScalarCurve curve_;
+    AnimationSamplingError validation_ = AnimationSamplingError::None;
+};
+
 [[nodiscard]] AnimationSampleResult<double>
 sampleAnimationComponentCurve(document::AnimationCurveId curveId,
                               std::span<const CompiledScalarKeyframe> keyframes, double fallback,

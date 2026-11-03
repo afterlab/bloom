@@ -253,13 +253,10 @@ namespace {
 // parameter's own, and each component of a vector or colour parameter, which is what composes the
 // typed value the caller asked for. The rules -- extrapolation, Hold, Linear, the eased factor and
 // the Bezier segment -- are unchanged and remain sampling semantics version 2.
+// The body runs on a curve validateForSampling has admitted; sampleCurve is the checked entry.
 template <typename Curve>
-AnimationSampleResult<double> sampleCurve(const Curve& curve, const core::RationalTime time,
-                                          const CancellationToken* cancellation) noexcept {
-    if (const auto error = validateForSampling(curve, cancellation);
-        error != AnimationSamplingError::None) {
-        return {std::nullopt, error, std::nullopt};
-    }
+AnimationSampleResult<double> sampleAdmittedCurve(const Curve& curve,
+                                                  const core::RationalTime time) noexcept {
     if (time <= curve.keyframes.front().time) {
         const auto& keyframe = curve.keyframes.front();
         return endpoint(keyframe.value, keyframe.id);
@@ -322,6 +319,16 @@ AnimationSampleResult<double> sampleCurve(const Curve& curve, const core::Ration
         return {std::nullopt, error, leftKeyframe.id};
     }
     return {mixed, AnimationSamplingError::None, leftKeyframe.id};
+}
+
+template <typename Curve>
+AnimationSampleResult<double> sampleCurve(const Curve& curve, const core::RationalTime time,
+                                          const CancellationToken* cancellation) noexcept {
+    if (const auto error = validateForSampling(curve, cancellation);
+        error != AnimationSamplingError::None) {
+        return {std::nullopt, error, std::nullopt};
+    }
+    return sampleAdmittedCurve(curve, time);
 }
 
 template <typename Keyframes>
@@ -430,6 +437,26 @@ AnimationSampleResult<double> sampleAnimationCurve(const CompiledScalarCurve& cu
                                                    const CancellationToken& cancellation) noexcept {
     return sampleCurve(curve, time, &cancellation);
 }
+ValidatedScalarCurve::ValidatedScalarCurve(CompiledScalarCurve curve) noexcept
+    : curve_(std::move(curve)), validation_(validateForSampling(curve_, nullptr)) {}
+
+AnimationSampleResult<double> ValidatedScalarCurve::sample(core::RationalTime time) const noexcept {
+    // The table is immutable, but the floating-point environment is not: it is re-checked on every
+    // sample (O(1)), and an admission refused only for the environment is re-run in full, so the
+    // result always equals sampleAnimationCurve's at the moment of the call.
+    if (validation_ == AnimationSamplingError::UnsupportedFloatingPointEnvironment) {
+        return sampleCurve(curve_, time, nullptr);
+    }
+    if (validation_ != AnimationSamplingError::None) {
+        return {std::nullopt, validation_, std::nullopt};
+    }
+    if (!core::supportsReferenceFloatingPointEnvironment<double>()) {
+        return {std::nullopt, AnimationSamplingError::UnsupportedFloatingPointEnvironment,
+                std::nullopt};
+    }
+    return sampleAdmittedCurve(curve_, time);
+}
+
 AnimationSampleResult<double> sampleAnimationCurve(const document::ScalarAnimationCurve& curve,
                                                    core::RationalTime time) noexcept {
     return sampleCurve(curve, time, nullptr);

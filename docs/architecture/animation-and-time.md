@@ -973,8 +973,10 @@ A playhead move is a value change, not a document change, and every surface trea
   later time only evaluates the cached plan's value graph (`CompositionSession::drivenValueWork()`).
 - The Timeline lane region and the curve view invalidate only the strips the playhead leaves and
   enters. Collapsed layers' key summaries are cached per document state, and curve polylines per
-  compiled-curve generation, time axis, size and value viewport. The ruler merges adjacent cached
-  frames into one RAM-preview coverage segment.
+  compiled-curve generation, time axis, size and value viewport. A polyline rebuild (pan, zoom,
+  resize, an edit) admits each curve once (`runtime::ValidatedScalarCurve`) and finds each column's
+  segment by binary search, so it costs O(keys + width x log keys), not O(width x keys). The ruler
+  merges adjacent cached frames into one RAM-preview coverage segment.
 - Audio remixes only when an edit moved the active composition's evaluation provenance
   (`CompositionSession::lastDocumentChangeAffectedEvaluation()`), keeps the previous mix audible
   until the new one is ready, and silences explicitly only on a composition switch or document
