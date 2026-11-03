@@ -172,8 +172,13 @@ class ParityOperations(unittest.TestCase):
         result = self.server.tool('profiler.snapshot', {})
         self.assertTrue(result['succeeded'], result)
         snapshot = result['snapshot']
-        self.assertEqual(snapshot['schemaVersion'], 3)
+        self.assertEqual(snapshot['schemaVersion'], 4)
         self.assertGreaterEqual(snapshot['serial'], 1)
+        # #427: the pressure counters are always counted, and the swap field is in the schema.
+        self.assertIsInstance(snapshot['pressure']['admissionWaits'], int)
+        self.assertEqual(set(snapshot['pressure']['evictionBytes']),
+                         {'ceiling', 'memoryPressure', 'admission', 'purge'})
+        self.assertIn('processSwappedBytes', snapshot['memory'])
         self.assertIsInstance(snapshot['memory']['pools'], list)
         self.assertIsNone(snapshot['gpu']['utilization'])
         self.assertEqual(len(snapshot['workload']['stages']['decode']['counts']), 20)
