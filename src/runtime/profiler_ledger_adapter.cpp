@@ -2,6 +2,7 @@
 #include <bloom/runtime/profiler_ledger_adapter.hpp>
 
 #include <algorithm>
+#include <chrono>
 
 namespace bloom::runtime {
 namespace {
@@ -28,6 +29,12 @@ void readProfilerLedger(const MemoryBudgetLedger& ledger, ProfilerLedgerReading&
         reading.retainedBytes = bytes(state.retainedBytes);
         reading.memoryPressure = ProfilerMetric<bool>::of(state.memoryPressure);
         reading.swapPressure = ProfilerMetric<bool>::of(state.swapPressure);
+        reading.sampleSteadyNs =
+            state.machineAppliedAt
+                ? ProfilerNanoseconds::of(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              state.machineAppliedAt->time_since_epoch())
+                                              .count())
+                : ProfilerNanoseconds{};
     }
     reading.physicalBytes = nonZero(ledger.physicalByteBudget());
     const auto headroom = ledger.ramHeadroom();

@@ -30,6 +30,9 @@ struct Counters final {
     std::atomic<std::int64_t> heapBudgetSteadyNs{0};
     alignas(64) std::atomic<std::uint64_t> stagingLive{0};
     std::atomic<std::uint64_t> stagingPeak{0};
+    alignas(64) std::atomic<std::uint64_t> admissionWaits{0};
+    std::atomic<std::uint64_t> admissionRefusals{0};
+    std::array<std::atomic<std::uint64_t>, kEvictionCauseCount> evictedBytes{};
     alignas(64) std::atomic<bool> profilerActive{false};
     std::array<HelperSlot, kHelperProcessSlots> helpers{};
 };
@@ -38,6 +41,9 @@ Counters& counters() noexcept {
     static Counters instance;
     return instance;
 }
+
+// The innermost eviction cause scope's cause on this thread; Ceiling outside every scope.
+thread_local EvictionCause currentCause = EvictionCause::Ceiling;
 
 void raisePeak(std::atomic<std::uint64_t>& peak, const std::uint64_t value) noexcept {
     auto current = peak.load(relaxed);
@@ -83,6 +89,40 @@ void StageTimer::end() noexcept {
         return;
     running_ = false;
     recordStage(stage_, steadyNowNs() - startedNs_);
+}
+
+void countAdmissionWait() noexcept { counters().admissionWaits.fetch_add(1, relaxed); }
+void countAdmissionRefusal() noexcept { counters().admissionRefusals.fetch_add(1, relaxed); }
+AdmissionTotals admissionTotals() noexcept {
+    const auto& source = counters();
+    return {source.admissionWaits.load(relaxed), source.admissionRefusals.load(relaxed)};
+}
+
+EvictionCause currentEvictionCause() noexcept { return currentCause; }
+
+EvictionCauseScope::EvictionCauseScope(const EvictionCause cause) noexcept
+    : previous_(currentCause) {
+    currentCause = cause;
+}
+
+EvictionCauseScope::~EvictionCauseScope() { currentCause = previous_; }
+
+void addEvictedBytes(const EvictionCause cause, const std::uint64_t bytes) noexcept {
+    const auto index = static_cast<std::size_t>(cause);
+    if (index < kEvictionCauseCount && bytes != 0)
+        counters().evictedBytes[index].fetch_add(bytes, relaxed);
+}
+
+void addEvictedBytes(const std::uint64_t bytes) noexcept {
+    addEvictedBytes(currentEvictionCause(), bytes);
+}
+
+std::array<std::uint64_t, kEvictionCauseCount> evictedBytesByCause() noexcept {
+    std::array<std::uint64_t, kEvictionCauseCount> result{};
+    const auto& source = counters();
+    for (std::size_t cause = 0; cause < kEvictionCauseCount; ++cause)
+        result[cause] = source.evictedBytes[cause].load(relaxed);
+    return result;
 }
 
 void addGpuUploadBytes(const std::uint64_t bytes) noexcept {

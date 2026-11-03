@@ -1,4 +1,5 @@
 #include "video_source.hpp"
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
@@ -36,6 +37,8 @@ struct OperationCache::Accounting {
     // Allocated host bytes (retained + pending), each storage once.
     std::size_t bytes = 0;
     std::array<std::size_t, 2> kindBytes{};
+    // Retained entries by kind, for the Profiler's per-kind rows.
+    std::array<std::size_t, 2> kindEntries{};
     std::size_t sharedBytes = 0;
     std::unordered_map<const void*, Storage> storages;
     std::uint64_t decodedMediaGeneration = 0;
@@ -70,6 +73,7 @@ struct OperationCache::Accounting {
         return charge;
     }
     void chargeLive(const Entry& entry) {
+        ++kindEntries[index(entry.kind)];
         bytes += entry.metadataBytes;
         kindBytes[index(entry.kind)] += entry.metadataBytes;
         for (const auto& reference : entry.storage) {
@@ -92,6 +96,7 @@ struct OperationCache::Accounting {
         }
     }
     void moveToPending(const Entry& entry) {
+        --kindEntries[index(entry.kind)];
         pendingBytes += entry.metadataBytes;
         pendingKindBytes[index(entry.kind)] += entry.metadataBytes;
         for (const auto& reference : entry.storage) {
@@ -108,6 +113,7 @@ struct OperationCache::Accounting {
     }
     // A synchronous removal: the entry is freed under the same lock.
     void releaseLive(const Entry& entry) {
+        --kindEntries[index(entry.kind)];
         bytes -= entry.metadataBytes;
         kindBytes[index(entry.kind)] -= entry.metadataBytes;
         for (const auto& reference : entry.storage) {
@@ -216,23 +222,26 @@ OperationCache::OperationCache(const std::size_t budget, MemoryBudgetLedger& led
         this, {.name = {},
                .kind = ProfilerPoolKind::Cache,
                .counters = nullptr,
-               .rows = [accounting = accounting_](const std::span<ProfilerPool> out) {
-                   static constexpr std::array<std::string_view, 2> names{
-                       "Operation cache: operations", "Operation cache: decoded media"};
-                   const std::lock_guard lock(accounting->mutex);
-                   const auto count = std::min(out.size(), names.size());
-                   for (std::size_t kind = 0; kind < count; ++kind) {
-                       auto& row = out[kind];
-                       row = ProfilerPool{};
-                       setProfilerName(row.name, names[kind]);
-                       row.kind = ProfilerPoolKind::Cache;
-                       row.pendingBytes = accounting->pendingKindBytes[kind];
-                       row.hostBytes = accounting->kindBytes[kind] - row.pendingBytes;
-                       row.ceilingBytes = ProfilerBytes::of(accounting->budget);
-                       accounting->counters[kind].copyTo(row);
-                   }
-                   return count;
-               }});
+               .rows =
+                   [accounting = accounting_](const std::span<ProfilerPool> out) {
+                       static constexpr std::array<std::string_view, 2> names{
+                           "Operation cache: operations", "Operation cache: decoded media"};
+                       const std::lock_guard lock(accounting->mutex);
+                       const auto count = std::min(out.size(), names.size());
+                       for (std::size_t kind = 0; kind < count; ++kind) {
+                           auto& row = out[kind];
+                           row = ProfilerPool{};
+                           setProfilerName(row.name, names[kind]);
+                           row.kind = ProfilerPoolKind::Cache;
+                           row.pendingBytes = accounting->pendingKindBytes[kind];
+                           row.hostBytes = accounting->kindBytes[kind] - row.pendingBytes;
+                           row.ceilingBytes = ProfilerBytes::of(accounting->budget);
+                           row.entries = ProfilerCount::of(accounting->kindEntries[kind]);
+                           accounting->counters[kind].copyTo(row);
+                       }
+                       return count;
+                   },
+               .entries = {}});
 }
 OperationCache::~OperationCache() {
     sourceWindow_->removeTrimmer(this);
@@ -504,13 +513,17 @@ void OperationCache::removeLocked(const Position candidate) {
         entries_.erase(candidate);
     }
 }
-void OperationCache::removeKindLocked(const OperationCacheEntryKind kind) {
+std::size_t OperationCache::removeKindLocked(const OperationCacheEntryKind kind) {
+    std::size_t removed = 0;
     for (auto entry = entries_.begin(); entry != entries_.end();) {
         const auto next = std::next(entry);
-        if ((*entry)->kind == kind)
+        if ((*entry)->kind == kind) {
+            removed += (*entry)->standaloneBytes();
             removeLocked(entry);
+        }
         entry = next;
     }
+    return removed;
 }
 void OperationCache::evictToLocked(const std::size_t limit, std::uint64_t& counter) {
     while (accounting_->bytes - accounting_->pendingBytes > limit && !entries_.empty()) {
@@ -537,7 +550,7 @@ void OperationCache::releaseSourcesOutsideWindow() {
         const auto& entry = **position;
         if (entry.kind == OperationCacheEntryKind::DecodedMedia && entry.use.tracked &&
             !sourceWindow_->retains(entry.use)) {
-            accounting_->counters[Accounting::index(entry.kind)].evicted(entry.standaloneBytes());
+            accounting_->counters[Accounting::index(entry.kind)].released(entry.standaloneBytes());
             removeLocked(position);
         }
         position = next;
@@ -549,7 +562,8 @@ void OperationCache::trimToBytes(const std::size_t bytes) {
 }
 void OperationCache::clearOperations() {
     const std::lock_guard lock(accounting_->mutex);
-    removeKindLocked(OperationCacheEntryKind::Operation);
+    core::telemetry::addEvictedBytes(core::telemetry::EvictionCause::Purge,
+                                     removeKindLocked(OperationCacheEntryKind::Operation));
 }
 void OperationCache::clearDecodedMedia() {
     std::shared_ptr<detail::VideoSourceContext> video;
@@ -557,7 +571,8 @@ void OperationCache::clearDecodedMedia() {
         const std::lock_guard lock(accounting_->mutex);
         if (accounting_->decodedMediaGeneration != std::numeric_limits<std::uint64_t>::max())
             ++accounting_->decodedMediaGeneration;
-        removeKindLocked(OperationCacheEntryKind::DecodedMedia);
+        core::telemetry::addEvictedBytes(core::telemetry::EvictionCause::Purge,
+                                         removeKindLocked(OperationCacheEntryKind::DecodedMedia));
         video = accounting_->videoSources.lock();
     }
     if (video)

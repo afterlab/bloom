@@ -12,7 +12,7 @@
 //
 // Absent is not zero. Every value the platform or an unwired counter cannot supply is a
 // ProfilerMetric whose `present` flag is false; readers show it as absent, never as 0. Values that
-// come from a slower source (the ledger's process sample, the GPU budget query) carry that source's
+// come from a slower source (the ledger's machine sample, the GPU budget query) carry that source's
 // age so a reader can show how old they are.
 //
 // Units: bytes, nanoseconds and counts are unsigned 64-bit; "cumulative" counters only grow from
@@ -32,7 +32,8 @@ namespace bloom::runtime {
 
 // 2: pool counters and executor busy time can be absent (a source that does not count them).
 // 3: pools report cumulative evicted bytes (ProfilerPool::evictedBytes).
-inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 3;
+// 4: this process's memory in swap (ProfilerMemory::processSwappedBytes).
+inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 4;
 
 inline constexpr std::size_t kProfilerNameCapacity = 48;
 inline constexpr std::size_t kProfilerMaximumPools = 32;
@@ -104,8 +105,8 @@ struct ProfilerPool final {
 struct ProfilerMemory final {
     // Resident set size, read at the sampler rate (statm or the platform equivalent).
     ProfilerBytes rssBytes{};
-    // Anonymous, file-backed and shared memory from the ledger's slower process sample; see
-    // ProfilerSnapshot::ledgerSampleAgeNs for its age.
+    // Resident anonymous, file-backed and shared memory, read at the sampler rate where the
+    // platform splits them (Linux /proc/self/statm and /proc/self/status).
     ProfilerBytes anonBytes{};
     ProfilerBytes fileBytes{};
     ProfilerBytes shmemBytes{};
@@ -114,6 +115,8 @@ struct ProfilerMemory final {
     ProfilerBytes availableBytes{};
     ProfilerBytes swapTotalBytes{};
     ProfilerBytes swapUsedBytes{};
+    // This process's own memory in swap (Linux VmSwap), read at the sampler rate.
+    ProfilerBytes processSwappedBytes{};
     // Measured capacity minus the RAM headroom preference, and the headroom itself.
     ProfilerBytes headroomBytes{};
     ProfilerBytes usableBytes{};
@@ -299,7 +302,8 @@ struct ProfilerSnapshot final {
     // When the sample was taken, and the sampler's interval at that time.
     std::int64_t steadyTimestampNs = 0;
     std::int64_t intervalNs = 0;
-    // Ages of the slower sources at sample time.
+    // Ages of the slower sources at sample time: the memory budget ledger's machine sample
+    // (available memory, swap, the pressure flags and the ledger totals) and the GPU budget query.
     ProfilerNanoseconds ledgerSampleAgeNs{};
     ProfilerNanoseconds gpuBudgetQueryAgeNs{};
 

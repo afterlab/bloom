@@ -89,7 +89,9 @@ void RuntimeProfilerFeed::publishUiInputs() {
                                            : 0);
     }
 
+    bool busy = false;
     if (const auto* preview = sources_.preview) {
+        busy = busy || preview->playbackActive();
         inputs_.droppedFrames = preview->isCountingDroppedFrames()
                                     ? runtime::ProfilerCount::of(preview->droppedFrameCount())
                                     : runtime::ProfilerCount{};
@@ -99,6 +101,7 @@ void RuntimeProfilerFeed::publishUiInputs() {
     }
 
     if (const auto* ramPreview = sources_.ramPreview) {
+        busy = busy || ramPreview->isCaching();
         const auto cached = ramPreview->cachedFrameCount();
         inputs_.ramPreviewCachedFrames = runtime::ProfilerCount::of(cached);
         inputs_.ramPreviewFillFps = rate(fillRate_, ramPreview->isCaching(), cached, now);
@@ -115,8 +118,10 @@ void RuntimeProfilerFeed::publishUiInputs() {
             if (job != snapshot->jobs.end())
                 completed = job->progress.framesCompleted;
         }
+        busy = busy || completed.has_value();
         inputs_.exportFps = rate(exportRate_, completed.has_value(), completed.value_or(0), now);
     }
+    inputs_.hostBusy = busy;
 
     sampler_.publishHostInputs(inputs_);
 }

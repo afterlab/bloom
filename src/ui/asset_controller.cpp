@@ -490,14 +490,18 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
         ledger.unregisterCache(&proxyCacheBytes_);
         throw;
     }
-    ledger.setPoolProfile(&proxyCacheBytes_, {.name = "Proxies",
-                                              .kind = runtime::ProfilerPoolKind::Cache,
-                                              .counters = proxyCounters_.get(),
-                                              .rows = {}});
-    ledger.setPoolProfile(&decodedAudioBytes_, {.name = "Decoded audio",
-                                                .kind = runtime::ProfilerPoolKind::Cache,
-                                                .counters = audioCounters_.get(),
-                                                .rows = {}});
+    ledger.setPoolProfile(&proxyCacheBytes_,
+                          {.name = "Proxies",
+                           .kind = runtime::ProfilerPoolKind::Cache,
+                           .counters = proxyCounters_.get(),
+                           .rows = {},
+                           .entries = [this] { return thumbnailCache_.size(); }});
+    ledger.setPoolProfile(&decodedAudioBytes_,
+                          {.name = "Decoded audio",
+                           .kind = runtime::ProfilerPoolKind::Cache,
+                           .counters = audioCounters_.get(),
+                           .rows = {},
+                           .entries = [this] { return audioBuffers_.size(); }});
     dragToken_ = QUuid::createUuid().toByteArray();
     session_.setAssetController(this);
     connect(&bridge_, &TaskUiBridge::resultsAvailable, this, &AssetController::poll);

@@ -159,6 +159,7 @@ void fillFakeProfilerSnapshot(const std::uint64_t serial, const std::chrono::mil
     memory.availableBytes = of(64 * kGiB - 18 * kGiB - memory.rssBytes.value);
     memory.swapTotalBytes = of(8 * kGiB);
     memory.swapUsedBytes = of(mib(12.0));
+    memory.processSwappedBytes = of(mib(3.0));
     memory.headroomBytes = of(2 * kGiB);
     memory.usableBytes = of(memory.availableBytes.value - memory.headroomBytes.value);
     memory.ledgerConfiguredBytes = of(8 * kGiB);

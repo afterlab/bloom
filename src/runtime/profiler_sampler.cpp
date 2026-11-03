@@ -17,6 +17,13 @@ static_assert(static_cast<std::size_t>(telemetry::Stage::Encode) ==
 static_assert(telemetry::histogramBucket(profilerHistogramEdgeNs(18)) ==
               profilerHistogramBucket(profilerHistogramEdgeNs(18)));
 static_assert(telemetry::kHelperProcessSlots == kProfilerMaximumHelpers);
+static_assert(telemetry::kEvictionCauseCount == kProfilerEvictionCauseCount);
+static_assert(static_cast<std::size_t>(telemetry::EvictionCause::MemoryPressure) ==
+                  static_cast<std::size_t>(ProfilerEvictionCause::MemoryPressure) &&
+              static_cast<std::size_t>(telemetry::EvictionCause::Admission) ==
+                  static_cast<std::size_t>(ProfilerEvictionCause::Admission) &&
+              static_cast<std::size_t>(telemetry::EvictionCause::Purge) ==
+                  static_cast<std::size_t>(ProfilerEvictionCause::Purge));
 
 std::int64_t clampedIntervalNs(const std::chrono::milliseconds interval) noexcept {
     const auto clamped =
@@ -25,6 +32,13 @@ std::int64_t clampedIntervalNs(const std::chrono::milliseconds interval) noexcep
 }
 
 } // namespace
+
+bool profilerSampleIdle(const ProfilerSnapshot& snapshot,
+                        const ProfilerHostInputs& inputs) noexcept {
+    const auto& tasks = snapshot.workload.tasksByState;
+    return !inputs.hostBusy && tasks[static_cast<std::size_t>(TaskState::Queued)] == 0 &&
+           tasks[static_cast<std::size_t>(TaskState::Running)] == 0;
+}
 
 ProfilerSampler::ProfilerSampler(const ProfilerSamplerSources sources)
     : sources_(sources), intervalNs_(clampedIntervalNs(kDefaultInterval)) {}
@@ -142,20 +156,25 @@ void ProfilerSampler::sample() noexcept {
             memory.anonBytes =
                 ProfilerBytes::of(resident->residentBytes - *resident->fileAndSharedBytes);
     }
+    // The split by kind and this process's swap (Linux /proc/self/status).
+    const auto breakdown = readProfilerMemoryBreakdown();
+    if (!memory.anonBytes.present && breakdown.anonBytes)
+        memory.anonBytes = ProfilerBytes::of(*breakdown.anonBytes);
+    if (breakdown.fileBytes)
+        memory.fileBytes = ProfilerBytes::of(*breakdown.fileBytes);
+    if (breakdown.shmemBytes)
+        memory.shmemBytes = ProfilerBytes::of(*breakdown.shmemBytes);
+    if (breakdown.swappedBytes)
+        memory.processSwappedBytes = ProfilerBytes::of(*breakdown.swappedBytes);
     applyProfilerLedgerReading(inputs_.ledger, memory);
+    if (inputs_.ledger.sampleSteadyNs.present)
+        snapshot.ledgerSampleAgeNs = ProfilerNanoseconds::of(std::max<std::int64_t>(
+            snapshot.steadyTimestampNs - inputs_.ledger.sampleSteadyNs.value, 0));
     // The live host-staging scratch line (always counted).
     const auto staging = telemetry::stagingBytes();
     memory.stagingLiveBytes = ProfilerBytes::of(staging.liveBytes);
     memory.stagingPeakBytes = ProfilerBytes::of(staging.peakBytes);
     memory.unattributedBytes = profilerUnattributedBytes(memory);
-    // The idle baseline is the unattributed gap at the first sample that has both sides.
-    if (!baselineCaptured_ && memory.unattributedBytes.present && inputs_.ledger.holdingPresent) {
-        baselineCaptured_ = true;
-        baselineBytes_ =
-            static_cast<std::uint64_t>(std::max<std::int64_t>(memory.unattributedBytes.value, 0));
-    }
-    if (baselineCaptured_)
-        memory.idleBaselineBytes = ProfilerBytes::of(baselineBytes_);
 
     // ---- GPU: Bloom's own allocations from the injected reader; transfers and the driver heap
     // only in a process that has a GPU device (the reader reports its live bytes).
@@ -214,6 +233,25 @@ void ProfilerSampler::sample() noexcept {
     workload.ramPreviewCachedFrames = inputs_.ramPreviewCachedFrames;
     workload.ramPreviewFillFps = inputs_.ramPreviewFillFps;
     workload.exportFps = inputs_.exportFps;
+
+    // ---- Pressure: admission answers and evicted bytes by cause (always counted).
+    const auto admission = telemetry::admissionTotals();
+    snapshot.pressure.admissionWaits = ProfilerCount::of(admission.waits);
+    snapshot.pressure.admissionRefusals = ProfilerCount::of(admission.refusals);
+    const auto evicted = telemetry::evictedBytesByCause();
+    for (std::size_t cause = 0; cause < kProfilerEvictionCauseCount; ++cause)
+        snapshot.pressure.evictionBytes[cause] = ProfilerBytes::of(evicted[cause]);
+
+    // ---- The idle baseline: the unattributed gap at the first sample that has both sides while
+    // Bloom is idle (no queued or running task, no playback, RAM Preview fill or export).
+    if (!baselineCaptured_ && memory.unattributedBytes.present && inputs_.ledger.holdingPresent &&
+        profilerSampleIdle(snapshot, inputs_)) {
+        baselineCaptured_ = true;
+        baselineBytes_ =
+            static_cast<std::uint64_t>(std::max<std::int64_t>(memory.unattributedBytes.value, 0));
+    }
+    if (baselineCaptured_)
+        memory.idleBaselineBytes = ProfilerBytes::of(baselineBytes_);
 
     published_.store(snapshot);
 }

@@ -208,6 +208,51 @@ std::optional<ProfilerResidentMemory> readProfilerResidentMemory() noexcept {
 #endif
 }
 
+ProfilerMemoryBreakdown parseProfilerProcStatus(const std::string_view text) noexcept {
+    ProfilerMemoryBreakdown result;
+    // A "Key:" at the start of a line, then the value in kB.
+    const auto field = [text](const std::string_view key) -> std::optional<std::uint64_t> {
+        std::size_t at = 0;
+        while ((at = text.find(key, at)) != std::string_view::npos) {
+            if (at == 0 || text[at - 1] == '\n') {
+                std::size_t position = at + key.size();
+                const auto kibibytes = nextField(text, position);
+                if (!kibibytes || text.substr(position, 3) != " kB")
+                    return std::nullopt;
+                return *kibibytes * 1024ULL;
+            }
+            at += key.size();
+        }
+        return std::nullopt;
+    };
+    result.anonBytes = field("RssAnon:");
+    result.fileBytes = field("RssFile:");
+    result.shmemBytes = field("RssShmem:");
+    result.swappedBytes = field("VmSwap:");
+    return result;
+}
+
+ProfilerMemoryBreakdown readProfilerMemoryBreakdown() noexcept {
+#if defined(__linux__)
+    const int descriptor = ::open("/proc/self/status", O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0)
+        return {};
+    // About 1.5 KiB on current kernels; the four lines sit in the first half.
+    std::array<char, 4096> buffer{};
+    std::size_t length = 0;
+    while (length < buffer.size() - 1) {
+        const auto read = ::read(descriptor, buffer.data() + length, buffer.size() - 1 - length);
+        if (read <= 0)
+            break;
+        length += static_cast<std::size_t>(read);
+    }
+    ::close(descriptor);
+    return parseProfilerProcStatus(std::string_view(buffer.data(), length));
+#else
+    return {};
+#endif
+}
+
 std::optional<std::uint64_t> readProfilerProcessCpuNs() noexcept {
 #if defined(__linux__) || defined(__APPLE__)
     rusage usage{};

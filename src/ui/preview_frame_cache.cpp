@@ -160,7 +160,8 @@ PreviewFrameCache::PreviewFrameCache(const std::size_t byteBudget,
     ledger_.setPoolProfile(this, {.name = "Preview frames",
                                   .kind = runtime::ProfilerPoolKind::Cache,
                                   .counters = &counters_,
-                                  .rows = {}});
+                                  .rows = {},
+                                  .entries = [this] { return entries_.size(); }});
 }
 
 PreviewFrameCache::~PreviewFrameCache() { ledger_.unregisterCache(this); }

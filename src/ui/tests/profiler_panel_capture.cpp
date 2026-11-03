@@ -129,7 +129,8 @@ int captureLive(const QString& directory, const QString& scale) {
     ledger.setPoolProfile(&cacheOwner, {.name = "Preview frames",
                                         .kind = runtime::ProfilerPoolKind::Cache,
                                         .counters = &counters,
-                                        .rows = {}});
+                                        .rows = {},
+                                        .entries = {}});
     runtime::GpuProcessingPhasePolicy admission;
 
     int failures = 0;

@@ -1,6 +1,7 @@
 #include "packed_host_retirement_private.hpp"
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/operation_cache.hpp>
@@ -341,6 +342,11 @@ void ledgerHostTotalsNeverExceedAllocation() {
 // caller looked for, stores, evictions with their bytes, and refusals over the budget, read
 // through the ledger without the cache's lock order changing.
 void profilerRowsCountPerKind() {
+    namespace telemetry = bloom::core::telemetry;
+    const auto causeBytes = [](const telemetry::EvictionCause cause) {
+        return telemetry::evictedBytesByCause()[static_cast<std::size_t>(cause)];
+    };
+    const auto ceilingBefore = causeBytes(telemetry::EvictionCause::Ceiling);
     MemoryBudgetLedger ledger(16ULL << 30U);
     const auto image = makeImage(16, 16);
     const auto entry = storageBytes(*image);
@@ -383,6 +389,25 @@ void profilerRowsCountPerKind() {
                    decoded.pendingBytes ==
                memory.hostBytes,
            "the rows add up to the cache's host bytes");
+    // Entries now: every stored entry not yet evicted, per kind.
+    expect(operations.entries.present && decoded.entries.present &&
+               operations.entries.value ==
+                   operations.stores.valueOr(0) - operations.evictions.valueOr(0) &&
+               decoded.entries.value == decoded.stores.valueOr(0) - decoded.evictions.valueOr(0),
+           "each row counts its retained entries");
+    // A store evicting past the budget is the Ceiling cause; a purge is the Purge cause.
+    expect(causeBytes(telemetry::EvictionCause::Ceiling) - ceilingBefore == evictedBytes,
+           "evictions on a store are attributed to the pool's ceiling");
+    const auto purgedBefore = causeBytes(telemetry::EvictionCause::Purge);
+    const auto retainedEntries = operations.entries.value;
+    cache.clearOperations();
+    expect(causeBytes(telemetry::EvictionCause::Purge) - purgedBefore >= retainedEntries * entry,
+           "a purge counts the cleared entries' standalone charges");
+    static_cast<void>(ledger.copyProfilerPools(rows, dropped));
+    expect(rows[0].entries.valueOr(1) == 0 && rows[1].entries.value == decoded.entries.value,
+           "a purge of operations leaves no operation entries and keeps decoded media");
+    expect(rows[0].evictions.valueOr(0) == operations.evictions.valueOr(0),
+           "a purge is not a pool eviction");
 }
 
 // ADR 0037 rule 3: decoded-media entries hold the playback window. Behind the oldest request in

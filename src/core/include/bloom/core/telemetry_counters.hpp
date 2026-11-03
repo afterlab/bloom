@@ -109,6 +109,48 @@ struct StagingBytes final {
 // Restarts the peak at the current live bytes (the sampler does this when it starts).
 void resetStagingPeak() noexcept;
 
+// ---- Memory pressure -------------------------------------------------------------------------
+
+// Admission answers, counted where the admission policy answers a reservation: a request told to
+// wait for capacity (a waiting request retries, so each retry that waits again counts) and a
+// request refused because it can never fit the budget.
+void countAdmissionWait() noexcept;
+void countAdmissionRefusal() noexcept;
+struct AdmissionTotals final {
+    std::uint64_t waits = 0;
+    std::uint64_t refusals = 0;
+};
+[[nodiscard]] AdmissionTotals admissionTotals() noexcept;
+
+// Why bytes left a memory cache. The order matches runtime::ProfilerEvictionCause.
+//  - Ceiling: a pool evicting to stay within its own allowance (on a store, or after its ceiling
+//    or the memory preferences changed).
+//  - MemoryPressure: the memory budget ledger shrinking pools after a measured memory sample.
+//  - Admission: room made for live work (admission's reclaim, a RAM Preview fill).
+//  - Purge: an explicit user purge.
+enum class EvictionCause : std::uint8_t { Ceiling, MemoryPressure, Admission, Purge };
+inline constexpr std::size_t kEvictionCauseCount = 4;
+
+// The cause a memory pool's eviction on this thread is attributed to: the innermost live
+// EvictionCauseScope, or Ceiling outside every scope (a pool evicting on its own). The memory
+// budget ledger opens a scope around the budget callbacks it runs, which evict synchronously.
+[[nodiscard]] EvictionCause currentEvictionCause() noexcept;
+class EvictionCauseScope final {
+  public:
+    explicit EvictionCauseScope(EvictionCause cause) noexcept;
+    ~EvictionCauseScope();
+    EvictionCauseScope(const EvictionCauseScope&) = delete;
+    EvictionCauseScope& operator=(const EvictionCauseScope&) = delete;
+
+  private:
+    EvictionCause previous_;
+};
+
+// Adds evicted host bytes under `cause`, or under the current cause.
+void addEvictedBytes(EvictionCause cause, std::uint64_t bytes) noexcept;
+void addEvictedBytes(std::uint64_t bytes) noexcept;
+[[nodiscard]] std::array<std::uint64_t, kEvictionCauseCount> evictedBytesByCause() noexcept;
+
 // ---- Profiler activity ----------------------------------------------------------------------
 
 // Set while a profiler sampler runs. Owners of a slower query (the GPU heap budget) run it only

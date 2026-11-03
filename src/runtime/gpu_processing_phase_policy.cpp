@@ -1,3 +1,4 @@
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 
 #include <algorithm>
@@ -512,6 +513,12 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
             }
         }
     }
+    // The Profiler's pressure section: each answer to wait for capacity, and each refusal of a
+    // request that can never fit the budget.
+    if (grant.status == render::GpuProcessingPhaseAdmission::AwaitingCapacity)
+        core::telemetry::countAdmissionWait();
+    else if (grant.status == render::GpuProcessingPhaseAdmission::BudgetRefused)
+        core::telemetry::countAdmissionRefusal();
     if (grant.status != render::GpuProcessingPhaseAdmission::Accepted)
         logWaitOrRefusal(grant);
     return grant;

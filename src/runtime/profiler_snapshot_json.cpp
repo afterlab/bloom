@@ -167,6 +167,7 @@ void writeMemory(Writer& json, const ProfilerMemory& memory) {
     json.metric("availableBytes", memory.availableBytes);
     json.metric("swapTotalBytes", memory.swapTotalBytes);
     json.metric("swapUsedBytes", memory.swapUsedBytes);
+    json.metric("processSwappedBytes", memory.processSwappedBytes);
     json.metric("headroomBytes", memory.headroomBytes);
     json.metric("usableBytes", memory.usableBytes);
     json.metric("ledgerConfiguredBytes", memory.ledgerConfiguredBytes);

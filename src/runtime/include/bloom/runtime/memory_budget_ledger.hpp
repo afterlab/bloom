@@ -98,6 +98,9 @@ struct MemoryBudgetState final {
     bool processSampleFresh = false;
     std::uint64_t sampleSerial = 0;
     MachineMemorySample machine;
+    // When the ledger applied `machine` (a process sample, a pressure sample or a poll); empty
+    // before the first.
+    std::optional<std::chrono::steady_clock::time_point> machineAppliedAt;
     // Compatibility field: named budgets no longer use a percentage retention policy.
     unsigned retentionPercent = 100;
     bool memoryPressure = false;

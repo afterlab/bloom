@@ -376,6 +376,31 @@ void ledgerAdapterReadsAccessors() {
            "the reusable holding is read");
     const auto allocations = allocationsDuring([&] { readProfilerLedger(ledger, reading, false); });
     expect(allocations == 0, "a holding-only read allocates nothing");
+    expect(!reading.sampleSteadyNs.present, "no sample time before the ledger applied a sample");
+    const auto appliedAt = std::chrono::steady_clock::now() - 3s;
+    static_cast<void>(ledger.poll(MachineMemorySample{.availableBytes = 8 * kGiB,
+                                                      .swapTotalBytes = 4 * kGiB,
+                                                      .swapUsedBytes = 1 * kGiB,
+                                                      .processSwappedBytes = 0,
+                                                      .memoryStall = false},
+                                  appliedAt));
+    readProfilerLedger(ledger, reading, true);
+    expect(reading.sampleSteadyNs.present &&
+               reading.sampleSteadyNs.value == std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                   appliedAt.time_since_epoch())
+                                                   .count(),
+           "the reading carries when the ledger applied its machine sample");
+    expect(reading.swapUsedBytes.valueOr(0) == 1 * kGiB, "system swap in use is read");
+    ProfilerSampler aged;
+    ProfilerHostInputs agedInputs;
+    agedInputs.ledger = reading;
+    aged.publishHostInputs(agedInputs);
+    ProfilerSnapshot agedSnapshot;
+    expect(aged.sampleNow() && aged.readLatest(agedSnapshot, 0), "a sample with the reading");
+    expect(agedSnapshot.ledgerSampleAgeNs.present &&
+               agedSnapshot.ledgerSampleAgeNs.value >= 3'000'000'000 &&
+               agedSnapshot.ledgerSampleAgeNs.value < 60'000'000'000,
+           "the snapshot reports the ledger sample's age");
 
     ProfilerMemory memory;
     applyProfilerLedgerReading(reading, memory);
@@ -398,7 +423,8 @@ void ledgerAdapterReadsAccessors() {
     ledger.setPoolProfile(&cacheOwner, {.name = "Decoded video",
                                         .kind = ProfilerPoolKind::Cache,
                                         .counters = &counters,
-                                        .rows = {}});
+                                        .rows = {},
+                                        .entries = [] { return std::size_t{7}; }});
     counters.hit();
     counters.hit();
     counters.miss();
@@ -407,20 +433,23 @@ void ledgerAdapterReadsAccessors() {
     counters.refused();
     const int splitOwner = 0;
     ledger.registerCache(&splitOwner, 0, std::function<std::size_t()>{}, [](std::size_t) {});
-    ledger.setPoolProfile(&splitOwner, {.name = {},
-                                        .kind = ProfilerPoolKind::Cache,
-                                        .counters = nullptr,
-                                        .rows = [](const std::span<ProfilerPool> out) {
-                                            const auto count = std::min<std::size_t>(out.size(), 2);
-                                            for (std::size_t index = 0; index < count; ++index) {
-                                                out[index] = ProfilerPool{};
-                                                setProfilerName(out[index].name,
-                                                                index == 0 ? "Part A" : "Part B");
-                                                out[index].kind = ProfilerPoolKind::Scratch;
-                                                out[index].hostBytes = (index + 1) * kMiB;
-                                            }
-                                            return count;
-                                        }});
+    ledger.setPoolProfile(&splitOwner,
+                          {.name = {},
+                           .kind = ProfilerPoolKind::Cache,
+                           .counters = nullptr,
+                           .rows =
+                               [](const std::span<ProfilerPool> out) {
+                                   const auto count = std::min<std::size_t>(out.size(), 2);
+                                   for (std::size_t index = 0; index < count; ++index) {
+                                       out[index] = ProfilerPool{};
+                                       setProfilerName(out[index].name,
+                                                       index == 0 ? "Part A" : "Part B");
+                                       out[index].kind = ProfilerPoolKind::Scratch;
+                                       out[index].hostBytes = (index + 1) * kMiB;
+                                   }
+                                   return count;
+                               },
+                           .entries = {}});
     readProfilerLedger(ledger, reading, false);
     applyProfilerLedgerReading(reading, memory);
     expect(memory.poolCount == 3 && memory.droppedPools == 0, "one row plus two rows");
@@ -432,6 +461,8 @@ void ledgerAdapterReadsAccessors() {
                named->evictions.valueOr(0) == 1 && named->evictedBytes.valueOr(0) == 4096 &&
                named->refusals.valueOr(0) == 1,
            "a named pool's counters reach its row");
+    expect(named != memory.pools.end() && named->entries.present && named->entries.value == 7,
+           "a pool that counts its entries reports them");
     expect(reading.holdingHostBytes == 303 * kMiB, "the holding sums every row");
     const auto counted = allocationsDuring([&] { readProfilerLedger(ledger, reading, false); });
     expect(counted == 0, "reading pool rows allocates nothing");
@@ -565,8 +596,16 @@ void absentFieldsStayAbsent() {
     expect(memory.rssBytes.present && memory.anonBytes.present, "RSS and anonymous from statm");
     expect(memory.unattributedBytes.present, "unattributed follows anonymous memory");
 #endif
-    expect(!memory.fileBytes.present && !memory.shmemBytes.present,
-           "file-backed and shared memory are not split at the sampler rate");
+#if defined(__linux__)
+    expect(memory.fileBytes.present && memory.shmemBytes.present &&
+               memory.processSwappedBytes.present,
+           "file-backed, shared and swapped memory come from /proc/self/status");
+#else
+    expect(
+        !memory.fileBytes.present && !memory.shmemBytes.present &&
+            !memory.processSwappedBytes.present,
+        "file-backed, shared and swapped memory are absent where the platform does not split them");
+#endif
     expect(!snapshot.ledgerSampleAgeNs.present && !snapshot.gpuBudgetQueryAgeNs.present,
            "no slower source is read");
     expect(!memory.physicalBytes.present && !memory.ledgerConfiguredBytes.present &&
@@ -588,11 +627,11 @@ void absentFieldsStayAbsent() {
     expect(!snapshot.workload.playbackFps.present && !snapshot.workload.exportFps.present &&
                !snapshot.workload.ramPreviewCachedFrames.present,
            "workload rates are absent without the hook");
-    expect(!snapshot.pressure.admissionWaits.present &&
-               !snapshot.pressure.admissionRefusals.present &&
-               std::ranges::none_of(snapshot.pressure.evictionBytes,
-                                    [](const auto& bytes) { return bytes.present; }),
-           "pressure counters stay absent");
+    expect(snapshot.pressure.admissionWaits.present &&
+               snapshot.pressure.admissionRefusals.present &&
+               std::ranges::all_of(snapshot.pressure.evictionBytes,
+                                   [](const auto& bytes) { return bytes.present; }),
+           "the pressure counters are always counted");
     expect(snapshot.processes.helperCount == 0, "no helper processes are reported");
 
     // With the hook's values: the pool row, the baseline and the rates arrive; the rest stays.
@@ -615,6 +654,144 @@ void absentFieldsStayAbsent() {
     expect(sampler.sampleNow() && sampler.readLatest(snapshot, 2) &&
                snapshot.memory.idleBaselineBytes.value == baseline,
            "the baseline is captured once");
+#endif
+}
+
+void procStatusParsing() {
+    const auto parsed = parseProfilerProcStatus("Name:\tbloom\nVmRSS:\t    4000 kB\n"
+                                                "RssAnon:\t    3000 kB\nRssFile:\t     900 kB\n"
+                                                "RssShmem:\t     100 kB\nVmSwap:\t      12 kB\n");
+    expect(parsed.anonBytes == 3000 * 1024ULL && parsed.fileBytes == 900 * 1024ULL &&
+               parsed.shmemBytes == 100 * 1024ULL && parsed.swappedBytes == 12 * 1024ULL,
+           "status lines are kB");
+    const auto partial =
+        parseProfilerProcStatus("RssAnon:\t5 kB\nVmSwap:\tabc kB\nXRssFile:\t7 kB\n");
+    expect(partial.anonBytes == 5 * 1024ULL && !partial.fileBytes && !partial.shmemBytes &&
+               !partial.swappedBytes,
+           "missing, malformed or mid-line keys stay absent");
+    expect(!parseProfilerProcStatus("RssFile:\t7 MB\n").fileBytes, "only kB values are read");
+    const auto live = readProfilerMemoryBreakdown();
+#if defined(__linux__)
+    expect(live.anonBytes && live.fileBytes && live.shmemBytes && live.swappedBytes,
+           "this process's status reads");
+    const auto resident = readProfilerResidentMemory();
+    expect(resident && live.fileBytes && *live.fileBytes <= resident->residentBytes,
+           "file-backed memory is part of the resident set");
+#else
+    expect(!live.anonBytes && !live.fileBytes && !live.shmemBytes && !live.swappedBytes,
+           "no split where the platform has none");
+#endif
+}
+
+void evictionCausesAreAttributed() {
+    namespace telemetry = bloom::core::telemetry;
+    using Cause = telemetry::EvictionCause;
+    static_assert(telemetry::kEvictionCauseCount == kProfilerEvictionCauseCount);
+    static_assert(static_cast<std::size_t>(Cause::Purge) ==
+                  static_cast<std::size_t>(ProfilerEvictionCause::Purge));
+    const auto start = telemetry::evictedBytesByCause();
+    const auto added = [&start](const Cause cause) {
+        const auto index = static_cast<std::size_t>(cause);
+        return telemetry::evictedBytesByCause()[index] - start[index];
+    };
+
+    // Scopes nest and restore; outside every scope a pool evicts under its own ceiling.
+    expect(telemetry::currentEvictionCause() == Cause::Ceiling, "no scope is the Ceiling cause");
+    {
+        const telemetry::EvictionCauseScope admission(Cause::Admission);
+        {
+            const telemetry::EvictionCauseScope purge(Cause::Purge);
+            expect(telemetry::currentEvictionCause() == Cause::Purge, "the innermost scope wins");
+        }
+        expect(telemetry::currentEvictionCause() == Cause::Admission, "a scope restores");
+    }
+    expect(telemetry::currentEvictionCause() == Cause::Ceiling, "the last scope restores Ceiling");
+
+    // A pool whose budget callback evicts synchronously, as every registered pool does.
+    MemoryBudgetLedger ledger(16 * kGiB);
+    MemoryPoolCounters counters;
+    std::size_t held = 1 * kGiB;
+    const int owner = 0;
+    ledger.registerCache(
+        &owner, 4 * kGiB, [&held] { return held; },
+        [&](const std::size_t budget) {
+            if (held > budget) {
+                counters.evicted(held - budget);
+                held = budget;
+            }
+        });
+    // A lowered ceiling (a preference change).
+    static_cast<void>(ledger.setCacheCeiling(&owner, 512 * kMiB));
+    expect(added(Cause::Ceiling) == 512 * kMiB && held == 512 * kMiB,
+           "a lowered ceiling's eviction is the Ceiling cause");
+    // A measured memory sample with available memory below the headroom.
+    ledger.setRamHeadroom(2 * kGiB);
+    const auto beforePressure = held;
+    static_cast<void>(ledger.applyPressureSample(MachineMemorySample{.availableBytes = 1 * kGiB,
+                                                                     .swapTotalBytes = 0,
+                                                                     .swapUsedBytes = 0,
+                                                                     .processSwappedBytes = 0,
+                                                                     .memoryStall = false}));
+    expect(held < beforePressure && added(Cause::MemoryPressure) == beforePressure - held,
+           "a pressure sample's eviction is the MemoryPressure cause");
+    // Room made for admitted work.
+    held = 256 * kMiB;
+    const auto released = ledger.reclaim(64 * kMiB);
+    expect(released >= 64 * kMiB && added(Cause::Admission) == released,
+           "a reclaim's eviction is the Admission cause");
+    expect(added(Cause::Ceiling) == 512 * kMiB, "no other cause moved");
+    // Outside the ledger: a pool's own eviction, a release outside the causes and a purge.
+    counters.evicted(1000);
+    counters.released(500);
+    telemetry::addEvictedBytes(Cause::Purge, 7);
+    expect(added(Cause::Ceiling) == 512 * kMiB + 1000 && added(Cause::Purge) == 7,
+           "a pool's own eviction is Ceiling and a purge is Purge");
+    const auto total = added(Cause::Ceiling) + added(Cause::MemoryPressure) +
+                       added(Cause::Admission) + added(Cause::Purge);
+    expect(counters.evictedBytes.load() == total - 7 + 500,
+           "a release counts in the pool's row and in no cause");
+    ledger.unregisterCache(&owner);
+
+    // The sampler reports the totals.
+    ProfilerSampler sampler;
+    ProfilerSnapshot snapshot;
+    expect(sampler.sampleNow() && sampler.readLatest(snapshot, 0), "a sample");
+    const auto now = telemetry::evictedBytesByCause();
+    for (std::size_t cause = 0; cause < kProfilerEvictionCauseCount; ++cause)
+        expect(snapshot.pressure.evictionBytes[cause].present &&
+                   snapshot.pressure.evictionBytes[cause].value == now[cause],
+               "each cause reaches the pressure section");
+    const auto admission = telemetry::admissionTotals();
+    expect(snapshot.pressure.admissionWaits.valueOr(admission.waits + 1) == admission.waits &&
+               snapshot.pressure.admissionRefusals.valueOr(admission.refusals + 1) ==
+                   admission.refusals,
+           "admission waits and refusals reach the pressure section");
+}
+
+void idleBaselineWaitsForIdle() {
+    auto inputs = someInputs();
+    inputs.hostBusy = true;
+    ProfilerSampler sampler;
+    sampler.publishHostInputs(inputs);
+    ProfilerSnapshot snapshot;
+    expect(sampler.sampleNow() && sampler.readLatest(snapshot, 0), "a busy sample");
+    expect(!profilerSampleIdle(snapshot, inputs) && !snapshot.memory.idleBaselineBytes.present,
+           "no baseline while playback, a fill or an export runs");
+    {
+        BusyScheduler busy(2);
+        ProfilerSampler withTasks({.scheduler = &busy.scheduler, .readGpu = nullptr});
+        inputs.hostBusy = false;
+        withTasks.publishHostInputs(inputs);
+        expect(withTasks.sampleNow() && withTasks.readLatest(snapshot, 0), "a sample with tasks");
+        expect(!profilerSampleIdle(snapshot, inputs) && !snapshot.memory.idleBaselineBytes.present,
+               "no baseline while tasks run or wait");
+    }
+    inputs.hostBusy = false;
+    sampler.publishHostInputs(inputs);
+    expect(sampler.sampleNow() && sampler.readLatest(snapshot, 1), "an idle sample");
+#if defined(__linux__)
+    expect(snapshot.memory.idleBaselineBytes.present,
+           "the first idle sample captures the baseline");
 #endif
 }
 
@@ -652,6 +829,9 @@ int main() try {
     seqlockReadersSeeWholeWrites();
     statmParsing();
     procStatParsing();
+    procStatusParsing();
+    evictionCausesAreAttributed();
+    idleBaselineWaitsForIdle();
     helpersAndStagingReachTheSnapshot();
     rowBandActivityIsCounted();
     snapshotJsonShape();

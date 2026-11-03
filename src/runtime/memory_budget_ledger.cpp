@@ -1,3 +1,4 @@
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
@@ -31,6 +32,12 @@
 
 namespace bloom::runtime {
 namespace {
+
+// Every entry point that runs pool budget callbacks names why, so the evictions those callbacks
+// make synchronously are attributed to that cause in the Profiler's pressure section: a changed
+// ceiling or preference, a measured memory sample, or room made for live work.
+using core::telemetry::EvictionCause;
+using core::telemetry::EvictionCauseScope;
 
 [[nodiscard]] std::size_t saturatedAdd(const std::size_t left, const std::size_t right) noexcept {
     return left + std::min(right, std::numeric_limits<std::size_t>::max() - left);
@@ -312,6 +319,7 @@ void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceil
                                        const MemoryBudgetOwnerKind kind,
                                        const MemoryEvictionPriority priority) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Ceiling);
     const auto entry =
         caches_
             .insert_or_assign(
@@ -336,6 +344,7 @@ void MemoryBudgetLedger::registerCache(const void* owner, const std::size_t ceil
 
 void MemoryBudgetLedger::unregisterCache(const void* owner) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Ceiling);
     if (const auto found = caches_.find(owner); found != caches_.end()) {
         yieldTargets_.erase(&found->second);
         caches_.erase(found);
@@ -348,6 +357,7 @@ void MemoryBudgetLedger::unregisterCache(const void* owner) {
 
 std::size_t MemoryBudgetLedger::setCacheCeiling(const void* owner, const std::size_t ceiling) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Ceiling);
     const auto found = caches_.find(owner);
     if (found == caches_.end())
         return ceiling;
@@ -477,6 +487,7 @@ std::size_t MemoryBudgetLedger::cacheByteBudget(const void* owner) const {
 
 void MemoryBudgetLedger::setConfiguredTotal(const std::size_t bytes) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Ceiling);
     configuredTotalSet_ = true;
     state_.configuredBytes = bytes;
     if (!processSampling_)
@@ -528,6 +539,7 @@ MemoryBudgetState MemoryBudgetLedger::pollHostLocked(MachineMemorySample sample,
         state_.swapPressure = swapGrowing;
     state_.swapNotice = state_.swapPressure && !wasSwap;
     state_.machine = sample;
+    state_.machineAppliedAt = now;
     state_.retentionPercent = 100;
     if (!processSampling_) {
         state_.effectiveBytes = state_.configuredBytes;
@@ -539,6 +551,7 @@ MemoryBudgetState MemoryBudgetLedger::pollHostLocked(MachineMemorySample sample,
 
 void MemoryBudgetLedger::setRamHeadroom(const std::size_t bytes) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Ceiling);
     if (ramHeadroom_ == bytes)
         return;
     ramHeadroom_ = bytes;
@@ -598,6 +611,8 @@ std::size_t MemoryBudgetLedger::copyProfilerPools(const std::span<ProfilerPool> 
             row.ceilingBytes = ProfilerBytes::of(cache.ceiling);
         if (cache.profile.counters != nullptr)
             cache.profile.counters->copyTo(row);
+        if (cache.profile.entries)
+            row.entries = ProfilerCount::of(cache.profile.entries());
     }
     return count;
 }
@@ -636,6 +651,7 @@ void MemoryBudgetLedger::applyBudgetsLocked() {
 MemoryBudgetState MemoryBudgetLedger::applyPressureSample(const MachineMemorySample& sample,
                                                           const Clock::time_point now) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::MemoryPressure);
     static_cast<void>(pollHostLocked(sample, now));
     if (processSampling_)
         applyProcessCeilingLocked();
@@ -699,6 +715,7 @@ MemoryBudgetLedger::reusableHoldingsLocked() const {
 
 std::size_t MemoryBudgetLedger::reclaim(const std::size_t bytes) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Admission);
     if (bytes == 0)
         return 0;
     auto holdings = reusableHoldingsLocked();
@@ -749,6 +766,7 @@ void MemoryBudgetLedger::PreviewFill::end() noexcept {
 
 MemoryBudgetLedger::PreviewFill MemoryBudgetLedger::beginPreviewFill() {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Admission);
     ++previewFills_;
     // Ordinary pools stop growing from the start of the fill, not from the next sample: a budget
     // granted before the fill would otherwise let them keep filling free memory meanwhile.
@@ -772,6 +790,7 @@ bool MemoryBudgetLedger::previewFillActive() const {
 
 std::size_t MemoryBudgetLedger::yieldToPreview(const void* owner, const std::size_t bytes) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::Admission);
     if (bytes == 0 || previewFills_ == 0 || !ramHeadroom_)
         return 0;
     const auto found = caches_.find(owner);
@@ -828,6 +847,7 @@ std::optional<std::size_t> MemoryBudgetLedger::ramHeadroom() const {
 
 void MemoryBudgetLedger::beginProcessSampling() {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::MemoryPressure);
     if (processSampling_)
         return;
     // Production retention: freed cache buffers must leave the process, not stay in heap arenas.
@@ -884,6 +904,7 @@ void MemoryBudgetLedger::applyProcessCeilingLocked() {
 MemoryBudgetState MemoryBudgetLedger::poll(MachineMemorySample sample,
                                            const Clock::time_point now) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::MemoryPressure);
     static_cast<void>(pollHostLocked(sample, now));
     applyBudgetsLocked();
     return state_;
@@ -892,6 +913,7 @@ MemoryBudgetState MemoryBudgetLedger::poll(MachineMemorySample sample,
 MemoryBudgetState MemoryBudgetLedger::applySample(MemoryBudgetSample sample,
                                                   const Clock::time_point now) {
     const std::lock_guard lock(mutex_);
+    const EvictionCauseScope cause(EvictionCause::MemoryPressure);
     updatePhysicalCapacity(sample.physicalBytes);
     if (!processSampling_) {
         static_cast<void>(pollHostLocked(sample.machine, now));

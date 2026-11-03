@@ -26,6 +26,9 @@ struct ProfilerLedgerReading final {
     ProfilerBytes retainedBytes{};
     ProfilerMetric<bool> memoryPressure{};
     ProfilerMetric<bool> swapPressure{};
+    // When the ledger applied the machine sample these figures come from (steady-clock
+    // nanoseconds); the sampler reports its age as ProfilerSnapshot::ledgerSampleAgeNs.
+    ProfilerNanoseconds sampleSteadyNs{};
     // One row per registered pool (MemoryBudgetLedger::copyProfilerPools), and their sums.
     bool holdingPresent = false;
     std::uint64_t holdingHostBytes = 0;

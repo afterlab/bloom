@@ -23,6 +23,24 @@ parseProfilerStatm(std::string_view text, std::uint64_t pageBytes) noexcept;
 
 [[nodiscard]] std::optional<ProfilerResidentMemory> readProfilerResidentMemory() noexcept;
 
+// This process's resident memory by kind and its memory in swap, each absent where the platform
+// does not report it. Linux reads the RssAnon, RssFile, RssShmem and VmSwap lines of
+// /proc/self/status (the kernel's per-process counters, O(1), never smaps) into a fixed buffer.
+// macOS and Windows have no equivalent per-process split through their standard calls; there
+// every field is absent.
+struct ProfilerMemoryBreakdown final {
+    std::optional<std::uint64_t> anonBytes;
+    std::optional<std::uint64_t> fileBytes;
+    std::optional<std::uint64_t> shmemBytes;
+    std::optional<std::uint64_t> swappedBytes;
+};
+
+// Parses /proc/<pid>/status text: each of the four "Key:   N kB" lines that is present and
+// numeric fills its field.
+[[nodiscard]] ProfilerMemoryBreakdown parseProfilerProcStatus(std::string_view text) noexcept;
+
+[[nodiscard]] ProfilerMemoryBreakdown readProfilerMemoryBreakdown() noexcept;
+
 // Cumulative user plus system CPU time of this process.
 [[nodiscard]] std::optional<std::uint64_t> readProfilerProcessCpuNs() noexcept;
 

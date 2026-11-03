@@ -298,7 +298,11 @@ MediaDiskCache::MediaDiskCache(MediaDiskCacheConfig config, runtime::MemoryBudge
         ledger_.setPoolProfile(this, {.name = "Media disk cache write queue",
                                       .kind = runtime::ProfilerPoolKind::Scratch,
                                       .counters = &counters_,
-                                      .rows = {}});
+                                      .rows = {},
+                                      .entries = [this] {
+                                          std::lock_guard lock(queueMutex_);
+                                          return queue_.size();
+                                      }});
     } catch (...) {
         {
             std::lock_guard lock(queueMutex_);
@@ -412,7 +416,7 @@ void MediaDiskCache::evictLocked() {
         std::error_code removeError;
         std::filesystem::remove(entryPath(victim), removeError);
         storedBytes_ -= index_.at(victim).first.bytes;
-        counters_.evicted(index_.at(victim).first.bytes);
+        counters_.released(index_.at(victim).first.bytes);
         index_.erase(victim);
         lru_.pop_back();
         ++statistics_.evictions;

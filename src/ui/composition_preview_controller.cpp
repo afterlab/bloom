@@ -4,6 +4,7 @@
 #include <bloom/ui/playback_controller.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/document/project.hpp>
 
 #include <QThread>
@@ -770,6 +771,8 @@ void CompositionPreviewController::purgePreviewCache() {
     // and the next requested frame is a cache miss that recomputes.
     ++generation_;
     preparationEstimate_.reset();
+    core::telemetry::addEvictedBytes(core::telemetry::EvictionCause::Purge,
+                                     frameCache_->hostBytes());
     frameCache_->clear();
     emit stateChanged();
 }

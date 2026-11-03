@@ -222,7 +222,8 @@ class OperationCache final {
     static void retag(Entry& entry) noexcept;
     void evictToLocked(std::size_t limit, std::uint64_t& counter);
     void removeLocked(Position candidate);
-    void removeKindLocked(OperationCacheEntryKind kind);
+    // Returns the removed entries' standalone charge.
+    std::size_t removeKindLocked(OperationCacheEntryKind kind);
     [[nodiscard]] Position evictionCandidate();
     void insertLocked(std::unique_ptr<Entry>& entry);
 

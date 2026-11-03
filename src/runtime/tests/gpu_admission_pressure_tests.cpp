@@ -5,6 +5,7 @@
 // requested source/executor values are unclaimed ceilings. A need that fits the usable capacity
 // but not what other work holds now waits (AwaitingCapacity) and is admitted on release. Only a
 // need larger than the whole usable capacity is refused (BudgetRefused).
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/native_image_storage.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
@@ -155,6 +156,8 @@ void exhaustionIsRefusedWithReadableCounters() {
     large.pixels = 16384ULL * 16384;
     large.minimumSourceBytes = large.pixels * 16;
     large.minimumExecutorBytes = large.pixels * 16;
+    // The Profiler's pressure counters (process-wide): one wait, then two refusals.
+    const auto countedBefore = bloom::core::telemetry::admissionTotals();
     const auto waits = policy.reserve(large);
     require(waits.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
                 waits.domain == GpuProcessingPhaseDomain::Host && !waits.lease,
@@ -173,6 +176,17 @@ void exhaustionIsRefusedWithReadableCounters() {
     require(deviceRefused.status == GpuProcessingPhaseAdmission::BudgetRefused &&
                 deviceRefused.domain == GpuProcessingPhaseDomain::Device,
             "a device need larger than the whole usable device capacity is refused");
+    const auto counted = bloom::core::telemetry::admissionTotals();
+    require(counted.waits == countedBefore.waits + 1 &&
+                counted.refusals == countedBefore.refusals + 2,
+            "each wait and each refusal is counted for the Profiler");
+    {
+        const auto accepted = policy.reserve(frame());
+        require(accepted.status == GpuProcessingPhaseAdmission::Accepted &&
+                    bloom::core::telemetry::admissionTotals().waits == counted.waits &&
+                    bloom::core::telemetry::admissionTotals().refusals == counted.refusals,
+                "an accepted reservation counts neither");
+    }
     const auto usable = policy.usableCapacity();
     require(usable.hostClaimBytes == 0 && usable.deviceClaimBytes == 0 &&
                 usable.admittedPhases == 0,

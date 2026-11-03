@@ -42,8 +42,15 @@ struct ProfilerHostInputs final {
     ProfilerCount ramPreviewCachedFrames{};
     ProfilerRatio ramPreviewFillFps{};
     ProfilerRatio exportFps{};
+    // Playback, a RAM Preview fill or an export is running: the idle baseline waits for none.
+    bool hostBusy = false;
 };
 static_assert(std::is_trivially_copyable_v<ProfilerHostInputs>);
+
+// Whether a sample shows Bloom idle, the only time the idle baseline is captured: no queued or
+// running task in the snapshot's workload and nothing busy in the host inputs.
+[[nodiscard]] bool profilerSampleIdle(const ProfilerSnapshot& snapshot,
+                                      const ProfilerHostInputs& inputs) noexcept;
 
 class ProfilerSampler final {
   public:

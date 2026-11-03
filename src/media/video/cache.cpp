@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/video/session.hpp>
 #include <utility>
 #include <vector>
@@ -19,7 +20,11 @@ DecodedVideoCache::DecodedVideoCache(const std::size_t budget, runtime::MemoryBu
     ledger_.setPoolProfile(this, {.name = "Decoded video",
                                   .kind = runtime::ProfilerPoolKind::Cache,
                                   .counters = &counters_,
-                                  .rows = {}});
+                                  .rows = {},
+                                  .entries = [this] {
+                                      std::lock_guard lock(mutex_);
+                                      return entries_.size();
+                                  }});
 }
 DecodedVideoCache::~DecodedVideoCache() {
     std::shared_ptr<runtime::SourceWorkingSet> window;
@@ -55,7 +60,7 @@ void DecodedVideoCache::releaseOutsideWindow() {
         for (auto position = entries_.begin(); position != entries_.end();) {
             if (position->use.tracked && !window_->retains(position->use)) {
                 resident_ -= position->bytes;
-                counters_.evicted(position->bytes);
+                counters_.released(position->bytes);
                 released.push_back(std::move(position->frame));
                 position = entries_.erase(position);
             } else {
@@ -111,6 +116,8 @@ void DecodedVideoCache::setByteBudget(const std::size_t budget) {
 }
 void DecodedVideoCache::clear() {
     std::lock_guard lock(mutex_);
+    // Only an explicit refresh (a user purge) clears the decoded planes.
+    core::telemetry::addEvictedBytes(core::telemetry::EvictionCause::Purge, resident_);
     entries_.clear();
     resident_ = 0;
 }
