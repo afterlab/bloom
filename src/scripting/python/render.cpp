@@ -76,9 +76,16 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
                 [this, cancellationTask, &call, &scheduler] {
                     if (call.closing() || cancellationRequested() || !session_->isValid())
                         return true;
+                    if (cancellationTask == 0)
+                        return false;
+                    // The parent Python task's ticket runs until that task finishes, which is
+                    // after this render returns. A cancelled ticket ends within one of its own
+                    // polls, after which its snapshot no longer reports the request and later
+                    // leaves the terminal history, so a ticket that is no longer running can only
+                    // have been cancelled.
                     const auto task =
                         scheduler.snapshot(runtime::TaskId::fromRaw(cancellationTask));
-                    return task && task->cancellationRequested;
+                    return !task || runtime::isTerminal(task->state) || task->cancellationRequested;
                 },
             .replaceExisting = replace};
         result =

@@ -1,5 +1,6 @@
 """Python/CLI conformance against built artifacts, without user site imports."""
 import ast
+import concurrent.futures
 import json
 import keyword
 import hashlib
@@ -552,13 +553,14 @@ class PythonApi(unittest.TestCase):
             composition = bloom.data.compositions[-1]
             handle = bloom.tasks.submit(lambda task: bloom.render.range(
                 0, 999, composition=composition, out=root / 'cancel.png'))
-            deadline = time.monotonic() + 10
-            while len(self.host.tasks()) < 2 and not handle.done and time.monotonic() < deadline:
+            # The native range is running once the host tracks it beside the Python task. Wait for
+            # that (or for the task to end) rather than against a wall-clock budget; ctest bounds it.
+            while len(self.host.tasks()) < 2 and not handle.done:
                 time.sleep(0.001)
             self.assertGreaterEqual(len(self.host.tasks()), 2)
             handle.cancel()
-            while not handle.done and time.monotonic() < deadline:
-                time.sleep(0.001)
+            # Ends only if the native range cooperates with its parent Python task.
+            concurrent.futures.wait([handle._future])
             self.assertTrue(handle.done, 'Native range cooperates with its parent Python task')
             self.assertLess(len(list(root.glob('cancel.*.png'))), 1000)
             with self.assertRaises(bloom.CancelledError):
