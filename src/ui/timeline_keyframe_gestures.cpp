@@ -240,19 +240,27 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
         if (snapGuide_)
             targetSeconds = snapGuide_->toSeconds();
     }
+    // The exact offsets that keep every dragged key inside [0, duration): rational, so a clamped
+    // key lands exactly on a bound, never a rounding step outside it.
+    const auto [firstKey, lastKey] =
+        std::minmax_element(gestureData_.begin(), gestureData_.end(),
+                            [](const auto& a, const auto& b) { return a.time < b.time; });
+    const auto epsilon = core::RationalTime::create(-1, 1'000'000'000);
+    const auto lastInstant = epsilon ? offsetKeyTime(duration, *epsilon) : std::nullopt;
+    const auto minimum = keyTimeDifference(core::RationalTime{}, firstKey->time);
+    const auto maximum =
+        lastInstant ? keyTimeDifference(*lastInstant, lastKey->time) : std::nullopt;
     if (!snapping && !stretchAnchor_) {
-        const auto [first, last] =
-            std::minmax_element(gestureData_.begin(), gestureData_.end(),
-                                [](const auto& a, const auto& b) { return a.time < b.time; });
-        const double deltaSeconds =
-            std::clamp(targetSeconds - pressed_->time.toSeconds(), -first->time.toSeconds(),
-                       std::max(0.0, duration.toSeconds() - last->time.toSeconds() - 1e-9));
-        const auto offset = keyPointerOffset(deltaSeconds);
+        // A free drag keeps the nanosecond time the pointer names; only the clamp is exact. A key
+        // already outside the interval (projected through a layer clock) may stay where it is.
+        const auto requested = keyPointerOffset(targetSeconds - pressed_->time.toSeconds());
         moves_.clear();
-        if (!offset)
+        if (!requested || !minimum || !maximum)
             return;
+        const auto offset = std::clamp(*requested, std::min(*minimum, core::RationalTime{}),
+                                       std::max(*maximum, core::RationalTime{}));
         for (std::size_t i = 0; i < gestureData_.size(); ++i) {
-            const auto time = offsetKeyTime(gestureData_[i].time, *offset);
+            const auto time = offsetKeyTime(gestureData_[i].time, offset);
             if (!time) {
                 moves_.clear();
                 return;
@@ -270,14 +278,6 @@ void TimelineKeyframePanel::mouseMoveEvent(QMouseEvent* event) {
     if (!stretchAnchor_) {
         const auto target =
             snapGuide_ ? snapGuide_ : frameTimeForIndex(rate, duration, targetIndex);
-        const auto [firstKey, lastKey] =
-            std::minmax_element(gestureData_.begin(), gestureData_.end(),
-                                [](const auto& a, const auto& b) { return a.time < b.time; });
-        const auto epsilon = core::RationalTime::create(-1, 1'000'000'000);
-        const auto lastInstant = epsilon ? offsetKeyTime(duration, *epsilon) : std::nullopt;
-        const auto minimum = keyTimeDifference(core::RationalTime{}, firstKey->time);
-        const auto maximum =
-            lastInstant ? keyTimeDifference(*lastInstant, lastKey->time) : std::nullopt;
         const auto requested = target ? keyTimeDifference(*target, pressed_->time) : std::nullopt;
         moves_.clear();
         if (!requested || !minimum || !maximum || *minimum > *maximum)

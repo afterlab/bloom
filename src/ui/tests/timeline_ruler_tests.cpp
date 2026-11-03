@@ -1432,6 +1432,66 @@ void testComponentRowsAndLaneSelections(Expectations& expectations) {
         "component lane double-click inserts only its component");
 }
 
+// #461: a free (Shift) lane drag clamped at zero lands the earliest key exactly on zero. A key at
+// 2/3 s used to be offset by -2/3 s rounded to the nanosecond, -0.666666667 s, which put it a third
+// of a nanosecond BEFORE zero.
+void testFreeKeyDragClampsExactlyAtZero(Expectations& expectations) {
+    using namespace bloom;
+    SessionFixture fixture(makeTestProject("Free key drag", time(10)));
+    auto& session = fixture.session;
+    expectations.expect(session.addSolidLayer("Free", {1, 0, 0, 1}), "free drag layer fixture");
+    const auto selectedLayer = session.selection().contextualLayer;
+    const auto* opacity = session.parameterForSelection(document::kOpacityParameterRole);
+    if (!selectedLayer || opacity == nullptr)
+        return;
+    const auto layer = *selectedLayer;
+    const auto parameter = opacity->id;
+    expectations.expect(session.pasteKeyframes({{parameter, time(2, 3), 0.25},
+                                                {parameter, time(2), 0.75}},
+                                               session.snapshot().revision()),
+                        "free drag keys seed");
+    session.clearSelection(); // the Shift-press then selects the dragged key alone
+    ui::TimelineLayerEntry layerEntry;
+    layerEntry.layerId = layer;
+    const auto entries = ui::timelinePropertyEntries(session, {layerEntry}, {layer});
+    ui::TimelineRuler ruler(session, fixture.controller);
+    ui::TimelineKeyframePanel panel(session);
+    const DeferredWidgetCleanup panelCleanup;
+    panel.resize(501, static_cast<int>(entries.size()) * ui::kTimelineRowHeight);
+    panel.setRuler(ruler);
+    panel.setGridEntries(entries, 0);
+    panel.show();
+    const auto axis = ruler.axisForWidth(panel.width());
+    QWidget* lane = nullptr;
+    for (auto* row : panel.findChildren<QWidget*>("timelineKeyframeRow", Qt::FindDirectChildrenOnly))
+        if (row->property("parameterId").toULongLong() == parameter.value())
+            lane = row;
+    expectations.expect(axis.has_value() && lane != nullptr, "the opacity lane exists");
+    if (!axis || lane == nullptr)
+        return;
+    const auto send = [&](const QEvent::Type type, const qreal x) {
+        const QPointF local(x, lane->height() / 2.0);
+        QMouseEvent event(type, local, local, Qt::LeftButton,
+                          type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                          Qt::ShiftModifier);
+        QCoreApplication::sendEvent(lane, &event);
+    };
+    send(QEvent::MouseButtonPress, axis->pixelForTime(time(2, 3)));
+    send(QEvent::MouseMove, -200.0);
+    send(QEvent::MouseButtonRelease, -200.0);
+    std::vector<core::RationalTime> times;
+    const auto* record = session.composition()->parameters().find(parameter);
+    const auto* source =
+        record ? std::get_if<document::AnimationCurveSource>(&record->source) : nullptr;
+    if (const auto* curve =
+            source ? session.composition()->animationCurves().findScalar(source->curveId)
+                   : nullptr)
+        for (const auto& key : curve->keyframes)
+            times.push_back(key.time);
+    expectations.expect((times == std::vector{time(0), time(2)}),
+                        "a free drag past zero lands the key exactly on zero, never before it");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1452,5 +1512,6 @@ int main(int argc, char** argv) {
     testRulerMajorTickLabelsNeverCollideAtTwoWidths(expectations);
     testRulerPlayheadPaintsAOnePixelAccentLine(expectations);
     testWorkAreaStripSpansFullWidthWithDimAccentBand(expectations);
+    testFreeKeyDragClampsExactlyAtZero(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
