@@ -47,6 +47,37 @@ void testProviderPoolsShareTheProcessBudget(Expectations& expectations) {
                             "shared-pools: providers shut down");
 }
 
+// #462: a headless root (no UI memory controller) samples the process ledger and gives it the
+// default RAM headroom, the value the UI's preference defaults to. Every reusable pool in the
+// process then shares the free memory beyond it. Before, that ledger was never sampled and had no
+// headroom: each pool kept its registered ceiling, all of usable memory for every one of them.
+void testHeadlessRootBoundsTheProcessPools(Expectations& expectations) {
+    auto& ledger = runtime::processMemoryBudgetLedger();
+    constexpr auto ceiling = std::numeric_limits<std::size_t>::max() / 8;
+    std::array<int, 3> owners{};
+    for (auto& owner : owners)
+        ledger.registerCache(&owner, ceiling, [] { return std::size_t{0}; }, [](std::size_t) {});
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.enabled = false;
+    auto provider = host::GpuExportProvider::create(std::move(options));
+    provider->refreshProcessingCapacity();
+    const auto state = ledger.state();
+    expectations.expect(ledger.ramHeadroom() ==
+                            static_cast<std::size_t>(runtime::defaultRamHeadroomBytes()),
+                        "headless-bound: the process ledger takes the default RAM headroom");
+    expectations.expect(state.machine.availableBytes.has_value(),
+                        "headless-bound: the provider's sample reaches the process ledger");
+    std::size_t total = 0;
+    for (const auto& owner : owners)
+        total = std::min(ceiling, total + std::min(ceiling, ledger.cacheByteBudget(&owner)));
+    expectations.expect(total <= state.machine.availableBytes.value_or(0),
+                        "headless-bound: the process's pools together stay within free memory");
+    for (const auto& owner : owners)
+        ledger.unregisterCache(&owner);
+    expectations.expect(provider->shutdownAndWait(std::chrono::seconds(15)),
+                        "headless-bound: the provider shuts down");
+}
+
 void testGpuExportProviderAsyncRetirement(Expectations& expectations, const bool requireDevice) {
     const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER");
     if (loader == nullptr || *loader == '\0') {

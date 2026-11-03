@@ -4,6 +4,7 @@
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -29,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <source_location>
@@ -94,6 +96,7 @@ int main(const int argc, char** argv) {
     testGpuDisplayConcurrentSetterPrepare(expectations);
     testGpuExportProviderFactoryDisplayPreparation(expectations);
     testGpuEvaluatorHostPath(expectations, requireDevice);
+    testHeadlessRootBoundsTheProcessPools(expectations);
     // Last: it sets the process ledger's RAM headroom for the rest of this process.
     testProviderPoolsShareTheProcessBudget(expectations);
     expectations.expect(collectFixtureRetirement(),

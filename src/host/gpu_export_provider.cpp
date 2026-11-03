@@ -4,6 +4,7 @@
 
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
+#include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
 
@@ -11,11 +12,30 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
 
 namespace bloom::host {
+namespace {
+
+// A headless process (CLI, MCP, scripting, export) has no Preferences window, so its process
+// ledger takes the default RAM headroom, the same value the UI's preference defaults to: 10% of
+// physical memory or of an observed process limit when that is smaller. It follows the measured
+// capacity like the UI's unsaved default, and never replaces a headroom something else chose.
+void applyDefaultProcessHeadroom(runtime::MemoryBudgetLedger& ledger) {
+    static std::mutex mutex;
+    static std::optional<std::size_t> applied;
+    const std::lock_guard lock(mutex);
+    if (const auto current = ledger.ramHeadroom(); current && current != applied)
+        return;
+    const auto headroom = static_cast<std::size_t>(runtime::defaultRamHeadroomBytes());
+    applied = headroom;
+    ledger.setRamHeadroom(headroom);
+}
+
+} // namespace
 
 struct GpuExportProvider::State final {
     explicit State(runtime::GpuProcessFrameEvaluatorOptions optionsValue,
@@ -108,6 +128,10 @@ struct GpuExportProvider::State final {
             // ledger was invisible to the others and sized as if it were the only cache: every
             // export or capture provider could retain its own share of physical memory.
             auto& processLedger = runtime::processMemoryBudgetLedger();
+            // A headless root also samples that ledger, as the UI's memory controller does: with
+            // no sample and no headroom every reusable pool in the process kept its registered
+            // ceiling, each of them all of usable memory, and none shrank under pressure.
+            processLedger.beginProcessSampling();
             auto pool = std::make_shared<runtime::OperationCache>(
                 processLedger.allocate().operationCacheByteBudget, processLedger);
             pool->bindHostRetirement(packedHostOwner);
@@ -132,6 +156,11 @@ struct GpuExportProvider::State final {
             }
         }
         const auto deliveredAt = std::chrono::steady_clock::now();
+        // The process ledger's reusable pools (every provider's operation cache, decoded video)
+        // share the free memory beyond the headroom and give back their share when it runs short.
+        auto& processLedger = runtime::processMemoryBudgetLedger();
+        static_cast<void>(processLedger.applySample(sample, deliveredAt));
+        applyDefaultProcessHeadroom(processLedger);
         const auto state = samplingLedger->applySample(std::move(sample), deliveredAt);
         options.processingPhasePolicy->applyHostSample(state, samplingLedger->physicalByteBudget(),
                                                        deliveredAt);

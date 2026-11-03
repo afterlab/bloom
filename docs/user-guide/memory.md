@@ -50,6 +50,11 @@ container memory limit when that is smaller (about 6 GiB on a 64 GB workstation,
 the default follows the measured capacity; missing, malformed or out-of-range values select it.
 Apply takes effect immediately.
 
+Headless processes (`bloom-cli`, `bloom-mcp`, scripting and their exports) have no Preferences
+window and use the default RAM headroom. Their caches follow the same rules as the application's
+and share the free memory beyond the headroom. Memory is measured when a render asks for it, at
+most every five seconds unless a cache has just given memory back; there is no continuous monitor.
+
 **Usable RAM** is the available system memory Bloom measures (within any real OS or container limit)
 minus the RAM headroom. **Usable VRAM** is the graphics driver's live memory budget minus the VRAM
 headroom. The Viewer, RAM preview, playback and exports run as many frames at once as fit usable
