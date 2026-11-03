@@ -349,7 +349,8 @@ phases:
 - **Reading**, against a known total: the heading names the item (`Importing SC020_SH070_image ·
   sequence`, or `Importing plate.png`) and adds `2 of 5:` only when several items were chosen; the
   detail reads `Reading frame 120 of 522` for a sequence or `Reading file` otherwise. The bar fills by
-  work, one unit per sequence frame (each is read and hashed) and one per other item, summed across
+  work, one unit per sequence frame (each is stamped with its size and time; only the frame chosen
+  is read, the rest on first use, #473) and one per other item, summed across
   the items, so it moves through a single long sequence and never goes back. A file read as one
   unit (a still, video, audio file or LUT) has no progress of its own: the bar is busy while it is
   read if nothing has finished yet (a lone large file), or once the same file has been read for

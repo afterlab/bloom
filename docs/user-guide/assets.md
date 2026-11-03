@@ -72,7 +72,9 @@ the defaults. Every import gives new sequences and stills the frame rate and dur
 An import that takes longer than a moment shows its progress. First Bloom finds what to import:
 it searches folders you dropped and counts the frames of each image sequence ("Finding frames…
 522 found"), with a moving bar because it does not know the total yet. Then it reads each file and
-the bar fills: a sequence shows "Reading frame 120 of 522", and its name with "· sequence"
+the bar fills: a sequence shows "Reading frame 120 of 522" while it notes each frame's size and
+time (it reads only the frame you chose; every other frame is read the first time it is shown,
+previewed or exported, so a sequence on network storage is ready at once), and its name with "· sequence"
 ("Importing SC020_SH070_image · sequence"). An image sequence is one item however many of its
 frames you chose, but every frame counts towards the bar, so a long sequence moves it steadily.
 When you import several items the heading also says which one it is on ("Importing 2 of 5: …").
@@ -220,6 +222,13 @@ sRGB-texture space, and linear transfer to the working space. The asset tooltip 
 container tags. Rec.2020, HLG and PQ footage remains unavailable on the unqualified preview path
 and reports why. A file changed outside Bloom is marked unavailable until relinked, including when
 its old frame was cached.
+
+A frame of an image sequence that changes, or disappears, after you import it is reported by its
+number ("Frame 12 changed since it was imported; reload the footage in Assets") and is never shown
+from its old pixels; **Reload Footage** reads the sequence again. Bloom recognizes a frame it has
+not read yet by its size and modification time, so copying the footage somewhere without keeping
+modification times also needs a Reload Footage. A frame that is not a readable image is reported
+the first time it is needed and treated like a missing frame.
 
 A ProRes asset's tooltip states: “Decoded by FFmpeg; not an Apple-authorized ProRes implementation”.
 This preview workflow carries no Apple authorization or ProRes delivery qualification.

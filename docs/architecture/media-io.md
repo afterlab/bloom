@@ -20,7 +20,10 @@ The implemented APIs are `probeImage`, `decodeImage`, `encodeImage`, and `scanSe
 admits PNG (including 16-bit samples), JPEG, and the bounded EXR subset. The scanner recognizes a final fixed-width number in
 any name whose stem ends in, or contains, a run of digits: the last digit run is the frame number, everything before it is the prefix and everything after it the suffix, and both must match for members to belong together (`shot.0001.png`, `shot_0001.png`, `shot0001.png`, `0001.png`, `shot0001_left.png`); padding may differ between members and is reported once; two or more matching members create one
 sequence asset. Different padding is diagnosed rather than merged. A manifest records explicit
-members, SHA-256 digests, first/last frame and gaps. Hold repeats the nearest endpoint; Loop and
+members, first/last frame and gaps; the member import read carries its SHA-256 digest and every
+other member the file stamp (length and modification time) the listing observed, until its first
+read (issue #473; see [project-format.md](project-format.md) "Sequence Member Stamps In Document
+1.35"). Hold repeats the nearest endpoint; Loop and
 PingPong wrap after the end, while time before the node start always holds the first member.
 A missing or changed selected member produces transparent pixels and a warning; it is not a gap.
 
@@ -74,7 +77,9 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
   Image source's Part and Layer pickers read a sequence's parts from its first member.
 - *Sequences.* An unreadable member never aborts a scan: it is reported (up to 32 frames by name,
   then a count) and its frame becomes a gap that holds the preceding frame, as for the #373 batch
-  import policy.
+  import policy. The scan stamps members without reading them (#473), so a member that cannot be
+  stamped is a gap at import, and one whose bytes are not a readable image is reported and treated
+  as a gap at its first read.
 
 **OpenEXR ingest correctness (#362).**
 
@@ -122,8 +127,9 @@ second fixed 16,384-axis or 16,777,216-pixel limit. Actual decode and proxy work
 caller's checked pixel budget before allocation. Video assets follow the media provider protocol's
 extent and frame-index limits (issue #352: 16,384 per axis, 67,108,864 pixels, 16,777,216 frames).
 Publication checks the originating project/revision and discards work after project replacement.
-Sequence scanning checks cancellation while enumerating files and hashes only matching image
-members. Missing intervals in sparse spans are derived from adjacent sorted member numbers, so
+Sequence scanning checks cancellation while enumerating files and stamping matching image members
+(one `stat` each); import reads and hashes one member, so its cost is the listing plus one file
+however many members the sequence has, which matters on network storage (#473). Missing intervals in sparse spans are derived from adjacent sorted member numbers, so
 large numeric holes do not allocate one record per absent frame. Spans under 100,000 retain their
 legacy enumerated `gaps` encoding for compatibility with older project readers. Older binaries
 cannot open a newly admitted wider-span sequence, which their own validation already rejected.
@@ -808,7 +814,8 @@ never proves content. Whole-file reads are counted by `platform::sourceReadWork(
 in its `GpuSceneMediaContext`, so preview, playback and export requests sharing the evaluator
 share it. When GPU scene preparation verifies a sequence member, it queues the distinct members the
 next eight composition frames select (start frame, loop mode and gap hold included). Four I/O
-workers capture them as ordinary verified revisions under the same revision-cache keys, so a later
+workers capture them as ordinary verified revisions (a stamped member against its stamp) under the
+same revision-cache keys, so a later
 selection reuses them after the usual identity observation and reads nothing itself. Several reads
 stay outstanding, which is what a network share needs: on an SMB share measured at 61-66 MB/s with
 one reader, four and eight concurrent readers reached 75-82 MB/s. Read-ahead never evicts; a file

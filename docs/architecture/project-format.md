@@ -1,6 +1,8 @@
 # Bloom Project Format
 
-The current document schema is 1.34. It adds the optional Interpret Footage members of an asset's
+The current document schema is 1.35. It lets an image-sequence member carry the file stamp import
+listed instead of its content digest (see "Sequence Member Stamps In Document 1.35"). Document 1.34
+added the optional Interpret Footage members of an asset's
 interpretation, a sequence's imported frame range and a video stream's coded pixel aspect ratio (see "Interpret Footage In Document
 1.34"). Document 1.33 added the export formats `vp9-webm`, `av1-webm` and `av1-mp4` and their codec
 profiles (see "Export Formats In Document 1.33"). Document 1.32 added the optional
@@ -1327,7 +1329,8 @@ file URIs validated before use, never synthetic percent-encoded relative paths. 
 encodes UTF-8 bytes, a local drive as `file:///C:/...`, and a UNC share as
 `file://server/share/...`. Invalid escapes, NUL, non-file schemes and relative paths are rejected.
 The digest is lowercase SHA-256 of image bytes; a sequence digest hashes ordered decimal frame
-numbers plus `:` and each member's lowercase digest. Interpretation holds integer `colorSpace`
+numbers plus `:` and each member's lowercase digest (from 1.35, a stamped member's provisional
+identity; see "Sequence Member Stamps In Document 1.35"). Interpretation holds integer `colorSpace`
 (0 Auto, 1 sRGB, 2 Linear, 3 Raw), string `inputColorSpaceId`, and `alphaAssociation` (0 Straight,
 1 Premultiplied). The string is written after the legacy integer and before `alphaAssociation`; an
 empty string means Auto. A non-empty value is an exact non-data color-space id in the project's
@@ -1336,7 +1339,7 @@ chromaticities remain automatic; the enum is retained for compatibility and dete
 of older documents.
 
 The manifest contains `pattern`, `padding`, decimal-string `first` and `last`, sorted `members`
-(frame, locator, digest), and explicit decimal-string `gaps`. A still carries an empty manifest.
+(frame, locator, and a digest or, from 1.35, a file stamp), and explicit decimal-string `gaps`. A still carries an empty manifest.
 Sequence ranges and gaps must agree with their members. Dimensions and locator lengths are
 validated before publication. Missing files do not invalidate the document or remove its assets.
 `RemoveAsset` preserves referencing nodes so they can warn; Relink retains the stable asset ID.
@@ -1393,9 +1396,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.34`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.35`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.34.schema.json` and `manifest-1.34.schema.json`; the
+The current artifacts are `document-1.35.schema.json` and `manifest-1.35.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1578,6 +1581,55 @@ flag on exactly the layers whose name already equals their source's current name
 audio source's asset name, or a nested composition's name; see
 [layer-graph-model.md](layer-graph-model.md#layer-timeline-contract)). Following the source therefore
 changes no visible name. The DOM step, which archive loading does not run, leaves the flag absent.
+
+## Sequence Member Stamps In Document 1.35
+
+Importing an image sequence lists its directory and reads one member: the file chosen, or the first
+frame of an **Only frames** range that leaves it out (issue #473). That member's bytes are probed
+for format, size, channels and alpha and hashed as before. Every other member is recorded with the
+**file stamp** the listing observed, its length and modification time, and its bytes are read and
+digested only when it is first needed (viewer, RAM Preview, export, thumbnails), on a worker.
+
+A sequence `members` element is either `{frame, locator, contentDigest}`, unchanged, or, from 1.35,
+`{frame, locator, stamp}` with `stamp` = `{size, modified}`: `size` an unsigned decimal string (the
+byte length) and `modified` a signed decimal string (nanoseconds since the Unix epoch, as
+`platform::observeFileIdentity` reports it on every platform). Exactly one of the two is present;
+validation refuses neither or both. A document claiming 1.34 or older cannot carry a stamp. A
+project saved while only some members have been read keeps the stamps of the others and reopens to
+the same asset; nothing a first read learns is written back to the document.
+
+A stamped member's identity is provisional: `document::sequenceMemberIdentity` is SHA-256 over
+`BloomSequenceMemberStamp`, NUL, the locator `path`, NUL, the `relinkHint`, NUL, the decimal size,
+NUL and the decimal modification time. Path, size and time together, so frames of one size written
+in one timestamp tick never share it. That identity stands in for the digest everywhere a digest
+keys a cache (the asset's sequence digest, the evaluator's revision, decode and disk-cache keys,
+the RAM Preview composite key and Assets thumbnails), so cache identity is correct before the bytes
+are known and changes when the stamp does.
+
+A stamped member's file is admitted only while it still carries its stamp. The first read observes
+the file before and after reading it, refuses bytes whose stamp differs ("Frame 12 changed since it
+was imported; reload the footage in Assets"; a missing file reads "Frame 12 is missing"), and
+records the digest it computed in the process memo of
+[ADR 0025](../decisions/0025-identity-verified-media-sources.md), so a later use costs one `stat`.
+A revision retained in memory is reused only while the file still carries the stamp and the memo
+still vouches for the retained bytes. Changed content is therefore never served stale. The
+residual risk of ADR 0025 applies with one addition: a stamped member rewritten in place with the
+same length and modification time is not detected, including across sessions, until Reload
+Footage reads the sequence again. Copying media without preserving modification times makes
+every stamped frame read as changed; Reload Footage (or Relink) lists it again.
+
+A member whose bytes turn out not to be an image Bloom reads is found at its first read and follows
+the unreadable-member policy of ADR 0026 / #373 then: it is reported ("Frame 12 is unreadable and is
+treated as a gap: …") and shows what a gap shows, the preceding readable member (looking back at
+most eight members), or nothing when the asset shows nothing for missing frames or no readable
+member precedes it. A member that cannot even be stamped at import (missing, or not a regular file)
+is a gap in the manifest, as before. Relink and Reload Footage list the sequence again the same way,
+keeping its frame range; Relink to a single frame of a sequence still produces a still with the
+digest of the file chosen.
+
+The `1.34` -> `1.35` DOM step `migrateSequenceMemberStampsV1_34` only advances the version: every
+older member has its digest. The schema artifacts add `assetMember-1.35` and `assetManifest-1.35`;
+the schema check restores the 1.34 artifact from them exactly.
 
 ## Interpret Footage In Document 1.34
 

@@ -20,8 +20,9 @@ modal that ends with a clear result.
    progress to the controller and to the job's `TaskProgress`; the dialog only reads it. Nothing heavy runs on
    the interface thread.
 2. **Items and work.** An item is a chosen file, or one image sequence however many of its members
-   were chosen. Progress is measured in work, not items: one unit per sequence member (each is read
-   and hashed, the slow part) and one per other item, summed across the batch, so the bar moves
+   were chosen. Progress is measured in work, not items: one unit per sequence member (each was read
+   and hashed, the slow part; amended by #473: each is now stamped with one `stat` and only one
+   member is read at import, the others on first use) and one per other item, summed across the batch, so the bar moves
    through a single long sequence. A first **finding** phase searches chosen folders and lists each
    sequence's members without opening them, reporting what it found over a busy bar; the **reading**
    phase then probes and hashes against the known total ("Reading frame 120 of 522"). The heading
