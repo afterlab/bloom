@@ -37,7 +37,7 @@ def operation_stub(schemas):
              "from .data import Proxy",
              "",
              "Time = int | tuple[int, int] | Fraction | float",
-             "Value = float | bool | str | tuple[float, ...]",
+             "Value = float | bool | str | tuple[float, ...] | Mapping[str, Any]",
              "Path = Mapping[str, Any]",
              "",
              "class Operation:",
@@ -436,6 +436,11 @@ class PythonApi(unittest.TestCase):
         self.assertTrue(bloom.ops.layer.set_mask_path(mask, moved, layer=layer)['succeeded'])
         self.assertEqual(bloom.data.parameters(composition).get(path).value['anchors'][0]['point'],
                          (5.0, 0.0))
+        # #434 O2: parameter.set_source takes the same path object for a Path parameter.
+        self.assertTrue(bloom.ops.parameter.set_source(path, value=square)['succeeded'])
+        self.assertEqual(bloom.data.parameters(composition).get(path).value['anchors'][0]['point'],
+                         (0.0, 0.0))
+        self.assertTrue(bloom.ops.parameter.set_source(path, value=moved)['succeeded'])
         self.assertTrue(bloom.ops.layer.animate_mask_path(mask, layer=layer, time=0)['succeeded'])
         self.assertTrue(
             bloom.ops.layer.set_mask_path(mask, square, layer=layer, time=12)['succeeded'])
