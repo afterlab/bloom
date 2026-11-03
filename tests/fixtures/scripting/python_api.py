@@ -5,6 +5,7 @@ import json
 import keyword
 import hashlib
 import inspect
+import os
 import pathlib
 import pydoc
 import subprocess
@@ -636,6 +637,60 @@ class PythonApi(unittest.TestCase):
             self.assertEqual(bloom.render.frame(12, out=root / 'python.png',
                                                 replace=True).files[0].digest,
                              result.files[0].digest)
+
+    def test_render_reports_and_requires_the_device(self):
+        """#452: CLI and Python report which device rendered; requiring one fails without it."""
+        with tempfile.TemporaryDirectory(prefix='bloom-device-') as directory:
+            root = pathlib.Path(directory)
+            bloom.ops.layer.add_solid(composition=1, name='Red', color=(1, 0, 0, 1),
+                                      position=(960, 540))
+            self.host.save(str(root / 'scene.bloom'))
+            render = [CLI, 'render', '--project', str(root / 'scene.bloom'), '--frame', '12',
+                      '--preset', 'PngRgba8SrgbV1']
+            result = bloom.render.frame(12, out=root / 'python.png')
+            self.assertEqual(result.gpu_frames + result.cpu_reference_frames, 1)
+            # No device: the Vulkan loader is pointed at a driver list that does not exist.
+            missing = str(root / 'no-driver.json')
+            no_device = dict(os.environ, VK_ICD_FILENAMES=missing, VK_DRIVER_FILES=missing)
+            refused = subprocess.run(render + ['--out', str(root / 'refused'), '--require-device'],
+                                     env=no_device, capture_output=True, timeout=60)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn(b'error[bloom-cli.render.device-required]', refused.stderr)
+            self.assertFalse((root / 'refused/frame.png').exists())
+            cpu = subprocess.run(render + ['--out', str(root / 'cpu')], env=no_device,
+                                 capture_output=True, timeout=60)
+            self.assertEqual(cpu.returncode, 0, cpu.stderr.decode())
+            self.assertIn(b'device gpu-frames=0 cpu-reference-frames=1', cpu.stdout)
+            self.assertIn(b'warning[bloom-cli.render.cpu-reference]', cpu.stderr)
+            script = root / 'require.py'
+            script.write_text(f"""import pathlib
+import bloom
+bloom.ops.layer.add_solid(name='Red', color=(1, 0, 0, 1))
+out = pathlib.Path({str(root)!r})
+try:
+    bloom.render.frame(0, out=out / 'script-required.png', require_device=True)
+except RuntimeError as error:
+    print('refused:', error)
+assert not (out / 'script-required.png').exists()
+cpu = bloom.render.frame(0, out=out / 'script-cpu.png')
+assert (cpu.gpu_frames, cpu.cpu_reference_frames) == (0, 1), cpu
+print('python require-device refused')
+""")
+            embedded = subprocess.run([CLI, 'run', str(script)], env=no_device,
+                                      capture_output=True, timeout=60)
+            self.assertEqual(embedded.returncode, 0, embedded.stderr.decode())
+            self.assertIn(b'refused: The render requires a GPU device', embedded.stdout)
+            self.assertIn(b'python require-device refused', embedded.stdout)
+            if result.gpu_frames == 0:
+                return  # No device here either; the device-present half has nothing to run.
+            required = bloom.render.frame(12, out=root / 'required.png', require_device=True)
+            self.assertEqual((required.gpu_frames, required.cpu_reference_frames), (1, 0))
+            gpu = subprocess.run(render + ['--out', str(root / 'gpu'), '--require-device'],
+                                 capture_output=True, timeout=60)
+            self.assertEqual(gpu.returncode, 0, gpu.stderr.decode())
+            self.assertIn(b'device gpu-frames=1 cpu-reference-frames=0', gpu.stdout)
+            self.assertEqual((root / 'gpu/frame.png').read_bytes(),
+                             (root / 'required.png').read_bytes())
 
 
 if __name__ == '__main__':

@@ -48,7 +48,7 @@ const char* diagnosticCode(const RenderDiagnosticCode code) {
 nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t first,
                             const std::uint64_t last, const bool range, const std::string& preset,
                             const std::string& destination, const std::uint64_t cancellationTask,
-                            const bool replace) {
+                            const bool replace, const bool requireDevice) {
     output::OutputPresetV1 selected;
     if (preset == "PngRgba8SrgbV1") {
         selected = output::OutputPresetV1::PngRgba8SrgbV1;
@@ -89,7 +89,8 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
                         scheduler.snapshot(runtime::TaskId::fromRaw(cancellationTask));
                     return !task || runtime::isTerminal(task->state) || task->cancellationRequested;
                 },
-            .replaceExisting = replace};
+            .replaceExisting = replace,
+            .requireDevice = requireDevice};
         result =
             Render::run(*session_, scheduler, compiler, std::move(request), {}, gpuExportProvider_);
         if (result.succeeded) {
@@ -106,6 +107,9 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
     }
     nb::dict row;
     row["succeeded"] = result.succeeded;
+    // #452: which device evaluated the frames, on success and failure alike.
+    row["gpu_frames"] = result.gpuEvaluatedFrames;
+    row["cpu_reference_frames"] = result.cpuReferenceFrames;
     if (!result.succeeded) {
         // bloom.render raises bloom.CancelledError for "cancelled" and RuntimeError otherwise.
         row["diagnostic"] = result.diagnostic;

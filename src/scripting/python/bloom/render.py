@@ -17,9 +17,12 @@ class RenderResult:
     files: tuple[RenderFile, ...]
     published_frames: int
     preservation_report: str
+    # Frames the GPU evaluated and frames the CPU reference path evaluated (#452).
+    gpu_frames: int
+    cpu_reference_frames: int
 
 
-def _render(first, last, is_range, out, composition, preset, replace):
+def _render(first, last, is_range, out, composition, preset, replace, require_device):
     if type(first) is not int or type(last) is not int or first < 0 or last < first:
         raise ValueError("Frames must be nonnegative integers in ascending order")
     if composition is None:
@@ -29,20 +32,21 @@ def _render(first, last, is_range, out, composition, preset, replace):
     task = _state._task.get()
     cancellation_task = task._ticket.id if task is not None and task._ticket is not None else 0
     result = _state.host().render(int(composition), first, last, is_range, preset, str(Path(out)),
-                                 cancellation_task, bool(replace))
+                                 cancellation_task, bool(replace), bool(require_device))
     if not result["succeeded"]:
         if result["diagnostic_code"] == "cancelled":
             raise CancelledError(result["diagnostic"])
         raise RuntimeError(result["diagnostic"])
     return RenderResult(tuple(RenderFile(**item) for item in result["files"]),
-                        result["published_frames"], result["preservation_report"])
+                        result["published_frames"], result["preservation_report"],
+                        result["gpu_frames"], result["cpu_reference_frames"])
 
 
 def frame(number: int, *, out, composition=None, preset="PngRgba8SrgbV1",
-          replace=False) -> RenderResult:
-    return _render(number, number, False, out, composition, preset, replace)
+          replace=False, require_device=False) -> RenderResult:
+    return _render(number, number, False, out, composition, preset, replace, require_device)
 
 
 def range(first: int, last: int, *, out, composition=None, preset="PngRgba8SrgbV1",
-          replace=False) -> RenderResult:
-    return _render(first, last, True, out, composition, preset, replace)
+          replace=False, require_device=False) -> RenderResult:
+    return _render(first, last, True, out, composition, preset, replace, require_device)

@@ -196,6 +196,11 @@ SHA-256 over the published file bytes. These calls release the GIL during native
 runs in the evaluator or render kernels. Native progress is available through
 `bloom.tasks.snapshots()` and native task IDs can be cancelled with `bloom.tasks.cancel(id)`.
 A render that is cancelled raises `bloom.CancelledError`; any other failure raises `RuntimeError`.
+`RenderResult.gpu_frames` and `RenderResult.cpu_reference_frames` count the frames the GPU evaluated
+and the frames that took the CPU reference path, for example on a computer without a GPU device.
+Pass `require_device=True` to fail instead of using the CPU: the call raises `RuntimeError` before
+evaluating anything when no device is available, and a frame the CPU evaluated anyway is refused
+before it is written. This is the same rule as `bloom-cli render --require-device`.
 Every `_bloom.Host()` in one interpreter renders through the same GPU device, which is released
 once when the interpreter exits.
 
