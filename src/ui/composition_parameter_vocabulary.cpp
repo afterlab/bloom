@@ -245,7 +245,9 @@ bool refreshImageLayerSelector(kit::KDropdown& selector, const CompositionSessio
             items.push_back({layer.empty() ? QObject::tr("Color (root)")
                                            : QString::fromStdString(layer),
                              QString::fromStdString(layer)});
-    const auto current = boundNodeText(session, node, document::kImageLayerParameterRole);
+    auto current = boundNodeText(session, node, document::kImageLayerParameterRole);
+    if (part != nullptr)
+        current = QString::fromStdString(part->resolveColourLayer(current.toStdString()));
     if (part != nullptr && items.empty()) {
         // A data-only part: nothing to choose; the note says what to use instead.
         const QSignalBlocker blocker(selector);
@@ -288,7 +290,11 @@ QString imageSourceColourNote(const CompositionSession& session, const document:
         parts == nullptr
             ? nullptr
             : selectedPart(*parts, boundNodeText(session, node, document::kImagePartParameterRole));
-    const auto layer = boundNodeText(session, node, document::kImageLayerParameterRole).toStdString();
+    const auto layer =
+        part == nullptr
+            ? std::string{}
+            : part->resolveColourLayer(
+                  boundNodeText(session, node, document::kImageLayerParameterRole).toStdString());
     return part != nullptr && std::ranges::find(part->colourLayers, layer) == part->colourLayers.end()
                ? QObject::tr("No color layer — use Channels")
                : QString{};

@@ -401,7 +401,8 @@ ThumbnailSelection selectThumbnail(const runtime::CompiledImageSource& source,
         const auto* part = probe.value->findPart(source.part);
         selected.dataOnly =
             part != nullptr &&
-            std::ranges::find(part->colourLayers, source.layer) == part->colourLayers.end();
+            std::ranges::find(part->colourLayers, part->resolveColourLayer(source.layer)) ==
+                part->colourLayers.end();
         // The renderer's rule (image_source.cpp): the parity of the first data row.
         selected.firstRow =
             part != nullptr ? part->dataY - part->displayY : probe.value->dataOffsetY;

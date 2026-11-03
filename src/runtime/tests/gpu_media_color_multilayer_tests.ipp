@@ -26,7 +26,7 @@ void testMultilayerNoColourLayerNative(Expectations& expectations,
     const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
 
     const auto root =
-        mediaPlan(format(8, 8), asset, LayerValues{.position = {4.3, 3.1}}, 7300, 0, 0, "");
+        mediaPlan(format(8, 8), asset, LayerValues{.position = {4.3, 3.1}}, 7300, 0, 0, "Depth");
     const auto request = acesRequest(*root, kAcesWorking);
     const auto prepared = builder.build(root, request);
     expectations.expect(prepared.hasValue(),

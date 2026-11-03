@@ -49,7 +49,11 @@ EXR decode runs on a worker and uses the same disk-cache key and thumbnail path 
   root layer) choose the color image: the layer's `R/G/B[/A]` (or `Y[/A]`) channels go through the
   unchanged color path, while every other channel of the part is ignored by it. A missing part or
   layer is a typed `PartNotFound` or `LayerNotFound`; a layer without color channels
-  (`NoColourChannels`) gives no color image. The decoded-image identity is `bloom-image-decode-4`,
+  (`NoColourChannels`) gives no color image. The runtime image source resolves an empty source
+  layer from the probed part before decoding and keying: a part with no root color layer (for
+  example a layered render's `ViewLayer.Combined`) defaults to its first color layer, identically in the Viewer, RAM Preview,
+  export and headless render, and the resolved name is the cache identity; an explicit name is never
+  replaced, so a layer the file lost is still reported missing. The decoded-image identity is `bloom-image-decode-4`,
   and a non-default part or layer is part of the memory, raw-upload and disk keys.
 - *Channel sets.* `decodeImageChannels()` returns a `render::ChannelSetImage`: the named channels of
   one part (all, or a selection in order) as planar Float32 over the shared data window, with the

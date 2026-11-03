@@ -364,6 +364,12 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     selected.interpretation.alphaAssociation = imageSourceAlphaAssociation(source);
     selected.interpretation.part = source.part;
     selected.interpretation.layer = source.layer;
+    // #478: a default layer on a part without a root colour layer is the part's first colour layer,
+    // so every route decodes and keys the same layer.
+    if (selected.sourceRevision != nullptr)
+        if (const auto* part = selected.sourceRevision->probe().findPart(source.part);
+            part != nullptr)
+            selected.interpretation.layer = part->resolveColourLayer(source.layer);
     selected.available = selected.sourceRevision != nullptr &&
                          (selected.expectedStamp ||
                           selected.sourceRevision->probe().contentDigest == selected.digest);

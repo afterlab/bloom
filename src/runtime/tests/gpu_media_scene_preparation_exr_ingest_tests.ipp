@@ -160,7 +160,7 @@ void testExrNoColourLayerStaysPrepared(Expectations& expectations) {
     CpuCompositionEvaluator evaluator;
     evaluator.setAssetBaseDirectory(directory);
     const auto root =
-        mediaPlan(format(8, 6), asset, LayerValues{.position = {4.0, 3.0}}, 63000, 0, 0, "");
+        mediaPlan(format(8, 6), asset, LayerValues{.position = {4.0, 3.0}}, 63000, 0, 0, "Depth");
     auto request = requestFor(*root);
     request.bypassOperationCache = true;
     const auto frame = evaluator.evaluate(root, request, {});
@@ -169,7 +169,7 @@ void testExrNoColourLayerStaysPrepared(Expectations& expectations) {
                diagnostic.detail.find("No color layer") != std::string::npos;
     });
     expectations.expect(frame.frame() != nullptr && informed,
-                        "a data-only root layer renders nothing and reports why");
+                        "a data-only layer renders nothing and reports why");
     auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
     context.assetBaseDirectory = directory;
     const CpuGpuSceneBuilder builder(nullptr, context);
@@ -197,5 +197,14 @@ void testExrNoColourLayerStaysPrepared(Expectations& expectations) {
     const auto selected = builder.build(colour, requestFor(*colour));
     expectations.expect(selected && selected.scene->mediaStatistics().imageNoColourLayerSources == 0,
                         "a selected color layer is an ordinary prepared upload");
+    // #478: this file has no root color layer, so the default layer is its first color layer.
+    const auto defaulted = mediaPlan(format(8, 6), asset, LayerValues{.position = {4.0, 3.0}},
+                                     63200, 0, 0, "");
+    checkMediaParity(expectations, evaluator, defaulted, requestFor(*defaulted),
+                     "default layer of a rootless EXR");
+    const auto defaultPrepared = builder.build(defaulted, requestFor(*defaulted));
+    expectations.expect(defaultPrepared &&
+                            defaultPrepared.scene->mediaStatistics().imageNoColourLayerSources == 0,
+                        "a rootless EXR's default layer is its first color layer");
     std::filesystem::remove_all(directory);
 }

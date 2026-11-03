@@ -219,6 +219,59 @@ int main() {
                          pixel.value()->blue() == 4.125F && pixel.value()->alpha() == 1.0F,
                      "a layer without alpha is opaque");
     }
+    // #478: a layered-render part with no root layer defaults to its first colour layer.
+    check.expect(probe.value->parts[0].resolveColourLayer({}).empty() &&
+                     probe.value->parts[0].resolveColourLayer("diffuse") == "diffuse" &&
+                     probe.value->parts[1].resolveColourLayer({}).empty(),
+                 "a part with a root layer, or a data-only part, keeps the empty default");
+    {
+        const auto noRoot = scratch.file("no-root.exr");
+        const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(1, 1));
+        std::vector<Plane> planes;
+        planes.push_back(plane("ViewLayer.Combined.R", Imf::FLOAT, 0.5F));
+        planes.push_back(plane("ViewLayer.Combined.G", Imf::FLOAT, 0.25F));
+        planes.push_back(plane("ViewLayer.Combined.B", Imf::FLOAT, 0.125F));
+        planes.push_back(plane("ViewLayer.Depth.Z", Imf::FLOAT, 9.0F));
+        Imf::Header header(window, window);
+        header.setName("beauty");
+        header.setType(Imf::SCANLINEIMAGE);
+        for (const auto& item : planes)
+            header.channels().insert(item.name, Imf::Channel(item.type));
+        {
+            Imf::MultiPartOutputFile file(noRoot.string().c_str(), &header, 1);
+            Imf::OutputPart part(file, 0);
+            Imf::FrameBuffer frameBuffer;
+            for (auto& item : planes)
+                insert(frameBuffer, item, window);
+            part.setFrameBuffer(frameBuffer);
+            part.writePixels(2);
+        }
+        const auto revisionNoRoot =
+            media::captureImageSourceRevision(noRoot, media::kMaxImageStorageBytes);
+        check.expect(revisionNoRoot.value.has_value(), "rootless EXR captures");
+        if (revisionNoRoot.value) {
+            const auto& rootless = **revisionNoRoot.value;
+            const auto& info = rootless.probe().parts.front();
+            check.expect(info.colourLayers == std::vector<std::string>{"ViewLayer.Combined"},
+                         "rootless part lists its colour layer");
+            const auto resolved = info.resolveColourLayer({});
+            check.expect(resolved == "ViewLayer.Combined" &&
+                             info.resolveColourLayer("Gone") == "Gone",
+                         "default resolves to the first colour layer; explicit names are kept");
+            const auto viaDefault = media::decodeImage(rootless, select({}, resolved));
+            const auto explicitLayer = media::decodeImage(rootless, select({}, "ViewLayer.Combined"));
+            check.expect(viaDefault.value.has_value() && explicitLayer.value.has_value(),
+                         "rootless layers decode");
+            if (viaDefault.value && explicitLayer.value) {
+                const auto first = (*viaDefault.value)->read(1, 1);
+                const auto second = (*explicitLayer.value)->read(1, 1);
+                check.expect(first && second && first.value()->red() >= 0.5F &&
+                                 first.value()->red() == second.value()->red() &&
+                                 first.value()->green() == second.value()->green(),
+                             "resolved default pixels match the explicit layer");
+            }
+        }
+    }
     const auto dataOnly =
         media::decodeImage(source, select("data", "depth"));
     check.expect(!dataOnly && dataOnly.code == media::ImageDiagnosticCode::NoColourChannels,

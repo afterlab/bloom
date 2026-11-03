@@ -5,6 +5,7 @@
 #include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/native_samples.hpp>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -126,6 +127,14 @@ struct ImagePartInfo final {
     std::vector<std::string> layers;
     // The subset of `layers` that carries R/G/B or Y colour channels.
     std::vector<std::string> colourLayers;
+    // #478: an empty (default) layer selects the root colour layer; a part without one defaults to
+    // its first colour layer. An explicit name is returned unchanged, listed or not.
+    [[nodiscard]] std::string resolveColourLayer(const std::string_view selected) const {
+        if (selected.empty() && !colourLayers.empty() &&
+            std::ranges::find(colourLayers, std::string{}) == colourLayers.end())
+            return colourLayers.front();
+        return std::string(selected);
+    }
     friend bool operator==(const ImagePartInfo&, const ImagePartInfo&) = default;
     [[nodiscard]] std::size_t retainedBytes() const noexcept {
         std::size_t total =
