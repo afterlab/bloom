@@ -601,6 +601,9 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.counters.gpuCacheHits = core.counterGpuCacheHits.load(std::memory_order_relaxed);
     result.counters.gpuCacheMisses = core.counterGpuCacheMisses.load(std::memory_order_relaxed);
     result.counters.cpuFallbacks = core.counterCpuFallbacks.load(std::memory_order_relaxed);
+    for (std::size_t reason = 0; reason < kGpuPreviewCpuFallbackReasonCount; ++reason)
+        result.counters.cpuFallbacksByReason[reason] =
+            core.counterCpuFallbacksByReason[reason].load(std::memory_order_relaxed);
     result.counters.gpuAdmissionRefusals =
         core.counterGpuAdmissionRefusals.load(std::memory_order_relaxed);
     result.counters.fullFrameReadbacks =
@@ -707,18 +710,22 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         (neutralRequired && !detail::gpuPreviewDisplayRequestIsNeutral(identity))) {
         // Reference/unavailable/disabled, no device admission, or a packed non-neutral request:
         // ordinary CPU task before any stage work on the held reservation. For the resident arm an
-        // unavailable presentation generation takes this honest CPU fallback.
-        return submitCpuRootReserved(core, std::move(request), snapshot, identity,
-                                     pixelStorageByteLimit, overrides);
+        // unavailable presentation generation takes this honest, counted CPU fallback.
+        return submitCpuRootReserved(
+            core, std::move(request), snapshot, identity, pixelStorageByteLimit, overrides,
+            !gpuMode || gpuAllowance == 0 ? GpuPreviewCpuFallbackReason::GpuUnavailable
+                                          : GpuPreviewCpuFallbackReason::NonNeutralRequest);
     }
     if (!residentMode) {
         if (const auto estimatedPixels = detail::gpuPreviewDisplayEstimatePixels(identity);
             estimatedPixels.has_value() && !detail::gpuPreviewDisplaySelectsNative(
                                                *current.qualification, *estimatedPixels,
                                                detail::gpuPreviewDisplayHandoffOverheadMicros())) {
-            // Obviously tiny (or otherwise not worth the two service handoff intervals).
+            // Obviously tiny (or otherwise not worth the two service handoff intervals): the
+            // measured cost model prefers the CPU display, counted with that reason.
             return submitCpuRootReserved(core, std::move(request), snapshot, identity,
-                                         pixelStorageByteLimit, overrides);
+                                         pixelStorageByteLimit, overrides,
+                                         GpuPreviewCpuFallbackReason::NotWorthwhile);
         }
     }
 
@@ -774,7 +781,7 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         // CPU path on the held reservation.
         core->counterGpuAdmissionRefusals.fetch_add(1, std::memory_order_relaxed);
         return submitCpuRootReserved(core, std::move(cpuRequest), snapshot, identity,
-                                     pixelStorageByteLimit, overrides);
+                                     pixelStorageByteLimit, overrides, std::nullopt);
     } catch (...) {
         core->abandonRootAdmission();
         throw;

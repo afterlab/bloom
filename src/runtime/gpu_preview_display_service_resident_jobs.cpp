@@ -182,7 +182,7 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
         completeFailed(stage, {std::move(diagnostic)});
         return;
     }
-    core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
+    core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
     dispatchResidentCpuFallbackChild(core, stage);
 }
 
@@ -227,7 +227,7 @@ void finishResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& 
         completeCancelled(stage);
         return;
     }
-    core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
+    core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
     dispatchResidentCpuFallbackChild(core, stage);
 }
 
@@ -452,7 +452,7 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
         outcome.stage == nullptr) {
         // The composition compiled but is outside the prepared GPU subset: take the FULL original
         // CPU path. No fake empty frame and no silently different subset.
-        core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
+        core->recordCpuFallback(GpuPreviewCpuFallbackReason::UnsupportedGpuSubset);
         stage->phase = StagePhase::AwaitingCpuFallbackDispatch;
         return;
     }
@@ -467,7 +467,7 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
     std::string reason;
     const bool eligible = residentStageIsEligible(core, *stage, reason);
     if (!eligible) {
-        core->counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
+        core->recordCpuFallback(GpuPreviewCpuFallbackReason::Ineligible);
         const std::string detail =
             reason.empty() ? std::string("the resident stage was not eligible") : reason;
         {

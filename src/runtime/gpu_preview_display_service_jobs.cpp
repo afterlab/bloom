@@ -157,7 +157,9 @@ void handleStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>& co
     // A busy native display is back-pressure: eligible stages queue for it rather than taking the
     // CPU display path.
     if (!eligible || !worthwhile) {
-        dispatchDisplayFallbackChild(core, stage);
+        dispatchDisplayFallbackChild(core, stage,
+                                     eligible ? GpuPreviewCpuFallbackReason::NotWorthwhile
+                                              : GpuPreviewCpuFallbackReason::Ineligible);
         return;
     }
     stage->phase = StagePhase::AwaitingNative;
@@ -212,12 +214,12 @@ void timeoutNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
     if (stage->cancellationRequested || core->stopping.load(std::memory_order_acquire)) {
         completeCancelled(stage);
     } else {
-        dispatchDisplayFallbackChild(core, stage);
+        dispatchDisplayFallbackChild(core, stage, GpuPreviewCpuFallbackReason::NativeTimeout);
     }
     while (!core->nativeReady.empty()) {
         auto queued = core->nativeReady.front();
         core->nativeReady.pop_front();
-        dispatchDisplayFallbackChild(core, queued);
+        dispatchDisplayFallbackChild(core, queued, GpuPreviewCpuFallbackReason::NativeTimeout);
     }
 }
 
@@ -505,7 +507,8 @@ void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core
 // -----------------------------------------------------------------------------------------------
 
 void dispatchDisplayFallbackChild(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                                  const std::shared_ptr<PreviewDisplayStageRecord>& stage) {
+                                  const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                                  const GpuPreviewCpuFallbackReason reason) {
     if (core->stopping.load(std::memory_order_acquire) || stage->cancellationRequested) {
         completeCancelled(stage);
         return;
@@ -542,6 +545,7 @@ void dispatchDisplayFallbackChild(const std::shared_ptr<PreviewDisplayServiceCor
         }
         stage->fallbackChild = child.handle;
         stage->phase = StagePhase::AwaitingFallback;
+        core->recordCpuFallback(reason);
     } catch (...) {
         completeFailed(stage, {previewDiagnostic("bloom.runtime.gpu-preview-fallback-threw",
                                                  "The CPU display fallback submission raised.")});
@@ -631,7 +635,8 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             while (!core->nativeReady.empty()) {
                 stage = core->nativeReady.front();
                 core->nativeReady.pop_front();
-                dispatchDisplayFallbackChild(core, stage);
+                dispatchDisplayFallbackChild(core, stage,
+                                             GpuPreviewCpuFallbackReason::GpuUnavailable);
             }
         }
 
@@ -693,7 +698,9 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             if (deviceFailure) {
                 disableGpuAfterNativeFailure(core, diagnostic.message);
             }
-            dispatchDisplayFallbackChild(core, stage);
+            dispatchDisplayFallbackChild(core, stage,
+                                         noNativeWork ? GpuPreviewCpuFallbackReason::Ineligible
+                                                      : GpuPreviewCpuFallbackReason::NativeFailure);
             return;
         }
 
@@ -728,7 +735,8 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
                 if (deviceFailure) {
                     disableGpuAfterNativeFailure(core, readback.diagnostic.message);
                 }
-                dispatchDisplayFallbackChild(core, stage);
+                dispatchDisplayFallbackChild(core, stage,
+                                             GpuPreviewCpuFallbackReason::NativeFailure);
                 return;
             }
             if (stage->cancellationRequested || stage->nativeDiscard) {
@@ -736,7 +744,8 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
                 return;
             }
             if (stage->stage == nullptr || stage->report == nullptr) {
-                dispatchDisplayFallbackChild(core, stage);
+                dispatchDisplayFallbackChild(core, stage,
+                                             GpuPreviewCpuFallbackReason::NativeFailure);
                 return;
             }
             fault = 3;
@@ -745,13 +754,15 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
             auto frame =
                 makeGpuNeutralDisplayPreview(*stage->stage, stage->report, std::move(readback));
             if (!frame.has_value()) {
-                dispatchDisplayFallbackChild(core, stage);
+                dispatchDisplayFallbackChild(core, stage,
+                                             GpuPreviewCpuFallbackReason::NativeFailure);
                 return;
             }
             auto prepared = PreviewPreparationResult::prepared(
                 std::make_shared<const PreparedPreviewFrame>(std::move(*frame)));
             if (!prepared.has_value()) {
-                dispatchDisplayFallbackChild(core, stage);
+                dispatchDisplayFallbackChild(core, stage,
+                                             GpuPreviewCpuFallbackReason::NativeFailure);
                 return;
             }
             auto handle = std::make_shared<const PreviewPreparationResult>(std::move(*prepared));
@@ -770,7 +781,7 @@ void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core
         if (deviceFailure) {
             disableGpuAfterNativeFailure(core, diagnostic.message);
         }
-        dispatchDisplayFallbackChild(core, stage);
+        dispatchDisplayFallbackChild(core, stage, GpuPreviewCpuFallbackReason::NativeFailure);
     } catch (...) {
         if (!stage)
             return;
@@ -807,7 +818,7 @@ void disableGpuAfterNativeFailure(const std::shared_ptr<PreviewDisplayServiceCor
     while (!core->nativeReady.empty()) {
         auto stage = core->nativeReady.front();
         core->nativeReady.pop_front();
-        dispatchDisplayFallbackChild(core, stage);
+        dispatchDisplayFallbackChild(core, stage, GpuPreviewCpuFallbackReason::NativeFailure);
     }
 }
 

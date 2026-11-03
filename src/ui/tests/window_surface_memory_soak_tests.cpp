@@ -516,6 +516,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return 1;
     }
     std::cout << "SOAK route=" << (gpu ? "gpu-prepared-packed" : "cpu") << '\n';
+    // #452: frames requested while the service was still initializing took the CPU path. They are
+    // counted, as GpuUnavailable, and are not part of the measured window changes below.
+    const auto initializing = service.status().counters;
+    checks.expect(initializing.cpuFallbacks ==
+                      initializing.cpuFallbacksByReason[static_cast<std::size_t>(
+                          runtime::GpuPreviewCpuFallbackReason::GpuUnavailable)],
+                  "every CPU fallback before the service is ready is counted as GpuUnavailable");
+    const auto startupCpuFallbacks = initializing.cpuFallbacks + initializing.gpuAdmissionRefusals;
     if (!waitUntil([&] { return window->displayedViewer() != nullptr; }, 30s)) {
         shutdown();
         return 1;
@@ -752,7 +760,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "a window change never re-prepares the unchanged parked frame");
     // The Viewer frame, at either divisor, is prepared on the production GPU route. Only the pixel
     // probe's one-pixel analysis evaluates on the CPU, and it is not a Viewer frame.
-    checks.expect(!gpu || lastSample.viewerCpuFallbacks == 0,
+    checks.expect(!gpu || lastSample.viewerCpuFallbacks == startupCpuFallbacks,
                   "no Viewer frame takes the CPU fallback or an admission refusal");
     for (const auto& value : samples) {
         checks.expect(value.peak <= kCyclePeakTolerance,

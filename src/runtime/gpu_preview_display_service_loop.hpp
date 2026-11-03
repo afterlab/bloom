@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -123,12 +124,15 @@ runCpuPipeline(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
 }
 
 // Submits on an already-held root admission reservation and consumes that reservation exactly once.
+// An admitted CPU root is counted as a CPU fallback with `reason`; a bounded-admission refusal
+// passes none because gpuAdmissionRefusals already counts it.
 [[nodiscard]] inline TaskSubmission<PreviewPreparationResultHandle>
 submitCpuRootReserved(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
                       TaskRequest request, const document::Snapshot& snapshot,
                       const PreviewRequestIdentity& identity,
                       const std::size_t pixelStorageByteLimit,
-                      const std::vector<SnapshotParameterOverride>& overrides) {
+                      const std::vector<SnapshotParameterOverride>& overrides,
+                      const std::optional<GpuPreviewCpuFallbackReason> reason) {
     request.executor = TaskExecutor::Cpu;
     try {
         auto submission = core->scheduler->submit<PreviewPreparationResultHandle>(
@@ -139,6 +143,8 @@ submitCpuRootReserved(const std::shared_ptr<detail::PreviewDisplayServiceCore>& 
             });
         core->finishRootAdmission(submission.accepted() ? submission.handle.id() : TaskId{},
                                   submission.accepted());
+        if (submission.accepted() && reason)
+            core->recordCpuFallback(*reason);
         return submission;
     } catch (...) {
         core->abandonRootAdmission();

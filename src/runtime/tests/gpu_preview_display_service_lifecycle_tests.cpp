@@ -282,7 +282,8 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
 
 } // namespace
 
-NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::path& loader) {
+NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::path& loader,
+                                                       const bool failNative) {
     NativeDeadlineScenarioResult result;
     auto processor = makeProcessor();
     if (processor == nullptr) {
@@ -380,21 +381,42 @@ NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::pa
 
     auto fakeNow = std::make_shared<std::chrono::steady_clock::time_point>();
     core->nativeClockOverride = [fakeNow] { return *fakeNow; };
-    core->nativePollOverride = [](render::GpuNeutralDisplay&) {
-        return render::GpuNeutralDisplayPollResult::Pending;
-    };
+    if (failNative) {
+        // The real job completes and retires; only its outcome is reported as a failure.
+        core->nativePollOverride = [](render::GpuNeutralDisplay& display) {
+            const auto polled = display.poll();
+            return polled == render::GpuNeutralDisplayPollResult::Ready
+                       ? render::GpuNeutralDisplayPollResult::Failure
+                       : polled;
+        };
+    } else {
+        core->nativePollOverride = [](render::GpuNeutralDisplay&) {
+            return render::GpuNeutralDisplayPollResult::Pending;
+        };
+    }
     core->nativeReady.push_back(stage);
 
     processNativeDisplay(core);
     result.ran = true;
     result.dispatched = core->nativeInFlight;
 
-    *fakeNow += core->options.nativeDispatchDeadline + std::chrono::milliseconds(1);
-    processNativeDisplay(core);
+    if (failNative) {
+        const auto deadline = std::chrono::steady_clock::now() + 10s;
+        while (core->nativeInFlight && std::chrono::steady_clock::now() < deadline) {
+            processNativeDisplay(core);
+            std::this_thread::sleep_for(1ms);
+        }
+    } else {
+        *fakeNow += core->options.nativeDispatchDeadline + std::chrono::milliseconds(1);
+        processNativeDisplay(core);
+    }
     result.retired = core->display == nullptr && !core->gpuAvailable;
     result.timeoutDiagnostic =
         core->diagnostic.code == GpuPreviewDisplayServiceDiagnosticCode::NativeTimeout;
     result.fallbackDispatched = stage->fallbackChild.isValid();
+    result.cpuFallbacks = core->counterCpuFallbacks.load();
+    for (std::size_t reason = 0; reason < kGpuPreviewCpuFallbackReasonCount; ++reason)
+        result.cpuFallbacksByReason[reason] = core->counterCpuFallbacksByReason[reason].load();
     result.message = result.dispatched ? "ok" : "native job was not dispatched";
 
     scheduler.beginShutdown();

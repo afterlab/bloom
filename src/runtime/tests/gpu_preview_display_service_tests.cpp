@@ -236,7 +236,18 @@ void testCpuGraphPeakAdmittedBeforeEvaluation(Expectations& expectations) {
                             fixture.evaluations->load() == 1,
                         "the same request evaluates once the complete graph peak is admitted");
 }
+[[nodiscard]] std::uint64_t
+reasonCount(const std::array<std::uint64_t, runtime::kGpuPreviewCpuFallbackReasonCount>& counts,
+            const runtime::GpuPreviewCpuFallbackReason reason) {
+    return counts[static_cast<std::size_t>(reason)];
+}
+[[nodiscard]] std::uint64_t reasonCount(const runtime::GpuPreviewDisplayService& service,
+                                        const runtime::GpuPreviewCpuFallbackReason reason) {
+    return reasonCount(service.status().counters.cpuFallbacksByReason, reason);
+}
+
 // Non-device: disabled and missing-loader both take the ordinary CPU task, one evaluation each.
+// Neither is silent: each is one counted GpuUnavailable CPU fallback (#452).
 void testCpuPaths(Expectations& expectations) {
     runtime::detail::PreviewDisplayServiceTestFixture fixture(32, 18);
     expectations.expect(fixture.processor != nullptr, "the neutral processor builds");
@@ -262,6 +273,10 @@ void testCpuPaths(Expectations& expectations) {
                                     runtime::PreviewPreparationStatus::Prepared &&
                                 result->value().value()->frame() != nullptr,
                             "the disabled path publishes a prepared frame");
+        expectations.expect(
+            service.status().counters.cpuFallbacks == 1 &&
+                reasonCount(service, runtime::GpuPreviewCpuFallbackReason::GpuUnavailable) == 1,
+            "the disabled path is one counted GpuUnavailable CPU fallback");
         expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
                             "the disabled path leaves the scheduler quiescent");
     }
@@ -284,6 +299,10 @@ void testCpuPaths(Expectations& expectations) {
         expectations.expect(result.has_value() && result->state() == TaskState::Succeeded &&
                                 fixture.evaluations->load() == 1 && fixture.fallbacks->load() == 1,
                             "the unavailable path uses the ordinary CPU task");
+        expectations.expect(
+            service.status().counters.cpuFallbacks == 1 &&
+                reasonCount(service, runtime::GpuPreviewCpuFallbackReason::GpuUnavailable) == 1,
+            "the unavailable path is one counted GpuUnavailable CPU fallback");
         expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
                             "the unavailable path leaves the scheduler quiescent");
     }
@@ -334,6 +353,8 @@ void testGpuProvenanceAndParity(Expectations& expectations, const std::string& l
                                 runtime::PreviewDisplayProvider::GpuNeutral &&
                             displayOnly->isOcioQualified(),
                         "the result is an OCIO-qualified GPU Neutral display-only frame");
+    expectations.expect(service.status().counters.cpuFallbacks == 0,
+                        "a GPU Neutral display is not a CPU fallback");
     if (displayOnly == nullptr) {
         return;
     }
@@ -372,6 +393,15 @@ void testLateFallbackSameFrame(Expectations& expectations, const std::string& lo
     expectations.expect(result.has_value() && result->state() == TaskState::Succeeded &&
                             fixture.evaluations->load() == 1 && fixture.fallbacks->load() == 1,
                         "the late fallback reuses the one evaluated stage");
+    // A tiny frame is outside the measured interval: the cost model, not a silent route.
+    const auto counters = service.status().counters;
+    expectations.expect(counters.cpuFallbacks == 1 &&
+                            reasonCount(counters.cpuFallbacksByReason,
+                                        runtime::GpuPreviewCpuFallbackReason::NotWorthwhile) +
+                                    reasonCount(counters.cpuFallbacksByReason,
+                                                runtime::GpuPreviewCpuFallbackReason::Ineligible) ==
+                                1,
+                        "the late fallback is counted with a NotWorthwhile or Ineligible reason");
     expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
                         "the late-fallback path leaves the scheduler quiescent");
 }
@@ -579,6 +609,17 @@ void testNativeDeadlineRetirement(Expectations& expectations, const std::string&
     expectations.expect(scenario.timeoutDiagnostic, "deadline expiry publishes NativeTimeout");
     expectations.expect(scenario.fallbackDispatched,
                         "deadline expiry takes the same-stage CPU fallback");
+    expectations.expect(scenario.cpuFallbacks == 1 &&
+                            reasonCount(scenario.cpuFallbacksByReason,
+                                        runtime::GpuPreviewCpuFallbackReason::NativeTimeout) == 1,
+                        "the deadline fallback is counted with the NativeTimeout reason");
+    const auto failed = runtime::detail::runNativeDeadlineScenario(loader, true);
+    expectations.expect(failed.ran && failed.dispatched && failed.fallbackDispatched,
+                        "a failed native job takes the same-stage CPU fallback");
+    expectations.expect(failed.cpuFallbacks == 1 &&
+                            reasonCount(failed.cpuFallbacksByReason,
+                                        runtime::GpuPreviewCpuFallbackReason::NativeFailure) == 1,
+                        "the native-failure fallback is counted with the NativeFailure reason");
 }
 
 // Paired benchmark preparation: medians over 5 warmups + 10 alternating pairs, real service

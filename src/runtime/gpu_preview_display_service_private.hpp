@@ -19,6 +19,7 @@
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -261,6 +262,14 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterGpuCacheHits{0};
     std::atomic<std::uint64_t> counterGpuCacheMisses{0};
     std::atomic<std::uint64_t> counterCpuFallbacks{0};
+    std::array<std::atomic<std::uint64_t>, kGpuPreviewCpuFallbackReasonCount>
+        counterCpuFallbacksByReason{};
+    // The one way a request is counted as a CPU fallback: the total and its reason together.
+    void recordCpuFallback(const GpuPreviewCpuFallbackReason reason) noexcept {
+        counterCpuFallbacks.fetch_add(1, std::memory_order_relaxed);
+        counterCpuFallbacksByReason[static_cast<std::size_t>(reason)].fetch_add(
+            1, std::memory_order_relaxed);
+    }
     std::atomic<std::uint64_t> counterGpuAdmissionRefusals{0};
     std::atomic<std::uint64_t> counterFullFrameReadbacks{0};
     std::atomic<std::uint64_t> counterDisplayStatusReads{0};
@@ -450,8 +459,10 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
 // Service-loop jobs (service thread only).
 void processPreviewStages(const std::shared_ptr<PreviewDisplayServiceCore>& core);
 void processNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCore>& core);
+// Counts the fallback with `reason` once the CPU display child is admitted.
 void dispatchDisplayFallbackChild(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                                  const std::shared_ptr<PreviewDisplayStageRecord>& stage);
+                                  const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                                  GpuPreviewCpuFallbackReason reason);
 void disableGpuAfterNativeFailure(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                   const std::string& detail);
 
@@ -507,17 +518,21 @@ class PreviewDisplayServiceTestFixture final {
 // Bounded native-dispatch-deadline scenario: builds a real device/pipeline/qualification on the
 // calling thread and drives the private native pump with an injected clock/poll so the deadline
 // retirement path is verified without a fabricated eligibility report. `ran == false` means no
-// compatible device was available.
+// compatible device was available. With `failNative`, the completed native job reports a failure
+// instead of stalling, so the native-failure fallback is exercised on a retired submission.
 struct NativeDeadlineScenarioResult final {
     bool ran = false;
     bool dispatched = false;
     bool retired = false;
     bool timeoutDiagnostic = false;
     bool fallbackDispatched = false;
+    // The fallback counters after the scenario (#452).
+    std::uint64_t cpuFallbacks = 0;
+    std::array<std::uint64_t, kGpuPreviewCpuFallbackReasonCount> cpuFallbacksByReason{};
     std::string message;
 };
 [[nodiscard]] NativeDeadlineScenarioResult
-runNativeDeadlineScenario(const std::filesystem::path& loader);
+runNativeDeadlineScenario(const std::filesystem::path& loader, bool failNative = false);
 
 // Paired service-submit vs ordinary-CPU benchmark preparation over one warm graph. Medians include
 // task scheduling and the service handoff. `usedGpu` records actual GPU provenance.

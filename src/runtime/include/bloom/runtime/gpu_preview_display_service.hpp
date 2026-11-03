@@ -36,6 +36,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -112,6 +113,30 @@ enum class GpuPreviewDisplayServicePresentationMode : std::uint8_t {
     Wayland,
 };
 
+// Why a preview request took the CPU path (#452). Every `cpuFallbacks` increment names exactly one
+// reason, so a CPU frame on a GPU route is never silent. A request the scheduler's bounded GPU
+// admission refused is counted by `gpuAdmissionRefusals` instead.
+enum class GpuPreviewCpuFallbackReason : std::uint8_t {
+    // No usable GPU route: the service is not Ready (initializing, disabled, no device, failed
+    // qualification or a retired pipeline), presentation is unavailable, or the request has no
+    // device allowance.
+    GpuUnavailable,
+    // Packed readback route: the request is not the Bloom Neutral display the native op runs.
+    NonNeutralRequest,
+    // Packed readback route: the startup cost model measured the CPU display as faster for this
+    // pixel count (outside the qualified interval, or not worth the service handoffs).
+    NotWorthwhile,
+    // The evaluated stage does not fit the native display's eligibility, geometry or budget.
+    Ineligible,
+    // Resident route: the composition is outside the prepared GPU subset.
+    UnsupportedGpuSubset,
+    // A native submission, readback or publication failed, or the device was lost.
+    NativeFailure,
+    // A native dispatch exceeded its bounded deadline.
+    NativeTimeout,
+};
+inline constexpr std::size_t kGpuPreviewCpuFallbackReasonCount = 7;
+
 // Cached, end-to-end counters for the resident display route. This is a bounded counter snapshot,
 // not a profiling framework: it exists so a concrete integration test can assert the resident arm
 // actually dispatched native work, hit the content cache, read nothing back, and fell back to the
@@ -142,8 +167,10 @@ struct GpuPreviewDisplayServiceCounters final {
     std::uint64_t gpuCacheHits = 0;
     std::uint64_t gpuCacheMisses = 0;
     // Requests that took the full original CPU path (unsupported subset, non-neutral, over budget,
-    // unavailable presentation, lease pressure, or a resident-native failure).
+    // unavailable presentation, lease pressure, or a resident-native failure), on either route.
     std::uint64_t cpuFallbacks = 0;
+    // The same requests by reason, indexed by GpuPreviewCpuFallbackReason; sums to cpuFallbacks.
+    std::array<std::uint64_t, kGpuPreviewCpuFallbackReasonCount> cpuFallbacksByReason{};
     // GPU parent submissions refused by the scheduler's bounded per-request admission (the derived
     // host default or an explicit configured capacity) BEFORE any stage work. Non-zero means a
     // request the display stage could have handled was forced onto the CPU by ADMISSION, not by

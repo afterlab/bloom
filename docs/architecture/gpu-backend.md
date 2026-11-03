@@ -298,6 +298,11 @@ retention or allocation failure latches the process-wide fuse. The bounded count
 `fullFrameReadbacks` (zero on the native resident route; scene readbacks plus final packed
 transfers on the packed route), `displayStatusReads` (the 4-byte status word),
 cache hits/misses, fallbacks, and refusals, so a test can prove no full-frame readback occurred.
+Every request that takes the CPU path on either route increments `cpuFallbacks` and exactly one
+`cpuFallbacksByReason` entry (`GpuPreviewCpuFallbackReason`: GPU unavailable, non-Neutral request,
+not worthwhile under the measured cost model, ineligible stage, unsupported GPU subset, native
+failure or device loss, native timeout); a bounded-admission refusal is counted by
+`gpuAdmissionRefusals` instead.
 `beginShutdown()` is non-blocking; the destructor joins the service thread and drains child/native
 ownership before releasing the lease.
 
