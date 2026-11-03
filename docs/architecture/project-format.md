@@ -1860,6 +1860,15 @@ Migration is deterministic under the selected project's OCIO configuration:
 | Linear | effective working-space id |
 | Raw | empty; data/no-conversion |
 
+Opening a project (#487) also migrates the source rows: an Image or Video source whose integer
+`colorSpace` is `1` (sRGB) or `2` (Linear) and whose `inputColorSpaceId` is empty opens with the
+config's sRGB texture id (`srgb_rec709_display` in Bloom Neutral, `sRGB - Texture` in the ACES CG
+config) or the composition's effective working-space id, and `colorSpace` `0`. Raw (`3`) stays, as
+the Input color space control's "Raw (no conversion)" choice; an sRGB choice under any other config
+stays as it was. The migration runs on the open path only (`migrateLegacySourceColorSpaces`), never
+in save verification, which must decode exactly what was written; the next save writes the migrated
+values. Properties and the node card show one control, Input color space, for both rows.
+
 The canonical writer emits `colorSpace`, `inputColorSpaceId`, then `alphaAssociation` in that
 order. The field is bounded and validated as strict UTF-8. Missing, data, or unavailable ids do
 not fall back to a similarly named space or to an ambient config; the asset remains diagnostically

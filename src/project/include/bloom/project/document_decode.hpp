@@ -459,6 +459,11 @@ class [[nodiscard]] DocumentDecodeResult final {
     std::uint32_t nodeVersion_ = 0;
 };
 
+// #487: an Image or Video source has one input color space control. Opening a project migrates a
+// legacy source Color Space choice (sRGB, Linear) to the OCIO space it meant; Raw stays. Applied
+// by the open path only, never by save verification, which must reproduce the saved values.
+void migrateLegacySourceColorSpaces(DecodedDocumentEnvelope& envelope);
+
 // Decodes `root` (the document.json root value from a parsed StrictJsonDomDocument) into a
 // DecodedDocumentEnvelope. `root` must outlive the call; nothing is retained past return. See the
 // file-level comment above for exact scope. May throw std::bad_alloc; never throws otherwise.

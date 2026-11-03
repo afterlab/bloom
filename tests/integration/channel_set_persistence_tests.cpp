@@ -220,12 +220,69 @@ void imageSourceV1Migrates() {
            "a 1.29 decoder refuses an unmigrated v1 Image source");
 }
 
+// #487: one input color space control. Opening migrates a legacy source Color Space choice to the
+// OCIO space it meant; Raw stays the legacy value; saving (and its verification) writes values as
+// they are, so a document holding a legacy choice still saves.
+void legacyColorSpaceMigratesOnOpen() {
+    Fixture fixture;
+    const auto linear = fixture.add(document::kImageSourceNodeType);
+    const auto raw = fixture.add(document::kImageSourceNodeType);
+    const auto explicitSpace = fixture.add(document::kImageSourceNodeType);
+    const auto setLegacy = [&](const document::NodeId node, const std::int64_t value) {
+        fixture.run<commands::SetParameterSource>(
+            fixture.composition, fixture.parameter(node, "colorSpace"),
+            document::ConstantValueSource{document::ParameterValue{value}});
+    };
+    setLegacy(fixture.source, 1);
+    setLegacy(linear, 2);
+    setLegacy(raw, 3);
+    setLegacy(explicitSpace, 1);
+    fixture.setText(explicitSpace, "inputColorSpaceId", "ACEScg");
+    const auto snapshot = fixture.document.snapshot();
+    const auto settings = document::makeBloomNeutralColorSettingsV1({});
+    auto archive = project::buildVerifiedSaveArchive(
+        {}, {.snapshot = &snapshot, .colorSettings = &settings}, {}, memory());
+    expect(static_cast<bool>(archive), "a document holding legacy choices saves and verifies");
+    if (!archive)
+        return;
+    auto result = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
+    expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the legacy archive opens");
+    if (result.outcome() != project::OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(result).takeOpened();
+    const auto reopened = opened.document->snapshot();
+    const auto& composition = *reopened.project().findComposition(fixture.composition);
+    const auto value = [&](const document::NodeId node,
+                           const std::string_view role) -> document::ParameterValue {
+        const auto* record = composition.graph().findNode(node);
+        for (const auto& binding : record->parameters)
+            if (binding.role == role)
+                return std::get<document::ConstantValueSource>(
+                           composition.parameters().find(binding.parameterId)->source)
+                    .value;
+        throw std::runtime_error("binding missing");
+    };
+    const auto is = [&](const document::NodeId node, const std::int64_t legacy,
+                        const std::string& id) {
+        return value(node, "colorSpace") == document::ParameterValue{legacy} &&
+               value(node, "inputColorSpaceId") == document::ParameterValue{id};
+    };
+    expect(is(fixture.source, 0, "srgb_rec709_display"),
+           "legacy sRGB opens as the config's sRGB texture space");
+    expect(is(linear, 0, std::string(settings.processColorSpaceId)),
+           "legacy Linear opens as the working space");
+    expect(is(raw, 3, ""), "legacy Raw stays the Raw choice");
+    expect(is(explicitSpace, 1, "ACEScg"),
+           "an explicit input color space is untouched (it already took precedence)");
+}
+
 } // namespace
 
 int main() {
     try {
         roundTrip();
         imageSourceV1Migrates();
+        legacyColorSpaceMigratesOnOpen();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

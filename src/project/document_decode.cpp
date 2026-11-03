@@ -3,6 +3,8 @@
 #include "document_decode_internal.hpp"
 
 #include <bloom/core/sha256.hpp>
+#include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_settings.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
@@ -2224,8 +2226,60 @@ namespace {
     }
     return DocumentDecodeResult::failure(state.error, state.path);
 }
+
 } // namespace
 
+// #487: an Image or Video source has one input color space control, the OCIO "Input color space".
+// A legacy source Color Space choice (sRGB or Linear) is migrated on load to the config space it
+// always meant: the config's sRGB texture space, or the composition's working space. Raw stays the
+// legacy value (the control offers it as "Raw (no conversion)"); an sRGB choice under a config
+// whose sRGB texture space is not known without reading the config stays as it was.
+void migrateLegacySourceColorSpaces(DecodedDocumentEnvelope& envelope) {
+    const auto* builtIn =
+        std::get_if<document::BuiltInOcioConfigLocator>(&envelope.colorSettings.ocioConfig.locator);
+    const std::string_view srgbTexture = builtIn == nullptr ? std::string_view{}
+                                         : builtIn->uri == document::kBloomNeutralConfigUriV1
+                                             ? std::string_view("srgb_rec709_display")
+                                         : builtIn->uri == document::kAcesCgConfigUriV1
+                                             ? std::string_view("sRGB - Texture")
+                                             : std::string_view{};
+    for (auto& composition : envelope.compositions) {
+        const auto& working = composition.workingColorSpaceId.has_value()
+                                  ? *composition.workingColorSpaceId
+                                  : envelope.colorSettings.processColorSpaceId;
+        const auto constant = [&](const document::NodeRecord& node,
+                                  const std::string_view role) -> document::ParameterValue* {
+            const auto binding =
+                std::ranges::find(node.parameters, role, &document::ParameterBinding::role);
+            if (binding == node.parameters.end())
+                return nullptr;
+            const auto record = std::ranges::find(composition.parameters, binding->parameterId,
+                                                  &document::ParameterRecord::id);
+            auto* source = record == composition.parameters.end()
+                               ? nullptr
+                               : std::get_if<document::ConstantValueSource>(&record->source);
+            return source == nullptr ? nullptr : &source->value;
+        };
+        for (const auto& node : composition.graph.nodes) {
+            if (node.typeId != document::kImageSourceNodeType &&
+                node.typeId != "bloom.video-source")
+                continue;
+            auto* legacy = constant(node, "colorSpace");
+            auto* explicitId = constant(node, "inputColorSpaceId");
+            auto* legacyValue = legacy ? std::get_if<std::int64_t>(legacy) : nullptr;
+            auto* idValue = explicitId ? std::get_if<std::string>(explicitId) : nullptr;
+            if (legacyValue == nullptr || idValue == nullptr || !idValue->empty())
+                continue;
+            const std::string_view migrated = *legacyValue == 1   ? srgbTexture
+                                              : *legacyValue == 2 ? std::string_view(working)
+                                                                  : std::string_view{};
+            if (migrated.empty())
+                continue;
+            *idValue = std::string(migrated);
+            *legacyValue = 0;
+        }
+    }
+}
 DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
     static constexpr std::array<std::string_view, 4> kKeys{"schemaVersion", "project",
                                                            "idAllocation", "extensions"};
