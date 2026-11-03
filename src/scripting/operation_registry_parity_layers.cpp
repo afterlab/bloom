@@ -69,7 +69,7 @@ const std::string kDuplicate =
     R"(Layer Output node is copied with its parameters, keyframes, masks, timing, parent and )"
     R"(matte, reading the same source as the original, and the copy takes a new stack slot )"
     R"(directly below the original. Layers duplicated together keep their parent and matte links )"
-    R"(among the copies. )"
+    R"(among the copies. A layer named N times is copied N times. )"
     R"(Outputs: one "layer" output per copy in argument order, plus "layer.<original>" -> copy, )"
     R"("node.<original>" -> copied node and "slot.<original>" -> new slot. )"
     R"(Errors: "Layer N is not in the composition" - a stale or foreign layer id; "Driven )"

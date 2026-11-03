@@ -3,6 +3,8 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/project.hpp>
 
+#include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 
@@ -44,14 +46,49 @@ OperationResult DuplicateLayers::apply(document::Draft& draft) const {
     std::set<document::NodeId> nodes;
     if (auto failure = boundaryNodes(draft, composition_, layers_, nodes))
         return std::move(*failure);
-    auto result =
-        DuplicateNodes(composition_, std::move(nodes), document::Vec2d{0, 0}).apply(draft);
-    if (result.status == OperationStatus::Rejected)
-        return result;
+    // A layer named N times is copied N times, as running Duplicate N times would: pass k copies
+    // every layer named more than k times, so layers copied in the same pass keep their parent and
+    // matte links among those copies.
+    std::map<document::LayerId, std::size_t> named;
+    for (const auto layer : layers_)
+        ++named[layer];
+    std::size_t passes = 0;
+    for (const auto& [layer, count] : named)
+        passes = std::max(passes, count);
+    OperationResult result = OperationResult::applied();
+    std::vector<std::vector<OperationOutput>> passOutputs;
+    for (std::size_t pass = 0; pass < passes; ++pass) {
+        std::vector<document::LayerId> copied;
+        for (const auto& [layer, count] : named)
+            if (count > pass)
+                copied.push_back(layer);
+        std::set<document::NodeId> passNodes;
+        if (auto failure = boundaryNodes(draft, composition_, copied, passNodes))
+            return std::move(*failure);
+        auto duplicated =
+            DuplicateNodes(composition_, std::move(passNodes), document::Vec2d{0, 0}).apply(draft);
+        if (duplicated.status == OperationStatus::Rejected)
+            return duplicated;
+        if (pass == 0) {
+            result = duplicated;
+        } else {
+            result.outputs.insert(result.outputs.end(), duplicated.outputs.begin(),
+                                  duplicated.outputs.end());
+            // A footprint only one pass proved is not the whole edit's.
+            result.affectedTimes =
+                result.affectedTimes && duplicated.affectedTimes
+                    ? mergeAffectedTimeFootprints(result.affectedTimes, *duplicated.affectedTimes)
+                    : std::nullopt;
+            result.layerIdentityRemaps.reset();
+        }
+        passOutputs.push_back(std::move(duplicated.outputs));
+    }
+    // One "layer" output per copy, in argument order: the k-th mention of a layer is its k-th copy.
     std::vector<OperationOutput> copies;
+    std::map<document::LayerId, std::size_t> seen;
     for (const auto layer : layers_) {
         const auto name = "layer." + std::to_string(layer.value());
-        for (const auto& output : result.outputs)
+        for (const auto& output : passOutputs[seen[layer]++])
             if (output.name == name)
                 copies.push_back({"layer", output.id});
     }

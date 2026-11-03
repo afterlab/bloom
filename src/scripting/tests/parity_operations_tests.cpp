@@ -122,6 +122,23 @@ void layerOperations() {
     expect(fixture.session->redo().succeeded(), "redo duplicate");
     expect(fixture.stack(fixture.main).size() == 3, "redo restores the copy");
 
+    // #434 O5: a layer named N times is copied N times, one "layer" output per mention.
+    auto repeated = fixture.run("bloom.layer.duplicate",
+                                {{"composition", Value(StableId{fixture.main.value()})},
+                                 {"layers", Value(ids({blue.value(), blue.value(), blue.value()}))}});
+    const auto repeatedCopies = Fixture::outputs<document::LayerId>(repeated, "layer");
+    stack = fixture.stack(fixture.main);
+    expect(repeated.succeeded() && repeatedCopies.size() == 3 && stack.size() == 6 &&
+               std::ranges::all_of(repeatedCopies,
+                                   [&](const auto copy) {
+                                       return copy != blue && std::ranges::count(stack, copy) == 1;
+                                   }) &&
+               repeatedCopies[0] != repeatedCopies[1] && repeatedCopies[1] != repeatedCopies[2] &&
+               repeatedCopies[0] != repeatedCopies[2],
+           "a layer named three times is copied three times");
+    expect(fixture.session->undo().succeeded() && fixture.stack(fixture.main).size() == 3,
+           "one undo removes every repeated copy");
+
     // Delete: both named layers go in one step; undo brings them back with their ids.
     auto deleted =
         fixture.run("bloom.layer.delete", {{"composition", Value(StableId{fixture.main.value()})},
