@@ -854,7 +854,8 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
 }
 
 // #337: the Coverage channel policy (Matte Blur) runs through the same harness on the Gaussian
-// kernel, so its alpha-only filter and all-channel write keep exact-alpha CPU parity too.
+// kernel, so its alpha-only filter and all-channel write keep exact-alpha CPU parity too. #338
+// Matte Erode/Dilate run the morphology kinds through the same cases.
 void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::runtime::BlurChannels;
     using bloom::runtime::BlurEdgeMode;
@@ -866,7 +867,9 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
     for (const auto [kind, channels] :
          {std::pair{SeparableBlurKind::Gaussian, BlurChannels::Rgba},
           std::pair{SeparableBlurKind::Box, BlurChannels::Rgba},
-          std::pair{SeparableBlurKind::Gaussian, BlurChannels::Coverage}}) {
+          std::pair{SeparableBlurKind::Gaussian, BlurChannels::Coverage},
+          std::pair{SeparableBlurKind::Erode, BlurChannels::Coverage},
+          std::pair{SeparableBlurKind::Dilate, BlurChannels::Coverage}}) {
         for (const auto edge : {BlurEdgeMode::Transparent, BlurEdgeMode::Clamp}) {
             for (const bool proxy : {false, true}) {
                 cache.clear();
@@ -950,6 +953,89 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
     }
 }
 
+// #338 Luma Key: ramp, inverted ramp, hard and inverted hard keys of signed/HDR/partial-alpha
+// solids against the CPU oracle (2e-6, exact alpha), one resident dispatch, warm zero dispatch and
+// a changed threshold that re-dispatches with parity.
+void runLumaKeys(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::LumaKeyKernel;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    std::uint64_t id = 9000;
+    struct Case final {
+        double low;
+        double high;
+        bool invert;
+    };
+    for (const auto color : {Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
+                             Color4d{0.3, 0.6, 0.2, 0.25}}) {
+        for (const auto [low, high, invert] :
+             {Case{0.0, 1.0, false}, Case{0.25, 2.0, true}, Case{0.5, 0.5, false},
+              Case{0.5, 0.5, true}}) {
+            cache.clear();
+            const auto plan = effectPlan(LumaKeyKernel{{ParameterId::fromRaw(id + 90), low},
+                                                       {ParameterId::fromRaw(id + 91), high},
+                                                       invert},
+                                         id, std::nullopt, color);
+            id += 100;
+            const auto request = requestFor(*plan);
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+            const auto prepared = builder.build(plan, request);
+            expectations.expect(oracle.frame() && prepared,
+                                "luma key native: CPU oracle and production scene prepare");
+            if (!oracle.frame() || !prepared)
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), "luma key native: executor creates");
+            if (!executor)
+                continue;
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            const auto coldCounters = executor.executor->counters();
+            std::string detail;
+            expectations.expect(
+                cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                "luma key native: HDR/partial-alpha CPU parity (2e-6, exact alpha): " + detail);
+            const auto& descriptor = *oracle.frame()->processImage().descriptor();
+            expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                    cold.displayWindow == descriptor.displayWindow() &&
+                                    cold.pixelAspect == descriptor.pixelAspect(),
+                                "luma key native: data/display-window and PAR parity");
+            expectations.expect(coldCounters.ocioEffectDispatches == 1 &&
+                                    coldCounters.readbacks == 0,
+                                "luma key native: one resident dispatch and no frame readback");
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(
+                warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches,
+                "luma key native: warm RAM reuse has identical pixels and zero dispatches");
+            auto changedDefinition = plan->copyDefinition();
+            std::get<LumaKeyKernel>(
+                std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel)
+                .high.source = high + 0.375;
+            const auto changedPlan =
+                std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
+            const auto changed = builder.build(changedPlan, request);
+            const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+            expectations.expect(changed && changedOracle.frame(),
+                                "luma key native: changed threshold prepares");
+            if (!changed || !changedOracle.frame())
+                continue;
+            const auto rerun = runScene(*executor.executor, changed.scene);
+            expectations.expect(
+                rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(rerun.pixels, changedOracle.frame()->processImage().pixels(),
+                           detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches + 1,
+                "luma key native: a changed threshold re-dispatches with CPU parity: " + detail);
+        }
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
@@ -960,6 +1046,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runResizeFit(expectations, device, cache);
     runTransform2D(expectations, device, cache);
     runBlurs(expectations, device, cache);
+    runLumaKeys(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

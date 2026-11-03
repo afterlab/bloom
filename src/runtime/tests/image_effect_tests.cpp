@@ -766,6 +766,211 @@ void testMatteBlurEvaluation() {
     }
 }
 
+// #338 Matte Erode/Dilate through the evaluator: coverage written to every channel, an exact radius-
+// zero identity, warm reuse, ROI equality, a memo key per kind (never shared with each other or
+// with Matte Blur), animation and radius/edge invalidation.
+void testMatteMorphologyEvaluation() {
+    const auto filter = [](const runtime::SeparableBlurKind kind, const double radius,
+                           const runtime::BlurEdgeMode edge) {
+        return runtime::SeparableBlurKernel{kind,
+                                            {document::ParameterId::fromRaw(90), radius},
+                                            edge,
+                                            runtime::BlurChannels::Coverage};
+    };
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto baseline = planWith({});
+    const auto original = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    for (const auto kind : {runtime::SeparableBlurKind::Erode, runtime::SeparableBlurKind::Dilate}) {
+        const auto zero = planWith({filter(kind, 0, runtime::BlurEdgeMode::Transparent)});
+        expect(samePixels(original, evaluator.evaluate(zero, requestFor(*zero), {})),
+               "zero-radius Matte Erode/Dilate is an exact identity");
+        for (const auto edge : {runtime::BlurEdgeMode::Transparent, runtime::BlurEdgeMode::Clamp}) {
+            const auto plan = planWith({filter(kind, 1, edge)});
+            const auto cold = evaluator.evaluate(plan, requestFor(*plan), {});
+            expect(cold.frame() && cold.diagnostics().empty(), "Matte Erode/Dilate evaluates");
+            if (!cold.frame())
+                continue;
+            const auto& image = cold.frame()->processImage();
+            const auto window = image.descriptor()->dataWindow();
+            bool covered = false;
+            for (auto y = window.originY(); y < window.maxYExclusive(); ++y)
+                for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
+                    const auto p = image.read(x, y);
+                    expect(p && p.value()->red() == p.value()->alpha() &&
+                               p.value()->green() == p.value()->alpha() &&
+                               p.value()->blue() == p.value()->alpha(),
+                           "Matte Erode/Dilate writes its coverage to every channel");
+                    covered = covered || (p && p.value()->alpha() > 0.0F);
+                }
+            // The 4x2 solid is entirely within one pixel of a transparent edge: a radius-1
+            // Transparent erode removes all of it, while every other case keeps coverage.
+            expect(covered == !(kind == runtime::SeparableBlurKind::Erode &&
+                                edge == runtime::BlurEdgeMode::Transparent),
+                   "Matte Erode erodes from a transparent data-window edge; Clamp keeps it");
+            const auto warm = evaluator.evaluate(plan, requestFor(*plan), {});
+            expect(samePixels(cold, warm) && warm.frame()->operationCacheStatistics().misses == 0,
+                   "Matte Erode/Dilate warm memo reuses identical pixels");
+            auto roiRequest = requestFor(*plan);
+            const auto roiWindow = render::ImageWindow::create(1, 0, 2, 2);
+            roiRequest.roi = *roiWindow.value();
+            const auto roi = evaluator.evaluate(plan, roiRequest, {});
+            expect(roi.frame() != nullptr, "Matte Erode/Dilate ROI evaluates");
+            if (roi.frame())
+                for (std::int64_t y = 0; y < 2; ++y)
+                    for (std::int64_t x = 1; x < 3; ++x) {
+                        const auto actual = roi.frame()->processImage().read(x, y);
+                        const auto expected = image.read(x, y);
+                        expect(actual && expected && *actual.value() == *expected.value(),
+                               "Matte Erode/Dilate ROI pixels equal the full-frame pixels");
+                    }
+            const auto other = planWith({filter(kind == runtime::SeparableBlurKind::Erode
+                                                    ? runtime::SeparableBlurKind::Dilate
+                                                    : runtime::SeparableBlurKind::Erode,
+                                                1, edge)});
+            const auto matte = planWith({filter(runtime::SeparableBlurKind::Gaussian, 1, edge)});
+            const auto otherResult = evaluator.evaluate(other, requestFor(*other), {});
+            const auto matteResult = evaluator.evaluate(matte, requestFor(*matte), {});
+            runtime::CpuCompositionEvaluator fresh;
+            expect(samePixels(otherResult, fresh.evaluate(other, requestFor(*other), {})) &&
+                       samePixels(matteResult, fresh.evaluate(matte, requestFor(*matte), {})) &&
+                       (edge == runtime::BlurEdgeMode::Clamp || !samePixels(cold, otherResult)),
+                   "Erode, Dilate and Matte Blur never share a memoized image");
+            auto animatedDefinition = plan->copyDefinition();
+            std::get<runtime::SeparableBlurKernel>(
+                std::get<runtime::CompiledImageEffect>(animatedDefinition.operations[1]).kernel)
+                .radius.source = runtime::ScalarCurveIndex::fromRaw(0);
+            animatedDefinition.scalarCurves.push_back(
+                {document::AnimationCurveId::fromRaw(190),
+                 {{document::KeyframeId::fromRaw(190), {}, 0.0},
+                  {document::KeyframeId::fromRaw(191), *core::RationalTime::create(1, 1), 1.0}}});
+            const auto animated = std::make_shared<const runtime::CompiledCompositionPlan>(
+                std::move(animatedDefinition));
+            expect(animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)),
+                   "animated Matte Erode/Dilate radius is time-dependent");
+            auto start = requestFor(*animated);
+            auto end = start;
+            end.time = *core::RationalTime::create(1, 1);
+            const auto startResult = evaluator.evaluate(animated, start, {});
+            const auto endResult = evaluator.evaluate(animated, end, {});
+            expect(startResult.frame() && endResult.frame() &&
+                       samePixels(startResult, original) &&
+                       samePixels(endResult, fresh.evaluate(plan, requestFor(*plan), {})),
+                   "animated Matte Erode/Dilate radius samples each frame without reuse");
+            const auto changed = planWith(
+                {filter(kind, 2,
+                        edge == runtime::BlurEdgeMode::Clamp ? runtime::BlurEdgeMode::Transparent
+                                                             : runtime::BlurEdgeMode::Clamp)});
+            const auto changedResult = evaluator.evaluate(changed, requestFor(*changed), {});
+            expect(samePixels(changedResult, fresh.evaluate(changed, requestFor(*changed), {})),
+                   "Matte Erode/Dilate radius/edge changes invalidate the memoized image");
+        }
+    }
+}
+
+// #338 Luma Key through the evaluator: the coverage of the composited baseline pixel by the same
+// reference, an inverted complement, warm reuse, ROI equality, animation, threshold/invert
+// invalidation and an out-of-domain threshold refusal.
+void testLumaKeyEvaluation() {
+    const auto key = [](const double low, const double high, const bool invert) {
+        return runtime::LumaKeyKernel{
+            {document::ParameterId::fromRaw(91), low}, {document::ParameterId::fromRaw(92), high},
+            invert};
+    };
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto baseline = planWith({});
+    const auto original = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    expect(original.frame() != nullptr, "Luma Key baseline evaluates");
+    if (!original.frame())
+        return;
+    const auto& source = original.frame()->processImage();
+    const auto plan = planWith({key(0.0, 0.5, false)});
+    const auto inverted = planWith({key(0.0, 0.5, true)});
+    const auto cold = evaluator.evaluate(plan, requestFor(*plan), {});
+    const auto invertedResult = evaluator.evaluate(inverted, requestFor(*inverted), {});
+    expect(cold.frame() && invertedResult.frame() && cold.diagnostics().empty(),
+           "Luma Key evaluates");
+    if (!cold.frame() || !invertedResult.frame())
+        return;
+    const auto prepared = runtime::detail::prepareLumaKey(key(0.0, 0.5, false), 0.0, 0.5);
+    const auto& image = cold.frame()->processImage();
+    const auto window = image.descriptor()->dataWindow();
+    expect(window == source.descriptor()->dataWindow(), "Luma Key keeps the input data window");
+    bool covered = false;
+    for (auto y = window.originY(); y < window.maxYExclusive(); ++y)
+        for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
+            const auto sourceSample = source.read(x, y);
+            const auto keyedSample = image.read(x, y);
+            const auto invertedSample = invertedResult.frame()->processImage().read(x, y);
+            if (!sourceSample || !keyedSample || !invertedSample) {
+                expect(false, "Luma Key samples exist");
+                continue;
+            }
+            const auto s = *sourceSample.value();
+            const auto p = *keyedSample.value();
+            const auto q = *invertedSample.value();
+            expect(p.alpha() == runtime::detail::lumaKeyCoverage(*prepared, s.red(), s.green(),
+                                                                 s.blue(), s.alpha()) &&
+                       p.red() == p.alpha() && p.green() == p.alpha() && p.blue() == p.alpha(),
+                   "Luma Key publishes the reference coverage on every channel");
+            expect(std::abs(p.alpha() + q.alpha() - s.alpha()) < 2e-6F,
+                   "an inverted Luma Key is the complement within alpha");
+            covered = covered || p.alpha() > 0.0F;
+        }
+    expect(covered, "Luma Key publishes coverage");
+    const auto warm = evaluator.evaluate(plan, requestFor(*plan), {});
+    expect(samePixels(cold, warm) && warm.frame()->operationCacheStatistics().misses == 0,
+           "Luma Key warm memo reuses identical pixels");
+    auto roiRequest = requestFor(*plan);
+    const auto roiWindow = render::ImageWindow::create(1, 0, 2, 2);
+    roiRequest.roi = *roiWindow.value();
+    const auto roi = evaluator.evaluate(plan, roiRequest, {});
+    expect(roi.frame() != nullptr, "Luma Key ROI evaluates");
+    if (roi.frame())
+        for (std::int64_t y = 0; y < 2; ++y)
+            for (std::int64_t x = 1; x < 3; ++x) {
+                const auto actual = roi.frame()->processImage().read(x, y);
+                const auto expected = image.read(x, y);
+                expect(actual && expected && *actual.value() == *expected.value(),
+                       "Luma Key ROI pixels equal the full-frame pixels");
+            }
+    runtime::CpuCompositionEvaluator fresh;
+    for (const auto& changed : {planWith({key(0.0, 0.25, false)}), planWith({key(0.1, 0.5, false)}),
+                                planWith({key(0.5, 0.5, false)})}) {
+        const auto result = evaluator.evaluate(changed, requestFor(*changed), {});
+        expect(result.frame() && !samePixels(result, cold) &&
+                   samePixels(result, fresh.evaluate(changed, requestFor(*changed), {})),
+               "Luma Key threshold changes invalidate the memoized image");
+    }
+    expect(!samePixels(invertedResult, cold) &&
+               samePixels(invertedResult, fresh.evaluate(inverted, requestFor(*inverted), {})),
+           "Luma Key invert invalidates the memoized image");
+    auto animatedDefinition = plan->copyDefinition();
+    std::get<runtime::LumaKeyKernel>(
+        std::get<runtime::CompiledImageEffect>(animatedDefinition.operations[1]).kernel)
+        .high.source = runtime::ScalarCurveIndex::fromRaw(0);
+    animatedDefinition.scalarCurves.push_back(
+        {document::AnimationCurveId::fromRaw(192),
+         {{document::KeyframeId::fromRaw(192), {}, 0.5},
+          {document::KeyframeId::fromRaw(193), *core::RationalTime::create(1, 1), 0.25}}});
+    const auto animated =
+        std::make_shared<const runtime::CompiledCompositionPlan>(std::move(animatedDefinition));
+    expect(animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)),
+           "animated Luma Key threshold is time-dependent");
+    auto start = requestFor(*animated);
+    auto end = start;
+    end.time = *core::RationalTime::create(1, 1);
+    const auto startResult = evaluator.evaluate(animated, start, {});
+    const auto endResult = evaluator.evaluate(animated, end, {});
+    const auto quarter = planWith({key(0.0, 0.25, false)});
+    expect(samePixels(startResult, cold) &&
+               samePixels(endResult, fresh.evaluate(quarter, requestFor(*quarter), {})),
+           "animated Luma Key threshold samples each frame without reuse");
+    const auto outside = planWith({key(-2.0e6, 0.5, false)});
+    const auto refused = evaluator.evaluate(outside, requestFor(*outside), {});
+    expect(!refused.frame() && !refused.diagnostics().empty(),
+           "an out-of-domain Luma Key threshold fails explicitly");
+}
+
 void testSpatialEffectBudgets() {
     const auto check = [](const runtime::ImageEffectKernel& kernel, const std::size_t peak) {
         auto definition = planWith({kernel})->copyDefinition();
@@ -1429,6 +1634,8 @@ int main(const int argc, char** argv) {
         if (argc == 2 && std::string_view(argv[1]) == "--blur-only") {
             testBlurEvaluation();
             testMatteBlurEvaluation();
+            testMatteMorphologyEvaluation();
+            testLumaKeyEvaluation();
             testSpatialEffectBudgets();
             testAliasedBlurBudgets();
             return failures == 0 ? 0 : 1;
@@ -1451,6 +1658,8 @@ int main(const int argc, char** argv) {
         testUnaryImageEffectInputArity();
         testBlurEvaluation();
         testMatteBlurEvaluation();
+        testMatteMorphologyEvaluation();
+        testLumaKeyEvaluation();
         testSpatialEffectBudgets();
         testAliasedBlurBudgets();
         testLookBypass();

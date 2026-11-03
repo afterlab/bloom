@@ -197,6 +197,53 @@ void matteBlurRows() {
     }
 }
 
+// #338: Matte Erode and Matte Dilate present the Matte Blur controls; Luma Key presents its low
+// and high thresholds and an invert switch, and edits them through command history.
+void matteKeyRows() {
+    auto project =
+        document::makeNewProject("Matte Key", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    for (const auto* type : {"bloom.matte-erode", "bloom.matte-dilate"}) {
+        const auto node = addNode(session, type);
+        expect(node.isValid(), "Matte Erode/Dilate is discoverable through generic AddNode");
+        session.selectNode(node);
+        QCoreApplication::processEvents();
+        auto* edge = row(properties, "edge");
+        auto* selector =
+            edge ? edge->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum") : nullptr;
+        expect(row(properties, "radius") != nullptr && selector && selector->count() == 2 &&
+                   selector->currentText() == QStringLiteral("Transparent"),
+               "Matte Erode/Dilate presents radius and a Transparent/Clamp Edges selector");
+    }
+    const auto key = addNode(session, "bloom.luma-key");
+    expect(key.isValid(), "Luma Key is discoverable through generic AddNode");
+    session.selectNode(key);
+    QCoreApplication::processEvents();
+    expect(row(properties, "low") != nullptr && row(properties, "high") != nullptr,
+           "Luma Key presents its low and high thresholds");
+    auto* invert = row(properties, "invert");
+    auto* toggle = invert ? invert->findChild<ui::kit::KSwitch*>() : nullptr;
+    expect(toggle != nullptr && !toggle->isChecked(), "Luma Key presents an unset invert switch");
+    if (toggle) {
+        toggle->setChecked(true);
+        const auto* record = [&]() -> const document::ParameterRecord* {
+            for (const auto& binding : session.composition()->graph().findNode(key)->parameters)
+                if (binding.role == "invert")
+                    return session.composition()->parameters().find(binding.parameterId);
+            return nullptr;
+        }();
+        expect(record && std::get<bool>(
+                             std::get<document::ConstantValueSource>(record->source).value),
+               "inverting the key publishes the stored invert through a command");
+        expect(session.undo(), "Luma Key invert edit undoes");
+        expect(session.redo(), "Luma Key invert edit redoes");
+    }
+}
+
 void colourEffectRows() {
     auto project = document::makeNewProject("Color", "Main", core::RationalTime::fromInteger(10));
     const auto composition = project.initialCompositionId;
@@ -814,6 +861,7 @@ int main(int argc, char** argv) try {
     discreteImageRows();
     transform2DRows();
     matteBlurRows();
+    matteKeyRows();
     widthRule();
     videoRows();
     QSettings().clear();

@@ -50,6 +50,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -890,23 +891,17 @@ displayProofRunner(const bool customView) {
         "src/runtime separable image effect tests",
         [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Box); }, {},
         FixturePrerequisite::PackagedShaderTools);
-    // #337 Matte Blur: a Mask node's coverage filtered by the Coverage blur and read by Image Mix's
-    // mask, through both edge policies and an ROI request. Never the Rgba blur or an identity.
-    add(
-        "node.bloom.matte-blur", GpuCoverageFixtureCriterion::Prepared,
-        "src/runtime separable image effect tests",
-        [] {
+    // #337 Matte Blur, #338 Matte Erode/Dilate and Luma Key: a Mask node's coverage (or, for Luma
+    // Key, the masked canvas keyed into a Mask) filtered and read by Image Mix's mask, for each
+    // kernel and through an ROI request. Never the Rgba blur or an identity.
+    const auto runMaskFilters =
+        [](const std::vector<std::function<ImageEffectKernel(std::uint64_t)>>& kernels,
+           std::uint64_t idBase, std::string evidence) {
             FixtureRun combined;
             combined.prepared = true;
-            std::uint64_t idBase = 160000;
-            for (const auto edge :
-                 {bloom::runtime::BlurEdgeMode::Transparent, bloom::runtime::BlurEdgeMode::Clamp}) {
-                const auto plan = bloom::gpu_coverage_plans::maskValuePlan(
-                    idBase, false,
-                    bloom::runtime::SeparableBlurKernel{bloom::runtime::SeparableBlurKind::Gaussian,
-                                                        {ParameterId::fromRaw(idBase + 71), 1.5},
-                                                        edge,
-                                                        bloom::runtime::BlurChannels::Coverage});
+            for (const auto& kernel : kernels) {
+                const auto plan =
+                    bloom::gpu_coverage_plans::maskValuePlan(idBase, false, kernel(idBase));
                 idBase += 100;
                 auto request = requestFor(*plan);
                 auto frame = runBuilderWithRequest(plan, request);
@@ -920,8 +915,76 @@ displayProofRunner(const bool customView) {
                 for (auto& value : frame.frames)
                     combined.frames.push_back(std::move(value));
             }
-            combined.evidence = "production Matte Blur: Mask coverage, transparent/clamp and ROI";
+            combined.evidence = std::move(evidence);
             return combined;
+        };
+    const auto matteFilter = [](const bloom::runtime::SeparableBlurKind kind) {
+        std::vector<std::function<ImageEffectKernel(std::uint64_t)>> kernels;
+        for (const auto edge :
+             {bloom::runtime::BlurEdgeMode::Transparent, bloom::runtime::BlurEdgeMode::Clamp})
+            kernels.emplace_back([kind, edge](const std::uint64_t idBase) -> ImageEffectKernel {
+                return bloom::runtime::SeparableBlurKernel{
+                    kind, {ParameterId::fromRaw(idBase + 71), 1.5}, edge,
+                    bloom::runtime::BlurChannels::Coverage};
+            });
+        return kernels;
+    };
+    add(
+        "node.bloom.matte-blur", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runMaskFilters, matteFilter] {
+            return runMaskFilters(matteFilter(bloom::runtime::SeparableBlurKind::Gaussian), 160000,
+                                  "production Matte Blur: Mask coverage, transparent/clamp and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.matte-erode", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runMaskFilters, matteFilter] {
+            return runMaskFilters(matteFilter(bloom::runtime::SeparableBlurKind::Erode), 161000,
+                                  "production Matte Erode: Mask minimum, transparent/clamp and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.matte-dilate", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [runMaskFilters, matteFilter] {
+            return runMaskFilters(matteFilter(bloom::runtime::SeparableBlurKind::Dilate), 162000,
+                                  "production Matte Dilate: Mask maximum, transparent/clamp and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    // Luma Key: a ramp and an inverted ramp across the white canvas's luma (so its partial mask
+    // coverage scales a fractional key), and a hard key.
+    const auto lumaKeys = [] {
+        std::vector<std::function<ImageEffectKernel(std::uint64_t)>> kernels;
+        for (const auto [low, high, invert] :
+             {std::tuple{0.5, 1.5, false}, std::tuple{0.25, 2.0, true},
+              std::tuple{0.75, 0.75, false}})
+            kernels.emplace_back([low, high, invert](const std::uint64_t idBase) -> ImageEffectKernel {
+                return bloom::runtime::LumaKeyKernel{{ParameterId::fromRaw(idBase + 71), low},
+                                                     {ParameterId::fromRaw(idBase + 72), high},
+                                                     invert};
+            });
+        return kernels;
+    };
+    add(
+        "effect.LumaKeyKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Luma Key image effect tests",
+        [] {
+            return runBuilder(effectPlan(
+                bloom::runtime::LumaKeyKernel{{ParameterId::fromRaw(163001), 0.0},
+                                              {ParameterId::fromRaw(163002), 0.5},
+                                              false},
+                163000));
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.luma-key", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Luma Key image effect tests",
+        [runMaskFilters, lumaKeys] {
+            return runMaskFilters(lumaKeys(), 164000,
+                                  "production Luma Key: ramp, inverted and hard keys into Image "
+                                  "Mix's mask, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     return list;

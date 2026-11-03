@@ -169,7 +169,8 @@ void blurNodeReopen() {
     auto draft = owned.draft(before);
     auto* composition = draft.project().findComposition(initial.initialCompositionId);
     std::vector<document::NodeId> nodes;
-    for (const auto* type : {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur"}) {
+    for (const auto* type : {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
+                             "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -181,9 +182,13 @@ void blurNodeReopen() {
             const auto id = draft.ids().allocateParameter();
             if (!id)
                 throw std::logic_error("blur parameter identity");
-            const document::ParameterValue value = parameter.role == "radius"
-                                                       ? document::ParameterValue{2.5}
-                                                       : document::ParameterValue{std::int64_t{1}};
+            // #338 Luma Key: animatable thresholds (an HDR high) and a set invert.
+            const document::ParameterValue value =
+                parameter.role == "radius"   ? document::ParameterValue{2.5}
+                : parameter.role == "low"    ? document::ParameterValue{-0.25}
+                : parameter.role == "high"   ? document::ParameterValue{3.5}
+                : parameter.role == "invert" ? document::ParameterValue{true}
+                                             : document::ParameterValue{std::int64_t{1}};
             if (!composition->parameters().insert(
                     {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
                 throw std::logic_error("blur parameter inserts");

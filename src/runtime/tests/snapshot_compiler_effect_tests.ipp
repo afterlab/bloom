@@ -605,3 +605,222 @@ void testMatteBlurLowering(Expectations& expectations) {
                             "Matte Blur lowers to the Gaussian Coverage blur of the Mask");
     }
 }
+
+// #338: Matte Erode and Matte Dilate lower exactly as Matte Blur does (Mask node -> filter -> Image
+// Mix mask), to the Erode/Dilate Coverage kernel; muted they pass the Mask through, and an empty
+// upstream Mask empties them.
+void testMatteMorphologyLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto maskId = NodeId::fromRaw(985);
+    const auto filterId = NodeId::fromRaw(986);
+    const auto mixId = NodeId::fromRaw(987);
+    for (const auto* type : {"bloom.matte-erode", "bloom.matte-dilate"}) {
+        const auto kind = std::string_view(type) == "bloom.matte-erode"
+                              ? runtime::SeparableBlurKind::Erode
+                              : runtime::SeparableBlurKind::Dilate;
+        for (int scenario = 0; scenario != 3; ++scenario) {
+            auto project = makeProject();
+            auto* composition = project.findComposition(kCompositionId);
+            auto& graph = composition->graph();
+            std::uint64_t next = 985;
+            const auto add = [&](const NodeId id, const std::string_view nodeType) {
+                const auto* definition = builtInNodeDefinitions().find(nodeType, 1);
+                require(definition != nullptr, "definition exists");
+                std::vector<ParameterBinding> bindings;
+                for (const auto& parameter : definition->parameters) {
+                    const auto parameterId = ParameterId::fromRaw(next++);
+                    auto value = parameter.defaultValue;
+                    if (parameter.schemaKey == "bloom.blur.radius")
+                        value = 2.5;
+                    if (parameter.schemaKey == "bloom.blur.edge")
+                        value = std::int64_t{1};
+                    require(composition->parameters().insert(
+                                {parameterId, parameter.schemaKey, ConstantValueSource{value}}),
+                            "parameter is valid");
+                    bindings.push_back({parameter.role, parameterId});
+                }
+                require(graph.addNode({id, std::string(nodeType), std::move(bindings), 1}),
+                        "node is accepted");
+            };
+            add(maskId, kMaskNodeType);
+            add(filterId, type);
+            add(mixId, "bloom.image-mix");
+            require(graph.eraseEdge(kFirstSourceEdge), "base source edge is removed");
+            require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                                   NodeInputRef{mixId, "input"}}),
+                    "base feeds Image Mix");
+            require(graph.addEdge({EdgeId::fromRaw(985), {kSecondSolidNode, "image"},
+                                   NodeInputRef{mixId, "second"}}),
+                    "second feeds Image Mix");
+            require(graph.addEdge({EdgeId::fromRaw(986), {maskId, std::string(kMaskNodeOutputPort)},
+                                   NodeInputRef{filterId, "input"}}),
+                    "Mask feeds the matte filter");
+            require(graph.addEdge(
+                        {EdgeId::fromRaw(987), {filterId, "mask"}, NodeInputRef{mixId, "mask"}}),
+                    "the matte filter feeds Image Mix's mask");
+            require(graph.addEdge({EdgeId::fromRaw(988), {mixId, "image"},
+                                   NodeInputRef{kFirstLayerNode,
+                                                std::string(kLayerOutputContentInputPort)}}),
+                    "Image Mix feeds Layer");
+            if (scenario == 1)
+                composition->nodeLayout()[filterId].muted = true;
+            if (scenario == 2)
+                composition->nodeLayout()[maskId].muted = true;
+            expectations.expect(project.validate().ok(), "matte filter graph is valid");
+            const auto result = compile(std::move(project), registry);
+            expectations.expect(result.plan != nullptr, "matte filter graph compiles");
+            if (!result.plan)
+                continue;
+            const auto& operations = result.plan->operations();
+            const auto find = [&](const NodeId id, const auto predicate) {
+                return std::ranges::find_if(operations, [&](const auto& item) {
+                    const auto* effect = std::get_if<runtime::CompiledImageEffect>(&item);
+                    return effect && effect->sourceNodeId == id && predicate(*effect);
+                });
+            };
+            const auto mix = find(mixId, [](const auto&) { return true; });
+            require(mix != operations.end(), "Image Mix lowers");
+            const auto& mixEffect = std::get<runtime::CompiledImageEffect>(*mix);
+            require(mixEffect.maskInput.has_value(), "Image Mix keeps its connected mask");
+            const auto& maskSource = operations[mixEffect.maskInput->value()];
+            if (scenario == 2) {
+                const auto* empty = std::get_if<runtime::CompiledMerge>(&maskSource);
+                expectations.expect(empty && empty->entries.empty(),
+                                    "an empty Mask through Matte Erode/Dilate stays empty");
+                continue;
+            }
+            const auto masked = find(maskId, [](const auto& effect) {
+                return std::holds_alternative<runtime::LayerMaskKernel>(effect.kernel);
+            });
+            require(masked != operations.end(), "Mask node lowers");
+            const auto maskedIndex =
+                static_cast<std::size_t>(std::distance(operations.begin(), masked));
+            if (scenario == 1) {
+                expectations.expect(mixEffect.maskInput->value() == maskedIndex &&
+                                        find(filterId, [](const auto&) { return true; }) ==
+                                            operations.end(),
+                                    "a muted Matte Erode/Dilate passes its Mask through");
+                continue;
+            }
+            const auto* filterEffect = std::get_if<runtime::CompiledImageEffect>(&maskSource);
+            const auto* kernel = filterEffect
+                                     ? std::get_if<runtime::SeparableBlurKernel>(&filterEffect->kernel)
+                                     : nullptr;
+            const auto* radius = kernel ? std::get_if<double>(&kernel->radius.source) : nullptr;
+            expectations.expect(filterEffect && filterEffect->sourceNodeId == filterId && kernel &&
+                                    filterEffect->input.value() == maskedIndex &&
+                                    kernel->kind == kind &&
+                                    kernel->channels == runtime::BlurChannels::Coverage &&
+                                    kernel->edge == runtime::BlurEdgeMode::Clamp && radius &&
+                                    *radius == 2.5,
+                                "Matte Erode/Dilate lowers to its Coverage morphology kernel");
+        }
+    }
+}
+
+// #338: an Image keyed by Luma Key feeds Image Mix's mask. It lowers to the LumaKeyKernel of the
+// image; muted it is an empty Mask (an Image never passes through as a Mask); an empty upstream
+// Image keys to an empty Mask.
+void testLumaKeyLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto keyId = NodeId::fromRaw(990);
+    const auto mixId = NodeId::fromRaw(991);
+    for (int scenario = 0; scenario != 3; ++scenario) {
+        auto project = makeProject();
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::uint64_t next = 990;
+        const auto add = [&](const NodeId id, const std::string_view nodeType) {
+            const auto* definition = builtInNodeDefinitions().find(nodeType, 1);
+            require(definition != nullptr, "definition exists");
+            std::vector<ParameterBinding> bindings;
+            for (const auto& parameter : definition->parameters) {
+                const auto parameterId = ParameterId::fromRaw(next++);
+                auto value = parameter.defaultValue;
+                if (parameter.schemaKey == "bloom.luma-key.low")
+                    value = 0.25;
+                if (parameter.schemaKey == "bloom.luma-key.high")
+                    value = 0.75;
+                if (parameter.schemaKey == "bloom.luma-key.invert")
+                    value = true;
+                require(composition->parameters().insert(
+                            {parameterId, parameter.schemaKey, ConstantValueSource{value}}),
+                        "parameter is valid");
+                bindings.push_back({parameter.role, parameterId});
+            }
+            require(graph.addNode({id, std::string(nodeType), std::move(bindings), 1}),
+                    "node is accepted");
+        };
+        add(keyId, "bloom.luma-key");
+        add(mixId, "bloom.image-mix");
+        require(graph.eraseEdge(kFirstSourceEdge), "base source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{mixId, "input"}}),
+                "base feeds Image Mix");
+        require(graph.addEdge({EdgeId::fromRaw(990), {kSecondSolidNode, "image"},
+                               NodeInputRef{mixId, "second"}}),
+                "second feeds Image Mix");
+        require(graph.addEdge({EdgeId::fromRaw(991), {kSecondSolidNode, "image"},
+                               NodeInputRef{keyId, "input"}}),
+                "an Image feeds Luma Key");
+        require(graph.addEdge({EdgeId::fromRaw(992), {keyId, "mask"}, NodeInputRef{mixId, "mask"}}),
+                "Luma Key feeds Image Mix's mask");
+        require(graph.addEdge({EdgeId::fromRaw(993), {mixId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "Image Mix feeds Layer");
+        if (scenario == 1)
+            composition->nodeLayout()[keyId].muted = true;
+        if (scenario == 2)
+            composition->nodeLayout()[kSecondSolidNode].muted = true;
+        expectations.expect(project.validate().ok(), "Luma Key graph is valid document truth");
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "Luma Key graph compiles");
+        if (!result.plan)
+            continue;
+        const auto& operations = result.plan->operations();
+        const auto mix = std::ranges::find_if(operations, [&](const auto& item) {
+            const auto* effect = std::get_if<runtime::CompiledImageEffect>(&item);
+            return effect && effect->sourceNodeId == mixId;
+        });
+        require(mix != operations.end(), "Image Mix lowers");
+        const auto& mixEffect = std::get<runtime::CompiledImageEffect>(*mix);
+        require(mixEffect.maskInput.has_value(), "Image Mix keeps its connected mask");
+        const auto& maskSource = operations[mixEffect.maskInput->value()];
+        if (scenario != 0) {
+            const auto* empty = std::get_if<runtime::CompiledMerge>(&maskSource);
+            expectations.expect(empty && empty->entries.empty() &&
+                                    std::ranges::none_of(operations,
+                                                         [&](const auto& item) {
+                                                             const auto* effect = std::get_if<
+                                                                 runtime::CompiledImageEffect>(
+                                                                 &item);
+                                                             return effect &&
+                                                                    effect->sourceNodeId == keyId;
+                                                         }),
+                                scenario == 1
+                                    ? "a muted Luma Key is an empty Mask, never its Image"
+                                    : "an empty Image keys to an empty Mask");
+            continue;
+        }
+        const auto* keyEffect = std::get_if<runtime::CompiledImageEffect>(&maskSource);
+        const auto* kernel =
+            keyEffect ? std::get_if<runtime::LumaKeyKernel>(&keyEffect->kernel) : nullptr;
+        const auto* low = kernel ? std::get_if<double>(&kernel->low.source) : nullptr;
+        const auto* high = kernel ? std::get_if<double>(&kernel->high.source) : nullptr;
+        const auto* source = keyEffect && keyEffect->input.value() < operations.size()
+                                 ? std::get_if<runtime::CompiledSolid>(
+                                       &operations[keyEffect->input.value()])
+                                 : nullptr;
+        expectations.expect(keyEffect && keyEffect->sourceNodeId == keyId && kernel && low &&
+                                high && *low == 0.25 && *high == 0.75 && kernel->invert &&
+                                source && source->sourceNodeId == kSecondSolidNode,
+                            "Luma Key lowers to the LumaKeyKernel of its Image");
+    }
+}

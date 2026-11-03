@@ -134,12 +134,14 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Multiply Alpha, Checker, Flip, Rotate 90, Resize, Fit, Gaussian and Box Blur, and Linear and
     // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions. ADR 0028
     // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove; #364 adds Cryptomatte.
-    // #336 adds the standalone Transform 2D; #337 adds Matte Blur.
-    expectations.expect(registry.definitions().size() == 137,
+    // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
+    // Dilate and Luma Key.
+    expectations.expect(registry.definitions().size() == 140,
                         "startup contribution includes every built-in definition");
     for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
                              "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",
-                             "bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur"})
+                             "bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
+                             "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"})
         expectations.expect(registry.find(type, 1) != nullptr,
                             "each pinned image-node addition is registered");
 
@@ -193,6 +195,52 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         expectations.expect(scratch.registerDefinition(imageInput) ==
                                 runtime::NodeRegistrationStatus::InvalidDefinition,
                             "#337: a Matte Blur that accepts an Image is refused");
+    }
+    for (const auto* type : {"bloom.matte-erode", "bloom.matte-dilate"}) {
+        const auto* filter = registry.find(type, 1);
+        expectations.expect(
+            filter && matteBlur && filter->inputs == matteBlur->inputs &&
+                filter->outputs == matteBlur->outputs &&
+                filter->parameters == matteBlur->parameters &&
+                filter->lowering == runtime::NodeLoweringKind::ImageEffect,
+            "#338: Matte Erode/Dilate filter a Mask into a Mask with the Matte Blur controls");
+        if (filter) {
+            auto imageOutput = *filter;
+            imageOutput.outputs[0].valueKind = runtime::SocketValueKind::Image;
+            runtime::NodeDefinitionRegistry scratch;
+            expectations.expect(scratch.registerDefinition(imageOutput) ==
+                                    runtime::NodeRegistrationStatus::InvalidDefinition,
+                                "#338: a Matte Erode/Dilate that publishes an Image is refused");
+        }
+    }
+    const auto* lumaKey = registry.find("bloom.luma-key", 1);
+    expectations.expect(
+        lumaKey && lumaKey->lowering == runtime::NodeLoweringKind::ImageEffect &&
+            lumaKey->inputs.size() == 3 &&
+            lumaKey->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            lumaKey->inputs[0].required &&
+            lumaKey->inputs[1].valueKind == runtime::SocketValueKind::Scalar &&
+            lumaKey->inputs[2].valueKind == runtime::SocketValueKind::Scalar &&
+            lumaKey->outputs.size() == 1 &&
+            lumaKey->outputs[0].valueKind == runtime::SocketValueKind::Mask &&
+            lumaKey->parameters.size() == 3 &&
+            lumaKey->parameters[0].schemaKey == "bloom.luma-key.low" &&
+            lumaKey->parameters[0].supportsAnimation &&
+            lumaKey->parameters[1].schemaKey == "bloom.luma-key.high" &&
+            lumaKey->parameters[1].supportsAnimation &&
+            lumaKey->parameters[2].schemaKey == "bloom.luma-key.invert" &&
+            !lumaKey->parameters[2].supportsAnimation &&
+            lumaKey->parameters[0].defaultValue == document::ParameterValue{0.0} &&
+            lumaKey->parameters[1].defaultValue == document::ParameterValue{1.0} &&
+            lumaKey->parameters[2].defaultValue == document::ParameterValue{false},
+        "#338: Luma Key keys an Image into a Mask with low/high thresholds and invert");
+    if (lumaKey) {
+        auto imageOutput = *lumaKey;
+        imageOutput.outputs[0].valueKind = runtime::SocketValueKind::Image;
+        runtime::NodeDefinitionRegistry scratch;
+        expectations.expect(scratch.registerDefinition(imageOutput) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "#338: a Luma Key that publishes an Image is refused");
     }
     registry.freeze();
     expectations.expect(registry.find(document::kSolidSourceNodeType,

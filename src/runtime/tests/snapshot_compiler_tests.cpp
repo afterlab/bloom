@@ -1922,6 +1922,8 @@ int main() {
         testBlurLowering(expectations);
         testTransform2DLowering(expectations);
         testMatteBlurLowering(expectations);
+        testMatteMorphologyLowering(expectations);
+        testLumaKeyLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

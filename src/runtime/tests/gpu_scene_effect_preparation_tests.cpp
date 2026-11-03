@@ -501,6 +501,109 @@ void testRealMatteBlur(Expectations& expectations) {
     }
 }
 
+// #338: Matte Dilate prepares two resident morphology passes over the transparent halo; Matte Erode
+// keeps the input window (no halo padding) because it never grows coverage. Both programs differ
+// from the Coverage blur's and from each other.
+void testRealMatteMorphology(Expectations& expectations) {
+    using bloom::runtime::BlurChannels;
+    using bloom::runtime::BlurEdgeMode;
+    using bloom::runtime::SeparableBlurKernel;
+    using bloom::runtime::SeparableBlurKind;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const auto build = [&](const SeparableBlurKind kind) {
+        const auto plan = effectPlan({solidLeaf(810)},
+                                     SeparableBlurKernel{kind,
+                                                         {ParameterId::fromRaw(8190), 2.0},
+                                                         BlurEdgeMode::Transparent,
+                                                         BlurChannels::Coverage},
+                                     8100);
+        std::vector<GpuSceneOcioEffectCommand> commands;
+        std::size_t translations = 0;
+        const auto prepared = builder.build(plan, requestFor(*plan));
+        if (prepared)
+            for (const auto& command : prepared.scene->commands()) {
+                if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command))
+                    commands.push_back(*ocio);
+                if (const auto* translation = std::get_if<bloom::runtime::GpuSceneTranslationCommand>(&command);
+                    translation && translation->sourceOperation.value() == 1)
+                    ++translations;
+            }
+        return std::pair{commands, translations};
+    };
+    const auto [erode, erodePadding] = build(SeparableBlurKind::Erode);
+    const auto [dilate, dilatePadding] = build(SeparableBlurKind::Dilate);
+    const auto [blur, blurPadding] = build(SeparableBlurKind::Gaussian);
+    expectations.expect(erode.size() == 2 && dilate.size() == 2 && blur.size() == 2,
+                        "Matte Erode/Dilate prepare two resident neighborhood passes");
+    if (erode.size() != 2 || dilate.size() != 2 || blur.size() != 2)
+        return;
+    expectations.expect(erodePadding == 0 && dilatePadding == 1 && blurPadding == 1,
+                        "only Dilate pads a transparent halo; Erode keeps its input window");
+    for (std::size_t pass = 0; pass < 2; ++pass) {
+        expectations.expect(erode[pass].outputWindow.originX() == 0 &&
+                                erode[pass].outputWindow.extent().width() == 8 &&
+                                dilate[pass].outputWindow == blur[pass].outputWindow &&
+                                dilate[pass].outputWindow.originX() == -2 &&
+                                dilate[pass].outputWindow.extent().width() == 12,
+                            "Matte Erode keeps the input window and Dilate grows by the halo");
+        expectations.expect(
+            erode[pass].program && dilate[pass].program && blur[pass].program &&
+                erode[pass].program->identity() != dilate[pass].program->identity() &&
+                dilate[pass].program->identity() != blur[pass].program->identity() &&
+                erode[pass].program->program().semanticsId ==
+                    "bloom.render.separable-erode.coverage.v1" &&
+                dilate[pass].program->program().semanticsId ==
+                    "bloom.render.separable-dilate.coverage.v1",
+            "Matte Erode/Dilate programs are distinct from each other and from the blur");
+    }
+}
+
+// #338: Luma Key prepares exactly one resident neighborhood command over the input window. A
+// changed threshold changes the command identity and data but reuses the compiled shader and the
+// native program key, so keyed thresholds never recompile.
+void testRealLumaKey(Expectations& expectations) {
+    auto context = ocioContext();
+    const CpuGpuSceneBuilder builder(nullptr, {}, context);
+    const auto commandOf = [&](const double low, const double high, const bool invert) {
+        const auto plan =
+            effectPlan({solidLeaf(820)},
+                       bloom::runtime::LumaKeyKernel{{ParameterId::fromRaw(8291), low},
+                                                     {ParameterId::fromRaw(8292), high},
+                                                     invert},
+                       8200);
+        std::vector<GpuSceneOcioEffectCommand> commands;
+        const auto prepared = builder.build(plan, requestFor(*plan));
+        if (prepared)
+            for (const auto& command : prepared.scene->commands())
+                if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command))
+                    commands.push_back(*ocio);
+        return commands;
+    };
+    const auto first = commandOf(0.0, 0.5, false);
+    const auto compiles = context.preparer->counters().shaderCompilerRuns;
+    const auto changed = commandOf(0.1, 0.9, true);
+    const auto repeated = commandOf(0.0, 0.5, false);
+    expectations.expect(first.size() == 1 && changed.size() == 1 && repeated.size() == 1,
+                        "Luma Key prepares one resident command");
+    if (first.size() != 1 || changed.size() != 1 || repeated.size() != 1)
+        return;
+    expectations.expect(first[0].program &&
+                            first[0].program->program().semanticsId == "bloom.render.luma-key.v1" &&
+                            first[0].outputWindow.originX() == 0 &&
+                            first[0].outputWindow.extent().width() == 8 &&
+                            first[0].outputWindow.extent().height() == 6,
+                        "Luma Key keeps its input window");
+    expectations.expect(changed[0].program->identity() != first[0].program->identity() &&
+                            changed[0].semanticKey != first[0].semanticKey &&
+                            changed[0].program->nativeProgramKey() ==
+                                first[0].program->nativeProgramKey() &&
+                            context.preparer->counters().shaderCompilerRuns == compiles,
+                        "a changed Luma Key threshold changes data, never the compiled shader");
+    expectations.expect(repeated[0].semanticKey == first[0].semanticKey &&
+                            repeated[0].program->identity() == first[0].program->identity(),
+                        "an unchanged Luma Key reuses its command identity");
+}
+
 #if defined(__linux__)
 void testRealFileTransform(Expectations& expectations, const std::string& working,
                            const std::string& process) {
@@ -598,6 +701,8 @@ int main() {
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
         testRealCst(expectations, from, to);
         testRealMatteBlur(expectations);
+        testRealMatteMorphology(expectations);
+        testRealLumaKey(expectations);
 #if defined(__linux__)
         testRealFileTransform(expectations, from, to);
 #endif

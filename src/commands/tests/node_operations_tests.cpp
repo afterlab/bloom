@@ -565,9 +565,10 @@ void testTransform2DParameters(TestContext& test) {
 
 // #337: Matte Blur is added, wired Mask to Mask, edited, undone and redone through the generic node
 // commands. An Image never connects to its Mask input, and its schema refuses unrenderable values.
-void testMatteBlurCommands(TestContext& test) {
+// #338 Matte Erode and Matte Dilate follow exactly the same contract.
+void testMatteBlurCommands(TestContext& test, const char* type = "bloom.matte-blur") {
     Fixture fixture;
-    const auto blur = exercise<AddNode>(test, fixture, "bloom.matte-blur", Vec2d{});
+    const auto blur = exercise<AddNode>(test, fixture, type, Vec2d{});
     const auto blurId = blur.outputId<NodeId>(kAddNodeOutput);
     const auto radius = blur.outputId<ParameterId>("parameter.radius");
     const auto edge = blur.outputId<ParameterId>("parameter.edge");
@@ -594,6 +595,47 @@ void testMatteBlurCommands(TestContext& test) {
                                ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *edge,
                                ConstantValueSource{std::int64_t{2}});
+}
+
+// #338: Luma Key is added, keyed from an Image into Image Mix's or a matte filter's Mask input,
+// edited, undone and redone through the generic node commands. Its Mask never connects to an
+// Image input, a Mask never connects to its Image input, and its schema refuses unrenderable
+// thresholds.
+void testLumaKeyCommands(TestContext& test) {
+    Fixture fixture;
+    const auto key = exercise<AddNode>(test, fixture, "bloom.luma-key", Vec2d{});
+    const auto keyId = key.outputId<NodeId>(kAddNodeOutput);
+    const auto low = key.outputId<ParameterId>("parameter.low");
+    const auto high = key.outputId<ParameterId>("parameter.high");
+    const auto invert = key.outputId<ParameterId>("parameter.invert");
+    const auto erode =
+        apply<AddNode>(fixture, "bloom.matte-erode", Vec2d{40, 0}).outputId<NodeId>(kAddNodeOutput);
+    const auto mask =
+        apply<AddNode>(fixture, "bloom.mask", Vec2d{60, 0}).outputId<NodeId>(kAddNodeOutput);
+    const auto mix =
+        apply<AddNode>(fixture, "bloom.image-mix", Vec2d{80, 0}).outputId<NodeId>(kAddNodeOutput);
+    if (!keyId || !low || !high || !invert || !erode || !mask || !mix)
+        throw std::logic_error("Luma Key exposes registered control identities");
+    const InputPortRef input = NodeInputRef{*keyId, "input"};
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"}, input);
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*keyId, "mask"},
+                           InputPortRef{NodeInputRef{*erode, "input"}});
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*erode, "mask"},
+                           InputPortRef{NodeInputRef{*mix, "mask"}});
+    refuse<ConnectPorts>(test, fixture, OperationIssueCode::SocketKindMismatch,
+                         OutputPortRef{*mask, "mask"}, input);
+    refuse<ConnectPorts>(test, fixture, OperationIssueCode::SocketKindMismatch,
+                         OutputPortRef{*keyId, "mask"},
+                         InputPortRef{NodeInputRef{kFirstLayerNodeId, "image"}});
+    (void)exercise<SetParameterSource>(test, fixture, *low, ConstantValueSource{-0.5});
+    (void)exercise<SetParameterSource>(test, fixture, *high, ConstantValueSource{8.0});
+    (void)exercise<SetParameterSource>(test, fixture, *invert, ConstantValueSource{true});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *low,
+                               ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *high,
+                               ConstantValueSource{2.0e6});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *invert,
+                               ConstantValueSource{std::int64_t{1}});
 }
 
 void testAddAndLayout(TestContext& test) {
@@ -1544,6 +1586,9 @@ int main() {
         bloom::commands::test::testResizeFitParameters(test);
         bloom::commands::test::testTransform2DParameters(test);
         bloom::commands::test::testMatteBlurCommands(test);
+        bloom::commands::test::testMatteBlurCommands(test, "bloom.matte-erode");
+        bloom::commands::test::testMatteBlurCommands(test, "bloom.matte-dilate");
+        bloom::commands::test::testLumaKeyCommands(test);
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);

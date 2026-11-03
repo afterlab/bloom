@@ -297,9 +297,162 @@ void coverageTests() {
                      .succeeded(),
             "an unknown channel policy refuses on both routes");
 }
-void cancellationTest(const runtime::BlurChannels channels) {
+// #338 Matte Erode/Dilate: the separable square minimum/maximum of coverage, compared with an
+// independent two-dimensional reduction. Whole taps weigh 1 and a fractional radius's outer taps
+// weigh the fraction (Dilate: max of w*a; Erode: min of 1 - w*(1 - a), a = 0 outside under
+// Transparent). RGB never contributes, every channel holds the coverage, Erode never grows the
+// window, and the device programs are distinct identities that reduce instead of summing.
+void morphologyTests() {
+    const auto data = render::ImageWindow::create(-2, -1, 5, 4);
+    const auto display = render::ImageWindow::create(0, 0, 6, 6);
+    auto descriptor = render::Rgba32fImageDescriptor::create(*data.value(), *display.value(),
+                                                             core::PixelAspectRatio::square());
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 4096);
+    const std::array<float, 20> coverage{1.0F,  1.0F, 0.25F, 1.0F,  1.0F, 0.5F,  1.0F,
+                                         1.0F,  0.0F, 1.0F,  1.0F,  1.0F, 0.75F, 1.0F,
+                                         0.125F, 1.0F, 1.0F, 0.0F,  1.0F, 0.625F};
+    for (std::size_t i = 0; i < coverage.size(); ++i) {
+        const auto a = coverage[i];
+        const auto p = render::Rgba32f::fromPremultiplied(a == 0.0F ? 0.0F : -3.0F * a,
+                                                          a == 0.0F ? 0.0F : 7.0F * a, a, a);
+        require(p.hasValue() &&
+                    !builder.value()->write(-2 + static_cast<std::int64_t>(i % 5),
+                                            -1 + static_cast<std::int64_t>(i / 5), *p.value()),
+                "morphology input writes");
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    require(frozen.hasValue(), "morphology input freezes");
+    const auto input = std::move(*frozen.value());
+    const auto original = input.descriptor()->dataWindow();
+    for (const auto kind : {runtime::SeparableBlurKind::Erode, runtime::SeparableBlurKind::Dilate}) {
+        const bool erode = kind == runtime::SeparableBlurKind::Erode;
+        for (const auto edge : {runtime::BlurEdgeMode::Transparent, runtime::BlurEdgeMode::Clamp}) {
+            for (const double radius : {1.0, 1.5, 0.25}) {
+                auto matte = kernel(kind, edge);
+                matte.channels = runtime::BlurChannels::Coverage;
+                const auto filter = runtime::detail::prepareSeparableBlur(matte, radius, 1.0, 1.0);
+                require(filter && filter->kind == kind && !filter->identity(),
+                        "morphology prepares");
+                const auto support = static_cast<std::int64_t>(std::ceil(radius));
+                const float fraction = static_cast<float>(radius - std::floor(radius));
+                require(filter->horizontal.size() == static_cast<std::size_t>(2 * support + 1) &&
+                            filter->horizontal == filter->vertical,
+                        "morphology support is ceil(radius) per side");
+                for (std::int64_t tap = -support; tap <= support; ++tap)
+                    require(filter->horizontal[static_cast<std::size_t>(tap + support)] ==
+                                (std::abs(tap) == support && fraction > 0.0F ? fraction : 1.0F),
+                            "whole taps weigh 1 and fractional outer taps weigh the fraction");
+                const auto result = runtime::detail::applySeparableBlur(
+                    *filter, input, 65536, {}, runtime::OperationIndex::fromRaw(0), {});
+                require(result.image && !result.diagnostic, "morphology publishes");
+                const auto output = result.image->descriptor()->dataWindow();
+                const bool grows = !erode && edge == runtime::BlurEdgeMode::Transparent;
+                require(output.originX() == original.originX() - (grows ? support : 0) &&
+                            output.originY() == original.originY() - (grows ? support : 0) &&
+                            output.extent().width() ==
+                                original.extent().width() +
+                                    static_cast<std::uint64_t>(grows ? 2 * support : 0) &&
+                            result.image->descriptor()->displayWindow() ==
+                                input.descriptor()->displayWindow(),
+                        "only a transparent Dilate grows the window; display window is kept");
+                for (auto y = output.originY(); y < output.maxYExclusive(); ++y)
+                    for (auto x = output.originX(); x < output.maxXExclusive(); ++x) {
+                        double expected = erode ? 1.0 : 0.0;
+                        for (auto dy = -support; dy <= support; ++dy)
+                            for (auto dx = -support; dx <= support; ++dx) {
+                                auto sx = x + dx, sy = y + dy;
+                                if (edge == runtime::BlurEdgeMode::Clamp) {
+                                    sx = std::clamp(sx, original.originX(),
+                                                    original.maxXExclusive() - 1);
+                                    sy = std::clamp(sy, original.originY(),
+                                                    original.maxYExclusive() - 1);
+                                }
+                                const auto sample = input.read(sx, sy);
+                                const double a =
+                                    sample ? static_cast<double>(sample.value()->alpha()) : 0.0;
+                                const double w =
+                                    static_cast<double>(
+                                        filter->horizontal[static_cast<std::size_t>(dx + support)]) *
+                                    static_cast<double>(
+                                        filter->vertical[static_cast<std::size_t>(dy + support)]);
+                                expected = erode ? std::min(expected, 1.0 - w * (1.0 - a))
+                                                 : std::max(expected, w * a);
+                            }
+                        const auto actual = result.image->read(x, y);
+                        require(actual.hasValue(), "morphology sample exists");
+                        const auto p = *actual.value();
+                        require(radius == 1.0
+                                    ? static_cast<double>(p.alpha()) == expected
+                                    : std::abs(static_cast<double>(p.alpha()) - expected) < 2e-6,
+                                "morphology equals an independent 2-D square min/max of coverage "
+                                "(exactly for a whole radius)");
+                        require(p.red() == p.alpha() && p.green() == p.alpha() &&
+                                    p.blue() == p.alpha(),
+                                "morphology writes premultiplied white");
+                    }
+                require(!runtime::detail::applySeparableBlur(*filter, input, 1, {},
+                                                             runtime::OperationIndex::fromRaw(0),
+                                                             {})
+                             .image,
+                        "morphology budget refuses before publication");
+                for (const bool vertical : {false, true}) {
+                    const auto& weights = vertical ? filter->vertical : filter->horizontal;
+                    auto program = runtime::detail::buildSeparableBlurProgram(
+                        weights, vertical, edge, runtime::BlurChannels::Coverage, kind);
+                    auto blurProgram = runtime::detail::buildSeparableBlurProgram(
+                        weights, vertical, edge, runtime::BlurChannels::Coverage);
+                    require(program.succeeded() && blurProgram.succeeded() &&
+                                render::validateOcioGpuProgram(*program.program(), {}) ==
+                                    render::OcioGpuProgramError::None,
+                            "morphology device program prepares and validates");
+                    const auto& text = program.program()->shaderText;
+                    require(program.program()->semanticsId ==
+                                    (erode ? "bloom.render.separable-erode.coverage.v1"
+                                           : "bloom.render.separable-dilate.coverage.v1") &&
+                                program.program()->contentIdentity !=
+                                    blurProgram.program()->contentIdentity &&
+                                text.find(erode ? "m = min(m, t);" : "m = max(m, t);") !=
+                                    std::string::npos &&
+                                text.find(erode ? "fma(w, a, 1.0 - w)" : "w * imageLoad") !=
+                                    std::string::npos &&
+                                text.find("return vec4(clamp(m, 0.0, 1.0));") != std::string::npos,
+                            "morphology program reduces alpha by min/max with its own identity");
+                    const auto wrapper = runtime::buildGpuOcioWrapperGlsl(*program.program());
+                    require(wrapper.succeeded() && wrapper.source.find(
+                                                       "vec4 p = bloom_separable_blur(c)") !=
+                                                       std::string::npos,
+                            "morphology program runs in the resident neighborhood wrapper");
+                }
+            }
+        }
+        auto identity = kernel(kind, runtime::BlurEdgeMode::Clamp);
+        identity.channels = runtime::BlurChannels::Coverage;
+        require(runtime::detail::prepareSeparableBlur(identity, 0.0, 1.0, 1.0)->identity(),
+                "morphology radius zero is an exact identity");
+        const auto rgba = kernel(kind, runtime::BlurEdgeMode::Clamp);
+        require(!runtime::detail::prepareSeparableBlur(rgba, 1.0, 1.0, 1.0) &&
+                    !runtime::detail::buildSeparableBlurProgram(std::array{1.0F, 1.0F, 1.0F},
+                                                                false, runtime::BlurEdgeMode::Clamp,
+                                                                runtime::BlurChannels::Rgba, kind)
+                         .succeeded(),
+                "morphology refuses the Rgba channel policy on both routes");
+    }
+    auto invalid = kernel(static_cast<runtime::SeparableBlurKind>(4), runtime::BlurEdgeMode::Clamp);
+    invalid.channels = runtime::BlurChannels::Coverage;
+    require(!runtime::detail::prepareSeparableBlur(invalid, 1.0, 1.0, 1.0),
+            "an unknown neighborhood kind refuses");
+    // Proxy scaling follows the blur: support is ceil(radius * scale) per axis.
+    auto proxy = kernel(runtime::SeparableBlurKind::Dilate, runtime::BlurEdgeMode::Transparent);
+    proxy.channels = runtime::BlurChannels::Coverage;
+    const auto scaled = runtime::detail::prepareSeparableBlur(proxy, 3.0, 0.5, 0.25);
+    require(scaled && scaled->horizontal.size() == 5 && scaled->vertical.size() == 3 &&
+                scaled->horizontal.front() == 0.5F && scaled->vertical.front() == 0.75F,
+            "morphology support and fractions scale with the proxy resolution");
+}
+void cancellationTest(const runtime::BlurChannels channels,
+                      const runtime::SeparableBlurKind kind = runtime::SeparableBlurKind::Box) {
     const auto input = source();
-    auto cancelled = kernel(runtime::SeparableBlurKind::Box, runtime::BlurEdgeMode::Transparent);
+    auto cancelled = kernel(kind, runtime::BlurEdgeMode::Transparent);
     cancelled.channels = channels;
     const auto blur = runtime::detail::prepareSeparableBlur(cancelled, 2.0, 1.0, 1.0);
     runtime::TaskScheduler scheduler(runtime::TaskSchedulerConfig::defaults());
@@ -339,6 +492,9 @@ int main() {
         coverageTests();
         cancellationTest(runtime::BlurChannels::Rgba);
         cancellationTest(runtime::BlurChannels::Coverage);
+        morphologyTests();
+        cancellationTest(runtime::BlurChannels::Coverage, runtime::SeparableBlurKind::Erode);
+        cancellationTest(runtime::BlurChannels::Coverage, runtime::SeparableBlurKind::Dilate);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
