@@ -1001,6 +1001,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"nativeDispatches\":" << after.nativeDispatches - before.nativeDispatches
          << ",\"packedTransfers\":" << after.packedTransfers - before.packedTransfers
          << ",\"residentGraphJobs\":" << after.residentGraphJobs - before.residentGraphJobs
+         << ",\"uploadsAhead\":" << after.uploadsAhead - before.uploadsAhead
          << ",\"uploadSubmitSeconds\":"
          << 1e-9 * static_cast<double>(after.uploadSubmitNanoseconds - before.uploadSubmitNanoseconds)
          << ",\"uploadFenceSeconds\":"

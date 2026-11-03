@@ -248,6 +248,7 @@ struct PreviewDisplayServiceCore final {
     // Bounded cached counters, owner-written atomics and read locklessly/under lock by status().
     std::atomic<std::uint64_t> counterResidentGraphJobs{0};
     std::atomic<std::uint64_t> counterNativeDispatches{0};
+    std::atomic<std::uint64_t> counterUploadsAhead{0};
     std::atomic<std::uint64_t> counterUploadSubmitNanoseconds{0};
     std::atomic<std::uint64_t> counterUploadFenceObservationNanoseconds{0};
     std::atomic<std::uint64_t> counterProcessingSubmitNanoseconds{0};

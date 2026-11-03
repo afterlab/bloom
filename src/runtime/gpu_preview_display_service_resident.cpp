@@ -727,6 +727,7 @@ void noteResidentExecutorCounters(const std::shared_ptr<PreviewDisplayServiceCor
     // subtree performs none, so this stays unchanged. `readbacks` is asserted zero by the
     // executor's own contract; it is never a full-frame host transfer.
     core->counterNativeDispatches.store(counters.dispatches, std::memory_order_relaxed);
+    core->counterUploadsAhead.store(counters.uploadsAhead, std::memory_order_relaxed);
     core->counterUploadSubmitNanoseconds.store(counters.uploadSubmitNanoseconds,
                                                std::memory_order_relaxed);
     core->counterUploadFenceObservationNanoseconds.store(counters.uploadFenceObservationNanoseconds,

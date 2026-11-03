@@ -232,8 +232,9 @@ Every measurement is a fresh process.
   computer is recorded as `outcome: unavailable`. H.264 and HEVC always have a bundled encoder.
 - **GPU stages**: `uploadSubmitSeconds`, `uploadFenceSeconds`, `processingSubmitSeconds`,
   `processingFenceSeconds` and `packedTransferSeconds` are the device owner's wall time per stage
-  over the measured window (from the preview service counters), with `residentGraphJobs` and
-  `nativeDispatches`.
+  over the measured window (from the preview service counters), with `residentGraphJobs`,
+  `nativeDispatches` and `uploadsAhead` (uploads the scene executor began ahead of their own step,
+  beside another native job, #405).
 - **Resources**: `gpuBusyPercent` (and peak) from `nvidia-smi` sampled every 200 ms over the
   measured window (NVIDIA only; absent elsewhere); `fillCoresBusy` = process CPU seconds / wall
   seconds of the fill; `cpuCoresBusy` for exports from process-tree sampling; `peakRssBytes` is the

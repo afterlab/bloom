@@ -583,6 +583,7 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.counters.residentGraphJobs =
         core.counterResidentGraphJobs.load(std::memory_order_relaxed);
     result.counters.nativeDispatches = core.counterNativeDispatches.load(std::memory_order_relaxed);
+    result.counters.uploadsAhead = core.counterUploadsAhead.load(std::memory_order_relaxed);
     result.counters.uploadSubmitNanoseconds =
         core.counterUploadSubmitNanoseconds.load(std::memory_order_relaxed);
     result.counters.uploadFenceObservationNanoseconds =

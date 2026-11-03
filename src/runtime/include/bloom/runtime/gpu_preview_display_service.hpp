@@ -152,6 +152,8 @@ struct GpuPreviewDisplayServiceCounters final {
     // including every family. Several operations may share one work submission. A warm cache hit
     // that cuts the whole subtree leaves this unchanged (zero for an identical warm request).
     std::uint64_t nativeDispatches = 0;
+    // Uploads the executor began ahead of their own step, beside another native job (#405).
+    std::uint64_t uploadsAhead = 0;
     // CPU wall stages, including host submission and fence observation/polling delay.
     std::uint64_t uploadSubmitNanoseconds = 0;
     std::uint64_t uploadFenceObservationNanoseconds = 0;
