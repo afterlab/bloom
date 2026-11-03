@@ -10,7 +10,9 @@
 // scope also marks the calling thread, so a source entry stored or found while the request runs is
 // tagged with that composition frame (SourceUse); an entry used outside any request is untracked
 // and keeps the cache's ordinary retention. When a request ends, the window moves and every bound
-// cache releases its tracked entries that fall outside it.
+// cache releases its tracked entries that fall outside it. A composition with no request in flight
+// keeps its window until a request for another composition begins; then that window is dropped
+// (what it holds is already inside it), so only compositions in use have one.
 //
 // Lock order: the trimmer mutex, then a cache's own lock, then the window state. A cache never
 // calls into the working set while holding its lock except retains() (state only), and a request
@@ -84,8 +86,11 @@ class SourceWorkingSet final : public std::enable_shared_from_this<SourceWorking
     [[nodiscard]] static SourceUse current() noexcept;
 
     // Whether an entry used at `use` is in its composition's window. Untracked uses and
-    // compositions without a request yet are always retained.
+    // compositions without a window (no request yet, or idle while another composition renders)
+    // are always retained.
     [[nodiscard]] bool retains(const SourceUse& use) const;
+    // Compositions that currently have a window.
+    [[nodiscard]] std::size_t windowCount() const;
 
     // A bound cache's release pass, run after every request ends (never while a request runs on
     // the calling thread's stack holding a cache lock). Removal waits for a running pass.

@@ -76,6 +76,13 @@ std::int64_t SourceWorkingSet::frameAt(const std::int64_t timeNumerator,
 
 void SourceWorkingSet::begin(const SourceUse& use) {
     const std::lock_guard lock(mutex_);
+    // A composition with no request in flight keeps its window only until another composition
+    // starts rendering: its entries were released to that window when its last request ended, and
+    // the window stays meanwhile for the read-ahead captures still landing after it. Without this
+    // every composition ever rendered kept a window for the life of the cache.
+    std::erase_if(windows_, [&use](const auto& entry) {
+        return entry.first != use.composition && entry.second.inFlight.empty();
+    });
     auto& window = windows_[use.composition];
     window.latest = use.frame;
     window.inFlight.insert(use.frame);
@@ -89,6 +96,11 @@ void SourceWorkingSet::finish(const SourceUse& use) {
     if (const auto position = found->second.inFlight.find(use.frame);
         position != found->second.inFlight.end())
         found->second.inFlight.erase(position);
+}
+
+std::size_t SourceWorkingSet::windowCount() const {
+    const std::lock_guard lock(mutex_);
+    return windows_.size();
 }
 
 bool SourceWorkingSet::retains(const SourceUse& use) const {

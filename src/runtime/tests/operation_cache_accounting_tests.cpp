@@ -475,12 +475,30 @@ void sourceEntriesFollowThePlaybackWindow() {
            "window releases count as decoded-media evictions");
 }
 
+// #462: a composition keeps a playback window while it is in use, not for the life of the cache.
+// An idle composition's window is dropped when another composition starts rendering; one with a
+// request in flight keeps it.
+void playbackWindowsFollowTheCompositionsInUse() {
+    using bloom::runtime::SourceWorkingSet;
+    const auto set = std::make_shared<SourceWorkingSet>();
+    for (std::uint64_t composition = 1; composition <= 100; ++composition)
+        const SourceWorkingSet::Request request(set, composition, 0);
+    expect(set->windowCount() == 1, "only the composition rendered last keeps a window");
+    {
+        const SourceWorkingSet::Request first(set, 1, 0);
+        const SourceWorkingSet::Request second(set, 2, 0);
+        expect(set->windowCount() == 2, "a composition with a request in flight keeps its window");
+    }
+    expect(set->windowCount() == 2, "the window outlives its last request until another begins");
+}
+
 int main() try {
     sharedStorageIsChargedOnce();
     pendingRetirementIsNeitherLostNorDoubled();
     ledgerHostTotalsNeverExceedAllocation();
     profilerRowsCountPerKind();
     sourceEntriesFollowThePlaybackWindow();
+    playbackWindowsFollowTheCompositionsInUse();
     if (failures != 0) {
         std::cerr << "FAIL: operation cache accounting expectations failed\n";
         return 1;

@@ -91,6 +91,9 @@ evaluator's operation cache and shared with its decoded-video cache:
   evictions in the Profiler's pool rows). Operation-kind entries, finished frames and sources used
   outside any request (tools, tests) keep their ordinary retention. There is no new limit,
   preference or fraction; the budgets above are unchanged.
+- A composition with no request in flight keeps its window until a request for another
+  composition begins; then that window is dropped (its entries are already inside it), so only
+  compositions in use keep one (#462).
 
 ## Audit of pixel-holding stores
 
