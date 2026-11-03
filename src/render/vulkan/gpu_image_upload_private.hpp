@@ -13,6 +13,7 @@
 
 #include <bloom/render/gpu_image_upload.hpp>
 
+#include "gpu_composite_private.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_image_private.hpp"
 #include "gpu_image_upload_fault.hpp"
@@ -85,6 +86,8 @@ struct UploadStagingBuffer final {
     VmaAllocation allocation = VK_NULL_HANDLE;
     std::uint64_t bytes = 0;
     bool armed = false;
+    // #422: created with STORAGE_BUFFER usage, so SampleConvertV1 can read it directly.
+    bool storage = false;
     NativeBufferStorageToken token;
     // Present only while this buffer holds half-exact pixels for the current job.
     UploadHalfImage half;
@@ -92,9 +95,11 @@ struct UploadStagingBuffer final {
 
 // Creates a host-visible, mapped, TRANSFER_SRC buffer sized `bytes`. Returns false and leaves `out`
 // untouched on failure; backed failures destroy native storage before returning credit.
+// `storage` adds STORAGE_BUFFER usage for a native-sample upload (#422).
 [[nodiscard]] vulkan_detail::NativeBufferAllocationOutcome
 createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state, std::uint64_t bytes,
-                          std::uint64_t maximumBackingBytes, UploadStagingBuffer& out) noexcept;
+                          std::uint64_t maximumBackingBytes, UploadStagingBuffer& out,
+                          bool storage = false) noexcept;
 
 // Actual VMA allocation size in bytes, or 0 when the allocation is invalid. This is the number the
 // peak budget is charged against, not the requested extent.
@@ -146,6 +151,12 @@ struct GpuImageUpload::Impl final {
     // be destroyed from any thread.
     void resetResources() noexcept;
     [[nodiscard]] bool createResources();
+    // #422: the SampleConvertV1 pipeline, descriptor pool and set, created on the first native-
+    // sample job under the resident slot and kept with the command resources.
+    [[nodiscard]] bool createSamplePipeline();
+    void resetSamplePipeline() noexcept;
+    [[nodiscard]] GpuImageUploadDiagnostic beginSamples(const GpuImageUploadParameters& parameters,
+                                                        std::uint64_t byteBudget);
     // Bounded owner-thread drain. Returns true when the submission is proved retired.
     [[nodiscard]] bool drainAndRetire() noexcept;
 
@@ -179,6 +190,12 @@ struct GpuImageUpload::Impl final {
     // least the upload's; copy and blit address only the upload's region).
     UploadHalfImage spareHalf;
     const void* spareHalfPhase = nullptr;
+    // #422 SampleConvertV1. The set is declared after its pool so it is freed first.
+    CompositePipeline samplePipeline;
+    vk::raii::DescriptorPool sampleDescriptorPool{nullptr};
+    vk::raii::DescriptorSet sampleDescriptorSet{nullptr};
+    bool samplePipelineReady = false;
+    std::uint64_t sampleConvertedUploads = 0;
 
     GpuImageUploadJobState jobState = GpuImageUploadJobState::Idle;
     bool queueSubmitted = false;

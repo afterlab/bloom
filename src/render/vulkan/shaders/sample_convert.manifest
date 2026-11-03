@@ -1,0 +1,142 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "SampleConvertV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "606b4cf8ed910cc50e5f989ce2bdf9f3900a1385ae57f1df8f9a08c5def7b918",
+    "spirvSha256": "fd12ceb2e440d0128a6248e8e97073e91e117e8df7340c79f04e15c1bc3e3cfa",
+    "localSizeX": 256,
+    "localSizeY": 1,
+    "localSizeZ": 1
+  },
+  "bindings": [
+    {
+      "set": 0,
+      "binding": 0,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "uint",
+      "role": "native-sample-plane-0",
+      "layout": "the decoded plane's rows as staged, little-endian bytes packed into 32-bit words; an unused binding aliases plane 0"
+    },
+    {
+      "set": 0,
+      "binding": 1,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "uint",
+      "role": "native-sample-plane-1",
+      "layout": "the decoded plane's rows as staged, little-endian bytes packed into 32-bit words; an unused binding aliases plane 0"
+    },
+    {
+      "set": 0,
+      "binding": 2,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "uint",
+      "role": "native-sample-plane-2",
+      "layout": "the decoded plane's rows as staged, little-endian bytes packed into 32-bit words; an unused binding aliases plane 0"
+    },
+    {
+      "set": 0,
+      "binding": 3,
+      "kind": "storage-buffer",
+      "access": "readonly",
+      "element": "uint",
+      "role": "native-sample-plane-3",
+      "layout": "the decoded plane's rows as staged, little-endian bytes packed into 32-bit words; an unused binding aliases plane 0"
+    },
+    {
+      "set": 0,
+      "binding": 4,
+      "kind": "storage-image",
+      "access": "writeonly",
+      "format": "rgba32f",
+      "role": "premultiplied-working-image-output"
+    }
+  ],
+  "pushConstant": {
+    "byteCount": 64,
+    "fields": [
+      {
+        "name": "width",
+        "type": "uint32"
+      },
+      {
+        "name": "height",
+        "type": "uint32"
+      },
+      {
+        "name": "sampleLayout",
+        "type": "uint32"
+      },
+      {
+        "name": "flags",
+        "type": "uint32"
+      },
+      {
+        "name": "stride0",
+        "type": "uint32"
+      },
+      {
+        "name": "stride1",
+        "type": "uint32"
+      },
+      {
+        "name": "stride2",
+        "type": "uint32"
+      },
+      {
+        "name": "stride3",
+        "type": "uint32"
+      },
+      {
+        "name": "chromaWidth",
+        "type": "uint32"
+      },
+      {
+        "name": "chromaHeight",
+        "type": "uint32"
+      },
+      {
+        "name": "transfer",
+        "type": "int32"
+      },
+      {
+        "name": "redFromCr",
+        "type": "float32"
+      },
+      {
+        "name": "greenFromCb",
+        "type": "float32"
+      },
+      {
+        "name": "greenFromCr",
+        "type": "float32"
+      },
+      {
+        "name": "blueFromCb",
+        "type": "float32"
+      },
+      {
+        "name": "wideToEight",
+        "type": "float32"
+      }
+    ]
+  },
+  "hostDerivation": {
+    "planes": "the decoder's planes copied unchanged into one host-visible staging buffer, each at a 256-byte aligned offset and padded to whole words; no host sample is widened, converted or reordered",
+    "conversion": "layout, alpha association, stored-samples flag, range, inverse transfer and the four YUV matrix coefficients evaluated with the same binary32 expressions color::yuvToSceneLinear uses",
+    "checked": "plane extents and strides against the output data window, each plane binding against maxStorageBufferRange, the image and staging bytes against the configured and per-call budgets, and the flattened workgroup grid against the device limits, before any allocation"
+  },
+  "contracts": {
+    "numeric": "equal to the CPU reference bloom::render::convertNativeSamples for every layout: additions, subtractions and multiplications are precise (no contraction), divisions are an integer long division with round-to-nearest-even, binary16 is decoded from its bits; only the legacy inverse transfer curves (transfer 1, 6, 13) use pow() and are held to 2e-6 absolute or relative per finite component",
+    "alpha": "zero alpha publishes transparent black exactly as Rgba32f::fromPremultiplied; stored samples encode alpha as a * 0.5 + 0.5, which equals fma(a, 0.5, 0.5)",
+    "ingestPolicy": "binary16 NaN/Inf become zero and alpha is clamped to [0, 1], the OpenEXR decoder's policy",
+    "cpuFallback": "an invalid layout, a device-limit or budget refusal, a foreign device, or a wrong thread fails closed with an explicit diagnostic; no silent CPU substitution"
+  }
+}

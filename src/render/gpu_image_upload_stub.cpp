@@ -94,6 +94,7 @@ void GpuImageUpload::releaseSpareStaging() noexcept {}
 std::uint64_t GpuImageUpload::stagingAllocations() const noexcept { return 0; }
 
 std::uint64_t GpuImageUpload::halfStagedUploads() const noexcept { return 0; }
+std::uint64_t GpuImageUpload::sampleConvertedUploads() const noexcept { return 0; }
 
 bool GpuImageUpload::teardownDrainIncomplete() noexcept { return false; }
 

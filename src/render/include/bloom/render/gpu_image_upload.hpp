@@ -26,6 +26,7 @@
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/render/native_samples.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -67,6 +68,12 @@ struct GpuImageUploadDiagnostic final {
 // The host image to upload. It is retained as shared immutable ownership for the duration of
 // begin(); begin() copies the pixels into an owned staging buffer before returning, so no borrowed
 // pointer survives the call and the caller may release its reference immediately afterwards.
+//
+// Exactly one of `source` and `samples` is set. `samples` (#422) are decoded media samples in their
+// native layout: begin() copies their planes into the staging buffer as they are and one
+// SampleConvertV1 dispatch converts them into the resident RGBA32F image on the device, so the host
+// never builds the float frame. The resident image's descriptor is the samples' descriptor (or
+// `descriptorOverride`, whose data-window extent must match it).
 struct GpuImageUploadParameters final {
     std::shared_ptr<const Rgba32fImage> source;
     // Exact already-retained request authority; null only for an explicitly rootless device.
@@ -86,6 +93,7 @@ struct GpuImageUploadParameters final {
     // job's fence, so the job's phase and memory grant retire with the job, and any spare left by
     // an earlier opted-in job is released.
     bool reuseStagingWithinScene = false;
+    std::shared_ptr<const NativeSampleImage> samples = {};
 };
 
 // Separately bounded image and staging ceilings. The per-call byteBudget is the peak allowance and
@@ -160,6 +168,8 @@ class GpuImageUpload final {
     // RGBA32F resident image (issue #401). Other sources upload as RGBA32F; the resident bytes
     // are identical either way.
     [[nodiscard]] std::uint64_t halfStagedUploads() const noexcept;
+    // Uploads that crossed as native samples and were converted by SampleConvertV1 (#422).
+    [[nodiscard]] std::uint64_t sampleConvertedUploads() const noexcept;
 
     // Recoverable bounded-pool pressure, not a permanent fuse: true while a foreign-released or
     // unproven resident is retained for owner drain, and false again once the rightful owner thread

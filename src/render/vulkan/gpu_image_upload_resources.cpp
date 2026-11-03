@@ -19,6 +19,7 @@ UploadStagingBuffer& UploadStagingBuffer::operator=(UploadStagingBuffer&& other)
         allocation = other.allocation;
         bytes = other.bytes;
         armed = other.armed;
+        storage = other.storage;
         token = std::move(other.token);
         half = std::move(other.half);
         other.state = nullptr;
@@ -26,6 +27,7 @@ UploadStagingBuffer& UploadStagingBuffer::operator=(UploadStagingBuffer&& other)
         other.allocation = VK_NULL_HANDLE;
         other.bytes = 0;
         other.armed = false;
+        other.storage = false;
     }
     return *this;
 }
@@ -47,6 +49,7 @@ void UploadStagingBuffer::release() noexcept {
     allocation = VK_NULL_HANDLE;
     bytes = 0;
     armed = false;
+    storage = false;
 }
 
 UploadHalfImage& UploadHalfImage::operator=(UploadHalfImage&& other) noexcept {
@@ -175,15 +178,16 @@ std::uint64_t uploadAllocationBytes(vulkan_detail::DeviceAllocatorState& state,
 
 vulkan_detail::NativeBufferAllocationOutcome
 createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state, const std::uint64_t bytes,
-                          const std::uint64_t maximumBackingBytes,
-                          UploadStagingBuffer& out) noexcept {
+                          const std::uint64_t maximumBackingBytes, UploadStagingBuffer& out,
+                          const bool storage) noexcept {
     if (bytes == 0) {
         return vulkan_detail::NativeBufferAllocationOutcome::Failed;
     }
     VkBufferCreateInfo bufferInfo{};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = bytes;
-    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                       (storage ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : VkBufferUsageFlags{0});
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo allocationInfo{};
@@ -201,6 +205,7 @@ createUploadStagingBuffer(vulkan_detail::DeviceAllocatorState& state, const std:
     pending.state = &state;
     pending.bytes = actual.size;
     pending.armed = true;
+    pending.storage = storage;
     core::telemetry::stagingAllocated(pending.bytes);
     out = std::move(pending);
     return outcome;

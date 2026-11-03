@@ -257,6 +257,18 @@ bloom_add_test(
     LABELS unit gpu render
 )
 
+# SampleConvertV1 (#422): native-layout samples converted on the device against the CPU reference.
+add_executable(bloom_render_gpu_sample_convert_test gpu_sample_convert_tests.cpp)
+target_link_libraries(bloom_render_gpu_sample_convert_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_gpu_sample_convert_test)
+bloom_enable_strict_floating_point(bloom_render_gpu_sample_convert_test)
+bloom_add_test(
+    NAME bloom.render.gpu_sample_convert
+    COMMAND bloom_render_gpu_sample_convert_test
+    LABELS unit gpu render
+    TIMEOUT 300
+)
+
 # Bounded-resource-retirement tests for GpuSolid/CoveredSolidV1 and GpuImageUpload. They include the
 # Vulkan-free private fault seams, so the targets exist only where the Vulkan backend is built; a
 # hardware-free build prints an explicit skip and --require-device fails closed. The vectors prove

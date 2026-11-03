@@ -1,0 +1,310 @@
+#version 460
+// Bloom SampleConvertV1 compute shader. Offline-generated/embedded; do not edit at runtime.
+// Operation: SampleConvertV1 (#422).
+//
+// Converts decoded media samples, uploaded in their native layout, into the premultiplied RGBA32F
+// working image. The CPU reference is bloom::render::convertNativeSamples
+// (src/render/native_samples.cpp), which reproduces the decoders' own CPU conversions.
+//
+// Layouts (push.sampleLayout):
+//   1 Yuv420p8    planes 0..2 = Y, Cb, Cr 8-bit; Cb/Cr ceil(w/2) x ceil(h/2), bilinear
+//                 reconstruction (horizontally co-sited, vertically centred)
+//   2 Yuva444p16  planes 0..3 = Y, Cb, Cr, A 16-bit little-endian
+//   3 Rgba16      plane 0 = interleaved R, G, B, A 16-bit unorm
+//   4 RgbaHalf    plane 0 = interleaved binary16 R, G, B, A; luminance replicates lane 0;
+//                 NaN/Inf become 0 and alpha is clamped to [0, 1] (the OpenEXR ingest policy)
+//
+// EXACTNESS. Every add, subtract and multiply is `precise` (no contraction) and therefore one
+// correctly rounded binary32 operation, exactly as the CPU reference (built with
+// -ffp-contract=off). Every division is bloomExactDivide: an integer long division of the
+// significands with round-to-nearest-even, so it equals the IEEE quotient on every device
+// instead of inheriting OpFDiv's 2.5 ULP bound. Half-to-float is decoded from the bits, and
+// non-finite halves are detected from the bits. Only the legacy inverse transfer curves
+// (transfer 1, 6 and 13) call pow() and are held to the documented 2e-6 tolerance.
+//
+// 2D FLATTENED DISPATCH, as PointResampleV1: the output pixel space is flattened row-major into
+// 256-wide workgroups; gl_NumWorkGroups.x * 256 is the flattened row stride.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer BloomPlane0 { uint words[]; } bloom_plane0;
+layout(set = 0, binding = 1, std430) readonly buffer BloomPlane1 { uint words[]; } bloom_plane1;
+layout(set = 0, binding = 2, std430) readonly buffer BloomPlane2 { uint words[]; } bloom_plane2;
+layout(set = 0, binding = 3, std430) readonly buffer BloomPlane3 { uint words[]; } bloom_plane3;
+layout(set = 0, binding = 4, rgba32f) uniform writeonly image2D bloom_sample_output;
+
+layout(push_constant) uniform BloomSamplePushConstants {
+    uint width;          // output data-window width/height
+    uint height;
+    uint sampleLayout;   // 1..4, above
+    uint flags;          // bit 0 stored samples, bits 1-2 alpha (1 straight, 2 premultiplied,
+                         // 3 unpremultiply), bit 3 limited range, bit 4 luminance, bit 5 has alpha
+    uint stride0;        // plane row strides in bytes
+    uint stride1;
+    uint stride2;
+    uint stride3;
+    uint chromaWidth;    // Yuv420p8 chroma plane extent
+    uint chromaHeight;
+    int transfer;        // 8 none, 13 sRGB, otherwise BT.709
+    float redFromCr;     // the YUV matrix as color::yuvToSceneLinear evaluates it
+    float greenFromCb;
+    float greenFromCr;
+    float blueFromCb;
+    float wideToEight;   // 255.0F / 65535.0F
+} bloom_push;
+
+uint planeWord(uint plane, uint index) {
+    if (plane == 0u) return bloom_plane0.words[index];
+    if (plane == 1u) return bloom_plane1.words[index];
+    if (plane == 2u) return bloom_plane2.words[index];
+    return bloom_plane3.words[index];
+}
+
+uint planeStride(uint plane) {
+    if (plane == 0u) return bloom_push.stride0;
+    if (plane == 1u) return bloom_push.stride1;
+    if (plane == 2u) return bloom_push.stride2;
+    return bloom_push.stride3;
+}
+
+uint byteAt(uint plane, uint offset) {
+    return (planeWord(plane, offset >> 2u) >> ((offset & 3u) * 8u)) & 0xFFu;
+}
+
+// A 16-bit little-endian sample at an even byte offset.
+uint halfWordAt(uint plane, uint offset) {
+    return (planeWord(plane, offset >> 2u) >> ((offset & 2u) * 8u)) & 0xFFFFu;
+}
+
+// The correctly rounded quotient a / b for finite a and a positive normal b (the reference is
+// bloom::render::nativeSampleExactDivide, line for line).
+float bloomExactDivide(float a, float b) {
+    uint sa = floatBitsToUint(a);
+    uint sb = floatBitsToUint(b);
+    if ((sa & 0x7FFFFFFFu) == 0u) {
+        return a;
+    }
+    uint sign = sa & 0x80000000u;
+    int ea = int((sa >> 23u) & 0xFFu);
+    int eb = int((sb >> 23u) & 0xFFu);
+    uint ma = sa & 0x7FFFFFu;
+    uint mb = (sb & 0x7FFFFFu) | 0x800000u;
+    if (ea == 0) {
+        ea = 1;
+        while ((ma & 0x800000u) == 0u) {
+            ma <<= 1u;
+            ea -= 1;
+        }
+    } else {
+        ma |= 0x800000u;
+    }
+    int exponent = ea - eb;
+    uint remainder = ma;
+    if (remainder < mb) {
+        remainder <<= 1u;
+        exponent -= 1;
+    }
+    uint quotient = 0u;
+    for (int bit = 0; bit < 25; ++bit) {
+        quotient <<= 1u;
+        if (remainder >= mb) {
+            remainder -= mb;
+            quotient |= 1u;
+        }
+        remainder <<= 1u;
+    }
+    uint mantissa = quotient >> 1u;
+    bool guard = (quotient & 1u) != 0u;
+    if (guard && (remainder != 0u || (mantissa & 1u) != 0u)) {
+        mantissa += 1u;
+    }
+    if (mantissa == 0x1000000u) {
+        mantissa >>= 1u;
+        exponent += 1;
+    }
+    int biased = exponent + 127;
+    if (biased <= 0 || biased >= 255) {
+        return a / b;
+    }
+    return uintBitsToFloat(sign | (uint(biased) << 23u) | (mantissa & 0x7FFFFFu));
+}
+
+// color::video_colour.cpp's inverse transfer; the constants are the binary32 literals the CPU
+// uses, by bit pattern.
+float inverseTransfer(float value, int transfer) {
+    if (transfer == 8) {
+        return value;
+    }
+    if (transfer == 13) {
+        if (value <= uintBitsToFloat(0x3D25AEE6u)) { // 0.04045F
+            return bloomExactDivide(value, uintBitsToFloat(0x414EB852u)); // 12.92F
+        }
+        precise float shifted = value + uintBitsToFloat(0x3D6147AEu); // 0.055F
+        return pow(bloomExactDivide(shifted, uintBitsToFloat(0x3F870A3Du)), // 1.055F
+                   uintBitsToFloat(0x4019999Au));                           // 2.4F
+    }
+    if (value < uintBitsToFloat(0x3DA5E354u)) { // 0.081F
+        return bloomExactDivide(value, 4.5);
+    }
+    precise float shifted = value + uintBitsToFloat(0x3DCAC083u); // 0.099F
+    return pow(bloomExactDivide(shifted, uintBitsToFloat(0x3F8CAC08u)), // 1.099F
+               uintBitsToFloat(0x400E38E4u));                           // 1.0F / 0.45F
+}
+
+float code8(uint plane, uint x, uint y) {
+    return float(byteAt(plane, y * planeStride(plane) + x));
+}
+
+float code16(uint plane, uint x, uint y, uint lane, uint lanes) {
+    return float(halfWordAt(plane, y * planeStride(plane) + (x * lanes + lane) * 2u));
+}
+
+float chromaAt(uint plane, int cx, int cy) {
+    int x = clamp(cx, 0, int(bloom_push.chromaWidth) - 1);
+    int y = clamp(cy, 0, int(bloom_push.chromaHeight) - 1);
+    return code8(plane, uint(x), uint(y));
+}
+
+// The decoders' filtered 4:2:0 reconstruction for left-sited chroma.
+float chroma(uint plane, uint x, uint y) {
+    int cx = int(x / 2u);
+    float fx = (x & 1u) != 0u ? 0.5 : 0.0;
+    int vy = 4 * int(y) - 2;
+    int cy = vy < 0 ? -1 : vy / 8;
+    float fy = float(vy - cy * 8) * 0.125;
+    precise float top = chromaAt(plane, cx, cy) * (1.0 - fx) + chromaAt(plane, cx + 1, cy) * fx;
+    precise float bottom =
+        chromaAt(plane, cx, cy + 1) * (1.0 - fx) + chromaAt(plane, cx + 1, cy + 1) * fx;
+    precise float value = top * (1.0 - fy) + bottom * fy;
+    return value;
+}
+
+// Exact binary16 -> binary32 from the bits, so a half subnormal is never flushed. The caller has
+// already replaced NaN/Inf.
+float halfBitsToFloat(uint bits) {
+    uint sign = (bits & 0x8000u) << 16u;
+    uint exponent = (bits >> 10u) & 0x1Fu;
+    uint mantissa = bits & 0x3FFu;
+    if (exponent == 0u) {
+        if (mantissa == 0u) {
+            return uintBitsToFloat(sign);
+        }
+        int shift = 10 - findMSB(mantissa);
+        mantissa = (mantissa << uint(shift)) & 0x3FFu;
+        return uintBitsToFloat(sign | (uint(127 - 15 + 1 - shift) << 23u) | (mantissa << 13u));
+    }
+    return uintBitsToFloat(sign | ((exponent + 112u) << 23u) | (mantissa << 13u));
+}
+
+void main()
+{
+    uvec2 invocation = gl_GlobalInvocationID.xy;
+    uint linear = invocation.y * (gl_NumWorkGroups.x * 256u) + invocation.x;
+    uint total = bloom_push.width * bloom_push.height;
+    if (linear >= total) {
+        return;
+    }
+    uint x = linear % bloom_push.width;
+    uint y = linear / bloom_push.width;
+    uint flags = bloom_push.flags;
+    bool stored = (flags & 1u) != 0u;
+    uint alphaMode = (flags >> 1u) & 3u;
+    bool limited = (flags & 8u) != 0u;
+    bool luminance = (flags & 16u) != 0u;
+    bool hasAlpha = (flags & 32u) != 0u;
+
+    precise vec4 converted;
+    if (bloom_push.sampleLayout == 1u || bloom_push.sampleLayout == 2u) {
+        bool wide = bloom_push.sampleLayout == 2u;
+        float yCode;
+        float uCode;
+        float vCode;
+        if (wide) {
+            yCode = code16(0u, x, y, 0u, 1u);
+            uCode = code16(1u, x, y, 0u, 1u);
+            vCode = code16(2u, x, y, 0u, 1u);
+        } else {
+            yCode = code8(0u, x, y);
+            uCode = chroma(1u, x, y);
+            vCode = chroma(2u, x, y);
+        }
+        bool fullWide = wide && !limited;
+        precise float luma;
+        precise float cb;
+        precise float cr;
+        if (fullWide) {
+            luma = yCode * bloom_push.wideToEight;
+            cb = 128.0 + (uCode - 32768.0) * bloom_push.wideToEight;
+            cr = 128.0 + (vCode - 32768.0) * bloom_push.wideToEight;
+        } else if (wide) {
+            luma = bloomExactDivide(yCode, 256.0);
+            cb = bloomExactDivide(uCode, 256.0);
+            cr = bloomExactDivide(vCode, 256.0);
+        } else {
+            luma = yCode;
+            cb = uCode;
+            cr = vCode;
+        }
+        precise float yy = limited ? bloomExactDivide(luma - 16.0, 219.0)
+                                   : bloomExactDivide(luma, 255.0);
+        float chromaRange = limited ? 224.0 : 255.0;
+        precise float u = bloomExactDivide(cb - 128.0, chromaRange);
+        precise float v = bloomExactDivide(cr - 128.0, chromaRange);
+        precise float red = yy + bloom_push.redFromCr * v;
+        precise float green = yy - bloom_push.greenFromCb * u - bloom_push.greenFromCr * v;
+        precise float blue = yy + bloom_push.blueFromCb * u;
+        float alpha = 1.0;
+        if (wide) {
+            alpha = bloomExactDivide(code16(3u, x, y, 0u, 1u), 65535.0);
+        }
+        converted = vec4(inverseTransfer(red, bloom_push.transfer),
+                      inverseTransfer(green, bloom_push.transfer),
+                      inverseTransfer(blue, bloom_push.transfer), alpha);
+    } else if (bloom_push.sampleLayout == 3u) {
+        converted = vec4(bloomExactDivide(code16(0u, x, y, 0u, 4u), 65535.0),
+                      bloomExactDivide(code16(0u, x, y, 1u, 4u), 65535.0),
+                      bloomExactDivide(code16(0u, x, y, 2u, 4u), 65535.0),
+                      bloomExactDivide(code16(0u, x, y, 3u, 4u), 65535.0));
+    } else {
+        uint base = y * bloom_push.stride0 + x * 8u;
+        uint bits[4];
+        bits[0] = halfWordAt(0u, base);
+        bits[1] = halfWordAt(0u, base + 2u);
+        bits[2] = halfWordAt(0u, base + 4u);
+        bits[3] = halfWordAt(0u, base + 6u);
+        if (luminance) {
+            bits[1] = bits[0];
+            bits[2] = bits[0];
+        }
+        if (!hasAlpha) {
+            bits[3] = 0x3C00u; // 1.0
+        }
+        float lanes[4];
+        for (int c = 0; c < 4; ++c) {
+            // NaN/Inf (an all-ones exponent) become zero.
+            lanes[c] = (bits[c] & 0x7C00u) == 0x7C00u ? 0.0 : halfBitsToFloat(bits[c]);
+        }
+        if (lanes[3] < 0.0 || lanes[3] > 1.0) {
+            lanes[3] = clamp(lanes[3], 0.0, 1.0);
+        }
+        converted = vec4(lanes[0], lanes[1], lanes[2], lanes[3]);
+    }
+
+    if (!stored && alphaMode == 3u) {
+        converted.r = converted.a > 0.0 ? bloomExactDivide(converted.r, converted.a) : 0.0;
+        converted.g = converted.a > 0.0 ? bloomExactDivide(converted.g, converted.a) : 0.0;
+        converted.b = converted.a > 0.0 ? bloomExactDivide(converted.b, converted.a) : 0.0;
+    }
+    precise vec4 pixel;
+    if (stored) {
+        // fma(a, 0.5, 0.5): a * 0.5 is exact, so one rounded add equals the fused result.
+        pixel = vec4(converted.rgb, converted.a * 0.5 + 0.5);
+    } else if (alphaMode == 2u) {
+        pixel = converted;
+    } else {
+        pixel = vec4(converted.r * converted.a, converted.g * converted.a, converted.b * converted.a, converted.a);
+    }
+    if (pixel.a == 0.0) {
+        pixel = vec4(0.0);
+    }
+    imageStore(bloom_sample_output, ivec2(x, y), pixel);
+}

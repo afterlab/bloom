@@ -112,6 +112,7 @@ GpuImageUpload::Impl::~Impl() {
 }
 
 void GpuImageUpload::Impl::resetResources() noexcept {
+    resetSamplePipeline();
     // Free children through their still-live pools, matching reverse member destruction.
     if (*fence) {
         initializationDestroyed.fetch_add(1);
@@ -218,6 +219,10 @@ std::uint64_t GpuImageUpload::stagingAllocations() const noexcept {
 
 std::uint64_t GpuImageUpload::halfStagedUploads() const noexcept {
     return impl_ != nullptr ? impl_->halfStagedUploads : 0;
+}
+
+std::uint64_t GpuImageUpload::sampleConvertedUploads() const noexcept {
+    return impl_ != nullptr ? impl_->sampleConvertedUploads : 0;
 }
 
 bool GpuImageUpload::Impl::createResources() {
@@ -353,6 +358,13 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
     }
     impl.control->imageStorageRefusal.reset();
     impl.control->bufferStorageRefusal.reset();
+    if (parameters.samples != nullptr) {
+        if (parameters.source != nullptr) {
+            return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                    "an upload carries either a float image or native samples");
+        }
+        return impl.beginSamples(parameters, byteBudget);
+    }
     if (parameters.source == nullptr) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload source is null");

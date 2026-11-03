@@ -620,6 +620,86 @@ else()
         "point_resample.comp digest is still enforced.")
 endif()
 
+# --- Fixed SampleConvertV1 shader (#422): source pin and regeneration check ----------------------
+#
+# Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
+# .comp is pinned here, the manifest must bind that source digest, and, when the locked
+# glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V digest
+# embedded in sample_convert_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_SAMPLE_CONVERT_COMP
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/sample_convert.comp")
+set(BLOOM_SAMPLE_CONVERT_MANIFEST
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/sample_convert.manifest")
+set(BLOOM_SAMPLE_CONVERT_INC
+    "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/sample_convert_spirv.inc")
+set(BLOOM_SAMPLE_CONVERT_COMP_SHA256
+    "606b4cf8ed910cc50e5f989ce2bdf9f3900a1385ae57f1df8f9a08c5def7b918")
+set(BLOOM_SAMPLE_CONVERT_SPV_SHA256
+    "fd12ceb2e440d0128a6248e8e97073e91e117e8df7340c79f04e15c1bc3e3cfa")
+
+file(SHA256 "${BLOOM_SAMPLE_CONVERT_COMP}" bloom_sample_convert_comp_sha256)
+if(NOT bloom_sample_convert_comp_sha256 STREQUAL BLOOM_SAMPLE_CONVERT_COMP_SHA256)
+    message(FATAL_ERROR
+        "sample_convert.comp SHA-256 mismatch: measured ${bloom_sample_convert_comp_sha256}, "
+        "pinned ${BLOOM_SAMPLE_CONVERT_COMP_SHA256}. Regenerate only through the tools/gpu-shaders "
+        "recipe and update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_SAMPLE_CONVERT_MANIFEST}" bloom_sample_convert_manifest_text)
+if(NOT bloom_sample_convert_manifest_text MATCHES "${BLOOM_SAMPLE_CONVERT_COMP_SHA256}")
+    message(FATAL_ERROR
+        "sample_convert.manifest does not bind the pinned sample_convert.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_sample_convert_generated_spv
+        "${CMAKE_CURRENT_BINARY_DIR}/sample_convert.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_SAMPLE_CONVERT_COMP}" -o "${bloom_sample_convert_generated_spv}"
+        RESULT_VARIABLE bloom_sample_convert_glslang_result)
+    if(NOT bloom_sample_convert_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile sample_convert.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2
+                "${bloom_sample_convert_generated_spv}"
+        RESULT_VARIABLE bloom_sample_convert_spirv_val_result)
+    if(NOT bloom_sample_convert_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated SampleConvertV1 SPIR-V.")
+    endif()
+    if(BLOOM_SPIRV_DIS)
+        set(bloom_sample_convert_generated_spvasm
+            "${CMAKE_CURRENT_BINARY_DIR}/sample_convert.generated.spvasm")
+        execute_process(
+            COMMAND "${BLOOM_SPIRV_DIS}" "${bloom_sample_convert_generated_spv}" -o
+                    "${bloom_sample_convert_generated_spvasm}"
+            RESULT_VARIABLE bloom_sample_convert_spirv_dis_result)
+        if(NOT bloom_sample_convert_spirv_dis_result EQUAL 0)
+            message(FATAL_ERROR "spirv-dis failed to disassemble the SampleConvertV1 SPIR-V.")
+        endif()
+        file(READ "${bloom_sample_convert_generated_spvasm}" bloom_sample_convert_spvasm_text)
+        if(bloom_sample_convert_spvasm_text MATCHES "OpCapability Float64" OR
+           bloom_sample_convert_spvasm_text MATCHES "OpCapability Int64" OR
+           bloom_sample_convert_spvasm_text MATCHES "OpTypeFloat 64" OR
+           bloom_sample_convert_spvasm_text MATCHES "OpTypeInt 64")
+            message(FATAL_ERROR
+                "the SampleConvertV1 SPIR-V declares a forbidden Float64/Int64 capability or "
+                "type; it must run on standard Float32 hardware without shaderFloat64.")
+        endif()
+    endif()
+    file(SHA256 "${bloom_sample_convert_generated_spv}" bloom_sample_convert_spv_sha256)
+    if(NOT bloom_sample_convert_spv_sha256 STREQUAL BLOOM_SAMPLE_CONVERT_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated SampleConvertV1 SPIR-V SHA-256 ${bloom_sample_convert_spv_sha256} does "
+            "not match the embedded ${BLOOM_SAMPLE_CONVERT_SPV_SHA256}; the checked-in .comp and "
+            "sample_convert_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: sample_convert.comp regenerated, SPIR-V-validated, and "
+        "capability-checked (${bloom_sample_convert_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "sample_convert.comp digest is still enforced.")
+endif()
+
 # --- Fixed CryptomatteCoverageV1 shader: source pin and regeneration check -----------------------------
 #
 # Offline artifact from the existing tools/gpu-shaders compile/validate/embed recipe. The checked-in
@@ -1142,6 +1222,7 @@ target_sources(
         image.cpp
         channel_set_image.cpp
         image_types.cpp
+        native_samples.cpp
         ocio_gpu_program.cpp
         text_glyph_source.hpp
         text_raster.cpp
@@ -1186,6 +1267,7 @@ target_sources(
             include/bloom/render/gpu_solid.hpp
             include/bloom/render/image.hpp
             include/bloom/render/image_types.hpp
+            include/bloom/render/native_samples.hpp
             include/bloom/render/text_raster.hpp
             include/bloom/render/path_raster.hpp
 )
@@ -1235,6 +1317,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_image_upload_fault.hpp
         vulkan/gpu_image_upload_private.hpp
         vulkan/gpu_image_upload_resources.cpp
+        vulkan/gpu_image_upload_samples.cpp
         vulkan/gpu_image_upload_retirement.cpp
         vulkan/gpu_image_upload_retirement_private.hpp
         vulkan/gpu_neutral_display.cpp
@@ -1294,6 +1377,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/point_resample.comp
         vulkan/shaders/point_resample.manifest
         vulkan/shaders/point_resample_spirv.inc
+        vulkan/shaders/sample_convert.comp
+        vulkan/shaders/sample_convert.manifest
+        vulkan/shaders/sample_convert_spirv.inc
         vulkan/shaders/cryptomatte_coverage_spirv.inc
         vulkan/shaders/solid_covered.comp
         vulkan/shaders/solid_covered.manifest
