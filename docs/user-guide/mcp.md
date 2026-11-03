@@ -319,7 +319,9 @@ one of these is refused with the constraint it broke. `bloom.asset.import` of a 
 already holds adds nothing and returns the existing asset's id as its `asset` output, one id per
 imported file. `bloom.animation.set-keyframe-at-time-for-parameter`
 on a constant parameter makes it animated in the same undo step, its constant becoming the first
-key.
+key. The reverse is one step too: `bloom.parameter.set-source` with a `value` (or a driver) on an
+animated parameter replaces the animation and removes its curve, as
+`bloom.animation.convert-to-constant` does.
 
 **Diagnostics.** A refused transaction applies nothing and lists why. Each diagnostic is
 `{code, operationIndex, operation?, path?, message}`: `operationIndex` is the 0-based place in

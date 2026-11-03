@@ -4,7 +4,8 @@
 // names the parameter, the node that owns it and what it accepts, so an artist or an agent never
 // has to guess why an edit was refused. A text font takes one value form only: the id of a Font
 // asset in this project, as a decimal string. Any other value is refused here, with the project's
-// Font assets listed, instead of being stored and silently rendered in the fallback face.
+// Font assets listed, instead of being stored and silently rendered in the fallback face. Replacing
+// an animated source retires the parameter's animation curve in the same edit.
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -312,6 +313,16 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
         return OperationResult::noChange();
     }
     const auto record = *parameter;
+    // A parameter owns its animation curve outright, so replacing an animated source with a
+    // constant, a driver or another curve retires the curve with it, exactly as
+    // bloom.animation.convert-to-constant does. Leaving it would orphan the curve and refuse the
+    // whole edit at validation.
+    std::optional<document::AnimationCurveId> retiredCurve;
+    if (const auto* animated = std::get_if<document::AnimationCurveSource>(&record.source)) {
+        const auto* next = std::get_if<document::AnimationCurveSource>(&source);
+        if (next == nullptr || next->curveId != animated->curveId)
+            retiredCurve = animated->curveId;
+    }
     if (!composition->parameters().setSource(parameterId_, source)) {
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&source))
             return refusedValue(record, owner, constant->value, draft.project());
@@ -320,6 +331,11 @@ OperationResult SetParameterSource::apply(document::Draft& draft) const {
                                              "it takes " + accepts(record, owner, draft.project()) +
                                              ".");
     }
+    if (retiredCurve && composition->animationCurves().find(*retiredCurve) != nullptr &&
+        !composition->animationCurves().erase(*retiredCurve))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         describe(record, owner) +
+                                             " could not retire its animation curve.");
     // Pointing a source node at another asset or composition renames the layers that follow it.
     (void)document::refreshLayerNamesFromSources(draft.project(), compositionId_);
     return OperationResult::applied();

@@ -819,6 +819,35 @@ void testAnimatedToConstantTransitionUndoRedo(TestContext& test) {
                 "redo reapplies the constant and curve erasure");
 }
 
+// bloom.parameter.set-source with a constant on an animated parameter replaces the animation in
+// one edit: the curve the parameter owned is retired with it instead of being orphaned and
+// refusing the whole edit at validation.
+void testSetSourceReplacesAnimation(TestContext& test) {
+    Document document(makeProject());
+    CommandStack stack(document);
+    Transaction create("Animate opacity", document.snapshot().revision());
+    create.emplace<CreateAnimationForParameter>(kCompositionId, kOpacityId,
+                                                core::RationalTime::fromInteger(0));
+    const auto created = stack.execute(std::move(create));
+    const auto curve =
+        requireValue(created.outputId<document::AnimationCurveId>(kAnimationCurveOutput),
+                     "set-source fixture must create a curve");
+
+    Transaction constant("Set opacity", document.snapshot().revision());
+    constant.emplace<SetParameterSource>(kCompositionId, kOpacityId,
+                                         document::ConstantValueSource{0.25});
+    const auto replaced = stack.execute(std::move(constant));
+    const auto after = document.snapshot();
+    test.expect(replaced.changed() && constantScalar(after, kOpacityId) == 0.25 &&
+                    composition(after).animationCurves().find(curve) == nullptr,
+                "set-source with a constant replaces an animated source and retires its curve");
+    test.expect(stack.undo().changed(), "set-source over an animation is one undo step");
+    const auto undone = document.snapshot();
+    test.expect(animationSource(undone, kOpacityId) == curve &&
+                    composition(undone).animationCurves().findScalar(curve) != nullptr,
+                "undo restores the animated source and its curve");
+}
+
 void testBatchKeyframeTransactions(TestContext& test) {
     Document document(makeSourceProject());
     CommandStack stack(document);
@@ -1440,6 +1469,7 @@ int main() {
         bloom::commands::test::testScalarKeyOperations(test);
         bloom::commands::test::testVec2KeyOperations(test);
         bloom::commands::test::testAnimatedToConstantTransitionUndoRedo(test);
+        bloom::commands::test::testSetSourceReplacesAnimation(test);
         bloom::commands::test::testColorKeyOperations(test);
         bloom::commands::test::testComponentKeyOperations(test);
         bloom::commands::test::testComponentUpdateRefusesNonFiniteValues(test);
