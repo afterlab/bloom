@@ -196,7 +196,9 @@ action; node cards show the same composition name.
 A Layer Output may name another layer of the same composition as its `parent`. Parent links form
 an acyclic hierarchy independently of Merge membership and stack order. A layer cannot parent itself
 or name a missing or foreign layer. Cycles that combine parent links with image or parameter-driver
-dependencies are also refused before publication. Children retain their authored values when a parent changes.
+dependencies are also refused before publication. A track matte whose source layer is parented,
+directly or through its parents, to the layer it mattes is such a cycle; setting either link is
+refused with a reason that names both layers. Children retain their authored values when a parent changes.
 With no parent, those values place the layer in composition space; with a parent, they place it in
 that parent's local coordinate space. For column-vector affine matrices:
 

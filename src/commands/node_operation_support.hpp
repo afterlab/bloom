@@ -129,6 +129,38 @@ inline std::optional<OperationResult> validateGraph(
     }
     return std::nullopt;
 }
+// A track matte whose source layer is parented, directly or through its parents, to the layer it
+// mattes. A parent link and a matte share one same-time evaluation order (docs/architecture/
+// layer-graph-model.md, Transform Parenting), so that layer would wait on itself. The generic cycle
+// refusal is replaced by one that names both layers and the way out.
+inline std::optional<OperationResult> matteParentedToItsTarget(const document::CanonicalGraph& graph) {
+    for (const auto& target : graph.layerOutputs()) {
+        if (!target.trackMatte)
+            continue;
+        const auto source = target.trackMatte->source;
+        std::size_t remaining = graph.layerOutputs().size();
+        for (const auto* layer = graph.findLayer(source); layer != nullptr && layer->parent &&
+                                                          remaining-- > 0;
+             layer = graph.findLayer(*layer->parent)) {
+            if (*layer->parent != target.layerId)
+                continue;
+            const auto name = [&](const document::LayerId id) {
+                return "layer " + std::to_string(id.value());
+            };
+            return OperationResult::rejected(
+                OperationIssueCode::GraphCycle,
+                "The track matte of " + name(target.layerId) + " is " + name(source) +
+                    ", which is parented to it" +
+                    (layer->layerId == source ? std::string()
+                                              : " through " + name(layer->layerId)) +
+                    ". Bloom evaluates a parent link and a matte in one order, so a layer's matte "
+                    "cannot be its own child; unparent the matte layer or matte with a copy of it "
+                    "that is not parented to " + name(target.layerId) + ".");
+        }
+    }
+    return std::nullopt;
+}
+
 // A reroute that now has nothing on either side, removed (task FIX1, item I). A reroute is a bend
 // in a wire and nothing else -- it carries no value of its own, has no parameter to edit, and shows
 // no name -- so once both of its links are gone there is nothing for it to be. Answers whether it

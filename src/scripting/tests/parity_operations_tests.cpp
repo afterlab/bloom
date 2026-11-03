@@ -530,6 +530,58 @@ void exportPresetOutputs() {
            "an unknown preset without settings is refused by name");
 }
 
+// #434 O7: a layer's track matte cannot be its own child, because a parent link and a matte share
+// one evaluation order. Both ways of reaching that setup are refused with a refusal that names the
+// two layers and the way out, instead of the generic graph cycle.
+void matteParentedToItsTarget() {
+    Fixture fixture;
+    const auto solid = [&](const std::string& name) {
+        auto result = fixture.run("bloom.layer.add-solid",
+                                  {{"composition", Value(StableId{fixture.main.value()})},
+                                   {"name", Value(name)},
+                                   {"color", Value(core::Color4d{1, 0, 0, 1})}});
+        const auto layers = Fixture::outputs<document::LayerId>(result, "layer");
+        return layers.empty() ? document::LayerId{} : layers.front();
+    };
+    const auto target = solid("Target");
+    const auto matte = solid("Matte");
+    const auto refusal = [](const scripting::SessionCommandResult& result) {
+        if (result.diagnostic)
+            return result.diagnostic->message;
+        return result.command && !result.command->operationFailures.empty()
+                   ? result.command->operationFailures.front().issue.message
+                   : std::string{};
+    };
+    const auto setMatte = [&] {
+        return fixture.run("bloom.layer.set-track-matte",
+                           {{"composition", Value(StableId{fixture.main.value()})},
+                            {"layer", Value(StableId{target.value()})},
+                            {"source", Value(StableId{matte.value()})},
+                            {"channel", Value(std::int64_t{0})},
+                            {"inverted", Value(false)}});
+    };
+    const auto setParent = [&] {
+        return fixture.run("bloom.layer.set-parent",
+                           {{"composition", Value(StableId{fixture.main.value()})},
+                            {"layer", Value(StableId{matte.value()})},
+                            {"parent", Value(StableId{target.value()})}});
+    };
+    expect(setParent().succeeded(), "the matte layer is parented to the target");
+    const auto matteFirst = setMatte();
+    expect(!matteFirst.succeeded() &&
+               refusal(matteFirst).find("cannot be its own child") != std::string::npos &&
+               refusal(matteFirst).find("layer " + std::to_string(matte.value())) !=
+                   std::string::npos,
+           "a matte from the target's child is refused by name: " + refusal(matteFirst));
+    expect(fixture.session->undo().succeeded() && setMatte().succeeded(),
+           "an unparented layer can matte the target");
+    const auto parentAfter = setParent();
+    expect(!parentAfter.succeeded() &&
+               refusal(parentAfter).find("cannot be its own child") != std::string::npos,
+           "parenting a matte under the layer it mattes is refused by name: " +
+               refusal(parentAfter));
+}
+
 void projectItems() {
     Fixture fixture;
     auto folder = fixture.run("bloom.asset.create-folder", {{"name", Value("Shots")}});
@@ -615,6 +667,7 @@ int main() {
     addFeedingInserts();
     nullArguments();
     exportPresetOutputs();
+    matteParentedToItsTarget();
     projectItems();
     colorSettings();
     descriptions();
