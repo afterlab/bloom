@@ -311,7 +311,49 @@ frames in flight take nearly all usable memory:
   memory for any pool to grow into.
 
 Every cell ran on the GPU route with 0 CPU-fallback frames. The L50 "no hold" run overlapped a
-build of the before tree.
+build of the before tree. (Correction from the #472 measurements below: the claims came from fewer
+frames than eight. At the stated source need an L25 frame claimed 3.5 GB while preparing and an
+L50 frame 7.6 GB, so four to five L25 frames and two L50 frames filled the usable memory.)
+
+### Host source claims follow measured retention (#472)
+
+A frame's host claim while it prepares is its fixed bytes plus three times its source need. The
+stated source need counts every reachable footage reference as one float frame; the L stacks
+reference six media 19 (L25) or 39 (L50) times, at the same time, and preparation decodes each
+distinct source once. Since #472 a phase records the source bytes it actually retained when it
+finishes preparation, and later frames of the same envelope need that plus a quarter (see
+[host source needs](../architecture/gpu-backend.md)). Measured on the same `layers` suite, Full
+cold, inside the same 20G scope, on 2026-11-03:
+
+- **Before:** main 799331aea with the bench fields below, run with a diagnostic switch that kept
+  the stated need (this measurement only, not shipped code).
+- **After:** the same build with the measured need.
+
+"Work claims" are host claims minus retained preview frames, sampled every 10 s after the first
+sample (the first frames of an envelope still claim the stated need); "anon" is the process's
+anonymous memory over the same samples. The source need and retention are per frame, from
+`finishedPhaseSourceNeedBytes` and `finishedPhaseRetainedSourceBytes`.
+
+| Cell | fps | Prepared, kept of 240 | Work claims | Anon | Preview cache peak | Source need / retained per frame |
+|---|---|---|---|---|---|---|
+| L25 before | 1.84 | 277, 5 (`PartialBudget`, 263 evicted) | 13.9–17.3 GB | 1.4–2.1 GB | 0 | 1.13 / 0.40 GB |
+| L25 after | 2.31 | 240, 225 (`PartialBudget`, 15 evicted) | 7.3–12.6 GB | 2.6–4.9 GB | 1.81 GB | 0.51 / 0.40 GB |
+| L50 before | 0.64 | 383, 0 (not finished at 600 s) | 15.1–16.2 GB | 0.5–1.2 GB | 0 | 2.49 / 0.40 GB |
+| L50 after | 1.22 | 240, 240 (`Complete`) | 10.6–12.6 GB | 2.7–4.9 GB | 1.94 GB | 0.51 / 0.40 GB |
+
+- **The fills now keep their frames.** L50 completes with all 240 frames and plays them back from
+  the cache at 24.0 fps; L25 keeps 225. Fill fps rises 26% (L25) and 91% (L50), because finished
+  frames are no longer evicted and prepared again.
+- **What a frame retains is the same in every cell, 0.40 GB** (twelve 1080p float frames: four
+  1080p and two 2160p media). The measured need is that plus a quarter (0.50 GB); the means of
+  0.51 GB include the first frames, which use the stated need.
+- **Claims still exceed use.** A preparing frame claims three times its source need (decode,
+  conversion and upload overlap): 1.6 GB against the 0.4 GB it retains. Eight frames in flight
+  therefore claim 7–13 GB while anonymous memory, the preview frames included, stays below 5 GB.
+  L25 ends `PartialBudget` with 15 frames evicted because the cache budget is what usable memory
+  leaves beside those claims. The overlap factor is unchanged by #472.
+- Device claim peaks are unchanged (2.32 GB L25, 3.20 GB L50); every cell ran on the GPU route with
+  0 CPU-fallback frames.
 
 ## Conditions
 
