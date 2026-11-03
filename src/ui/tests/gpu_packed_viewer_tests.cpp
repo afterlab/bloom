@@ -6,6 +6,7 @@
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>

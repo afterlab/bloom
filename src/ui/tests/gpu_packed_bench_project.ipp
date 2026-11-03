@@ -869,6 +869,16 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     });
     const auto before = service.status().counters;
     const auto cpuBefore = benchProcessCpuSeconds();
+    // #422: host work and upload traffic over the measured window, from the runtime telemetry
+    // counters: bytes copied to the device, and the decode and colour-convert stage totals.
+    const auto transfersBefore = core::telemetry::gpuTransferTotals();
+    const auto stageSeconds = [](const core::telemetry::Stage stage) {
+        core::telemetry::StageHistogram histogram;
+        core::telemetry::readStage(stage, histogram);
+        return 1e-9 * static_cast<double>(histogram.totalNs);
+    };
+    const auto decodeBefore = stageSeconds(core::telemetry::Stage::Decode);
+    const auto convertBefore = stageSeconds(core::telemetry::Stage::ColourConvert);
     const auto started = std::chrono::steady_clock::now();
     memoryTimer.start();
     json << std::setprecision(15) << ",\"windowStartEpoch\":" << benchEpochSeconds()
@@ -996,6 +1006,13 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     }
     const auto after = service.status().counters;
     const auto claims = policy->snapshot().reservations;
+    json << ",\"windowCpuSeconds\":" << benchProcessCpuSeconds() - cpuBefore
+         << ",\"uploadBytes\":"
+         << core::telemetry::gpuTransferTotals().uploadBytes - transfersBefore.uploadBytes
+         << ",\"decodeStageSeconds\":"
+         << stageSeconds(core::telemetry::Stage::Decode) - decodeBefore
+         << ",\"colourConvertStageSeconds\":"
+         << stageSeconds(core::telemetry::Stage::ColourConvert) - convertBefore;
     json << ",\"cpuFallbackFrames\":" << after.cpuFallbacks - before.cpuFallbacks
          << ",\"cpuFallbacksTotal\":" << after.cpuFallbacks
          << ",\"nativeDispatches\":" << after.nativeDispatches - before.nativeDispatches

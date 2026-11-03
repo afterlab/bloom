@@ -235,6 +235,11 @@ Every measurement is a fresh process.
   over the measured window (from the preview service counters), with `residentGraphJobs`,
   `nativeDispatches` and `uploadsAhead` (uploads the scene executor began ahead of their own step,
   beside another native job, #405).
+- **Host preparation** (#422): `windowCpuSeconds` is the process CPU time over the measured window
+  (fills and playback), `uploadBytes` the host-to-device bytes uploaded in it (from the GPU
+  transfer telemetry), and `decodeStageSeconds` and `colourConvertStageSeconds` the summed wall time
+  of the `Decode` and `ColourConvert` telemetry stages over the window, across every thread. Divide
+  by the frames filled for per-frame figures.
 - **Resources**: `gpuBusyPercent` (and peak) from `nvidia-smi` sampled every 200 ms over the
   measured window (NVIDIA only; absent elsewhere); `fillCoresBusy` = process CPU seconds / wall
   seconds of the fill; `cpuCoresBusy` for exports from process-tree sampling; `peakRssBytes` is the
