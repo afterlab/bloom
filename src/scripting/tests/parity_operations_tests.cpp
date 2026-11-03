@@ -416,6 +416,61 @@ void pathValues() {
            "a number on a Path parameter is refused");
 }
 
+// #434 O4: add-feeding on an input that is already fed inserts the new node into the link. An
+// OCIO colour space transform added in front of a layer's image keeps the solid feeding it, so the
+// composition still compiles, and one undo restores the original link.
+void addFeedingInserts() {
+    Fixture fixture;
+    auto solid = fixture.run("bloom.layer.add-solid",
+                             {{"composition", Value(StableId{fixture.main.value()})},
+                              {"name", Value("Red")},
+                              {"color", Value(core::Color4d{1, 0, 0, 1})}});
+    const auto layers = Fixture::outputs<document::LayerId>(solid, "layer");
+    expect(solid.succeeded() && layers.size() == 1, "a solid layer is added");
+    if (layers.empty())
+        return;
+    fixture.refresh();
+    const auto* boundary = fixture.composition(fixture.main).graph().findLayer(layers.front());
+    expect(boundary != nullptr, "the layer has a Layer Output node");
+    if (boundary == nullptr)
+        return;
+    const auto layerNode = boundary->nodeId;
+    const document::InputPortRef image =
+        document::NodeInputRef{layerNode, std::string(document::kLayerOutputContentInputPort)};
+    const auto feeding = [&](const document::InputPortRef& input)
+        -> std::optional<document::OutputPortRef> {
+        fixture.refresh();
+        for (const auto& edge : fixture.composition(fixture.main).graph().edges())
+            if (edge.destination == input)
+                return edge.source;
+        return std::nullopt;
+    };
+    const auto original = feeding(image);
+    expect(original.has_value(), "the solid feeds the layer's image");
+
+    auto added = fixture.run("bloom.node.add-feeding",
+                             {{"composition", Value(StableId{fixture.main.value()})},
+                              {"nodeType", Value("bloom.ocio-colour-space-transform")},
+                              {"node", Value(StableId{layerNode.value()})},
+                              {"port", Value(std::string(document::kLayerOutputContentInputPort))}});
+    const auto inserted = Fixture::outputs<document::NodeId>(added, "editorNode");
+    expect(added.succeeded() && inserted.size() == 1, "add-feeding adds the transform");
+    if (inserted.empty() || !original)
+        return;
+    const auto fed = feeding(image);
+    expect(fed.has_value() && fed->nodeId == inserted.front(),
+           "the transform now feeds the layer's image");
+    std::optional<document::OutputPortRef> upstream;
+    fixture.refresh();
+    for (const auto& edge : fixture.composition(fixture.main).graph().edges())
+        if (const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+            input != nullptr && input->nodeId == inserted.front())
+            upstream = edge.source;
+    expect(upstream == original, "what fed the layer now feeds the inserted transform");
+    expect(fixture.session->undo().succeeded() && feeding(image) == original,
+           "one undo restores the original link");
+}
+
 void projectItems() {
     Fixture fixture;
     auto folder = fixture.run("bloom.asset.create-folder", {{"name", Value("Shots")}});
@@ -498,6 +553,7 @@ int main() {
     nodeOperations();
     parameterOperations();
     pathValues();
+    addFeedingInserts();
     projectItems();
     colorSettings();
     descriptions();

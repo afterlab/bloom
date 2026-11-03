@@ -211,12 +211,33 @@ OperationResult AddEditorNode::apply(document::Draft& draft) const {
     const auto& graph = draft.project().findComposition(composition_)->graph();
     if (input_) {
         const auto kind = graph.inputKind(*input_);
+        // An input that is already fed gets the new node INSERTED into its link: what fed it then
+        // feeds the new node, exactly as add-fed-by would wire it, so a filter added in front of a
+        // connected input never leaves its own input empty. A node with no input of that kind
+        // (a value or source node) replaces the link instead.
+        std::optional<document::OutputPortRef> previous;
+        for (const auto& edge : graph.edges())
+            if (edge.destination == *input_)
+                previous = edge.source;
         for (const auto& port : definition->outputs) {
             if (port.valueKind != kind)
                 continue;
             const auto connected =
                 ConnectPorts(composition_, {*node, port.name}, *input_).apply(draft);
-            return connected.status == OperationStatus::Rejected ? connected : result;
+            if (connected.status == OperationStatus::Rejected || !previous)
+                return connected.status == OperationStatus::Rejected ? connected : result;
+            const auto previousKind =
+                draft.project().findComposition(composition_)->graph().outputKind(*previous);
+            std::optional<document::InputPortRef> upstream;
+            if (definition->layerSlotInput && previousKind == definition->layerSlotInput->valueKind)
+                upstream = document::LayerStackInputRef{*node, {}, definition->layerSlotInput->role};
+            for (const auto& input : definition->inputs)
+                if (!upstream && previousKind == input.valueKind)
+                    upstream = document::NodeInputRef{*node, input.name};
+            if (!upstream)
+                return result;
+            const auto fed = ConnectPorts(composition_, *previous, *upstream).apply(draft);
+            return fed.status == OperationStatus::Rejected ? fed : result;
         }
     }
     if (output_) {

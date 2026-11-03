@@ -83,7 +83,9 @@ built on the same command as the UI action, so it validates, labels and undoes t
   layer, and `sequence` for end-to-end layers. It does not import: run `bloom.asset.import` first.
 - `bloom.node.add-asset-source` and `bloom.node.add-composition-source` are drops on the Node
   canvas: an unwired source node. `bloom.node.add-feeding` and `bloom.node.add-fed-by` add a node
-  connected to an existing input or output, as dragging a wire to empty canvas does, and
+  connected to an existing input or output, as dragging a wire to empty canvas does (a node fed
+  into an input that is already connected is inserted into that link, what fed the input feeding
+  the new node), and
   `bloom.node.insert-reroute` inserts a Reroute into the link that feeds an input.
 
 Project Settings > Color is not a document edit, so it is not an operation: MCP's
