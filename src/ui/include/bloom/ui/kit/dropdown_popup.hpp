@@ -31,10 +31,9 @@ class KDropdownPopup final : public KPopupWindow {
     // The surface the artist sees: the list (and its filter), filling the frame inside its hairline.
     [[nodiscard]] QWidget* surface() const noexcept;
 
-    // Opens against `anchor` with `committedRow` checked and current. `anchorTextOffset` is where
-    // the anchor's own text starts, so the popup hangs its check column to the left and its row
-    // text lines up with the closed field's.
-    void openFor(const QWidget& anchor, int committedRow, int anchorTextOffset);
+    // Opens against `anchor` with `committedRow` checked and current. The popup's left edge is the
+    // anchor's left edge; it grows right when wider and moves left only to stay on screen.
+    void openFor(const QWidget& anchor, int committedRow);
 
     // The frame size the current rows want: at least `anchorWidth` wide, wide enough for the
     // widest row, and exactly the rows tall (twelve at most) plus the frame's hairlines.

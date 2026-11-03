@@ -101,6 +101,9 @@ void testPlacementAgainstFakeScreens(Expectations& expectations) {
     auto clamped = place(QRect(950, 100, 40, 26), screen);
     expectations.expect(clamped.frame.right() == screen.right(),
                         "near the right edge x is clamped onto the screen");
+    auto wideAtEdge = place(QRect(900, 100, 60, 26), screen);
+    expectations.expect(wideAtEdge.frame.left() == screen.right() + 1 - frame.width(),
+                        "a popup wider than its anchor at the right edge moves left just enough");
     auto shifted = place(QRect(100, 100, 120, 26), screen, 20);
     expectations.expect(shifted.frame.left() == 80, "a leading shift hangs the frame to the left");
     auto atLeft = place(QRect(5, 100, 120, 26), screen, 20);
@@ -177,21 +180,29 @@ void testALongListIsCappedAtTwelveRowsAndScrollsToTheValue(Expectations& expecta
     dropdown.hidePopup();
 }
 
-void testTheRowTextLinesUpWithTheFieldText(Expectations& expectations) {
-    Fixture fixture(3);
-    auto& dropdown = *fixture.dropdown;
-    dropdown.showPopup();
-    QCoreApplication::processEvents();
-    auto* popup = dropdown.popup();
-    auto* view = dropdown.popupView();
-    const int rowText = view->viewport()->mapToGlobal(QPoint(0, 0)).x() + kit::KPopupList::textOffset();
-    const int fieldText = dropdown.mapToGlobal(QPoint(dropdown.textOffset(), 0)).x();
-    expectations.expect(rowText == fieldText,
-                        "the popup's row text starts exactly where the closed field's text does");
-    expectations.expect(popup->frameRect().translated(popup->pos()).right() >=
-                            dropdown.mapToGlobal(QPoint(dropdown.width() - 1, 0)).x(),
-                        "and the popup reaches at least the field's right edge");
-    dropdown.hidePopup();
+void testThePopupIsLeftAlignedToTheField(Expectations& expectations) {
+    for (const bool icons : {false, true}) {
+        for (const bool wide : {false, true}) {
+            Fixture fixture;
+            auto& dropdown = *fixture.dropdown;
+            QPixmap pixmap(16, 16);
+            pixmap.fill(Qt::red);
+            const QIcon icon = icons ? QIcon(pixmap) : QIcon();
+            (void)dropdown.addItem(icon, QStringLiteral("A"));
+            (void)dropdown.addItem(icon, wide ? QString(24, QLatin1Char('W')) : QStringLiteral("B"));
+            (void)dropdown.addItem(icon, QStringLiteral("C"));
+            dropdown.setCurrentIndex(1);
+            dropdown.showPopup();
+            QCoreApplication::processEvents();
+            auto* popup = dropdown.popup();
+            const QRect frame = popup->frameRect().translated(popup->pos());
+            expectations.expect(frame.left() == dropdown.mapToGlobal(QPoint(0, 0)).x(),
+                                "the popup's left edge equals the field's left edge");
+            expectations.expect(frame.right() >= dropdown.mapToGlobal(QPoint(dropdown.width() - 1, 0)).x(),
+                                "and it reaches at least the field's right edge");
+            dropdown.hidePopup();
+        }
+    }
 }
 
 void testDismissal(Expectations& expectations) {
@@ -387,7 +398,7 @@ int main(int argc, char** argv) {
     testPlacementAgainstFakeScreens(expectations);
     testThereIsNoChinUnderTheLastRow(expectations);
     testALongListIsCappedAtTwelveRowsAndScrollsToTheValue(expectations);
-    testTheRowTextLinesUpWithTheFieldText(expectations);
+    testThePopupIsLeftAlignedToTheField(expectations);
     testDismissal(expectations);
     testTheListKeyboard(expectations);
     testTheSearchableFilter(expectations);

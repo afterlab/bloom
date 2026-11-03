@@ -193,8 +193,8 @@ committed value (or frames a row's own icon, as a checked menu action does), and
 with `OnAccent` text marks the current row, which is the pointer's or the keyboard's. The bar is
 clipped to the frame's rounded inner edge by an antialiased path. Headings are `UiSmall` in
 `Faint`; separators are the menu's `Border` hairline; an elided row's tooltip is its whole label
-unless the row carries its own. A dropdown's list hangs its check column left of the field so the
-row text starts exactly where the closed field's text does, and is at least as wide as the field.
+unless the row carries its own. A dropdown's list is left-aligned to its field, whatever the current
+item or its icon, and is at least as wide as the field; a wider list grows right and moves left only as far as the screen requires.
 
 ### Type Roles
 

@@ -268,9 +268,7 @@ void KDropdown::showPopup() {
             widestText, static_cast<int>(std::ceil(metrics.horizontalAdvance(itemText(index)))));
     widestText += px(Spacing::XS);
     popup_->setWidestRowText(widestText);
-    popup_->openFor(*this, currentIndex_, textOffset() - (itemIcon(currentIndex_).isNull()
-                                                              ? 0
-                                                              : px(Size::IconMedium) + caretGap()));
+    popup_->openFor(*this, currentIndex_);
     update();
     if (QAccessible::isActive()) {
         QAccessible::State expanded;

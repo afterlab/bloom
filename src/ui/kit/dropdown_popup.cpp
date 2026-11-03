@@ -112,21 +112,15 @@ QSize KDropdownPopup::wantedFrameSize(const int anchorWidth) const {
 
 void KDropdownPopup::refitToRows() { refit(wantedFrameSize(anchorWidth_)); }
 
-void KDropdownPopup::openFor(const QWidget& anchor, const int committedRow,
-                             const int anchorTextOffset) {
+void KDropdownPopup::openFor(const QWidget& anchor, const int committedRow) {
     committedSource_ = committedRow;
     list_->prepareForOpen();
     list_->setCommittedRow(viewRow(committedRow));
     list_->setCurrentRow(viewRow(committedRow));
-    const QRect visual = visualGlobalRect(anchor);
-    // A zoomed node card draws its field smaller than its widget; its text offset scales with it.
-    const qreal scale =
-        anchor.width() > 0 ? static_cast<qreal>(visual.width()) / anchor.width() : 1.0;
-    const int shift =
-        std::max(0, KPopupList::textOffset() + frameBorderWidth() -
-                        static_cast<int>(std::lround(anchorTextOffset * scale)));
-    anchorWidth_ = visual.width() + shift - 2 * frameBorderWidth();
-    KPopupWindow::openFor(anchor, wantedFrameSize(anchorWidth_), shift);
+    // The frame's left edge is the anchor's left edge; a wider popup grows right and the shared
+    // placement moves it left only as far as the screen requires.
+    anchorWidth_ = visualGlobalRect(anchor).width() - 2 * frameBorderWidth();
+    KPopupWindow::openFor(anchor, wantedFrameSize(anchorWidth_));
     list_->setFrameCorner(translucent() ? radiusPx(Radius::Small, 0) - frameBorderWidth() : 0.0);
     list_->scrollToCurrent();
 }
