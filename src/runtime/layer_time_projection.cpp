@@ -89,9 +89,16 @@ std::optional<TimeExtent> resolveSourceExtent(const document::Project& project,
     if (node == nullptr)
         return std::nullopt;
     const auto rate = composition.format().frameRate();
+    // A source with its own timing has no media length to offer: a start frame moves it, and a Loop
+    // or Ping-pong mode repeats it without end, so the layer stays unbounded and passes its content
+    // time (a Time Remap included) to the source, whose own mode then wraps it.
+    const auto holds = [&] {
+        const auto* mode = constantOf<std::int64_t>(composition, *node, "loopMode");
+        return mode == nullptr || *mode == 0;
+    };
     const auto identityStart = [&] {
         const auto* start = constantOf<std::int64_t>(composition, *node, "startFrame");
-        return start == nullptr || *start == 0;
+        return (start == nullptr || *start == 0) && holds();
     };
     if (node->typeId == "bloom.image-source") {
         const auto* asset = assetOf(project, composition, *node);
@@ -122,7 +129,7 @@ std::optional<TimeExtent> resolveSourceExtent(const document::Project& project,
         const auto* offset = constantOf<double>(composition, *node, "timeOffset");
         const auto* scale = constantOf<double>(composition, *node, "timeScale");
         if (id == nullptr || *id <= 0 || offset == nullptr || scale == nullptr || *offset != 0.0 ||
-            *scale != 1.0)
+            *scale != 1.0 || !holds())
             return std::nullopt;
         const auto* nested = project.findComposition(
             document::CompositionId::fromRaw(static_cast<std::uint64_t>(*id)));

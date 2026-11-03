@@ -1516,7 +1516,10 @@ Implementation notes:
   claims them once, for the first copy. The Time Remap operand is claimed with the Layer Output.
 - A `Source` extent resolves through `runtime::resolveSourceExtent` (`layer_time_projection`): a
   numbered sequence, a video, an audio asset, or a composition source with constant identity offset
-  and scale; anything else compiles `Unbounded` with `bloom.runtime.compile.layer-extent-unresolved`.
+  and scale, each with its loop mode at Hold; anything else compiles `Unbounded` with
+  `bloom.runtime.compile.layer-extent-unresolved`. A source set to Loop or Ping-pong repeats without
+  end, so its layer passes every content time, a Time Remap past the source's duration included, to
+  the source, whose own mode wraps it.
 - `AddNode` never binds Time Remap (absence means disabled); `EnableLayerTimeRemap` binds it with two
   Linear keys mapping the layer range identically, and `DisableLayerTimeRemap` erases it with its
   curve.

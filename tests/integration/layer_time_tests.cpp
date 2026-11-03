@@ -287,6 +287,128 @@ void identityRemap() {
     expect(fixture.commands.execute(std::move(disable)).changed(), "Time Remap disables");
     expect(fixture.covered(at(30, 24)) == plain[30], "disabling restores plain playback");
 }
+// #434 T2: a Time Remap past the content wraps with the layer's Loop after mode.
+void remapWrapsWithLayerLoop() {
+    Fixture fixture;
+    commands::Transaction enable("Remap", fixture.document.snapshot().revision());
+    enable.emplace<commands::EnableLayerTimeRemap>(fixture.initial.initialCompositionId,
+                                                   fixture.layer);
+    expect(fixture.commands.execute(std::move(enable)).changed(), "Time Remap enables");
+    document::LayerTiming bounded;
+    bounded.contentExtent = document::FixedLayerExtent{at(2), rate(24)};
+    bounded.afterMode = document::LayerTimeMode::Loop;
+    fixture.setTiming(bounded, at(0), at(4));
+    expect(fixture.covered(at(3)) == fixture.covered(at(1)) && fixture.covered(at(1)) > 0,
+           "a remapped time past the extent wraps with the layer's Loop");
+}
+
+// Inner (2 s) holds a Solid whose width is animated 1 -> 13 over [0, 2] s; Main (4 s) nests it as a
+// layer, so a row's covered width reads back the nested content time.
+struct NestedFixture {
+    document::NewProject initial = document::makeNewProject(
+        "Nested time", "Main", core::RationalTime::fromInteger(4),
+        *document::CompositionFormat::create(16, 4, core::PixelAspectRatio::square(), rate(24)));
+    document::Document document{std::move(initial.project)};
+    commands::CommandStack commands{document};
+    document::CompositionId main = initial.initialCompositionId;
+    document::CompositionId inner;
+    document::LayerId layer;
+    document::NodeId sourceNode;
+    runtime::CpuCompositionEvaluator evaluator;
+
+    template <typename Operation, typename... Arguments>
+    commands::CommandResult run(Arguments&&... arguments) {
+        commands::Transaction transaction("Nested", document.snapshot().revision());
+        transaction.emplace<Operation>(std::forward<Arguments>(arguments)...);
+        auto result = commands.execute(std::move(transaction));
+        if (!result.succeeded())
+            throw std::runtime_error("nested fixture edit refused");
+        return result;
+    }
+    NestedFixture() {
+        const auto format = *document::CompositionFormat::create(
+            16, 4, core::PixelAspectRatio::square(), rate(24));
+        run<commands::AddComposition>("Inner", format, rate(24), at(2));
+        inner = document.snapshot().project().compositions().back().id();
+        const auto solid =
+            *run<commands::AddSolidLayer>(inner, "Solid", core::Color4d{1, 1, 1, 1},
+                                          document::Vec2d{8, 2})
+                 .outputId<document::NodeId>(commands::kAddSolidLayerSolidNodeOutput);
+        document::ParameterId width;
+        for (const auto& binding : document.snapshot()
+                                       .project()
+                                       .findComposition(inner)
+                                       ->graph()
+                                       .findNode(solid)
+                                       ->parameters)
+            if (binding.role == "width")
+                width = binding.parameterId;
+        run<commands::SetParameterSource>(inner, width, document::ConstantValueSource{1.0});
+        run<commands::CreateAnimationForParameter>(inner, width, at(0));
+        run<commands::SetKeyframeAtTimeForParameter>(inner, width, at(2), 13.0);
+        run<commands::AddCompositionSource>(main, inner, document::Vec2d{}, true);
+        const auto& graph = document.snapshot().project().findComposition(main)->graph();
+        layer = graph.layerOutputs().back().layerId;
+        for (const auto& node : graph.nodes())
+            if (node.typeId == document::kCompositionSourceNodeType)
+                sourceNode = node.id;
+    }
+    void setSource(const std::string_view role, document::ParameterValue value) {
+        for (const auto& binding : document.snapshot()
+                                       .project()
+                                       .findComposition(main)
+                                       ->graph()
+                                       .findNode(sourceNode)
+                                       ->parameters)
+            if (binding.role == role)
+                run<commands::SetParameterSource>(main, binding.parameterId,
+                                                  document::ConstantValueSource{std::move(value)});
+    }
+    int covered(const core::RationalTime time) {
+        runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+        const auto compiled = compiler.compile({document.snapshot(), main}, {});
+        if (!compiled.plan) {
+            ++failures;
+            return -2;
+        }
+        const auto result = evaluator.evaluate(
+            compiled.plan,
+            {time, compiled.plan->output(), runtime::CompositionFormatResolution{},
+             runtime::EvaluationQuality::Reference,
+             runtime::EvaluationColorIntent::LinearRec709Scene, 1U << 20U},
+            {});
+        if (!result.frame()) {
+            ++failures;
+            return -1;
+        }
+        const auto pixels = result.frame()->processImage().pixels();
+        int count = 0;
+        for (std::size_t x = 0; x < 16; ++x)
+            if (pixels[2 * 16 + x].alpha() > 0.5F)
+                ++count;
+        return count;
+    }
+};
+
+// #434 T2: a nested composition whose source is set to Loop keeps looping inside its layer, Time
+// Remapped or not. The layer used to take the nested duration as its content extent and end there
+// (after mode None), so a remap past that duration showed nothing although the source loops.
+void loopingSourceInsideLayer() {
+    NestedFixture fixture;
+    fixture.run<commands::SetLayerRange>(fixture.main, fixture.layer, at(0), at(4));
+    fixture.run<commands::EnableLayerTimeRemap>(fixture.main, fixture.layer);
+    expect(fixture.covered(at(3)) == 0, "a Hold source ends with its layer's content extent");
+    fixture.setSource("loopMode", std::int64_t{1});
+    expect(fixture.covered(at(5, 2)) == fixture.covered(at(1, 2)) &&
+               fixture.covered(at(3)) == fixture.covered(at(1)) && fixture.covered(at(1)) > 0,
+           "a remap past the duration of a Loop source wraps into the source");
+    fixture.setSource("loopMode", std::int64_t{2});
+    // Ping-pong reflects around the last frame start, 47/24 s: 3 s shows 94/24 - 72/24 s.
+    expect(fixture.covered(at(3)) == fixture.covered(at(22, 24)) &&
+               fixture.covered(at(5, 2)) == fixture.covered(at(34, 24)),
+           "a Ping-pong source reflects past its duration");
+}
+
 template <typename Operation, typename... Arguments>
 bool execute(document::Document& document, commands::CommandStack& commands,
              Arguments&&... arguments) {
@@ -652,6 +774,8 @@ int main() {
         disabledRemappedLayers();
         audibleMixCurves();
         compileFailureNamesItsSubject();
+        remapWrapsWithLayerLoop();
+        loopingSourceInsideLayer();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
