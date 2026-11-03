@@ -355,6 +355,41 @@ anonymous memory over the same samples. The source need and retention are per fr
 - Device claim peaks are unchanged (2.32 GB L25, 3.20 GB L50); every cell ran on the GPU route with
   0 CPU-fallback frames.
 
+### Upload lookahead (#405)
+
+Since #405 the scene executor begins the next planned upload while the job in front of it runs, on
+its second upload pipeline (see [the scene executor](../architecture/gpu-backend.md)). Measured on
+the `layers` suite (L10, L25, L50), cold, at Full, Half and Quarter, with a 6 s cold playback at each
+resolution, inside the same 20G scope with the GPU lock held, one run per cell, on 2026-11-03:
+
+- **Before:** main ec94e8a56.
+- **After:** the same tree with the lookahead.
+
+"Ahead" is `uploadsAhead`, the uploads begun beside another native job. Device peak is
+`peakPhaseDeviceAllocationBytes`, the most device storage one phase held at once.
+
+| Cell | Fill fps Full / Half / Quarter | Playback fps Full / Half / Quarter | Ahead per filled frame | Device peak (Full) |
+|---|---|---|---|---|
+| L10 | 6.66 → 6.98 / 7.01 → 7.02 / 7.01 → 7.01 | 0.83 → 1.50 / 1.00 → 1.17 / 1.50 → 1.17 | 7.0 | 0.86 → 0.91 GB |
+| L25 | 2.23 → 2.18 / 2.21 → 2.23 / 2.28 → 2.31 | 0.17 → 0.17 at all three | 19.0 | 0.95 → 1.20 GB |
+| L50 | 1.19 → 1.24 / 1.20 → 1.29 / 1.19 → 1.27 | 0.17 → 0.17 at all three | 39.0 | 1.05 → 1.28 GB |
+
+- **The lookahead runs on every frame,** for every upload but the first of a frame, and the output
+  is unchanged (0 CPU-fallback frames in every cell; the executor proofs compare it bit for bit
+  with the serial run).
+- **Fill throughput barely moves** (−2 % to +7 %, within run-to-run spread for one run per cell).
+  These fills are not bound by the device owner: fill fps is the same at Full, Half and Quarter,
+  and before the change the executor's upload and processing stages already took only 45–59 % of
+  the fill's wall time (L25 Full: 49 s of 108 s). Frames wait on CPU preparation, so shortening
+  the owner's part of a frame does not raise the rate.
+- **Uncached playback stays at 0.17 fps for L25 and L50** in both runs: the 6 s window shows only
+  the first frame (131 dropped). L10 playback moved within the noise of single 6 s runs. The cause
+  is upstream of the upload, as for the fills.
+- **A phase holds one more upload at once,** 0.05–0.25 GB more device storage at its peak. The device
+  claim peaks are unchanged: they follow the measured peaks within the stated need.
+- The per-stage wall times (`uploadFenceSeconds`, `processingFenceSeconds`) now overlap and are
+  larger after the change; they are no longer additive.
+
 ## Conditions
 
 - **Host crash, 2026-10-31 16:14 local.** The first after-run queue ran one runner for the whole
