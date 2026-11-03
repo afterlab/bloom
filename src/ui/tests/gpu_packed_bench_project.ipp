@@ -795,6 +795,12 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     // Memory over the measured window: the sample with the highest RSS, and a line every ten
     // seconds so a run that stops making progress shows where its memory is.
     BenchMemorySample memoryPeak;
+    // The operation cache over the fill only: its sampled bytes and budget, next to its lookups
+    // over the same window, so a fill whose reusable working set does not stay cached shows (#415).
+    std::uint64_t fillOperationMaxBytes = 0;
+    std::uint64_t fillOperationMaxBudgetBytes = 0;
+    double fillOperationSumBytes = 0.0;
+    std::uint64_t fillOperationSamples = 0;
     std::chrono::steady_clock::time_point lastMemoryLine{};
     // The runtime profiler sampler (#423), fed like the application's UI-side hook. Without
     // --bench-profiler no sampler thread runs (a closed Profiler): each memory tick takes one
@@ -835,6 +841,14 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
             sample.deviceOwnedNativeBytes =
                 owned.ownedNativeImageBytes + owned.ownedNativeBufferBytes;
         }
+        if (ram.isCaching()) {
+            const std::uint64_t operationBytes = sample.operationCacheBytes.valueOr(0);
+            fillOperationMaxBytes = std::max(fillOperationMaxBytes, operationBytes);
+            fillOperationMaxBudgetBytes = std::max<std::uint64_t>(
+                fillOperationMaxBudgetBytes, evaluator.operationCache()->byteBudget());
+            fillOperationSumBytes += static_cast<double>(operationBytes);
+            ++fillOperationSamples;
+        }
         if (sample.rssBytes.valueOr(0) >= memoryPeak.rssBytes.valueOr(0))
             memoryPeak = sample;
         const auto now = std::chrono::steady_clock::now();
@@ -874,12 +888,26 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
              << (played.seconds > 0 ? static_cast<double>(played.paintedFrames) / played.seconds
                                     : 0.0);
     } else {
+        const auto operationBefore = evaluator.operationCache()->statistics();
+        const auto operationBudgetBefore = evaluator.operationCache()->byteBudget();
         ram.start();
         const bool finished = waitUntil([&] { return !ram.isCaching(); }, gBenchTimeout);
         const auto wall =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         const auto cpu = benchProcessCpuSeconds() - cpuBefore;
         const auto completion = ram.lastCompletion();
+        const auto operationAfter = evaluator.operationCache()->statistics();
+        json << ",\"fillOperationHits\":" << operationAfter.hits - operationBefore.hits
+             << ",\"fillOperationMisses\":" << operationAfter.misses - operationBefore.misses
+             << ",\"fillOperationPressureDrops\":"
+             << operationAfter.pressureDrops - operationBefore.pressureDrops
+             << ",\"fillOperationBudgetBeforeBytes\":" << operationBudgetBefore
+             << ",\"fillOperationMaxBudgetBytes\":" << fillOperationMaxBudgetBytes
+             << ",\"fillOperationMaxBytes\":" << fillOperationMaxBytes
+             << ",\"fillOperationMeanBytes\":"
+             << (fillOperationSamples > 0
+                     ? fillOperationSumBytes / static_cast<double>(fillOperationSamples)
+                     : 0.0);
         json << ",\"finished\":" << (finished ? "true" : "false") << ",\"completion\":"
              << (completion ? static_cast<int>(*completion) : -1)
              << ",\"completionComplete\":"

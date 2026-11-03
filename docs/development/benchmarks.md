@@ -280,7 +280,12 @@ Every measurement is a fresh process.
   which the run log keeps, so a fill that stops making progress shows where its memory is.
   Fills also report `cachedFrames` (frames still retained when the fill ends) and
   `previewFirstYieldedBytes`: bytes the other reusable pools gave back so a finished preview frame
-  was kept instead of an earlier one (preview-first eviction priority during a fill).
+  was kept instead of an earlier one (preview-first eviction priority during a fill). Over the
+  fill alone, the operation cache's lookups (`fillOperationHits`, `fillOperationMisses`,
+  `fillOperationPressureDrops`), its byte budget when the fill starts
+  (`fillOperationBudgetBeforeBytes`) and the most it was given during the fill
+  (`fillOperationMaxBudgetBytes`), and its sampled bytes (`fillOperationMaxBytes`,
+  `fillOperationMeanBytes`) say whether a fill's reusable working set stayed cached.
 
 Process sampling uses `/proc` on Linux and `psutil` where it is installed; without either, CPU and
 RSS sampling are reported as absent rather than guessed.
