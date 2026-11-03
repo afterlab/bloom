@@ -2785,7 +2785,7 @@ OperationRegistry OperationRegistry::builtIn() {
     add("bloom.layer.set-parent",
         {compositionArgument(), layerArgument(),
          maybe("parent", ValueKind::Id, StableId{1},
-               "The parent layer. Omit to clear the parent.")},
+               "The parent layer. Omit it, or pass null, to clear the parent.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);

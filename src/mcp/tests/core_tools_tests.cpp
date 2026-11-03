@@ -838,6 +838,44 @@ void animationReadBack() {
            "the handle mode table is listed: " + enums);
 }
 
+// #434 O2/O6: transact reads `null` as an omitted argument (`"parent": null` clears a parent) and
+// passes a path object through a parameter `value` to the operation instead of refusing it at the
+// protocol.
+void fieldTestArguments() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    for (const auto* name : {"Parent", "Child"})
+        static_cast<void>(transact(R"({"op":"bloom.layer.add-solid","args":{"composition":1,)"
+                                   R"("name":")" +
+                                   std::string(name) + R"(","color":[1,0,0,1]}})"));
+    const auto layers = server.call("query", R"({"kind":"layers","composition":1})");
+    std::vector<std::string> ids;
+    const std::regex id(R"re(\{"id":(\d+),)re");
+    for (auto match = std::sregex_iterator(layers.begin(), layers.end(), id);
+         match != std::sregex_iterator(); ++match)
+        ids.push_back((*match)[1].str());
+    expect(ids.size() >= 2, "two layers to parent: " + layers);
+    if (ids.size() < 2)
+        return;
+    auto result = transact(R"({"op":"bloom.layer.set-parent","args":{"composition":1,"layer":)" +
+                           ids[1] + R"(,"parent":)" + ids[0] + "}}");
+    expect(contains(result, R"("succeeded":true)"), "the child is parented: " + result);
+    result = transact(R"({"op":"bloom.layer.set-parent","args":{"composition":1,"layer":)" +
+                      ids[1] + R"(,"parent":null}})");
+    expect(contains(result, R"("isError":false)") && contains(result, R"("succeeded":true)"),
+           "parent null clears the parent: " + result);
+    const auto nodes = server.call("query", R"({"kind":"nodes","composition":1})");
+    const auto opacity = firstMatch(nodes, R"re("opacity":(\d+))re");
+    result = transact(R"({"op":"bloom.parameter.set-source","args":{"composition":1,"parameter":)" +
+                      opacity +
+                      R"(,"value":{"closed":true,"anchors":[{"point":[0,0]},{"point":[10,0]}]}}})");
+    expect(!contains(result, "expects value") && contains(result, "cannot take a path"),
+           "a path value reaches the parameter and is judged by its kind: " + result);
+}
+
 // profiler.snapshot (#423): unbound it says so; bound it returns the snapshot as JSON with
 // schemaVersion, absent values as null, and the fixed histogram and pool shapes.
 void profilerSnapshotTool() {
@@ -963,6 +1001,7 @@ int main() {
         exportReveal();
         retiredTransientJobs();
         animationReadBack();
+        fieldTestArguments();
         parityTools();
         stdioStopsWhileInputIdle();
     } catch (const std::exception& error) {

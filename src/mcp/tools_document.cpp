@@ -448,6 +448,11 @@ yyjson_mut_val* transactTool(McpServerCore::State& core, Json& out, McpCall& cal
             const auto schema = std::ranges::find(descriptor->schema.arguments, name,
                                                   &scripting::ArgumentSchema::name);
             auto* item = yyjson_obj_iter_get_val(key);
+            // null is the same as leaving the argument out, as None is in Python: an optional
+            // argument takes its default (`"parent": null` clears a parent) and a required one is
+            // reported missing.
+            if (yyjson_is_null(item) && schema != descriptor->schema.arguments.end())
+                continue;
             if (schema == descriptor->schema.arguments.end())
                 throw InvalidInput(at + " (" + id + "): unknown argument \"" + name +
                                    "\"; the example is " +

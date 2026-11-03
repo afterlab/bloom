@@ -5,6 +5,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/scripting/json_script.hpp>
 #include <bloom/scripting/session.hpp>
 
 #include <algorithm>
@@ -488,6 +489,17 @@ void addFeedingInserts() {
            "one undo restores the original link");
 }
 
+// #434 O6: a JSON script reads `null` as an omitted argument, as transact and Python do, so
+// set-parent with "parent": null clears the parent instead of refusing the script.
+void nullArguments() {
+    const auto parsed = scripting::parseScriptJson(
+        R"([{"op":"bloom.layer.set-parent","args":{"composition":1,"layer":2,"parent":null}}])");
+    expect(static_cast<bool>(parsed) && parsed.transactions().size() == 1 &&
+               !parsed.transactions().front().arguments.contains("parent") &&
+               parsed.transactions().front().arguments.contains("layer"),
+           "a null argument parses as an omitted one");
+}
+
 void projectItems() {
     Fixture fixture;
     auto folder = fixture.run("bloom.asset.create-folder", {{"name", Value("Shots")}});
@@ -571,6 +583,7 @@ int main() {
     parameterOperations();
     pathValues();
     addFeedingInserts();
+    nullArguments();
     projectItems();
     colorSettings();
     descriptions();

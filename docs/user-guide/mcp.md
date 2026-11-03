@@ -293,6 +293,11 @@ these three.
 
 ## Edits and diagnostics
 
+**Omitted arguments.** An operation argument set to `null` is the same as leaving it out, in
+`transact` and JSON scripts as with `None` in Python: an optional argument takes its default
+(`bloom.layer.set-parent` with `"parent": null` clears the parent) and a required one is reported
+missing.
+
 **Times.** Every time argument follows one contract, in `transact`, `editor.reveal`, `transport`,
 JSON scripts and Python alike: an integer is a whole frame of the composition the call works on, at
 its frame rate, and `[numerator, denominator]` is an exact time in seconds. At 24 fps,

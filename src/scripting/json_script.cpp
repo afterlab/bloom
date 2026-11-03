@@ -454,6 +454,9 @@ ScriptParseResult parseScriptJson(const std::string_view json) {
         }
         ScriptTransaction transaction{.operation = *operationText, .arguments = {}};
         for (const auto& [name, value] : *argsObject) {
+            // null is the same as leaving the argument out, as in MCP and Python.
+            if (std::holds_alternative<std::nullptr_t>(value.storage))
+                continue;
             const auto converted = convert(value);
             if (!converted.has_value()) {
                 result.diagnostic_ =
