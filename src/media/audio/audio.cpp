@@ -140,6 +140,36 @@ bool AudioStream::ensureWindow(const std::uint64_t frame, const CancelAudioWork&
         return false;
     if (frame >= windowStart_ && frame - windowStart_ < windowCount_)
         return true;
+    // Reading on past the window keeps its tail and decodes forward from the window end, so a
+    // reader whose next request starts a little before this frame (the mixer's interpolation
+    // taps, #459) is served from memory instead of seeking the decoder backwards.
+    const auto windowEnd = windowStart_ + windowCount_;
+    const auto history = std::min(windowFrames_ / 8U, windowCount_);
+    if (history != 0 && frame >= windowEnd && windowEnd < probe_.frames) {
+        const auto forward = static_cast<std::size_t>(
+            std::min<std::uint64_t>(windowFrames_ - history, probe_.frames - windowEnd));
+        if (frame - windowEnd < forward) {
+            std::copy_n(window_.data() + (windowCount_ - history) * probe_.channels,
+                        history * probe_.channels, window_.data());
+            // The window no longer holds what it described until the fill succeeds.
+            windowCount_ = 0;
+            auto result = fill(windowEnd,
+                               std::span<float>(window_.data() + history * probe_.channels,
+                                                forward * probe_.channels),
+                               cancel);
+            if (!result || *result.value() != forward) {
+                diagnostic_ =
+                    result ? AudioError::codeOnly(AudioErrorCode::DecoderFailure) : *result.error();
+                if (diagnostic_->code != AudioErrorCode::Cancelled)
+                    diagnosticCode_.store(static_cast<int>(diagnostic_->code),
+                                          std::memory_order_release);
+                return false;
+            }
+            windowStart_ = windowEnd - history;
+            windowCount_ = history + forward;
+            return true;
+        }
+    }
     const auto count =
         static_cast<std::size_t>(std::min<std::uint64_t>(windowFrames_, probe_.frames - frame));
     auto result = fill(frame, std::span<float>(window_.data(), count * probe_.channels), cancel);

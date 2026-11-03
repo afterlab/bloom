@@ -144,11 +144,12 @@ audioMix(const Snapshot& snapshot, const std::uint64_t composition, const core::
     return runtime::CpuCompositionEvaluator{}.evaluateAudioMix(compiled.plan, at);
 }
 std::shared_ptr<const media::audio::AudioBuffer> audioBuffer() {
-    // Distinct values at each 8 Hz output sample, with a valid 48 kHz source descriptor.
+    // Distinct values at each 8 Hz output sample, with a valid 48 kHz source descriptor. Each
+    // value holds from 1000 frames before its read position, so the mixer's band-limited
+    // decimation filter (half-width 528 source frames at 6000:1) sees a constant there (#459).
     std::vector<float> samples(96000);
-    for (std::size_t index = 0; index < 16; ++index)
-        std::ranges::fill(std::span(samples).subspan(index * 6000, 6000),
-                          static_cast<float>(index + 1));
+    for (std::size_t index = 0; index < samples.size(); ++index)
+        samples[index] = static_cast<float>(std::min<std::size_t>((index + 1000) / 6000, 15) + 1);
     return std::make_shared<const media::audio::AudioBuffer>(
         media::audio::AudioBuffer{48000, 1, samples.size(), {std::move(samples)}});
 }

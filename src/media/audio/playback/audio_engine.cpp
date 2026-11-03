@@ -39,26 +39,126 @@ using bloom::media::audio::playback::AudioStatus;
     return static_cast<std::int64_t>(std::floor(value));
 }
 
-[[nodiscard]] std::size_t sourceFrameFor(const std::int64_t localOutputFrame,
-                                         const std::uint32_t sourceRate,
-                                         const std::uint32_t outputRate) noexcept {
-    const auto value = static_cast<long double>(localOutputFrame) *
-                       static_cast<long double>(sourceRate) / static_cast<long double>(outputRate);
-    if (value < 0.0L ||
-        value >= static_cast<long double>(std::numeric_limits<std::size_t>::max())) {
-        return std::numeric_limits<std::size_t>::max();
-    }
-    return static_cast<std::size_t>(std::floor(value));
+[[nodiscard]] std::optional<std::int64_t> checkedProduct(const std::int64_t lhs,
+                                                         const std::int64_t rhs) noexcept {
+    constexpr auto max = std::numeric_limits<std::int64_t>::max();
+    constexpr auto min = std::numeric_limits<std::int64_t>::min();
+    if (lhs == 0 || rhs == 0)
+        return std::int64_t{0};
+    const bool overflow = lhs > 0 ? (rhs > 0 ? lhs > max / rhs : rhs < min / lhs)
+                                  : (rhs > 0 ? lhs < min / rhs : rhs < max / lhs);
+    if (overflow)
+        return std::nullopt;
+    return lhs * rhs;
 }
 
-[[nodiscard]] std::optional<std::size_t> clipSampleFrame(const AudioClip& clip,
-                                                         std::int64_t absoluteFrame,
-                                                         const std::uint32_t outputRate) noexcept {
+// Band-limited sample-rate conversion (#459). Each output frame reads its clip at the exact
+// fractional source position through a Kaiser-windowed sinc, using libswresample's default filter
+// parameters (filter_size 32, i.e. 16 zero crossings per side; cutoff 0.97 of the lower Nyquist;
+// Kaiser beta 9; 2^10 phases per zero crossing, linearly interpolated). The engine samples clips
+// at random positions (per-clip time mappers, loops, transport rate), so a streaming resampler
+// does not fit; this stateless kernel serves any position. A position on an exact source frame of
+// a clip already at the output rate needs no conversion and plays that sample unchanged.
+constexpr std::size_t kSincZeroCrossings = 16;
+constexpr std::size_t kSincPhases = 1024;
+constexpr double kSincCutoff = 0.97;
+constexpr double kKaiserBeta = 9.0;
+// Beyond 32:1 decimation the filter stops widening, bounding the taps per output frame.
+constexpr double kMaxDecimation = 32.0;
+
+[[nodiscard]] double besselI0(const double x) noexcept {
+    double sum = 1.0;
+    double term = 1.0;
+    for (int k = 1; k < 200; ++k) {
+        const auto half = x / (2.0 * static_cast<double>(k));
+        term *= half * half;
+        sum += term;
+        if (term < sum * 1e-17)
+            break;
+    }
+    return sum;
+}
+
+// sinc(u) * kaiser(u / zeroCrossings) for u in [0, zeroCrossings], kSincPhases samples per unit,
+// plus one zero guard entry for interpolation.
+[[nodiscard]] const std::vector<float>& sincTable() {
+    static const std::vector<float> table = [] {
+        constexpr auto entries = kSincZeroCrossings * kSincPhases;
+        constexpr double pi = 3.14159265358979323846;
+        std::vector<float> values(entries + 2, 0.0F);
+        const auto normal = besselI0(kKaiserBeta);
+        for (std::size_t index = 0; index <= entries; ++index) {
+            const auto u = static_cast<double>(index) / static_cast<double>(kSincPhases);
+            const auto ratio = u / static_cast<double>(kSincZeroCrossings);
+            const auto window =
+                besselI0(kKaiserBeta * std::sqrt(std::max(0.0, 1.0 - ratio * ratio))) / normal;
+            const auto sinc = index == 0 ? 1.0 : std::sin(pi * u) / (pi * u);
+            values[index] = static_cast<float>(sinc * window);
+        }
+        return values;
+    }();
+    return table;
+}
+
+// The filter weight of a source frame `distance` frames from the read position.
+[[nodiscard]] double sincWeight(const std::vector<float>& table, const double distance,
+                                const double cutoff) noexcept {
+    const auto scaled = std::abs(distance) * cutoff * static_cast<double>(kSincPhases);
+    const auto index = static_cast<std::size_t>(scaled);
+    if (index >= kSincZeroCrossings * kSincPhases)
+        return 0.0;
+    const auto fraction = scaled - static_cast<double>(index);
+    return cutoff * (static_cast<double>(table[index]) +
+                     fraction * static_cast<double>(table[index + 1] - table[index]));
+}
+
+// A clip's read position in source frames: `frame` plus `fraction` in [0, 1).
+struct SourcePosition final {
+    std::int64_t frame = 0;
+    double fraction = 0.0;
+};
+
+[[nodiscard]] std::int64_t floorDivide(const std::int64_t numerator,
+                                       const std::int64_t denominator) noexcept {
+    const auto quotient = numerator / denominator;
+    return (numerator % denominator != 0 && (numerator < 0) != (denominator < 0)) ? quotient - 1
+                                                                                  : quotient;
+}
+
+// `localFrame + localFraction` output frames into the clip, in source frames.
+[[nodiscard]] std::optional<SourcePosition>
+sourcePositionFor(const std::int64_t localFrame, const double localFraction,
+                  const std::uint32_t sourceRate, const std::uint32_t outputRate) noexcept {
+    if (sourceRate == outputRate)
+        return SourcePosition{localFrame, localFraction};
+    if (const auto scaled = checkedProduct(localFrame, static_cast<std::int64_t>(sourceRate))) {
+        const auto rate = static_cast<std::int64_t>(outputRate);
+        const auto whole = floorDivide(*scaled, rate);
+        const auto remainder = static_cast<double>(*scaled - whole * rate) +
+                               localFraction * static_cast<double>(sourceRate);
+        const auto carry = std::floor(remainder / static_cast<double>(outputRate));
+        return SourcePosition{whole + static_cast<std::int64_t>(carry),
+                              remainder / static_cast<double>(outputRate) - carry};
+    }
+    const auto value =
+        (static_cast<long double>(localFrame) + static_cast<long double>(localFraction)) *
+        static_cast<long double>(sourceRate) / static_cast<long double>(outputRate);
+    if (value >= static_cast<long double>(std::numeric_limits<std::int64_t>::max()))
+        return std::nullopt;
+    const auto whole = std::floor(value);
+    return SourcePosition{static_cast<std::int64_t>(whole), static_cast<double>(value - whole)};
+}
+
+[[nodiscard]] std::optional<SourcePosition>
+clipSourcePosition(const AudioClip& clip, std::int64_t absoluteFrame,
+                   const std::uint32_t outputRate) noexcept {
     if (clip.muted || clip.buffer == nullptr || clip.buffer->rate == 0 ||
         clip.buffer->channels == 0 ||
         (!clip.buffer->stream && clip.buffer->planes.size() != clip.buffer->channels)) {
         return std::nullopt;
     }
+    // A mapped time between output frames keeps its fraction, so a retimed clip interpolates too.
+    double fraction = 0.0;
     if (clip.mapTime) {
         const auto time = RationalTime::create(absoluteFrame, outputRate);
         if (!time)
@@ -67,6 +167,12 @@ using bloom::media::audio::playback::AudioStatus;
         if (!mapped)
             return std::nullopt;
         absoluteFrame = timeToFrames(*mapped, outputRate);
+        if (const auto scaled =
+                checkedProduct(mapped->numerator(), static_cast<std::int64_t>(outputRate))) {
+            const auto remainder =
+                *scaled - floorDivide(*scaled, mapped->denominator()) * mapped->denominator();
+            fraction = static_cast<double>(remainder) / static_cast<double>(mapped->denominator());
+        }
     }
     const auto startFrame = timeToFrames(clip.startTime, outputRate);
     if (absoluteFrame < startFrame) {
@@ -79,28 +185,17 @@ using bloom::media::audio::playback::AudioStatus;
     if (localFrame < 0) {
         return std::nullopt;
     }
-    const auto sourceFrame = sourceFrameFor(localFrame, clip.buffer->rate, outputRate);
-    if (sourceFrame >= clip.buffer->frames ||
-        (!clip.buffer->stream && sourceFrame >= clip.buffer->planes.front().size()))
+    const auto position = sourcePositionFor(localFrame, fraction, clip.buffer->rate, outputRate);
+    if (!position || position->frame < 0 ||
+        static_cast<std::uint64_t>(position->frame) >= clip.buffer->frames ||
+        (!clip.buffer->stream &&
+         static_cast<std::uint64_t>(position->frame) >= clip.buffer->planes.front().size()))
         return std::nullopt;
-    return sourceFrame;
+    return position;
 }
 
 [[nodiscard]] AudioStatus errorStatus(const AudioErrorCode code) noexcept {
     return AudioStatus{AudioError::codeOnly(code)};
-}
-
-[[nodiscard]] std::optional<std::int64_t> checkedProduct(const std::int64_t lhs,
-                                                         const std::int64_t rhs) noexcept {
-    constexpr auto max = std::numeric_limits<std::int64_t>::max();
-    constexpr auto min = std::numeric_limits<std::int64_t>::min();
-    if (lhs == 0 || rhs == 0)
-        return std::int64_t{0};
-    const bool overflow = lhs > 0 ? (rhs > 0 ? lhs > max / rhs : rhs < min / lhs)
-                                  : (rhs > 0 ? lhs < min / rhs : rhs < max / lhs);
-    if (overflow)
-        return std::nullopt;
-    return lhs * rhs;
 }
 
 // `time` in units of 1/scale output frames, exactly; nullopt when it is not representable.
@@ -231,45 +326,71 @@ AudioEngine::AudioEngine(std::unique_ptr<Backend> backend, const Config config)
       ring_(std::make_unique<SpscRing>(config.ringBufferFrames, config.channels)),
       mixScratch_(kMixerBlockFrames * config.channels) {
     clockState_.store(std::make_shared<const ClockState>(), std::memory_order_release);
+    // Built here, never on the mixer.
+    static_cast<void>(sincTable());
 }
 
 AudioEngine::~AudioEngine() { stop(); }
 
-std::vector<float> AudioEngine::clipGains(const AudioClip& clip) const {
+AudioEngine::ClipMix AudioEngine::clipMix(const AudioClip& clip) const {
     if (!clip.buffer)
         return {};
-    return channelMixMatrix(clip.buffer->channelLayout, clip.buffer->channels, config_.channels);
+    ClipMix mix;
+    mix.gains =
+        channelMixMatrix(clip.buffer->channelLayout, clip.buffer->channels, config_.channels);
+    if (clip.buffer->rate != 0 && config_.rate != 0) {
+        // Decimation lowers the cutoff below the output Nyquist, so nothing above it aliases.
+        const auto ratio = std::max(std::min(1.0, static_cast<double>(config_.rate) /
+                                                      static_cast<double>(clip.buffer->rate)),
+                                    1.0 / kMaxDecimation);
+        mix.cutoff = kSincCutoff * ratio;
+        mix.halfWidthFrames = static_cast<std::size_t>(
+            std::ceil(static_cast<double>(kSincZeroCrossings) / mix.cutoff));
+    }
+    return mix;
+}
+
+void AudioEngine::reserveScratchLocked(const AudioClip& clip, const ClipMix& mix) {
+    const auto taps = 2U * mix.halfWidthFrames + 1U;
+    if (tapScratch_.size() < taps)
+        tapScratch_.resize(taps);
+    if (clip.buffer && clip.buffer->stream && streamScratch_.size() < taps * clip.buffer->channels)
+        streamScratch_.resize(taps * clip.buffer->channels);
 }
 
 AudioEngine::ClipId AudioEngine::addClip(AudioClip clip) {
-    auto gains = clipGains(clip);
+    auto mix = clipMix(clip);
     std::scoped_lock lock(controlMutex_);
-    clipGains_.reserve(clips_.size() + 1U);
+    clipMixes_.reserve(clips_.size() + 1U);
+    reserveScratchLocked(clip, mix);
     clips_.push_back(std::move(clip));
-    clipGains_.push_back(std::move(gains));
+    clipMixes_.push_back(std::move(mix));
     return clips_.size() - 1U;
 }
 
 void AudioEngine::replaceClips(std::vector<AudioClip> clips) {
-    // The channel mix is resolved here, off the mixer, so mixBlock never allocates.
-    std::vector<std::vector<float>> gains;
-    gains.reserve(clips.size());
+    // The channel mix and resampling filter are resolved here, off the mixer, so mixBlock never
+    // allocates.
+    std::vector<ClipMix> mixes;
+    mixes.reserve(clips.size());
     for (const auto& clip : clips)
-        gains.push_back(clipGains(clip));
+        mixes.push_back(clipMix(clip));
     {
         std::scoped_lock lock(controlMutex_);
+        for (std::size_t index = 0; index < clips.size(); ++index)
+            reserveScratchLocked(clips[index], mixes[index]);
         clips_.swap(clips);
-        clipGains_.swap(gains);
+        clipMixes_.swap(mixes);
     } // Old decoded refs are released outside the mixer mutex.
 }
 
 void AudioEngine::clearClips() noexcept {
     std::vector<AudioClip> old;
-    std::vector<std::vector<float>> oldGains;
+    std::vector<ClipMix> oldMixes;
     {
         std::scoped_lock lock(controlMutex_);
         old.swap(clips_);
-        oldGains.swap(clipGains_);
+        oldMixes.swap(clipMixes_);
     }
 }
 
@@ -279,7 +400,7 @@ bool AudioEngine::removeClip(const ClipId id) {
         return false;
     }
     clips_.erase(clips_.begin() + static_cast<std::ptrdiff_t>(id));
-    clipGains_.erase(clipGains_.begin() + static_cast<std::ptrdiff_t>(id));
+    clipMixes_.erase(clipMixes_.begin() + static_cast<std::ptrdiff_t>(id));
     return true;
 }
 
@@ -664,6 +785,7 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
     };
     const auto firstAbsoluteFrame = timeToFrames(clockOrigin_, config_.rate) +
                                     saturatingFrameOffset(firstProducedFrame, playbackRate_);
+    const auto& table = sincTable();
     const auto anySolo = std::any_of(clips_.begin(), clips_.end(), [](const AudioClip& clip) {
         return clip.solo && !clip.muted;
     });
@@ -675,14 +797,65 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
             const auto& clip = clips_[clipIndex];
             if (anySolo && !clip.solo)
                 continue;
-            const auto sourceFrame = clipSampleFrame(clip, absoluteFrame, config_.rate);
-            if (!sourceFrame)
+            const auto position = clipSourcePosition(clip, absoluteFrame, config_.rate);
+            if (!position)
                 continue;
             // Gains are output-major: gains[output * sourceChannels + source].
-            const auto& gains = clipGains_[clipIndex];
-            const std::size_t sourceChannels = clip.buffer->channels;
+            const auto& mix = clipMixes_[clipIndex];
+            const auto& gains = mix.gains;
+            const auto& buffer = *clip.buffer;
+            const std::size_t sourceChannels = buffer.channels;
             if (gains.size() != sourceChannels * config_.channels)
                 continue;
+            // Exact: an output-rate clip on a whole source frame plays that sample unchanged.
+            const bool exact = position->fraction == 0.0 && buffer.rate == config_.rate;
+            const auto available = static_cast<std::int64_t>(
+                buffer.stream
+                    ? buffer.frames
+                    : std::min<std::uint64_t>(buffer.frames, buffer.planes.front().size()));
+            std::int64_t firstTap = position->frame;
+            std::size_t tapCount = 1;
+            if (!exact) {
+                // Taps past either end of the source repeat its edge sample, so the filter keeps
+                // unity gain up to the clip's first and last frames. Weights are normalized to sum
+                // to one, which makes a constant signal pass exactly.
+                const auto halfWidth = static_cast<std::int64_t>(mix.halfWidthFrames);
+                const auto lowest = position->frame - halfWidth + 1;
+                const auto highest = position->frame + halfWidth;
+                firstTap = std::clamp<std::int64_t>(lowest, 0, available - 1);
+                const auto lastTap = std::clamp<std::int64_t>(highest, 0, available - 1);
+                tapCount = static_cast<std::size_t>(lastTap - firstTap + 1);
+                if (tapCount > tapScratch_.size())
+                    continue;
+                std::fill_n(tapScratch_.begin(), tapCount, 0.0);
+                double weightSum = 0.0;
+                for (auto tap = lowest; tap <= highest; ++tap) {
+                    const auto distance =
+                        static_cast<double>(tap - position->frame) - position->fraction;
+                    const auto weight = sincWeight(table, distance, mix.cutoff);
+                    weightSum += weight;
+                    tapScratch_[static_cast<std::size_t>(
+                        std::clamp<std::int64_t>(tap, firstTap, lastTap) - firstTap)] += weight;
+                }
+                if (!(weightSum > 0.0))
+                    continue;
+                for (std::size_t tap = 0; tap < tapCount; ++tap)
+                    tapScratch_[tap] /= weightSum;
+            }
+            const float* streamed = nullptr;
+            if (buffer.stream && !exact) {
+                const auto window =
+                    std::span<float>(streamScratch_.data(), streamScratch_.size())
+                        .first(std::min(streamScratch_.size(), tapCount * sourceChannels));
+                if (window.size() != tapCount * sourceChannels ||
+                    buffer.stream->probe().channels != sourceChannels)
+                    continue;
+                const auto read = buffer.stream->readInterleaved(
+                    static_cast<std::uint64_t>(firstTap), window, cancelled);
+                if (!read || *read.value() != tapCount)
+                    continue;
+                streamed = window.data();
+            }
             for (std::size_t source = 0; source < sourceChannels; ++source) {
                 bool audible = false;
                 for (std::size_t channel = 0; channel < config_.channels; ++channel)
@@ -690,17 +863,38 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
                 if (!audible)
                     continue;
                 float sample = 0.0F;
-                if (clip.buffer->stream) {
-                    const auto streamed = clip.buffer->stream->sample(
-                        *sourceFrame, static_cast<std::uint32_t>(source), cancelled);
-                    if (!streamed)
+                if (exact) {
+                    if (buffer.stream) {
+                        const auto value =
+                            buffer.stream->sample(static_cast<std::uint64_t>(position->frame),
+                                                  static_cast<std::uint32_t>(source), cancelled);
+                        if (!value)
+                            continue;
+                        sample = *value;
+                    } else if (source < buffer.planes.size() &&
+                               static_cast<std::size_t>(position->frame) <
+                                   buffer.planes[source].size()) {
+                        sample = buffer.planes[source][static_cast<std::size_t>(position->frame)];
+                    } else {
                         continue;
-                    sample = *streamed;
-                } else if (source < clip.buffer->planes.size() &&
-                           *sourceFrame < clip.buffer->planes[source].size()) {
-                    sample = clip.buffer->planes[source][*sourceFrame];
+                    }
                 } else {
-                    continue;
+                    double sum = 0.0;
+                    if (streamed != nullptr) {
+                        for (std::size_t tap = 0; tap < tapCount; ++tap)
+                            sum += tapScratch_[tap] *
+                                   static_cast<double>(streamed[tap * sourceChannels + source]);
+                    } else if (source < buffer.planes.size() &&
+                               static_cast<std::size_t>(firstTap) + tapCount <=
+                                   buffer.planes[source].size()) {
+                        const auto* plane =
+                            buffer.planes[source].data() + static_cast<std::size_t>(firstTap);
+                        for (std::size_t tap = 0; tap < tapCount; ++tap)
+                            sum += tapScratch_[tap] * static_cast<double>(plane[tap]);
+                    } else {
+                        continue;
+                    }
+                    sample = static_cast<float>(sum);
                 }
                 for (std::size_t channel = 0; channel < config_.channels; ++channel)
                     if (const auto gain = gains[channel * sourceChannels + source]; gain != 0.0F)

@@ -2,6 +2,7 @@
 #include <bloom/media/audio/channel_layout.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -511,6 +512,103 @@ void testMidPlayLoopChangeRewindsQueuedAudio(Expectations& expectations) {
                   "mid-play loop changes re-mix queued audio gaplessly from the device position");
 }
 
+[[nodiscard]] std::vector<float> sine(const double frequency, const std::uint32_t rate,
+                                      const std::size_t frames) {
+    constexpr double pi = 3.14159265358979323846;
+    std::vector<float> samples(frames);
+    for (std::size_t index = 0; index < frames; ++index)
+        samples[index] = static_cast<float>(std::sin(
+            2.0 * pi * frequency * static_cast<double>(index) / static_cast<double>(rate)));
+    return samples;
+}
+
+// Renders `frames` frames of one clip at 48 kHz mono.
+[[nodiscard]] std::vector<float> renderAt48k(std::shared_ptr<const AudioBuffer> buffer,
+                                             const std::size_t frames) {
+    auto backend = std::make_unique<NullBackend>();
+    auto* captured = backend.get();
+    AudioEngine engine(std::move(backend), AudioEngine::Config{48'000, 1, 16'384});
+    static_cast<void>(engine.addClip(AudioClip{std::move(buffer), time(0), 1.0F, false, false}));
+    static_cast<void>(engine.play(time(0)));
+    static_cast<void>(engine.renderForTesting(frames));
+    return {captured->captured().begin(), captured->captured().end()};
+}
+
+// #459: a 44.1 kHz clip on the 48 kHz engine is band-limited interpolated, not held at the
+// nearest earlier source sample. A 5 kHz tone stays a 5 kHz tone to within the filter's passband
+// ripple; zero-order hold is off by up to 0.7 of full scale.
+void testRateConversionInterpolates(Expectations& expectations) {
+    constexpr double pi = 3.14159265358979323846;
+    const auto played = renderAt48k(monoBuffer(sine(5'000.0, 44'100, 8'820), 44'100), 4'800);
+    expectations.expect(played.size() == 4'800, "the converted clip renders every frame");
+    if (played.size() != 4'800)
+        return;
+    double worst = 0.0;
+    // Away from the clip head, where the filter reaches before the first sample.
+    for (std::size_t frame = 64; frame < played.size(); ++frame) {
+        const auto ideal = std::sin(2.0 * pi * 5'000.0 * static_cast<double>(frame) / 48'000.0);
+        worst = std::max(worst, std::abs(static_cast<double>(played[frame]) - ideal));
+    }
+    expectations.expect(worst < 1e-3, "a 44.1 kHz tone converts to 48 kHz without distortion");
+}
+
+// #459: decimating a 96 kHz clip to 48 kHz removes content above the output Nyquist instead of
+// folding it back. Zero-order hold turns a 30 kHz tone into a full-scale 18 kHz alias.
+void testRateConversionRejectsAliases(Expectations& expectations) {
+    const auto played = renderAt48k(monoBuffer(sine(30'000.0, 96'000, 19'200), 96'000), 4'800);
+    expectations.expect(played.size() == 4'800, "the decimated clip renders every frame");
+    if (played.size() != 4'800)
+        return;
+    double energy = 0.0;
+    for (std::size_t frame = 64; frame < played.size(); ++frame)
+        energy += static_cast<double>(played[frame]) * static_cast<double>(played[frame]);
+    const auto rms = std::sqrt(energy / static_cast<double>(played.size() - 64));
+    expectations.expect(rms < 1e-3, "a tone above the output Nyquist does not alias into the mix");
+}
+
+// A windowed source whose decoder reports every window it is asked to fill.
+class RecordingStream final : public bloom::media::audio::AudioStream {
+  public:
+    RecordingStream(std::vector<float> samples, const std::uint32_t rate)
+        : AudioStream(
+              bloom::media::audio::AudioProbe{
+                  bloom::media::audio::AudioContainer::Wav, rate, 1, samples.size(), time(0), {}},
+              512),
+          samples_(std::move(samples)) {}
+    std::vector<std::uint64_t> fills;
+
+  protected:
+    bloom::media::audio::AudioResult<std::size_t>
+    fill(const std::uint64_t firstFrame, const std::span<float> output,
+         const bloom::media::audio::CancelAudioWork&) noexcept override {
+        fills.push_back(firstFrame);
+        const auto count = std::min<std::size_t>(output.size(), samples_.size() - firstFrame);
+        std::copy_n(samples_.begin() + static_cast<std::ptrdiff_t>(firstFrame), count,
+                    output.begin());
+        return bloom::media::audio::AudioResult<std::size_t>::success(count);
+    }
+
+  private:
+    std::vector<float> samples_;
+};
+
+// A streamed clip converts exactly like a decoded one, and the interpolation taps never seek
+// its decoder backwards (an MP3 decoder would restart from the file head).
+void testStreamedRateConversionReadsForward(Expectations& expectations) {
+    const auto samples = sine(5'000.0, 44'100, 4'410);
+    const auto recording = std::make_shared<RecordingStream>(samples, 44'100);
+    auto buffer = std::make_shared<AudioBuffer>(AudioBuffer{44'100, 1, samples.size(), {}});
+    buffer->stream = recording;
+    const auto streamed = renderAt48k(std::move(buffer), 4'800);
+    const auto decoded = renderAt48k(monoBuffer(samples, 44'100), 4'800);
+    expectSamples(expectations, streamed, decoded,
+                  "a streamed clip converts to the same samples as a decoded one");
+    bool forward = !recording->fills.empty();
+    for (std::size_t index = 1; index < recording->fills.size(); ++index)
+        forward = forward && recording->fills[index] > recording->fills[index - 1];
+    expectations.expect(forward, "interpolation reads the stream forward only");
+}
+
 } // namespace
 
 int main() {
@@ -527,5 +625,8 @@ int main() {
     testLoopRangeValidationAndClearing(expectations);
     testUnderrunKeepsMixOnDeviceClock(expectations);
     testMidPlayLoopChangeRewindsQueuedAudio(expectations);
+    testRateConversionInterpolates(expectations);
+    testRateConversionRejectsAliases(expectations);
+    testStreamedRateConversionReadsForward(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -595,6 +595,24 @@ offline mix both run this engine, so they downmix identically (#450):
 - Output layouts other than mono and stereo map source channel i to output channel i. Bloom's
   playback device and export mix are stereo today.
 
+#### Sample-Rate Conversion
+
+A clip whose source rate differs from the engine rate (a 44.1 kHz asset on the 48 kHz device or
+export mix) is band-limited, not held at the nearest earlier source sample (#459). Each output
+frame reads the clip at its exact fractional source position through a Kaiser-windowed sinc with
+libswresample's default filter parameters: 16 zero crossings per side, cutoff at 0.97 of the lower
+of the two Nyquist frequencies, Kaiser beta 9, and 1,024 table phases per zero crossing, linearly
+interpolated. Decimation lowers the cutoff below the output Nyquist so content above it is removed
+rather than folded back; past 32:1 the filter stops widening, bounding the taps per frame. The
+weights are normalized to unity gain, and taps past either end of the source repeat its edge sample.
+A retimed clip whose mapped time falls between source frames interpolates the same way. A clip
+already at the engine rate read on a whole source frame plays that sample unchanged. The engine
+cannot use libswresample itself: FFmpeg links only into the media worker, never the desktop, and a
+streaming resampler does not fit a mixer that reads clips at arbitrary mapped, looped and
+rate-scaled positions, so the stateless kernel serves any position. A streamed (windowed) source
+keeps the tail of its previous window when it reads on past it, so the filter's taps never seek
+its decoder backwards. Playback and export run the same engine, so they convert identically.
+
 While playing, the audio clock is the master clock. `positionNow()` is derived from the number of
 frames actually written by the backend callback, the output rate, the rational play origin, and the
 transport rate; it does not advance from wall-clock guesses. The transport follows this clock, so

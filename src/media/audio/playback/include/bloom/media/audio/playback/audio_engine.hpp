@@ -205,8 +205,19 @@ class AudioEngine final {
     [[nodiscard]] std::int64_t loopedFrame(std::int64_t absoluteFrame) const noexcept;
     void resetTransportLocked() noexcept;
     void mixBlock(std::uint64_t firstProducedFrame, std::span<float> output) noexcept;
-    // The clip's source-to-output channel mix (see channelMixMatrix); empty without a buffer.
-    [[nodiscard]] std::vector<float> clipGains(const AudioClip& clip) const;
+    // What the mixer needs per clip, resolved off the mixer so mixBlock never allocates: the
+    // source-to-output channel mix (see channelMixMatrix; empty without a buffer) and the
+    // band-limited sample-rate conversion filter for the clip's source rate.
+    struct ClipMix final {
+        std::vector<float> gains;
+        // Kaiser-windowed sinc cutoff as a fraction of the source Nyquist, and the filter's
+        // half-width in source frames (taps reach floor(position) +- halfWidthFrames).
+        double cutoff = 1.0;
+        std::size_t halfWidthFrames = 0;
+    };
+    [[nodiscard]] ClipMix clipMix(const AudioClip& clip) const;
+    // Requires controlMutex_: grows the mixer's interpolation scratch to cover `mix`.
+    void reserveScratchLocked(const AudioClip& clip, const ClipMix& mix);
     void joinMixer() noexcept;
 
     std::unique_ptr<Backend> backend_;
@@ -216,7 +227,11 @@ class AudioEngine final {
     mutable std::mutex controlMutex_;
     std::vector<AudioClip> clips_;
     // Parallel to clips_, guarded by controlMutex_.
-    std::vector<std::vector<float>> clipGains_;
+    std::vector<ClipMix> clipMixes_;
+    // Interpolation scratch, guarded by controlMutex_ and only ever grown off the mixer: one
+    // coefficient per filter tap, and one interleaved tap window for a streamed source.
+    std::vector<double> tapScratch_;
+    std::vector<float> streamScratch_;
     std::atomic<bool> playing_{false};
     std::atomic<std::uint64_t> mixGeneration_{0};
     // Low bit is callback silence; high bits are the UI request generation.

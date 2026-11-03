@@ -59,10 +59,13 @@ constexpr auto kVideoAsset = document::AssetId::fromRaw(9001);
 constexpr std::uint32_t kRate = 8;
 
 std::shared_ptr<const media::audio::AudioBuffer> ramp() {
-    // 2 s at 48 kHz; the 8 Hz mixer reads source frame 6000 n for output sample n.
+    // 2 s at 48 kHz; the 8 Hz mixer reads source frame 6000 n for output sample n. Each value
+    // holds from 1000 frames before its read position, so the mixer's band-limited decimation
+    // filter (half-width 528 source frames at 6000:1) sees a constant at every read, including the
+    // half-sample reads of a retimed layer, and the oracle stays the source sample played (#459).
     std::vector<float> samples(96000);
     for (std::size_t index = 0; index < samples.size(); ++index)
-        samples[index] = static_cast<float>(index / 6000 + 1);
+        samples[index] = static_cast<float>(std::min<std::size_t>((index + 1000) / 6000, 15) + 1);
     return std::make_shared<const media::audio::AudioBuffer>(
         media::audio::AudioBuffer{48000, 1, samples.size(), {std::move(samples)}});
 }
