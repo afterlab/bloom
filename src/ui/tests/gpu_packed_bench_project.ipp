@@ -801,6 +801,10 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     std::uint64_t fillOperationMaxBudgetBytes = 0;
     double fillOperationSumBytes = 0.0;
     std::uint64_t fillOperationSamples = 0;
+    // Host admission against use over the fill (#472): the most host memory active work claimed
+    // (claims minus retained preview frames) and the most anonymous memory the process held.
+    std::uint64_t fillHostWorkClaimMaxBytes = 0;
+    std::uint64_t fillAnonMaxBytes = 0;
     std::chrono::steady_clock::time_point lastMemoryLine{};
     // The runtime profiler sampler (#423), fed like the application's UI-side hook. Without
     // --bench-profiler no sampler thread runs (a closed Profiler): each memory tick takes one
@@ -848,6 +852,12 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
                 fillOperationMaxBudgetBytes, evaluator.operationCache()->byteBudget());
             fillOperationSumBytes += static_cast<double>(operationBytes);
             ++fillOperationSamples;
+            fillHostWorkClaimMaxBytes = std::max<std::uint64_t>(
+                fillHostWorkClaimMaxBytes, capacity.hostClaimBytes > capacity.hostRetentionBytes
+                                               ? capacity.hostClaimBytes - capacity.hostRetentionBytes
+                                               : 0);
+            fillAnonMaxBytes =
+                std::max<std::uint64_t>(fillAnonMaxBytes, sample.anonBytes.valueOr(0));
         }
         if (sample.rssBytes.valueOr(0) >= memoryPeak.rssBytes.valueOr(0))
             memoryPeak = sample;
@@ -907,7 +917,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
              << ",\"fillOperationMeanBytes\":"
              << (fillOperationSamples > 0
                      ? fillOperationSumBytes / static_cast<double>(fillOperationSamples)
-                     : 0.0);
+                     : 0.0)
+             << ",\"fillHostWorkClaimMaxBytes\":" << fillHostWorkClaimMaxBytes
+             << ",\"fillAnonMaxBytes\":" << fillAnonMaxBytes;
         json << ",\"finished\":" << (finished ? "true" : "false") << ",\"completion\":"
              << (completion ? static_cast<int>(*completion) : -1)
              << ",\"completionComplete\":"
@@ -1017,6 +1029,13 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"releasedPhaseDevicePeakBytes\":" << claims.releasedPhaseDevicePeakBytes
          << ",\"peakPhaseDeviceNeedBytes\":" << claims.peakPhaseDeviceNeedBytes
          << ",\"peakPhaseDeviceAllocationBytes\":" << claims.peakPhaseDeviceAllocationBytes
+         // Host admission (#472): per phase that finished source preparation, the source need it
+         // claimed (three times of it while preparing) and the source bytes it actually retained.
+         << ",\"finishedSourcePhases\":" << claims.finishedSourcePhases
+         << ",\"finishedPhaseSourceNeedBytes\":" << claims.finishedPhaseSourceNeedBytes
+         << ",\"finishedPhaseRetainedSourceBytes\":" << claims.finishedPhaseRetainedSourceBytes
+         << ",\"peakPhaseSourceNeedBytes\":" << claims.peakPhaseSourceNeedBytes
+         << ",\"peakPhaseRetainedSourceBytes\":" << claims.peakPhaseRetainedSourceBytes
          << ",\"peakRssBytes\":" << benchPeakRssBytes() << ",\"processSeconds\":"
          << std::chrono::duration<double>(std::chrono::steady_clock::now() - processStarted)
                 .count()

@@ -285,7 +285,14 @@ Every measurement is a fresh process.
   `fillOperationPressureDrops`), its byte budget when the fill starts
   (`fillOperationBudgetBeforeBytes`) and the most it was given during the fill
   (`fillOperationMaxBudgetBytes`), and its sampled bytes (`fillOperationMaxBytes`,
-  `fillOperationMeanBytes`) say whether a fill's reusable working set stayed cached.
+  `fillOperationMeanBytes`) say whether a fill's reusable working set stayed cached. For host
+  admission (#472), a fill reports the most host memory active work claimed while it ran
+  (`fillHostWorkClaimMaxBytes`: claims minus retained preview frames) next to the most anonymous
+  memory the process held (`fillAnonMaxBytes`), and every run reports, over the phases that
+  finished source preparation, `finishedSourcePhases`, `finishedPhaseSourceNeedBytes` and
+  `finishedPhaseRetainedSourceBytes` (sums of the source need each claimed, three times of which
+  it held while preparing, and of the source bytes it actually retained),
+  `peakPhaseSourceNeedBytes` and `peakPhaseRetainedSourceBytes`.
 
 Process sampling uses `/proc` on Linux and `psutil` where it is installed; without either, CPU and
 RSS sampling are reported as absent rather than guessed.
