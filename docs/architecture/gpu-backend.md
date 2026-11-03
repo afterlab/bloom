@@ -403,13 +403,63 @@ Reading `vmaGetHeapBudgets()` alone can retain an old external-pressure reading 
 allocations occur; rejected work must recover when another process frees VRAM, even while Bloom
 makes no allocations. The existing owner sampling cadence bounds these refreshes.
 
-Explicit/unrooted resident callers retain an additive capacity plan for lease, scene-cache and
-request ceilings. That legacy plan partitions a bounded pool 50/20/30 with cache headroom; no sum
-can exceed its pool. It is not the active-work policy for ordinary rooted preview. Rooted requests
-without an explicit request override use a separate, non-additive foreground allowance refreshed on
-the GPU owner from actual available capacity. Selecting a larger host cache does not reduce this
-allowance. Existing cache and lease allocations remain owned and accounted; the foreground field
-must not be added to the legacy partition as if it were another reservation.
+**One device ceiling (#425).** Usable VRAM, the driver's live budget minus the VRAM headroom
+preference (the device-local heap minus the headroom without `VK_EXT_memory_budget`), is the only
+device ceiling. The resident capacity plan (`gpu_preview_resident_capacity.hpp`) no longer splits a
+pool into fixed shares: the former lease 1/2, scene cache 1/5, request remainder, cache 4/5 of the
+lease and nominal-heap divisor 2 are gone. The owner resolves one device pool (the live budget, the
+device-local heap for rooted construction, or the 256 MiB unknown-device fallback), and each ledger
+is its configured ceiling clamped to that pool on its own: the scene cache, the resident frame cache
+(the configured lease ceiling) and the request take the pool or a smaller explicit value, and the
+lease registry, which only accounts leases that are real device allocations, takes the whole pool
+so an in-flight or on-screen lease beside a full cache is never refused while VRAM is free. The
+ledgers are not additive. The application configures no device ceiling of its own and never derives
+one from host memory; tests and explicit callers may still pass a smaller one. What the ledgers hold
+together is bounded by real allocation admission against usable VRAM, and they give memory back on
+demand (below). Rooted requests without an explicit request override use the non-additive
+foreground allowance refreshed on the GPU owner from actual available capacity; under a nominal heap
+that is the heap minus the generation's live and retiring image ownership, and an image outside the
+root's claims is subtracted once from the nominal report (it was subtracted twice).
+
+**Device caches are evicted on demand (#425).** The rules are the host's: staging is scratch,
+caches keep what fits and are evicted when work needs the room, finished frames go last, and work
+waits only on genuine exhaustion. A phase whose device need fits usable VRAM but not beside what is
+held returns `AwaitingCapacity` with domain Device (retained cache images are root-owned claims, so
+they make work wait, never refuse it). The preview service and the final-render evaluator each
+register a Device reclaimer (`registerDeviceReclaim`) that records the shortfall in a
+`GpuDeviceReclaimRequest` and wakes their GPU owner. The owner takes it (`deviceReclaimBytes`), evicts
+its scene cache least recently used first (`GpuSceneCache::reclaim`, pinned entries are never
+invalidated) and reports the live budget again, which resumes the waiter. What the scene cache could
+not give back is published on the preview status as a finished-frame eviction
+(`residentFrameEvictionSerial`/`residentFrameEvictionBytes`); the bootstrap's status poll applies it
+to the frame cache (`PreviewFrameCache::evictGpuResidentBytes`), dropping least recently used
+resident frames. A native allocation refused for device room in a device stage asks for the phase's
+need the same way before its retry. When another program takes VRAM and the live free memory falls
+below the VRAM headroom, the owner evicts the difference at its next device sample, as host caches
+shrink when free RAM falls below the RAM headroom. Because retained cache images are root claims, a full cache
+leaves little room beside it: a measured envelope's executor ceiling is therefore never below its
+measured need (which fits the remaining room), and the rooted foreground request credits the scene
+cache's retained bytes back, so a cache that fills the device makes work wait or evicts, never
+squeezes a frame onto the CPU. A stated (first-frame) need keeps the working allowance apart from
+the executor ceiling as before. The final-render evaluator's scene cache uses the
+same unpartitioned pool. The scene executor no longer caps one OCIO program's owned bytes at a fixed
+512 MiB: a 4320p RGBA32F effect output alone is 506 MiB, and beside the program's LUTs the fixed cap
+refused it and sent every 4320p B frame to the CPU (#474); each dispatch is bounded by its request's
+live byte budget instead.
+
+Measured on an RTX 4090 (24 GB, default VRAM headroom), RAM fill at Full
+from a cold cache in a 40G memory scope; device figures are the driver's peak for the process, the
+root's own native allocation and the peak claims:
+
+| Cell | Fill fps before → after | CPU-fallback frames | Device peak / own / claims before → after |
+|---|---|---|---|
+| 2160p multilayer EXR B | 6.98 → 7.41 (240/240) | 0 → 0 | 1.72 / 1.53 / 2.47 → 4.15 / 4.04 / 5.01 GB |
+| 4320p PNG16 B (48 frames) | 0.03 (20/48, timed out) → 2.16 (47/48) | 699 → 0 | 3.89 / 3.80 / 5.12 → 6.30 / 6.44 / 7.77 GB |
+
+The 4320p cell's media was a local 2x upscale of the 2160p PNG16 frames. Before the change every
+4320p B frame failed with the OCIO program's fixed ceiling; the resident fractions were not the cause
+of those refusals. With the fractions gone the scene cache keeps more of the device (the higher
+2160p peak) and gives it back when work waits; no cell had an admission refusal.
 
 Each request also passes the shared phase reservation and native resource/capability checks.
 Host decode capacity stays independent of device capacity. Unknown capacity uses an explicit
@@ -1409,8 +1459,8 @@ while their needs fit the usable device capacity.
 
 The resident service keeps construction ceilings separate from live free space. For an omitted
 rooted preview limit, the executor's per-image ceiling uses finite device-local size (or the
-bounded unknown-device fallback), while lease, scene, and Viewer retention limits use a nominal
-retention-only pool. A zero free-space sample at startup therefore does not permanently disable
+bounded unknown-device fallback), while lease, scene, and Viewer retention limits use the
+device-local heap as their pool. A zero free-space sample at startup therefore does not permanently disable
 those owners. The service samples live device availability on its GPU owner and refreshes the
 shared phase report; measured free bytes already exclude VMA allocations. With one reported owner,
 or several owners whose reports carry the same driver device UUID
@@ -1420,8 +1470,8 @@ remains in its claim ledger, so it is subtracted once. Equal heap sizes are not 
 device. Unallocated phase reservations and other allocations receive no credit; owners on different
 or unidentified devices retain a conservative common minimum. Nominal estimates
 subtract live and retiring image ownership outside the root's existing claims. Every native
-allocation remains subject to the refreshed phase quota and allocator result. Explicit/unrooted
-additive limits retain their existing capacity plan.
+allocation remains subject to the refreshed phase quota and allocator result. Explicit ceilings
+are clamped to the device pool independently; none is additive.
 
 Cold, failed, future-dated or stale default delivery closes new default admission with typed
 AwaitingCapacity. A fresh sample epoch can retry the newest eligible request through existing

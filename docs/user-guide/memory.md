@@ -62,7 +62,11 @@ memory. The reusable caches (operation results, RAM preview, decoded video and m
 audio) share what is left: together they grow by at most the free memory beyond the headroom, and
 when other programs need memory and free memory falls below the headroom, every cache shrinks by
 its share, so caches never push the computer into swap. Active work evicts them when it needs the
-room.
+room. Graphics memory follows the same rules: usable VRAM is the only limit on
+it, with no fixed share for any cache. The GPU scene cache and GPU-resident finished frames keep
+what fits; a frame that needs graphics memory they hold waits while they give it back (cached
+intermediate images first, finished frames last), and they also give back what free graphics memory
+has fallen below the VRAM headroom when another program takes it.
 
 Bloom watches memory continuously, not only when it starts work: a monitor samples the machine four
 times a second (and on Linux wakes at once on a kernel memory-pressure (PSI) notification). Caches

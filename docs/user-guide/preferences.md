@@ -48,7 +48,9 @@ asset's interpretation when it imports; footage already in the project keeps its
 ## Memory headroom and disk budget
 
 **RAM headroom** and **VRAM headroom** are the memory Bloom leaves free for the rest of your
-computer; Bloom uses everything else for rendering and caching. Each is a size from 0 to 256 GiB.
+computer; Bloom uses everything else for rendering and caching. They are the only memory limits:
+usable VRAM, the graphics driver's live budget minus the VRAM headroom, is the one ceiling for
+everything Bloom keeps on the graphics card. Each is a size from 0 to 256 GiB.
 The default is 10% of the memory it protects: RAM headroom is 10% of physical memory (or of a
 tighter process or container limit, about 6 GiB on a 64 GB workstation), VRAM headroom is 10% of
 the graphics card's memory (about 2.4 GiB on a 24 GB card; 2 GiB until the card has been measured).
