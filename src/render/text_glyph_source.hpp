@@ -4,7 +4,9 @@
 #include <bloom/render/path_raster.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <span>
+#include <vector>
 
 // The Bloom-owned boundary around the single vendored stb_truetype translation unit
 // (text_glyph_source.cpp, compiled as the bloom_render_stb_truetype object library). This header is
@@ -82,23 +84,35 @@ void embeddedFontRasterizeGlyph(EmbeddedFace face, std::span<std::uint8_t> outpu
                                 float shiftX, float shiftY, int glyph) noexcept;
 
 [[nodiscard]] std::vector<Path> embeddedFontGlyphOutlines(EmbeddedFace face, int glyph);
-[[nodiscard]] std::vector<Path> externalFontGlyphOutlines(const ExternalFontFile& font, int glyph);
-
 using ExternalFontFile = bloom::render::ExternalFontFile;
-[[nodiscard]] bool externalFontIsParsed(const ExternalFontFile& font) noexcept;
-[[nodiscard]] float externalFontScaleForEmPixelSize(const ExternalFontFile& font,
+
+// An external font parsed for one layout. It keeps the font bytes alive only while a caller holds
+// it: nothing retains a parsed external font between layouts, so a font no text uses any more is
+// freed with its last owner, and the glyph functions below read it without a lock or a lookup.
+// Parsing reads only the font's table directory, so a layout pays it once, not per glyph.
+struct ParsedExternalFont;
+struct ExternalFontFace final {
+    std::shared_ptr<const ParsedExternalFont> parsed;
+};
+// Empty when the file has no bytes or the parse cannot be allocated; externalFontIsParsed() is
+// false for that and for bytes that do not parse.
+[[nodiscard]] ExternalFontFace openExternalFont(const ExternalFontFile& font) noexcept;
+
+[[nodiscard]] std::vector<Path> externalFontGlyphOutlines(const ExternalFontFace& font, int glyph);
+[[nodiscard]] bool externalFontIsParsed(const ExternalFontFace& font) noexcept;
+[[nodiscard]] float externalFontScaleForEmPixelSize(const ExternalFontFace& font,
                                                     double pixelSize) noexcept;
 [[nodiscard]] FontVerticalMetrics
-externalFontVerticalMetrics(const ExternalFontFile& font) noexcept;
-[[nodiscard]] int externalFontGlyphIndex(const ExternalFontFile& font, char32_t codepoint) noexcept;
+externalFontVerticalMetrics(const ExternalFontFace& font) noexcept;
+[[nodiscard]] int externalFontGlyphIndex(const ExternalFontFace& font, char32_t codepoint) noexcept;
 [[nodiscard]] GlyphHorizontalMetrics
-externalFontGlyphHorizontalMetrics(const ExternalFontFile& font, int glyph) noexcept;
-[[nodiscard]] int externalFontGlyphKernAdvance(const ExternalFontFile& font, int leftGlyph,
+externalFontGlyphHorizontalMetrics(const ExternalFontFace& font, int glyph) noexcept;
+[[nodiscard]] int externalFontGlyphKernAdvance(const ExternalFontFace& font, int leftGlyph,
                                                int rightGlyph) noexcept;
-[[nodiscard]] GlyphBitmapBox externalFontGlyphBitmapBox(const ExternalFontFile& font, int glyph,
+[[nodiscard]] GlyphBitmapBox externalFontGlyphBitmapBox(const ExternalFontFace& font, int glyph,
                                                         float scaleX, float scaleY, float shiftX,
                                                         float shiftY) noexcept;
-void externalFontRasterizeGlyph(const ExternalFontFile& font, std::span<std::uint8_t> output,
+void externalFontRasterizeGlyph(const ExternalFontFace& font, std::span<std::uint8_t> output,
                                 int width, int height, int strideBytes, float scaleX, float scaleY,
                                 float shiftX, float shiftY, int glyph) noexcept;
 

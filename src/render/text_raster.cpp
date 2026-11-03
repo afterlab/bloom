@@ -575,6 +575,17 @@ rasterizeFontText(const Face& face, const std::string_view utf8Content,
                            extent.value()->height(), std::move(coverage)));
 }
 
+// An external font is parsed once for the whole layout and read without a lock per glyph; the
+// parse and the font bytes it holds go with the layout.
+ImageResult<TextCoverageBitmap>
+rasterizeFontText(const ExternalFontFile& face, const std::string_view utf8Content,
+                  const TextRasterParameters parameters, const std::size_t coverageByteLimit,
+                  const TextLayoutOptions layout, std::vector<Path>* outlines = nullptr,
+                  const PathCancellation& cancelled = {}, TextLayout* query = nullptr) {
+    return rasterizeFontText(detail::openExternalFont(face), utf8Content, parameters,
+                             coverageByteLimit, layout, outlines, cancelled, query);
+}
+
 ImageResult<TextLayout> layoutText(const TextFont& font, const std::string_view content,
                                    const TextRasterParameters parameters,
                                    const TextLayoutOptions options, PathCancellation cancelled) {

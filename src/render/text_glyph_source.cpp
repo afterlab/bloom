@@ -42,14 +42,6 @@ struct ParsedFont final {
     bool parsed = false;
 };
 
-struct ParsedExternalFont final {
-    std::shared_ptr<const std::vector<std::uint8_t>> bytes;
-    core::Sha256Digest contentDigest;
-    std::uint32_t faceIndex = 0;
-    stbtt_fontinfo info{};
-    bool parsed = false;
-};
-
 [[nodiscard]] constexpr std::size_t faceIndex(const EmbeddedFace face) noexcept {
     switch (face) {
     case EmbeddedFace::DejaVuSans:
@@ -87,30 +79,36 @@ struct ParsedExternalFont final {
     return &font;
 }
 
-[[nodiscard]] const ParsedExternalFont* parsedExternalFont(const ExternalFontFile& font) noexcept {
-    if (font.bytes == nullptr || font.bytes->empty())
-        return nullptr;
-    static std::mutex mutex;
-    static std::vector<std::unique_ptr<ParsedExternalFont>> fonts;
-    std::lock_guard lock(mutex);
-    for (const auto& candidate : fonts) {
-        if (candidate->contentDigest == font.contentDigest &&
-            candidate->faceIndex == font.faceIndex)
-            return candidate.get();
-    }
-    auto parsed = std::make_unique<ParsedExternalFont>();
-    parsed->bytes = font.bytes;
-    parsed->contentDigest = font.contentDigest;
-    parsed->faceIndex = font.faceIndex;
-    const auto* data = parsed->bytes->data();
-    const auto offset = stbtt_GetFontOffsetForIndex(data, static_cast<int>(font.faceIndex));
-    if (offset >= 0)
-        parsed->parsed = stbtt_InitFont(&parsed->info, data, offset) != 0;
-    fonts.push_back(std::move(parsed));
-    return fonts.back().get();
-}
-
 } // namespace
+
+struct ParsedExternalFont final {
+    std::shared_ptr<const std::vector<std::uint8_t>> bytes;
+    stbtt_fontinfo info{};
+    bool parsed = false;
+};
+
+namespace {
+// The parse when it succeeded, else null.
+[[nodiscard]] const ParsedExternalFont* parsedExternalFont(const ExternalFontFace& font) noexcept {
+    return font.parsed != nullptr && font.parsed->parsed ? font.parsed.get() : nullptr;
+}
+} // namespace
+
+ExternalFontFace openExternalFont(const ExternalFontFile& font) noexcept {
+    if (font.bytes == nullptr || font.bytes->empty())
+        return {};
+    try {
+        auto parsed = std::make_shared<ParsedExternalFont>();
+        parsed->bytes = font.bytes;
+        const auto* data = parsed->bytes->data();
+        const auto offset = stbtt_GetFontOffsetForIndex(data, static_cast<int>(font.faceIndex));
+        if (offset >= 0)
+            parsed->parsed = stbtt_InitFont(&parsed->info, data, offset) != 0;
+        return {std::move(parsed)};
+    } catch (...) {
+        return {};
+    }
+}
 
 bool embeddedFontIsParsed(const EmbeddedFace face) noexcept {
     const auto* font = parsedFont(face);
@@ -192,69 +190,65 @@ void embeddedFontRasterizeGlyph(const EmbeddedFace face, const std::span<std::ui
                                   scaleY, shiftX, shiftY, glyph);
 }
 
-bool externalFontIsParsed(const ExternalFontFile& font) noexcept {
+bool externalFontIsParsed(const ExternalFontFace& font) noexcept {
     const auto* parsed = parsedExternalFont(font);
-    return parsed != nullptr && parsed->parsed;
+    return parsed != nullptr;
 }
 
-float externalFontScaleForEmPixelSize(const ExternalFontFile& font,
+float externalFontScaleForEmPixelSize(const ExternalFontFace& font,
                                       const double pixelSize) noexcept {
     const auto* parsed = parsedExternalFont(font);
-    if (parsed == nullptr || !parsed->parsed || !std::isfinite(pixelSize) || pixelSize <= 0.0)
+    if (parsed == nullptr || !std::isfinite(pixelSize) || pixelSize <= 0.0)
         return 0.0F;
     return stbtt_ScaleForMappingEmToPixels(&parsed->info, static_cast<float>(pixelSize));
 }
 
-FontVerticalMetrics externalFontVerticalMetrics(const ExternalFontFile& font) noexcept {
+FontVerticalMetrics externalFontVerticalMetrics(const ExternalFontFace& font) noexcept {
     FontVerticalMetrics metrics;
     const auto* parsed = parsedExternalFont(font);
-    if (parsed != nullptr && parsed->parsed)
+    if (parsed != nullptr)
         stbtt_GetFontVMetrics(&parsed->info, &metrics.ascent, &metrics.descent, &metrics.lineGap);
     return metrics;
 }
 
-int externalFontGlyphIndex(const ExternalFontFile& font, const char32_t codepoint) noexcept {
+int externalFontGlyphIndex(const ExternalFontFace& font, const char32_t codepoint) noexcept {
     const auto* parsed = parsedExternalFont(font);
-    return parsed != nullptr && parsed->parsed
-               ? stbtt_FindGlyphIndex(&parsed->info, static_cast<int>(codepoint))
-               : 0;
+    return parsed != nullptr ? stbtt_FindGlyphIndex(&parsed->info, static_cast<int>(codepoint)) : 0;
 }
 
-GlyphHorizontalMetrics externalFontGlyphHorizontalMetrics(const ExternalFontFile& font,
+GlyphHorizontalMetrics externalFontGlyphHorizontalMetrics(const ExternalFontFace& font,
                                                           const int glyph) noexcept {
     GlyphHorizontalMetrics metrics;
     const auto* parsed = parsedExternalFont(font);
-    if (parsed != nullptr && parsed->parsed)
+    if (parsed != nullptr)
         stbtt_GetGlyphHMetrics(&parsed->info, glyph, &metrics.advanceWidth,
                                &metrics.leftSideBearing);
     return metrics;
 }
 
-int externalFontGlyphKernAdvance(const ExternalFontFile& font, const int leftGlyph,
+int externalFontGlyphKernAdvance(const ExternalFontFace& font, const int leftGlyph,
                                  const int rightGlyph) noexcept {
     const auto* parsed = parsedExternalFont(font);
-    return parsed != nullptr && parsed->parsed
-               ? stbtt_GetGlyphKernAdvance(&parsed->info, leftGlyph, rightGlyph)
-               : 0;
+    return parsed != nullptr ? stbtt_GetGlyphKernAdvance(&parsed->info, leftGlyph, rightGlyph) : 0;
 }
 
-GlyphBitmapBox externalFontGlyphBitmapBox(const ExternalFontFile& font, const int glyph,
+GlyphBitmapBox externalFontGlyphBitmapBox(const ExternalFontFace& font, const int glyph,
                                           const float scaleX, const float scaleY,
                                           const float shiftX, const float shiftY) noexcept {
     GlyphBitmapBox box;
     const auto* parsed = parsedExternalFont(font);
-    if (parsed != nullptr && parsed->parsed)
+    if (parsed != nullptr)
         stbtt_GetGlyphBitmapBoxSubpixel(&parsed->info, glyph, scaleX, scaleY, shiftX, shiftY,
                                         &box.left, &box.top, &box.right, &box.bottom);
     return box;
 }
 
-void externalFontRasterizeGlyph(const ExternalFontFile& font, const std::span<std::uint8_t> output,
+void externalFontRasterizeGlyph(const ExternalFontFace& font, const std::span<std::uint8_t> output,
                                 const int width, const int height, const int strideBytes,
                                 const float scaleX, const float scaleY, const float shiftX,
                                 const float shiftY, const int glyph) noexcept {
     const auto* parsed = parsedExternalFont(font);
-    if (parsed == nullptr || !parsed->parsed || width <= 0 || height <= 0 || strideBytes < width)
+    if (parsed == nullptr || width <= 0 || height <= 0 || strideBytes < width)
         return;
     const auto required = static_cast<std::size_t>(strideBytes) * static_cast<std::size_t>(height);
     if (output.size() < required)
@@ -300,8 +294,8 @@ std::vector<Path> embeddedFontGlyphOutlines(EmbeddedFace face, int glyph) {
     const auto* font = parsedFont(face);
     return font && font->parsed ? glyphOutlines(font->info, glyph) : std::vector<Path>{};
 }
-std::vector<Path> externalFontGlyphOutlines(const ExternalFontFile& face, int glyph) {
+std::vector<Path> externalFontGlyphOutlines(const ExternalFontFace& face, int glyph) {
     const auto* font = parsedExternalFont(face);
-    return font && font->parsed ? glyphOutlines(font->info, glyph) : std::vector<Path>{};
+    return font ? glyphOutlines(font->info, glyph) : std::vector<Path>{};
 }
 } // namespace bloom::render::detail

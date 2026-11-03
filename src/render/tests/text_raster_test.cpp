@@ -1,14 +1,17 @@
 #include <bloom/core/color.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/embedded_fonts.hpp>
 #include <bloom/render/text_raster.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <source_location>
 #include <span>
 #include <stdexcept>
@@ -22,6 +25,7 @@ using bloom::core::Color4d;
 using bloom::render::coverageSolidRow;
 using bloom::render::EmbeddedFace;
 using bloom::render::embeddedFaceBytes;
+using bloom::render::ExternalFontFile;
 using bloom::render::ImageErrorCode;
 using bloom::render::ImageResult;
 using bloom::render::kMaximumTextPixelSize;
@@ -222,6 +226,52 @@ void testFaceSelectionChangesCoverage(Expectations& expectations) {
                                         dejavu.value()->coverage().end(),
                                         semiBold.value()->coverage().begin()),
                         "DejaVu Sans and Inter SemiBold produce different coverage");
+}
+
+// #462: an external font is parsed for the layout that uses it, never kept by a process-wide
+// cache. Its bytes (and a file that does not parse) are freed with their last owner; before, every
+// font ever laid out stayed resident for the life of the process.
+void testExternalFontIsNotRetained(Expectations& expectations) {
+    const auto parameters = TextRasterParameters::create(16.0, 16.0);
+    if (!parameters) {
+        expectations.expect(false, "external-font raster parameters are valid");
+        return;
+    }
+    const auto embedded = embeddedFaceBytes(EmbeddedFace::DejaVuSans);
+    auto bytes =
+        std::make_shared<const std::vector<std::uint8_t>>(embedded.begin(), embedded.end());
+    const std::weak_ptr<const std::vector<std::uint8_t>> watched = bytes;
+    {
+        const bloom::render::TextFont font =
+            ExternalFontFile{.bytes = std::move(bytes), .contentDigest = {}, .faceIndex = 0};
+        const auto external =
+            TextCoverageBitmap::rasterizeText(font, "Ab", *parameters.value(), generousByteLimit());
+        const auto reference = TextCoverageBitmap::rasterizeEmbeddedText(
+            EmbeddedFace::DejaVuSans, "Ab", *parameters.value(), generousByteLimit());
+        expectations.expect(
+            external && reference &&
+                external.value()->coverage().size() == reference.value()->coverage().size() &&
+                std::equal(external.value()->coverage().begin(), external.value()->coverage().end(),
+                           reference.value()->coverage().begin()),
+            "the same font bytes loaded externally rasterize identically");
+    }
+    expectations.expect(watched.expired(),
+                        "an external font's bytes are freed once no text holds them");
+
+    auto garbage = std::make_shared<const std::vector<std::uint8_t>>(64, std::uint8_t{0x5a});
+    const std::weak_ptr<const std::vector<std::uint8_t>> watchedGarbage = garbage;
+    {
+        const bloom::render::TextFont font = ExternalFontFile{
+            .bytes = std::move(garbage),
+            .contentDigest = bloom::core::Sha256Digest::fromBytes({std::uint8_t{1}}),
+            .faceIndex = 0};
+        const auto refused =
+            TextCoverageBitmap::rasterizeText(font, "Ab", *parameters.value(), generousByteLimit());
+        expectations.expect(hasError(refused, ImageErrorCode::InvalidState),
+                            "a font file that does not parse is refused");
+    }
+    expectations.expect(watchedGarbage.expired(),
+                        "a font file that did not parse is not kept either");
 }
 
 void testEmptyAndBlankContent(Expectations& expectations) {
@@ -500,6 +550,7 @@ int main() {
         testParameterValidation(expectations);
         testGlyphCoverageGolden(expectations);
         testFaceSelectionChangesCoverage(expectations);
+        testExternalFontIsNotRetained(expectations);
         testEmptyAndBlankContent(expectations);
         testRefusals(expectations);
         testPerAxisScaling(expectations);
