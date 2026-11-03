@@ -476,6 +476,14 @@ struct GpuSceneExecutor::Impl final {
     std::unique_ptr<render::GpuSolid> solid;
     std::unique_ptr<render::GpuComposite> composite;
     std::unique_ptr<render::GpuImageUpload> upload;
+    // #405 upload lookahead: the second upload pipeline. While another native job is in flight,
+    // the next planned Upload step is begun here (host staging copy and queue submission), and the
+    // two pipelines swap when the cursor reaches that step, so the step completes through the
+    // ordinary `upload` path. `uploadRan`/`lookaheadUploadRan` record which pipeline has begun a
+    // job (and so holds its bounded resident slot); they swap with the pipelines.
+    std::unique_ptr<render::GpuImageUpload> lookaheadUpload;
+    bool uploadRan = false;
+    bool lookaheadUploadRan = false;
     std::unique_ptr<render::GpuAffine> affine;
     std::unique_ptr<render::GpuBlend> blend;
     std::unique_ptr<render::GpuPointResample> pointResample;
@@ -536,12 +544,30 @@ struct GpuSceneExecutor::Impl final {
     bool deviceLost = false;
     std::chrono::steady_clock::time_point nativeStart{};
 
+    // #405 upload lookahead state for the current job. `lookaheadStep` is the planned Upload step
+    // begun on `lookaheadUpload` (kNoLookahead when none); its actual VMA bytes are reserved
+    // against the request budget (`lookaheadBytes`) until the step is adopted. `lookaheadDisabled`
+    // stops further lookahead for the rest of the job after a refusal; `lookaheadDiscarding` holds
+    // the cursor while a dropped lookahead upload retires before the refused step is retried on
+    // the serial path.
+    static constexpr std::size_t kNoLookahead = static_cast<std::size_t>(-1);
+    std::size_t lookaheadStep = kNoLookahead;
+    std::uint64_t lookaheadBytes = 0;
+    bool lookaheadReady = false;
+    bool lookaheadDisabled = false;
+    bool lookaheadDiscarding = false;
+    // First step index not yet ruled out as the next lookahead candidate (monotone per job).
+    std::size_t lookaheadScan = 0;
+    std::chrono::steady_clock::time_point lookaheadStart{};
+
     [[nodiscard]] bool onOwnerThread() const noexcept {
         return device != nullptr && device->isOwnerThread();
     }
 
     void clearJob() noexcept;
+    // Every owned native job, the lookahead upload included; the main form excludes the lookahead.
     [[nodiscard]] bool hasUnretiredNative() const noexcept;
+    [[nodiscard]] bool hasUnretiredMainNative() const noexcept;
     [[nodiscard]] std::uint64_t remainingBudget() const noexcept;
     void assignImage(GpuSceneCommandIndex index, std::shared_ptr<const render::GpuImage> pin);
     void releaseImage(GpuSceneCommandIndex index) noexcept;
@@ -553,6 +579,24 @@ struct GpuSceneExecutor::Impl final {
     [[nodiscard]] GpuSceneExecutorDiagnostic planCommand(GpuSceneCommandIndex index,
                                                          std::vector<std::uint8_t>& color);
     [[nodiscard]] GpuSceneExecutorDiagnostic startStep(const GpuSceneExecutorStep& step);
+    [[nodiscard]] render::GpuImageUploadParameters
+    uploadParameters(const GpuSceneExecutorStep& step) const;
+
+    // #405 upload lookahead, kept in gpu_scene_executor_lookahead.cpp. `startLookahead` begins the
+    // next planned upload on the second pipeline while a native job is in flight (within the
+    // request budget left beside the live pins and that job's actual bytes); `pollLookahead`
+    // refreshes it without blocking; `adoptLookahead` turns it into the in-flight Upload step when
+    // the cursor reaches it; `dropLookahead` cancels it and discards its image once retired, and
+    // returns true when nothing of it remains unretired.
+    void startLookahead() noexcept;
+    void pollLookahead() noexcept;
+    [[nodiscard]] bool adoptLookahead() noexcept;
+    [[nodiscard]] bool dropLookahead() noexcept;
+    [[nodiscard]] bool lookaheadOutstanding() const noexcept {
+        return lookaheadStep != kNoLookahead;
+    }
+    [[nodiscard]] std::optional<std::uint64_t> inFlightNativeBytes() const noexcept;
+    void swapUploadPipelines() noexcept;
     [[nodiscard]] std::optional<GpuSceneExecutorDiagnostic> tryStartBatch();
     [[nodiscard]] GpuSceneExecutorPollResult pollBatch();
     // Vector coverage, kept in gpu_scene_executor_coverage.cpp so this translation unit stays

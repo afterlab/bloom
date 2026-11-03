@@ -337,7 +337,7 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
                  "the device generation was lost while polling", false);
             return GpuSceneExecutorPollResult::Failure;
         }
-        if (!hasUnretiredNative()) {
+        if (!hasUnretiredMainNative()) {
             nativeInFlight = false;
             nativeKind = NativeKind::None;
             nativeOcioProgram = nullptr;
@@ -375,7 +375,7 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
              "the device generation was lost while polling", false);
         return GpuSceneExecutorPollResult::Failure;
     }
-    if (!hasUnretiredNative()) {
+    if (!hasUnretiredMainNative()) {
         const bool wasCancelled =
             nativeKind == NativeKind::Solid           ? solidCancelled(solid->diagnostic())
             : nativeKind == NativeKind::Upload        ? uploadCancelled(upload->diagnostic())

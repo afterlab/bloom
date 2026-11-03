@@ -35,9 +35,26 @@ using gpu_scene_executor_detail::NativePoll;
 } // namespace
 
 void GpuSceneExecutor::Impl::clearJob() noexcept {
-    // The upload's spare staging buffer is charged to this request's phase: free it with the job.
+    // The uploads' spare staging buffers are charged to this request's phase: free them with the
+    // job. A lookahead upload still held here was never adopted; its result is discarded (an
+    // unretired one keeps its resources inside the pipeline until its fence is proven, and fail()
+    // keeps the job draining until then).
     if (upload)
         upload->releaseSpareStaging();
+    if (lookaheadUpload) {
+        if (lookaheadOutstanding()) {
+            lookaheadUpload->cancel();
+            if (lookaheadUpload->state() == render::GpuImageUploadJobState::Ready)
+                static_cast<void>(lookaheadUpload->takeImage());
+        }
+        lookaheadUpload->releaseSpareStaging();
+    }
+    lookaheadStep = kNoLookahead;
+    lookaheadBytes = 0;
+    lookaheadReady = false;
+    lookaheadDisabled = false;
+    lookaheadDiscarding = false;
+    lookaheadScan = 0;
     // A completed/failed request must not keep the device's exclusive batch slot from another
     // executor. Unproven submissions retain their owner until the existing drain proves safety.
     if (operationBatch && !operationBatch->hasUnretiredSubmission())
@@ -80,6 +97,11 @@ void GpuSceneExecutor::Impl::clearJob() noexcept {
 }
 
 bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
+    return hasUnretiredMainNative() ||
+           (lookaheadUpload != nullptr && lookaheadUpload->hasUnretiredSubmission());
+}
+
+bool GpuSceneExecutor::Impl::hasUnretiredMainNative() const noexcept {
     const bool solidUnretired = solid != nullptr && solid->hasUnretiredSubmission();
     const bool compositeUnretired = composite != nullptr && composite->hasUnretiredSubmission();
     const bool uploadUnretired = upload != nullptr && upload->hasUnretiredSubmission();
@@ -96,10 +118,12 @@ bool GpuSceneExecutor::Impl::hasUnretiredNative() const noexcept {
 }
 
 std::uint64_t GpuSceneExecutor::Impl::remainingBudget() const noexcept {
-    if (liveBytes >= requestBudget) {
+    // A lookahead upload's actual bytes stay reserved until its step adopts it (#405).
+    const std::uint64_t held = liveBytes + lookaheadBytes;
+    if (held >= requestBudget) {
         return 0;
     }
-    const std::uint64_t headroom = requestBudget - liveBytes;
+    const std::uint64_t headroom = requestBudget - held;
     return headroom < budgets.maxImageBytes ? headroom : budgets.maxImageBytes;
 }
 
@@ -169,7 +193,12 @@ void GpuSceneExecutor::Impl::consume(const GpuSceneCommandIndex index) noexcept 
 }
 
 void GpuSceneExecutor::Impl::fail(const GpuSceneExecutorDiagnosticCode code, std::string message,
-                                  const bool requireDrain) noexcept {
+                                  bool requireDrain) noexcept {
+    // A lookahead upload that is not adopted is dropped with the job. When its fence is not yet
+    // proven, the failed request keeps draining (owner polls) until it is, exactly like an
+    // unproven native job: its pins and phase are never released under it.
+    if (!dropLookahead())
+        requireDrain = true;
     if (queueTimingStarted && queueTiming) {
         queueTiming->cancel();
         queueTimingSample = queueTiming->poll();
@@ -212,6 +241,8 @@ void GpuSceneExecutor::Impl::finishReady() noexcept {
         operationBatch.reset();
     if (upload)
         upload->releaseSpareStaging(); // charged to this request's phase; never kept past it
+    if (lookaheadUpload)
+        lookaheadUpload->releaseSpareStaging();
     state = GpuSceneExecutorJobState::Ready;
     diagnostic = {};
     ++counters.scenesCompleted;
@@ -244,6 +275,7 @@ void GpuSceneExecutor::Impl::advanceDrain() noexcept {
     } else if (nativeKind == NativeKind::Ocio) {
         drainOcioPrograms();
     }
+    static_cast<void>(dropLookahead());
     if (!hasUnretiredNative()) {
         nativeInFlight = false;
         nativeKind = NativeKind::None;
@@ -262,7 +294,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
     }
     const auto submitStarted = std::chrono::steady_clock::now();
     const std::uint64_t remaining = remainingBudget();
-    liveBytesAtDispatch = liveBytes;
+    // The during-op peak also holds a reserved lookahead upload (#405).
+    liveBytesAtDispatch = liveBytes + lookaheadBytes;
     const auto solidParameters = [&step]() -> std::optional<render::GpuSolidParameters> {
         if (!step.solidDataWindow.has_value() || !step.solidDisplayWindow.has_value()) {
             return std::nullopt;
@@ -304,23 +337,11 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "an upload step has no converted source before dispatch");
         }
-        render::GpuImageUploadParameters parameters{
-            step.uploadSource, device->retainedProcessingPhase(), step.uploadDescriptor};
-        // Staging reuse across this scene's uploads; clearJob()/finishReady() release the spare.
-        parameters.reuseStagingWithinScene = true;
-        if (auto* const copyPool = budgets.uploadCopyExecutor; copyPool != nullptr)
-            parameters.parallelFor = [copyPool](const std::size_t count,
-                                                const std::function<void(std::size_t)>& body) {
-                // A band that threw leaves its chunk unwritten: copy it again on this thread so
-                // the staging bytes are always complete. memcpy itself does not throw.
-                if (!copyPool->run(count, body))
-                    for (std::size_t index = 0; index < count; ++index)
-                        body(index);
-            };
-        const auto native = upload->begin(parameters, remaining);
+        const auto native = upload->begin(uploadParameters(step), remaining);
         if (native.code != render::GpuImageUploadDiagnosticCode::None) {
             return diagnosticFromUpload(native);
         }
+        uploadRan = true;
         ++counters.uploads;
         break;
     }
@@ -473,6 +494,24 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
     return {};
 }
 
+render::GpuImageUploadParameters
+GpuSceneExecutor::Impl::uploadParameters(const GpuSceneExecutorStep& step) const {
+    render::GpuImageUploadParameters parameters{
+        step.uploadSource, device->retainedProcessingPhase(), step.uploadDescriptor};
+    // Staging reuse across this scene's uploads; clearJob()/finishReady() release the spare.
+    parameters.reuseStagingWithinScene = true;
+    if (auto* const copyPool = budgets.uploadCopyExecutor; copyPool != nullptr)
+        parameters.parallelFor = [copyPool](const std::size_t count,
+                                            const std::function<void(std::size_t)>& body) {
+            // A band that threw leaves its chunk unwritten: copy it again on this thread so
+            // the staging bytes are always complete. memcpy itself does not throw.
+            if (!copyPool->run(count, body))
+                for (std::size_t index = 0; index < count; ++index)
+                    body(index);
+        };
+    return parameters;
+}
+
 GpuSceneExecutor::Impl::~Impl() {
     // Owner thread. Destroy the owned native pipelines FIRST, while the scene and the executor's
     // pins are still alive. Each pipeline's releaseImpl drains the in-flight submission within its
@@ -484,6 +523,7 @@ GpuSceneExecutor::Impl::~Impl() {
     ocioPrograms.clear();
     operationBatch.reset();
     upload.reset();
+    lookaheadUpload.reset();
     affine.reset();
     blend.reset();
     pointResample.reset();

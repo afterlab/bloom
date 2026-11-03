@@ -22,7 +22,9 @@
 namespace bloom::render {
 namespace {
 
-constexpr std::size_t kUploadResidentCapacity = 8;
+// Each scene executor owns two upload pipelines (its upload and its #405 lookahead), so the pool is
+// twice the per-family default to leave the same room per executor.
+constexpr std::size_t kUploadResidentCapacity = 16;
 
 // Distinguishes the GpuImageUpload pool from every other family's function-local static store.
 struct UploadResidentTag final {};

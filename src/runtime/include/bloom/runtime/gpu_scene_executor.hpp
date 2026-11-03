@@ -7,7 +7,10 @@
 // operands, geometry and pinned shader digests. This executor turns the commands reachable from the
 // terminal CompositionOutput into one bounded sequence of already-typed native operations (GpuSolid
 // / GpuSolid::beginCovered / GpuImageUpload / GpuComposite translation / GpuComposite source-over),
-// one outstanding native dispatch at a time, on the GpuDevice owner thread.
+// one outstanding native dispatch at a time, on the GpuDevice owner thread. The one exception is
+// the upload lookahead (#405): while a native job is in flight, the next planned upload may
+// already be begun on a second upload pipeline, so its host staging copy and transfer overlap the
+// GPU work in front of it. It completes, publishes and is cached at its own step, in plan order.
 //
 // It owns NO thread, service, Qt surface, viewer, or media decode path. It DOES own one
 // GpuImageUpload pipeline: an ImageSource/VideoSource leaf command carries the already-decoded,
@@ -160,6 +163,11 @@ struct GpuSceneExecutorCounters final {
     std::uint64_t nativeBatches = 0;
     std::uint64_t nativeBatchFallbacks = 0;
     std::uint64_t uploads = 0;
+    // #405: uploads begun ahead of their own step while another native job was in flight (a
+    // subset of `uploads`), and lookahead uploads dropped before their step (cancellation, a
+    // failure, or a later step refused beside the reservation and retried without lookahead).
+    std::uint64_t uploadsAhead = 0;
+    std::uint64_t uploadsAheadDropped = 0;
     std::uint64_t readbacks = 0;
     // CPU steady-clock wall stages. Submit includes host allocation/map/command recording;
     // fence observation includes device/queue execution and owner polling delay. These are not
@@ -253,6 +261,12 @@ struct GpuSceneExecutorBudgets final {
     // serialises every layer of every frame on the owner. Null copies on the owner thread. Not
     // owned; it must outlive the executor (the scheduler's row-band executor does).
     CpuRowBandExecutor* uploadCopyExecutor = nullptr;
+    // Upload lookahead (#405): while a native job is in flight, begin the next planned upload on a
+    // second upload pipeline (at most one ahead), within the request budget left beside the live
+    // pins and that job's actual bytes. Both submissions go to the device's queue in submission
+    // order and the step still completes on its own proven fence, so the output is identical.
+    // False keeps one native job at a time, for baseline comparisons.
+    bool enableUploadLookahead = true;
 };
 
 struct GpuSceneExecutorCreateResult;

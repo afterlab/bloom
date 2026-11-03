@@ -70,6 +70,14 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
         return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                                         upload.diagnostic.message)};
     }
+    // #405: the lookahead upload pipeline. Idle pipelines own no native resources; it takes its
+    // bounded resident slot only when a lookahead upload actually begins.
+    auto lookaheadUpload = render::GpuImageUpload::create(
+        device, render::GpuImageUploadBudgets{budgets.maxImageBytes, budgets.maxImageBytes});
+    if (!lookaheadUpload) {
+        return {nullptr, makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
+                                        lookaheadUpload.diagnostic.message)};
+    }
     auto affine = render::GpuAffine::create(
         device, render::GpuAffineBudgets{budgets.maxImageBytes, budgets.maxAffineMetadataBytes});
     if (!affine) {
@@ -107,6 +115,7 @@ GpuSceneExecutorCreateResult GpuSceneExecutor::create(render::GpuDevice& device,
     impl->solid = std::move(solid.solid);
     impl->composite = std::move(composite.composite);
     impl->upload = std::move(upload.upload);
+    impl->lookaheadUpload = std::move(lookaheadUpload.upload);
     impl->affine = std::move(affine.affine);
     impl->blend = std::move(blend.blend);
     impl->pointResample = std::move(pointResample.resampler);
@@ -381,27 +390,80 @@ GpuSceneExecutorPollResult GpuSceneExecutor::pollOnce() {
             }
             impl.cancelIssued = true;
         }
-        return impl.pollNative();
+        impl.pollLookahead();
+        const auto result = impl.pollNative();
+        // #405: while this job runs, begin the next planned upload beside it.
+        if (result == GpuSceneExecutorPollResult::Pending && impl.nativeInFlight)
+            impl.startLookahead();
+        return result;
     }
     if (impl.cancelRequested) {
         impl.fail(GpuSceneExecutorDiagnosticCode::Cancelled,
                   "the scene execution was cancelled; no image was published", false);
         return GpuSceneExecutorPollResult::Failure;
     }
+    if (impl.lookaheadDiscarding) {
+        // A step was refused beside the lookahead reservation: wait for the dropped lookahead's
+        // fence before retrying that step on the serial path.
+        if (!impl.dropLookahead()) {
+            if (std::chrono::steady_clock::now() - impl.lookaheadStart >=
+                std::chrono::milliseconds(impl.budgets.jobDeadlineMilliseconds)) {
+                ++impl.counters.nativeJobTimeouts;
+                impl.fail(GpuSceneExecutorDiagnosticCode::NativeTimeout,
+                          "a dropped lookahead upload exceeded its deadline; it is retained until "
+                          "it retires",
+                          true);
+                return GpuSceneExecutorPollResult::Failure;
+            }
+            return GpuSceneExecutorPollResult::Pending;
+        }
+    }
     if (impl.cursor >= impl.steps.size()) {
         impl.finishReady();
         return impl.state == GpuSceneExecutorJobState::Ready ? GpuSceneExecutorPollResult::Ready
                                                              : GpuSceneExecutorPollResult::Failure;
     }
+    if (impl.adoptLookahead()) {
+        // The step's upload was begun ahead; it completes here like any upload (often already
+        // retired, so it publishes in this same turn).
+        const auto result = impl.pollNative();
+        if (result == GpuSceneExecutorPollResult::Pending && impl.nativeInFlight)
+            impl.startLookahead();
+        return result;
+    }
+    // A pre-submit refusal while a lookahead upload holds its reservation is retried on the serial
+    // path: the lookahead is dropped, lookahead stays off for this job, and the step runs again
+    // once the dropped upload has retired. The serial executor's outcome is unchanged.
+    const auto retryWithoutLookahead = [&impl]() noexcept {
+        if (!impl.lookaheadOutstanding() || impl.deviceLost || impl.nativeInFlight ||
+            impl.hasUnretiredMainNative()) {
+            return false;
+        }
+        impl.lookaheadDisabled = true;
+        impl.lookaheadDiscarding = true;
+        impl.batchAttempted = false;
+        return true;
+    };
     if (const auto batch = impl.tryStartBatch(); batch.has_value()) {
         if (batch->code != GpuSceneExecutorDiagnosticCode::None) {
-            impl.fail(batch->code, batch->message, impl.hasUnretiredNative());
+            if (batch->code != GpuSceneExecutorDiagnosticCode::DeviceLost &&
+                batch->code != GpuSceneExecutorDiagnosticCode::NativeUnproven &&
+                retryWithoutLookahead()) {
+                return impl.dropLookahead() ? pollOnce() : GpuSceneExecutorPollResult::Pending;
+            }
+            impl.fail(batch->code, batch->message, impl.hasUnretiredMainNative());
             return GpuSceneExecutorPollResult::Failure;
         }
+        impl.startLookahead();
         return GpuSceneExecutorPollResult::Pending;
     }
     const auto started = impl.startStep(impl.steps[impl.cursor]);
-    if (started.code != GpuSceneExecutorDiagnosticCode::None) {
+    if (started.code != GpuSceneExecutorDiagnosticCode::None && retryWithoutLookahead()) {
+        return impl.dropLookahead() ? pollOnce() : GpuSceneExecutorPollResult::Pending;
+    }
+    if (started.code == GpuSceneExecutorDiagnosticCode::None) {
+        impl.startLookahead();
+    } else {
         // Bounded accounting context: the step's own refusal is distinguished from the executor's
         // per-request allowance and its remaining headroom without a second probe.
         impl.fail(started.code,

@@ -88,7 +88,10 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         queueTimingStarted = queueTimingSample.status == render::GpuQueueTimingStatus::Active;
     }
     const auto started = std::chrono::steady_clock::now();
-    auto native = operationBatch->begin(operations, requestBudget - liveBytes);
+    // A reserved lookahead upload (#405) is held beside the live pins.
+    const std::uint64_t held = liveBytes + lookaheadBytes;
+    const std::uint64_t batchBudget = requestBudget > held ? requestBudget - held : 0;
+    auto native = operationBatch->begin(operations, batchBudget);
     if (requiredGradient && operations.size() > 1 &&
         (native.code == render::GpuOperationBatchCode::OverBudget ||
          native.code == render::GpuOperationBatchCode::AllocationFailed ||
@@ -101,7 +104,7 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         // optional downstream operations retain their ordinary native paths.
         ++counters.nativeBatchFallbacks;
         operations.erase(operations.begin() + 1, operations.end());
-        native = operationBatch->begin(operations, requestBudget - liveBytes);
+        native = operationBatch->begin(operations, batchBudget);
     }
     const auto stats = operationBatch->statistics();
     if (stats.submissions != 0 && (native.code == render::GpuOperationBatchCode::None ||
@@ -109,7 +112,7 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
                                     operationBatch->hasUnretiredSubmission()))) {
         nativeKind = NativeKind::Batch;
         nativeInFlight = true;
-        liveBytesAtDispatch = liveBytes;
+        liveBytesAtDispatch = held;
         nativeStart = std::chrono::steady_clock::now();
         const auto elapsed =
             std::chrono::duration_cast<std::chrono::nanoseconds>(nativeStart - started).count();
@@ -117,7 +120,7 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
             counters.processingSubmitNanoseconds += std::min(
                 static_cast<std::uint64_t>(elapsed),
                 std::numeric_limits<std::uint64_t>::max() - counters.processingSubmitNanoseconds);
-        peakLiveBytes = std::max(peakLiveBytes, liveBytes + stats.peakAllocationBytes);
+        peakLiveBytes = std::max(peakLiveBytes, held + stats.peakAllocationBytes);
         counters.peakLiveImageBytes = peakLiveBytes;
         // peakStepImageBytes is the largest single produced image (gpu_scene_executor.hpp); each
         // batch output records its own allocation when it is published (finishNative). The whole

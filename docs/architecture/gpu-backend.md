@@ -203,7 +203,25 @@ one immutable `PreparedGpuScene` as a bounded sequence of already-typed native o
 existing `GpuDevice`; `begin` validates and flattens the reachable DAG consulting `GpuSceneCache`
 first, so a warm unchanged output performs zero native dispatches, `poll` is non-blocking and starts
 at most one native dispatch per call, and the request byte budget bounds the actual LIVE unique pinned
-bytes with each charge released at the last dependency. Each native op's real retained allocation
+bytes with each charge released at the last dependency. One upload may run ahead of the plan (#405,
+`GpuSceneExecutorBudgets::enableUploadLookahead`, on by default): uploads are leaves whose input is
+the scene's converted host image, so while any native job is in flight the next planned Upload step
+is begun on the executor's second `GpuImageUpload` pipeline, and its host staging copy and queued
+copy overlap the GPU work in front of it. When the cursor reaches that step the pipelines swap and
+the step completes through the ordinary upload path: the same proven fence, descriptor check,
+live-pin charge and cache insertion, in plan order, so the output and every cache identity are
+unchanged. Both submissions go to the device's one queue in submission order; the upload writes a
+fresh image and its closing barrier orders it before every consumer, which is submitted only after
+its fence is observed, so no semaphore or separate transfer queue is involved and a device without
+one takes the same path. The lookahead begins only within the request budget left beside the live
+pins and the in-flight job's actual bytes, and its own actual bytes stay reserved against the budget
+until its step adopts it. A later step refused beside that reservation drops the lookahead, waits for
+its fence and runs on the serial path with lookahead off for the rest of the job, so the lookahead
+never fails a scene the serial executor runs. Cancellation, a failure or device loss drops it with
+the job; a lookahead whose fence is not yet proven keeps the failed job owner-drain-required until an
+owner poll proves it, like any unproven native job. It allocates under the request's processing phase
+like every upload, so device admission sees it in the phase's measured peak. Each executor therefore
+holds up to two upload pipelines, and the bounded upload resident pool is 16 slots. Each native op's real retained allocation
 comes from an additive `hasUnretiredSubmission()`/`lastJobAllocationBytes()` accessor pair, and only a
 native result that proves fence retirement may release pins: a failure with a submission still
 outstanding retains every pin and refuses reuse. `GpuSceneCache` maps an already-computed semantic

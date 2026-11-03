@@ -1079,6 +1079,28 @@ bloom_add_test(
     TIMEOUT 600
 )
 
+# #405 upload lookahead: a three-source media scene on a real device, lookahead on versus off
+# (ordering, bit-identical output, 2e-6 CPU parity), cancellation while a lookahead upload is in
+# flight, and the serial fallback under a budget of exactly the serial live peak.
+add_executable(bloom_runtime_gpu_upload_lookahead_test
+    gpu_upload_lookahead_tests.cpp
+    gpu_media_executor_test_support.hpp)
+target_include_directories(bloom_runtime_gpu_upload_lookahead_test
+    PRIVATE ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
+            "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_gpu_upload_lookahead_test
+    PRIVATE bloom_runtime_evaluator bloom_render bloom_media_image bloom_media_video
+            bloom_media_cache bloom_color bloom_color_ocio OpenEXR::OpenEXR)
+bloom_enable_warnings(bloom_runtime_gpu_upload_lookahead_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_upload_lookahead_test)
+target_compile_options(bloom_runtime_gpu_upload_lookahead_test PRIVATE -Wno-unused-function)
+bloom_add_test(
+    NAME bloom.runtime.gpu_upload_lookahead
+    COMMAND bloom_runtime_gpu_upload_lookahead_test
+    LABELS runtime unit gpu render media
+    TIMEOUT 600
+)
+
 # The bounded media-source GPU colour split: a real AP0 EXR -> CpuGpuSceneBuilder (with the shared
 # GpuSceneOcioContext) -> RAW full-source upload + real input->working OCIO ProcessEffect ->
 # GpuSceneExecutor on a real device, checked against the unchanged CpuCompositionEvaluator frame at
