@@ -84,6 +84,9 @@ struct CompositionOutputStreamV1::State {
     NullBackend* audioSink = nullptr;
     std::map<runtime::AudioStreamKey, OwnedAudioBuffer> audioBuffers;
     std::uint64_t samples = 0;
+    // The mix evaluated at the end of the last block (sample `samples`), reused as the next
+    // block's start mix.
+    std::optional<runtime::AudioMixDescription> blockEndMix;
     bool started = false;
     // An audio source failed to read or decode (#428); see loadSource.
     bool audioSourceFailed = false;
@@ -214,21 +217,37 @@ struct CompositionOutputStreamV1::State {
             const auto origin = source.origin;
             require(!mixer->play(origin), "Offline mixer failed");
         }
+        const auto sampleTime = [&](const std::uint64_t sample) {
+            const auto origin = source.origin;
+            return core::RationalTime::create(origin.numerator() * settings().sampleRate +
+                                                  static_cast<std::int64_t>(sample) *
+                                                      origin.denominator(),
+                                              origin.denominator() * settings().sampleRate);
+        };
         while (samples < through) {
             checkpoint();
-            const auto origin = source.origin;
-            const auto time =
-                required(core::RationalTime::create(origin.numerator() * settings().sampleRate +
-                                                        static_cast<std::int64_t>(samples) *
-                                                            origin.denominator(),
-                                                    origin.denominator() * settings().sampleRate),
-                         "Audio sample timestamp overflow");
-            const auto mix = required(runtime::CpuCompositionEvaluator{}.evaluateAudioMix(
-                                          source.plan, time, context.cancellation()),
-                                      "Composition audio graph is unavailable");
+            const auto time = required(sampleTime(samples), "Audio sample timestamp overflow");
+            const auto mix = blockEndMix
+                                 ? std::move(*blockEndMix)
+                                 : required(runtime::CpuCompositionEvaluator{}.evaluateAudioMix(
+                                                source.plan, time, context.cancellation()),
+                                            "Composition audio graph is unavailable");
+            blockEndMix.reset();
+            const auto count =
+                static_cast<std::uint32_t>(std::min<std::uint64_t>(512, through - samples));
+            // Level automation ramps linearly from this block's start to its end (#459), so a
+            // fade is continuous instead of stepping once per block. Without an end mix (for
+            // example past a representable time) the block holds its start level.
+            const auto endTime = sampleTime(samples + count);
+            std::optional<runtime::AudioMixDescription> endMix;
+            if (endTime)
+                endMix = runtime::CpuCompositionEvaluator{}.evaluateAudioMix(
+                    source.plan, *endTime, context.cancellation());
+            const bool ramped = endMix && endMix->clips.size() == mix.clips.size();
             std::vector<media::audio::playback::AudioClip> clips;
             clips.reserve(mix.clips.size());
-            for (const auto& description : mix.clips) {
+            for (std::size_t index = 0; index < mix.clips.size(); ++index) {
+                const auto& description = mix.clips[index];
                 auto found = audioBuffers.find({description.assetId, description.audioStream});
                 if (found == audioBuffers.end())
                     found = loadSource(context, description, cancel);
@@ -245,10 +264,17 @@ struct CompositionOutputStreamV1::State {
                     clips.back().mapTime = [description](core::RationalTime at) {
                         return runtime::mapAudioClipTime(description, at);
                     };
+                if (ramped) {
+                    const auto& end = endMix->clips[index];
+                    if (end.sourceNodeId == description.sourceNodeId &&
+                        end.assetId == description.assetId &&
+                        end.audioStream == description.audioStream &&
+                        end.level != description.level)
+                        clips.back().levelRamp = media::audio::playback::AudioLevelRamp{
+                            time, *endTime, static_cast<float>(end.level)};
+                }
             }
             mixer->replaceClips(std::move(clips));
-            const auto count =
-                static_cast<std::uint32_t>(std::min<std::uint64_t>(512, through - samples));
             audioSink->clearCaptured();
             require(!mixer->renderForTesting(count), "Offline mix failed");
             AudioBlock block;
@@ -264,6 +290,7 @@ struct CompositionOutputStreamV1::State {
                     block.channels[c][i] = captured[static_cast<std::size_t>(i) * 2 + c];
             checked(encoder->audio(std::move(block)));
             samples += count;
+            blockEndMix = std::move(endMix);
         }
     }
 };

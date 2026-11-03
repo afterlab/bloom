@@ -72,6 +72,16 @@ class MiniaudioBackend final : public Backend {
 
 [[nodiscard]] std::unique_ptr<Backend> makeMiniaudioBackend();
 
+// Linear level automation across one span of transport time (#459): a clip's gain moves from its
+// `level` at `start` to `endLevel` at `end` and holds each value outside the span. The offline
+// export mix sets one per mix block from the level evaluated at both block edges, so automation is
+// a continuous piecewise-linear ramp instead of a step at every block.
+struct AudioLevelRamp final {
+    core::RationalTime start{};
+    core::RationalTime end{};
+    float endLevel = 1.0F;
+};
+
 struct AudioClip final {
     // Null means "no sample": the clip contributes silence. Shared so the engine never
     // deep-copies decoded audio (a shared decode can be tens of megabytes) -- callers hand in
@@ -85,6 +95,8 @@ struct AudioClip final {
     // Optional; invocation must not allocate or throw. Runs on the mixer worker, never the device
     // callback. nullopt means silence outside an enclosing composition/layer range.
     std::function<std::optional<core::RationalTime>(core::RationalTime)> mapTime{};
+    // Evaluated at the transport position after any loop wrap and before mapTime.
+    std::optional<AudioLevelRamp> levelRamp{};
 };
 
 // A transport loop in timeline time, half-open: [start, end).
@@ -219,6 +231,10 @@ class AudioEngine final {
         // half-width in source frames (taps reach floor(position) +- halfWidthFrames).
         double cutoff = 1.0;
         std::size_t halfWidthFrames = 0;
+        // The clip's level ramp in output frames, on the same floored grid as the mixer's
+        // transport position; rampEnd > rampStart when the clip has one.
+        std::int64_t rampStart = 0;
+        std::int64_t rampEnd = 0;
     };
     [[nodiscard]] ClipMix clipMix(const AudioClip& clip) const;
     // Requires controlMutex_: grows the mixer's interpolation scratch to cover `mix`.

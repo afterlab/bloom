@@ -1971,7 +1971,11 @@ allocation. The worker retains only first/last frame references, codec buffers a
 file products. Audio uses the production `AudioEngine` mixer through its offline null-device pull,
 in blocks of at most 512 samples, stopping at each rational video-frame boundary. The final sample
 count is the floor of range duration times the chosen source sample rate. Nested clip time mappings,
-levels, mute and solo use the normal audio graph.
+levels, mute and solo use the normal audio graph. The graph is evaluated at both edges of every
+block (the end mix is reused as the next block's start), and each clip whose level differs between
+them carries an `AudioLevelRamp` across the block, so level automation is a continuous
+piecewise-linear ramp evaluated per sample rather than a step every block (#459). Mute and solo
+still change at block edges.
 
 The worker closes its private artifact and decodes it again with the same provider. QC checks every
 video timestamp, frame count, duration, codec, dimensions and stream layout; first/last decoded

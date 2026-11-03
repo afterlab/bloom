@@ -5,6 +5,8 @@
 // sentence naming the stage and the input. Issue #424: a failed run keeps its frames' route
 // provenance instead of counting every frame as CPU reference. Issue #450: a 5.1 source exports
 // to stereo through the ITU-R BS.775 downmix instead of losing every channel past the second.
+// Issue #459: an automated level exports as a continuous ramp, not a step every mix block.
+#include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/layer_drop_operations.hpp>
@@ -69,8 +71,10 @@ document::Snapshot currentSnapshot(const host::ProjectSession& session) {
 
 // The WAV encodings the tests write: integer PCM, IEEE float, IMA ADPCM (which the import
 // decoder reads but the bundled FFmpeg build has no decoder for), and WAVE_FORMAT_EXTENSIBLE
-// float 5.1 (FL FR FC LFE BL BR) holding the constants in kSurroundLevels.
-enum class WavEncoding { Pcm16, Pcm24, Float32, ImaAdpcm, Surround51 };
+// float 5.1 (FL FR FC LFE BL BR) holding the constants in kSurroundLevels, and float stereo
+// holding kConstantLevel.
+enum class WavEncoding { Pcm16, Pcm24, Float32, ImaAdpcm, Surround51, ConstantStereo };
+constexpr float kConstantLevel = 0.5F;
 constexpr std::array<float, 6> kSurroundLevels{0.1F, 0.2F, 0.3F, 0.4F, 0.05F, 0.15F};
 
 void put(std::vector<char>& out, const std::uint64_t value, const int bytes) {
@@ -108,14 +112,18 @@ std::filesystem::path writeWav(const std::filesystem::path& path, const WavEncod
                 put(data, raw, 4);
             }
     } else {
-        format = encoding == WavEncoding::Float32 ? 3 : 1;
+        const bool floating =
+            encoding == WavEncoding::Float32 || encoding == WavEncoding::ConstantStereo;
+        format = floating ? 3 : 1;
         bits = encoding == WavEncoding::Pcm16 ? 16 : encoding == WavEncoding::Pcm24 ? 24 : 32;
         blockAlign = static_cast<std::uint16_t>(channels * bits / 8);
         for (std::uint32_t frame = 0; frame < rate; ++frame) {
             const double value =
-                0.25 * std::sin(2.0 * 3.141592653589793 * 440.0 * frame / double(rate));
+                encoding == WavEncoding::ConstantStereo
+                    ? double{kConstantLevel}
+                    : 0.25 * std::sin(2.0 * 3.141592653589793 * 440.0 * frame / double(rate));
             for (std::uint32_t channel = 0; channel < channels; ++channel) {
-                if (encoding == WavEncoding::Float32) {
+                if (floating) {
                     const auto sample = static_cast<float>(value);
                     std::uint32_t raw = 0;
                     std::memcpy(&raw, &sample, sizeof raw);
@@ -380,6 +388,85 @@ std::pair<unsigned, std::vector<double>> wavFrame(const std::filesystem::path& p
         at += 8 + size + (size & 1U);
     }
     return {channels, {}};
+}
+
+// Every sample of a published 24-bit PCM WAV, interleaved, and its channel count.
+std::pair<unsigned, std::vector<double>> wavSamples(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto u = [&](const std::size_t at, const unsigned count) {
+        std::uint64_t value = 0;
+        for (unsigned i = 0; i < count; ++i)
+            value |= std::uint64_t{static_cast<unsigned char>(bytes[at + i])} << (8U * i);
+        return value;
+    };
+    unsigned channels = 0, bits = 0;
+    for (std::size_t at = 12; at + 8 <= bytes.size();) {
+        const auto id = bytes.substr(at, 4);
+        const auto size = static_cast<std::size_t>(u(at + 4, 4));
+        if (id == "fmt " && at + 24 <= bytes.size()) {
+            channels = static_cast<unsigned>(u(at + 10, 2));
+            bits = static_cast<unsigned>(u(at + 22, 2));
+        } else if (id == "data" && channels != 0 && bits == 24) {
+            std::vector<double> samples;
+            for (std::size_t sample = at + 8; sample + 3 <= std::min(bytes.size(), at + 8 + size);
+                 sample += 3) {
+                const auto raw = static_cast<std::int32_t>(u(sample, 3) << 8) >> 8;
+                samples.push_back(static_cast<double>(raw) / 8388608.0);
+            }
+            return {channels, samples};
+        }
+        at += 8 + size + (size & 1U);
+    }
+    return {channels, {}};
+}
+
+// #459: an automated audio level exports as a continuous ramp. The level of a constant source
+// is keyed 0 at 0 s and 1 at 0.5 s; the export mix evaluates the graph once per 512-sample block,
+// and used to hold each block's start level, a 0.0107 jump every block (a zipper). Now adjacent
+// samples differ by the ramp's own slope, about 2e-5.
+void testLevelAutomationRampsWithinBlocks() {
+    Fixture f("level-ramp", WavEncoding::ConstantStereo);
+    const auto snapshot = currentSnapshot(f.session);
+    const auto& graph = snapshot.project().findComposition(f.composition())->graph();
+    std::optional<document::ParameterId> level;
+    for (const auto& node : graph.nodes())
+        if (node.typeId == document::kAudioSourceNodeType)
+            for (const auto& binding : node.parameters)
+                if (binding.role == "level")
+                    level = binding.parameterId;
+    expect(level.has_value(), "level ramp: the audio layer has a level parameter");
+    if (!level)
+        return;
+    commands::Transaction automate("Automate level");
+    automate.emplace<commands::CreateAnimationForParameter>(f.composition(), *level,
+                                                            core::RationalTime{});
+    automate.emplace<commands::SetKeyframeAtTimeForParameter>(f.composition(), *level,
+                                                              core::RationalTime{}, 0.0);
+    automate.emplace<commands::SetKeyframeAtTimeForParameter>(
+        f.composition(), *level, *core::RationalTime::create(1, 2), 1.0);
+    expect(f.session.execute(std::move(automate)).changed(), "level ramp: the level is keyed");
+    document::ExportOutputSettings settings;
+    settings.format = ExportFormat::Wav;
+    settings.codecProfile = "s24";
+    settings.includeAudio = true;
+    const std::string file = "Exports/level-ramp.wav";
+    const auto finished = f.run(f.addJob(settings, file), "level ramp");
+    if (finished && finished->failure)
+        std::cerr << "  level ramp: " << finished->failure->reason << '\n';
+    expect(published(finished), "level ramp: exports and publishes");
+    const auto [channels, samples] = wavSamples(f.folder / file);
+    expect(channels == 2 && samples.size() >= 2 * 24000, "level ramp: a stereo WAV of the ramp");
+    if (channels != 2 || samples.size() < 2 * 24000)
+        return;
+    double largest = 0.0;
+    for (std::size_t frame = 1; frame < 24000; ++frame)
+        largest = std::max(largest, std::abs(samples[frame * 2] - samples[(frame - 1) * 2]));
+    expect(largest < 1e-3, "level ramp: the fade is continuous, the largest sample step is " +
+                               std::to_string(largest));
+    expect(std::abs(samples[12000 * 2] - 0.5 * double{kConstantLevel}) < 1e-3,
+           "level ramp: a quarter second in, the level is halfway (got " +
+               std::to_string(samples[12000 * 2]) + ")");
 }
 
 // #450: the export mix downmixes a 5.1 source to its stereo output with ITU-R BS.775 levels
@@ -676,6 +763,7 @@ int main() {
         testSourceFormatsAcrossPresets();
         testUndecodableSourceIsRefusedBeforeRendering();
         testSurroundSourceDownmixesToStereo();
+        testLevelAutomationRampsWithinBlocks();
         testFailedRunKeepsFrameProvenance();
         testCompileFailureNamesItsSubject();
     } catch (const std::exception& error) {

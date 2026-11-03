@@ -561,6 +561,22 @@ void testMidPlayMixEditsRemixQueuedAudio(Expectations& expectations) {
                   "mid-play mix edits are heard at the next device callback");
 }
 
+// #459: a level ramp moves the clip's gain linearly across its span, per output frame, and holds
+// each end outside it.
+void testLevelRampIsPerFrame(Expectations& expectations) {
+    auto backend = std::make_unique<NullBackend>();
+    auto* captured = backend.get();
+    AudioEngine engine(std::move(backend), AudioEngine::Config{8, 1, 64});
+    auto clip = AudioClip{monoBuffer(std::vector<float>(16, 1.0F)), time(0), 0.0F, false, false};
+    clip.levelRamp = bloom::media::audio::playback::AudioLevelRamp{time(1, 4), time(5, 4), 1.0F};
+    static_cast<void>(engine.addClip(std::move(clip)));
+    static_cast<void>(engine.play(time(0)));
+    static_cast<void>(engine.renderForTesting(13));
+    expectSamples(expectations, captured->captured(),
+                  {0, 0, 0, 0.125F, 0.25F, 0.375F, 0.5F, 0.625F, 0.75F, 0.875F, 1, 1, 1},
+                  "a level ramp is linear per frame and holds outside its span");
+}
+
 [[nodiscard]] std::vector<float> sine(const double frequency, const std::uint32_t rate,
                                       const std::size_t frames) {
     constexpr double pi = 3.14159265358979323846;
@@ -675,6 +691,7 @@ int main() {
     testUnderrunKeepsMixOnDeviceClock(expectations);
     testMidPlayLoopChangeRewindsQueuedAudio(expectations);
     testMidPlayMixEditsRemixQueuedAudio(expectations);
+    testLevelRampIsPerFrame(expectations);
     testRateConversionInterpolates(expectations);
     testRateConversionRejectsAliases(expectations);
     testStreamedRateConversionReadsForward(expectations);

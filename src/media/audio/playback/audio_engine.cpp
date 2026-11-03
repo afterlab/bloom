@@ -347,6 +347,10 @@ AudioEngine::ClipMix AudioEngine::clipMix(const AudioClip& clip) const {
         mix.halfWidthFrames = static_cast<std::size_t>(
             std::ceil(static_cast<double>(kSincZeroCrossings) / mix.cutoff));
     }
+    if (clip.levelRamp && std::isfinite(clip.levelRamp->endLevel)) {
+        mix.rampStart = timeToFrames(clip.levelRamp->start, config_.rate);
+        mix.rampEnd = timeToFrames(clip.levelRamp->end, config_.rate);
+    }
     return mix;
 }
 
@@ -846,6 +850,16 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
             const std::size_t sourceChannels = buffer.channels;
             if (gains.size() != sourceChannels * config_.channels)
                 continue;
+            auto level = clip.level;
+            if (mix.rampEnd > mix.rampStart && clip.levelRamp) {
+                const auto progress = std::clamp(
+                    (static_cast<double>(absoluteFrame) - static_cast<double>(mix.rampStart)) /
+                        static_cast<double>(mix.rampEnd - mix.rampStart),
+                    0.0, 1.0);
+                level = static_cast<float>(
+                    static_cast<double>(clip.level) +
+                    progress * static_cast<double>(clip.levelRamp->endLevel - clip.level));
+            }
             // Exact: an output-rate clip on a whole source frame plays that sample unchanged.
             const bool exact = position->fraction == 0.0 && buffer.rate == config_.rate;
             const auto available = static_cast<std::int64_t>(
@@ -937,8 +951,7 @@ void AudioEngine::mixBlock(const std::uint64_t firstProducedFrame,
                 }
                 for (std::size_t channel = 0; channel < config_.channels; ++channel)
                     if (const auto gain = gains[channel * sourceChannels + source]; gain != 0.0F)
-                        output[outputFrame * config_.channels + channel] +=
-                            sample * (gain * clip.level);
+                        output[outputFrame * config_.channels + channel] += sample * (gain * level);
             }
         }
     }
