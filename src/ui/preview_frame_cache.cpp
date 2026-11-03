@@ -192,6 +192,13 @@ std::size_t PreviewFrameCache::frameByteCost(const runtime::PreparedPreviewFrame
     return view->pixels.size_bytes() + geometryBytes;
 }
 
+std::size_t
+PreviewFrameCache::hostByteCost(const runtime::PreparedPreviewFrame& frame) const noexcept {
+    const bool resident =
+        frame.provenance().provider == runtime::PreviewDisplayProvider::GpuResident;
+    return resident && deviceBudgeted() ? 0 : frameByteCost(frame);
+}
+
 PreparedPreviewFrameHandle
 PreviewFrameCache::take(const runtime::PreviewRequestIdentity& identity) {
     const auto key = PreviewFrameCacheKey::forIdentity(identity);

@@ -915,7 +915,11 @@ handle remains the admission gate until terminal, including across revision and 
 Preparation runs on the CPU executor with the ordinary pipeline's progress, cancellation, diagnostics,
 and shutdown handling. It never changes session time or publishes Viewer pixels.
 
-Each pass visits at most the nearest set of frames that fits the cache's byte budget. Cached entries
+Each pass visits at most the nearest set of frames that fits the cache's byte budget. A frame's
+size is what the cache charges to retain it, measured from frames already prepared at the current
+extent (packed pixels plus evaluated geometry), with the packed pixels alone as the floor before
+any has landed. Counting pixels alone lets the set outgrow the budget, so the pass evicts its own
+nearest frame. Cached entries
 in that set are reused and protected by the cache's LRU order. The pass then stops, avoiding an endless
 cycle that evicts its own frames. An evaluation-snapshot, work-area, resolution, playhead, or
 memory-budget change restarts selection; a layout-only edit moves none of those and leaves the pass

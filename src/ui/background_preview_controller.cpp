@@ -211,8 +211,12 @@ void BackgroundPreviewController::fillNextFrame() {
         return;
     }
     const auto divisor = previewController_.resolutionDivisor();
-    const auto bytes = std::uint64_t{4} * ((format.width() + divisor - 1) / divisor) *
-                       ((format.height() + divisor - 1) / divisor);
+    const auto extentWidth = std::uint64_t{(format.width() + divisor - 1) / divisor};
+    const auto extentHeight = std::uint64_t{(format.height() + divisor - 1) / divisor};
+    // Packed pixels are the floor; a measured frame at this extent also counts its geometry.
+    auto bytes = std::uint64_t{4} * extentWidth * extentHeight;
+    if (frameCost_.width == extentWidth && frameCost_.height == extentHeight)
+        bytes = std::max(bytes, frameCost_.bytes);
     auto& cache = previewController_.frameCache();
     const auto capacity = bytes == 0 ? 0 : cache.byteBudget() / bytes;
     const auto range = session_.workArea();
@@ -300,7 +304,8 @@ void BackgroundPreviewController::fillNextFrame() {
         };
         if (cache.contains(*key)) {
             // Protect nearer existing entries from eviction by this pass's farther entries.
-            (void)cache.take(identity);
+            if (const auto cached = cache.take(identity))
+                learnFrameCost(*cached);
             continue;
         }
         // A frame already preparing ahead of the playhead is not submitted twice.
@@ -350,6 +355,23 @@ void BackgroundPreviewController::fillNextFrame() {
             return;
         }
     }
+}
+
+void BackgroundPreviewController::learnFrameCost(const runtime::PreparedPreviewFrame& frame) {
+    // Only a frame whose key matches the current composition and resolution is learned from (the
+    // landing path drops the others first), so the current display extent is the frame's.
+    const auto* composition = session_.composition();
+    if (composition == nullptr)
+        return;
+    const auto format = composition->format();
+    const auto divisor = previewController_.resolutionDivisor();
+    const auto width = std::uint64_t{(format.width() + divisor - 1) / divisor};
+    const auto height = std::uint64_t{(format.height() + divisor - 1) / divisor};
+    const auto bytes = previewController_.frameCache().hostByteCost(frame);
+    if (frameCost_.width != width || frameCost_.height != height)
+        frameCost_ = {.width = width, .height = height, .bytes = bytes};
+    else
+        frameCost_.bytes = std::max<std::uint64_t>(frameCost_.bytes, bytes);
 }
 
 void BackgroundPreviewController::consumeReadyResult() {
@@ -403,6 +425,7 @@ void BackgroundPreviewController::consumeReadyResult() {
             exhausted_ = true;
             continue;
         }
+        learnFrameCost(*(*value)->cacheFrame());
         previewController_.frameCache().insert((*value)->cacheFrame());
     }
     // A landed frame frees its slot: refill read-ahead at once rather than on the idle tick.

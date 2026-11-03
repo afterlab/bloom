@@ -87,6 +87,17 @@ class BackgroundPreviewController final : public QObject {
     std::size_t readAheadWidth_ = 1;
     // Average time from submitting a read-ahead frame to its landing; sets the playback lead.
     std::chrono::steady_clock::duration landedLatency_{};
+    // The largest budget charge measured for one frame at this extent. The packed-pixel size alone
+    // undercounts it (a retained frame also keeps its evaluated geometry), and a pass sized from
+    // the undercount asks for one frame more than the budget holds, which then evicts the pass's
+    // own nearest frame.
+    struct FrameCost final {
+        std::uint64_t width = 0;
+        std::uint64_t height = 0;
+        std::uint64_t bytes = 0;
+    };
+    FrameCost frameCost_;
+    void learnFrameCost(const runtime::PreparedPreviewFrame& frame);
     std::uint64_t passAnchor_ = 0;
     std::uint64_t generation_ = 0;
     std::uint64_t cursor_ = 0;

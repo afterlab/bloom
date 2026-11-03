@@ -35,6 +35,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -340,15 +341,30 @@ void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
     fixture.frameCache->clear();
     fixture.frameCache->setByteBudget(bytes * 3);
     background.restart();
-    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 3; }), "budget fills");
+    const auto nearestThreeCached = [&] {
+        return std::ranges::all_of(std::array{2, 3, 4}, [&](const int index) {
+            const auto key = fixture.controller.cacheKeyForTime(time(index, 25));
+            return key.has_value() && fixture.frameCache->contains(*key);
+        });
+    };
+    const auto submissions = [&] {
+        std::lock_guard lock(mutex);
+        return order.size();
+    };
+    // Settled: the nearest three frames are cached and nothing is still preparing. A frame still
+    // in flight here would land later and evict one of them.
+    expectations.expect(
+        waitUntil([&] { return nearestThreeCached() && background.inFlightCount() == 0; }),
+        "budget fills with the nearest three frames");
+    const auto filled = submissions();
     for (int i = 0; i < 10; ++i) {
         background.fillNextFrame();
     }
-    for (const auto index : {2, 3, 4}) {
-        const auto key = fixture.controller.cacheKeyForTime(time(index, 25));
-        expectations.expect(key.has_value() && fixture.frameCache->contains(*key),
-                            "budget retains the nearest three frames without churn");
-    }
+    expectations.expect(waitUntil([&] { return background.inFlightCount() == 0; }),
+                        "repeated fills settle");
+    expectations.expect(nearestThreeCached() && fixture.frameCache->size() == 3 &&
+                            submissions() == filled,
+                        "budget retains the nearest three frames without churn");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
     expectations.expect(waitUntil([&] {
                             const auto key = fixture.controller.cacheKeyForTime(time(0));
@@ -357,9 +373,14 @@ void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
                         "resolution change restarts the range at the new factor");
     expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Edit"), {1, 0, 0, 1}),
                         "revision changes");
+    // The edit's second layer adds evaluated geometry to every retained frame, so the budget now
+    // holds about four quarter frames: the restarted pass fills the nearest of the new revision.
     expectations.expect(waitUntil([&] {
-                            const auto key = fixture.controller.cacheKeyForTime(time(6, 25));
-                            return key.has_value() && fixture.frameCache->contains(*key);
+                            return std::ranges::all_of(std::array{2, 4}, [&](const int index) {
+                                const auto key =
+                                    fixture.controller.cacheKeyForTime(time(index, 25));
+                                return key.has_value() && fixture.frameCache->contains(*key);
+                            });
                         }),
                         "revision change restarts and fills the new revision");
     background.beginShutdown();

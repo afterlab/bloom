@@ -281,6 +281,10 @@ class PreviewFrameCache final : public QObject {
     // buffer and drops the Float32 process image (see runtime::PreviewDisplayOnlyFrame).
     [[nodiscard]] static std::size_t
     frameByteCost(const runtime::PreparedPreviewFrame& frame) noexcept;
+    // What retaining `frame` takes from byteBudget(): frameByteCost(), or zero for a resident frame
+    // once the GPU-resident limits budget it as device memory.
+    [[nodiscard]] std::size_t
+    hostByteCost(const runtime::PreparedPreviewFrame& frame) const noexcept;
 
   signals:
     // Cache mutations coalesce for 50ms; a burst produces one ruler repaint notification.
