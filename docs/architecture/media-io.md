@@ -1834,10 +1834,9 @@ fixture through both routes with zero byte mismatches. On this AMD driver, hardw
 random seek returned a frame presented after the target; that is a typed refusal and the session
 fell back to software as designed.
 
-Plane digests are computed once in the worker and verified once when the host decodes the
-message, hashing the planes of large products concurrently. Later consumers of the immutable
-product (the decoded cache and color conversion) check structure and budget only, so a 16-bit
-4:4:4 1080p frame is no longer hashed seven times. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
+Decoded planes cross the worker pipe without digests (provider schema 8; see
+[frame output](frame-output.md)): the message is length-checked and every consumer of the
+immutable product (the decoded cache and color conversion) checks structure and budget. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
 Thumbnail and waveform/audio buffers reuse the existing bounded preview storage after the same
 content check; scrubbing does not decode the complete audio clip again.
 No operation-cache or memory-ledger implementation changes are required.

@@ -600,7 +600,6 @@ struct Encoder::State {
         }
     }
     void push(const FrameProduct& product) {
-        // The message decoder verified every plane digest once; check structure only.
         require(!finished && videoTrack.codec && validLayout(product) &&
                     product.format == PixelFormat::Rgba16 &&
                     product.planes[0].width == settings.width &&

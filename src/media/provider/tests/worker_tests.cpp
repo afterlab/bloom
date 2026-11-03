@@ -177,7 +177,7 @@ void run() {
         for (unsigned x = 0; x < 16; ++x)
             for (unsigned component : {x, y, 7U, 255U})
                 oracle.push_back(static_cast<std::byte>(component));
-    test::check(frame.planes[0].bytes == oracle && frame.planes[0].digest == digestBytes(oracle),
+    test::check(frame.planes[0].bytes == oracle,
                 "independent deterministic plane oracle");
     reaped(pid.load());
     std::weak_ptr<const WorkerReply> released;
@@ -197,7 +197,6 @@ void run() {
                                               {"Replay", Error::Replay},
                                               {"VersionMismatch", Error::VersionMismatch},
                                               {"IdentityMismatch", Error::IdentityMismatch},
-                                              {"DigestMismatch", Error::DigestMismatch},
                                               {"Timeout", Error::Timeout}};
     std::ifstream cases(BLOOM_MEDIA_FIXTURES);
     test::check(static_cast<bool>(cases), "synthetic fixture manifest");

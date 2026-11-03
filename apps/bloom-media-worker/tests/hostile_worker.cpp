@@ -98,8 +98,6 @@ int main(int argc, char** argv) {
             bytes[29] = std::byte{255};
             bytes[30] = std::byte{15};
         }
-        if (mode == "digest")
-            bytes.back() ^= std::byte{1};
         raw(bytes);
         if (mode != "limits")
             return 0;

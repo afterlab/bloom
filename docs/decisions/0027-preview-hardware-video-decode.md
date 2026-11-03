@@ -29,7 +29,9 @@ times between the worker and the color conversion.
 - Sessions queue callers; retained sessions are admitted by estimated worker memory and the
   source-snapshot file quota; the decoded cache target is configurable and otherwise a share of
   physical memory registered with the process memory ledger.
-- Plane digests are computed once in the worker and verified once at the host boundary.
+- Decoded planes cross the worker pipe length-checked, without digests (amended 2026-11-04: the
+  digests cost a SHA-256 of every frame on both sides and guarded nothing a worker could not
+  forge; see `frame-output.md`).
 
 ## Consequences
 

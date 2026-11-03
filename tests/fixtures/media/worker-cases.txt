@@ -6,6 +6,5 @@ length BadLength
 replay Replay
 version VersionMismatch
 lock IdentityMismatch
-digest DigestMismatch
 crash Crashed
 hang Timeout

@@ -74,12 +74,11 @@ void run() {
     plane.height = 1;
     plane.stride = 4;
     plane.bytes = {std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
-    plane.digest = digestBytes(plane.bytes);
     frame.planes = {plane};
     auto encoded = std::get<Bytes>(encodeMessage({MessageKind::Frame, 42, 2, frame}));
     test::check(std::get<FrameProduct>(
                     std::get<Message>(host.receive(encoded, MessageKind::Frame)).payload) == frame,
-                "digest-verified copied plane");
+                "copied plane");
     auto excessivePlanes = encoded;
     excessivePlanes[62] = std::byte{5};
     rejected(excessivePlanes, Error::Oversized);
@@ -105,8 +104,8 @@ void run() {
                 }
             }
     }
-    encoded.back() ^= std::byte{1};
-    rejected(encoded, Error::DigestMismatch);
+    encoded.pop_back();
+    rejected(encoded, Error::Truncated);
 }
 } // namespace
 int main() {

@@ -169,7 +169,6 @@ ProbeResult probe(Reader& r) {
     return p;
 }
 void frame(Writer& w, const FrameProduct& f) {
-    // The receiver verifies every plane digest; the sender checks structure only.
     require(validLayout(f));
     w.enumeration(f.format, 1, 5);
     w.rational(f.pts);
@@ -181,7 +180,6 @@ void frame(Writer& w, const FrameProduct& f) {
         w.number(p.stride);
         w.count(p.bytes.size(), Limits::productBytes);
         w.bytes.insert(w.bytes.end(), p.bytes.begin(), p.bytes.end());
-        w.hash(p.digest);
     }
 }
 FrameProduct frame(Reader& r) {
@@ -206,10 +204,8 @@ FrameProduct frame(Reader& r) {
                 size == static_cast<std::uint64_t>(p.stride) * p.height);
         p.bytes.assign(r.bytes.begin(), r.bytes.begin() + size);
         r.bytes = r.bytes.subspan(size);
-        p.digest = r.hash();
         f.planes.push_back(std::move(p));
     }
-    require(planeDigestsMatch(f.planes), Error::DigestMismatch);
     require(validLayout(f));
     return f;
 }

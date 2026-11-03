@@ -3,7 +3,7 @@
 #include <bloom/media/provider/registry.hpp>
 
 namespace bloom::media::provider {
-inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 7;
+inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 8;
 inline constexpr std::uint32_t kEnvelopeBytes = 25;
 enum class MessageKind : std::uint8_t {
     Handshake = 1,

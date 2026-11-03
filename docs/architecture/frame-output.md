@@ -257,13 +257,17 @@ Full-frame digests on the export paths, and why each remains:
 | Digest | Owner | Why it is kept |
 | --- | --- | --- |
 | Process-pixel digest | this identity | approval digest and published identity |
-| Decoded video plane digests | media worker, verified at the host boundary | IPC integrity (ADR 0027) |
-| Encoded RGBA16 plane digest | host, verified by the worker | IPC integrity of every encoded frame |
 | Image and movie source content digests | media I/O source revisions | stale-source detection (ADR 0025) |
 | Staged artifact digests | staged publication | transfer and reopen verification |
 
-None is removed; every one runs on the accelerated rounds, and the process-pixel digest runs on the
-frame's own analysis worker while other frames of the same export evaluate and encode.
+Every one runs on the accelerated rounds, and the process-pixel digest runs on the frame's own
+analysis worker while other frames of the same export evaluate and encode.
+
+Decoded and encoded frames cross the media worker pipe without plane digests (provider schema 8).
+The pipe joins two of Bloom's own processes, every message is length-checked, and a worker able to
+corrupt a plane could recompute its digest, so the digests guarded nothing; they cost a SHA-256 of
+every frame on each side, on the serial path of a video decode session (on 1080p ProRes 422 HQ,
+19% of the CPU time of a RAM preview fill).
 
 A movie source is captured and hashed once per export, not once per frame. The export root's own
 source pool carries its own video sources: sharing the evaluator's would rebind their retirement
@@ -274,9 +278,7 @@ snapshot, so every frame copied and hashed the whole file again (a 206 MB ProRes
 Layers of one image source share its capture within a frame. A linear pass stores a source
 revision only when its key is offered a second time, so the second layer that read a footage frame
 read and hashed the file again; the scene build now keeps the revisions its earlier leaves
-captured (one capture per frame instead of two on the three-layer benchmark shot). The worker
-verifies an encoded frame's plane digest once, when it decodes the message; the encoder no longer
-hashes the planes a second time.
+captured (one capture per frame instead of two on the three-layer benchmark shot).
 
 ## Preservation And Loss Report
 

@@ -66,7 +66,6 @@ FrameProduct image(const EncodeSettingsV1& settings, std::uint64_t index) {
                 plane.bytes[offset] = static_cast<std::byte>(value & 255U);
                 plane.bytes[offset + 1] = static_cast<std::byte>(value >> 8U);
             }
-    plane.digest = digestBytes(plane.bytes);
     frame.planes.push_back(std::move(plane));
     return frame;
 }

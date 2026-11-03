@@ -698,7 +698,6 @@ FrameProduct frame(Input& input, const AVStream& stream, AVFrame* decoded) {
     }
     if (!turn.identity())
         orient(product, turn);
-    assignPlaneDigests(product.planes);
     require(validLayout(product), "Invalid video product");
     return product;
 }

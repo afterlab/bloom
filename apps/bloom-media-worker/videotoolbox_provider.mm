@@ -292,7 +292,6 @@ using provider::Unavailable;
             for (std::size_t row = 0; row < planeHeight; ++row)
                 std::memcpy(plane.bytes.data() + row * plane.stride, source + row * sourceStride,
                             plane.stride);
-            plane.digest = provider::digestBytes(plane.bytes);
             frame.planes.push_back(std::move(plane));
         }
         CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);

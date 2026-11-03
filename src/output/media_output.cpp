@@ -298,7 +298,6 @@ Result<FrameProduct> prepareMediaRgba16V1(const render::Rgba32fImage& image, Rat
             plane.bytes[offset++] = static_cast<std::byte>(quantized >> 8U);
         }
     }
-    plane.digest = digestBytes(plane.bytes);
     result.planes.push_back(std::move(plane));
     return result;
 }
@@ -379,7 +378,6 @@ prepareMediaRgba16FromDisplayV1(const std::span<const render::Rgba32f> pixels,
             }
         }
     }
-    plane.digest = digestBytes(plane.bytes);
     result.planes.push_back(std::move(plane));
     return result;
 }

@@ -44,7 +44,6 @@ makeFrame(const std::uint32_t width, const std::uint32_t height, const std::uint
             pixel[5] = static_cast<unsigned char>(index * 80);
             pixel[7] = 255;
         }
-    plane.digest = provider::digestBytes(plane.bytes);
     frame.planes.push_back(std::move(plane));
     return frame;
 }

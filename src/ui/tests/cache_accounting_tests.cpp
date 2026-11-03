@@ -313,7 +313,6 @@ void testContentionDuringTwoHundredImports(Expectations& check) {
         plane.height = 512;
         plane.stride = 4096;
         plane.bytes.resize(static_cast<std::size_t>(plane.stride) * plane.height);
-        plane.digest = bloom::media::provider::digestBytes(plane.bytes);
         frame->planes.push_back(std::move(plane));
         video.store({{}, 0, static_cast<std::uint64_t>(index), 0, {}, {}, {}}, std::move(frame));
         image.reset();
@@ -408,7 +407,6 @@ void testHeadroomCachesFillTogetherAndShrink(Expectations& check) {
             plane.height = 512;
             plane.stride = 4096;
             plane.bytes.resize(static_cast<std::size_t>(plane.stride) * plane.height);
-            plane.digest = bloom::media::provider::digestBytes(plane.bytes);
             frame->planes.push_back(std::move(plane));
             video.store({{}, 0, static_cast<std::uint64_t>(index * 16 + part), 0, {}, {}, {}},
                         std::move(frame));

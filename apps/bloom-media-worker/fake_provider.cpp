@@ -103,7 +103,6 @@ provider::Payload call(const provider::CallRequest& request) {
             p.bytes[offset + 2] = static_cast<std::byte>(request.frame % 256);
             p.bytes[offset + 3] = std::byte{255};
         }
-    p.digest = provider::digestBytes(p.bytes);
     f.planes.push_back(std::move(p));
     return f;
 }

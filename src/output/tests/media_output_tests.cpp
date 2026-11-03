@@ -92,7 +92,7 @@ void testDisplayPayloadQuantizationMatchesReference() {
     const auto& right = std::get<p::FrameProduct>(boundary);
     check(left.planes.size() == 1 && right.planes.size() == 1 &&
               left.planes[0].bytes == right.planes[0].bytes &&
-              left.planes[0].digest == right.planes[0].digest && left.pts == right.pts &&
+              left.pts == right.pts &&
               left.format == right.format && left.colour == right.colour &&
               left.planes[0].stride == right.planes[0].stride,
           "GPU display payload quantizes exactly like the CPU reference");

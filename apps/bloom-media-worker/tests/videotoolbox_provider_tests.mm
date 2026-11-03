@@ -200,7 +200,6 @@ void testEncodeRoundTrip() {
                 pixel[5] = static_cast<unsigned char>(index * 80);
                 pixel[7] = 255;
             }
-        plane.digest = provider::digestBytes(plane.bytes);
         frame.planes.push_back(std::move(plane));
         auto framePayload = encoder.call(provider::MessageKind::Frame, frame);
         check(!std::get_if<provider::Unavailable>(&framePayload), "encode frame accepted");

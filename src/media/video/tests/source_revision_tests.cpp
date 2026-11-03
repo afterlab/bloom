@@ -38,7 +38,7 @@ bool equal(const provider::FrameProduct& a, const provider::FrameProduct& b) {
     if (a.pts != b.pts || a.format != b.format || a.planes.size() != b.planes.size())
         return false;
     for (std::size_t i = 0; i < a.planes.size(); ++i)
-        if (a.planes[i].bytes != b.planes[i].bytes || a.planes[i].digest != b.planes[i].digest)
+        if (a.planes[i].bytes != b.planes[i].bytes)
             return false;
     return true;
 }

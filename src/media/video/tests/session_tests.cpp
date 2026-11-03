@@ -133,7 +133,6 @@ void run(const std::filesystem::path& directory) {
         plane.width = plane.height = 1;
         plane.stride = 2;
         plane.bytes = {static_cast<std::byte>(code & 255), static_cast<std::byte>(code >> 8)};
-        plane.digest = provider::digestBytes(plane.bytes);
         alphaFrame.planes.push_back(plane);
     }
     const auto alphaImage =
@@ -147,7 +146,6 @@ void run(const std::filesystem::path& directory) {
     alphaFrame.colour.range = 2;
     for (unsigned i : {0U, 3U}) {
         alphaFrame.planes[i].bytes = {std::byte{255}, std::byte{255}};
-        alphaFrame.planes[i].digest = provider::digestBytes(alphaFrame.planes[i].bytes);
     }
     const auto fullImage =
         bloom::media::video::videoToSceneLinear(alphaFrame, 0, *descriptor.value(), 1, 1, 64);
@@ -298,7 +296,6 @@ bloom::media::provider::FrameProduct yuv420(std::array<unsigned, 2> cb, std::arr
         p.stride = w;
         for (const auto v : values)
             p.bytes.push_back(static_cast<std::byte>(v));
-        p.digest = digestBytes(p.bytes);
         return p;
     };
     frame.planes.push_back(plane(4, 2, {126, 126, 126, 126, 126, 126, 126, 126}));
@@ -645,7 +642,6 @@ void chromaSiting(const std::filesystem::path& directory) {
         p.stride = w;
         for (const auto v : values)
             p.bytes.push_back(static_cast<std::byte>(v));
-        p.digest = provider::digestBytes(p.bytes);
         return p;
     };
     compact.planes.push_back(plane(2, 4, {126, 126, 126, 126, 126, 126, 126, 126}));
@@ -683,7 +679,6 @@ bloom::media::provider::CpuPlane noisePlane(std::uint32_t width, std::uint32_t h
         seed ^= seed << 5U;
         byte = static_cast<std::byte>(seed >> 24U);
     }
-    plane.digest = bloom::media::provider::digestBytes(plane.bytes);
     return plane;
 }
 bool identicalImages(const bloom::render::Rgba32fImage& a, const bloom::render::Rgba32fImage& b) {
