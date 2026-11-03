@@ -64,5 +64,26 @@ int main() {
     expect(compressed && compressed->speed == *document::LayerSpeed::create(2, 1) &&
                compressed->in == f(22) && compressed->start == f(22),
            "Alt + in-edge drag stretches about the out edge, keeping its content time");
+    // #461: a frame-rate change leaves an in point off the grid. Every gesture re-grids the range
+    // inward -- the in point up, never down past what was authored.
+    const auto half = [](const std::int64_t frame) {
+        return *core::RationalTime::create(2 * frame + 1, 48);
+    };
+    input = base(-1, false, 2);
+    input.in = half(10); // frame 10.5
+    trimmed = proposeLayerTiming(input);
+    expect(trimmed && trimmed->in == f(13) && trimmed->out == f(34),
+           "an in-edge trim starts from the in point rounded up (11 + 2), not down (10 + 2)");
+    input = base(1, false, 5);
+    input.in = half(10);
+    trimmed = proposeLayerTiming(input);
+    expect(trimmed && trimmed->in == f(11) && trimmed->out == f(39),
+           "an out-edge trim re-grids the off-grid in point inward");
+    input.out = half(11); // frames [10.5, 11.5): no whole frame lies inside
+    input.handle = 0;
+    input.deltaSeconds = 1.0 / 24.0;
+    moved = proposeLayerTiming(input);
+    expect(moved && moved->in == f(11) && moved->out == f(12),
+           "a range shorter than a whole frame inside keeps the frame its in point starts in");
     return failures == 0 ? 0 : 1;
 }

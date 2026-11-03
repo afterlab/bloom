@@ -60,8 +60,13 @@ std::optional<LayerTimingProposal> proposeLayerTiming(const LayerTimingGestureIn
     const auto rate = input.rate;
     const auto deltaFrames = static_cast<std::int64_t>(
         std::llround(input.deltaSeconds * rate.numerator() / rate.denominator()));
-    const auto in = frameOf(input.in, rate, false);
+    // An off-grid range (a composition frame-rate change) rounds inward: the in point up to the
+    // next frame, the out point down. A range too short to keep a whole frame that way keeps the
+    // frame its in point starts in, so it stays editable.
+    auto in = frameOf(input.in, rate, true);
     const auto out = frameOf(input.out, rate, false);
+    if (out <= in)
+        in = frameOf(input.in, rate, false);
     const auto last = frameOf(input.duration, rate, true); // first frame at or after the end
     if (out <= in)
         return std::nullopt;

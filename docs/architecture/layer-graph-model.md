@@ -1199,7 +1199,9 @@ own parameters sample at layer time and its whole upstream at content time, as d
 [Layer Time](animation-and-time.md#layer-time). Once implemented, the document validates only
 `in < out` (an explicit `outPoint` stays greater than zero, keeping the sentinel unambiguous); keeping
 at least one frame inside the composition is a gesture rule, and a trim may extend outside the
-composition only as far as the content extent reaches. All members default to identity, so existing
+composition only as far as the content extent reaches. A bar gesture on a range left off the frame
+grid (by a composition frame-rate change) re-grids it inward, the in point up and the out point down;
+a range that would then hold no whole frame keeps the frame its in point starts in. All members default to identity, so existing
 documents decode without injected data and render unchanged. `SetLayerTiming` commits start, range and
 speed atomically; `SetLayerTimeModes`, `SetLayerContentExtent`, `EnableLayerTimeRemap` and
 `DisableLayerTimeRemap` complete the command surface. `AddImageLayer`, `AddAudioLayer` and the
