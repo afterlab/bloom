@@ -25,6 +25,9 @@ namespace bloom::color {
 // already links both bloom_document and (via this header) bloom_color, cross-checks them for
 // exact equality.
 inline constexpr std::string_view kBloomNeutralV1ConfigUri = "bloom://ocio/neutral-v1/config.ocio";
+// Bloom Neutral v1's single display and its single view are both named after its output colour
+// space, so this one name is the config's whole display/view list.
+inline constexpr std::string_view kBloomNeutralV1DisplayViewName = "srgb_rec709_display";
 
 // OCIO 2.5's immutable ACES 1.3 CG config. OCIO owns the serialized payload; the registry
 // computes its durable content revision from Config::serialize() at runtime, so no generated

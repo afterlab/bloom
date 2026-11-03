@@ -1,5 +1,9 @@
 #include <bloom/host/project_session.hpp>
 
+#include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/commands/export_queue_operations.hpp>
+#include <bloom/host/export_presets.hpp>
+
 #include <exception>
 #include <limits>
 #include <new>
@@ -544,9 +548,38 @@ ProjectSession::setColorSettings(document::ColorSettings settings) {
         return ProjectSessionColorSettingsStatus::InvalidSettings;
     if (colorSettings_.has_value() && *colorSettings_ == settings)
         return ProjectSessionColorSettingsStatus::NoChange;
-    colorSettings_ = std::move(settings);
+    auto previous = std::exchange(colorSettings_, std::move(settings));
     colorSettingsDirty_ = true;
+    if (previous.has_value())
+        followViewerDefaultExportView(*previous, *colorSettings_);
     return ProjectSessionColorSettingsStatus::Updated;
+}
+
+void ProjectSession::followViewerDefaultExportView(const document::ColorSettings& previous,
+                                                   const document::ColorSettings& current) {
+    if (previous.ocioConfig == current.ocioConfig)
+        return; // the same configuration offers the same display/view list
+    const auto before = exportDisplayViews(previous);
+    const auto after = exportDisplayViews(current);
+    const auto* from = color::viewerDefaultDisplayView(before);
+    const auto* to = color::viewerDefaultDisplayView(after);
+    if (from == nullptr || to == nullptr ||
+        (from->display == to->display && from->view == to->view))
+        return;
+    const auto snapshot = document_->snapshot();
+    commands::Transaction transaction("Follow the Viewer's Default View", snapshot.revision());
+    for (const auto& job : snapshot.project().exportJobs())
+        for (const auto& output : job.outputs) {
+            if (output.settings.displayName != from->display ||
+                output.settings.viewName != from->view)
+                continue;
+            auto settings = output.settings;
+            settings.displayName = to->display;
+            settings.viewName = to->view;
+            transaction.emplace<commands::SetExportOutputSettings>(output.id, std::move(settings));
+        }
+    if (!transaction.empty())
+        (void)commandStack_->execute(std::move(transaction));
 }
 
 ProjectSessionSavepointStatus ProjectSession::acceptSavepoint(

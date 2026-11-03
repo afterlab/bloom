@@ -8,6 +8,7 @@
 
 #include "operation_values.hpp"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -122,6 +123,19 @@ rangeArguments(const Arguments& arguments, const std::string& op, OperationCreat
     return output;
 }
 
+// Issue #409: a stored display-referred output names its display/view. Settings that leave either
+// empty take the project's resolved names (host::withExplicitExportView: the Viewer's default
+// pair); a client without a project source keeps them empty and the run resolves the same pair.
+[[nodiscard]] document::ExportOutputSettings explicitView(document::ExportOutputSettings settings,
+                                                          const OperationContext& context) {
+    if (!context.source)
+        return settings;
+    const auto source = context.source();
+    if (!source || !source->colorSettings)
+        return settings;
+    return host::withExplicitExportView(std::move(settings), *source->colorSettings);
+}
+
 const std::string kOutputSummary =
     R"(One output as JSON: {"preset": id, "settings": {document 1.29 settings}, )"
     R"("destination": {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}.)";
@@ -136,8 +150,22 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
              .factory = std::move(factory),
              .contextualFactory = {}});
     };
+    // The operations that store output settings also read the project's colour settings.
+    using Contextual = std::function<OperationCreateResult(const std::string&, const Arguments&,
+                                                           const OperationContext&)>;
+    const auto addContextual = [&descriptors](std::string id, std::vector<ArgumentSchema> arguments,
+                                              Contextual factory) {
+        descriptors.push_back(
+            {.schema = {.typeId = std::move(id), .arguments = std::move(arguments)},
+             .factory =
+                 [factory](const std::string& op, const Arguments& args) {
+                     return factory(op, args, OperationContext{});
+                 },
+             .contextualFactory = factory});
+    };
 
-    add("bloom.export.add-job",
+    addContextual(
+        "bloom.export.add-job",
         {argument("composition", ValueKind::Id, true, StableId{1},
                   "The composition to export. Defaults to the current composition.",
                   ContextSource::Composition),
@@ -155,7 +183,7 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
              "Optional row label as three integers 0..255."),
          argument("outputs", ValueKind::Array, false, ValueArray{},
                   "Outputs as JSON strings; omitted adds one H.264 MP4 output. " + kOutputSummary)},
-        [](const std::string& op, const Arguments& args) {
+        [](const std::string& op, const Arguments& args, const OperationContext& context) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = idArgument<document::CompositionId>(args, "composition");
             if (!composition)
@@ -196,6 +224,8 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
             }
             if (job.outputs.empty())
                 job.outputs.push_back(defaultOutput());
+            for (auto& output : job.outputs)
+                output.settings = explicitView(std::move(output.settings), context);
             return made(std::make_unique<commands::AddExportJob>(std::move(job)));
         });
 
@@ -298,16 +328,18 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
             }
             return made(std::make_unique<commands::SetExportJobLabelColor>(*job, color));
         });
-    add("bloom.export.add-output",
+    addContextual(
+        "bloom.export.add-output",
         {argument("job", ValueKind::Id, true, StableId{1}, "The job."),
          argument("output", ValueKind::String, true, "{}", kOutputSummary)},
-        [](const std::string& op, const Arguments& args) {
+        [](const std::string& op, const Arguments& args, const OperationContext& context) {
             const auto job = idArgument<ExportJobId>(args, "job");
             const auto text = textArgument(args, "output");
             auto output = text ? host::exportOutputFromJson(*text) : std::nullopt;
             if (!job || !output)
                 return argumentFailure(op, "output",
                                        "Expected a job id and an output. " + kOutputSummary);
+            output->settings = explicitView(std::move(output->settings), context);
             return made(std::make_unique<commands::AddExportOutput>(*job, std::move(*output)));
         });
     add("bloom.export.remove-output",
@@ -318,32 +350,34 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
                 return argumentFailure(op, "output", "Expected an output id.");
             return made(std::make_unique<commands::RemoveExportOutput>(*output));
         });
-    add("bloom.export.set-output-settings",
+    addContextual(
+        "bloom.export.set-output-settings",
         {argument("output", ValueKind::Id, true, StableId{1}, "The output."),
          argument("settings", ValueKind::String, true,
                   host::exportSettingsToJson(document::ExportOutputSettings{}),
                   "The document 1.29 settings object as JSON.")},
-        [](const std::string& op, const Arguments& args) {
+        [](const std::string& op, const Arguments& args, const OperationContext& context) {
             const auto output = idArgument<ExportOutputId>(args, "output");
             const auto text = textArgument(args, "settings");
             auto settings = text ? host::exportSettingsFromJson(*text) : std::nullopt;
             if (!output || !settings)
                 return argumentFailure(op, "settings", "Expected an output id and settings JSON.");
-            return made(
-                std::make_unique<commands::SetExportOutputSettings>(*output, std::move(*settings)));
+            return made(std::make_unique<commands::SetExportOutputSettings>(
+                *output, explicitView(std::move(*settings), context)));
         });
-    add("bloom.export.apply-preset",
+    addContextual(
+        "bloom.export.apply-preset",
         {argument("output", ValueKind::Id, true, StableId{1}, "The output."),
          argument("preset", ValueKind::String, true, "builtin:prores-422hq-mov",
                   "A built-in preset id (export.presets lists them).")},
-        [](const std::string& op, const Arguments& args) {
+        [](const std::string& op, const Arguments& args, const OperationContext& context) {
             const auto output = idArgument<ExportOutputId>(args, "output");
             const auto id = textArgument(args, "preset");
             const auto preset = id ? host::builtInExportPreset(*id) : std::nullopt;
             if (!output || !preset)
                 return argumentFailure(op, "preset", "Expected an output id and a preset id.");
-            return made(std::make_unique<commands::ApplyExportPreset>(*output, preset->id,
-                                                                      preset->settings));
+            return made(std::make_unique<commands::ApplyExportPreset>(
+                *output, preset->id, explicitView(preset->settings, context)));
         });
     add("bloom.export.set-output-destination",
         {argument("output", ValueKind::Id, true, StableId{1}, "The output."),

@@ -582,6 +582,8 @@ class ImageDriver final : public DriverBase {
             std::move(request),
             [snapshot = input_.snapshot, composition = input_.composition,
              &compiler = dependencies_.compiler, tiff, intent = input_.colorIntent,
+             display = input_.output.record.settings.displayName,
+             view = input_.output.record.settings.viewName,
              slot = mediaDisplaySlot_](runtime::TaskContext& context) {
                 using Result =
                     runtime::TaskResult<std::shared_ptr<const runtime::CompiledCompositionPlan>>;
@@ -602,8 +604,9 @@ class ImageDriver final : public DriverBase {
                                                                   composition),
                         .suggestedAction = "Review the composition graph."});
                 if (tiff) {
-                    if (auto display = output::PreparedOutputDisplayV1::prepare(intent))
-                        *slot = std::make_shared<OutputMediaDisplayCommandV1>(std::move(display),
+                    if (auto prepared =
+                            output::PreparedOutputDisplayV1::prepare(intent, display, view))
+                        *slot = std::make_shared<OutputMediaDisplayCommandV1>(std::move(prepared),
                                                                               intent);
                 }
                 return Result::succeeded(compiled.plan);
@@ -727,6 +730,10 @@ class ImageDriver final : public DriverBase {
             .gpuProvider = dependencies_.gpu,
             .mediaDisplay = mediaDisplay_,
             .useRootPixelCapacity = true};
+        // Issue #409: PNG and TIFF use the output's own display/view (the Viewer's default pair
+        // when it names none), as movies do.
+        request.displayName = input_.output.record.settings.displayName;
+        request.viewName = input_.output.record.settings.viewName;
         auto begin = beginOutputAnalysisAttemptV1(dependencies_.scheduler, dependencies_.artifacts,
                                                   *dependencies_.ledger, std::move(request));
         if (!begin) {

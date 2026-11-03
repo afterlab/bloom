@@ -3,6 +3,8 @@
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
+#include <bloom/output/display_output.hpp>
+#include <bloom/runtime/gpu_neutral_display_qualification.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
 
 #include <new>
@@ -55,17 +57,16 @@ retainDisplayProducts(std::shared_ptr<const color::PreparedCpuDisplayProcessorHa
 // Prepares the immutable GPU DisplayRgba8 command from the exact resolved display processor, on
 // this blocking CPU stage. Unavailable qualified tools or a preparation failure return null: the
 // request then keeps the unchanged CPU display path. Never throws.
-[[nodiscard]] std::shared_ptr<const runtime::PreparedGpuOcioCommand>
-prepareGpuDisplayCommand(GpuExportProvider* const gpuProvider,
-                         const color::ResolvedBloomNeutralConfig& config,
-                         const runtime::GpuOcioCommandGeometry geometry,
-                         const runtime::GpuOcioCancellation& cancel) noexcept {
+[[nodiscard]] std::shared_ptr<const runtime::PreparedGpuOcioCommand> prepareGpuDisplayCommand(
+    GpuExportProvider* const gpuProvider, const color::ResolvedBloomNeutralConfig& config,
+    const output::OutputDisplayViewV1& pair, const runtime::GpuOcioCommandGeometry geometry,
+    const runtime::GpuOcioCancellation& cancel) noexcept {
     try {
         if (gpuProvider == nullptr || !gpuProvider->gpuDisplayPreparationAvailable()) {
             return nullptr;
         }
-        auto prepared = gpuProvider->prepareGpuDisplayCommand(config, config.displayName(),
-                                                              config.viewName(), geometry, cancel);
+        auto prepared = gpuProvider->prepareGpuDisplayCommand(config, pair.display, pair.view,
+                                                              geometry, cancel);
         return prepared.hasValue() ? prepared.command : nullptr;
     } catch (...) {
         return nullptr;
@@ -78,6 +79,7 @@ std::optional<ColorResolutionOutcomeV1>
 resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const provider,
                           GpuExportProvider* const gpuProvider,
                           const runtime::EvaluationColorIntent& intent,
+                          const std::string_view display, const std::string_view view,
                           const runtime::GpuOcioCommandGeometry geometry,
                           const runtime::GpuOcioCancellation& cancel) noexcept {
     try {
@@ -88,7 +90,12 @@ resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const prov
         const auto expectedRevision = intent.ocioConfigRevision == core::Sha256Digest{}
                                           ? color::kBloomNeutralV1ConfigDigest
                                           : intent.ocioConfigRevision;
-        if (neutralWorkingSpace && provider != nullptr) {
+        // The qualified provider holds Bloom Neutral's one display/view pair; an output naming any
+        // other pair resolves and builds its own processor below.
+        const bool neutralPair =
+            (display.empty() || display == runtime::kGpuNeutralDisplayDisplayName) &&
+            (view.empty() || view == runtime::kGpuNeutralDisplayViewName);
+        if (neutralWorkingSpace && neutralPair && provider != nullptr) {
             const auto snapshot = provider->snapshot();
             if (snapshot.readiness == runtime::QualifiedDisplayProcessorReadiness::Ready &&
                 snapshot.handle != nullptr) {
@@ -106,8 +113,10 @@ resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const prov
                 if (gpuResolution.ready()) {
                     if (auto gpuConfig = std::move(gpuResolution).takeResolved();
                         gpuConfig.has_value()) {
-                        gpuCommand =
-                            prepareGpuDisplayCommand(gpuProvider, *gpuConfig, geometry, cancel);
+                        gpuCommand = prepareGpuDisplayCommand(
+                            gpuProvider, *gpuConfig,
+                            output::outputDisplayViewV1(*gpuConfig, display, view), geometry,
+                            cancel);
                     }
                 }
                 return ColorResolutionOutcomeV1{
@@ -139,12 +148,15 @@ resolvePngDisplayProducts(runtime::QualifiedDisplayProcessorProvider* const prov
         // resolver supports, not just Bloom Neutral: the same exact resolved display processor the
         // CPU path uses. Unavailable tools or a preparation failure return null and keep the CPU
         // display path as the truthful fallback.
-        auto gpuCommand = prepareGpuDisplayCommand(gpuProvider, *resolved, geometry, cancel);
+        // Issue #409: the output's own display/view; one that names none takes the Viewer's
+        // default pair, never the config's own (tone-mapped under ACES CG) default view.
+        const auto pair = output::outputDisplayViewV1(*resolved, display, view);
+        auto gpuCommand = prepareGpuDisplayCommand(gpuProvider, *resolved, pair, geometry, cancel);
 
         // frame-output.md: "A resolved PNG configuration whose helper, processor, or execution
         // provider cannot run is an adapter-execution failure: Color keeps its Ready nominal tuple
         // while External Dependencies uses adapter.unavailable."
-        auto built = color::buildBloomNeutralCpuDisplayProcessor(*resolved);
+        auto built = color::buildCpuDisplayProcessorForView(*resolved, pair.display, pair.view);
         auto handleValue = std::move(built).takeHandle();
         if (!handleValue.has_value()) {
             return ColorResolutionOutcomeV1{

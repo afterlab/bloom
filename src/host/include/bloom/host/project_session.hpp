@@ -686,6 +686,10 @@ class ProjectSession final {
     [[nodiscard]] const document::ColorSettings* colorSettings() const noexcept {
         return colorSettings_.has_value() ? &*colorSettings_ : nullptr;
     }
+    // Issue #409: a changed configuration also moves every display-referred export output that
+    // recorded the previous configuration's Viewer default display/view to the new one's, in one
+    // undoable "Follow the Viewer's Default View" command, so switching configurations keeps those
+    // outputs exporting. An output naming any other display/view keeps it.
     [[nodiscard]] ProjectSessionColorSettingsStatus
     setColorSettings(document::ColorSettings settings);
 
@@ -757,6 +761,9 @@ class ProjectSession final {
   private:
     friend class ProjectSessionCreateResult;
     friend class ProjectSessionTestAccess;
+
+    void followViewerDefaultExportView(const document::ColorSettings& previous,
+                                       const document::ColorSettings& current);
 
     // Not noexcept: wrapping a present `roundTrip` into the session's owning
     // std::shared_ptr<const project::RoundTripState> (design decision 1) allocates a control block,

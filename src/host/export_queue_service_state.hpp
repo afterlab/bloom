@@ -154,6 +154,10 @@ struct ExportQueueService::State {
     std::uint64_t nextLogSequence = 1;
     std::optional<document::Snapshot> snapshot;
     std::optional<document::ColorSettings> colorSettings;
+    // Issue #409: the project configuration's display/view list, resolved again only when the
+    // colour settings change (resolving parses the configuration).
+    std::optional<document::ColorSettings> displayViewsFor;
+    std::vector<color::DisplayViewEntry> displayViews;
     std::optional<std::filesystem::path> projectFolder;
     bool editable = false;
     std::map<ExportJobId, detail::JobRuntime> jobs;

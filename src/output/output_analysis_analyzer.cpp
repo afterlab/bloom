@@ -284,6 +284,8 @@ struct CommonInput final {
     output::OutputAnalysisOtherDependencyStateV1 otherDependency;
     std::optional<core::Sha256Digest> expectedOcioRevision;
     std::optional<output::PngRgba8SrgbColorResolutionStateV1> colorResolution;
+    std::string displayName = {};
+    std::string viewName = {};
 };
 
 } // namespace
@@ -389,7 +391,8 @@ class OutputAnalysisAnalyzerV1 final {
             std::shared_ptr<const PreparedOutputDisplayV1> display;
             if (tiff && input.process.readyIdentity) {
                 display = PreparedOutputDisplayV1::prepare(
-                    input.process.readyIdentity->processFrame()->identity().colorIntent);
+                    input.process.readyIdentity->processFrame()->identity().colorIntent,
+                    input.displayName, input.viewName);
                 if (!display)
                     input.adapter = OutputAnalysisAdapterStateV1::Unavailable;
             }
@@ -651,7 +654,9 @@ analyzeTiffRgba16SrgbV1(TiffRgba16SrgbAnalysisInputV1 input) noexcept {
                                                       .compression = input.compression,
                                                       .otherDependency = input.otherDependency,
                                                       .expectedOcioRevision = std::nullopt,
-                                                      .colorResolution = std::nullopt},
+                                                      .colorResolution = std::nullopt,
+                                                      .displayName = std::move(input.displayName),
+                                                      .viewName = std::move(input.viewName)},
                                                      detail::OutputAnalysisAnalyzerFaultV1::None);
 }
 

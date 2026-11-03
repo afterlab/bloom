@@ -15,6 +15,33 @@ resolveOutputDisplayConfigV1(const runtime::EvaluationColorIntent& intent) {
                                                 revision, intent.workingColorSpaceId);
     return std::move(resolution).takeResolved();
 }
+OutputDisplayViewV1 outputDisplayViewV1(const std::span<const color::DisplayViewEntry> displays,
+                                        const std::string_view display,
+                                        const std::string_view view) {
+    const auto* viewer = color::viewerDefaultDisplayView(displays);
+    const auto configDefault =
+        std::ranges::find_if(displays, [](const auto& entry) { return entry.isDefault; });
+    const auto offers = [&](const std::string_view d, const std::string_view v) {
+        return std::ranges::any_of(displays, [&](const color::DisplayViewEntry& entry) {
+            return entry.display == d && entry.view == v;
+        });
+    };
+    if (viewer == nullptr || configDefault == displays.end())
+        return {std::string(display), std::string(view)};
+    if (display.empty() && view.empty())
+        return {viewer->display, viewer->view};
+    OutputDisplayViewV1 result{std::string(display), std::string(view)};
+    if (result.view.empty())
+        result.view = offers(display, viewer->view) ? viewer->view : configDefault->view;
+    if (result.display.empty())
+        result.display = offers(viewer->display, view) ? viewer->display : configDefault->display;
+    return result;
+}
+OutputDisplayViewV1 outputDisplayViewV1(const color::ResolvedBloomNeutralConfig& config,
+                                        const std::string_view display,
+                                        const std::string_view view) {
+    return outputDisplayViewV1(config.displays(), display, view);
+}
 std::shared_ptr<const PreparedOutputDisplayV1>
 PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
                                  std::string_view display, std::string_view view) {
@@ -24,10 +51,9 @@ PreparedOutputDisplayV1::prepare(const runtime::EvaluationColorIntent& intent,
     auto config = resolveOutputDisplayConfigV1(intent);
     if (!config)
         return {};
-    if (display.empty())
-        display = config->displayName();
-    if (view.empty())
-        view = config->viewName();
+    const auto chosen = outputDisplayViewV1(*config, display, view);
+    display = chosen.display;
+    view = chosen.view;
     auto built = color::buildCpuDisplayProcessorForView(*config, display, view);
     auto handle = std::move(built).takeHandle();
     if (!handle)

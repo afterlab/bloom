@@ -397,8 +397,12 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
             outputView.destination = resolveDestination(record, output, context);
             const auto preset =
                 std::ranges::find(catalogue->presets, output.presetId, &ExportPreset::id);
+            // An output records its display/view (issue #409) where its preset names none, so
+            // the preset's settings with those names filled in are unmodified too.
             outputView.presetModified =
-                preset == catalogue->presets.end() || !(preset->settings == output.settings);
+                preset == catalogue->presets.end() ||
+                !(preset->settings == output.settings ||
+                  withExplicitExportView(preset->settings, state.displayViews) == output.settings);
             outputView.availability =
                 exportPlatformAvailability(output.settings, catalogue->encoders);
             if (outputView.availability)

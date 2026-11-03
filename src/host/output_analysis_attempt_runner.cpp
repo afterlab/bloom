@@ -424,7 +424,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
              fallbackEvaluator = std::move(fallbackEvaluator), resolved, preset, ledger,
              gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
              forceCpuFallback, outputColorCommand = std::move(outputColorCommand),
-             mediaDisplay = std::move(mediaDisplay)](
+             mediaDisplay = std::move(mediaDisplay), displayName = state_->request.displayName,
+             viewName = state_->request.viewName](
                 runtime::TaskContext& context) mutable -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -706,7 +707,9 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                               output::OutputPresetV1::TiffRgba16SrgbV1)
                                                   .available
                                               ? output::OutputAnalysisAdapterStateV1::Qualified
-                                              : output::OutputAnalysisAdapterStateV1::Unavailable})
+                                              : output::OutputAnalysisAdapterStateV1::Unavailable,
+                               .displayName = displayName,
+                               .viewName = viewName})
                         : output::analyzeFlatExrRgba32fLinRec709SceneV1({.process = processSource});
                 if (!analyzed.hasReport()) {
                     return runtime::TaskResult<BuildOutcomeV1>::succeeded(
@@ -881,6 +884,8 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
     auto* const displayProvider = state->request.displayProcessorProvider;
     auto* const gpuProvider = state->request.gpuProvider.get();
     const auto capturedColorIntent = state->request.evaluation.colorIntent;
+    auto displayName = state->request.displayName;
+    auto viewName = state->request.viewName;
     const runtime::GpuOcioCommandGeometry colorGeometry{
         .width = state->request.plan != nullptr ? state->request.plan->format().width() : 0,
         .height = state->request.plan != nullptr ? state->request.plan->format().height() : 0};
@@ -891,7 +896,8 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
     auto submission = scheduler.submit<ResolvingOutcomeV1>(
         std::move(resolvingRequest),
         [&artifacts, targetPath, overwritePolicy, confirmedExisting, preset, displayProvider,
-         gpuProvider, capturedColorIntent,
+         gpuProvider, capturedColorIntent, displayName = std::move(displayName),
+         viewName = std::move(viewName),
          colorGeometry](runtime::TaskContext& context) -> runtime::TaskResult<ResolvingOutcomeV1> {
             if (context.isCancellationRequested()) {
                 return runtime::TaskResult<ResolvingOutcomeV1>::cancelled();
@@ -939,8 +945,8 @@ OutputAnalysisAttemptRunnerResultV1 beginOutputAnalysisAttemptV1(
                                         .completed = 0,
                                         .total = std::nullopt});
                 auto color = detail::resolvePngDisplayProducts(
-                    displayProvider, gpuProvider, capturedColorIntent, colorGeometry,
-                    [&context] { return context.isCancellationRequested(); });
+                    displayProvider, gpuProvider, capturedColorIntent, displayName, viewName,
+                    colorGeometry, [&context] { return context.isCancellationRequested(); });
                 if (!color.has_value()) {
                     return runtime::TaskResult<ResolvingOutcomeV1>::succeeded(
                         {.succeeded = false, .colorStageFailed = true});

@@ -81,8 +81,10 @@ active composition's optional override. It is carried with the OCIO config revis
 intent and is part of the process/output semantic identity for generalized projects. The legacy
 `lin_rec709_scene` intent keeps the previous identity bytes and goldens.
 
-PNG and TIFF use the qualified OCIO transform from the effective working space to the config's
-default display/view. Their analysis binds that processor and config revision. EXR defaults to
+PNG and TIFF use the qualified OCIO transform from the effective working space to the output's
+display/view (`output::outputDisplayViewV1`: the Viewer's default pair when the output names none,
+never the config's own default view; see color-management.md). Their analysis binds that processor
+and config revision. EXR defaults to
 unchanged working-space pixels, but `FlatExrRgba32fOptionsV1::outputColorSpaceId` can name an output
 space in the exact config. The CPU reference path converts working → output with
 `CpuColorSpaceProcessor` before encoding, while the GPU export route resolves the same qualified

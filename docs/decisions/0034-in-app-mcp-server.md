@@ -263,7 +263,7 @@ Both hosts list the same tools with the same schemas.
 | `history` | `action` `undo` or `redo`, with `expectedRevision`; queued like a commit | direct |
 | `events` | the live command events; resets on project replacement | as today |
 | `render`, `export` | unchanged request shapes; a transient export job (ADR 0033 section 13) | the same, on a headless export queue |
-| `capture` | one PNG of the context composition at the context time, using the Viewer's display and view, returned as an MCP `image` | the session composition at time 0, with the project's default display and view |
+| `capture` | one PNG of the context composition at the context time, using the Viewer's display and view, returned as an MCP `image` | the session composition at time 0, with the Viewer's default display and view |
 | `export.start`, `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`, `export.retry`, `export.confirm-replace`, `export.status`, `export.events`, `export.log`, `export.wait`, `export.presets`, `export.script` | the `ExportQueueService` session calls on the artist's queue, which the Export panel shows | the same on the headless queue |
 
 The project-truth `bloom.export.*` edits are ordinary operations, so `transact` reaches them through

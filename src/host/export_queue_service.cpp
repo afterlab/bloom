@@ -131,6 +131,11 @@ struct Pump final {
             s.colorSettings = *colour;
         else
             s.colorSettings.reset();
+        if (s.colorSettings != s.displayViewsFor) {
+            s.displayViews = s.colorSettings ? exportDisplayViews(*s.colorSettings)
+                                             : std::vector<color::DisplayViewEntry>{};
+            s.displayViewsFor = s.colorSettings;
+        }
         const auto state = session.stateSnapshot();
         s.editable = s.snapshot.has_value() && state.editability.has_value();
         s.projectFolder = state.displayPath
@@ -1250,7 +1255,8 @@ ExportTransientSubmitResult ExportQueueService::submitTransient(ExportTransientJ
     document::ExportOutput output;
     output.id = ExportOutputId::fromRaw(s.nextTransient++);
     output.presetId = request.presetId.empty() ? std::string("transient") : request.presetId;
-    output.settings = std::move(request.settings);
+    // Issue #409: the transient output names its display/view, as a queued one does.
+    output.settings = withExplicitExportView(std::move(request.settings), s.displayViews);
     output.destination = std::move(request.destination);
     job.outputs.push_back(output);
     if (const auto validation = document::validateExportJob(job); !validation.ok())

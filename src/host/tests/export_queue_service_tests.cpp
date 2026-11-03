@@ -22,6 +22,7 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -1032,6 +1033,188 @@ void testFreeTextWorkingSpace(const std::string& workingSpace) {
     }
 }
 
+// Issue #409: the ACES CG built-in project colour settings, with the working space the dialog
+// offers first.
+std::optional<document::ColorSettings> acesColour() {
+    const auto revision = color::ocioBuiltInContentRevision(
+        color::OcioConfigLocatorKind::BloomBuiltIn, color::kAcesCgV1ConfigUri);
+    if (!revision)
+        return std::nullopt;
+    auto colour = document::makeBloomNeutralColorSettingsV1({});
+    colour.processColorSpaceId = std::string(color::kAcesCgV1SceneLinearColorSpaceId);
+    colour.ocioConfig.locator =
+        document::BuiltInOcioConfigLocator{std::string(color::kAcesCgV1ConfigUri)};
+    colour.ocioConfig.expectedRevision.digest = *revision;
+    return colour;
+}
+
+// Issue #409: a display-referred output records an explicit display/view, the Viewer's default
+// pair, so the configuration's own default view (a tone map under ACES CG) never decides it.
+void testExplicitExportView() {
+    const auto neutral =
+        document::makeBloomNeutralColorSettingsV1(color::kBloomNeutralV1ConfigDigest);
+    const auto aces = acesColour();
+    expect(aces.has_value(), "explicit view: the ACES config is available");
+    if (!aces)
+        return;
+    auto movie = png();
+    movie.format = document::ExportFormat::H264Mp4;
+    const auto neutralPng = host::withExplicitExportView(png(), neutral);
+    expect(neutralPng.displayName == "srgb_rec709_display" &&
+               neutralPng.viewName == "srgb_rec709_display",
+           "a Bloom Neutral PNG records the neutral display/view");
+    expect(host::exportProjectAvailability(neutralPng, neutral).available,
+           "the recorded neutral display/view is available under Bloom Neutral");
+    const auto acesMovie = host::withExplicitExportView(movie, *aces);
+    expect(acesMovie.displayName == "sRGB - Display" && acesMovie.viewName == "Un-tone-mapped",
+           "an ACES CG movie records the Viewer's un-tone-mapped view, not ACES 1.0 - SDR Video");
+    expect(!host::exportProjectAvailability(acesMovie, neutral).available,
+           "ACES display/view names are missing under Bloom Neutral");
+    auto tiff = png();
+    tiff.format = document::ExportFormat::Tiff;
+    expect(host::withExplicitExportView(tiff, *aces).viewName == "Un-tone-mapped",
+           "an ACES CG TIFF records the un-tone-mapped view");
+    auto exr = png();
+    exr.format = document::ExportFormat::OpenExr;
+    expect(host::withExplicitExportView(exr, *aces) == exr,
+           "a scene-referred EXR records no display/view");
+    const auto review = host::builtInExportPreset("builtin:review-h264");
+    expect(review && host::withExplicitExportView(review->settings, *aces) == review->settings,
+           "the review preset keeps its own ACES 1.0 - SDR Video view");
+}
+
+// Issue #409 end to end under ACES CG: a PNG and a TIFF that name no view render through the
+// Viewer's un-tone-mapped default, the same output as naming sRGB - Display / Un-tone-mapped;
+// naming the ACES tone map is honoured.
+void testAcesExportView() {
+    const auto aces = acesColour();
+    expect(aces.has_value(), "ACES export view: the ACES config is available");
+    if (!aces)
+        return;
+    Fixture f("aces-view", linuxEncoders(), aces);
+    {
+        commands::Transaction transaction("Add a gray solid");
+        transaction.emplace<commands::AddSolidLayer>(f.composition(), "Gray",
+                                                     core::Color4d{0.18, 0.18, 0.18, 1.0});
+        expect(f.session.execute(std::move(transaction)).changed(), "the gray solid is added");
+    }
+    const auto still = document::ExportRange{document::ExportRangeKind::Frame, 0, 0};
+    auto tiff = png();
+    tiff.format = document::ExportFormat::Tiff;
+    auto untone = png();
+    untone.displayName = "sRGB - Display";
+    untone.viewName = "Un-tone-mapped";
+    auto toneMapped = png();
+    toneMapped.displayName = "sRGB - Display";
+    toneMapped.viewName = "ACES 1.0 - SDR Video";
+    auto tiffUntone = untone;
+    tiffUntone.format = document::ExportFormat::Tiff;
+    auto tiffTone = toneMapped;
+    tiffTone.format = document::ExportFormat::Tiff;
+    const std::vector<std::pair<document::ExportJobId, std::string>> jobs{
+        {f.addJob(png(), "Exports/empty.png", document::ExportOverwritePolicy::Replace, still),
+         "Exports/empty.png"},
+        {f.addJob(untone, "Exports/untone.png", document::ExportOverwritePolicy::Replace, still),
+         "Exports/untone.png"},
+        {f.addJob(toneMapped, "Exports/tone.png", document::ExportOverwritePolicy::Replace, still),
+         "Exports/tone.png"},
+        {f.addJob(tiff, "Exports/empty.tiff", document::ExportOverwritePolicy::Replace, still),
+         "Exports/empty.tiff"},
+        {f.addJob(tiffUntone, "Exports/untone.tiff", document::ExportOverwritePolicy::Replace,
+                  still),
+         "Exports/untone.tiff"},
+        {f.addJob(tiffTone, "Exports/tone.tiff", document::ExportOverwritePolicy::Replace, still),
+         "Exports/tone.tiff"}};
+    std::vector<document::ExportJobId> ids;
+    for (const auto& [id, path] : jobs) {
+        expect(f.startable(id), "ACES export view: " + path + " becomes startable");
+        ids.push_back(id);
+    }
+    expect(f.service->start(ids).accepted, "ACES export view: start");
+    expect(f.pumpUntil(
+               [&] {
+                   return std::ranges::all_of(
+                       ids, [&](auto id) { return host::isTerminal(f.view(id)->state); });
+               },
+               180),
+           "ACES export view: every job finishes");
+    // The analysis digest binds the qualified display processor's identity, so it shows which
+    // display/view each output was rendered through (pixel values are pinned by the output and
+    // thumbnail tests).
+    const auto digest = [&](const document::ExportJobId id) -> std::optional<core::Sha256Digest> {
+        const auto* job = f.view(id);
+        if (!job || job->state == ExportJobState::Failed || job->outputs.empty() ||
+            !job->outputs.front().verification)
+            return std::nullopt;
+        return job->outputs.front().verification->analysisDigest;
+    };
+    const auto pngEmpty = digest(jobs[0].first);
+    const auto pngNamed = digest(jobs[1].first);
+    const auto pngToneMapped = digest(jobs[2].first);
+    expect(pngEmpty && pngNamed && *pngEmpty == *pngNamed,
+           "a PNG naming no view is the PNG naming sRGB - Display / Un-tone-mapped");
+    expect(pngEmpty && pngToneMapped && *pngEmpty != *pngToneMapped,
+           "a PNG naming ACES 1.0 - SDR Video is honoured, a different output");
+    const auto tiffEmpty = digest(jobs[3].first);
+    const auto tiffNamed = digest(jobs[4].first);
+    const auto tiffToneMapped = digest(jobs[5].first);
+    expect(tiffEmpty && tiffNamed && *tiffEmpty == *tiffNamed,
+           "a TIFF naming no view is the TIFF naming sRGB - Display / Un-tone-mapped");
+    expect(tiffEmpty && tiffToneMapped && *tiffEmpty != *tiffToneMapped,
+           "a TIFF naming ACES 1.0 - SDR Video is a different output");
+
+    // A transient job (MCP render/capture) records the view it renders through.
+    host::ExportTransientJobRequest request;
+    request.composition = f.composition();
+    request.range = still;
+    request.settings = png();
+    request.destination = {"external", fileUri(f.folder / "transient.png"),
+                           document::ExportOverwritePolicy::Replace};
+    const auto submitted = f.service->submitTransient(request);
+    const auto* view = submitted.job ? f.view(*submitted.job) : nullptr;
+    expect(view && !view->outputs.empty() &&
+               view->outputs.front().record.settings.displayName == "sRGB - Display" &&
+               view->outputs.front().record.settings.viewName == "Un-tone-mapped",
+           "a transient output records the Viewer's default display/view");
+    if (submitted.job) {
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(*submitted.job)->state); }),
+               "the transient job finishes");
+        (void)f.service->acknowledgeTransient(*submitted.job);
+    }
+}
+
+// Issue #409: switching the project's configuration moves outputs that recorded the previous
+// Viewer default to the new one, in one undoable command; other names stay.
+void testConfigurationSwitchFollowsView() {
+    const auto aces = acesColour();
+    if (!aces)
+        return;
+    Fixture f("follow-view");
+    const auto neutral = document::makeBloomNeutralColorSettingsV1({});
+    const auto recorded =
+        f.addJob(host::withExplicitExportView(png(), neutral), "Exports/recorded.png");
+    auto review = host::builtInExportPreset("builtin:review-h264");
+    const auto kept = f.addJob(review->settings, "Exports/review.mp4");
+    auto exr = png();
+    exr.format = document::ExportFormat::OpenExr;
+    const auto scene = f.addJob(exr, "Exports/scene.exr");
+    const auto settingsOf = [&](const document::ExportJobId id) {
+        return currentSnapshot(f.session).project().findExportJob(id)->outputs.front().settings;
+    };
+    expect(f.session.setColorSettings(*aces) == host::ProjectSessionColorSettingsStatus::Updated,
+           "the project switches to ACES CG");
+    expect(settingsOf(recorded).displayName == "sRGB - Display" &&
+               settingsOf(recorded).viewName == "Un-tone-mapped",
+           "an output on the neutral Viewer default follows to the ACES Viewer default");
+    expect(settingsOf(kept) == review->settings, "an explicitly chosen review view stays");
+    expect(settingsOf(scene) == exr, "a scene-referred output is untouched");
+    expect(f.session.setColorSettings(neutral) == host::ProjectSessionColorSettingsStatus::Updated,
+           "the project switches back to Bloom Neutral");
+    expect(settingsOf(recorded).displayName == "srgb_rec709_display" &&
+               settingsOf(recorded).viewName == "srgb_rec709_display",
+           "the output follows back to the neutral display/view");
+}
+
 // End to end: a movie through the media worker, reopened by the worker and checked for its
 // container, colour tags, frame count and digest. An empty profile is the format's usual one.
 void testVideoEndToEnd(const document::ExportFormat format,
@@ -1102,6 +1285,9 @@ int main() {
         testPolicyHoldsAtPublication();
         testEveryPlatformExports();
         testTransient();
+        testExplicitExportView();
+        testAcesExportView();
+        testConfigurationSwitchFollowsView();
         testVideoEndToEnd(document::ExportFormat::ProResMov, linuxEncoders(), "prores-mov");
         testFreeTextWorkingSpace("Linear Rec.709 (sRGB)");
         testFreeTextWorkingSpace("Linear P3-D65");

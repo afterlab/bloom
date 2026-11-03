@@ -1,12 +1,34 @@
 #pragma once
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_display_processor.hpp>
 #include <bloom/runtime/evaluation.hpp>
+
+#include <span>
+#include <string>
+#include <string_view>
 
 namespace bloom::output {
 // The built-in OCIO config an output colour intent names, resolved exactly as
 // PreparedOutputDisplayV1::prepare resolves it (an empty revision selects Bloom Neutral).
 [[nodiscard]] std::optional<color::ResolvedBloomNeutralConfig>
 resolveOutputDisplayConfigV1(const runtime::EvaluationColorIntent&);
+// Issue #409: the display/view an output resolves to. An output that names neither uses the
+// Viewer's default pair (color::viewerDefaultDisplayView: srgb_rec709_display under Bloom Neutral,
+// sRGB - Display / Un-tone-mapped under ACES CG), never the config's own default view, which under
+// ACES CG is a tone map. A named member is kept. An empty view takes the Viewer's default view
+// when the display offers it, otherwise the config's default view; an empty display takes the
+// Viewer's default display when it offers the named view, otherwise the config's default display.
+struct OutputDisplayViewV1 final {
+    std::string display;
+    std::string view;
+    friend bool operator==(const OutputDisplayViewV1&, const OutputDisplayViewV1&) = default;
+};
+[[nodiscard]] OutputDisplayViewV1 outputDisplayViewV1(std::span<const color::DisplayViewEntry>,
+                                                      std::string_view display,
+                                                      std::string_view view);
+[[nodiscard]] OutputDisplayViewV1 outputDisplayViewV1(const color::ResolvedBloomNeutralConfig&,
+                                                      std::string_view display,
+                                                      std::string_view view);
 class PreparedOutputDisplayV1 final {
   public:
     [[nodiscard]] static std::shared_ptr<const PreparedOutputDisplayV1>
@@ -17,7 +39,7 @@ class PreparedOutputDisplayV1 final {
     }
     [[nodiscard]] const std::string& description() const noexcept { return description_; }
     [[nodiscard]] const core::Sha256Digest& digest() const noexcept { return digest_; }
-    // The resolved display and view (the config's defaults when the request named none).
+    // The resolved display and view (outputDisplayViewV1 of the requested names).
     [[nodiscard]] const std::string& displayName() const noexcept { return display_; }
     [[nodiscard]] const std::string& viewName() const noexcept { return view_; }
 

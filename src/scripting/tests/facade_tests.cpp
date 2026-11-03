@@ -94,6 +94,39 @@ int main() {
     session->document()->removeObserver(documentObserver);
     session->commandStack()->removeObserver(observer);
 
+    // Issue #409: an export output added by a script records its display/view, the Viewer's
+    // default pair for the project's configuration, never the config's tone-mapped default view.
+    const auto viewOfNewJob = [&]() -> std::optional<std::pair<std::string, std::string>> {
+        const auto added = session->executeJsonOperation(
+            "bloom.export.add-job",
+            {{"composition",
+              bloom::scripting::StableId{
+                  session->snapshot().project().compositions().front().id().value()}}});
+        const auto job = added.succeeded()
+                             ? added.command->outputId<bloom::document::ExportJobId>("exportJob")
+                             : std::nullopt;
+        const auto* record = job ? session->snapshot().project().findExportJob(*job) : nullptr;
+        if (record == nullptr || record->outputs.empty())
+            return std::nullopt;
+        return std::pair{record->outputs.front().settings.displayName,
+                         record->outputs.front().settings.viewName};
+    };
+    const auto neutralView = viewOfNewJob();
+    if (!neutralView || neutralView->first != "srgb_rec709_display" ||
+        neutralView->second != "srgb_rec709_display") {
+        std::cerr << "a scripted Bloom Neutral export output does not record its view\n";
+        return 20;
+    }
+    if (session->setColorSettings("aces", std::nullopt).code != "updated") {
+        std::cerr << "the scripted session does not switch to ACES CG\n";
+        return 21;
+    }
+    const auto acesView = viewOfNewJob();
+    if (!acesView || acesView->first != "sRGB - Display" || acesView->second != "Un-tone-mapped") {
+        std::cerr << "a scripted ACES CG export output does not record the un-tone-mapped view\n";
+        return 22;
+    }
+
     auto renderSessionResult = bloom::scripting::Session::createNew(
         "Scripted", "Composition", bloom::core::RationalTime::fromInteger(48));
     if (!renderSessionResult) {

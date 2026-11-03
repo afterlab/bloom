@@ -61,6 +61,14 @@ This is a review transform only: it changes Viewer and RAM Preview pixels, never
 process image or export output. Export presets keep their own display and view; for example,
 **Review H.264** always uses **Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video**.
 
+Asset, node and composition thumbnails always use the Viewer's starting view (plain sRGB), so a
+thumbnail looks like the Viewer showing the same frame. A new export output that names no display
+or view records that same view in its settings (**sRGB - Display / Un-tone-mapped** under ACES 1.3
+CG), so the result never depends on the configuration's own default. An output from an earlier
+Bloom with no view stored exports through that view too. When you switch the project between Bloom
+Neutral and ACES 1.3 CG, outputs that use the plain sRGB view move to the new configuration's plain
+sRGB view (one undo step); an output you set to another view keeps it.
+
 If the composition contains a look-tagged OCIO File Transform, switch on the footer's **Look**
 toggle to include it while reviewing, or switch it off to inspect the underlying grade. The toggle
 is disabled when the composition has no look-tagged effect. Export always includes active look

@@ -83,6 +83,9 @@ struct TiffRgba16SrgbAnalysisInputV1 final {
     OutputAnalysisCompressionStateV1 compression = OutputAnalysisCompressionStateV1::Available;
     OutputAnalysisOtherDependencyStateV1 otherDependency =
         OutputAnalysisOtherDependencyStateV1::Available;
+    // The output's display/view (issue #409); empty members resolve through outputDisplayViewV1.
+    std::string displayName{};
+    std::string viewName{};
 };
 
 enum class OutputAnalysisAnalyzerErrorCodeV1 : std::uint8_t {

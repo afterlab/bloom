@@ -65,8 +65,9 @@ in ACES 1.3 CG): the R'G'B' is interpreted with the sRGB display transfer, exact
 Bloom's own 8-bit stills are shown, so through the default sRGB view footage matches a player's
 decode (`-vf scale=in_color_matrix=bt709:in_range=tv:out_range=full`) and matches Bloom's sRGB
 stills without adjustment. Under the ACES config the Viewer also starts on the untone-mapped sRGB
-view, so video there matches a player too; the configuration's own default view (used by exports
-that name no view, and by thumbnails) still applies the ACES output transform. Before document 1.28, Auto
+view, so video there matches a player too, and thumbnails and exports that name no view use the
+same pair; only an explicitly chosen view (such as the review preset's) applies the ACES output
+transform. Before document 1.28, Auto
 resolved these streams to the config's Rec.709 video space, which in Bloom Neutral was the
 scene-linear `lin_rec709_scene`: the encoded R'G'B' entered the working space as linear light and
 the display encoded it again, so video looked pale ([ADR 0032](../decisions/0032-sdr-video-colour-default.md)).
@@ -220,8 +221,10 @@ The read path is probe/metadata resolution → bounded decode to straight RGB `R
 input transform → unchanged alpha association/premultiplication into the working space. Decoded
 image and video-frame keys include source/member identity, resolved input id, effective working id,
 and OCIO config revision. Changing any of those values re-decodes thumbnails, proxies, and frames.
-Still and video thumbnail proxies use the qualified default display/view processor for the
-effective working space. Its canonical display identity is part of the proxy key, so a working
+Still and video thumbnail proxies use the qualified processor for the Viewer's default display/view
+(`isViewerDefault`, below) and the effective working space, so a thumbnail looks like the Viewer
+showing the same frame; composition thumbnails prepare through the preview pipeline with that same
+pair. Its canonical display identity is part of the proxy key, so a working
 space, config, display, or packing change cannot reuse differently displayed pixels.
 The CPU AP0 EXR read is pinned against the OCIO reference processor to an absolute channel delta of
 `1e-5`; Neutral sRGB PNG defaults retain the existing byte-identical goldens.
@@ -339,9 +342,8 @@ public list is bounded to 64 displays and 32 views per display; a larger config 
 typed diagnostic rather than being partially exposed to the UI. Each entry marks two pairs:
 
 - `isDefault`, the config's own default (`getDefaultDisplay()` and `getDefaultView()` for the
-  process space). `ResolvedBloomNeutralConfig::displayName()`/`viewName()` return it. Exports and
-  output analysis that name no display or view, asset thumbnails, and the color picker's inverse
-  use it, so their pixels and identities are unchanged.
+  process space). `ResolvedBloomNeutralConfig::displayName()`/`viewName()` return it. Only the
+  color picker's inverse uses it.
 - `isViewerDefault`, the pair the Viewer starts on: the default display with a view that applies
   no tone mapping. Bloom does not take the config's default view for the Viewer, because a config
   may default to a look or tone map: the ACES 1.3 CG built-in defaults to `ACES 1.0 - SDR Video`,
@@ -350,6 +352,23 @@ typed diagnostic rather than being partially exposed to the UI. Each entry marks
   `Un-tone-mapped` (the OCIO ACES configs), then `Standard` (the Blender convention). A view whose
   color space is data (`Raw`) never qualifies. A config with no identifiable view (any future
   external config included) keeps its own default pair for the Viewer.
+
+`color::viewerDefaultDisplayView()` returns the `isViewerDefault` entry. Asset, node-card and
+composition thumbnails display through it (issue #409). Output colour uses it too:
+`output::outputDisplayViewV1()` resolves an output's display/view, so an output that names neither
+takes the Viewer default pair, a named member is kept, an empty view takes the Viewer default view
+when the named display offers it (otherwise the config default view), and an empty display takes
+the Viewer default display when it offers the named view (otherwise the config default display).
+PNG, TIFF and movie exports all honour the output's own display/view through it, on the GPU output
+command and the CPU reference alike. A stored export output records the resolved names
+(`host::withExplicitExportView`): every Export panel, script and MCP edit that stores
+display-referred output settings, and every transient MCP job, writes the pair it resolves, so a
+configuration's own default view can never silently change an export. An output saved by an earlier
+Bloom with no stored names renders through the same Viewer default pair, and records it the next
+time its settings are edited. Changing the project's configuration moves every output that recorded
+the previous configuration's Viewer default pair to the new configuration's, in one undoable
+**Follow the Viewer's Default View** command; any other stored name stays, so an explicitly chosen
+review view is kept (and reported missing under a configuration without it).
 
 Bloom Neutral's `srgb_rec709_display / srgb_rec709_display` pair is both, so its existing
 display-processor identity and packed goldens are unchanged. Under ACES 1.3 CG the Viewer starts on
@@ -1014,9 +1033,10 @@ config, writes premultiplied 32-bit float EXR with PIZ, and labels its sequence 
 review deliverable applies look-tagged effects, then the config's `Rec.1886 Rec.709 - Display` /
 `ACES 1.0 - SDR Video` display transform before H.264 quantization. Its default target is 30 Mbps.
 The ACES 1.3 CG built-in's default display is sRGB; the named review deliberately selects the
-Rec.709 pair. Raw display-referred presets use the config's default display/view. Missing pairs
-fail explicitly. The processor pair and config revision are recorded in analysis and evidence;
-there is no export display/view picker.
+Rec.709 pair. Raw display-referred presets name no pair, so an output made from one records the
+Viewer's default pair (`sRGB - Display` / `Un-tone-mapped` under ACES CG) as described above.
+Missing pairs fail explicitly. The processor pair and config revision are recorded in analysis and
+evidence.
 The named ACES handoff and review options require the selected built-in ACES CG config with a
 pinned revision. The Export panel marks them unavailable with a Project Settings diagnostic otherwise;
 direct export requests are refused before preparation. Generic export presets remain selectable.

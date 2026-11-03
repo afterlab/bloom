@@ -157,6 +157,11 @@ struct OutputAnalysisAttemptRequestV1 final {
     // Failed, the blocking stage resolves and builds its own; that is a real cost, never a silent
     // fallback to an unqualified transform. Must outlive the whole asynchronous operation.
     runtime::QualifiedDisplayProcessorProvider* displayProcessorProvider = nullptr;
+    // PNG and TIFF: the output's display/view (issue #409). Empty members resolve through
+    // output::outputDisplayViewV1 to the Viewer's default pair, never the config's own default
+    // view.
+    std::string displayName{};
+    std::string viewName{};
     // Optional GPU final-render provider. When it is non-null the Evaluating stage is DEFERRED
     // (owner-driven, never blocking a worker) until the provider reports its lazy bootstrap
     // terminal, so the first export on a supported device is genuinely GPU rather than a CPU

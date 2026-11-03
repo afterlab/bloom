@@ -3,7 +3,9 @@
 #include "export_preset_store.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/output/display_output.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
@@ -438,6 +440,54 @@ ExportAvailability exportPlatformAvailability(const document::ExportOutputSettin
     return available();
 }
 
+std::vector<color::DisplayViewEntry> exportDisplayViews(const document::ColorSettings& project) {
+    const auto* builtIn =
+        std::get_if<document::BuiltInOcioConfigLocator>(&project.ocioConfig.locator);
+    if (builtIn == nullptr ||
+        project.ocioConfig.expectedRevision.algorithm != document::OcioRevisionAlgorithm::Sha256)
+        return {};
+    // An unpinned (zero) revision names the built-in's own content, as the render resolves it.
+    auto revision = project.ocioConfig.expectedRevision.digest;
+    if (revision == core::Sha256Digest{}) {
+        const auto content = color::ocioBuiltInContentRevision(
+            color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri);
+        if (!content)
+            return {};
+        revision = *content;
+    }
+    auto resolution =
+        color::resolveOcioBuiltIn(color::OcioConfigLocatorKind::BloomBuiltIn, builtIn->uri,
+                                  revision, project.processColorSpaceId);
+    const auto config = std::move(resolution).takeResolved();
+    if (!config.has_value())
+        return {};
+    return {config->displays().begin(), config->displays().end()};
+}
+
+document::ExportOutputSettings
+withExplicitExportView(document::ExportOutputSettings settings,
+                       const std::span<const color::DisplayViewEntry> displays) {
+    const auto format = settings.format;
+    if (displays.empty() || format == ExportFormat::OpenExr || format == ExportFormat::Dpx ||
+        format == ExportFormat::Wav ||
+        (!settings.displayName.empty() && !settings.viewName.empty()))
+        return settings;
+    auto chosen = output::outputDisplayViewV1(displays, settings.displayName, settings.viewName);
+    settings.displayName = std::move(chosen.display);
+    settings.viewName = std::move(chosen.view);
+    return settings;
+}
+
+document::ExportOutputSettings withExplicitExportView(document::ExportOutputSettings settings,
+                                                      const document::ColorSettings& project) {
+    const auto format = settings.format;
+    if (format == ExportFormat::OpenExr || format == ExportFormat::Dpx ||
+        format == ExportFormat::Wav ||
+        (!settings.displayName.empty() && !settings.viewName.empty()))
+        return settings;
+    return withExplicitExportView(std::move(settings), exportDisplayViews(project));
+}
+
 ExportAvailability exportProjectAvailability(const document::ExportOutputSettings& settings,
                                              const document::ColorSettings& project) {
     const auto* builtIn =
@@ -462,12 +512,15 @@ ExportAvailability exportProjectAvailability(const document::ExportOutputSetting
                                "Settings",
                                ExportRemedy::OpenProjectSettings);
     }
-    // The built-in neutral configuration has no named outputs: any explicit name is missing. Other
-    // configurations are checked when the run prepares its colour transform (no I/O here).
-    if (neutral &&
-        (!settings.outputColorSpaceId.empty() || !settings.displayName.empty() ||
-         !settings.viewName.empty()) &&
-        settings.outputColorSpaceId != project.processColorSpaceId)
+    // The built-in neutral configuration names no output colour space other than its working space,
+    // and one display/view pair: any other name is missing. Other configurations are checked when
+    // the run prepares its colour transform (no I/O here).
+    const auto neutralName = [](const std::string& name) {
+        return name.empty() || name == color::kBloomNeutralV1DisplayViewName;
+    };
+    if (neutral && ((!settings.outputColorSpaceId.empty() &&
+                     settings.outputColorSpaceId != project.processColorSpaceId) ||
+                    !neutralName(settings.displayName) || !neutralName(settings.viewName)))
         return unavailable(ExportAvailabilityCode::ColourNameMissing,
                            "The project's color configuration has no output named here",
                            ExportRemedy::OpenProjectSettings);

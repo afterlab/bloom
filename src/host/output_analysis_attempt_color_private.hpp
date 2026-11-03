@@ -15,6 +15,7 @@
 
 #include <memory>
 #include <optional>
+#include <string_view>
 
 namespace bloom::host::detail {
 
@@ -32,13 +33,14 @@ struct ColorResolutionOutcomeV1 final {
     std::shared_ptr<const runtime::PreparedGpuOcioCommand> gpuDisplayCommand;
 };
 
-// The attempt graph's step 4. Never throws; a genuine allocation/internal failure is signalled by
-// returning nullopt so the caller can fail the attempt AT the ColorPreparing stage, while every
-// modelled configuration/adapter state returns a populated outcome that the analyzer turns into a
-// truthful, non-approvable report.
+// The attempt graph's step 4. `display`/`view` are the output's own names (issue #409); empty
+// members resolve through output::outputDisplayViewV1 to the Viewer's default pair. Never throws; a
+// genuine allocation/internal failure is signalled by returning nullopt so the caller can fail the
+// attempt AT the ColorPreparing stage, while every modelled configuration/adapter state returns a
+// populated outcome that the analyzer turns into a truthful, non-approvable report.
 [[nodiscard]] std::optional<ColorResolutionOutcomeV1> resolvePngDisplayProducts(
     runtime::QualifiedDisplayProcessorProvider* provider, GpuExportProvider* gpuProvider,
-    const runtime::EvaluationColorIntent& intent, runtime::GpuOcioCommandGeometry geometry,
-    const runtime::GpuOcioCancellation& cancel) noexcept;
+    const runtime::EvaluationColorIntent& intent, std::string_view display, std::string_view view,
+    runtime::GpuOcioCommandGeometry geometry, const runtime::GpuOcioCancellation& cancel) noexcept;
 
 } // namespace bloom::host::detail

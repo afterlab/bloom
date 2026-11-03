@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/export_queue.hpp>
 #include <bloom/output/media_output.hpp>
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -279,6 +281,25 @@ exportExpectedPreservation(const document::ExportOutputSettings& settings) noexc
 [[nodiscard]] ExportAvailability
 exportPlatformAvailability(const document::ExportOutputSettings& settings,
                            const ExportEncoderStatus& encoders);
+// Issue #409: the settings a display-referred output (PNG, TIFF, movies) records. An empty display
+// or view is replaced by the name output::outputDisplayViewV1 resolves in the project's colour
+// configuration (the Viewer's default pair when both are empty: srgb_rec709_display under Bloom
+// Neutral, sRGB - Display / Un-tone-mapped under ACES CG), so the stored output names its view and
+// a configuration's own default view cannot silently change the result. Every edit that stores
+// output settings applies it. Scene-referred and audio outputs, settings that already name both,
+// and a configuration that does not resolve come back unchanged.
+[[nodiscard]] document::ExportOutputSettings
+withExplicitExportView(document::ExportOutputSettings settings,
+                       const document::ColorSettings& project);
+// The same rule over an already-resolved display/view list (exportDisplayViews), for callers that
+// apply it often; an empty list returns the settings unchanged.
+[[nodiscard]] document::ExportOutputSettings
+withExplicitExportView(document::ExportOutputSettings settings,
+                       std::span<const color::DisplayViewEntry> displays);
+// The display/view list of the project's built-in colour configuration; empty when it does not
+// resolve. Resolving parses the configuration, so callers keep the result while the settings stay.
+[[nodiscard]] std::vector<color::DisplayViewEntry>
+exportDisplayViews(const document::ColorSettings& project);
 // Project-dependent requirements: ACES names need the pinned built-in ACES CG config; names the
 // built-in neutral config does not have are missing.
 [[nodiscard]] ExportAvailability

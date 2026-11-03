@@ -91,7 +91,9 @@ number**, or **Use the frame numbers**, and **Digits**). **Quality** shows only 
 format has: **Profile** where a format has several, **Compression** for OpenEXR, **Color space** for
 OpenEXR and DPX, **Display** and **View** for movies, PNG and TIFF, **Bake in the look**, and
 **Include audio** for movies. **Color space**, **Display** and **View** are lists of what the
-project's color setup offers, with **Project default** first, so a name cannot be mistyped. The bit
+project's color setup offers, with **Project default** first, so a name cannot be mistyped.
+**Project default** is the Viewer's starting view (plain sRGB, **Un-tone-mapped** under ACES CG); the
+output stores that name, so the result never depends on the configuration's own default view. The bit
 rate, encoder choice, audio sample rate and file-name pattern an output already has are kept and
 used; the panel does not edit them.
 

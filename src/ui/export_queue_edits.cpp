@@ -28,6 +28,13 @@ ExportEditResult report(const commands::CommandResult& result) {
     return {false, reason, std::nullopt, std::nullopt, {}};
 }
 
+// Issue #409: every stored display-referred output names its display/view; one that leaves either
+// empty records the project's resolved names (the Viewer's default pair).
+document::ExportOutputSettings explicitView(document::ExportOutputSettings settings,
+                                            const CompositionSession& session) {
+    return host::withExplicitExportView(std::move(settings), session.colorSettings());
+}
+
 } // namespace
 
 ExportQueueEdits::ExportQueueEdits(CompositionSession& session, DefaultPreset defaultPreset,
@@ -41,10 +48,12 @@ ExportEditResult ExportQueueEdits::addJob(const document::CompositionId composit
 ExportEditResult ExportQueueEdits::addJobs(const std::vector<document::CompositionId>& compositions,
                                            const std::optional<std::size_t> index) {
     commands::Transaction transaction("Add to Export Queue", session_.snapshot().revision());
+    auto preset = defaultPreset_();
+    preset.settings = explicitView(std::move(preset.settings), session_);
     for (std::size_t i = 0; i < compositions.size(); ++i)
-        transaction.emplace<commands::AddExportJob>(
-            host::defaultExportJob(compositions[i], defaultPreset_()),
-            index.has_value() ? std::optional(*index + i) : std::nullopt);
+        transaction.emplace<commands::AddExportJob>(host::defaultExportJob(compositions[i], preset),
+                                                    index.has_value() ? std::optional(*index + i)
+                                                                      : std::nullopt);
     auto outcome = session_.executeTransaction(std::move(transaction));
     auto result = report(outcome);
     if (result.accepted)
@@ -111,6 +120,7 @@ ExportEditResult ExportQueueEdits::addOutput(const document::ExportJobId job,
         preset.settings = choice->settings;
         preset.destination = host::defaultExportDestination(choice->settings.format);
     }
+    preset.settings = explicitView(std::move(preset.settings), session_);
     transaction.emplace<commands::AddExportOutput>(
         job, host::defaultExportJob(document::CompositionId{}, preset).outputs.front());
     return report(session_.executeTransaction(std::move(transaction)));
@@ -124,7 +134,8 @@ ExportEditResult ExportQueueEdits::applyPreset(const document::ExportOutputId ou
                                                    "That preset is not in the catalogue."),
                 std::nullopt, std::nullopt, {}};
     commands::Transaction transaction("Apply Export Preset", session_.snapshot().revision());
-    transaction.emplace<commands::ApplyExportPreset>(output, presetId, choice->settings);
+    transaction.emplace<commands::ApplyExportPreset>(output, presetId,
+                                                     explicitView(choice->settings, session_));
     return report(session_.executeTransaction(std::move(transaction)));
 }
 
@@ -137,10 +148,12 @@ ExportEditResult ExportQueueEdits::editOutput(const document::ExportOutputId out
             return {false, QCoreApplication::translate("ExportQueueEdits",
                                                        "That preset is not in the catalogue."),
                     std::nullopt, std::nullopt, {}};
-        transaction.emplace<commands::ApplyExportPreset>(output, *edit.presetId,
-                                                         edit.settings.value_or(choice->settings));
+        transaction.emplace<commands::ApplyExportPreset>(
+            output, *edit.presetId,
+            explicitView(edit.settings.value_or(choice->settings), session_));
     } else if (edit.settings)
-        transaction.emplace<commands::SetExportOutputSettings>(output, *edit.settings);
+        transaction.emplace<commands::SetExportOutputSettings>(
+            output, explicitView(*edit.settings, session_));
     if (edit.chosenPath) {
         const auto folder = projectFolder_ ? projectFolder_() : std::nullopt;
         const auto destination = host::exportDestinationForPath(

@@ -162,8 +162,35 @@ int main() {
                  .ocioConfigRevision = *revision,
                  .ocioConfigUri = bloom::color::kAcesCgV1ConfigUri});
             check(display != nullptr, "ACES display processor available");
-            check(display->description().find("view: ACES 1.0 - SDR Video") != std::string::npos,
-                  "config default view recorded");
+            // Issue #409: an output naming no view takes the Viewer's default pair, never the
+            // config's own tone-mapped default view.
+            check(display->displayName() == "sRGB - Display" &&
+                      display->viewName() == "Un-tone-mapped" &&
+                      display->description().find("view: Un-tone-mapped") != std::string::npos,
+                  "an output naming no view records the Viewer's un-tone-mapped default");
+            const auto named = o::PreparedOutputDisplayV1::prepare(
+                {.workingColorSpaceId = "ACEScg",
+                 .ocioConfigRevision = *revision,
+                 .ocioConfigUri = bloom::color::kAcesCgV1ConfigUri},
+                "sRGB - Display", "Un-tone-mapped");
+            check(named && named->digest() == display->digest(),
+                  "naming the Viewer's default pair is the same output as naming none");
+            const auto toneMapped = o::PreparedOutputDisplayV1::prepare(
+                {.workingColorSpaceId = "ACEScg",
+                 .ocioConfigRevision = *revision,
+                 .ocioConfigUri = bloom::color::kAcesCgV1ConfigUri},
+                "sRGB - Display", "ACES 1.0 - SDR Video");
+            check(toneMapped && toneMapped->viewName() == "ACES 1.0 - SDR Video" &&
+                      toneMapped->digest() != display->digest(),
+                  "an explicitly named tone-mapped view is kept");
+            const auto displayOnly = o::PreparedOutputDisplayV1::prepare(
+                {.workingColorSpaceId = "ACEScg",
+                 .ocioConfigRevision = *revision,
+                 .ocioConfigUri = bloom::color::kAcesCgV1ConfigUri},
+                "Rec.1886 Rec.709 - Display", {});
+            check(displayOnly && displayOnly->displayName() == "Rec.1886 Rec.709 - Display" &&
+                      displayOnly->viewName() == "Un-tone-mapped",
+                  "a named display with no view takes the un-tone-mapped view it offers");
             const auto rec709 = o::PreparedOutputDisplayV1::prepare(
                 {.workingColorSpaceId = "ACEScg",
                  .ocioConfigRevision = *revision,
