@@ -181,10 +181,11 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     }
 
     if (const auto* uploadCommand = std::get_if<GpuSceneUploadCommand>(&command)) {
-        if (uploadCommand->image == nullptr) {
+        if ((uploadCommand->image == nullptr) == (uploadCommand->samples == nullptr)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
-                                  "an upload command has no converted source image");
+                                  "an upload command needs exactly one source image or native "
+                                  "sample set");
         }
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(uploadCommand->descriptor.dataWindow(), bytes)) {
@@ -198,6 +199,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheKey = uploadCommand->semanticKey;
         step.cacheOnComplete = true;
         step.uploadSource = uploadCommand->image;
+        step.uploadSamples = uploadCommand->samples;
         step.uploadDescriptor = uploadCommand->descriptor;
         steps.push_back(std::move(step));
         color[index] = 2;

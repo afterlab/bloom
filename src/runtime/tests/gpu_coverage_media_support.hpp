@@ -9,6 +9,7 @@
 #include "cryptomatte_fixture_support.hpp"
 #include "gpu_coverage_fixture_support.hpp"
 
+#include <Imath/half.h>
 #include <ImathBox.h>
 #include <ImfChannelList.h>
 #include <ImfChromaticitiesAttribute.h>
@@ -21,6 +22,7 @@
 #include <bloom/document/asset.hpp>
 #include <bloom/media/image.hpp>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -127,6 +129,138 @@ struct ImageFixture final {
         value.asset.height = probe.value->height;
         value.asset.name = "signed_hdr";
         return value;
+    }();
+    return fixture;
+}
+
+// #422 native-sample stills. An image probed through production for an asset of `rawId`.
+[[nodiscard]] inline ImageFixture probedImageFixture(const std::filesystem::path& path,
+                                                     const std::uint64_t rawId,
+                                                     const std::string& name) {
+    const auto probe = bloom::media::probeImage(path);
+    if (!probe.value.has_value()) {
+        throw std::logic_error("synthetic image could not be probed: " + probe.diagnostic);
+    }
+    ImageFixture value;
+    value.path = path;
+    value.asset.id = bloom::document::AssetId::fromRaw(rawId);
+    value.asset.kind = bloom::document::AssetKind::Image;
+    value.asset.locator.kind = "file";
+    value.asset.locator.portability = "project-relative";
+    value.asset.locator.path = path.filename().string();
+    value.asset.locator.relinkHint = "file:" + path.string();
+    value.asset.contentDigest = probe.value->contentDigest;
+    value.asset.interpretation.colorSpace = bloom::document::AssetColorSpace::Auto;
+    value.asset.width = probe.value->width;
+    value.asset.height = probe.value->height;
+    value.asset.name = name;
+    return value;
+}
+
+// The signed/HDR pixels as an all-HALF OpenEXR: its colour layer crosses to the device as binary16
+// samples and SampleConvertV1 widens them.
+[[nodiscard]] inline const ImageFixture& halfExrImage() {
+    static const ImageFixture fixture = [] {
+        std::filesystem::create_directories(gateDirectory());
+        const auto path = gateDirectory() / "signed_hdr_half.exr";
+        const auto pixels = signedHdrPixels();
+        const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(2, 1));
+        Imf::Header header(window, window);
+        header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+        header.insert("alphaAssociation", Imf::StringAttribute("premultiplied"));
+        std::array<std::vector<Imath::half>, 4> lanes;
+        Imf::FrameBuffer frameBuffer;
+        constexpr std::array<const char*, 4> kNames{"R", "G", "B", "A"};
+        for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+            header.channels().insert(kNames[lane], Imf::Channel(Imf::HALF));
+            for (const auto& pixel : pixels)
+                lanes[lane].emplace_back(lane == 0   ? pixel.red
+                                         : lane == 1 ? pixel.green
+                                         : lane == 2 ? pixel.blue
+                                                     : pixel.alpha);
+            frameBuffer.insert(kNames[lane],
+                               Imf::Slice(Imf::HALF, reinterpret_cast<char*>(lanes[lane].data()),
+                                          sizeof(Imath::half), 3 * sizeof(Imath::half)));
+        }
+        {
+            // The file is complete only once the writer is destroyed.
+            Imf::OutputFile file(path.string().c_str(), header);
+            file.setFrameBuffer(frameBuffer);
+            file.writePixels(2);
+        }
+        return probedImageFixture(path, 905, "signed_hdr_half");
+    }();
+    return fixture;
+}
+
+// A 16-bit RGBA PNG (sRGB, straight alpha with transparent and opaque pixels), written with stored
+// deflate blocks so the fixture needs no compressor. Its samples cross as 16-bit RGBA.
+[[nodiscard]] inline const ImageFixture& png16Image() {
+    static const ImageFixture fixture = [] {
+        std::filesystem::create_directories(gateDirectory());
+        const auto path = gateDirectory() / "straight_rgba16.png";
+        constexpr std::uint32_t width = 5;
+        constexpr std::uint32_t height = 3;
+        std::vector<unsigned char> raw;
+        for (std::uint32_t y = 0; y < height; ++y) {
+            raw.push_back(0);
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const std::array<std::uint16_t, 4> rgba{
+                    static_cast<std::uint16_t>(4099U * (x + 1U) + 977U * y),
+                    static_cast<std::uint16_t>(65535U - 6151U * x - 3001U * y),
+                    static_cast<std::uint16_t>(12289U * y + 513U),
+                    static_cast<std::uint16_t>(x == 0 ? 0U : x == 4 ? 65535U : 16411U * x + y)};
+                for (const auto value : rgba) {
+                    raw.push_back(static_cast<unsigned char>(value >> 8U));
+                    raw.push_back(static_cast<unsigned char>(value & 0xFFU));
+                }
+            }
+        }
+        const auto crc32 = [](const std::vector<unsigned char>& bytes) {
+            std::uint32_t crc = 0xFFFFFFFFU;
+            for (const auto byte : bytes) {
+                crc ^= byte;
+                for (int bit = 0; bit < 8; ++bit)
+                    crc = (crc >> 1U) ^ (0xEDB88320U & (0U - (crc & 1U)));
+            }
+            return crc ^ 0xFFFFFFFFU;
+        };
+        const auto be32 = [](std::vector<unsigned char>& out, const std::uint32_t value) {
+            for (const unsigned shift : {24U, 16U, 8U, 0U})
+                out.push_back(static_cast<unsigned char>((value >> shift) & 0xFFU));
+        };
+        std::vector<unsigned char> zlib{0x78, 0x01, 0x01};
+        zlib.push_back(static_cast<unsigned char>(raw.size() & 0xFFU));
+        zlib.push_back(static_cast<unsigned char>(raw.size() >> 8U));
+        zlib.push_back(static_cast<unsigned char>(~raw.size() & 0xFFU));
+        zlib.push_back(static_cast<unsigned char>((~raw.size() >> 8U) & 0xFFU));
+        zlib.insert(zlib.end(), raw.begin(), raw.end());
+        std::uint32_t a = 1, b = 0;
+        for (const auto byte : raw) {
+            a = (a + byte) % 65521U;
+            b = (b + a) % 65521U;
+        }
+        be32(zlib, (b << 16U) | a);
+        std::vector<unsigned char> png{137, 80, 78, 71, 13, 10, 26, 10};
+        const auto chunk = [&](const char* type, const std::vector<unsigned char>& data) {
+            be32(png, static_cast<std::uint32_t>(data.size()));
+            std::vector<unsigned char> body(type, type + 4);
+            body.insert(body.end(), data.begin(), data.end());
+            png.insert(png.end(), body.begin(), body.end());
+            be32(png, crc32(body));
+        };
+        std::vector<unsigned char> header;
+        be32(header, width);
+        be32(header, height);
+        header.insert(header.end(), {16, 6, 0, 0, 0});
+        chunk("IHDR", header);
+        chunk("IDAT", zlib);
+        chunk("IEND", {});
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(png.data()),
+                   static_cast<std::streamsize>(png.size()));
+        file.close();
+        return probedImageFixture(path, 906, "straight_rgba16");
     }();
     return fixture;
 }

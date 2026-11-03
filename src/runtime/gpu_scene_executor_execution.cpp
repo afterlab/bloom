@@ -333,7 +333,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
         break;
     }
     case GpuSceneExecutorStepKind::Upload: {
-        if (step.uploadSource == nullptr) {
+        if (step.uploadSource == nullptr && step.uploadSamples == nullptr) {
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "an upload step has no converted source before dispatch");
         }
@@ -498,6 +498,7 @@ render::GpuImageUploadParameters
 GpuSceneExecutor::Impl::uploadParameters(const GpuSceneExecutorStep& step) const {
     render::GpuImageUploadParameters parameters{
         step.uploadSource, device->retainedProcessingPhase(), step.uploadDescriptor};
+    parameters.samples = step.uploadSamples;
     // Staging reuse across this scene's uploads; clearJob()/finishReady() release the spare.
     parameters.reuseStagingWithinScene = true;
     if (auto* const copyPool = budgets.uploadCopyExecutor; copyPool != nullptr)

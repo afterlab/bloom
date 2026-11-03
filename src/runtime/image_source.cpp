@@ -438,6 +438,22 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
     return resampled;
 }
 
+namespace {
+
+media::ImageInterpretation rawImageInterpretation(const ImageSourceSelection& selected) {
+    media::ImageInterpretation rawInterpretation;
+    rawInterpretation.colorSpace = media::ImageColorSpace::Raw;
+    rawInterpretation.inputColorSpaceId = {};
+    rawInterpretation.alphaAssociation = selected.interpretation.alphaAssociation;
+    // #381: the footage pass reads the file's stored samples.
+    rawInterpretation.storedSamples = selected.footagePass.has_value();
+    rawInterpretation.part = selected.interpretation.part;
+    rawInterpretation.layer = selected.interpretation.layer;
+    return rawInterpretation;
+}
+
+} // namespace
+
 media::ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t budget,
                      const CancellationToken& cancel,
@@ -448,19 +464,27 @@ decodeRawImageSource(const ImageSourceSelection& selected, const std::size_t bud
         return {{}, selected.warning};
     if (selected.missingFrame)
         return missingFrameImage(budget);
-    media::ImageInterpretation rawInterpretation;
-    rawInterpretation.colorSpace = media::ImageColorSpace::Raw;
-    rawInterpretation.inputColorSpaceId = {};
-    rawInterpretation.alphaAssociation = selected.interpretation.alphaAssociation;
-    // #381: the footage pass reads the file's stored samples.
-    rawInterpretation.storedSamples = selected.footagePass.has_value();
-    rawInterpretation.part = selected.interpretation.part;
-    rawInterpretation.layer = selected.interpretation.layer;
     if (!selected.sourceRevision)
         return {{}, "Image selection has no immutable source revision"};
     return media::decodeImage(
-        *selected.sourceRevision, rawInterpretation, {},
+        *selected.sourceRevision, rawImageInterpretation(selected), {},
         [&cancel] { return cancel.isCancellationRequested(); }, {}, budget, decodeStatistics);
+}
+
+media::ImageResult<std::shared_ptr<const render::NativeSampleImage>>
+decodeRawImageSamples(const ImageSourceSelection& selected, const std::size_t budget,
+                      const CancellationToken& cancel,
+                      media::ImageDecodeStatistics* decodeStatistics) {
+    if (decodeStatistics)
+        *decodeStatistics = {};
+    if (!selected.available)
+        return {{}, selected.warning};
+    if (selected.missingFrame || !selected.sourceRevision)
+        return {{}, "The selection has no decoded native samples", false,
+                media::ImageDiagnosticCode::NativeSamplesUnavailable};
+    return media::decodeImageSamples(
+        *selected.sourceRevision, rawImageInterpretation(selected),
+        [&cancel] { return cancel.isCancellationRequested(); }, budget, decodeStatistics);
 }
 
 std::optional<render::ImageWindow>

@@ -41,6 +41,7 @@
 
 namespace bloom::render {
 class Rgba32fImage;
+class NativeSampleImage;
 } // namespace bloom::render
 
 namespace bloom::runtime {
@@ -54,10 +55,16 @@ class GpuSceneBuildUploads final {
   public:
     [[nodiscard]] std::shared_ptr<const render::Rgba32fImage> find(const std::string& key) const;
     void share(const std::string& key, std::shared_ptr<const render::Rgba32fImage> image);
+    // #422: decoded native samples, shared the same way.
+    [[nodiscard]] std::shared_ptr<const render::NativeSampleImage>
+    findSamples(const std::string& key) const;
+    void shareSamples(const std::string& key,
+                      std::shared_ptr<const render::NativeSampleImage> samples);
 
   private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<const render::Rgba32fImage>> images_;
+    std::unordered_map<std::string, std::shared_ptr<const render::NativeSampleImage>> samples_;
 };
 
 } // namespace bloom::runtime
@@ -98,7 +105,10 @@ struct MediaCryptomattePlan final {
 };
 
 struct MediaUploadOutcome final {
+    // Exactly one of `image` and `samples` (#422: the decoded samples in their native layout,
+    // converted to RGBA32F on the device by SampleConvertV1) carries the upload's host pixels.
     std::shared_ptr<const render::Rgba32fImage> image;
+    std::shared_ptr<const render::NativeSampleImage> samples;
     // Request geometry for the upload command. Raw source storage keeps its native descriptor;
     // this value supplies the composition display/PAR without copying its pixels.
     std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
@@ -136,12 +146,12 @@ prepareVideoUpload(const CompiledVideoSource& source, const EvaluationRequest& r
                    bool explicitBypass, bool planBypass, const CancellationToken& cancellation,
                    GpuSceneMediaStatistics& statistics);
 
-// The bounded media-source GPU colour path for a still image. When the resolved input colour space
-// equals the working colour space (or the source has no conversion), this is the exact connected
-// path and `program` is null. Otherwise it decodes the source RAW -- no OCIO colour pass and no
-// proxy resample hidden in host preparation -- applies the CPU's exact nearest proxy resample to
-// the raw bytes, uploads the result under the decode-only identity, and prepares the real
-// input->working OCIO ProcessEffect command through `ocioContext.preparer`.
+// The bounded media-source GPU colour path for a still image. It decodes the source RAW -- no OCIO
+// colour pass and no proxy resample hidden in host preparation -- and uploads it under the
+// decode-only identity: a PNG, JPEG or all-half OpenEXR still as its native samples (#422), which
+// SampleConvertV1 widens on the device, any other still as its raw RGBA32F decode. A fractional
+// proxy is the native PointResampleV1 over the upload, and a non-identity input->working transform
+// the real OCIO ProcessEffect command prepared through `ocioContext.preparer`.
 //
 // A null `ocioContext.preparer` for a non-identity transform fails closed (Unsupported) so the
 // caller keeps the CPU reference path; it is never substituted with identity.
@@ -177,10 +187,10 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
                        bool explicitBypass, bool planBypass, const CancellationToken& cancellation,
                        GpuSceneMediaStatistics& statistics);
 
-// The VideoSource twin of prepareImageColorLeaf. Video's YUV->RGB transfer/primaries conversion is
-// codec-side plane conversion and stays host preparation; the resolved config OCIO processor is the
-// colour pass. Until the codec-side split lands (see work-result.md) a non-identity video transform
-// fails closed rather than hiding the OCIO pass in host code and calling it GPU.
+// The VideoSource twin of prepareImageColorLeaf. The decoded planes cross as native samples
+// (#422): SampleConvertV1 applies the YUV matrix, range and bit-depth expansion on the device, and
+// the resolved config OCIO processor is the GPU colour pass after it. Host preparation is the
+// worker's decode only.
 [[nodiscard]] MediaUploadOutcome
 prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest& request,
                       const CompiledCompositionPlan& plan, const ResolvedEvaluation& resolved,

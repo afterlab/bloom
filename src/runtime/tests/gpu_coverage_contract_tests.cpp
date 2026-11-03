@@ -702,6 +702,77 @@ displayProofRunner(const bool customView) {
             }
         },
         {}, FixturePrerequisite::MediaFixtures);
+    // #422: one fixture per decoded native-sample layout. Each is prepared by the production
+    // builder on the GPU colour route, must upload that layout's samples (never a host float
+    // frame), and the native gate executes it and compares it with the CPU oracle.
+    const auto nativeSamples = [&add](const bloom::render::NativeSampleLayout layout,
+                                      std::function<FixtureRun()> run,
+                                      const FixturePrerequisite prerequisite) {
+        add(std::string{"feature.media.native_samples."} +
+                std::string{bloom::render::nativeSampleLayoutName(layout)},
+            GpuCoverageFixtureCriterion::Prepared,
+            "src/render SampleConvertV1 parity + production media preparation",
+            [layout, run = std::move(run)] {
+                auto result = run();
+                if (!result.prepared)
+                    return result;
+                for (const auto& frame : result.frames) {
+                    bool native = false;
+                    for (const auto& command : frame.scene->commands())
+                        if (const auto* upload =
+                                std::get_if<bloom::runtime::GpuSceneUploadCommand>(&command))
+                            native = native ||
+                                     (upload->image == nullptr && upload->samples != nullptr &&
+                                      upload->samples->conversion().layout == layout);
+                    if (!native) {
+                        result.prepared = false;
+                        result.evidence = "the prepared scene uploads no " +
+                                          std::string{bloom::render::nativeSampleLayoutName(layout)} +
+                                          " native samples";
+                        return result;
+                    }
+                }
+                result.evidence += " (native " +
+                                   std::string{bloom::render::nativeSampleLayoutName(layout)} +
+                                   " upload)";
+                return result;
+            },
+            {}, prerequisite);
+    };
+    const auto nativeVideo = [](const std::string& name, const std::uint64_t rawId,
+                                const std::uint64_t idBase) {
+        return [name, rawId, idBase] {
+            try {
+                return runVideoFixture(bloom::gpu_coverage_video::probeVideoFixture(name, rawId),
+                                       idBase);
+            } catch (const std::exception& error) {
+                FixtureRun result;
+                result.evidence = error.what();
+                return result;
+            }
+        };
+    };
+    const auto nativeStill = [](const bloom::gpu_coverage_media::ImageFixture& (*image)(),
+                                const std::uint64_t idBase) {
+        return [image, idBase] {
+            const bloom::runtime::CpuCompositionEvaluator evaluator;
+            const auto plan = bloom::gpu_coverage_media::imageSourcePlan(
+                image().asset, LayerValues{.position = {2.3, 1.1}, .opacity = 1.0}, idBase);
+            return runMediaBuilder(plan, evaluator, bloom::gpu_coverage_media::gateDirectory());
+        };
+    };
+    nativeSamples(bloom::render::NativeSampleLayout::Yuv420p8,
+                  nativeVideo("numbered-h264.mp4", 910, 115000),
+                  FixturePrerequisite::MediaFixturesAndShaderTools);
+    nativeSamples(bloom::render::NativeSampleLayout::Yuva444p16,
+                  nativeVideo("alpha-prores.mov", 911, 115300),
+                  FixturePrerequisite::MediaFixturesAndShaderTools);
+    nativeSamples(bloom::render::NativeSampleLayout::Rgba16,
+                  nativeStill(&bloom::gpu_coverage_media::png16Image, 115600),
+                  FixturePrerequisite::PackagedShaderTools);
+    nativeSamples(bloom::render::NativeSampleLayout::RgbaHalf,
+                  nativeStill(&bloom::gpu_coverage_media::halfExrImage, 115700),
+                  FixturePrerequisite::PackagedShaderTools);
     add("node.bloom.text-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
         [] { return runBuilder(withSource(text(105000), 105000, nullptr, 0.6)); });
@@ -1078,7 +1149,9 @@ int run(int argc, char** argv) {
             continue;
         }
         if (execution == FixtureExecution::PrerequisiteNotRun) {
-            if (fixture.prerequisite == FixturePrerequisite::MediaFixtures) {
+            if (fixture.prerequisite == FixturePrerequisite::MediaFixtures ||
+                (fixture.prerequisite == FixturePrerequisite::MediaFixturesAndShaderTools &&
+                 !prerequisiteAvailability.mediaFixtures)) {
                 std::cout << "NOTRUN(media) " << fixture.id
                           << " (generated media fixtures not supplied)\n";
                 ++mediaNotRun;

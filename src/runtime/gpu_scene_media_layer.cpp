@@ -6,6 +6,7 @@
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/render/native_samples.hpp>
 
 #include <cstddef>
 
@@ -29,13 +30,17 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
         result.noColourLayer = true;
         return std::nullopt;
     }
-    if (!outcome.failure.empty() || outcome.image == nullptr ||
-        outcome.image->descriptor() == nullptr) {
+    // #422: a leaf uploads either a host RGBA32F image or native samples SampleConvertV1 widens on
+    // the device, never both.
+    const bool hasImage = outcome.image != nullptr && outcome.image->descriptor() != nullptr;
+    const bool hasSamples = outcome.samples != nullptr;
+    if (!outcome.failure.empty() || hasImage == hasSamples) {
         return GpuSceneLeafFailure{outcome.failureCode,
                                    outcome.failure.empty() ? "Media source could not be prepared"
                                                            : outcome.failure};
     }
-    const auto descriptor = outcome.uploadDescriptor.value_or(*outcome.image->descriptor());
+    const auto descriptor = outcome.uploadDescriptor.value_or(
+        hasImage ? *outcome.image->descriptor() : outcome.samples->descriptor());
     // The layer transform samples the PROXY image the media source publishes, exactly as the CPU
     // evaluator does: under a fractional proxy the leaf's output window is the point-resample
     // output, not the full-resolution raw upload. At unit scale the two are identical.
@@ -47,10 +52,13 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     result.bounds.output = result.bounds.local;
     result.outputWindow = leafWindow;
     if (const auto error =
-            chargeBytes(outcome.image->pixels().data(), outcome.image->pixelStorageByteCost())) {
+            hasImage
+                ? chargeBytes(outcome.image->pixels().data(), outcome.image->pixelStorageByteCost())
+                : chargeBytes(outcome.samples->backingIdentity(), outcome.samples->byteCount())) {
         return error;
     }
     result.image = outcome.image;
+    result.samples = outcome.samples;
     result.descriptor = descriptor;
     result.semanticKey = outcome.semanticKey;
     result.uploadSemanticKey =

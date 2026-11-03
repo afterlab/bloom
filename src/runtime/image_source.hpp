@@ -129,6 +129,15 @@ decodeRawImageSource(const ImageSourceSelection& selection, std::size_t budget,
                      const CancellationToken& cancel,
                      media::ImageDecodeStatistics* decodeStatistics = nullptr);
 
+// #422: the same raw decode in its native sample layout (a PNG or JPEG's 16-bit RGBA, an
+// all-half OpenEXR layer's binary16 RGBA) for SampleConvertV1 to widen on the device;
+// render::convertNativeSamples() of the result equals decodeRawImageSource(). A missing sequence
+// frame, TIFF or a FLOAT/UINT OpenEXR layer returns NativeSamplesUnavailable.
+[[nodiscard]] media::ImageResult<std::shared_ptr<const render::NativeSampleImage>>
+decodeRawImageSamples(const ImageSourceSelection& selection, std::size_t budget,
+                      const CancellationToken& cancel,
+                      media::ImageDecodeStatistics* decodeStatistics = nullptr);
+
 // Rebase a decoded image into the evaluator's composition descriptor: its data window keeps its
 // offset inside the source frame (OpenEXR display window), scaled by the shared PointResampleV1
 // window rule, with the composition display window and pixel aspect. At unit scale this is the

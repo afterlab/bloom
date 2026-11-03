@@ -104,6 +104,9 @@ struct GpuSceneExecutorStep final {
     // for the job lifetime so the staging copy and any unretired submission keep their source
     // alive.
     std::shared_ptr<const render::Rgba32fImage> uploadSource;
+    // #422: or the native samples SampleConvertV1 converts on the device (exactly one is set),
+    // retained the same way.
+    std::shared_ptr<const render::NativeSampleImage> uploadSamples;
     std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
     // Translation output data window plus GPU-local translation and opacity.
     std::optional<render::ImageWindow> outputWindow;

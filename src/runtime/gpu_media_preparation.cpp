@@ -16,9 +16,11 @@
 #include <bloom/media/video/colour.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/render/native_samples.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <new>
@@ -56,10 +58,40 @@ void GpuSceneBuildUploads::share(const std::string& key,
     }
 }
 
+std::shared_ptr<const render::NativeSampleImage>
+GpuSceneBuildUploads::findSamples(const std::string& key) const {
+    const std::lock_guard lock(mutex_);
+    const auto found = samples_.find(key);
+    return found == samples_.end() ? nullptr : found->second;
+}
+
+void GpuSceneBuildUploads::shareSamples(const std::string& key,
+                                        std::shared_ptr<const render::NativeSampleImage> samples) {
+    if (!samples)
+        return;
+    try {
+        const std::lock_guard lock(mutex_);
+        samples_.try_emplace(key, std::move(samples));
+    } catch (const std::bad_alloc&) {
+        // Sharing is an optimization inside one build; a later leaf decodes its own samples.
+    }
+}
+
 } // namespace bloom::runtime
 
 namespace bloom::runtime::detail {
 namespace {
+
+[[nodiscard]] std::shared_ptr<const render::NativeSampleImage>
+findSharedSamples(const GpuSceneMediaContext& context, const std::string& key) {
+    return context.buildUploads ? context.buildUploads->findSamples(key) : nullptr;
+}
+
+void shareSamples(const GpuSceneMediaContext& context, const std::string& key,
+                  const std::shared_ptr<const render::NativeSampleImage>& samples) {
+    if (context.buildUploads)
+        context.buildUploads->shareSamples(key, samples);
+}
 
 [[nodiscard]] std::shared_ptr<const render::Rgba32fImage>
 findSharedUpload(const GpuSceneMediaContext& context, const std::string& key) {
@@ -231,15 +263,12 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
 // composition display window and pixel aspect. Both the unit-scale and proxy cases keep this
 // full-resolution data window.
 [[nodiscard]] std::optional<render::Rgba32fImageDescriptor>
-rawUploadDescriptor(const render::Rgba32fImage& source,
+rawUploadDescriptor(const render::Rgba32fImageDescriptor& source,
                     const render::Rgba32fImageDescriptor& composition, const bool framed) {
-    if (source.descriptor() == nullptr) {
-        return std::nullopt;
-    }
     // A still image keeps its data window's offset inside the source frame
     // (frameRelativeDataWindow); a video frame is always a (0,0)-origin frame.
-    const auto data = source.descriptor()->dataWindow();
-    const auto window = framed ? frameRelativeDataWindow(*source.descriptor())
+    const auto data = source.dataWindow();
+    const auto window = framed ? frameRelativeDataWindow(source)
                                : [&]() -> std::optional<render::ImageWindow> {
         auto created =
             render::ImageWindow::create(0, 0, data.extent().width(), data.extent().height());
@@ -256,6 +285,40 @@ rawUploadDescriptor(const render::Rgba32fImage& source,
         return std::nullopt;
     }
     return *descriptor.value();
+}
+
+[[nodiscard]] std::optional<render::Rgba32fImageDescriptor>
+rawUploadDescriptor(const render::Rgba32fImage& source,
+                    const render::Rgba32fImageDescriptor& composition, const bool framed) {
+    if (source.descriptor() == nullptr) {
+        return std::nullopt;
+    }
+    return rawUploadDescriptor(*source.descriptor(), composition, framed);
+}
+
+// #422: the backing identity of native samples. The decode-only identity plus every
+// SampleConvertV1 parameter and the kernel digest, so two interpretations of one decoded frame (or
+// a changed kernel) never share a converted resident.
+[[nodiscard]] std::string nativeSampleUploadKey(const std::string_view kind,
+                                                const std::string& decodeKey,
+                                                const render::NativeSampleImage& samples) {
+    const auto& conversion = samples.conversion();
+    OperationKey key;
+    key.add(std::string{"gpu-native-sample-upload-v1"});
+    key.add(std::string{kind});
+    key.add(decodeKey);
+    key.add(std::string{render::sampleConvertKernelDigest()});
+    key.add(conversion.layout);
+    key.add(conversion.alpha);
+    key.add(conversion.storedSamples);
+    key.add(conversion.limitedRange);
+    key.add(conversion.transfer);
+    for (const float coefficient : {conversion.redFromCr, conversion.greenFromCb,
+                                    conversion.greenFromCr, conversion.blueFromCb})
+        key.add(std::bit_cast<std::uint32_t>(coefficient));
+    key.add(conversion.luminance);
+    key.add(conversion.hasAlpha);
+    return key.digest();
 }
 
 // The proxy output descriptor: the shared PointResampleV1 proxy window of the positioned raw
@@ -616,56 +679,107 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     // pixel-identical with no host per-pixel resampling.
     MediaUploadOutcome outcome;
     outcome.frameBounds = imageSourceFrameBounds(selection);
-    const auto backingKey = rawDecodeUploadKey("image-raw", selection.decodeKey);
+    // #422: a PNG, JPEG or all-half OpenEXR still crosses as its native samples and
+    // SampleConvertV1 widens it on the device; any other still (TIFF, a FLOAT or UINT OpenEXR
+    // layer, a missing sequence frame) uploads its raw RGBA32F decode.
+    const auto samplesKey = rawDecodeUploadKey("image-samples", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
-    outcome.image = findSharedUpload(context, backingKey);
-    if (outcome.image == nullptr) {
+    outcome.samples = findSharedSamples(context, samplesKey);
+    if (outcome.samples == nullptr && !selection.missingFrame) {
         if (pixelBudget == 0) {
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
             outcome.failure = "A new raw image backing exceeds the remaining source allowance";
             return outcome;
         }
-        // RAW decode: no processor, no implicit conversion, no resample. File decode stays host
-        // preparation; the OCIO colour pass is the GPU command prepared below.
         media::ImageDecodeStatistics decodeStatistics;
-        auto decoded = decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation,
+        auto native = decodeRawImageSamples(selection, byteBudget(pixelBudget), cancellation,
                                             &decodeStatistics);
         addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
         addMediaWork(statistics.imageRepairedPixels, decodeStatistics.repairedPixels);
-        ++statistics.imageConversions;
-        if (decoded.cancelled) {
+        if (native.cancelled) {
+            ++statistics.imageConversions;
             outcome.cancelled = true;
             return outcome;
         }
-        if (!decoded.value.has_value() &&
-            decoded.code == media::ImageDiagnosticCode::NoColourChannels) {
+        if (native.value.has_value()) {
+            ++statistics.imageConversions;
+            outcome.samples = std::move(*native.value);
+            outcome.converted = true;
+            shareSamples(context, samplesKey, outcome.samples);
+        } else if (native.code == media::ImageDiagnosticCode::NoColourChannels) {
+            ++statistics.imageConversions;
             outcome.noColourLayer = true;
             ++statistics.imageNoColourLayerSources;
             return outcome;
-        }
-        if (!decoded.value.has_value()) {
-            if (decoded.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+        } else if (native.code != media::ImageDiagnosticCode::NativeSamplesUnavailable) {
+            ++statistics.imageConversions;
+            if (native.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
                 outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
-            outcome.failure = decoded.diagnostic.empty() ? "Image source could not be decoded"
-                                                         : decoded.diagnostic;
+            outcome.failure = native.diagnostic.empty() ? "Image source could not be decoded"
+                                                        : native.diagnostic;
             return outcome;
         }
-        // Keep the decoded allocation itself. The request descriptor is attached to the upload
-        // command below; rebasing it here would copy every source pixel only to change metadata.
-        outcome.image = std::move(*decoded.value);
-        outcome.converted = true;
-        shareUpload(context, backingKey, outcome.image);
     }
-    if (outcome.image->descriptor() == nullptr) {
-        outcome.failure = "Raw image upload has no descriptor";
-        outcome.image.reset();
-        return outcome;
+    std::string backingKey;
+    std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
+    if (outcome.samples != nullptr) {
+        backingKey = nativeSampleUploadKey("image", selection.decodeKey, *outcome.samples);
+        uploadDescriptor =
+            rawUploadDescriptor(outcome.samples->descriptor(), resolved.imageDescriptor, true);
+    } else {
+        backingKey = rawDecodeUploadKey("image-raw", selection.decodeKey);
+        ++statistics.uploadKeyConstructions;
+        outcome.image = findSharedUpload(context, backingKey);
+        if (outcome.image == nullptr) {
+            if (pixelBudget == 0) {
+                outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+                outcome.failure = "A new raw image backing exceeds the remaining source allowance";
+                return outcome;
+            }
+            // RAW decode: no processor, no implicit conversion, no resample. File decode stays
+            // host preparation; the OCIO colour pass is the GPU command prepared below.
+            media::ImageDecodeStatistics decodeStatistics;
+            auto decoded = decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation,
+                                                &decodeStatistics);
+            addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
+            addMediaWork(statistics.imageRepairedPixels, decodeStatistics.repairedPixels);
+            ++statistics.imageConversions;
+            if (decoded.cancelled) {
+                outcome.cancelled = true;
+                return outcome;
+            }
+            if (!decoded.value.has_value() &&
+                decoded.code == media::ImageDiagnosticCode::NoColourChannels) {
+                outcome.noColourLayer = true;
+                ++statistics.imageNoColourLayerSources;
+                return outcome;
+            }
+            if (!decoded.value.has_value()) {
+                if (decoded.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
+                    outcome.failureCode =
+                        PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+                outcome.failure = decoded.diagnostic.empty() ? "Image source could not be decoded"
+                                                             : decoded.diagnostic;
+                return outcome;
+            }
+            // Keep the decoded allocation itself. The request descriptor is attached to the
+            // upload command below; rebasing it here would copy every source pixel only to change
+            // metadata.
+            outcome.image = std::move(*decoded.value);
+            outcome.converted = true;
+            shareUpload(context, backingKey, outcome.image);
+        }
+        if (outcome.image->descriptor() == nullptr) {
+            outcome.failure = "Raw image upload has no descriptor";
+            outcome.image.reset();
+            return outcome;
+        }
+        uploadDescriptor = rawUploadDescriptor(*outcome.image, resolved.imageDescriptor, true);
     }
-    const auto uploadDescriptor =
-        rawUploadDescriptor(*outcome.image, resolved.imageDescriptor, true);
     if (!uploadDescriptor) {
         outcome.failure = "Raw image upload descriptor is invalid";
         outcome.image.reset();
+        outcome.samples.reset();
         return outcome;
     }
     outcome.uploadDescriptor = *uploadDescriptor;
@@ -1025,52 +1139,54 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
             return outcome;
         }
     }
-    // The host does only the codec-side YUV matrix/range and the config-managed transfer-8 path (no
-    // curve) into the source's pre-OCIO state; a non-identity transform then runs the OCIO CST on
-    // the GPU. The raw frame stays at source resolution; under a fractional proxy the
-    // PointResampleV1 command gathers it on the GPU before the (optional) OCIO transform. An
-    // identity transform is the same raw frame with no OCIO pass, never treated as raw codec data.
-    const auto backingKey = rawDecodeUploadKey("video-raw", selection.decodeKey);
+    // #422: the host does no pixel work. The decoded frame's planes cross in their native layout
+    // (8-bit 4:2:0, 16-bit 4:4:4:4 YUVA or 16-bit RGBA) and SampleConvertV1 applies the codec-side
+    // YUV matrix/range, bit-depth expansion and the config-managed transfer-8 path (no curve) on
+    // the device, producing the source's premultiplied pre-OCIO state (or, for a footage pass, its
+    // stored samples) exactly as the CPU reference does. A non-identity transform then runs the
+    // OCIO CST on the GPU. The frame stays at source resolution; under a fractional proxy the
+    // PointResampleV1 command gathers it on the GPU before the (optional) OCIO transform.
+    if (selection.frame->planes.empty()) {
+        outcome.failure = "Raw video frame has no source plane";
+        return outcome;
+    }
+    const auto sourceWindow = render::ImageWindow::create(0, 0, selection.frame->planes[0].width,
+                                                          selection.frame->planes[0].height);
+    if (!sourceWindow) {
+        outcome.failure = "Raw video source descriptor is invalid";
+        return outcome;
+    }
+    const auto sourceDescriptor = render::Rgba32fImageDescriptor::create(
+        *sourceWindow.value(), *sourceWindow.value(), core::PixelAspectRatio::square());
+    if (!sourceDescriptor) {
+        outcome.failure = "Raw video source descriptor is invalid";
+        return outcome;
+    }
+    // The converted working image is the same full-resolution RGBA32F image the host conversion
+    // produced, so it is admitted against the same allowance.
+    const auto convertedBytes = static_cast<std::uint64_t>(sourceWindow.value()->extent().width()) *
+                                sourceWindow.value()->extent().height() * sizeof(render::Rgba32f);
+    if (convertedBytes > byteBudget(pixelBudget)) {
+        outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
+        outcome.failure = "The converted video frame exceeds the remaining source allowance";
+        return outcome;
+    }
+    const auto samplesKey = rawDecodeUploadKey("video-samples", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
-    outcome.image = findSharedUpload(context, backingKey);
-    if (outcome.image == nullptr) {
-        // Codec-side preparation only: no OCIO processor runs here. The output is premultiplied
-        // pre-OCIO RGB at the full frame resolution, exactly the CPU's pre-OCIO state.
-        if (selection.frame->planes.empty()) {
-            outcome.failure = "Raw video frame has no source plane";
-            return outcome;
-        }
-        const auto sourceWindow = render::ImageWindow::create(
-            0, 0, selection.frame->planes[0].width, selection.frame->planes[0].height);
-        if (!sourceWindow) {
-            outcome.failure = "Raw video source descriptor is invalid";
-            return outcome;
-        }
-        const auto sourceDescriptor = render::Rgba32fImageDescriptor::create(
-            *sourceWindow.value(), *sourceWindow.value(), core::PixelAspectRatio::square());
-        if (!sourceDescriptor) {
-            outcome.failure = "Raw video source descriptor is invalid";
+    outcome.samples = findSharedSamples(context, samplesKey);
+    if (outcome.samples == nullptr) {
+        if (cancellation.isCancellationRequested()) {
+            outcome.cancelled = true;
             return outcome;
         }
         // #381: a footage pass starts from the stored samples (not premultiplied).
-        core::telemetry::StageTimer convertTime(core::telemetry::Stage::ColourConvert);
-        auto prepared =
-            selection.footagePass
-                ? media::video::videoToStoredSamples(
-                      *selection.frame, selection.interpretation,
-                      selection.inputProcessor ? std::string_view(selection.inputColorSpaceId)
-                                               : std::string_view{},
-                      *sourceDescriptor.value(), byteBudget(pixelBudget),
-                      [&cancellation] { return cancellation.isCancellationRequested(); })
-                : media::video::videoToInputColorSpace(
-                      *selection.frame, selection.interpretation, selection.inputColorSpaceId,
-                      *sourceDescriptor.value(), 1.0, 1.0, byteBudget(pixelBudget),
-                      [&cancellation] { return cancellation.isCancellationRequested(); });
+        auto prepared = media::video::videoNativeSamples(
+            selection.frame, selection.interpretation,
+            !selection.footagePass || selection.inputProcessor
+                ? std::string_view(selection.inputColorSpaceId)
+                : std::string_view{},
+            *sourceDescriptor.value(), selection.footagePass.has_value());
         ++statistics.videoConversions;
-        if (std::holds_alternative<media::provider::Unavailable>(prepared))
-            convertTime.cancel();
-        else
-            convertTime.end();
         if (const auto* error = std::get_if<media::provider::Unavailable>(&prepared)) {
             outcome.cancelled = error->reason == media::provider::Error::Cancelled;
             if (!outcome.cancelled) {
@@ -1082,21 +1198,17 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
             }
             return outcome;
         }
-        auto& pixels = std::get<render::Rgba32fImage>(prepared);
-        outcome.image = stagingImage(std::move(pixels));
+        outcome.samples =
+            std::move(std::get<std::shared_ptr<const render::NativeSampleImage>>(prepared));
         outcome.converted = true;
-        shareUpload(context, backingKey, outcome.image);
+        shareSamples(context, samplesKey, outcome.samples);
     }
-    if (outcome.image->descriptor() == nullptr) {
-        outcome.failure = "Raw video upload has no descriptor";
-        outcome.image.reset();
-        return outcome;
-    }
+    const auto backingKey = nativeSampleUploadKey("video", selection.decodeKey, *outcome.samples);
     const auto uploadDescriptor =
-        rawUploadDescriptor(*outcome.image, resolved.imageDescriptor, false);
+        rawUploadDescriptor(outcome.samples->descriptor(), resolved.imageDescriptor, false);
     if (!uploadDescriptor) {
         outcome.failure = "Raw video upload descriptor is invalid";
-        outcome.image.reset();
+        outcome.samples.reset();
         return outcome;
     }
     outcome.uploadDescriptor = *uploadDescriptor;

@@ -21,6 +21,7 @@
 #include <string>
 
 namespace bloom::render {
+class NativeSampleImage;
 class Rgba32fImage;
 } // namespace bloom::render
 
@@ -45,6 +46,9 @@ screenUnsupportedLayers(const CompiledCompositionPlan& plan, const EvaluationReq
 // orchestrator to declare it before filling it.
 struct GpuSceneUploadLeafResult final {
     std::shared_ptr<const render::Rgba32fImage> image;
+    // #422: or the decoded samples in their native layout, converted on the device (exactly one of
+    // `image` and `samples` is set).
+    std::shared_ptr<const render::NativeSampleImage> samples;
     std::optional<render::Rgba32fImageDescriptor> descriptor;
     // The final command key: the OCIO effect identity when `program` is set, otherwise the upload
     // identity. The upload command itself always uses `uploadSemanticKey`.
@@ -108,6 +112,7 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
     GpuSceneUploadCommand upload{.sourceOperation = operationIndex,
                                  .image = std::move(leaf.image),
                                  .descriptor = *leaf.descriptor,
+                                 .samples = std::move(leaf.samples),
                                  .semanticKey = uploadKey};
     GpuSceneCommandIndex current = emit(std::move(upload));
     std::string currentKey = uploadKey;

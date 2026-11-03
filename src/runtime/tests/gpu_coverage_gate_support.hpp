@@ -56,6 +56,9 @@ enum class FixturePrerequisite {
     None,
     PackagedShaderTools,
     MediaFixtures,
+    // A video fixture whose axis runs only on the GPU colour route (#422 native samples): it needs
+    // both the generated media fixtures and the packaged shader tools.
+    MediaFixturesAndShaderTools,
 };
 
 // Environmental availability of the explicit prerequisites. Passed into the classifier so the
@@ -148,6 +151,11 @@ classifyFixtureExecution(const Fixture& fixture, const PrerequisiteAvailability&
             return FixtureExecution::PrerequisiteNotRun;
         }
         break;
+    case FixturePrerequisite::MediaFixturesAndShaderTools:
+        if (!available.mediaFixtures || !available.packagedShaderTools) {
+            return FixtureExecution::PrerequisiteNotRun;
+        }
+        break;
     }
     return FixtureExecution::Run;
 }
@@ -197,6 +205,10 @@ structuralFixtureFailures(const std::vector<Fixture>& list,
     mediaDependent.id = "regression.media-dependent";
     mediaDependent.prerequisite = FixturePrerequisite::MediaFixtures;
 
+    Fixture bothDependent;
+    bothDependent.id = "regression.media-and-tools-dependent";
+    bothDependent.prerequisite = FixturePrerequisite::MediaFixturesAndShaderTools;
+
     Fixture independent;
     independent.id = "regression.independent";
 
@@ -221,6 +233,11 @@ structuralFixtureFailures(const std::vector<Fixture>& list,
         classifyFixtureExecution(mediaDependent, mediaOnly) == FixtureExecution::Run;
     const bool independentRun =
         classifyFixtureExecution(independent, none) == FixtureExecution::Run;
+    const bool bothNeedsBoth =
+        classifyFixtureExecution(bothDependent, mediaOnly) == FixtureExecution::PrerequisiteNotRun &&
+        classifyFixtureExecution(bothDependent, PrerequisiteAvailability{true, false}) ==
+            FixtureExecution::PrerequisiteNotRun &&
+        classifyFixtureExecution(bothDependent, all) == FixtureExecution::Run;
     const auto absentStructural = structuralFixtureFailures(present, required);
     const bool missingStillFails = !absentStructural.empty();
     bool missingNamed = false;
@@ -228,7 +245,8 @@ structuralFixtureFailures(const std::vector<Fixture>& list,
         missingNamed = missingNamed || failure.find("'regression.missing'") != std::string::npos;
     }
     const bool okay = absentToolsSkip && presentToolsRun && absentMediaSkip && presentMediaRun &&
-                      mediaRunsWithoutTools && independentRun && missingStillFails && missingNamed;
+                      mediaRunsWithoutTools && independentRun && bothNeedsBoth &&
+                      missingStillFails && missingNamed;
     evidence =
         okay
             ? "prerequisite decision matrix holds; missing fixture fails with tools absent"
@@ -239,6 +257,7 @@ structuralFixtureFailures(const std::vector<Fixture>& list,
                   ", media-run=" + std::string{presentMediaRun ? "ok" : "bad"} +
                   ", media-tools-independent=" + std::string{mediaRunsWithoutTools ? "ok" : "bad"} +
                   ", independent=" + std::string{independentRun ? "ok" : "bad"} +
+                  ", media-and-tools=" + std::string{bothNeedsBoth ? "ok" : "bad"} +
                   ", missing=" + std::string{missingStillFails && missingNamed ? "ok" : "bad"} +
                   ")";
     return okay;

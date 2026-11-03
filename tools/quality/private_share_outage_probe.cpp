@@ -125,8 +125,13 @@ void exercise(const std::filesystem::path& mounted, const std::filesystem::path&
         require(warmStill && warmVideo, "both retained sources remain available during outage");
         requireWarm(warmStill.scene->mediaStatistics());
         requireWarm(warmVideo.scene->mediaStatistics());
-        require(upload(*warmStill.scene).image == upload(*coldStill.scene).image &&
-                    upload(*warmVideo.scene).image == upload(*coldVideo.scene).image,
+        // A host float upload or (#422) the native samples' decoded bytes.
+        const auto backing = [](const bloom::runtime::GpuSceneUploadCommand& command) {
+            return command.samples ? command.samples->backingIdentity()
+                                   : static_cast<const void*>(command.image.get());
+        };
+        require(backing(upload(*warmStill.scene)) == backing(upload(*coldStill.scene)) &&
+                    backing(upload(*warmVideo.scene)) == backing(upload(*coldVideo.scene)),
                 "warm outage reuses the exact immutable decoded allocations");
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }

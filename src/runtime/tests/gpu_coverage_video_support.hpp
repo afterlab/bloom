@@ -107,9 +107,10 @@ struct VideoFixture final {
     return asset;
 }
 
-[[nodiscard]] inline VideoFixture probeVideoFixture() {
+[[nodiscard]] inline VideoFixture probeVideoFixture(const std::string& name = fixtureName(),
+                                                    const std::uint64_t rawId = 901) {
     VideoFixture fixture;
-    fixture.path = mediaFixturesDirectory() / fixtureName();
+    fixture.path = mediaFixturesDirectory() / name;
     if (mediaFixturesDirectory().empty() || !std::filesystem::is_regular_file(fixture.path)) {
         throw std::runtime_error("test-environment-missing: media fixtures not supplied");
     }
@@ -121,7 +122,7 @@ struct VideoFixture final {
         throw std::runtime_error("codec-unavailable: " +
                                  (error != nullptr ? error->detail : std::string{"unknown error"}));
     }
-    fixture.asset = videoAssetFromProbe(fixture.path, *probe, 901, fixture.path.stem().string());
+    fixture.asset = videoAssetFromProbe(fixture.path, *probe, rawId, fixture.path.stem().string());
     return fixture;
 }
 

@@ -61,6 +61,7 @@
 
 namespace bloom::render {
 class Rgba32fImage;
+class NativeSampleImage;
 } // namespace bloom::render
 
 namespace bloom::media::cache {
@@ -240,12 +241,22 @@ struct GpuSceneCoverageSolidCommand final {
 // with. Decoding, colour conversion and hashing happen entirely in the CPU task that builds the
 // scene; the command only carries the frozen result so a future native executor can upload it once
 // per semantic source. Preparation never uploads anything itself.
+//
+// #422: exactly one of `image` and `samples` is set. `samples` carries the decoded media samples in
+// their native layout (YUV planes, 16-bit RGBA, binary16 RGBA); the executor uploads them as they
+// are and SampleConvertV1 widens them into the resident RGBA32F image on the device, so the host
+// never builds the float frame. render::convertNativeSamples is their CPU reference.
 struct GpuSceneUploadCommand final {
     GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
     // Tracing only; NOT part of semanticKey.
     OperationIndex sourceOperation = OperationIndex::fromRaw(0);
     std::shared_ptr<const render::Rgba32fImage> image;
     render::Rgba32fImageDescriptor descriptor;
+    // #422: instead of `image`, the decoded samples in their native layout. The executor uploads
+    // their planes and SampleConvertV1 widens them to the RGBA32F working image on the device; the
+    // result equals render::convertNativeSamples(*samples) rebased to `descriptor`. Exactly one of
+    // `image` and `samples` is set.
+    std::shared_ptr<const render::NativeSampleImage> samples = {};
     // Source identity: validated asset/sequence/frame identity, interpretation and input/working
     // colour space, config/processor revision, and the proxy/composition descriptor the converted
     // image was produced for. It never contains a node ID, plan index, or frame time.

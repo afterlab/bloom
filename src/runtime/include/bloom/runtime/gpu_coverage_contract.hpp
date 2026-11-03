@@ -20,6 +20,7 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/shape.hpp>
+#include <bloom/render/native_samples.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 
 #include <array>
@@ -297,6 +298,17 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "Interpret Footage alpha (ignore, invert, matte) and deinterlace pass",
         GpuCoverageDisposition::Required,
         "src/runtime footage interpretation native tests + production media preparation"});
+    // #422: widening decoded samples from their native layout (YUV matrix and range, bit-depth
+    // expansion, binary16 decode, alpha association, stored-samples encoding) is pixel work done by
+    // SampleConvertV1 on the device. Decode and decompression stay host preparation. Every layout a
+    // decoder emits is a Required axis with CPU-reference parity through the production routes.
+    for (const auto layout : render::kNativeSampleLayouts)
+        out.push_back(GpuFeatureCoverageEntry{
+            std::string{"feature.media.native_samples."} +
+                std::string{render::nativeSampleLayoutName(layout)},
+            "decoded-sample conversion to the working image (SampleConvertV1)",
+            GpuCoverageDisposition::Required,
+            "src/render SampleConvertV1 parity + production media preparation"});
     return out;
 }
 
