@@ -563,6 +563,39 @@ void testTransform2DParameters(TestContext& test) {
                                ConstantValueSource{std::int64_t{1}});
 }
 
+// #337: Matte Blur is added, wired Mask to Mask, edited, undone and redone through the generic node
+// commands. An Image never connects to its Mask input, and its schema refuses unrenderable values.
+void testMatteBlurCommands(TestContext& test) {
+    Fixture fixture;
+    const auto blur = exercise<AddNode>(test, fixture, "bloom.matte-blur", Vec2d{});
+    const auto blurId = blur.outputId<NodeId>(kAddNodeOutput);
+    const auto radius = blur.outputId<ParameterId>("parameter.radius");
+    const auto edge = blur.outputId<ParameterId>("parameter.edge");
+    const auto mask =
+        apply<AddNode>(fixture, "bloom.mask", Vec2d{40, 0}).outputId<NodeId>(kAddNodeOutput);
+    const auto mix =
+        apply<AddNode>(fixture, "bloom.image-mix", Vec2d{80, 0}).outputId<NodeId>(kAddNodeOutput);
+    if (!blurId || !radius || !edge || !mask || !mix)
+        throw std::logic_error("Matte Blur exposes registered control identities");
+    const InputPortRef input = NodeInputRef{*blurId, "input"};
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*mask, "mask"}, input);
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*blurId, "mask"},
+                           InputPortRef{NodeInputRef{*mix, "mask"}});
+    refuse<ConnectPorts>(test, fixture, OperationIssueCode::SocketKindMismatch,
+                         OutputPortRef{addSource(fixture), "image"}, input);
+    refuse<ConnectPorts>(test, fixture, OperationIssueCode::SocketKindMismatch,
+                         OutputPortRef{*blurId, "mask"},
+                         InputPortRef{NodeInputRef{kFirstLayerNodeId, "image"}});
+    (void)exercise<SetParameterSource>(test, fixture, *radius, ConstantValueSource{12.75});
+    (void)exercise<SetParameterSource>(test, fixture, *edge, ConstantValueSource{std::int64_t{1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *radius,
+                               ConstantValueSource{257.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *radius,
+                               ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *edge,
+                               ConstantValueSource{std::int64_t{2}});
+}
+
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
@@ -1510,6 +1543,7 @@ int main() {
         bloom::commands::test::testAddAndLayout(test);
         bloom::commands::test::testResizeFitParameters(test);
         bloom::commands::test::testTransform2DParameters(test);
+        bloom::commands::test::testMatteBlurCommands(test);
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);

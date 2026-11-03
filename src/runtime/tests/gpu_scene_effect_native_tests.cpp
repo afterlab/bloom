@@ -853,19 +853,26 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
     }
 }
 
+// #337: the Coverage channel policy (Matte Blur) runs through the same harness on the Gaussian
+// kernel, so its alpha-only filter and all-channel write keep exact-alpha CPU parity too.
 void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::BlurChannels;
     using bloom::runtime::BlurEdgeMode;
     using bloom::runtime::SeparableBlurKernel;
     using bloom::runtime::SeparableBlurKind;
     const CpuCompositionEvaluator evaluator;
     const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
     std::uint64_t id = 7000;
-    for (const auto kind : {SeparableBlurKind::Gaussian, SeparableBlurKind::Box}) {
+    for (const auto [kind, channels] :
+         {std::pair{SeparableBlurKind::Gaussian, BlurChannels::Rgba},
+          std::pair{SeparableBlurKind::Box, BlurChannels::Rgba},
+          std::pair{SeparableBlurKind::Gaussian, BlurChannels::Coverage}}) {
         for (const auto edge : {BlurEdgeMode::Transparent, BlurEdgeMode::Clamp}) {
             for (const bool proxy : {false, true}) {
                 cache.clear();
                 const auto plan = effectPlan(
-                    SeparableBlurKernel{kind, {ParameterId::fromRaw(id + 90), 2.5}, edge}, id);
+                    SeparableBlurKernel{kind, {ParameterId::fromRaw(id + 90), 2.5}, edge, channels},
+                    id);
                 id += 100;
                 auto request = requestFor(*plan);
                 if (proxy) {

@@ -890,6 +890,40 @@ displayProofRunner(const bool customView) {
         "src/runtime separable image effect tests",
         [runBlur] { return runBlur(bloom::runtime::SeparableBlurKind::Box); }, {},
         FixturePrerequisite::PackagedShaderTools);
+    // #337 Matte Blur: a Mask node's coverage filtered by the Coverage blur and read by Image Mix's
+    // mask, through both edge policies and an ROI request. Never the Rgba blur or an identity.
+    add(
+        "node.bloom.matte-blur", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime separable image effect tests",
+        [] {
+            FixtureRun combined;
+            combined.prepared = true;
+            std::uint64_t idBase = 160000;
+            for (const auto edge :
+                 {bloom::runtime::BlurEdgeMode::Transparent, bloom::runtime::BlurEdgeMode::Clamp}) {
+                const auto plan = bloom::gpu_coverage_plans::maskValuePlan(
+                    idBase, false,
+                    bloom::runtime::SeparableBlurKernel{bloom::runtime::SeparableBlurKind::Gaussian,
+                                                        {ParameterId::fromRaw(idBase + 71), 1.5},
+                                                        edge,
+                                                        bloom::runtime::BlurChannels::Coverage});
+                idBase += 100;
+                auto request = requestFor(*plan);
+                auto frame = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && frame.prepared;
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto roiWindow = bloom::render::ImageWindow::create(2, 1, 5, 4);
+                request.roi = *roiWindow.value();
+                frame = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && frame.prepared;
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            combined.evidence = "production Matte Blur: Mask coverage, transparent/clamp and ROI";
+            return combined;
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 

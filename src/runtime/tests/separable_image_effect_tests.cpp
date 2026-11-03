@@ -181,10 +181,127 @@ void subnormalCoverageTest() {
                 "underflowed coverage canonicalizes RGB after each blur pass");
     }
 }
-void cancellationTest() {
+// #337 Matte Blur: Coverage filters alpha alone (an independent 2-D convolution of coverage) and
+// writes it to every channel, so even a non-white input leaves premultiplied white. RGB never
+// contributes, the windows follow the Rgba blur, and the device program is a distinct identity.
+void coverageTests() {
+    const auto data = render::ImageWindow::create(-2, -1, 4, 3);
+    const auto display = render::ImageWindow::create(0, 0, 6, 6);
+    auto descriptor = render::Rgba32fImageDescriptor::create(*data.value(), *display.value(),
+                                                             core::PixelAspectRatio::square());
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), 4096);
+    const std::array<float, 12> coverage{0.0F,  1.0F, 0.25F,  0.5F, 1.0F, 0.0F,
+                                         0.75F, 1.0F, 0.125F, 1.0F, 0.5F, 0.0F};
+    for (std::size_t i = 0; i < coverage.size(); ++i) {
+        const auto a = coverage[i];
+        // Signed/HDR RGB that a Mask never carries: Coverage must ignore it entirely.
+        const auto p = render::Rgba32f::fromPremultiplied(a == 0.0F ? 0.0F : -3.0F * a,
+                                                          a == 0.0F ? 0.0F : 7.0F * a, a, a);
+        require(p.hasValue() &&
+                    !builder.value()->write(-2 + static_cast<std::int64_t>(i % 4),
+                                            -1 + static_cast<std::int64_t>(i / 4), *p.value()),
+                "coverage input writes");
+    }
+    auto frozen = std::move(*builder.value()).freeze();
+    require(frozen.hasValue(), "coverage input freezes");
+    const auto input = std::move(*frozen.value());
+    for (const auto edge : {runtime::BlurEdgeMode::Transparent, runtime::BlurEdgeMode::Clamp}) {
+        auto matte = kernel(runtime::SeparableBlurKind::Gaussian, edge);
+        matte.channels = runtime::BlurChannels::Coverage;
+        const auto blur = runtime::detail::prepareSeparableBlur(matte, 1.5, 1.0, 1.0);
+        require(blur && blur->channels == runtime::BlurChannels::Coverage,
+                "coverage blur prepares");
+        const auto rgba = runtime::detail::prepareSeparableBlur(
+            kernel(runtime::SeparableBlurKind::Gaussian, edge), 1.5, 1.0, 1.0);
+        require(rgba && rgba->horizontal == blur->horizontal && rgba->vertical == blur->vertical,
+                "coverage shares the Gaussian coefficients exactly");
+        const auto result = runtime::detail::applySeparableBlur(
+            *blur, input, 65536, {}, runtime::OperationIndex::fromRaw(0), {});
+        require(result.image && !result.diagnostic, "coverage filter publishes");
+        const auto output = result.image->descriptor()->dataWindow();
+        const auto rgbaResult = runtime::detail::applySeparableBlur(
+            *rgba, input, 65536, {}, runtime::OperationIndex::fromRaw(0), {});
+        require(rgbaResult.image && rgbaResult.image->descriptor()->dataWindow() == output &&
+                    result.image->descriptor()->displayWindow() ==
+                        input.descriptor()->displayWindow(),
+                "coverage windows equal the Rgba blur's; display window is preserved");
+        const auto support = static_cast<std::int64_t>(blur->horizontal.size() / 2);
+        const auto original = input.descriptor()->dataWindow();
+        for (auto y = output.originY(); y < output.maxYExclusive(); ++y)
+            for (auto x = output.originX(); x < output.maxXExclusive(); ++x) {
+                double expected = 0.0;
+                for (auto dy = -support; dy <= support; ++dy)
+                    for (auto dx = -support; dx <= support; ++dx) {
+                        auto sx = x + dx, sy = y + dy;
+                        if (edge == runtime::BlurEdgeMode::Clamp) {
+                            sx = std::clamp(sx, original.originX(), original.maxXExclusive() - 1);
+                            sy = std::clamp(sy, original.originY(), original.maxYExclusive() - 1);
+                        }
+                        const auto sample = input.read(sx, sy);
+                        if (!sample)
+                            continue;
+                        expected += static_cast<double>(sample.value()->alpha()) *
+                                    static_cast<double>(
+                                        blur->horizontal[static_cast<std::size_t>(dx + support)]) *
+                                    static_cast<double>(
+                                        blur->vertical[static_cast<std::size_t>(dy + support)]);
+                    }
+                const auto actual = result.image->read(x, y);
+                require(actual.hasValue(), "coverage sample exists");
+                const auto p = *actual.value();
+                require(std::abs(static_cast<double>(p.alpha()) - expected) < 2e-6 &&
+                            p.alpha() >= 0.0F && p.alpha() <= 1.0F,
+                        "coverage equals an independent 2-D convolution of alpha");
+                require(p.red() == p.alpha() && p.green() == p.alpha() && p.blue() == p.alpha(),
+                        "coverage writes premultiplied white: every channel holds the coverage");
+            }
+        require(!runtime::detail::applySeparableBlur(*blur, input, 1, {},
+                                                     runtime::OperationIndex::fromRaw(0), {})
+                     .image,
+                "coverage intermediate budget refuses before publication");
+        for (const bool vertical : {false, true}) {
+            const auto& weights = vertical ? blur->vertical : blur->horizontal;
+            auto program = runtime::detail::buildSeparableBlurProgram(
+                weights, vertical, edge, runtime::BlurChannels::Coverage);
+            auto rgbaProgram = runtime::detail::buildSeparableBlurProgram(weights, vertical, edge);
+            require(program.succeeded() && rgbaProgram.succeeded() &&
+                        render::validateOcioGpuProgram(*program.program(), {}) ==
+                            render::OcioGpuProgramError::None,
+                    "coverage device program prepares and validates");
+            require(
+                program.program()->semanticsId == "bloom.render.separable-blur.coverage.v1" &&
+                    program.program()->contentIdentity != rgbaProgram.program()->contentIdentity &&
+                    program.program()->shaderText.find("imageLoad(bloom_ocio_input, p).a") !=
+                        std::string::npos &&
+                    program.program()->shaderText.find("return vec4(clamp(sum.a, 0.0, 1.0));") !=
+                        std::string::npos,
+                "coverage program reads alpha only, writes it to every channel and has its "
+                "own content identity");
+            const auto wrapper = runtime::buildGpuOcioWrapperGlsl(*program.program());
+            require(wrapper.succeeded() &&
+                        wrapper.source.find("vec4 p = bloom_separable_blur(c)") !=
+                            std::string::npos,
+                    "coverage program runs in the resident neighborhood wrapper");
+        }
+    }
+    auto identity = kernel(runtime::SeparableBlurKind::Gaussian, runtime::BlurEdgeMode::Clamp);
+    identity.channels = runtime::BlurChannels::Coverage;
+    require(runtime::detail::prepareSeparableBlur(identity, 0.0, 1.0, 1.0)->identity(),
+            "coverage radius zero is an exact identity");
+    auto invalid = identity;
+    invalid.channels = static_cast<runtime::BlurChannels>(2);
+    require(!runtime::detail::prepareSeparableBlur(invalid, 1.0, 1.0, 1.0) &&
+                !runtime::detail::buildSeparableBlurProgram(std::array{1.0F}, false,
+                                                            runtime::BlurEdgeMode::Clamp,
+                                                            static_cast<runtime::BlurChannels>(2))
+                     .succeeded(),
+            "an unknown channel policy refuses on both routes");
+}
+void cancellationTest(const runtime::BlurChannels channels) {
     const auto input = source();
-    const auto blur = runtime::detail::prepareSeparableBlur(
-        kernel(runtime::SeparableBlurKind::Box, runtime::BlurEdgeMode::Transparent), 2.0, 1.0, 1.0);
+    auto cancelled = kernel(runtime::SeparableBlurKind::Box, runtime::BlurEdgeMode::Transparent);
+    cancelled.channels = channels;
+    const auto blur = runtime::detail::prepareSeparableBlur(cancelled, 2.0, 1.0, 1.0);
     runtime::TaskScheduler scheduler(runtime::TaskSchedulerConfig::defaults());
     const runtime::TaskOwner owner{.kind = runtime::TaskOwnerKind::Composition,
                                    .id = runtime::TaskOwnerId::fromRaw(83)};
@@ -219,11 +336,13 @@ int main() {
     try {
         referenceTests();
         subnormalCoverageTest();
-        cancellationTest();
+        coverageTests();
+        cancellationTest(runtime::BlurChannels::Rgba);
+        cancellationTest(runtime::BlurChannels::Coverage);
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: Gaussian/Box reference, HDR/alpha/windows, proxy halo, budget, resident "
-                 "shader and cancellation\n";
+    std::cout << "PASS: Gaussian/Box/coverage reference, HDR/alpha/windows, proxy halo, budget, "
+                 "resident shader and cancellation\n";
 }

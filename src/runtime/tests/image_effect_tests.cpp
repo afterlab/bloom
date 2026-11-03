@@ -672,6 +672,100 @@ void testBlurEvaluation() {
     }
 }
 
+// #337 Matte Blur: the Coverage kernel filters only alpha, so its coverage is bit-identical to the
+// Rgba blur's alpha while every channel holds that coverage. The two never share a memo entry, and
+// warm reuse, ROI, radius-zero identity, animation and edge/radius invalidation follow the blurs.
+void testMatteBlurEvaluation() {
+    const auto matte = [](const double radius, const runtime::BlurEdgeMode edge,
+                          const runtime::BlurChannels channels) {
+        return runtime::SeparableBlurKernel{runtime::SeparableBlurKind::Gaussian,
+                                            {document::ParameterId::fromRaw(90), radius},
+                                            edge,
+                                            channels};
+    };
+    runtime::CpuCompositionEvaluator evaluator;
+    const auto baseline = planWith({});
+    const auto original = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    const auto zero =
+        planWith({matte(0, runtime::BlurEdgeMode::Transparent, runtime::BlurChannels::Coverage)});
+    expect(samePixels(original, evaluator.evaluate(zero, requestFor(*zero), {})),
+           "zero-radius Matte Blur is an exact identity");
+    for (const auto edge : {runtime::BlurEdgeMode::Transparent, runtime::BlurEdgeMode::Clamp}) {
+        const auto rgbaPlan = planWith({matte(2, edge, runtime::BlurChannels::Rgba)});
+        const auto plan = planWith({matte(2, edge, runtime::BlurChannels::Coverage)});
+        const auto rgba = evaluator.evaluate(rgbaPlan, requestFor(*rgbaPlan), {});
+        const auto cold = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(rgba.frame() && cold.frame() && cold.diagnostics().empty() &&
+                   !samePixels(rgba, cold),
+               "Matte Blur never reuses the Rgba blur's memoized pixels");
+        if (!rgba.frame() || !cold.frame())
+            continue;
+        const auto& image = cold.frame()->processImage();
+        const auto& reference = rgba.frame()->processImage();
+        expect(image.descriptor()->dataWindow() == reference.descriptor()->dataWindow(),
+               "Matte Blur windows equal the Rgba blur's");
+        bool covered = false;
+        const auto window = image.descriptor()->dataWindow();
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y)
+            for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
+                const auto p = image.read(x, y);
+                const auto r = reference.read(x, y);
+                expect(p && r && p.value()->alpha() == r.value()->alpha(),
+                       "Matte Blur coverage is bit-identical to the Rgba blur's alpha");
+                expect(p && p.value()->red() == p.value()->alpha() &&
+                           p.value()->green() == p.value()->alpha() &&
+                           p.value()->blue() == p.value()->alpha(),
+                       "Matte Blur writes its coverage to every channel");
+                covered = covered || (p && p.value()->alpha() > 0.0F);
+            }
+        expect(covered, "Matte Blur publishes coverage");
+        const auto warm = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(samePixels(cold, warm) && warm.frame()->operationCacheStatistics().misses == 0,
+               "Matte Blur warm memo reuses identical pixels");
+        auto roiRequest = requestFor(*plan);
+        const auto roiWindow = render::ImageWindow::create(1, 0, 2, 2);
+        roiRequest.roi = *roiWindow.value();
+        const auto roi = evaluator.evaluate(plan, roiRequest, {});
+        expect(roi.frame() != nullptr, "Matte Blur ROI evaluates");
+        if (roi.frame())
+            for (std::int64_t y = 0; y < 2; ++y)
+                for (std::int64_t x = 1; x < 3; ++x) {
+                    const auto actual = roi.frame()->processImage().read(x, y);
+                    const auto expected = image.read(x, y);
+                    expect(actual && expected && *actual.value() == *expected.value(),
+                           "Matte Blur ROI pixels equal the full-frame pixels");
+                }
+        auto animatedDefinition = plan->copyDefinition();
+        std::get<runtime::SeparableBlurKernel>(
+            std::get<runtime::CompiledImageEffect>(animatedDefinition.operations[1]).kernel)
+            .radius.source = runtime::ScalarCurveIndex::fromRaw(0);
+        animatedDefinition.scalarCurves.push_back(
+            {document::AnimationCurveId::fromRaw(190),
+             {{document::KeyframeId::fromRaw(190), {}, 0.5},
+              {document::KeyframeId::fromRaw(191), *core::RationalTime::create(1, 1), 2.0}}});
+        const auto animated =
+            std::make_shared<const runtime::CompiledCompositionPlan>(std::move(animatedDefinition));
+        expect(animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)),
+               "animated Matte Blur radius is time-dependent");
+        auto start = requestFor(*animated);
+        auto end = start;
+        end.time = *core::RationalTime::create(1, 1);
+        const auto startResult = evaluator.evaluate(animated, start, {});
+        const auto endResult = evaluator.evaluate(animated, end, {});
+        expect(startResult.frame() && endResult.frame() && !samePixels(startResult, endResult),
+               "animated Matte Blur radius cannot reuse an earlier frame");
+        const auto changed = planWith(
+            {matte(1,
+                   edge == runtime::BlurEdgeMode::Clamp ? runtime::BlurEdgeMode::Transparent
+                                                        : runtime::BlurEdgeMode::Clamp,
+                   runtime::BlurChannels::Coverage)});
+        const auto changedResult = evaluator.evaluate(changed, requestFor(*changed), {});
+        runtime::CpuCompositionEvaluator fresh;
+        expect(samePixels(changedResult, fresh.evaluate(changed, requestFor(*changed), {})),
+               "Matte Blur radius/edge changes invalidate the memoized image");
+    }
+}
+
 void testSpatialEffectBudgets() {
     const auto check = [](const runtime::ImageEffectKernel& kernel, const std::size_t peak) {
         auto definition = planWith({kernel})->copyDefinition();
@@ -712,6 +806,17 @@ void testSpatialEffectBudgets() {
                                            runtime::BlurEdgeMode::Transparent},
               896);
     }
+    // #337 Matte Blur admits exactly the Gaussian blur's buffers.
+    check(runtime::SeparableBlurKernel{runtime::SeparableBlurKind::Gaussian,
+                                       {document::ParameterId::fromRaw(90), 1.0},
+                                       runtime::BlurEdgeMode::Clamp,
+                                       runtime::BlurChannels::Coverage},
+          384);
+    check(runtime::SeparableBlurKernel{runtime::SeparableBlurKind::Gaussian,
+                                       {document::ParameterId::fromRaw(90), 1.0},
+                                       runtime::BlurEdgeMode::Transparent,
+                                       runtime::BlurChannels::Coverage},
+          896);
 }
 
 void testAliasedBlurBudgets() {
@@ -1323,6 +1428,7 @@ int main(const int argc, char** argv) {
         }
         if (argc == 2 && std::string_view(argv[1]) == "--blur-only") {
             testBlurEvaluation();
+            testMatteBlurEvaluation();
             testSpatialEffectBudgets();
             testAliasedBlurBudgets();
             return failures == 0 ? 0 : 1;
@@ -1344,6 +1450,7 @@ int main(const int argc, char** argv) {
         testDiscreteFinalRowCancellation();
         testUnaryImageEffectInputArity();
         testBlurEvaluation();
+        testMatteBlurEvaluation();
         testSpatialEffectBudgets();
         testAliasedBlurBudgets();
         testLookBypass();

@@ -497,3 +497,111 @@ void testTransform2DLowering(Expectations& expectations) {
             driven->operationTimeDependent(driven->output()),
         "driven Transform 2D translation invalidates itself and the downstream output");
 }
+
+// #337: a Mask node feeds Matte Blur, which feeds Image Mix's mask. Matte Blur lowers to the
+// Gaussian Coverage blur of the Mask operation; muted, it passes the Mask through; with a muted
+// (empty) Mask upstream it is empty too and Image Mix reads a transparent mask.
+void testMatteBlurLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto maskId = NodeId::fromRaw(985);
+    const auto blurId = NodeId::fromRaw(986);
+    const auto mixId = NodeId::fromRaw(987);
+    for (int scenario = 0; scenario != 3; ++scenario) {
+        auto project = makeProject();
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::uint64_t next = 985;
+        const auto add = [&](const NodeId id, const std::string_view type) {
+            const auto* definition = builtInNodeDefinitions().find(type, 1);
+            require(definition != nullptr, "definition exists");
+            std::vector<ParameterBinding> bindings;
+            for (const auto& parameter : definition->parameters) {
+                const auto parameterId = ParameterId::fromRaw(next++);
+                auto value = parameter.defaultValue;
+                if (parameter.schemaKey == "bloom.blur.radius")
+                    value = 3.5;
+                if (parameter.schemaKey == "bloom.blur.edge")
+                    value = std::int64_t{1};
+                require(composition->parameters().insert(
+                            {parameterId, parameter.schemaKey, ConstantValueSource{value}}),
+                        "parameter is valid");
+                bindings.push_back({parameter.role, parameterId});
+            }
+            require(graph.addNode({id, std::string(type), std::move(bindings), 1}),
+                    "node is accepted");
+        };
+        add(maskId, kMaskNodeType);
+        add(blurId, "bloom.matte-blur");
+        add(mixId, "bloom.image-mix");
+        require(graph.eraseEdge(kFirstSourceEdge), "base source edge is removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{mixId, "input"}}),
+                "base feeds Image Mix");
+        require(graph.addEdge({EdgeId::fromRaw(985), {kSecondSolidNode, "image"},
+                               NodeInputRef{mixId, "second"}}),
+                "second feeds Image Mix");
+        require(graph.addEdge({EdgeId::fromRaw(986), {maskId, std::string(kMaskNodeOutputPort)},
+                               NodeInputRef{blurId, "input"}}),
+                "Mask feeds Matte Blur");
+        require(graph.addEdge({EdgeId::fromRaw(987), {blurId, "mask"}, NodeInputRef{mixId, "mask"}}),
+                "Matte Blur feeds Image Mix's mask");
+        require(graph.addEdge({EdgeId::fromRaw(988), {mixId, "image"},
+                               NodeInputRef{kFirstLayerNode,
+                                            std::string(kLayerOutputContentInputPort)}}),
+                "Image Mix feeds Layer");
+        if (scenario == 1)
+            composition->nodeLayout()[blurId].muted = true;
+        if (scenario == 2)
+            composition->nodeLayout()[maskId].muted = true;
+        expectations.expect(project.validate().ok(), "Matte Blur graph is valid document truth");
+        const auto result = compile(std::move(project), registry);
+        expectations.expect(result.plan != nullptr, "Matte Blur graph compiles");
+        if (!result.plan)
+            continue;
+        const auto& operations = result.plan->operations();
+        const auto find = [&](const NodeId id, const auto predicate) {
+            return std::ranges::find_if(operations, [&](const auto& item) {
+                const auto* effect = std::get_if<runtime::CompiledImageEffect>(&item);
+                return effect && effect->sourceNodeId == id && predicate(*effect);
+            });
+        };
+        const auto mix = find(mixId, [](const auto&) { return true; });
+        require(mix != operations.end(), "Image Mix lowers");
+        const auto& mixEffect = std::get<runtime::CompiledImageEffect>(*mix);
+        require(mixEffect.maskInput.has_value(), "Image Mix keeps its connected mask");
+        const auto& maskSource = operations[mixEffect.maskInput->value()];
+        if (scenario == 2) {
+            const auto* empty = std::get_if<runtime::CompiledMerge>(&maskSource);
+            expectations.expect(empty && empty->entries.empty(),
+                                "an empty Mask through Matte Blur is a transparent mask");
+            continue;
+        }
+        const auto masked = find(maskId, [](const auto& effect) {
+            return std::holds_alternative<runtime::LayerMaskKernel>(effect.kernel);
+        });
+        require(masked != operations.end(), "Mask node lowers");
+        const auto maskedIndex =
+            static_cast<std::size_t>(std::distance(operations.begin(), masked));
+        if (scenario == 1) {
+            expectations.expect(mixEffect.maskInput->value() == maskedIndex &&
+                                    find(blurId, [](const auto&) { return true; }) ==
+                                        operations.end(),
+                                "a muted Matte Blur passes its Mask through unchanged");
+            continue;
+        }
+        const auto* blurEffect = std::get_if<runtime::CompiledImageEffect>(&maskSource);
+        const auto* kernel =
+            blurEffect ? std::get_if<runtime::SeparableBlurKernel>(&blurEffect->kernel) : nullptr;
+        const auto* radius = kernel ? std::get_if<double>(&kernel->radius.source) : nullptr;
+        expectations.expect(blurEffect && blurEffect->sourceNodeId == blurId && kernel &&
+                                blurEffect->input.value() == maskedIndex &&
+                                kernel->kind == runtime::SeparableBlurKind::Gaussian &&
+                                kernel->channels == runtime::BlurChannels::Coverage &&
+                                kernel->edge == runtime::BlurEdgeMode::Clamp && radius &&
+                                *radius == 3.5,
+                            "Matte Blur lowers to the Gaussian Coverage blur of the Mask");
+    }
+}

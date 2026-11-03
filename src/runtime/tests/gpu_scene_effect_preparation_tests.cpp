@@ -459,6 +459,48 @@ void testRealCst(Expectations& expectations, const std::string& from, const std:
     }
 }
 
+// #337: Matte Blur prepares two resident Coverage neighborhood commands (horizontal, vertical) over
+// the transparent halo, never the Rgba blur's programs: same windows, distinct program identities.
+void testRealMatteBlur(Expectations& expectations) {
+    using bloom::runtime::BlurChannels;
+    using bloom::runtime::BlurEdgeMode;
+    using bloom::runtime::SeparableBlurKernel;
+    using bloom::runtime::SeparableBlurKind;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const auto commandsOf = [&](const BlurChannels channels) {
+        const auto plan = effectPlan({solidLeaf(800)},
+                                     SeparableBlurKernel{SeparableBlurKind::Gaussian,
+                                                         {ParameterId::fromRaw(8090), 2.0},
+                                                         BlurEdgeMode::Transparent,
+                                                         channels},
+                                     8000);
+        std::vector<GpuSceneOcioEffectCommand> commands;
+        const auto prepared = builder.build(plan, requestFor(*plan));
+        if (prepared)
+            for (const auto& command : prepared.scene->commands())
+                if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command))
+                    commands.push_back(*ocio);
+        return commands;
+    };
+    const auto coverage = commandsOf(BlurChannels::Coverage);
+    const auto rgba = commandsOf(BlurChannels::Rgba);
+    expectations.expect(coverage.size() == 2 && rgba.size() == 2,
+                        "Matte Blur prepares two resident neighborhood passes");
+    if (coverage.size() != 2 || rgba.size() != 2)
+        return;
+    for (std::size_t pass = 0; pass < 2; ++pass) {
+        expectations.expect(coverage[pass].program && rgba[pass].program &&
+                                coverage[pass].program->identity() !=
+                                    rgba[pass].program->identity() &&
+                                coverage[pass].semanticKey != rgba[pass].semanticKey,
+                            "Matte Blur programs and command keys differ from the Rgba blur's");
+        expectations.expect(coverage[pass].outputWindow == rgba[pass].outputWindow &&
+                                coverage[pass].outputWindow.originX() == -2 &&
+                                coverage[pass].outputWindow.extent().width() == 12,
+                            "Matte Blur keeps the Gaussian blur's transparent-halo window");
+    }
+}
+
 #if defined(__linux__)
 void testRealFileTransform(Expectations& expectations, const std::string& working,
                            const std::string& process) {
@@ -555,6 +597,7 @@ int main() {
         testFailClosed(expectations, from, to);
 #ifdef BLOOM_GPUSHADER_TOOLS_DIR
         testRealCst(expectations, from, to);
+        testRealMatteBlur(expectations);
 #if defined(__linux__)
         testRealFileTransform(expectations, from, to);
 #endif

@@ -134,13 +134,12 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Multiply Alpha, Checker, Flip, Rotate 90, Resize, Fit, Gaussian and Box Blur, and Linear and
     // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions. ADR 0028
     // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove; #364 adds Cryptomatte.
-    // #336 adds the standalone Transform 2D.
-    expectations.expect(registry.definitions().size() == 136,
+    // #336 adds the standalone Transform 2D; #337 adds Matte Blur.
+    expectations.expect(registry.definitions().size() == 137,
                         "startup contribution includes every built-in definition");
-    for (const auto* type :
-         {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
-          "bloom.resize", "bloom.fit", "bloom.transform-2d", "bloom.gaussian-blur",
-          "bloom.box-blur"})
+    for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
+                             "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",
+                             "bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur"})
         expectations.expect(registry.find(type, 1) != nullptr,
                             "each pinned image-node addition is registered");
 
@@ -173,6 +172,28 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             multiplyAlpha->inputs[1].name == "matte" &&
                             !multiplyAlpha->inputs[1].required && imageMix->inputs[1].required,
                         "#361: Set Alpha and Multiply Alpha mattes are optional, Mix's is not");
+    const auto* matteBlur = registry.find("bloom.matte-blur", 1);
+    expectations.expect(
+        matteBlur && matteBlur->lowering == runtime::NodeLoweringKind::ImageEffect &&
+            matteBlur->inputs.size() == 2 &&
+            matteBlur->inputs[0].valueKind == runtime::SocketValueKind::Mask &&
+            matteBlur->inputs[0].required &&
+            matteBlur->inputs[1].valueKind == runtime::SocketValueKind::Scalar &&
+            matteBlur->outputs.size() == 1 &&
+            matteBlur->outputs[0].valueKind == runtime::SocketValueKind::Mask &&
+            matteBlur->parameters.size() == 2 &&
+            matteBlur->parameters[0].schemaKey == "bloom.blur.radius" &&
+            matteBlur->parameters[1].schemaKey == "bloom.blur.edge",
+        "#337: Matte Blur filters a Mask into a Mask with the blur radius and edge controls");
+    if (matteBlur) {
+        auto imageInput = *matteBlur;
+        imageInput.inputs[0].valueKind = runtime::SocketValueKind::Image;
+        imageInput.key.typeId = "bloom.matte-blur";
+        runtime::NodeDefinitionRegistry scratch;
+        expectations.expect(scratch.registerDefinition(imageInput) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "#337: a Matte Blur that accepts an Image is refused");
+    }
     registry.freeze();
     expectations.expect(registry.find(document::kSolidSourceNodeType,
                                       document::kSolidSourceNodeSchemaVersion) == solid,

@@ -551,8 +551,10 @@ struct NestedBranchReusePlans final {
 
 // ADR 0028 Mask value: Image Mix of the base solid and a second solid scaled by a Mask (a masked
 // opaque canvas). `absent` routes the Mask through a Layer trimmed out of range: a zero mask.
+// `maskFilter` (#337 Matte Blur) filters the present Mask before Image Mix reads it.
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
-maskValuePlan(const std::uint64_t idBase, const bool absent) {
+maskValuePlan(const std::uint64_t idBase, const bool absent,
+              const std::optional<bloom::runtime::SeparableBlurKernel>& maskFilter = {}) {
     auto definition = imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, idBase)
                           ->copyDefinition();
     auto first = definition.operations[0];
@@ -574,6 +576,11 @@ maskValuePlan(const std::uint64_t idBase, const bool absent) {
     if (!absent)
         operations.push_back(masked);
     auto maskIndex = OperationIndex::fromRaw(3);
+    if (!absent && maskFilter) {
+        operations.push_back(CompiledImageEffect{
+            NodeId::fromRaw(idBase + 70), OperationIndex::fromRaw(3), *maskFilter, false, false});
+        maskIndex = OperationIndex::fromRaw(4);
+    }
     if (absent) {
         auto trimmed = layer;
         trimmed.sourceNodeId = NodeId::fromRaw(idBase + 60);

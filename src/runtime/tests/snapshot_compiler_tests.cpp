@@ -4,6 +4,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -1920,6 +1921,7 @@ int main() {
         testCanvasLowering(expectations);
         testBlurLowering(expectations);
         testTransform2DLowering(expectations);
+        testMatteBlurLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

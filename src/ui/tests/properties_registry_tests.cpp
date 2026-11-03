@@ -160,6 +160,43 @@ void transform2DRows() {
     }
 }
 
+// #337: Matte Blur is discoverable through AddNode, presents the blur radius and edge controls in
+// Properties, and its Edges selector edits through command history with undo/redo.
+void matteBlurRows() {
+    auto project =
+        document::makeNewProject("Matte Blur", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    const auto node = addNode(session, "bloom.matte-blur");
+    expect(node.isValid(), "Matte Blur is discoverable through generic AddNode");
+    session.selectNode(node);
+    QCoreApplication::processEvents();
+    expect(row(properties, "radius") != nullptr, "Matte Blur presents its radius control");
+    auto* edge = row(properties, "edge");
+    auto* selector =
+        edge ? edge->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum") : nullptr;
+    expect(selector && selector->count() == 2 &&
+               selector->currentText() == QStringLiteral("Transparent"),
+           "Edges is a two-entry selector defaulting to Transparent");
+    if (selector) {
+        selector->chooseIndex(1);
+        const auto* record = [&]() -> const document::ParameterRecord* {
+            for (const auto& binding : session.composition()->graph().findNode(node)->parameters)
+                if (binding.role == "edge")
+                    return session.composition()->parameters().find(binding.parameterId);
+            return nullptr;
+        }();
+        expect(record && std::get<std::int64_t>(
+                             std::get<document::ConstantValueSource>(record->source).value) == 1,
+               "choosing Clamp publishes the stored edge through a command");
+        expect(session.undo(), "Matte Blur edge edit undoes");
+        expect(session.redo(), "Matte Blur edge edit redoes");
+    }
+}
+
 void colourEffectRows() {
     auto project = document::makeNewProject("Color", "Main", core::RationalTime::fromInteger(10));
     const auto composition = project.initialCompositionId;
@@ -776,6 +813,7 @@ int main(int argc, char** argv) try {
     colourEffectRows();
     discreteImageRows();
     transform2DRows();
+    matteBlurRows();
     widthRule();
     videoRows();
     QSettings().clear();
