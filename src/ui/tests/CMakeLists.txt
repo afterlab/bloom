@@ -1511,6 +1511,18 @@ set_tests_properties(bloom.ui.cryptomatte PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
     LABELS "ui;media;integration" TIMEOUT 120)
 
+# #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
+# on a rootless multi-layer EXR, in Properties and on the node cards.
+add_executable(bloom_channel_pickers_ui_test channel_pickers_ui_tests.cpp)
+target_include_directories(bloom_channel_pickers_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_channel_pickers_ui_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_commands OpenEXR::OpenEXR Qt6::Test)
+bloom_enable_warnings(bloom_channel_pickers_ui_test)
+add_test(NAME bloom.ui.channel-pickers COMMAND bloom_channel_pickers_ui_test)
+set_tests_properties(bloom.ui.channel-pickers PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;media;integration" TIMEOUT 120)
+
 # Assets validity in the application's AssetController: a Cryptomatte-only EXR sequence and an
 # H.264 video are valid assets with thumbnails, not "Missing — Relink".
 add_executable(bloom_asset_validity_ui_test asset_validity_ui_tests.cpp)

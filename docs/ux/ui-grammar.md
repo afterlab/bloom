@@ -665,14 +665,23 @@ document vocabulary, so the two cannot drift:
 | Enum (anything `document::parameterEnumOptions` lists) | `KDropdown` with those labels (Properties shows Text Alignment as its icon segmented control) |
 | OCIO color space (Color Transform from/to, OCIO File process space, image and video input color space) | searchable `KDropdown` filled by `populateColorSpaceSelector`, refreshed by `refreshColorSpaceSelector` |
 | LUT, image, video, audio asset; font; Image part and layer; Cryptomatte layer | `KDropdown` (`refreshLutSelector` and the asset and probe refreshers) |
+| Shuffle R, G, B, A slots | searchable `KDropdown` of the input channel set's channels plus `0` and `1` (`refreshShuffleSlotSelector`, read through `ChannelSetController`, the Viewer channel menu's listing) |
+| Channel Copy and Select Channels `select`, Composition Output Channel Layers | `ChannelChecklistField`: a summary that opens a checklist of the input's layers (and root channels), with the comma-separated pattern behind its advanced-pattern toggle |
+| Data reader block (Data Sample, Ramp Sample, Table Lookup, Point Set) | `KDropdown` of the project's data blocks of the reader's kind (`refreshDataBlockSelector`) |
+| Video audio stream | `KDropdown` of the asset's audio streams (`refreshAudioStreamSelector`) |
 | Bool | `KSwitch` |
 | Color | `KColorChip` (compact on the card) with channel cells |
 | Integer, float, vector | `KValueField` configured from `ParameterPresentation` |
-| String | `KLineEdit`, only for free text (Text content, string operands, channel names) |
+| String | `KLineEdit`, only for open values (Text content, string operands, the Shuffle output layer name) |
 
-A pick list is never a text or number field on either surface. The test
+A value with a closed or discoverable set is never a text or number field on either surface, and it
+always shows a meaningful default: an empty Shuffle slot shows the default color layer's channel it
+reads, an empty Cryptomatte layer the first Cryptomatte layer present, an unset data reader the
+first block of its kind (#487). The Image and Video source show one Input color space control; it
+also offers "Raw (no conversion)", and the legacy Color Space row is not shown. The test
 `bloom.ui.node-field-controls` adds every registered node type and asserts this for every
-parameter. Rows changed by the audit (old control to new control on the card):
+parameter: a String that renders as free text must be on its list of open values, and an Integer
+with a closed set (an enum, a choice presentation, the audio stream) must never be a number field. Rows changed by the audit (old control to new control on the card):
 
 | Node | Parameter | Kind | Old | New |
 | --- | --- | --- | --- | --- |

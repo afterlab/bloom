@@ -53,6 +53,27 @@ bool refreshImageLayerSelector(kit::KDropdown& selector, const CompositionSessio
                                const document::NodeRecord& node);
 bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const CompositionSession& session,
                                      const document::NodeRecord& node);
+// #487: the Shuffle R/G/B/A slots offer the channels of the node's input channel set (the Viewer
+// channel menu's listing, read on a worker through ChannelSetController) plus the constants 0 and
+// 1; an empty (default) slot shows the default colour layer's channel it reads.
+[[nodiscard]] bool isShuffleSlotSchema(std::string_view schemaKey) noexcept;
+bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                const document::NodeRecord& node, std::string_view schemaKey);
+// #487: a data reader's block, offered as the project's data blocks of the reader's kind; 0 (the
+// default) shows the first such block, which is the one it reads.
+bool refreshDataBlockSelector(kit::KDropdown& selector, const CompositionSession& session,
+                              const document::NodeRecord& node);
+// #487: the Video source's audio stream, shared by Properties and the node card, and its commit.
+void refreshAudioStreamSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                const document::NodeRecord& node);
+bool commitAudioStream(CompositionSession& session, document::NodeId node, std::uint32_t ordinal);
+// #487: the one input colour space control of an Image or Video source. Besides Auto and the OCIO
+// spaces it offers "Raw (no conversion)" (the legacy Raw choice), and shows a legacy sRGB choice
+// that load could not migrate. Committing writes the OCIO id and clears the legacy choice (or sets
+// Raw) in one undoable edit. Answers false when the schema is not a source input colour space.
+[[nodiscard]] bool isSourceInputColorSpaceSchema(std::string_view schemaKey) noexcept;
+bool commitSourceInputColorSpace(CompositionSession& session, document::NodeId node,
+                                 const QString& choice);
 // The plain note an Image source shows when its selected part and layer have no colour channels
 // ("No color layer — use Channels"); empty when it has colour or the probe is not known yet.
 QString imageSourceColourNote(const CompositionSession& session, const document::NodeRecord& node);
@@ -61,6 +82,7 @@ void jumpToPropertiesNode(CompositionSession& session, document::NodeId node, QW
 [[nodiscard]] document::ShapeKind nodeShapeKind(const document::Composition& composition,
                                                 const document::NodeRecord& node);
 class KeyframeDiamond;
+class ChannelChecklistField;
 namespace kit {
 class KColorChip;
 class KLineEdit;
@@ -113,6 +135,7 @@ class PropertiesRegistryRow final : public QWidget {
     kit::KLineEdit* text_ = nullptr;
     kit::KValueField* integer_ = nullptr;
     kit::KTextArea* multiline_ = nullptr;
+    ChannelChecklistField* checklist_ = nullptr;
     KeyframeDiamond* diamond_ = nullptr;
     bool refreshing_ = false;
     bool detached_ = false;

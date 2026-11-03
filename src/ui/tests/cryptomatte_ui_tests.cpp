@@ -218,6 +218,9 @@ void testPropertiesAndViewer() {
            "the layer picker fills once the worker listing arrives");
     expect(picker != nullptr && picker->count() == 1 && picker->itemText(0) == "CryptoObject",
            "the layer picker lists exactly CryptoObject");
+    // #487: the default (empty) layer shows the first Cryptomatte layer it reads, never missing.
+    expect(picker != nullptr && picker->currentIndex() == 0 && !picker->mutedValue(),
+           "the default layer shows CryptoObject");
 
     // The name field adds; a remove button removes; undo restores.
     auto* field = properties->findChild<ui::kit::KLineEdit*>("propertiesCryptomatteAdd");

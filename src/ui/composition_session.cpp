@@ -1146,8 +1146,14 @@ CompositionSession::dataBlockReaders(const document::DataBlockRecordId blockId) 
         const auto* constant =
             parameter ? std::get_if<document::ConstantValueSource>(&parameter->source) : nullptr;
         const auto* stored = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
-        if (stored != nullptr && *stored > 0 &&
-            static_cast<std::uint64_t>(*stored) == blockId.value())
+        const auto* descriptor = document::findValueUtilityDescriptor(node.typeId);
+        // #487: an unset reader reads the first block of its kind, so it counts as a reader too.
+        const auto* read = stored == nullptr || descriptor == nullptr
+                               ? nullptr
+                               : document::resolveDataBlockReaderBlock(snapshot_.project(),
+                                                                       descriptor->kernel, *stored);
+        if (read != nullptr && std::holds_alternative<document::DataBlockRecordId>(read->id) &&
+            std::get<document::DataBlockRecordId>(read->id) == blockId)
             readers.insert(node.id);
     }
     return readers;

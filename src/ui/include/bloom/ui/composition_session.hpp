@@ -54,6 +54,7 @@ struct Vec2d;
 namespace bloom::ui {
 class AssetController;
 class CryptomatteController;
+class ChannelSetController;
 class ToolController;
 class CompositionThumbnailController;
 
@@ -217,6 +218,14 @@ class CompositionSession final : public QObject {
     }
     [[nodiscard]] CryptomatteController* cryptomatteController() const noexcept {
         return cryptomatteController_;
+    }
+    // #487: the input channel-set listing behind the Shuffle slot pickers and the channel/layer
+    // checklists (null without a composition root).
+    void setChannelSetController(ChannelSetController* controller) noexcept {
+        channelSetController_ = controller;
+    }
+    [[nodiscard]] ChannelSetController* channelSetController() const noexcept {
+        return channelSetController_;
     }
     // ADR 0031: the one app-wide active tool and the tool options, shared by every Viewer and the
     // context bar of this session. Session/UI state only; never project truth.
@@ -785,6 +794,7 @@ class CompositionSession final : public QObject {
 
     AssetController* assetController_ = nullptr;
     CryptomatteController* cryptomatteController_ = nullptr;
+    ChannelSetController* channelSetController_ = nullptr;
     CompositionThumbnailController* compositionThumbnails_ = nullptr;
     ToolController* tools_ = nullptr;
 

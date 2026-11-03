@@ -1,7 +1,8 @@
 #include "asset_drop.hpp"
 #include <bloom/ui/asset_controller.hpp>
-#include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/channel_set_controller.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
+#include <bloom/ui/node_editor.hpp>
 
 #include <bloom/ui/composition_editors.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -154,6 +155,10 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     }
     if (auto* cryptomatte = session_.cryptomatteController())
         connect(cryptomatte, &CryptomatteController::changed, scene_,
+                &NodeGraphicsScene::refreshValues);
+    // #487: the Shuffle slot pickers and channel checklists refill when a listing arrives.
+    if (auto* channels = session_.channelSetController())
+        connect(channels, &ChannelSetController::changed, scene_,
                 &NodeGraphicsScene::refreshValues);
     layout->addWidget(view_);
 

@@ -1,9 +1,10 @@
 #include "properties_registry_row.hpp"
+#include "channel_checklist_field.hpp"
 #include "node_editor_items.hpp"
 #include "numeric_field_projection.hpp"
 #include "properties_sections.hpp"
-#include "properties_value_edits.hpp"
 #include "properties_text_edit.hpp"
+#include "properties_value_edits.hpp"
 #include "text_font_choices.hpp"
 #include "value_presentation.hpp"
 #include <QEvent>
@@ -19,9 +20,11 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/host/font_catalogue.hpp>
 #include <bloom/host/project_color_choice.hpp>
 #include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/channel_set_controller.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
@@ -75,7 +78,9 @@ propertiesRowVisibility(const std::string_view role, const std::string_view sche
         schemaKey == "bloom.image.part" || schemaKey == "bloom.image.layer" ||
         schemaKey == "bloom.composition-output.layers" || schemaKey == "bloom.cryptomatte.layer" ||
         schemaKey == "bloom.cryptomatte.mattes" ||
-        schemaKey == document::kVideoAudioStreamParameterSchemaKey;
+        schemaKey == document::kVideoAudioStreamParameterSchemaKey ||
+        // #487: the legacy source Color Space lives in the one Input color space control.
+        schemaKey == "bloom.image.color-space" || schemaKey == "bloom.video.color-space";
     return technicalRole || technicalSchema ? PropertiesRowVisibility::Hidden
                                             : PropertiesRowVisibility::Visible;
 }
@@ -154,7 +159,16 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         segments_->setFixedSize(segments_->sizeHint());
         layout->addWidget(segments_);
         connect(segments_, &kit::KRadioGroup::currentIndexChanged, this, [this] { commit(); });
+    } else if (const auto checklistKind = channelChecklistKind(definition_.schemaKey)) {
+        // #487: a channel pattern is chosen from the channels the input carries.
+        checklist_ =
+            new ChannelChecklistField(session_, node_, definition_.role, *checklistKind, controls);
+        checklist_->setObjectName(QStringLiteral("propertiesChannelChecklist"));
+        checklist_->setAccessibleName(label);
+        layout->addWidget(checklist_, 1);
     } else if (isInputColorSpaceSchema(definition_.schemaKey) || !items.empty() ||
+               isShuffleSlotSchema(definition_.schemaKey) ||
+               definition_.schemaKey == document::kDataBlockParameterSchemaKey ||
                definition_.schemaKey == "bloom.ocio-file.lut" ||
                definition_.schemaKey == "bloom.image.asset" ||
                definition_.schemaKey == "bloom.video.asset" ||
@@ -173,6 +187,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                 ? "propertiesImageInputColorSpace"
             : definition_.schemaKey == document::kVideoInputColorSpaceIdParameterSchemaKey
                 ? "propertiesVideoInputColorSpace"
+            : isShuffleSlotSchema(definition_.schemaKey) ? "propertiesShuffleSlot"
+            : definition_.schemaKey == document::kDataBlockParameterSchemaKey
+                ? "propertiesDataBlock"
                 : "propertiesRegistryEnum");
         selector_->setControlSize(kit::KDropdown::ControlSize::Dense);
         if (isFontSchema(definition_.schemaKey)) {
@@ -189,6 +206,11 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
         } else if (isInputColorSpaceSchema(definition_.schemaKey)) {
             selector_->setSearchable(true);
             populateInputColorSpaceSelector();
+        } else if (isShuffleSlotSchema(definition_.schemaKey)) {
+            // A multi-pass render carries dozens of channels: type to find one.
+            selector_->setSearchable(true);
+        } else if (definition_.schemaKey == document::kDataBlockParameterSchemaKey) {
+            // Filled on refresh from the project's blocks of the reader's kind.
         } else {
             for (const auto& [name, stored] : items)
                 selector_->addItem(name, QVariant::fromValue(stored));
@@ -322,7 +344,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
                                       "propertiesRegistryColorFields", parameter_);
         delete controls;
     } else {
-        if (!text_ && !multiline_) {
+        if (!text_ && !multiline_ && !checklist_) {
             const int preferred = controls->sizeHint().width();
             controls->setMaximumWidth(preferred);
         }
@@ -334,6 +356,9 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             &PropertiesRegistryRow::refresh);
     if (auto* controller = session_.assetController())
         connect(controller, &AssetController::changed, this, &PropertiesRegistryRow::refresh);
+    if (auto* channels = session_.channelSetController();
+        channels != nullptr && isShuffleSlotSchema(definition_.schemaKey))
+        connect(channels, &ChannelSetController::changed, this, &PropertiesRegistryRow::refresh);
     refresh();
 }
 
@@ -420,28 +445,10 @@ void PropertiesRegistryRow::refresh() {
     for (auto* control : {static_cast<QWidget*>(selector_), static_cast<QWidget*>(segments_),
                           static_cast<QWidget*>(toggle_), static_cast<QWidget*>(color_),
                           static_cast<QWidget*>(text_), static_cast<QWidget*>(multiline_),
-                          static_cast<QWidget*>(integer_), static_cast<QWidget*>(slider_)})
+                          static_cast<QWidget*>(integer_), static_cast<QWidget*>(slider_),
+                          static_cast<QWidget*>(checklist_)})
         if (control)
             control->setEnabled(editable);
-    if (selector_ && node &&
-        (definition_.schemaKey == "bloom.image.color-space" ||
-         definition_.schemaKey == "bloom.video.color-space")) {
-        const auto explicitInput = std::ranges::find_if(node->parameters, [](const auto& binding) {
-            return binding.role == "inputColorSpaceId";
-        });
-        const auto configured = explicitInput == node->parameters.end()
-                                    ? std::optional<QString>{}
-                                    : session_.constantStringValue(explicitInput->parameterId);
-        if (configured.has_value() && !configured->isEmpty()) {
-            selector_->setEnabled(false);
-            selector_->setToolTip(tr("Input color space (%1) takes precedence. Set it to Auto "
-                                     "to use this legacy Color Space choice.")
-                                      .arg(*configured));
-        } else {
-            selector_->setToolTip(tr("An explicit source Color Space overrides the asset's "
-                                     "input interpretation."));
-        }
-    }
     if (parameter) {
         auto value = definition_.defaultValue;
         if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source))
@@ -473,9 +480,14 @@ void PropertiesRegistryRow::refresh() {
                         : QString::fromStdString(document::parameterPresentation(definition_).unit));
         if (auto* scalar = std::get_if<double>(&value); scalar && slider_)
             slider_->setValue(*scalar);
+        if (checklist_)
+            checklist_->refresh();
         if (auto* integer = std::get_if<std::int64_t>(&value)) {
             if (selector_ && definition_.schemaKey == "bloom.ocio-file.lut")
                 refreshLutSelector(*selector_, session_, *integer);
+            if (selector_ && node &&
+                definition_.schemaKey == document::kDataBlockParameterSchemaKey)
+                refreshDataBlockSelector(*selector_, session_, *node);
             if (integer_)
                 integer_->setIntegerValue(*integer);
             if (fields_[0])
@@ -535,6 +547,11 @@ void PropertiesRegistryRow::refresh() {
                         selector_->setCurrentIndex(index);
                         break;
                     }
+            }
+            if (selector_ && node && isShuffleSlotSchema(definition_.schemaKey)) {
+                refreshShuffleSlotSelector(*selector_, session_, *node, definition_.schemaKey);
+                // The probe enables a slot once it is listed; a locked node stays locked.
+                selector_->setEnabled(selector_->isEnabled() && editable);
             }
             if (selector_ && isInputColorSpaceSchema(definition_.schemaKey))
                 refreshColorSpaceSelector(*selector_, session_, node, definition_.schemaKey,
@@ -603,7 +620,13 @@ void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {
                                          tr("Set Text Font"));
         refresh();
         return;
+    } else if (selector_ && isSourceInputColorSpaceSchema(definition_.schemaKey)) {
+        (void)commitSourceInputColorSpace(
+            session_, node_, selector_->itemData(selector_->currentIndex()).toString());
+        refresh();
+        return;
     } else if (selector_ && (isInputColorSpaceSchema(definition_.schemaKey) ||
+                             isShuffleSlotSchema(definition_.schemaKey) ||
                              definition_.schemaKey == "bloom.image.asset" ||
                              definition_.schemaKey == "bloom.video.asset" ||
                              definition_.schemaKey == "bloom.audio.asset"))

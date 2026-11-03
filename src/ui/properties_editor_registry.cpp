@@ -1,4 +1,5 @@
 #include "asset_drop.hpp"
+#include "channel_checklist_field.hpp"
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
@@ -8,9 +9,9 @@
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <algorithm>
-#include <bloom/document/channel_nodes.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -18,9 +19,9 @@
 #include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
-#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <limits>
 
@@ -182,13 +183,9 @@ void PropertiesEditor::configureRegistryRows() {
                         [this, selector, nodeId](int index) {
                             if (index < 0 || !selector->isEnabled())
                                 return;
-                            commands::Transaction transaction(
-                                tr("Choose Audio Stream").toStdString(),
-                                session_.snapshot().revision());
-                            transaction.emplace<commands::SetVideoAudioStream>(
-                                session_.compositionId(), nodeId,
+                            (void)commitAudioStream(
+                                session_, nodeId,
                                 static_cast<std::uint32_t>(selector->itemData(index).toUInt()));
-                            (void)session_.executeTransaction(std::move(transaction));
                         });
                 for (const auto& [name, object] :
                      std::array{std::pair{tr("Field Order"), "propertiesVideoFieldOrder"},
@@ -311,9 +308,8 @@ void PropertiesEditor::configureRegistryRows() {
     if (node != nullptr && node->typeId == document::kCryptomatteNodeType)
         populateCryptomatteRows(*node);
     if (node != nullptr && node->typeId == document::kCompositionOutputNodeType &&
-        outputLayersField_ != nullptr && !outputLayersField_->hasFocus())
-        outputLayersField_->setText(
-            boundText(session_, *node, document::kCompositionOutputLayersParameterRole));
+        outputLayersField_ != nullptr)
+        outputLayersField_->refresh();
     if (auto* selector = findChild<kit::KDropdown*>("propertiesCompositionSource");
         selector && node && session_.composition()) {
         const QSignalBlocker blocker(selector);
@@ -447,24 +443,17 @@ void PropertiesEditor::addOutputLayerRow(const document::NodeRecord& node,
                                          kit::KSection* section) {
     const auto name = tr("Channel Layers");
     auto* label = kit::makePropertyRowLabel(name, section->body());
-    auto* field = new kit::KLineEdit(section->body());
+    // #487: the layers the connected channel set carries, as a checklist (every layer by
+    // default), with the comma-separated pattern behind its advanced toggle.
+    auto* field = new ChannelChecklistField(
+        session_, node.id, std::string(document::kCompositionOutputLayersParameterRole),
+        ChannelChecklistKind::OutputLayers, section->body());
     field->setObjectName("propertiesOutputChannelLayers");
-    field->setPlaceholderText(tr("Every layer"));
-    field->setToolTip(tr("Comma-separated layer names written beside RGBA by layered OpenEXR"));
+    field->setToolTip(tr("The layers written beside RGBA by layered OpenEXR"));
     auto* row = new kit::KPropertyRow(label, nullptr, {field}, section->body());
     row->setProperty("rowLabel", name);
     section->bodyLayout()->addWidget(row);
     outputLayersField_ = field;
-    const auto nodeId = node.id;
-    connect(field, &QLineEdit::editingFinished, this, [this, nodeId] {
-        if (outputLayersField_ == nullptr)
-            return;
-        if (!session_.setNodeParameterValue(
-                nodeId, std::string(document::kCompositionOutputLayersParameterRole),
-                document::ParameterValue{outputLayersField_->text().trimmed().toStdString()},
-                tr("Set Channel Layers")))
-            configureRegistryRows();
-    });
 }
 
 void PropertiesEditor::cryptomatteLayersMayHaveArrived() {
@@ -733,30 +722,7 @@ void PropertiesEditor::refreshVideoSourceRows(const document::NodeRecord* node,
     auto* selector = findChild<kit::KDropdown*>(QStringLiteral("propertiesVideoAudioStream"));
     if (selector == nullptr || node == nullptr)
         return;
-    std::uint32_t selected = 0;
-    for (const auto& binding : node->parameters)
-        if (binding.role == document::kVideoAudioStreamParameterRole)
-            if (const auto value = session_.constantValue(binding.parameterId))
-                selected = static_cast<std::uint32_t>(*value);
-    const QSignalBlocker blocker(selector);
-    selector->clearItems();
-    std::uint32_t ordinal = 0;
-    if (asset != nullptr)
-        for (const auto& stream : asset->videoStreams) {
-            if (stream.kind != 2)
-                continue;
-            selector->addItem(tr("Stream %1 — %2 ch, %3 Hz (%4)")
-                                  .arg(ordinal + 1)
-                                  .arg(stream.channelLayout.size())
-                                  .arg(stream.sampleRate)
-                                  .arg(QString::fromStdString(stream.codec)),
-                              QVariant::fromValue(ordinal));
-            ++ordinal;
-        }
-    if (ordinal == 0)
-        selector->addItem(tr("No audio stream"), QVariant::fromValue(0U));
-    selector->setCurrentIndex(static_cast<int>(std::min(selected, ordinal == 0 ? 0 : ordinal - 1)));
-    selector->setEnabled(ordinal > 1 && !session_.composition()->nodeLocked(node->id));
+    refreshAudioStreamSelector(*selector, session_, *node);
     const auto* video = asset == nullptr ? nullptr
                                          : &*std::ranges::find(asset->videoStreams, 1U,
                                                                &document::AssetVideoStream::kind);

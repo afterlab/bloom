@@ -779,8 +779,10 @@ void videoRows() {
     expect(video.isValid(), "Video node registers for Properties");
     session.selectNode(video);
     ui::PropertiesEditor panel(session);
-    for (const auto* role : {"asset", "startFrame", "loopMode", "colorSpace"})
+    for (const auto* role : {"asset", "startFrame", "loopMode", "inputColorSpaceId"})
         expect(row(panel, role) != nullptr, "Video Properties uses every registry parameter");
+    // #487: the legacy Color Space is a choice of the one Input color space control.
+    expect(row(panel, "colorSpace") == nullptr, "Video Properties shows one color space control");
     expect(row(panel, "premultiply") == nullptr, "Video alpha association comes from its decoder");
     if (auto* loop = row(panel, "loopMode")) {
         auto* selector = loop->findChild<ui::kit::KDropdown*>();

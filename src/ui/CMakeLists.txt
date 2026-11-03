@@ -547,6 +547,7 @@ target_sources(
         asset_thumbnail_interpretation.cpp
         asset_data_thumbnail.hpp
         cryptomatte_controller.cpp
+        channel_set_controller.cpp
         context_bar.cpp
         context_bar_options.cpp
         context_bar_options.hpp
@@ -588,6 +589,7 @@ target_sources(
         properties_editor_sections.cpp
         properties_editor_sources.cpp
         properties_registry_row.cpp
+        channel_checklist_field.cpp
         properties_editor_registry.cpp
         properties_upstream.cpp
         properties_layer_time.cpp
@@ -725,6 +727,7 @@ target_sources(
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
             include/bloom/ui/cryptomatte_controller.hpp
+            include/bloom/ui/channel_set_controller.hpp
             include/bloom/ui/context_bar.hpp
             include/bloom/ui/layer_alignment_actions.hpp
             include/bloom/ui/tool_controller.hpp

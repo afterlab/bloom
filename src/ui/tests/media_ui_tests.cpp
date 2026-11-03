@@ -356,6 +356,34 @@ void run() {
     require(inputSpace && inputSpace->count() > 1 &&
                 inputSpace->itemText(0).startsWith("Auto (resolved: "),
             "Properties resolves Auto input color space and lists config spaces");
+    {
+        // #487: one Input color space control. Raw is its legacy Raw choice; an OCIO space
+        // clears the legacy choice in the same undoable edit.
+        const auto sourceValue = [&](const std::string_view role) {
+            const auto* parameter = ui::node_editor::parameterForRole(
+                *session.composition()->graph().findNode(source), *session.composition(), role);
+            require(parameter != nullptr, "source color parameter");
+            return std::get<document::ConstantValueSource>(parameter->source).value;
+        };
+        const auto state = [&](const std::int64_t legacy, const std::string& id) {
+            return sourceValue("colorSpace") == document::ParameterValue{legacy} &&
+                   sourceValue("inputColorSpaceId") == document::ParameterValue{id};
+        };
+        int raw = -1;
+        for (int index = 0; index < inputSpace->count(); ++index)
+            if (inputSpace->itemText(index) == "Raw (no conversion)")
+                raw = index;
+        require(raw == 1, "the input color space control offers Raw");
+        inputSpace->chooseIndex(raw);
+        require(state(3, "") && inputSpace->currentIndex() == raw,
+                "Raw writes the legacy Raw choice");
+        const auto linear = inputSpace->findData(QStringLiteral("lin_rec709_scene"));
+        require(linear > 1, "the config's working space is listed");
+        inputSpace->chooseIndex(linear);
+        require(state(0, "lin_rec709_scene"), "an OCIO space replaces the Raw choice in one edit");
+        require(session.undo() && state(3, ""), "one undo restores Raw");
+        require(session.undo() && state(0, ""), "a second undo restores Auto");
+    }
     auto* dimensions = properties.findChild<ui::kit::KLabel*>("propertiesImageDimensions");
     require(dimensions && dimensions->text() == QString::fromUtf8("32 × 16"), "source dimensions");
     // ADR 0026: the part and layer pickers read the probe through the Assets worker.
@@ -428,8 +456,7 @@ void run() {
                     "enum display and stored value agree");
     };
     for (const auto& [role, names] : std::vector<std::pair<QString, QStringList>>{
-             {"loopMode", {"Hold", "Loop", "Ping-pong"}},
-             {"colorSpace", {"Auto", "sRGB", "Linear", "Raw"}}}) {
+             {"loopMode", {"Hold", "Loop", "Ping-pong"}}}) {
         ui::kit::KDropdown* control = nullptr;
         for (auto* child : card->childItems())
             if (auto* proxy = dynamic_cast<QGraphicsProxyWidget*>(child))
@@ -437,10 +464,17 @@ void run() {
                     if (dropdown->property("nodeParameterRole").toString() == role)
                         control = dropdown;
         checkEnums(control, names);
-        const auto* const object =
-            role == "loopMode" ? "propertiesImageLoopMode" : "propertiesImageColorSpace";
-        checkEnums(properties.findChild<ui::kit::KDropdown*>(object), names);
+        checkEnums(properties.findChild<ui::kit::KDropdown*>("propertiesImageLoopMode"), names);
     }
+    // #487: the legacy Color Space is not a control of its own on either surface; the one Input
+    // color space control offers its Raw choice.
+    require(properties.findChild<ui::kit::KDropdown*>("propertiesImageColorSpace") == nullptr,
+            "Properties shows one input color space control");
+    for (auto* child : card->childItems())
+        if (auto* proxy = dynamic_cast<QGraphicsProxyWidget*>(child))
+            for (auto* dropdown : proxy->widget()->findChildren<ui::kit::KDropdown*>())
+                require(dropdown->property("nodeParameterRole").toString() != "colorSpace",
+                        "the card shows one input color space control");
     // Task N1, item 2: a source card carries no preview, so the worker only prepares the Assets
     // panel's own thumbnails; waiting means waiting for that request to settle.
     const auto waitThumbnail = [&] {
@@ -540,14 +574,14 @@ void run() {
     const auto rows = ui::timelinePropertyEntries(session, {entry}, {layer});
     int enumRows = 0;
     for (const auto& item : rows) {
-        if (item.role != "loopMode" && item.role != "colorSpace")
+        require(item.role != "colorSpace", "the timeline shows no legacy Color Space row");
+        if (item.role != "loopMode")
             continue;
         ++enumRows;
         ui::TimelinePropertyRow row(session, nullptr);
         row.bind(item);
         auto* control = row.findChild<ui::kit::KDropdown*>("timelinePropertyAlignment");
-        checkEnums(control, item.role == "loopMode" ? QStringList{"Hold", "Loop", "Ping-pong"}
-                                                    : QStringList{"Auto", "sRGB", "Linear", "Raw"});
+        checkEnums(control, QStringList{"Hold", "Loop", "Ping-pong"});
         control->chooseIndex(2);
         require(std::get<std::int64_t>(
                     std::get<document::ConstantValueSource>(
@@ -556,7 +590,7 @@ void run() {
                 "timeline enum commits");
         require(session.undo(), "timeline enum undo");
     }
-    require(enumRows == 2, "timeline exposes both image enum rows");
+    require(enumRows == 1, "timeline exposes the image loop mode row");
     controller.remove(asset);
     require(!session.snapshot().project().findAsset(asset), "Remove publishes asset removal");
     require(cardAsset->currentText() == "Missing asset" && cardAsset->mutedValue() &&

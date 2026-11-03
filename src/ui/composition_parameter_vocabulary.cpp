@@ -3,22 +3,29 @@
 #include "properties_registry_row.hpp"
 #include <QCoreApplication>
 #include <QSignalBlocker>
+#include <algorithm>
 #include <bloom/color/ocio_builtin_registry.hpp>
+#include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/transaction.hpp>
+#include <bloom/commands/video_source_operations.hpp>
+#include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/parameter_enums.hpp>
+#include <bloom/document/project.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/host/project_color_choice.hpp>
+#include <bloom/runtime/channel_inspection_listing.hpp>
+#include <bloom/ui/asset_controller.hpp>
+#include <bloom/ui/channel_set_controller.hpp>
+#include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
-#include <bloom/ui/timeline_ruler.hpp>
+#include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/timeline_ruler.hpp>
 #include <limits>
 #include <optional>
 #include <tuple>
-#include <bloom/document/channel_nodes.hpp>
-#include <bloom/host/project_color_choice.hpp>
-#include <bloom/document/parameter_enums.hpp>
-#include <bloom/ui/asset_controller.hpp>
-#include <bloom/ui/composition_session.hpp>
-#include <bloom/ui/cryptomatte_controller.hpp>
-#include <algorithm>
-#include <bloom/core/scalar_primitives.hpp>
-#include <bloom/ui/kit/icons.hpp>
 namespace bloom::ui {
 QString imageDimensionsText(const document::AssetRecord* asset) {
     return asset ? QObject::tr("%1 × %2").arg(asset->width).arg(asset->height)
@@ -273,11 +280,151 @@ bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const Composition
     if (layers != nullptr)
         for (const auto& layer : *layers)
             items.push_back({QString::fromStdString(layer), QString::fromStdString(layer)});
-    const auto current = boundNodeText(session, node, document::kCryptomatteLayerParameterRole);
-    const bool listed = fillProbeSelector(selector, items, current, layers != nullptr, current);
+    auto current = boundNodeText(session, node, document::kCryptomatteLayerParameterRole);
+    // #487: an empty (default) layer reads the first Cryptomatte layer present; show that one.
+    if (current.isEmpty() && layers != nullptr && !layers->empty())
+        current = QString::fromStdString(layers->front());
+    const bool listed = fillProbeSelector(selector, items, current, layers != nullptr,
+                                          current.isEmpty() ? QObject::tr("First layer") : current);
+    if (!listed && current.isEmpty() && layers != nullptr)
+        selector.setItemText(selector.count() - 1, QObject::tr("No Cryptomatte layer"));
     if (layers != nullptr && layers->empty())
         selector.setToolTip(QObject::tr("The channel set has no Cryptomatte layer"));
     return listed;
+}
+
+bool isShuffleSlotSchema(const std::string_view schemaKey) noexcept {
+    return schemaKey == "bloom.channel-shuffle.red" || schemaKey == "bloom.channel-shuffle.green" ||
+           schemaKey == "bloom.channel-shuffle.blue" || schemaKey == "bloom.channel-shuffle.alpha";
+}
+
+bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                const document::NodeRecord& node,
+                                const std::string_view schemaKey) {
+    const auto role = schemaKey.substr(schemaKey.rfind('.') + 1);
+    const std::size_t slot = role == "red" ? 0 : role == "green" ? 1 : role == "blue" ? 2 : 3;
+    auto* controller = session.channelSetController();
+    if (controller != nullptr && !controller->listingCurrent(node.id))
+        controller->request(node.id);
+    const auto* listing = controller != nullptr ? controller->listing(node.id) : nullptr;
+    QList<std::pair<QString, QString>> items;
+    if (listing != nullptr)
+        for (const auto& channel : listing->channels)
+            items.push_back({QString::fromStdString(channel), QString::fromStdString(channel)});
+    items.push_back({QObject::tr("0 (constant)"), QStringLiteral("0")});
+    items.push_back({QObject::tr("1 (constant)"), QStringLiteral("1")});
+    const auto stored = boundNodeText(session, node, role);
+    auto current = stored;
+    // An empty (default) slot reads the default colour layer's channel: show that channel.
+    if (stored.isEmpty() && listing != nullptr)
+        if (const auto channel = runtime::defaultShuffleSlotChannel(listing->channels, slot))
+            current = QString::fromStdString(*channel);
+    const bool listed =
+        fillProbeSelector(selector, items, current, listing != nullptr,
+                          current.isEmpty() ? QObject::tr("Default color") : current);
+    if (!listed && current.isEmpty() && listing != nullptr)
+        selector.setItemText(selector.count() - 1, QObject::tr("No color layer"));
+    if (listing != nullptr && listing->channels.empty() && !listing->diagnostic.empty())
+        selector.setToolTip(QString::fromStdString(listing->diagnostic));
+    return listed;
+}
+
+bool refreshDataBlockSelector(kit::KDropdown& selector, const CompositionSession& session,
+                              const document::NodeRecord& node) {
+    const QSignalBlocker blocker(selector);
+    selector.clearItems();
+    const auto* descriptor = document::findValueUtilityDescriptor(node.typeId);
+    const auto kind =
+        descriptor != nullptr ? document::dataBlockReaderKind(descriptor->kernel) : std::nullopt;
+    std::int64_t stored = 0;
+    for (const auto& binding : node.parameters)
+        if (binding.role == document::kDataBlockParameterRole)
+            if (const auto* composition = session.composition())
+                if (const auto* parameter = composition->parameters().find(binding.parameterId))
+                    if (const auto* constant =
+                            std::get_if<document::ConstantValueSource>(&parameter->source))
+                        if (const auto* value = std::get_if<std::int64_t>(&constant->value))
+                            stored = *value;
+    const auto& project = session.snapshot().project();
+    const auto kindName = kind ? document::dataBlockKindName(*kind) : std::string_view{};
+    const auto kindText =
+        QString::fromUtf8(kindName.data(), static_cast<qsizetype>(kindName.size()));
+    if (kind)
+        for (const auto& block : project.typedDataBlocks()) {
+            const auto* id = std::get_if<document::DataBlockRecordId>(&block.id);
+            if (id == nullptr || block.kind != *kind ||
+                id->value() > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                continue;
+            const auto index = selector.addItem(
+                QStringLiteral("%1 · %2").arg(QString::fromStdString(block.typeId),
+                                              QString::fromStdString(block.provenance.createdAt)),
+                QVariant::fromValue(static_cast<std::int64_t>(id->value())));
+            selector.setItemToolTip(index,
+                                    QObject::tr("%1 data block %2").arg(kindText).arg(id->value()));
+        }
+    const auto* resolved =
+        descriptor != nullptr
+            ? document::resolveDataBlockReaderBlock(project, descriptor->kernel, stored)
+            : nullptr;
+    const bool none = selector.count() == 0;
+    int index = -1;
+    if (resolved != nullptr)
+        if (const auto* id = std::get_if<document::DataBlockRecordId>(&resolved->id))
+            index = selector.findData(QVariant::fromValue(static_cast<std::int64_t>(id->value())));
+    const bool missing = index < 0 && stored > 0;
+    if (index < 0)
+        index = selector.addItem(missing ? QObject::tr("Missing data block")
+                                         : QObject::tr("No %1 data in the project").arg(kindText),
+                                 QVariant::fromValue(stored));
+    selector.setCurrentIndex(index);
+    selector.setMutedValue(index < 0 || missing || none);
+    selector.setToolTip(
+        none ? QObject::tr("Add a %1 data block to the project to read it").arg(kindText)
+             : selector.currentText());
+    return !missing && !none;
+}
+
+void refreshAudioStreamSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                const document::NodeRecord& node) {
+    const document::AssetRecord* asset = nullptr;
+    std::uint32_t selected = 0;
+    for (const auto& binding : node.parameters) {
+        if (binding.role == "asset")
+            if (const auto value = session.constantStringValue(binding.parameterId))
+                asset = session.snapshot().project().findAsset(
+                    document::AssetId::fromRaw(value->toULongLong()));
+        if (binding.role == document::kVideoAudioStreamParameterRole)
+            if (const auto value = session.constantValue(binding.parameterId))
+                selected = static_cast<std::uint32_t>(*value);
+    }
+    const QSignalBlocker blocker(selector);
+    selector.clearItems();
+    std::uint32_t ordinal = 0;
+    if (asset != nullptr)
+        for (const auto& stream : asset->videoStreams) {
+            if (stream.kind != 2)
+                continue;
+            selector.addItem(QObject::tr("Stream %1 — %2 ch, %3 Hz (%4)")
+                                 .arg(ordinal + 1)
+                                 .arg(stream.channelLayout.size())
+                                 .arg(stream.sampleRate)
+                                 .arg(QString::fromStdString(stream.codec)),
+                             QVariant::fromValue(ordinal));
+            ++ordinal;
+        }
+    if (ordinal == 0)
+        selector.addItem(QObject::tr("No audio stream"), QVariant::fromValue(0U));
+    selector.setCurrentIndex(static_cast<int>(std::min(selected, ordinal == 0 ? 0 : ordinal - 1)));
+    const auto* composition = session.composition();
+    selector.setEnabled(ordinal > 1 && composition != nullptr && !composition->nodeLocked(node.id));
+}
+
+bool commitAudioStream(CompositionSession& session, const document::NodeId node,
+                       const std::uint32_t ordinal) {
+    commands::Transaction transaction(QObject::tr("Choose Audio Stream").toStdString(),
+                                      session.snapshot().revision());
+    transaction.emplace<commands::SetVideoAudioStream>(session.compositionId(), node, ordinal);
+    return session.executeTransaction(std::move(transaction)).succeeded();
 }
 
 QString imageSourceColourNote(const CompositionSession& session, const document::NodeRecord& node) {
@@ -326,6 +473,18 @@ QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view
 bool isEffectColorSpaceSchema(const std::string_view schema) {
     return schema == "bloom.ocio-cst.from" || schema == "bloom.ocio-cst.to" ||
            schema == "bloom.ocio-file.process-space";
+}
+
+namespace {
+// #487: the source input colour space control's two non-OCIO choices. Neither can be an OCIO id
+// (a config's colour space names never start with a control character).
+const QString kRawInputChoice = QStringLiteral("\u0001raw");
+const QString kLegacyInputChoicePrefix = QStringLiteral("\u0001legacy:");
+} // namespace
+
+bool isSourceInputColorSpaceSchema(const std::string_view schema) noexcept {
+    return schema == document::kImageInputColorSpaceIdParameterSchemaKey ||
+           schema == document::kVideoInputColorSpaceIdParameterSchemaKey;
 }
 
 bool isInputColorSpaceSchema(const std::string_view schema) {
@@ -411,6 +570,12 @@ void populateColorSpaceSelector(kit::KDropdown& selector, const CompositionSessi
                                             QString{});
     selector.setItemToolTip(automatic, effect ? QObject::tr("Use the composition working color space")
                                               : QObject::tr("Inherit the asset's automatic interpretation"));
+    if (!effect) {
+        // #487: the legacy Raw choice lives in this one control.
+        const auto raw = selector.addItem(QObject::tr("Raw (no conversion)"), kRawInputChoice);
+        selector.setItemToolTip(raw, QObject::tr("Use the file's values as they are, with no "
+                                                 "color conversion"));
+    }
     const auto config = inputColorConfig(session);
     if (!config) {
         const auto unavailable = selector.addItem(QObject::tr("OCIO config unavailable"), QString{});
@@ -442,28 +607,62 @@ void refreshColorSpaceSelector(kit::KDropdown& selector, const CompositionSessio
                                const QString& stored) {
     const QSignalBlocker blocker(selector);
     const bool effect = isEffectColorSpaceSchema(schemaKey);
+    const auto legacy = effect ? std::int64_t{0} : sourceLegacyInputColorSpace(session, node);
     auto automatic = effect ? QObject::tr("Working space") : QObject::tr("Auto");
-    if (!effect && stored.isEmpty()) {
-        if (sourceLegacyInputColorSpace(session, node) != 0)
-            automatic = QObject::tr("Legacy Color Space choice");
-        else {
-            const auto resolved = sourceAssetInputColorSpace(session, node);
-            if (!resolved.isEmpty())
-                automatic = resolved;
-        }
+    if (!effect && stored.isEmpty() && legacy == 0) {
+        const auto resolved = sourceAssetInputColorSpace(session, node);
+        if (!resolved.isEmpty())
+            automatic = resolved;
     }
     selector.setItemText(0, automatic);
-    selector.setItemToolTip(
-        0, effect ? QObject::tr("Composition working color space: %1")
-                        .arg(QString::fromUtf8(host::workingColorSpaceLabel(
-                            session.colorIntent().workingColorSpaceId)))
-           : sourceLegacyInputColorSpace(session, node) != 0
-               ? QObject::tr("The source's legacy Color Space choice overrides the asset input "
-                             "color space")
-               : QObject::tr("Inherit the asset's input interpretation"));
-    const auto index = selector.findData(stored);
+    selector.setItemToolTip(0, effect ? QObject::tr("Composition working color space: %1")
+                                            .arg(QString::fromUtf8(host::workingColorSpaceLabel(
+                                                session.colorIntent().workingColorSpaceId)))
+                                      : QObject::tr("Inherit the asset's input interpretation"));
+    auto index = selector.findData(stored);
+    if (!effect && stored.isEmpty() && legacy == 3)
+        index = selector.findData(kRawInputChoice);
+    else if (!effect && stored.isEmpty() && legacy != 0) {
+        // A legacy sRGB or Linear choice load could not migrate (its config's sRGB texture space
+        // is unknown without reading the config): shown, never offered.
+        const auto data = kLegacyInputChoicePrefix + QString::number(legacy);
+        index = selector.findData(data);
+        if (index < 0) {
+            index = selector.addItem(legacy == 1 ? QObject::tr("sRGB (legacy)")
+                                                 : QObject::tr("Working space (legacy)"),
+                                     data);
+            selector.setItemToolTip(index, QObject::tr("A legacy source Color Space choice; "
+                                                       "choose a color space to replace it"));
+        }
+    }
     if (index >= 0)
         selector.setCurrentIndex(index);
+}
+
+bool commitSourceInputColorSpace(CompositionSession& session, const document::NodeId nodeId,
+                                 const QString& choice) {
+    const auto* composition = session.composition();
+    const auto* node = composition != nullptr ? composition->graph().findNode(nodeId) : nullptr;
+    if (node == nullptr || choice.startsWith(kLegacyInputChoicePrefix))
+        return node != nullptr;
+    const bool raw = choice == kRawInputChoice;
+    const auto targetId = raw ? std::string{} : choice.toStdString();
+    const std::int64_t targetLegacy = raw ? 3 : 0;
+    commands::Transaction transaction(QObject::tr("Set Input Color Space").toStdString(),
+                                      session.snapshot().revision());
+    for (const auto& binding : node->parameters) {
+        if (binding.role == "inputColorSpaceId" &&
+            session.constantStringValue(binding.parameterId).value_or(QString{}).toStdString() !=
+                targetId)
+            transaction.emplace<commands::SetNodeParameterValue>(
+                session.compositionId(), nodeId, binding.role, document::ParameterValue{targetId});
+        if (binding.role == "colorSpace" &&
+            sourceLegacyInputColorSpace(session, node) != targetLegacy)
+            transaction.emplace<commands::SetNodeParameterValue>(
+                session.compositionId(), nodeId, binding.role,
+                document::ParameterValue{targetLegacy});
+    }
+    return transaction.empty() || session.executeTransaction(std::move(transaction)).succeeded();
 }
 
 void refreshLutSelector(kit::KDropdown& selector, const CompositionSession& session,

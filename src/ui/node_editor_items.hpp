@@ -1,10 +1,11 @@
 #include "asset_drop.hpp"
+#include "channel_checklist_field.hpp"
 #include "numeric_field_projection.hpp"
 #include "properties_registry_row.hpp"
-#include <bloom/document/channel_nodes.hpp>
 #include "properties_sections.hpp"
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #pragma once
@@ -703,6 +704,9 @@ class NodeItem final : public QGraphicsObject {
         // The closed enumeration a selector offers, or null for an ordinary operand. A selector's
         // stored value is its item data, so reading one back never depends on a spelling.
         kit::KDropdown* selector = nullptr;
+        // #487: a channel pattern chosen from the input's channels (Copy, Select Channels, the
+        // Composition Output's layers).
+        ChannelChecklistField* checklist = nullptr;
         std::vector<platform::FontFace> fontFaces;
     };
 
@@ -940,6 +944,11 @@ class NodeItem final : public QGraphicsObject {
             // #364: the matte list is edited by name in Properties and by picking in the Viewer.
             if (node.typeId == document::kCryptomatteNodeType &&
                 binding.role == document::kCryptomatteMattesParameterRole)
+                continue;
+            // #487: the legacy source Color Space is one of the Input color space choices.
+            if ((node.typeId == document::kImageSourceNodeType ||
+                 node.typeId == "bloom.video-source") &&
+                binding.role == "colorSpace")
                 continue;
             if (!shapeSource_ || document::shapeRoleVisible(shapeKind_, binding.role))
                 roles.push_back(binding.role);
@@ -1228,12 +1237,28 @@ class NodeItem final : public QGraphicsObject {
         // list here, so a row cannot offer a key the command layer would refuse.
         const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
+        if (const auto checklistKind = channelChecklistKind(declared->schemaKey);
+            checklistKind && session_ != nullptr) {
+            row.checklist =
+                new ChannelChecklistField(*session_, id_, std::string(role), *checklistKind);
+            row.checklist->setObjectName(QStringLiteral("nodeChannelChecklist"));
+            row.checklist->setAccessibleName(label);
+            row.checklist->resize(row.checklist->sizeHint());
+            prepareField(row.checklist);
+            registerControlRole(row.checklist, role);
+            valueRows_.push_back({label, row.checklist, nullptr, {}});
+            operandRows_.push_back(row);
+            return true;
+        }
         const bool fontSelector = declared->schemaKey == document::kTextFontParameterSchemaKey;
         // ADR 0026 / #364: values the file's probe lists, filled on refresh.
         const bool probeSelector =
             declared->schemaKey == document::kImagePartParameterSchemaKey ||
             declared->schemaKey == document::kImageLayerParameterSchemaKey ||
-            declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey;
+            declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey ||
+            isShuffleSlotSchema(declared->schemaKey) ||
+            declared->schemaKey == document::kDataBlockParameterSchemaKey ||
+            declared->schemaKey == document::kVideoAudioStreamParameterSchemaKey;
         // The same dropdown kinds Properties builds for the same schemas (see
         // PropertiesRegistryRow): OCIO color spaces, the LUT asset and the audio asset are
         // closed pick lists, never a text or number field.
@@ -1247,17 +1272,23 @@ class NodeItem final : public QGraphicsObject {
             !items.isEmpty()) {
             row.selector = new kit::KDropdown;
             row.selector->setObjectName(
-                declared->schemaKey == "bloom.image.asset" ? "nodeImageAsset"
-                : declared->schemaKey == document::kImagePartParameterSchemaKey ? "nodeImagePart"
+                declared->schemaKey == "bloom.image.asset"                       ? "nodeImageAsset"
+                : declared->schemaKey == document::kImagePartParameterSchemaKey  ? "nodeImagePart"
                 : declared->schemaKey == document::kImageLayerParameterSchemaKey ? "nodeImageLayer"
                 : declared->schemaKey == document::kCryptomatteLayerParameterSchemaKey
                     ? "nodeCryptomatteLayer"
-                : colorSpaceSelector                                 ? "nodeOperandColorSpace"
-                : declared->schemaKey == "bloom.ocio-file.lut"        ? "nodeOperandLut"
-                : declared->schemaKey == "bloom.audio.asset"          ? "nodeOperandAudioAsset"
-                                                                      : "nodeOperandSelector");
+                : isShuffleSlotSchema(declared->schemaKey)                      ? "nodeShuffleSlot"
+                : declared->schemaKey == document::kDataBlockParameterSchemaKey ? "nodeDataBlock"
+                : declared->schemaKey == document::kVideoAudioStreamParameterSchemaKey
+                    ? "nodeVideoAudioStream"
+                : colorSpaceSelector                           ? "nodeOperandColorSpace"
+                : declared->schemaKey == "bloom.ocio-file.lut" ? "nodeOperandLut"
+                : declared->schemaKey == "bloom.audio.asset"   ? "nodeOperandAudioAsset"
+                                                               : "nodeOperandSelector");
             row.selector->setAccessibleName(label);
             row.selector->setControlSize(kit::KDropdown::ControlSize::Dense);
+            if (isShuffleSlotSchema(declared->schemaKey))
+                row.selector->setSearchable(true);
             if (fontSelector) {
                 row.selector->setSearchable(true);
                 const auto snapshot = nodeFontCatalogueCache().snapshot();
@@ -1460,6 +1491,18 @@ class NodeItem final : public QGraphicsObject {
                         return std::nullopt;
                     return document::ParameterValue{std::to_string(asset->value())};
                 }
+                if (parameter != nullptr && isSourceInputColorSpaceSchema(parameter->schemaKey)) {
+                    // #487: one edit writes the OCIO id and the legacy choice together.
+                    (void)commitSourceInputColorSpace(*session_, id_, stored.toString());
+                    return std::nullopt;
+                }
+                if (parameter != nullptr &&
+                    parameter->schemaKey == document::kVideoAudioStreamParameterSchemaKey) {
+                    if (row.selector->isEnabled())
+                        (void)commitAudioStream(*session_, id_,
+                                                static_cast<std::uint32_t>(stored.toUInt()));
+                    return std::nullopt;
+                }
                 if (row.kind == document::ParameterValueKind::String)
                     return document::ParameterValue{stored.toString().toStdString()};
                 return stored.isValid()
@@ -1558,6 +1601,11 @@ class NodeItem final : public QGraphicsObject {
     // readback as a second edit.
     void refreshOperandRows(const document::Composition& composition) {
         for (const auto& row : operandRows_) {
+            if (row.checklist != nullptr) {
+                if (!timeOnly_)
+                    row.checklist->refresh();
+                continue;
+            }
             const auto* parameter = composition.parameters().find(row.parameterId);
             const auto live = session_ ? session_->liveValue(row.parameterId) : std::nullopt;
             const auto* fallback =
@@ -1633,6 +1681,13 @@ class NodeItem final : public QGraphicsObject {
                                                                     *node);
                             }
                         } else if (parameter != nullptr &&
+                                   isShuffleSlotSchema(parameter->schemaKey)) {
+                            if (const auto* node = composition.graph().findNode(id_)) {
+                                ++nodeCardRefreshCounters().selectorRebuilds;
+                                refreshShuffleSlotSelector(*row.selector, *session_, *node,
+                                                           parameter->schemaKey);
+                            }
+                        } else if (parameter != nullptr &&
                                    isInputColorSpaceSchema(parameter->schemaKey)) {
                             refreshColorSpaceSelector(*row.selector, *session_,
                                                       composition.graph().findNode(id_),
@@ -1648,10 +1703,19 @@ class NodeItem final : public QGraphicsObject {
                                 *row.selector, *session_, QString::fromStdString(*stored));
                         }
                     }
+                const auto* cardNode = composition.graph().findNode(id_);
                 if (const auto* stored = std::get_if<std::int64_t>(value);
                     stored != nullptr && session_ && parameter != nullptr &&
                     parameter->schemaKey == "bloom.ocio-file.lut") {
                     refreshLutSelector(*row.selector, *session_, *stored);
+                } else if (stored != nullptr && session_ && parameter != nullptr &&
+                           cardNode != nullptr && !timeOnly_ &&
+                           parameter->schemaKey == document::kDataBlockParameterSchemaKey) {
+                    refreshDataBlockSelector(*row.selector, *session_, *cardNode);
+                } else if (stored != nullptr && session_ && parameter != nullptr &&
+                           cardNode != nullptr && !timeOnly_ &&
+                           parameter->schemaKey == document::kVideoAudioStreamParameterSchemaKey) {
+                    refreshAudioStreamSelector(*row.selector, *session_, *cardNode);
                 } else if (stored != nullptr) {
                     const QSignalBlocker blocker(row.selector);
                     for (int item = 0; item < row.selector->count(); ++item) {

@@ -28,6 +28,7 @@ namespace bloom::ui {
 
 class CompositionSession;
 class PropertiesRegistryRow;
+class ChannelChecklistField;
 class PropertiesAnchorGrid;
 
 class KeyframeDiamond;
@@ -80,7 +81,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QPointer<kit::KDropdown> imageLayerPicker_;
     QPointer<QLabel> imageColourNote_;
     QPointer<QWidget> imageColourNoteRow_;
-    QPointer<kit::KLineEdit> outputLayersField_;
+    // #487: the output layers are chosen from the connected channel set.
+    QPointer<ChannelChecklistField> outputLayersField_;
     // #364 Cryptomatte: the layer picker, the selected matte list and a name field.
     void addCryptomatteRows(const document::NodeRecord& node, kit::KSection* section);
     void populateCryptomatteRows(const document::NodeRecord& node);

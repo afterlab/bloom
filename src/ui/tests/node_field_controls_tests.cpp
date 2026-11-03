@@ -1,8 +1,12 @@
-// Item N2-1: a node card shows the same control Properties shows for the same parameter. Every
+// Item N2-1: a node card shows the same control Properties shows for the same parameter.
+// #487 adds the guard: a parameter whose values come from a closed or discoverable set (an enum, a
+// probe, the project's blocks, an asset's streams) never renders as free text or a raw number;
+// free text is only for the open values isOpenText() names. Every
 // registered node type is added to a real composition; every parameter whose schema is a closed
 // pick list (document enum, OCIO color space, LUT/audio/image/video asset, font, probe list) must
 // be a KDropdown on the card AND in Properties, bools a KSwitch, colors a KColorChip. The audit
 // table is printed so the docs table can be regenerated from it.
+#include "channel_checklist_field.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
 
@@ -12,6 +16,8 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter_enums.hpp>
+#include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -39,12 +45,44 @@ void expect(const bool condition, const std::string& message) {
 
 bool isPickList(const document::ParameterDefinition& p) {
     return !document::parameterEnumOptions(p.schemaKey).empty() ||
+           ui::isShuffleSlotSchema(p.schemaKey) ||
+           p.schemaKey == document::kDataBlockParameterSchemaKey ||
+           p.schemaKey == document::kVideoAudioStreamParameterSchemaKey ||
            ui::isInputColorSpaceSchema(p.schemaKey) || p.schemaKey == "bloom.ocio-file.lut" ||
            p.schemaKey == "bloom.image.asset" || p.schemaKey == "bloom.video.asset" ||
-           p.schemaKey == "bloom.audio.asset" || p.schemaKey == document::kTextFontParameterSchemaKey;
+           p.schemaKey == "bloom.audio.asset" ||
+           p.schemaKey == document::kTextFontParameterSchemaKey;
+}
+
+// #487: the String parameters whose value is open (the artist types it): text content, string
+// operands and values, and the Shuffle output layer name (it names a new layer). Every other String
+// has a closed or discoverable set and must be a dropdown or checklist. Adding a free-text String
+// means adding it here, deliberately.
+bool isOpenText(const std::string_view schemaKey) {
+    return schemaKey == document::kTextParameterSchemaKey || schemaKey == "bloom.operand.string" ||
+           schemaKey == "bloom.value.string" || schemaKey == "bloom.channel-shuffle.layer";
+}
+
+// #487: an Integer whose value is one of a closed or discoverable set (an enum, a choice such as a
+// data block or composition reference, an audio stream, a LUT asset) is never a number field.
+bool isClosedInteger(const document::ParameterDefinition& p) {
+    return p.valueKind == document::ParameterValueKind::Integer &&
+           (!document::parameterEnumOptions(p.schemaKey).empty() ||
+            document::parameterPresentation(p).kind ==
+                document::ParameterPresentationKind::Choice ||
+            p.schemaKey == document::kVideoAudioStreamParameterSchemaKey ||
+            p.schemaKey == "bloom.ocio-file.lut");
+}
+
+// Properties rows built by PropertiesEditor itself rather than PropertiesRegistryRow (the
+// Composition source's composition dropdown).
+bool hasPurposeBuiltPropertiesRow(const document::ParameterDefinition& p) {
+    return p.schemaKey == "bloom.composition-source.composition";
 }
 
 const char* controlName(QWidget* w) {
+    if (qobject_cast<ui::ChannelChecklistField*>(w))
+        return "checklist";
     if (qobject_cast<ui::kit::KDropdown*>(w)) return "dropdown";
     if (qobject_cast<ui::kit::KSwitch*>(w)) return "switch";
     if (qobject_cast<ui::kit::KColorChip*>(w)) return "color chip";
@@ -112,7 +150,9 @@ int main(int argc, char** argv) {
             const auto controls = editor.graphScene()->nodeControlsForRoleForTest(*id, role);
             QWidget* card = controls.isEmpty() ? nullptr : controls.front();
             ui::PropertiesRegistryRow row(session, *id, binding->parameterId, declared, nullptr);
-            QWidget* props = row.findChild<ui::kit::KDropdown*>();
+            QWidget* props = row.findChild<ui::ChannelChecklistField*>();
+            if (props == nullptr)
+                props = row.findChild<ui::kit::KDropdown*>();
             if (props == nullptr)
                 props = row.findChild<ui::kit::KRadioGroup*>();
             if (props == nullptr)
@@ -129,11 +169,31 @@ int main(int argc, char** argv) {
                 std::cout << "AUDIT|" << definition.key.typeId << '|' << declared.role << '|'
                           << declared.schemaKey << '|' << kindName(declared.valueKind) << '|'
                           << controlName(card) << '|' << controlName(props) << '\n';
-            if (card == nullptr)
-                continue; // not drawn as an editable card row (special rows, hidden, path)
             const bool hidden =
                 ui::propertiesRowVisibility(declared.role, declared.schemaKey) ==
                 ui::PropertiesRowVisibility::Hidden;
+            // #487 guard: a closed or discoverable value set never renders as free text or a raw
+            // number, on the card or in Properties (where a hidden row has a purpose-built one).
+            const bool propsShown = !hidden && !hasPurposeBuiltPropertiesRow(declared);
+            const auto freeText = [](QWidget* w) {
+                return qobject_cast<ui::kit::KLineEdit*>(w) != nullptr;
+            };
+            const auto rawNumber = [](QWidget* w) {
+                return qobject_cast<ui::kit::KValueField*>(w) != nullptr;
+            };
+            if (declared.valueKind == document::ParameterValueKind::String &&
+                !isOpenText(declared.schemaKey)) {
+                expect(!freeText(card), "card shows no free text for the closed " + label);
+                expect(!propsShown || !freeText(props),
+                       "Properties shows no free text for the closed " + label);
+            }
+            if (isClosedInteger(declared)) {
+                expect(!rawNumber(card), "card shows no number field for the closed " + label);
+                expect(!propsShown || !rawNumber(props),
+                       "Properties shows no number field for the closed " + label);
+            }
+            if (card == nullptr)
+                continue; // not drawn as an editable card row (special rows, hidden, path)
             if (isPickList(declared) && !hidden) {
                 expect(qobject_cast<ui::kit::KDropdown*>(card) != nullptr,
                        "card shows a dropdown for " + label);

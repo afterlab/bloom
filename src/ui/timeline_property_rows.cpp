@@ -293,6 +293,11 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
                                     document::isColor4AnimatableSchemaKey(parameter->schemaKey) ||
                                     !propertiesSelectorItems(parameter->schemaKey).empty()))
                     continue;
+                // #487: the legacy source Color Space is a choice of the one Input color space
+                // control (Properties and the node card), never a row of its own.
+                if (parameter->schemaKey == "bloom.image.color-space" ||
+                    parameter->schemaKey == "bloom.video.color-space")
+                    continue;
                 if (!heading) {
                     group(QObject::tr("Source"));
                     heading = true;

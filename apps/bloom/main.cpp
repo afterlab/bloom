@@ -36,6 +36,7 @@
 #include <bloom/ui/audio_playback_session.hpp>
 #include <bloom/ui/background_preview_controller.hpp>
 #include <bloom/ui/cache_purge_controller.hpp>
+#include <bloom/ui/channel_set_controller.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
@@ -409,7 +410,7 @@ int main(int argc, char* argv[]) try {
                      &bloom::ui::CompositionPreviewController::notifyProcessingCapacityChanged);
     // ADR 0026 Viewer channel inspection: the channel menu's worker listing reads the same
     // compiler and media base directory as evaluation.
-    previewController.setChannelListingProvider(
+    const auto channelListingProvider =
         [&snapshotCompiler, &cpuEvaluator](
             const bloom::document::Snapshot& snapshot,
             const bloom::document::CompositionId composition, const bloom::document::NodeId node,
@@ -419,7 +420,12 @@ int main(int argc, char* argv[]) try {
             return bloom::runtime::listChannelInspectionChoices(
                 snapshotCompiler, snapshot, composition, node, port,
                 cpuEvaluator.assetBaseDirectory(), time, colorIntent, cancellation);
-        });
+        };
+    previewController.setChannelListingProvider(channelListingProvider);
+    // #487: the Shuffle slot pickers and the channel/layer checklists read the channel set feeding
+    // their node through the same listing.
+    bloom::ui::ChannelSetController channelSetController(compositionSession, taskScheduler,
+                                                         taskUiBridge, channelListingProvider);
     // #364 Cryptomatte: the Properties layer picker and the Viewer eyedropper read the channel set
     // through the same compiler and media base directory on a worker.
     bloom::ui::CryptomatteController cryptomatteController(

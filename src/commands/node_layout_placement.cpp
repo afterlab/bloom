@@ -1,9 +1,11 @@
 #include <bloom/commands/node_layout_placement.hpp>
 
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -145,7 +147,12 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
             return !document::parameterEnumOptions(parameter.schemaKey).empty() ||
                    parameter.schemaKey.starts_with("bloom.ocio-") ||
                    parameter.schemaKey == document::kImageInputColorSpaceIdParameterSchemaKey ||
-                   parameter.schemaKey == document::kVideoInputColorSpaceIdParameterSchemaKey;
+                   parameter.schemaKey == document::kVideoInputColorSpaceIdParameterSchemaKey ||
+                   // #487: a data reader's block dropdown and a channel checklist.
+                   parameter.schemaKey == document::kDataBlockParameterSchemaKey ||
+                   parameter.schemaKey == "bloom.channel-copy.select" ||
+                   parameter.schemaKey == "bloom.channel-remove.select" ||
+                   parameter.schemaKey == document::kCompositionOutputLayersParameterSchemaKey;
         });
     // A vector parameter takes one row per component (they share the first one's socket).
     double rows = 0.0;
