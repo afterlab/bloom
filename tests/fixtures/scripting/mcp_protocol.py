@@ -383,11 +383,17 @@ class Protocol(unittest.TestCase):
                                           'destination': str(pathlib.Path(directory) / 'frame.png')})
                 process.stdin.write((READY + '\n' + render + '\n').encode())
                 process.stdin.flush()
-                time.sleep(0.15)
+                # Cancellation names the request that is running when it arrives, so send it once
+                # the render is writing frames rather than after a guessed delay; one sent while
+                # the render was still queued would be ignored and the whole range would render.
+                while (process.poll() is None
+                       and not any(pathlib.Path(directory).glob('frame*.png'))):
+                    time.sleep(0.005)
                 cancellation = {'jsonrpc': '2.0', 'method': 'notifications/cancelled',
                                 'params': {'requestId': 2}}
-                output, diagnostic = process.communicate((json.dumps(cancellation) + '\n').encode(),
-                                                          timeout=30)
+                # The cancelled result answers at once; process exit after end of input then
+                # scales with machine load (device teardown), so ctest's test timeout bounds it.
+                output, diagnostic = process.communicate((json.dumps(cancellation) + '\n').encode())
                 self.assertEqual(process.returncode, 0, diagnostic.decode())
                 result = json.loads(output.splitlines()[-1])
                 self.assertTrue(result['result']['isError'], result)
