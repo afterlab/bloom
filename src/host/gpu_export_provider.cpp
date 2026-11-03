@@ -137,11 +137,17 @@ struct GpuExportProvider::State final {
             pool->bindHostRetirement(packedHostOwner);
             const auto originalProvider = options.mediaContextProvider;
             const auto originalContext = options.mediaContext;
+            // Video decode sessions follow the pool's retirement owner. Sharing the evaluator's
+            // video sources would rebind them between the two owners on every frame, dropping
+            // each session and its verified source snapshot (a full copy and hash of the file).
+            auto video = runtime::GpuSceneMediaContext::makeVideoSources();
             // Capture the pool, never State: contexts may outlive this provider.
-            std::function<runtime::GpuSceneMediaContext()> wrapped = [pool, originalProvider,
+            std::function<runtime::GpuSceneMediaContext()> wrapped = [pool, video,
+                                                                      originalProvider,
                                                                       originalContext] {
                 auto context = originalProvider ? originalProvider() : originalContext;
                 context.operationCache = pool;
+                context.videoContext = video;
                 return context;
             };
             {

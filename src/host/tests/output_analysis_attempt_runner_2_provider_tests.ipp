@@ -566,6 +566,13 @@ void testOwnedPoolRetentionSessions(Expectations& checks) {
         checks.expect(context.operationCache && context.operationCache != cpu.operationCache() &&
                           context.assetBaseDirectory == "/retained/context/identity",
                       "owned-retention: private same-ledger pool preserves source context");
+        // The evaluator's video sources follow the evaluator's own cache; sharing them would
+        // rebind their retirement owner on every frame and drop each decode session with its
+        // verified source snapshot (a full copy and hash of the file per frame).
+        const auto again = host::detail::GpuExportProviderTestAccess::mediaContext(*provider);
+        checks.expect(context.videoContext && context.videoContext == again.videoContext &&
+                          context.videoContext != cpu.videoContext(),
+                      "owned-retention: the pool keeps its own video sources across frames");
         if (!context.operationCache) {
             checks.expect(false, "owned-retention: required context missing");
             return;

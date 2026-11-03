@@ -619,6 +619,11 @@ struct GpuSceneMediaContext final {
 
     [[nodiscard]] static GpuSceneMediaContext
     fromEvaluator(const CpuCompositionEvaluator& evaluator);
+    // Video decode sessions belong to one operation cache's retirement owner. A context that
+    // substitutes its own operation cache carries its own video sources too: rebinding a shared
+    // one to a second owner drops every session with its verified source snapshot, and the next
+    // frame copies and hashes the whole file again.
+    [[nodiscard]] static std::shared_ptr<detail::VideoSourceContext> makeVideoSources();
 };
 
 class PreparedGpuScene final {

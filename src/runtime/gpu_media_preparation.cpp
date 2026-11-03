@@ -39,6 +39,10 @@ GpuSceneMediaContext GpuSceneMediaContext::fromEvaluator(const CpuCompositionEva
     return context;
 }
 
+std::shared_ptr<detail::VideoSourceContext> GpuSceneMediaContext::makeVideoSources() {
+    return std::make_shared<detail::VideoSourceContext>();
+}
+
 std::shared_ptr<const render::Rgba32fImage>
 GpuSceneBuildUploads::find(const std::string& key) const {
     const std::lock_guard lock(mutex_);

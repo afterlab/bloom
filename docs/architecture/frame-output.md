@@ -265,6 +265,12 @@ Full-frame digests on the export paths, and why each remains:
 None is removed; every one runs on the accelerated rounds, and the process-pixel digest runs on the
 frame's own analysis worker while other frames of the same export evaluate and encode.
 
+A movie source is captured and hashed once per export, not once per frame. The export root's own
+source pool carries its own video sources: sharing the evaluator's would rebind their retirement
+owner between the two caches on every frame, dropping each decode session with its verified source
+snapshot, so every frame copied and hashed the whole file again (a 206 MB ProRes 422 HQ source,
+227 captures in a 240-frame export; 0.127 to 0.077 s per frame).
+
 ## Preservation And Loss Report
 
 Before a file task is admitted, the output adapter produces a deterministic `OutputAnalysis` with
