@@ -186,9 +186,12 @@ void nodeGroupRecords() {
 }
 void compositionNesting() {
     const auto* definition = builtInNodeDefinitions().find(kCompositionSourceNodeType, 1);
-    expect(definition && definition->outputs.size() == 2 && definition->parameters.size() == 4 &&
-               definition->category == NodeCategory::Sources,
-           "composition source definition includes image, audio and time mapping");
+    // #480: the third output is the precomp's channel set.
+    expect(definition && definition->outputs.size() == 3 &&
+               definition->outputs[2].name == "channels" &&
+               definition->outputs[2].valueKind == SocketValueKind::ChannelSet &&
+               definition->parameters.size() == 4 && definition->category == NodeCategory::Sources,
+           "composition source definition includes image, audio, channels and time mapping");
     if (!definition)
         return;
     const auto makeComposition = [&](const std::uint64_t id, const std::int64_t target) {
