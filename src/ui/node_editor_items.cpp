@@ -6,6 +6,7 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -364,6 +365,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kAlphaAssociationNodeType)
         return QStringLiteral("unmult premultiply unpremultiply premult unpremult straight "
                               "remove color matting matte black white");
+    // #504.
+    if (typeId == document::kColorizeNodeType)
+        return QStringLiteral("fill tint tritone duotone gradient map ramp colorama black white "
+                              "monochrome greyscale grayscale toner channel mixer");
     return {};
 }
 

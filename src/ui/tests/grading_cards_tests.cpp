@@ -1,5 +1,5 @@
 // #501: every grading card at the default width -- Grade, Levels, Curves, Hue/Saturation,
-// Exposure, Offset and Multiply -- paints only inside its card, keeps every widget inside it and
+// Exposure, Offset and Multiply (#504: and Colorize in each of its modes) -- paints only inside its card, keeps every widget inside it and
 // cuts no label short (the #499 rules), shows its numbers with their units, and has no lighter
 // sub-rectangle or dark band in its graphs. With BLOOM_GRAMMAR_ARTIFACT_DIR set it also writes each
 // card, as the node editor draws it at a device pixel ratio of 2, to <dir>/<name>-card.png.
@@ -24,13 +24,16 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/ui/composition_authoring.hpp>
+#include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
+#include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -356,6 +359,96 @@ void hueSaturationCard() {
     expect(stored(fixture.session, fixture.node, "hue") == 0.0, "a double-click resets the hue");
 }
 
+// #504: the Colorize card in every mode paints inside its card with no label cut short and shows
+// only its mode's controls; the ramp's midtones stop drags the midpoint as one command, a
+// Shift-press jumps it, a double-click resets it, and a click on a stop opens its colour picker.
+void colorizeCard() {
+    CardFixture fixture(document::kColorizeNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::ColorizeCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Colorize draws its card widget");
+    const auto mode = ui::nodeRoleParameter(fixture.session, fixture.node, "mode");
+    expect(mode.has_value(), "Colorize binds its mode");
+    if (card == nullptr || !mode)
+        return;
+    expect(card->mode() == document::kColorizeTint, "a new Colorize is a Tint");
+    const std::array<std::pair<std::int64_t, const char*>, 5> modes{
+        {{document::kColorizeFill, "colorize-fill"},
+         {document::kColorizeTint, "colorize-tint"},
+         {document::kColorizeTritone, "colorize-tritone"},
+         {document::kColorizeGradientMap, "colorize-gradient-map"},
+         {document::kColorizeBlackAndWhite, "colorize-black-and-white"}}};
+    for (const auto& [value, name] : modes) {
+        expect(fixture.session.setParameterValue(*mode, value, QStringLiteral("Set Mode")),
+               "the Colorize mode is set");
+        QApplication::processEvents();
+        expect(card->mode() == value, "the Colorize card follows its node's mode");
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << name << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, name))
+            ++failures;
+        capture(*fixture.item, *fixture.editor, QString::fromLatin1(name));
+        const bool ramp =
+            value == document::kColorizeTritone || value == document::kColorizeGradientMap;
+        expect(card->colorRow("fillColor")->isVisibleTo(card) == (value == document::kColorizeFill) &&
+                   card->rampBar()->isVisibleTo(card) ==
+                       (ramp || value == document::kColorizeTint) &&
+                   card->colorRow("midtones")->isVisibleTo(card) == ramp &&
+                   card->valueRow("reds")->isVisibleTo(card) ==
+                       (value == document::kColorizeBlackAndWhite) &&
+                   card->valueRow("amount")->isVisibleTo(card),
+               "the Colorize card shows only its mode's controls");
+        expect(card->socketY("amount").has_value() &&
+                   card->socketY("magentas").has_value() ==
+                       (value == document::kColorizeBlackAndWhite) &&
+                   card->socketY("highlights").has_value() ==
+                       (ramp || value == document::kColorizeTint) &&
+                   card->showsRole("mode") &&
+                   card->showsRole("source") == (value == document::kColorizeGradientMap) &&
+                   card->showsRole("cycle") == (value == document::kColorizeGradientMap) &&
+                   !card->showsRole("phase"),
+               "each shown value keeps its socket beside its row; the map's choices are rows");
+    }
+    expect(fixture.session.setParameterValue(*mode, document::kColorizeTritone,
+                                             QStringLiteral("Set Mode")),
+           "the Colorize mode is Tritone");
+    QApplication::processEvents();
+    auto& bar = *card->rampBar();
+    expect(bar.ramp() && bar.stops().size() == 3, "the Tritone ramp has three stops");
+    // The gradient shows the node's own colours: black at the left, white at the right.
+    expect(bar.colourAt(0.0).lightnessF() < 0.05F && bar.colourAt(1.0).lightnessF() > 0.95F,
+           "the ramp bar draws the shadows and highlights colours at its ends");
+    const auto commands = fixture.stack.size();
+    const QPointF from = bar.stopCentre(1);
+    const double travel = bar.barRect().width() * 0.2;
+    mouse(bar, QEvent::MouseButtonPress, from);
+    mouse(bar, QEvent::MouseMove, from + QPointF(travel, 0.0));
+    mouse(bar, QEvent::MouseButtonRelease, from + QPointF(travel, 0.0));
+    const auto dragged = stored(fixture.session, fixture.node, "midpoint");
+    expect(fixture.stack.size() == commands + 1 && dragged && std::abs(*dragged - 0.38) < 1e-6,
+           "dragging the midtones stop moves the midpoint as one command");
+    const QPointF half(bar.barRect().left() + bar.barRect().width() * 0.5,
+                       bar.barRect().center().y());
+    mouse(bar, QEvent::MouseButtonPress, half, Qt::ShiftModifier);
+    mouse(bar, QEvent::MouseButtonRelease, half);
+    const auto jumped = stored(fixture.session, fixture.node, "midpoint");
+    expect(fixture.stack.size() == commands + 2 && jumped && std::abs(*jumped - 0.5) < 1e-6,
+           "a Shift-press on the ramp jumps the midpoint to the pointer");
+    mouse(bar, QEvent::MouseButtonDblClick, half);
+    expect(stored(fixture.session, fixture.node, "midpoint") == 0.18,
+           "a double-click on the ramp resets the midpoint");
+    const auto before = fixture.stack.size();
+    mouse(bar, QEvent::MouseButtonPress, bar.stopCentre(0));
+    mouse(bar, QEvent::MouseButtonRelease, bar.stopCentre(0));
+    auto* chip = card->colorRow("shadows")->chip();
+    expect(chip->isPickerOpen() && fixture.stack.size() == before,
+           "a click on a stop opens its colour picker and changes nothing");
+    chip->closePicker();
+    expect(card->colorRow("shadows")->reset(), "a colour row resets to its default");
+}
+
 // A group diamond keys every value of the group as one command, and unkeys them as one.
 void groupDiamond() {
     CardFixture fixture(document::kGradeNodeType);
@@ -388,6 +481,7 @@ int main(int argc, char** argv) {
     exposureCard();
     hueSaturationCard();
     groupDiamond();
+    colorizeCard();
     if (failures != 0)
         return 1;
     std::cout << "PASS: grading cards\n";

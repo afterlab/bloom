@@ -536,9 +536,10 @@ void testSearchKeyboardAndMenus() {
             return nodes;
         };
         // #500: the image grades are their own section, apart from colour management.
-        expect(entries("nodeAddCategoryMenu.Grade") == QStringList{"Curves", "Exposure", "Grade",
-                                                                   "Hue/Saturation", "Invert",
-                                                                   "Levels", "Multiply", "Offset"},
+        // #504: and Colorize.
+        expect(entries("nodeAddCategoryMenu.Grade") ==
+                   QStringList{"Colorize", "Curves", "Exposure", "Grade", "Hue/Saturation",
+                               "Invert", "Levels", "Multiply", "Offset"},
                "Grade offers the image grades");
         expect(entries("nodeAddCategoryMenu.Color Management") ==
                    QStringList{"OCIO Color Space Transform", "OCIO File Transform"},

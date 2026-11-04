@@ -21,6 +21,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/host/font_catalogue.hpp>
@@ -85,6 +86,11 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
             ? QObject::tr("White background")
         : schemaKey == document::kAlphaAssociationBackgroundSchemaKey
             ? QObject::tr("Matte color")
+        // #504 Colorize: what each colour and choice is for.
+        : schemaKey == document::kColorizeColorSchemaKey ? QObject::tr("Fill color")
+        : schemaKey == document::kColorizeSourceSchemaKey ? QObject::tr("Map from")
+        : schemaKey == document::kColorizeCycleSchemaKey  ? QObject::tr("Outside the ramp")
+        : schemaKey == document::kColorizePhaseSchemaKey  ? QObject::tr("Phase (cycles)")
         : schemaKey == "bloom.rotate-90.quarter-turns" ? QObject::tr("Quarter turns (clockwise)")
         : schemaKey == "bloom.blur.radius"             ? QObject::tr("Radius (pixels)")
         : schemaKey == "bloom.blur.edge"               ? QObject::tr("Edges")

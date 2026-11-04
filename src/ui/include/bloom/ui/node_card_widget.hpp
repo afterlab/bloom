@@ -15,7 +15,8 @@
 // card and Properties ask. #498: the Curves node's curve graph is the third (curve_graph.hpp).
 // #501: Hue/Saturation draws its hue strip and saturation slider (hue_saturation_widget.hpp), and
 // Exposure, Offset and Multiply their amount's slider (scalar_slider_widget.hpp); each draws its
-// values' rows itself, with their sockets beside them (socketY). Every grading widget follows the
+// values' rows itself, with their sockets beside them (socketY). #504: Colorize draws its mode's
+// colour chips, gradient ramp and channel mix (colorize_widget.hpp). Every grading widget follows the
 // shared rules of grading_controls.hpp. No other existing node has a graphical main control: a
 // shape, mask, gradient or transform is drawn and dragged in the Viewer, and every other node's
 // controls are values, choices and switches.

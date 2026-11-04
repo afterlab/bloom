@@ -564,6 +564,7 @@ target_sources(
         curve_graph.cpp
         grade_wheels.cpp
         grading_controls.cpp
+        colorize_widget.cpp
         hue_saturation_widget.cpp
         scalar_slider_widget.cpp
         levels_graph.cpp
@@ -749,6 +750,7 @@ target_sources(
             include/bloom/ui/curve_graph.hpp
             include/bloom/ui/grade_wheels.hpp
             include/bloom/ui/grading_controls.hpp
+            include/bloom/ui/colorize_widget.hpp
             include/bloom/ui/hue_saturation_widget.hpp
             include/bloom/ui/scalar_slider_widget.hpp
             include/bloom/ui/levels_graph.hpp
