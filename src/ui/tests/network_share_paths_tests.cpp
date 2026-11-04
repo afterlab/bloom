@@ -11,6 +11,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileDialog>
 #include <QImage>
 #include <QMimeData>
@@ -166,7 +167,11 @@ void sidebarTest() {
     // so this test exercises the path the helper actually affects.
     QFileDialog dialog;
     dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+    // #533: start from a known sidebar, not whatever the machine's saved dialog settings hold (a
+    // real mounted share saved there is not under the fake root, so the helper drops it).
+    dialog.setSidebarUrls({QUrl::fromLocalFile(QDir::homePath())});
     const auto before = dialog.sidebarUrls();
+    require(before.size() == 1, "the sidebar starts from the test's own place");
     ui::configureFileDialogSidebar(dialog, fake.rootPath());
     const auto after = dialog.sidebarUrls();
     require(after.size() == before.size() + 2, "the sidebar gains exactly the two mounted shares");
@@ -262,10 +267,25 @@ void assetTreeDropTest() {
 } // namespace
 
 int main(int argc, char** argv) {
-    // Qt's widget file dialog saves its sidebar into the user's Qt settings; keep a test's fake
-    // shares out of the real ones.
+    // #533: Qt's widget file dialog reads and saves its sidebar in the user's Qt settings. Run
+    // under a private home and configuration directory so neither the developer's saved places
+    // nor an earlier run's fake shares reach the test, and the test writes nothing into them.
+    const QTemporaryDir home;
+    if (!home.isValid()) {
+        std::cerr << "a private home directory could not be created\n";
+        return 1;
+    }
+    qputenv("HOME", QFile::encodeName(home.path()));
+    qputenv("USERPROFILE", QFile::encodeName(home.path()));
+    qputenv("XDG_CONFIG_HOME", QFile::encodeName(home.path() + QStringLiteral("/config")));
+    qputenv("XDG_DATA_HOME", QFile::encodeName(home.path() + QStringLiteral("/data")));
+    qputenv("XDG_CACHE_HOME", QFile::encodeName(home.path() + QStringLiteral("/cache")));
     QStandardPaths::setTestModeEnabled(true);
     QApplication app(argc, argv);
+    if (!QDir::homePath().startsWith(home.path())) {
+        std::cerr << "the test does not run under its private home directory\n";
+        return 1;
+    }
     try {
         mappingTests();
         mountedSharesTest();
