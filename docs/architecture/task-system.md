@@ -271,9 +271,13 @@ Sample serials are separate from processing-phase release revisions and all imag
 Preview retries require a newer fresh usable sample, preserving the active/newest gate and shutdown
 barriers. Completion or own phase disposal is not evidence of a new default epoch. This is default
 propagation, not a second quota ledger or aggregate physical memory accounting. Delivered host
-capacity is measured available memory minus the RAM headroom preference; RAM preview sizes its
-frames in flight from the root's free usable capacity (`previewFramesThatFit`), at least one and at
-most one per hardware thread.
+capacity is measured available memory minus the RAM headroom preference; RAM preview and playback
+read-ahead size their frames in flight from the usable capacity measured now and the device peak
+of recently released phases (`previewFramesThatFit`, #539), re-measured at every
+frame boundary so the count shrinks when other programs take RAM or VRAM; at least one and at most
+one per hardware thread. Speculative frames (RAM Preview fill and read-ahead) are admitted in the
+Background class, so the Viewer's frame for the playhead, scrubbing and edits go first, and an edit
+cancels the RAM Preview frames it made stale.
 
 The numeric/controller controls, bounded ordinary-default Full/Half witnesses, affected strict/
 Linux fallback checks and final repository quality pass within the bounded scope recorded in the

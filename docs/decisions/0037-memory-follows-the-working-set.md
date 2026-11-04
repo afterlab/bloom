@@ -108,6 +108,22 @@ of a run (at least one frame when one fits). Playback read-ahead keeps at most e
 sixteen the frames nearest the playhead landed later, so cold playback ran slower and dropped more
 frames than with eight. The playback preroll window stays at most eight frames.
 
+### Frames in flight follow measured room (amendment, 2026-11-05)
+
+The width of a RAM fill or of playback read-ahead is re-measured at every frame boundary (#539),
+not chosen once when nothing is in flight: it is as many frames as fit the usable capacity
+measured now, with the most native storage recently released phases held at one time as each
+frame's device need and the stated one-source estimate as its host need (a quarter of usable RAM
+in all), at most one per hardware thread and, for read-ahead, eight. Usable capacity falls when
+other programs take memory, so the width shrinks with it; claims are not subtracted, because
+frames already in flight are part of the count rather than competitors for it. A many-layer fill's
+measured host claims include every layer's retained sources, and sizing the width from them halved
+an L50 fill's CPU use, so the host side keeps the estimate and admission makes a frame that does
+not fit wait.
+When not even one frame fits the room measured now but one fits what the machine could ever give
+(the host ceiling, and the device-local heap minus the VRAM headroom), the width is one frame that
+waits for the room another program holds, so the run resumes instead of ending.
+
 ### Reused native storage holds no content (amendment, 2026-11-04)
 
 The preview device parks a frame's released native images and staging buffers and gives them to the

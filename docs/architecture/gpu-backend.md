@@ -1383,8 +1383,11 @@ no fraction, quarter, half-of-remaining share or whole-device ceiling. A policy 
 headroom until its composition root delivers the preference; the desktop applies the saved value
 at startup and on every Preferences change, and a headless export root applies the 2 GiB default.
 
-**Claims are needs.** A phase claims fixed output and metadata bytes and three times its source
-need (decode, conversion and upload overlap) on the host. The source need is its minimum source
+**Claims are needs.** A phase claims fixed output and metadata bytes, its source need and one
+source's decode and conversion scratch on the host. Preparation decodes and converts its sources
+one at a time, so the scratch is twice the largest single source the envelope states
+(`largestSourceBytes`, #472), never twice the whole source need; when a source's extent is unknown
+the scratch stays twice the source need. The source need is its minimum source
 bytes until its envelope has been measured (see below). Its device need is its working
 bytes plus its minimum executor bytes (the live-image peak; GPU scene preparation raises the
 minimum to the preflight live-image peak for previews and final renders alike). GPU scene
@@ -1408,6 +1411,69 @@ such a refusal after a release. Storage freed within a stage refills its claim u
 stage's end releases the rest at once, quietly (the phase's own release is the wake-up, so a failed
 attempt's cleanup cannot retry itself). Device claims at any time are therefore the root's own
 native allocations plus the unallocated needs of the stages running.
+
+**Claims follow the live set, and only while the scene executes (#539).** A scene's intermediates
+that the executor publishes to the reusable scene cache leave the phase when they are published:
+they stay charged to the root as retention that gives way on demand, and the phase's allocation,
+its refill and its measured peak count only the storage it still holds. Before, every cached
+intermediate of a Glow or blur chain stayed in the phase's allocation, so a 2K frame measured a
+3.8 GB peak and claimed that for every later frame of its envelope. When the scene has executed, the phase's unallocated claim goes back to the root
+at once (`endDeviceExecution`); from then on it may hold at most its stated working allowance
+unallocated (the display, packed transfer or readback), and a frame that displays, transfers or
+waits to be shown holds only the storage it actually has.
+
+**Capacity never sends a frame to the CPU (#539).** A resident preview frame whose scene executor
+refuses it for device capacity (its byte limit, or a native allocation the live room cannot hold)
+waits for capacity instead of taking the CPU path. It asks the device caches to give way (parked
+native storage, then the reusable scene cache) and completes with an admission retry, so it runs on
+the GPU again once room returns (`capacityWaits` in the service counters). Preparation waits the same
+way when a source does not fit a source ceiling that other admitted work had cut short, and when an
+effect's GPU program could not be compiled because the shader compiler timed out, could not start or
+crashed (`compile-unavailable`; many frames compiling at once on a loaded machine): neither says
+anything about the scene, and both used to send a GPU-capable frame to the CPU, where a large Glow
+took over a minute and stalled the RAM fill behind it. Device memory another program holds is
+waited for too. Admission refuses only a device need above the device's ceiling (its device-local
+heap minus the VRAM headroom, `deviceCeilingBytes`); a need above the measured free room but within
+the ceiling, including a measured zero, waits for that room to come back. A frame whose executor
+ran short (its byte limit, or a native image or buffer allocation the device or the live room
+refused) waits the same way whenever the room can come back: the device caches can give way, other
+admitted frames will release what they hold, or another program took device memory while it ran
+(the measured capacity fell below what it was admitted with). When nothing fits now, RAM preview
+and read-ahead keep one frame waiting so the run resumes when room returns. Before, a second program
+filling the device made every frame `BudgetRefused`, and the fill ended with nothing cached. The
+explicit CPU fallback remains only for a frame that already had every byte the device could give
+with nothing left to evict, for an unsupported subset and for device loss.
+
+**Idle means small (#539).** When the preview owner has had no preview work for
+`idleTrimDelay` (one second), it gives back retained device memory: the reusable scene cache and
+all parked native storage. What is on screen and the finished frames the UI holds stay; the next
+frame re-creates what it needs (`idleTrims`, `idleTrimmedBytes`).
+
+**Measured (#539, #472).** Cold RAM fills of 120 frames on the RTX 4090 profile
+([benchmark results](../development/benchmark-results-2026-10-31.md)), two footage layers with a
+Glow of size 64 or 244, or several large Gaussian blurs, one run each before and after #539
+(fill rates vary by about a tenth between runs):
+
+| Scene | Peak device storage per frame, before / after | Fill fps, before / after | CPU-fallback frames after |
+|---|---|---|---|
+| 2048x858, Glow 64 | 3.66 GB / 0.55 GB | 17.6 / 17.4 | 0 |
+| 2048x858, Glow 244 | 3.84 GB / 0.65 GB | 9.5 / 9.6 | 0 |
+| 4K, Glow 64 | 3.76 GB / 0.76 GB | 17.3 / 15.4 | 0 |
+| 4K, Glow 244 | 3.95 GB / 0.84 GB | 8.1 / 9.2 | 0 |
+| 4K, Gaussian blurs | 1.76 GB / 0.79 GB | 10.2 / 10.2 | 0 |
+
+The scene cache still retains up to about 5 GB while a fill runs; it is retention that gives way on
+demand, not a claim of the frames. A Viewer frame requested during a 4K Glow 244 fill took 0.64 s
+(median of six, at most 1.09 s) while fill frames each spent about 1.7 s in flight. One second after
+the fill, device memory Bloom holds fell from 5.7 GB to 0.27 GB. With a second program allocating
+14.5 GiB of the 24 GiB device a few seconds into the 4K Glow 244 fill, the fill ran one or two
+frames at a time in the room left and completed all 120 frames in 43 s with no CPU fallback; before,
+the same run sent 163 frames to the CPU, cached 11 and took 240 s. With 18 GiB taken before the fill
+started, the fill waited for the room and then completed (before: every frame was refused and the
+fill ended with nothing cached). With L25 and L50 stacks of 1080p EXR half layers (the `layers`
+suite), host claims follow one source's scratch, so the fill keeps its frames: L25 cached 194 of 240
+frames with no evictions (before 155 with 84) at 8.1 fps (before 8.9), and L50 cached 213 with 27
+evictions (before 38 with 192) at 4.6 fps (before 4.9).
 
 **Device needs follow measured peaks (#417).** The stated device need is a fixed estimate: the
 desktop's preview working allowance is 512 MiB of room for one general OCIO display job (the arm's
