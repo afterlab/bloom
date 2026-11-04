@@ -3,9 +3,12 @@
 // it. Every parity op also carries a full description.
 
 #include <bloom/document/graph.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/scripting/json_script.hpp>
+#include <bloom/scripting/merge_entry_view.hpp>
+#include <bloom/scripting/operation_registry.hpp>
 #include <bloom/scripting/session.hpp>
 
 #include <algorithm>
@@ -648,7 +651,9 @@ void descriptions() {
           "bloom.node.add-feeding", "bloom.node.add-fed-by", "bloom.node.insert-reroute",
           "bloom.node.arrange", "bloom.asset.delete-items", "bloom.composition.add-from-assets",
           "bloom.parameter.reset", "bloom.node.set-parameter-value",
-          "bloom.node.set-video-audio-stream"}) {
+          "bloom.node.set-video-audio-stream", "bloom.merge.ensure-entry-layer",
+          "bloom.merge.insert-layer-node", "bloom.merge.add-adjustment-layer",
+          "bloom.merge.set-entry-parameter"}) {
         const auto* descriptor = registry.find(id);
         expect(descriptor != nullptr, std::string(id) + " is registered");
         if (descriptor == nullptr)
@@ -657,6 +662,354 @@ void descriptions() {
         for (const auto* part : {"Errors:", "Undo:", "MCP example:"})
             expect(text.find(part) != std::string::npos, std::string(id) + " describes " + part);
     }
+}
+
+
+// #502 Every Merge entry is a layer: a plain entry (a source wired straight into the Merge) is
+// edited by merge and slot, its own layer created in the same undo step; an Adjustment layer is
+// added; a Layer node is inserted and adopts the entry's values; everything reads back.
+void mergeEntryOperations() {
+    Fixture fixture;
+    fixture.refresh();
+    const auto merge = fixture.composition(fixture.main).graph().outputMergeId();
+    expect(merge.has_value(), "the composition has an output Merge");
+    if (!merge)
+        return;
+    const auto composition = Value(StableId{fixture.main.value()});
+    const auto mergeId = Value(StableId{merge->value()});
+    const auto plainEntry = [&] {
+        auto node = fixture.run("bloom.node.add", {{"composition", composition},
+                                                   {"nodeType", Value("bloom.solid-source")}});
+        const auto nodes = Fixture::outputs<document::NodeId>(node, "node");
+        if (nodes.empty())
+            return document::LayerSlotId{};
+        auto connected = fixture.run("bloom.node.connect",
+                                     {{"composition", composition},
+                                      {"sourceNode", Value(StableId{nodes.front().value()})},
+                                      {"sourcePort", Value("image")},
+                                      {"targetNode", mergeId},
+                                      {"role", Value("content")}});
+        const auto slots = Fixture::outputs<document::LayerSlotId>(connected, "layerSlot");
+        return slots.empty() ? document::LayerSlotId{} : slots.front();
+    };
+    const auto view = [&](const document::LayerSlotId slot) {
+        fixture.refresh();
+        return scripting::mergeEntryView(fixture.composition(fixture.main), *merge, slot);
+    };
+    const auto roleValue = [](const scripting::MergeEntryView& entry, const std::string_view role)
+        -> std::optional<document::ParameterValue> {
+        for (const auto& item : entry.roles)
+            if (item.role == role)
+                return item.value;
+        return std::nullopt;
+    };
+    const auto first = plainEntry();
+    const auto second = plainEntry();
+    expect(first.isValid() && second.isValid(), "two plain entries are wired into the Merge");
+    if (!first.isValid() || !second.isValid())
+        return;
+    const auto at = [&](const document::LayerSlotId slot) {
+        return Arguments{{"composition", composition},
+                         {"merge", mergeId},
+                         {"slot", Value(StableId{slot.value()})}};
+    };
+
+    // A plain entry reads back with no layer and the identity defaults it renders with.
+    auto plain = view(first);
+    expect(plain && plain->kind == scripting::EntryLayerKind::None && plain->layer == nullptr &&
+               roleValue(*plain, "opacity") == document::ParameterValue(1.0) &&
+               roleValue(*plain, "blendMode") == document::ParameterValue(std::int64_t{0}) &&
+               plain->outputMerge,
+           "a plain entry reports no layer and its default values");
+
+    // A layer edit by merge and slot creates the entry layer in the same undo step.
+    const auto before = fixture.stack(fixture.main);
+    auto args = at(first);
+    args["solo"] = Value(true);
+    auto solo = fixture.run("bloom.layer.set-solo", args);
+    expect(solo.succeeded(), "set-solo addresses a plain entry by merge and slot");
+    const auto soloLayers = Fixture::outputs<document::LayerId>(solo, "layer");
+    expect(soloLayers.size() == 1 &&
+               !Fixture::outputs<document::ParameterId>(solo, "parameter.opacity").empty(),
+           "the created entry layer and its parameters are output");
+    plain = view(first);
+    expect(plain && plain->kind == scripting::EntryLayerKind::Entry && plain->layer &&
+               plain->layer->solo && plain->layer->entryOwned() &&
+               plain->pivot == document::LayerPivot::Frame && !soloLayers.empty() &&
+               plain->layer->layerId == soloLayers.front(),
+           "the entry layer holds the edit");
+    expect(fixture.session->undo().succeeded(), "undo the entry edit");
+    plain = view(first);
+    expect(plain && plain->kind == scripting::EntryLayerKind::None,
+           "one undo removes both the edit and the entry layer");
+    expect(fixture.stack(fixture.main) == before, "undo restores the stack");
+    expect(fixture.session->redo().succeeded(), "redo the entry edit");
+    plain = view(first);
+    expect(plain && plain->layer && plain->layer->solo, "redo replays both");
+
+    // Once the layer exists, merge and slot keep addressing it; layer and merge together refuse.
+    args = at(first);
+    args["name"] = Value("Plate");
+    expect(fixture.run("bloom.layer.rename", args).succeeded(), "rename an entry layer by entry");
+    plain = view(first);
+    expect(plain && plain->layer && plain->layer->name == "Plate", "the entry layer is renamed");
+    args["layer"] = Value(StableId{soloLayers.empty() ? 1 : soloLayers.front().value() + 1000});
+    auto both = fixture.run("bloom.layer.rename", args);
+    expect(!both.succeeded(), "layer together with merge and slot must name that entry's layer");
+    args["layer"] = Value(StableId{plain && plain->layer ? plain->layer->layerId.value() : 0});
+    args["name"] = Value("Plate 2");
+    expect(fixture.run("bloom.layer.rename", args).succeeded(),
+           "layer together with merge and slot naming that entry's layer applies");
+    auto halfAddress = fixture.run("bloom.layer.set-shy", {{"composition", composition},
+                                                           {"merge", mergeId},
+                                                           {"shy", Value(true)}});
+    expect(!halfAddress.succeeded() && halfAddress.diagnostic &&
+               halfAddress.diagnostic->argument == "slot",
+           "merge without slot is refused naming slot");
+
+    // A selected layer does not fill `layer` when the call names an entry.
+    const auto registry = scripting::OperationRegistry::builtIn();
+    if (const auto* descriptor = registry.find("bloom.layer.set-shy")) {
+        auto contextual = at(second);
+        scripting::OperationContext context;
+        context.layers = {12345};
+        const auto filled = scripting::applyContextDefaults(descriptor->schema, contextual, context);
+        expect(std::ranges::find(filled, std::string("layer")) == filled.end() &&
+                   !contextual.contains("layer"),
+               "the selected layer is not used when merge names an entry");
+    }
+
+    // An entry's opacity by role: materializes its layer in one undo step.
+    args = at(second);
+    args["role"] = Value("opacity");
+    args["value"] = Value(0.5);
+    auto opacity = fixture.run("bloom.merge.set-entry-parameter", args);
+    expect(opacity.succeeded(), "set-entry-parameter sets a plain entry's opacity");
+    auto entry = view(second);
+    expect(entry && entry->kind == scripting::EntryLayerKind::Entry &&
+               roleValue(*entry, "opacity") == document::ParameterValue(0.5),
+           "the entry layer holds opacity 0.5");
+    expect(fixture.session->undo().succeeded(), "undo the opacity edit");
+    entry = view(second);
+    expect(entry && entry->kind == scripting::EntryLayerKind::None,
+           "undo removes the opacity edit and its entry layer together");
+    expect(fixture.session->redo().succeeded(), "redo the opacity edit");
+    // Blend mode by label, and a keyed position.
+    args = at(second);
+    args["role"] = Value("blendMode");
+    args["value"] = Value("screen");
+    expect(fixture.run("bloom.merge.set-entry-parameter", args).succeeded(),
+           "an entry's blend mode takes its label");
+    args = at(second);
+    args["role"] = Value("position");
+    args["value"] = Value(document::Vec2d{10.0, 20.0});
+    args["time"] = Value(std::int64_t{1});
+    auto keyed = fixture.run("bloom.merge.set-entry-parameter", args);
+    expect(keyed.succeeded(), "an entry's position is keyed at a time");
+    entry = view(second);
+    expect(entry && roleValue(*entry, "position") == std::nullopt &&
+               roleValue(*entry, "blendMode") != document::ParameterValue(std::int64_t{0}),
+           "the keyed position reads back as animated and the blend mode as Screen");
+    args = at(second);
+    args["role"] = Value("bogus");
+    args["value"] = Value(1.0);
+    auto bogus = fixture.run("bloom.merge.set-entry-parameter", args);
+    expect(!bogus.succeeded() && bogus.diagnostic && bogus.diagnostic->argument == "role",
+           "an unknown role is refused at creation");
+    args["role"] = Value("timeRemap");
+    expect(!fixture.run("bloom.merge.set-entry-parameter", args).succeeded(),
+           "Time Remap is refused while it is off");
+
+    // Insert a Layer node: it adopts the entry's values and becomes the entry's layer.
+    auto inserted = fixture.run("bloom.merge.insert-layer-node", at(second));
+    expect(inserted.succeeded() &&
+               Fixture::outputs<document::NodeId>(inserted, "node").size() == 1,
+           "insert-layer-node outputs the Layer node");
+    entry = view(second);
+    expect(entry && entry->kind == scripting::EntryLayerKind::Node && entry->layerNode &&
+               roleValue(*entry, "opacity") == document::ParameterValue(0.5) &&
+               roleValue(*entry, "position") == std::nullopt,
+           "the Layer node adopted the entry's opacity and keyed position");
+    fixture.refresh();
+    expect(document::entryOwnedLayer(fixture.composition(fixture.main).graph(), *merge, second) ==
+               nullptr,
+           "the entry layer left with the adoption");
+
+    // An Adjustment layer at the top of the Merge.
+    auto adjustment = fixture.run("bloom.merge.add-adjustment-layer",
+                                  {{"composition", composition}, {"merge", mergeId}});
+    const auto adjustmentNodes = Fixture::outputs<document::NodeId>(adjustment, "node");
+    const auto adjustmentSlots = Fixture::outputs<document::LayerSlotId>(adjustment, "layerSlot");
+    expect(adjustment.succeeded() && adjustmentNodes.size() == 1 && adjustmentSlots.size() == 1,
+           "add-adjustment-layer outputs its node and slot");
+    if (!adjustmentNodes.empty() && !adjustmentSlots.empty()) {
+        entry = view(adjustmentSlots.front());
+        expect(entry && entry->index == 0 && entry->adjustment == adjustmentNodes.front() &&
+                   entry->kind == scripting::EntryLayerKind::Entry && entry->layer &&
+                   entry->layer->name == "Adjustment Layer 1",
+               "the Adjustment layer is the top entry and reads back as an adjustment");
+        args = at(adjustmentSlots.front());
+        args["role"] = Value("opacity");
+        args["value"] = Value(0.25);
+        expect(fixture.run("bloom.merge.set-entry-parameter", args).succeeded(),
+               "the Adjustment layer's opacity is set");
+        entry = view(adjustmentSlots.front());
+        expect(entry && roleValue(*entry, "opacity") == document::ParameterValue(0.25),
+               "the adjustment opacity reads back");
+        auto above = fixture.run("bloom.merge.add-adjustment-layer",
+                                 {{"composition", composition},
+                                  {"merge", mergeId},
+                                  {"above", Value(StableId{first.value()})}});
+        const auto aboveSlots = Fixture::outputs<document::LayerSlotId>(above, "layerSlot");
+        const auto firstEntry = view(first);
+        expect(above.succeeded() && !aboveSlots.empty() && firstEntry &&
+                   view(aboveSlots.front())->index + 1 == firstEntry->index,
+               "an Adjustment layer lands directly above the named entry");
+    }
+
+    // ensure-entry-layer reports an existing layer and creates a missing one.
+    const auto third = plainEntry();
+    auto ensured = fixture.run("bloom.merge.ensure-entry-layer", at(third));
+    expect(ensured.succeeded() &&
+               Fixture::outputs<document::LayerId>(ensured, "layer").size() == 1 &&
+               Fixture::outputs<document::ParameterId>(ensured, "parameter.position").size() == 1,
+           "ensure-entry-layer creates the layer and outputs its parameters");
+    auto existing = fixture.run("bloom.merge.ensure-entry-layer", at(second));
+    const auto existingLayer = Fixture::outputs<document::LayerId>(existing, "layer");
+    entry = view(second);
+    expect(entry && entry->layer && existingLayer.size() == 1 &&
+               existingLayer.front() == entry->layer->layerId,
+           "ensure-entry-layer outputs a Layer node entry's layer without a change");
+    auto stale = fixture.run("bloom.merge.ensure-entry-layer",
+                             {{"composition", composition},
+                              {"merge", mergeId},
+                              {"slot", Value(StableId{999999})}});
+    expect(!stale.succeeded(), "a stale slot is refused");
+    fixture.refresh();
+    expect(fixture.snapshot->project().validate().ok(), "the project validates");
+    expect(scripting::mergeEntryViews(fixture.composition(fixture.main)).size() ==
+               fixture.composition(fixture.main).graph().merge(*merge)->entries().size(),
+           "every entry is listed once");
+}
+
+// #502: every layer edit reaches an entry layer through merge and slot, each one undo step that
+// leaves a valid project.
+void entryLayerEdits() {
+    Fixture fixture;
+    fixture.refresh();
+    const auto merge = fixture.composition(fixture.main).graph().outputMergeId();
+    if (!merge) {
+        expect(false, "the composition has an output Merge");
+        return;
+    }
+    const auto composition = Value(StableId{fixture.main.value()});
+    const auto plainEntry = [&] {
+        auto node = fixture.run("bloom.node.add", {{"composition", composition},
+                                                   {"nodeType", Value("bloom.solid-source")}});
+        const auto nodes = Fixture::outputs<document::NodeId>(node, "node");
+        if (nodes.empty())
+            return document::LayerSlotId{};
+        const auto slots = Fixture::outputs<document::LayerSlotId>(
+            fixture.run("bloom.node.connect",
+                        {{"composition", composition},
+                         {"sourceNode", Value(StableId{nodes.front().value()})},
+                         {"sourcePort", Value("image")},
+                         {"targetNode", Value(StableId{merge->value()})},
+                         {"role", Value("content")}}),
+            "layerSlot");
+        return slots.empty() ? document::LayerSlotId{} : slots.front();
+    };
+    const auto a = plainEntry();
+    const auto b = plainEntry();
+    const auto layerOf = [&](const document::LayerSlotId slot) {
+        fixture.refresh();
+        const auto* layer =
+            document::mergeEntryLayer(fixture.composition(fixture.main).graph(), *merge, slot);
+        return layer ? layer->layerId : document::LayerId{};
+    };
+    const auto edit = [&](const std::string& op, const document::LayerSlotId slot,
+                          Arguments extra) {
+        extra["composition"] = composition;
+        extra["merge"] = Value(StableId{merge->value()});
+        extra["slot"] = Value(StableId{slot.value()});
+        const auto before = fixture.session->snapshot().revision();
+        auto result = fixture.run(op, extra);
+        expect(result.succeeded(), op + " by merge and slot applies");
+        fixture.refresh();
+        expect(fixture.snapshot->project().validate().ok(), op + " leaves a valid project");
+        expect(fixture.snapshot->revision() != before, op + " makes a revision");
+        return result;
+    };
+    document::PathValue square;
+    square.closed = true;
+    square.anchors = {{{0, 0}, std::nullopt, std::nullopt},
+                      {{50, 0}, std::nullopt, std::nullopt},
+                      {{50, 50}, std::nullopt, std::nullopt}};
+    edit("bloom.layer.set-enabled", a, {{"enabled", Value(false)}});
+    edit("bloom.layer.set-enabled", a, {{"enabled", Value(true)}});
+    edit("bloom.layer.set-locked", a, {{"locked", Value(true)}});
+    edit("bloom.layer.set-locked", a, {{"locked", Value(false)}});
+    edit("bloom.layer.set-shy", a, {{"shy", Value(true)}});
+    edit("bloom.layer.set-label-color", a, {{"color", Value(document::Vec3d{255, 0, 0})}});
+    edit("bloom.layer.rename", a, {{"name", Value("A")}});
+    edit("bloom.layer.set-range", a,
+         {{"start", Value(std::int64_t{0})}, {"end", Value(std::int64_t{3})}});
+    edit("bloom.layer.set-timing", a,
+         {{"startTime", Value(std::int64_t{0})},
+          {"start", Value(std::int64_t{0})},
+          {"end", Value(std::int64_t{4})},
+          {"speedNumerator", Value(std::int64_t{1})},
+          {"speedDenominator", Value(std::int64_t{1})}});
+    edit("bloom.layer.set-time-modes", a,
+         {{"before", Value(std::int64_t{1})}, {"after", Value(std::int64_t{1})}});
+    edit("bloom.layer.enable-time-remap", a, {});
+    edit("bloom.merge.set-entry-parameter", a,
+         {{"role", Value("timeRemap")}, {"value", Value(0.0)}, {"time", Value(std::int64_t{2})}});
+    edit("bloom.layer.disable-time-remap", a, {});
+    auto masked = edit("bloom.layer.add-mask", a, {{"path", Value(square)}});
+    const auto masks = Fixture::outputs<document::LayerMaskId>(masked, "mask");
+    expect(masks.size() == 1, "add-mask on an entry layer outputs the mask");
+    if (!masks.empty()) {
+        edit("bloom.layer.set-mask-mode", a,
+             {{"mask", Value(StableId{masks.front().value()})}, {"mode", Value(std::int64_t{2})}});
+        edit("bloom.layer.set-mask-inverted", a,
+             {{"mask", Value(StableId{masks.front().value()})}, {"inverted", Value(true)}});
+        edit("bloom.layer.rename-mask", a,
+             {{"mask", Value(StableId{masks.front().value()})}, {"name", Value("Hole")}});
+    }
+    // b gets its layer from its first edit; then a uses it as parent and track matte.
+    // Setting a value the entry already has is no edit, so it creates no layer; a real one does.
+    edit("bloom.layer.set-shy", b, {{"shy", Value(true)}});
+    const auto bLayer = layerOf(b);
+    expect(bLayer.isValid(), "b has an entry layer");
+    edit("bloom.layer.set-parent", a, {{"parent", Value(StableId{bLayer.value()})}});
+    edit("bloom.layer.set-track-matte", a,
+         {{"source", Value(StableId{bLayer.value()})},
+          {"channel", Value(std::int64_t{1})},
+          {"inverted", Value(false)}});
+    edit("bloom.layer.clear-track-matte", a, {});
+    edit("bloom.layer.set-parent", a, {});
+    auto split = edit("bloom.layer.split-at-time", a, {{"time", Value(std::int64_t{2})}});
+    expect(Fixture::outputs<document::LayerId>(split, "layer").size() >= 1,
+           "split-at-time of an entry layer outputs the tail");
+    const auto aLayer = layerOf(a);
+    auto duplicated = fixture.run("bloom.layer.duplicate",
+                                  {{"composition", composition},
+                                   {"layers", Value(ids({aLayer.value()}))}});
+    const auto copies = Fixture::outputs<document::LayerId>(duplicated, "layer");
+    expect(duplicated.succeeded() && copies.size() == 1, "an entry layer duplicates");
+    if (!copies.empty()) {
+        auto removed = fixture.run("bloom.layer.delete", {{"composition", composition},
+                                                         {"layers", Value(ids({copies[0].value()}))}});
+        expect(removed.succeeded(), "an entry layer deletes");
+    }
+    auto moved = fixture.run("bloom.layer.move-before",
+                             {{"composition", composition},
+                              {"slot", Value(StableId{b.value()})},
+                              {"before", Value(StableId{a.value()})}});
+    expect(moved.succeeded(), "an entry slot moves");
+    fixture.refresh();
+    expect(fixture.snapshot->project().validate().ok(), "the project validates at the end");
 }
 
 } // namespace
@@ -674,6 +1027,8 @@ int main() {
     projectItems();
     colorSettings();
     descriptions();
+    mergeEntryOperations();
+    entryLayerEdits();
     if (failures != 0) {
         std::cerr << failures << " parity operation check(s) failed\n";
         return 1;

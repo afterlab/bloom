@@ -110,10 +110,77 @@ class ParityOperations(unittest.TestCase):
         bloom.transactions.undo()
         self.assertIn(composition, [c['id'] for c in bloom.data.snapshot()['compositions']])
 
+    def test_merge_entries(self):
+        """#502: every Merge entry is a layer. A plain entry is edited by merge and slot (its own
+        layer created in the same undo step), an Adjustment layer is added, a Layer node is
+        inserted and adopts the entry's values, and bloom.data reads it all back."""
+        composition = bloom.data.snapshot()['compositions'][0]
+        merge = next(node['id'] for node in composition['nodes']
+                     if node['type_id'] == 'bloom.layer-stack')
+        solid = outputs(bloom.ops.node.add('bloom.solid-source'), 'node')[0]
+        slot = outputs(bloom.ops.node.connect(solid, 'image', merge, role='content'),
+                       'layerSlot')[0]
+
+        def entry(identity):
+            entries = bloom.data.merge_entries(composition['id'])
+            return next(item for item in entries if item['slot'] == identity)
+
+        plain = entry(slot)
+        self.assertEqual(plain['layer_kind'], 'none')
+        self.assertIsNone(plain['layer'])
+        self.assertEqual(plain['values']['opacity'], 1.0)
+        self.assertEqual(plain['source_node'], solid)
+
+        result = bloom.ops.merge.set_entry_parameter(merge, slot, 'opacity', 0.5)
+        layer = outputs(result, 'layer')[0]
+        edited = entry(slot)
+        self.assertEqual(edited['layer_kind'], 'entry')
+        self.assertTrue(edited['entry_layer'])
+        self.assertEqual(edited['layer'], layer)
+        self.assertEqual(edited['values']['opacity'], 0.5)
+        self.assertEqual(edited['pivot'], 'frame')
+        record = bloom.data.layers(composition['id']).get(layer)
+        self.assertTrue(record.entry_layer)
+        self.assertEqual(record.entry_slot, slot)
+        self.assertEqual(record.node_id, merge)
+        self.assertEqual(record.values['opacity'], 0.5)
+        self.assertEqual(record.parameters['opacity'], outputs(result, 'parameter.opacity')[0])
+        bloom.transactions.undo()
+        self.assertEqual(entry(slot)['layer_kind'], 'none', 'one undo removes edit and layer')
+        bloom.transactions.redo()
+
+        bloom.ops.layer.set_solo(solo=True, merge=merge, slot=slot)
+        self.assertTrue(entry(slot)['solo'])
+        with self.assertRaises(bloom.OperationError):
+            bloom.ops.layer.set_shy(True, merge=merge)
+
+        added = bloom.ops.merge.add_adjustment_layer(merge)
+        adjustment = outputs(added, 'node')[0]
+        adjustment_slot = outputs(added, 'layerSlot')[0]
+        top = entry(adjustment_slot)
+        self.assertEqual(top['index'], 0)
+        self.assertEqual(top['adjustment'], adjustment)
+        self.assertEqual(top['name'], 'Adjustment Layer 1')
+        bloom.ops.merge.set_entry_parameter(merge, adjustment_slot, 'blendMode', 'screen')
+        self.assertNotEqual(entry(adjustment_slot)['values']['blendMode'], 0)
+
+        node = outputs(bloom.ops.merge.insert_layer_node(merge, slot), 'node')[0]
+        adopted = entry(slot)
+        self.assertEqual(adopted['layer_kind'], 'node')
+        self.assertEqual(adopted['layer_node'], node)
+        self.assertEqual(adopted['values']['opacity'], 0.5)
+        self.assertTrue(adopted['solo'])
+        self.assertNotIn(layer, layer_ids(), 'the entry layer left with the adoption')
+
+        ensured = bloom.ops.merge.ensure_entry_layer(merge, slot)
+        self.assertEqual(outputs(ensured, 'layer'), [adopted['layer']])
+
     def test_descriptions_are_published(self):
         schemas = {schema['id']: schema for schema in self.host.schemas()}
         for op in ('bloom.layer.delete', 'bloom.layer.duplicate', 'bloom.layer.add-from-assets',
-                   'bloom.node.add-asset-source'):
+                   'bloom.node.add-asset-source', 'bloom.merge.ensure-entry-layer',
+                   'bloom.merge.insert-layer-node', 'bloom.merge.add-adjustment-layer',
+                   'bloom.merge.set-entry-parameter'):
             self.assertIn('Errors:', schemas[op]['description'], op)
 
 

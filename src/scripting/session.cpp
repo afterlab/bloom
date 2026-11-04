@@ -283,7 +283,7 @@ std::vector<std::uint64_t> selectedLayers(const document::Snapshot& snapshot,
     }
     for (const auto node : selection) {
         for (const auto& boundary : found->graph().layerOutputs()) {
-            if (boundary.nodeId.value() == node) {
+            if (!boundary.entryOwned() && boundary.nodeId.value() == node) {
                 layers.push_back(boundary.layerId.value());
             }
         }

@@ -4301,7 +4301,7 @@ class LayerOps:
         Related: bloom.asset.import, query:layers, transact
         """
         ...
-    def add_mask(self, path: Path, mode: int = ..., name: str = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_mask(self, path: Path, mode: int = ..., name: str = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-mask  (operation, layer)
         Adds a mask to a layer. The path is in the layer's content space (pixels of the layer's own
         content, before its transform).
@@ -4312,7 +4312,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           path  path  required
@@ -4333,6 +4334,16 @@ class LayerOps:
                 4  Difference
           name  str  optional
               The mask name. Defaults to Mask N.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -4630,7 +4641,7 @@ class LayerOps:
         Related: bloom.layer.distribute-layers, query:layers, transact
         """
         ...
-    def animate_mask_path(self, mask: int | Proxy, *, composition: int | Proxy = ..., layer: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+    def animate_mask_path(self, mask: int | Proxy, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.layer.animate-mask-path  (operation, layer)
         Makes a mask path animated with a key at `time`.
 
@@ -4640,7 +4651,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
@@ -4651,6 +4663,16 @@ class LayerOps:
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
               denominator]
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -4684,7 +4706,7 @@ class LayerOps:
         Related: bloom.layer.set-mask-path, bloom.layer.stop-animating-mask-path, transact
         """
         ...
-    def clear_track_matte(self, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def clear_track_matte(self, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.clear-track-matte  (operation, layer)
         Removes a layer's track matte.
 
@@ -4694,8 +4716,19 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
+              Range: >= 1
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -4779,7 +4812,7 @@ class LayerOps:
         Related: transact
         """
         ...
-    def disable_time_remap(self, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def disable_time_remap(self, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.disable-time-remap  (operation, layer)
         Turns off Time Remap for a layer.
 
@@ -4789,8 +4822,19 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
+              Range: >= 1
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -4942,7 +4986,7 @@ class LayerOps:
         Related: transact
         """
         ...
-    def enable_time_remap(self, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def enable_time_remap(self, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.enable-time-remap  (operation, layer)
         Turns on Time Remap for a layer: an animatable parameter mapping layer time to content time.
 
@@ -4952,8 +4996,19 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
+              Range: >= 1
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -5038,7 +5093,7 @@ class LayerOps:
         Related: query:layers, bloom.merge.reorder-input, transact
         """
         ...
-    def move_mask(self, mask: int | Proxy, index: int, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def move_mask(self, mask: int | Proxy, index: int, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.move-mask  (operation, layer)
         Moves a mask in its layer's mask order.
 
@@ -5048,7 +5103,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
@@ -5059,6 +5115,16 @@ class LayerOps:
               The new zero-based position.
               Unit: zero-based position
               Range: >= 0
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5092,7 +5158,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def remove_mask(self, mask: int | Proxy, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def remove_mask(self, mask: int | Proxy, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.remove-mask  (operation, layer)
         Removes a mask from a layer.
 
@@ -5102,12 +5168,23 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
               The layer mask to edit.
               Unit: mask id (query:layers .masks)
+              Range: >= 1
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -5142,7 +5219,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def rename(self, name: str, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def rename(self, name: str, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.rename  (operation, layer)
         Renames a layer.
 
@@ -5152,11 +5229,22 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           name  str  required
               The new layer name.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5189,7 +5277,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def rename_mask(self, mask: int | Proxy, name: str, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def rename_mask(self, mask: int | Proxy, name: str, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.rename-mask  (operation, layer)
         Renames a mask.
 
@@ -5199,7 +5287,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
@@ -5208,6 +5297,16 @@ class LayerOps:
               Range: >= 1
           name  str  required
               The new mask name.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5315,7 +5414,7 @@ class LayerOps:
         Related: transact
         """
         ...
-    def set_enabled(self, enabled: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_enabled(self, enabled: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-enabled  (operation, layer)
         Shows or hides a layer (the Timeline eye).
 
@@ -5325,11 +5424,22 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           enabled  bool  required
               Whether the layer renders.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5362,7 +5472,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_label_color(self, color: tuple[float, float, float] = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_label_color(self, color: tuple[float, float, float] = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-label-color  (operation, layer)
         Sets or clears the layer's Timeline label colour.
 
@@ -5372,13 +5482,24 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           color  vec3  optional, default no label
               Label color as (r, g, b) in 0..255. Omit to clear the label.
               Unit: label colour as [r, g, b], each an integer 0..255
               Range: 0..255
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5411,7 +5532,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_locked(self, locked: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_locked(self, locked: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-locked  (operation, layer)
         Locks or unlocks a layer. A locked layer and the nodes it depends on refuse edits.
 
@@ -5421,11 +5542,22 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           locked  bool  required
               Whether the layer is locked.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5458,7 +5590,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_mask_inverted(self, mask: int | Proxy, inverted: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_mask_inverted(self, mask: int | Proxy, inverted: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-mask-inverted  (operation, layer)
         Inverts or restores a mask's coverage.
 
@@ -5468,7 +5600,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
@@ -5477,6 +5610,16 @@ class LayerOps:
               Range: >= 1
           inverted  bool  required
               Whether the mask coverage is inverted.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5510,7 +5653,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_mask_mode(self, mask: int | Proxy, mode: int, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_mask_mode(self, mask: int | Proxy, mode: int, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-mask-mode  (operation, layer)
         Sets how a mask combines with the masks above it.
 
@@ -5520,7 +5663,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
@@ -5536,6 +5680,16 @@ class LayerOps:
                 2  Subtract
                 3  Intersect
                 4  Difference
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5569,7 +5723,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_mask_path(self, mask: int | Proxy, path: Path, *, composition: int | Proxy = ..., layer: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+    def set_mask_path(self, mask: int | Proxy, path: Path, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-mask-path  (operation, layer)
         Sets a mask's outline. On an animated mask path this keys the outline at `time`.
 
@@ -5579,7 +5733,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
@@ -5597,6 +5752,16 @@ class LayerOps:
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
               denominator]
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5630,7 +5795,7 @@ class LayerOps:
         Related: bloom.layer.animate-mask-path, transact
         """
         ...
-    def set_name_follows_source(self, follows: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_name_follows_source(self, follows: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-name-follows-source  (operation, layer)
         Makes a layer show its source's name and follow it when the source is renamed, or stops
         following. Renaming the layer stops it following.
@@ -5641,13 +5806,24 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           follows  bool  required
               Whether the layer shows its source's name (an asset's or a nested composition's) and
               follows it when the source is renamed. True renames the layer to the source's name; it is
               refused for a layer without a source. Renaming the layer sets it false.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5683,7 +5859,7 @@ class LayerOps:
         Related: bloom.layer.rename, query:layers, transact
         """
         ...
-    def set_parent(self, parent: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_parent(self, parent: int | Proxy = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-parent  (operation, layer)
         Parents a layer to another layer's transform, or clears the parent.
 
@@ -5693,12 +5869,23 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           parent  id  optional
               The parent layer. Omit it, or pass null, to clear the parent.
               Unit: layer id (query:layers .id)
+              Range: >= 1
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
               Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
@@ -5735,7 +5922,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_range(self, start: Time, end: Time, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_range(self, start: Time, end: Time, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-range  (operation, layer)
         Trims a layer: sets the composition span it is visible in, without moving its content. `end` is
         exclusive: the layer shows frames start..end-1.
@@ -5746,7 +5933,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           start  time  required
@@ -5757,6 +5945,16 @@ class LayerOps:
               The layer's exclusive end, at most the composition duration.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
               denominator]
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5792,7 +5990,7 @@ class LayerOps:
         Related: bloom.layer.set-timing, query:layers, transact
         """
         ...
-    def set_shy(self, shy: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_shy(self, shy: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-shy  (operation, layer)
         Marks a layer shy: hidden from the layer table while its shy filter is on. It never changes the
         render.
@@ -5803,12 +6001,23 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           shy  bool  required
               Whether the layer is shy: hidden from the layer table while its shy filter is on. It never
               changes the render.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5841,7 +6050,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_solo(self, solo: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_solo(self, solo: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-solo  (operation, layer)
         Solos or unsolos a layer.
 
@@ -5851,11 +6060,22 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           solo  bool  required
               Whether the layer is soloed.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5888,7 +6108,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def set_time_modes(self, before: int, after: int, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_time_modes(self, before: int, after: int, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-time-modes  (operation, layer)
         Sets what a layer shows before and after its content: nothing, the first or last frame held, a
         loop or a ping-pong.
@@ -5899,7 +6119,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           before  int  required
@@ -5918,6 +6139,16 @@ class LayerOps:
                 1  Hold
                 2  Loop
                 3  Ping-pong
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5950,7 +6181,7 @@ class LayerOps:
         Related: bloom.layer.set-timing, query:layers, transact
         """
         ...
-    def set_timing(self, startTime: Time, start: Time, end: Time, speedNumerator: int, speedDenominator: int, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_timing(self, startTime: Time, start: Time, end: Time, speedNumerator: int, speedDenominator: int, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-timing  (operation, layer)
         Sets layer-owned time in one step (ADR 0024): where the layer's content starts (`startTime`,
         which moves content and keys), its visible span start..end (end exclusive), and an exact speed.
@@ -5961,7 +6192,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           startTime  time  required
@@ -5984,6 +6216,16 @@ class LayerOps:
               Exact speed denominator.
               Unit: exact speed ratio numerator / denominator, between 1/1000 and 1000
               Range: 1..2147483647
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -6019,7 +6261,7 @@ class LayerOps:
         Related: bloom.layer.set-range, bloom.layer.set-time-modes, query:layers, transact
         """
         ...
-    def set_track_matte(self, source: int | Proxy, channel: int, inverted: bool, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_track_matte(self, source: int | Proxy, channel: int, inverted: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-track-matte  (operation, layer)
         Uses another layer of the same Merge as this layer's track matte.
 
@@ -6029,7 +6271,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           source  id  required
@@ -6044,6 +6287,16 @@ class LayerOps:
                 1  Luma
           inverted  bool  required
               Whether the matte is inverted.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -6077,7 +6330,7 @@ class LayerOps:
         Related: bloom.layer.clear-track-matte, query:layers, transact
         """
         ...
-    def split_at_time(self, *, composition: int | Proxy = ..., layer: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
+    def split_at_time(self, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ..., time: Time = ...) -> Mapping[str, Any] | None:
         """bloom.layer.split-at-time  (operation, layer)
         Splits a layer at `time` into two layers (Ctrl+K): the original ends at `time` and a copy starts
         there.
@@ -6088,13 +6341,24 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           time  time  optional, defaults to the playhead (frame 0 headless) (context time)
               An exact time. Defaults to the current playhead time.
               Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
               denominator]
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -6127,7 +6391,7 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
-    def stop_animating_mask_path(self, mask: int | Proxy, path: Path, *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def stop_animating_mask_path(self, mask: int | Proxy, path: Path, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.stop-animating-mask-path  (operation, layer)
         Removes a mask path's keys and keeps one constant outline.
 
@@ -6137,7 +6401,8 @@ class LayerOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           layer  id  optional, defaults to the first selected layer (context layer)
-              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer.
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
               Unit: layer id (query:layers .id)
               Range: >= 1
           mask  id  required
@@ -6151,6 +6416,16 @@ class LayerOps:
               the handles)}, ...]}.
               Unit: {closed, anchors:[{point:[x, y], inHandle:[x, y]|null, outHandle:[x, y]|null,
               mode?}]} in the layer's content-space pixels; handles are relative to their anchor point
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -6188,6 +6463,206 @@ class LayerOps:
 layer: LayerOps
 
 class MergeOps:
+    def add_adjustment_layer(self, merge: int | Proxy, above: int | Proxy = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.merge.add-adjustment-layer  (operation, merge)
+        Adds an Adjustment layer to a Merge, as the Timeline's Add > Adjustment Layer does: a new
+        Adjustment node, a new entry of the Merge fed by it directly above the entry `above` (or at the
+        top), and that entry's own layer named "Adjustment Layer N". The Adjustment node's Image output
+        is the stack below its entry; filters connected between the Adjustment node and the entry
+        process it, and the entry replaces the stack below it (opacity mixes the adjusted stack with the
+        unadjusted one; masks, matte, blend and timing apply as on any layer). Connect a filter with
+        bloom.node.add-fed-by on the Adjustment node's "image" output. Outputs: "node" (the Adjustment
+        node), "layerSlot" (the new entry's slot) and "layer" (its entry layer). Errors: "The Merge does
+        not exist in the composition" - a stale merge id; "The entry to add the Adjustment Layer above
+        does not exist in the Merge" - a stale `above` slot. Undo: one step. MCP example:
+        {"op":"bloom.merge.add-adjustment-layer","args":{"merge":4}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          merge  id  required
+              Id. The Merge node to add the Adjustment layer to.
+              Unit: Merge node id (query:nodes)
+              Range: >= 1
+          above  id  optional
+              Id. The entry slot the new entry goes directly above. Default: the top of the stack.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node (the
+          Adjustment node), layerSlot, layer (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The Merge does not exist in the composition
+              Do: read Merge ids from query {kind:"nodes"}.
+          bloom.scripting.command-rejected
+              When: The entry to add the Adjustment Layer above does not exist in the Merge
+              Do: pass a slot from query {kind:"layers"} entries, or omit above.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.merge.add-adjustment-layer","args":{"merge":1}}]}}
+          Python:
+            bloom.ops.merge.add_adjustment_layer(merge=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.merge.add-adjustment-layer","args":{"merge":1}}]
+
+        Related: query:layers, bloom.node.add-fed-by, bloom.merge.set-entry-parameter, transact
+        """
+        ...
+    def ensure_entry_layer(self, merge: int | Proxy, slot: int | Proxy, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.merge.ensure-entry-layer  (operation, merge)
+        Makes sure a Merge entry has a layer and returns it (#502: every Merge entry is a layer). An
+        entry whose layer already exists -- a Layer node on its image chain, or its own entry layer --
+        is left as it is and its layer id is returned. An entry without one gets its own entry layer at
+        the defaults it already renders with (the identity: position the composition centre, anchor [0,
+        0], scale [1, 1], rotation 0, opacity 1, Normal, pivot frame), named after its source. Every
+        layer operation also takes `merge` and `slot` instead of `layer` and creates the layer in the
+        same undo step, so this is only needed to learn the parameter ids before animating them.
+        Outputs: "layer" (the entry's layer id), and when the layer was created "parameter.<role>" for
+        position, anchor, scale, rotation, opacity and blendMode. Errors: "The Merge entry does not
+        exist in the composition" - a stale merge or slot, read query kind=layers `entries`. Undo: one
+        step when the layer is created; nothing changes otherwise. MCP example:
+        {"op":"bloom.merge.ensure-entry-layer","args":{"merge":4,"slot":2}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          merge  id  required
+              Id. The Merge node whose entry this is (query kind=layers `entries`).
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  required
+              Id. The entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer;
+          parameter.position, parameter.anchor, parameter.scale, parameter.rotation, parameter.opacity,
+          parameter.blendMode when the layer is created (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The Merge entry does not exist in the composition
+              Do: read merge and slot from query {kind:"layers"} entries.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.merge.ensure-entry-layer","args":{"merge":1,"slot":1}}]}}
+          Python:
+            bloom.ops.merge.ensure_entry_layer(merge=1, slot=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.merge.ensure-entry-layer","args":{"merge":1,"slot":1}}]
+
+        Related: query:layers, bloom.merge.set-entry-parameter, bloom.merge.insert-layer-node, transact
+        """
+        ...
+    def insert_layer_node(self, merge: int | Proxy, slot: int | Proxy, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.merge.insert-layer-node  (operation, merge)
+        Inserts a Layer node into a Merge entry, between its image source and the slot, as the
+        Timeline's "Insert Layer Node" does. The picture does not change: the Layer node adopts the
+        entry's own layer values (transform, opacity, blend mode with their animation, flags, name,
+        label, timing, masks, matte, parent and pivot) in the same undo step, and becomes the entry's
+        layer; layers that referenced the entry layer (as parent or matte) now reference the Layer
+        node's layer. An audio edge of the slot stays where it is. Outputs: "node" (the Layer node),
+        "layer" (its layer id), "edge" (source -> Layer node) and "parameter.<role>" for the Layer
+        node's parameters. Errors: "The Merge entry does not exist in the composition" - a stale merge
+        or slot; "An entry without an image has no Layer node to insert" - an audio-only slot; "Layer is
+        locked" - unlock the entry's layer first. Undo: one step. MCP example:
+        {"op":"bloom.merge.insert-layer-node","args":{"merge":4,"slot":2}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          merge  id  required
+              Id. The Merge node whose entry this is (query kind=layers `entries`).
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  required
+              Id. The entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: node, layer,
+          edge, parameter.<role> (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The Merge entry does not exist in the composition
+              Do: read merge and slot from query {kind:"layers"} entries.
+          bloom.scripting.command-rejected
+              When: An entry without an image has no Layer node to insert
+              Do: pick an entry with an image source.
+          bloom.scripting.command-rejected
+              When: Layer is locked
+              Do: unlock it with bloom.layer.set-locked (merge and slot address it).
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.merge.insert-layer-node","args":{"merge":1,"slot":1}}]}}
+          Python:
+            bloom.ops.merge.insert_layer_node(merge=1, slot=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.merge.insert-layer-node","args":{"merge":1,"slot":1}}]
+
+        Related: query:layers, bloom.merge.ensure-entry-layer, transact
+        """
+        ...
     def reorder_input(self, merge: int | Proxy, slot: int | Proxy, index: int, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.merge.reorder-input  (operation, merge)
         Moves one slot of a Merge node's layer stack to an index (0 is the topmost).
@@ -6288,6 +6763,102 @@ class MergeOps:
             bloom-cli run edits.json   # [{"op":"bloom.merge.set-enabled","args":{"merge":1,"enabled":true}}]
 
         Related: query:nodes, transact
+        """
+        ...
+    def set_entry_parameter(self, merge: int | Proxy, slot: int | Proxy, role: str, value: Value, time: Time = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.merge.set-entry-parameter  (operation, merge)
+        Sets one layer control of a Merge entry by its role -- position, anchor, scale, rotation,
+        opacity, blendMode or timeRemap -- whatever the entry's layer is: its Layer node, or its own
+        entry layer, which is created at its defaults in the same undo step when the entry has none yet.
+        Without `time` the parameter becomes the constant `value` (an animated one loses its animation,
+        as bloom.parameter.set-source does); with `time` it is keyed at that time (a constant becomes
+        animated, its constant the first key). A blend mode takes its stored value or its label
+        ("screen"). An entry layer's parameters are constants or animation curves; to drive one from the
+        value graph, insert a Layer node (bloom.merge.insert-layer-node). Outputs: "layer" (the entry's
+        layer), "parameter.<role>" ids when the layer was created, and the edit's own outputs (a key's
+        "keyframe"). Errors: "The Merge entry does not exist in the composition" - a stale merge or
+        slot; "Time Remap is off on this layer" - run bloom.layer.enable-time-remap first; "Layer is
+        locked" - unlock it; a value of the wrong kind or out of range names what the parameter takes.
+        Undo: one step. MCP example:
+        {"op":"bloom.merge.set-entry-parameter","args":{"merge":4,"slot":2,"role":"opacity","value":0.5}}.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          merge  id  required
+              Id. The Merge node whose entry this is (query kind=layers `entries`).
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  required
+              Id. The entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+          role  str  required
+              String. The layer control: position, anchor, scale, rotation, opacity, blendMode or
+              timeRemap.
+              Unit: layer parameter role
+              Values:
+                "position"  position
+                "anchor"  anchor
+                "scale"  scale
+                "rotation"  rotation
+                "opacity"  opacity
+                "blendMode"  blendMode
+                "timeRemap"  timeRemap
+          value  value  required
+              Value. In the parameter's stored units: [x, y] for position, anchor and scale, degrees for
+              rotation, 0..1 for opacity, a blend mode's value or label, seconds for timeRemap.
+              Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
+          time  time  optional
+              Time. When given, the value is keyed at this time instead of replacing the parameter with
+              a constant.
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer;
+          parameter.<role> when the layer is created; keyframe when keyed (each {operationIndex, name,
+          id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The role is not a layer control
+              Do: pass position, anchor, scale, rotation, opacity, blendMode or timeRemap.
+          bloom.scripting.command-rejected
+              When: Time Remap is off on this layer
+              Do: run bloom.layer.enable-time-remap with the same merge and slot first.
+          bloom.scripting.command-rejected
+              When: The value does not fit the parameter
+              Do: query {kind:"parameter"} with the entry's parameter id reports its kind, range and
+              choices.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.merge.set-entry-parameter","args":{"merge":1,"slot":1,"role":"opacity","value":0.5}}]}}
+          Python:
+            bloom.ops.merge.set_entry_parameter(merge=1, slot=1, role="opacity", value=0.5)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.merge.set-entry-parameter","args":{"merge":1,"slot":1,"role":"opacity","value":0.5}}]
+
+        Related: query:layers, bloom.parameter.set-source,
+        bloom.animation.set-keyframe-at-time-for-parameter, bloom.merge.insert-layer-node, transact
         """
         ...
 

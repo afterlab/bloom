@@ -430,6 +430,35 @@ constexpr std::array kNotes{
         "bloom.layer.move-before query:nodes", ""},
     OperationNotes{"bloom.merge.set-enabled", "Enables or bypasses a Merge node.", "",
         "query:nodes", ""},
+    // #502 Every Merge entry is a layer; these carry their own descriptions.
+    OperationNotes{"bloom.merge.ensure-entry-layer", "",
+        "layer; parameter.position, parameter.anchor, parameter.scale, parameter.rotation, "
+        "parameter.opacity, parameter.blendMode when the layer is created",
+        "query:layers bloom.merge.set-entry-parameter bloom.merge.insert-layer-node",
+        "The Merge entry does not exist in the composition => read merge and slot from "
+        "query {kind:\"layers\"} entries."},
+    OperationNotes{"bloom.merge.insert-layer-node", "",
+        "node, layer, edge, parameter.<role>",
+        "query:layers bloom.merge.ensure-entry-layer",
+        "The Merge entry does not exist in the composition => read merge and slot from "
+        "query {kind:\"layers\"} entries.\nAn entry without an image has no Layer node to "
+        "insert => pick an entry with an image source.\nLayer is locked => unlock it with "
+        "bloom.layer.set-locked (merge and slot address it)."},
+    OperationNotes{"bloom.merge.add-adjustment-layer", "",
+        "node (the Adjustment node), layerSlot, layer",
+        "query:layers bloom.node.add-fed-by bloom.merge.set-entry-parameter",
+        "The Merge does not exist in the composition => read Merge ids from query "
+        "{kind:\"nodes\"}.\nThe entry to add the Adjustment Layer above does not exist in the "
+        "Merge => pass a slot from query {kind:\"layers\"} entries, or omit above."},
+    OperationNotes{"bloom.merge.set-entry-parameter", "",
+        "layer; parameter.<role> when the layer is created; keyframe when keyed",
+        "query:layers bloom.parameter.set-source "
+        "bloom.animation.set-keyframe-at-time-for-parameter bloom.merge.insert-layer-node",
+        "[invalid-argument] The role is not a layer control => pass position, anchor, scale, "
+        "rotation, opacity, blendMode or timeRemap.\nTime Remap is off on this layer => run "
+        "bloom.layer.enable-time-remap with the same merge and slot first.\nThe value does not "
+        "fit the parameter => query {kind:\"parameter\"} with the entry's parameter id reports "
+        "its kind, range and choices."},
     OperationNotes{"bloom.node-group.create",
         "Frames nodes in a named group. Groups are layout only and never change evaluation.",
         "nodeGroup", "query:nodes", ""},

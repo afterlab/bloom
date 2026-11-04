@@ -64,7 +64,12 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "Each layer's `parameters` maps its transform roles (position, anchor, scale, rotation, "
          "opacity, blendMode, timeRemap) to parameter ids; `sourceParameters` maps the source "
          "node's roles (a solid's color, a text layer's text, size, font, ...) the same way. "
-         "Pass those ids to bloom.parameter.set-source or the animation operations.",
+         "Pass those ids to bloom.parameter.set-source or the animation operations. Every Merge "
+         "entry is a layer (#502): `entries` lists each one, output Merge first and each Merge "
+         "top to bottom, with its layer -- a Layer node (layerKind node), the entry's own layer "
+         "(entry) or none yet (none, reporting the defaults it renders with). Address an entry "
+         "with merge and slot: every layer operation takes them instead of layer, and "
+         "bloom.merge.set-entry-parameter sets a control by role.",
          "{revision, composition, records:[{id, name, index (0 is topmost), slot, merge, "
          "layerOutputNode, sourceNode|null, sourceType|null, enabled, solo, locked, shy, "
          "nameFollowsSource, sourceName?, "
@@ -73,15 +78,24 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
              " (exclusive), timing:{startTime, speed:[n, d], before, after, extent}, "
              "masks:[{id, name, mode, inverted, path, feather, expansion, opacity}], "
              "trackMatte:{source, channel, inverted}|null, parameters:{role: id}, "
-             "sourceParameters:{role: id}}]}",
+             "sourceParameters:{role: id}, layerKind (node|entry), entryLayer, pivot "
+             "(content|frame), entries:[{merge, slot}], shared, adjustment|null, "
+             "values:{role: value|null}}], entries:[{merge, slot, index, outputMerge, "
+             "resolvedLayer|null, layerKind (node|entry|none), entryLayer, layerNode|null, "
+             "sourceNode|null, sourceType|null, name|null, enabled, solo, locked, shy, pivot, "
+             "adjustment|null, shared, nestedMerge|null, parameters:{role: id}, "
+             "values:{role: value|null}}]}",
          {composition}, R"({"name":"query","arguments":{"kind":"layers","composition":1}})");
     kind("nodes", "A composition's node graph: nodes, ports, links, card positions and groups.",
          "Input ports list what feeds them; output ports list where they lead. Merge nodes also "
-         "list their layer stack. `links` repeats every edge once.",
+         "list their layer stack, each row with the same entry fields as query:layers "
+         "`entries`. `links` repeats every edge once.",
          "{revision, composition, records:[{id, typeId, name, category, parameters:{role: id}, "
          "position:[x, y], width, collapsed, muted, group|null, inputs:[{port, kind, required, "
          "source:{node, port}|null}], outputs:[{port, kind, targets:[{node, port}|{node, role, "
-         "slot}]}], stack?:[{slot, layer, index}]}], links:[{id, source:{node, port}, "
+         "slot}]}], stack?:[{slot, layer, index, resolvedLayer, layerKind, entryLayer, layerNode, "
+         "sourceNode, sourceType, name, enabled, solo, locked, shy, pivot, adjustment, shared, "
+         "nestedMerge, parameters, values}]}], links:[{id, source:{node, port}, "
          "target:{node, port}|{node, role, slot}}], groups:[{id, name, members}]}",
          {composition}, R"({"name":"query","arguments":{"kind":"nodes","composition":1}})");
     kind("node-types", "Every node type bloom.node.add accepts, or one type in full.",
@@ -337,7 +351,10 @@ void addPythonEntries(std::vector<ReferenceEntry>& out) {
         "Read-only. time is a Fraction of seconds.", "bloom.context.composition");
     api("bloom.data", "Read the project: compositions, assets, layers, nodes, parameters, curves.",
         "bloom.data.layers(composition), bloom.data.curves(composition) and the other "
-        "collections return proxies whose attributes read the current snapshot.",
+        "collections return proxies whose attributes read the current snapshot. "
+        "bloom.data.merge_entries(composition) lists every Merge entry (#502) with its layer "
+        "(layer_kind node, entry or none), parameter ids, values and adjustment, shared and "
+        "nested-Merge markers.",
         "bloom.data.layers(bloom.context.composition)");
     api("bloom.render", "Render a frame or a range to image files.",
         "bloom.render.frame(number, *, out, composition=None, preset=...) and "

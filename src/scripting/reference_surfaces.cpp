@@ -64,7 +64,9 @@ void addConcepts(std::vector<ReferenceEntry>& out) {
                   "Ids are 1-based and stable across edits, saves and undo. Each kind has its "
                   "own id space: a layer id (query:layers .id) is not the id of the layer's "
                   "Layer Output node (.layerOutputNode), and a stack slot (.slot) is a third "
-                  "id. Operations that create objects return the new ids in the transaction "
+                  "id. A Merge entry is addressed by its Merge node and slot (query:layers "
+                  ".entries), because an entry whose layer is not created yet has no layer id. "
+                  "Operations that create objects return the new ids in the transaction "
                   "result's `outputs` as {operationIndex, name, id}; read them there instead of "
                   "guessing. An id from a project that was since replaced is stale.");
     addRelated(ids, {"query:layers", "query:nodes", "concept:revisions"});
@@ -104,7 +106,8 @@ void addConcepts(std::vector<ReferenceEntry>& out) {
         "editor in the desktop application (the composition the Viewer shows, the playhead, the "
         "selected layers or nodes) and from the session defaults on stdio and in bloom-cli (the "
         "first composition, time 0, no selection). Read the values with query:context. An "
-        "argument you pass always wins.");
+        "argument you pass always wins, and a layer edit addressed by merge and slot never "
+        "takes the selected layer.");
     addRelated(context, {"query:context"});
     out.push_back(std::move(context));
 

@@ -86,6 +86,10 @@ struct ArgumentSchema final {
     std::optional<double> maximum{};
     std::vector<ArgumentChoice> choices{};
     std::string defaultText{};
+    // A contextual argument with an alternative address: the context does not fill it when the
+    // caller gave this other argument. A layer edit addressed by a Merge entry (`merge` and
+    // `slot`, #502) must not also pick up the selected layer.
+    std::string contextUnless{};
 
     [[nodiscard]] bool contextual() const noexcept { return context != ContextSource::None; }
 };

@@ -5,6 +5,8 @@
 #include <nanobind/stl/string_view.h>
 
 #include <bloom/document/animation.hpp>
+#include <bloom/document/merge_entries.hpp>
+#include <bloom/scripting/merge_entry_view.hpp>
 
 #include <string>
 
@@ -94,6 +96,51 @@ nb::list keyframes(const std::vector<document::PathKeyframe>& keys) {
     return result;
 }
 
+// #502: a layer's controls by role -- parameter ids and constant values (None for an animated or
+// driven one), or the defaults an entry without a layer renders with.
+void roleFields(nb::dict& record, const std::vector<LayerRoleValue>& roles) {
+    nb::dict ids;
+    nb::dict values;
+    for (const auto& role : roles) {
+        const nb::str key(role.role.data(), role.role.size());
+        if (role.parameter)
+            ids[key] = role.parameter->value();
+        values[key] = role.value ? parameterValue(*role.value) : nb::object(nb::none());
+    }
+    record["parameters"] = ids;
+    record["values"] = values;
+}
+
+nb::object optionalId(const std::optional<document::NodeId>& id) {
+    return id ? nb::cast(id->value()) : nb::object(nb::none());
+}
+
+nb::dict mergeEntryRecord(const MergeEntryView& view) {
+    nb::dict record;
+    const auto* layer = view.layer;
+    record["merge"] = view.merge.value();
+    record["slot"] = view.slot.value();
+    record["index"] = view.index;
+    record["output_merge"] = view.outputMerge;
+    record["layer"] = layer ? nb::cast(layer->layerId.value()) : nb::object(nb::none());
+    record["layer_kind"] = std::string(entryLayerKindName(view.kind));
+    record["entry_layer"] = view.kind == EntryLayerKind::Entry;
+    record["layer_node"] = optionalId(view.layerNode);
+    record["source_node"] = optionalId(view.sourceNode);
+    record["source_type"] = view.sourceNode ? nb::cast(view.sourceType) : nb::object(nb::none());
+    record["name"] = layer ? nb::cast(layer->name) : nb::object(nb::none());
+    record["enabled"] = layer == nullptr || layer->enabled;
+    record["solo"] = layer != nullptr && layer->solo;
+    record["locked"] = layer != nullptr && layer->locked;
+    record["shy"] = layer != nullptr && layer->shy;
+    record["pivot"] = std::string(layerPivotName(view.pivot));
+    record["adjustment"] = optionalId(view.adjustment);
+    record["shared"] = view.shared;
+    record["nested_merge"] = optionalId(view.nestedMerge);
+    roleFields(record, view.roles);
+    return record;
+}
+
 } // namespace
 
 nb::dict projectSnapshot(const document::Snapshot& snapshot) {
@@ -144,6 +191,29 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
                 nb::make_tuple(boundary.inPoint.numerator(), boundary.inPoint.denominator());
             record["out"] =
                 nb::make_tuple(boundary.outPoint.numerator(), boundary.outPoint.denominator());
+            // #502: an entry layer belongs to a Merge entry (node_id is then the Merge); a Layer
+            // node's layer lists every entry it is the layer of (more than one when shared).
+            const auto& graph = composition.graph();
+            record["entry_layer"] = boundary.entryOwned();
+            record["layer_kind"] = std::string(boundary.entryOwned() ? "entry" : "node");
+            record["entry_slot"] = boundary.entrySlot ? nb::cast(boundary.entrySlot->value())
+                                                      : nb::object(nb::none());
+            record["pivot"] = std::string(layerPivotName(boundary.pivot));
+            nb::list entries;
+            std::optional<document::NodeId> adjustment;
+            const auto owners = document::mergeEntriesOfLayer(graph, boundary.layerId);
+            for (const auto& entry : owners) {
+                nb::dict owner;
+                owner["merge"] = entry.merge.value();
+                owner["slot"] = entry.slot.value();
+                entries.append(owner);
+                if (!adjustment)
+                    adjustment = document::mergeEntryAdjustment(graph, entry.merge, entry.slot);
+            }
+            record["entries"] = entries;
+            record["shared"] = owners.size() > 1;
+            record["adjustment"] = optionalId(adjustment);
+            roleFields(record, layerRoleValues(composition, &boundary));
             // ADR 0028: masks in order with their parameter ids, and the optional track matte.
             nb::list masks;
             for (const auto& mask : boundary.masks) {
@@ -171,6 +241,10 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
             layers.append(record);
         }
         row["layers"] = layers;
+        nb::list mergeEntries;
+        for (const auto& view : mergeEntryViews(composition))
+            mergeEntries.append(mergeEntryRecord(view));
+        row["merge_entries"] = mergeEntries;
         nb::list parameters;
         for (const auto& parameter : composition.parameters().records()) {
             nb::dict record;

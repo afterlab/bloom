@@ -280,6 +280,24 @@ headless CPU reference measurement on the calling client thread -- never the UI 
 the session's render-source snapshot; Python releases the GIL while it runs. The command itself
 stays evaluation-free. See [`layer-alignment.md`](layer-alignment.md).
 
+Merge entries (#502, [Layer Graph Model](layer-graph-model.md#merge)) are addressed by `merge` and
+`slot`, because an entry without a layer has no layer id yet. After every other family registers,
+`addMergeEntryOperations` (`operation_registry_parity_entries.cpp`) gives every descriptor whose
+`layer` argument comes from the Layer context (and whose factory reads no further context) the
+optional `merge` and `slot` arguments. Its `layer` argument stops being required and names `merge`
+as its `contextUnless` alternative, so `applyContextDefaults` never fills the selected layer into
+an entry-addressed call. The wrapped factory checks the rest of the call against a placeholder
+layer at creation and returns a `commands::EntryLayerEdit`, which creates the entry's layer when it
+has none and builds the original operation for that layer when it applies: one command, one undo
+step. `bloom.merge.set-entry-parameter` finds the parameter by role on the entry's layer when it
+applies and reuses the `bloom.parameter.set-source` and
+`bloom.animation.set-keyframe-at-time-for-parameter` factories, so values parse identically.
+`bloom.merge.ensure-entry-layer`, `insert-layer-node` and `add-adjustment-layer` wrap the commands
+of the same names. Read-back goes through one view, `scripting::mergeEntryViews`
+(`merge_entry_view.hpp`): the MCP `layers` query's `entries` and the Merge `stack` rows of `nodes`,
+and Python's `merge_entries` snapshot list report the same entry, layer kind, parameter ids,
+constant or default values and adjustment, shared and nested-Merge markers.
+
 Native `Render::run` callers explicitly inject one `GpuExportProvider` shared across their still,
 range and concurrent requests; a missing provider is a typed `MissingProcessingRoot` refusal before
 compilation. The Python native host retains a provider for its active lifetime. A live GUI host borrows the

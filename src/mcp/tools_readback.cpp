@@ -5,6 +5,8 @@
 #include "core_internal.hpp"
 
 #include <bloom/document/layer_source.hpp>
+#include <bloom/document/merge_entries.hpp>
+#include <bloom/scripting/merge_entry_view.hpp>
 #include <bloom/scripting/node_reference.hpp>
 
 #include <algorithm>
@@ -48,6 +50,61 @@ yyjson_mut_val* roles(Json& out, const document::NodeRecord* node) {
 yyjson_mut_val* parsedJson(Json& out, const std::string& text) {
     Parsed parsed(text);
     return out.copy(parsed.root());
+}
+
+// #502: a layer's parameters by role (its Layer node's, or an entry layer's own).
+yyjson_mut_val* layerRoles(Json& out, const document::CanonicalGraph& graph,
+                           const document::LayerOutputBoundary& layer) {
+    auto* value = out.object();
+    for (const auto& binding : document::layerParameterBindings(graph, layer))
+        out.set(value, binding.role, out.number(binding.parameterId.value()));
+    return value;
+}
+
+// The layer controls' constant values by role (null for an animated or driven one), or the
+// defaults an entry without a layer renders with.
+yyjson_mut_val* roleValues(Json& out, const std::vector<scripting::LayerRoleValue>& roles) {
+    auto* value = out.object();
+    for (const auto& role : roles)
+        out.set(value, role.role,
+                role.value ? parsedJson(out, scripting::parameterValueJson(*role.value))
+                           : out.null());
+    return value;
+}
+
+yyjson_mut_val* roleIds(Json& out, const std::vector<scripting::LayerRoleValue>& roles) {
+    auto* value = out.object();
+    for (const auto& role : roles)
+        if (role.parameter)
+            out.set(value, role.role, out.number(role.parameter->value()));
+    return value;
+}
+
+yyjson_mut_val* optionalId(Json& out, const std::optional<document::NodeId>& id) {
+    return id ? out.number(id->value()) : out.null();
+}
+
+// #502: the fields every Merge entry reports, in the `layers` query's `entries` and the `nodes`
+// query's Merge `stack`. An entry without a layer reports the defaults it renders with.
+void appendMergeEntryFields(Json& out, yyjson_mut_val* row, const scripting::MergeEntryView& view) {
+    const auto* layer = view.layer;
+    out.set(row, "resolvedLayer", layer ? out.number(layer->layerId.value()) : out.null());
+    out.set(row, "layerKind", out.text(scripting::entryLayerKindName(view.kind)));
+    out.set(row, "entryLayer", out.boolean(view.kind == scripting::EntryLayerKind::Entry));
+    out.set(row, "layerNode", optionalId(out, view.layerNode));
+    out.set(row, "sourceNode", optionalId(out, view.sourceNode));
+    out.set(row, "sourceType", view.sourceNode ? out.text(view.sourceType) : out.null());
+    out.set(row, "name", layer ? out.text(layer->name) : out.null());
+    out.set(row, "enabled", out.boolean(layer == nullptr || layer->enabled));
+    out.set(row, "solo", out.boolean(layer != nullptr && layer->solo));
+    out.set(row, "locked", out.boolean(layer != nullptr && layer->locked));
+    out.set(row, "shy", out.boolean(layer != nullptr && layer->shy));
+    out.set(row, "pivot", out.text(scripting::layerPivotName(view.pivot)));
+    out.set(row, "adjustment", optionalId(out, view.adjustment));
+    out.set(row, "shared", out.boolean(view.shared));
+    out.set(row, "nestedMerge", optionalId(out, view.nestedMerge));
+    out.set(row, "parameters", roleIds(out, view.roles));
+    out.set(row, "values", roleValues(out, view.roles));
 }
 
 std::string_view timeModeName(const document::LayerTimeMode mode) {
@@ -139,6 +196,26 @@ yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::P
             }
             ++order;
         }
+        // #502: a Layer node further up an entry's chain (Layer -> filter -> Merge) is still
+        // that entry's layer, though no slot names it.
+        if (!placement.merge)
+            if (const auto entries = document::mergeEntriesOfLayer(graph, boundary.layerId);
+                !entries.empty())
+                if (const auto* stack = graph.merge(entries.front().merge)) {
+                    const auto stackEntries = stack->entries();
+                    for (std::size_t index = 0; index < stackEntries.size(); ++index)
+                        if (stackEntries[index].slotId == entries.front().slot) {
+                            placement.merge = entries.front().merge;
+                            placement.slot = entries.front().slot;
+                            placement.index = index;
+                            std::size_t rank = 1;
+                            for (const auto& merge : graph.merges()) {
+                                if (merge.nodeId() == entries.front().merge)
+                                    placement.mergeOrder = output == merge.nodeId() ? 0 : rank;
+                                ++rank;
+                            }
+                        }
+                }
         placements.push_back(placement);
     }
     std::ranges::stable_sort(placements, {}, [](const Placement& placement) {
@@ -153,14 +230,21 @@ yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::P
         out.set(row, "index", placement.merge ? out.number(placement.index) : out.null());
         out.set(row, "slot", placement.slot ? out.number(placement.slot->value()) : out.null());
         out.set(row, "merge", placement.merge ? out.number(placement.merge->value()) : out.null());
-        out.set(row, "layerOutputNode", out.number(layer.nodeId.value()));
+        // #502: an entry layer has no Layer Output node; its `merge` and `slot` own it.
+        out.set(row, "layerOutputNode",
+                layer.entryOwned() ? out.null() : out.number(layer.nodeId.value()));
         const document::NodeRecord* source = nullptr;
+        if (layer.entryOwned()) {
+            if (const auto* edge =
+                    document::mergeSlotImageEdge(graph, layer.nodeId, *layer.entrySlot))
+                source = graph.findNode(edge->source.nodeId);
+        }
         for (const std::string_view port :
              {document::kLayerOutputContentInputPort, document::kLayerOutputAudioInputPort}) {
             for (const auto& edge : graph.edges()) {
                 const auto* target = std::get_if<document::NodeInputRef>(&edge.destination);
-                if (source == nullptr && target != nullptr && target->nodeId == layer.nodeId &&
-                    target->port == port)
+                if (!layer.entryOwned() && source == nullptr && target != nullptr &&
+                    target->nodeId == layer.nodeId && target->port == port)
                     source = graph.findNode(edge.source.nodeId);
             }
         }
@@ -234,11 +318,44 @@ yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::P
         } else {
             out.set(row, "trackMatte", out.null());
         }
-        out.set(row, "parameters", roles(out, graph.findNode(layer.nodeId)));
+        out.set(row, "parameters", layerRoles(out, graph, layer));
         out.set(row, "sourceParameters", roles(out, source));
+        // #502: what kind of layer this is, the Merge entries it is the layer of (more than one
+        // for a shared Layer node), whether one is an adjustment entry, and its control values.
+        out.set(row, "layerKind", out.text(layer.entryOwned() ? "entry" : "node"));
+        out.set(row, "entryLayer", out.boolean(layer.entryOwned()));
+        out.set(row, "pivot", out.text(scripting::layerPivotName(layer.pivot)));
+        const auto entries = document::mergeEntriesOfLayer(graph, layer.layerId);
+        auto* entryRows = out.array();
+        std::optional<document::NodeId> adjustment;
+        for (const auto& entry : entries) {
+            auto* item = out.object();
+            out.set(item, "merge", out.number(entry.merge.value()));
+            out.set(item, "slot", out.number(entry.slot.value()));
+            out.append(entryRows, item);
+            if (!adjustment)
+                adjustment = document::mergeEntryAdjustment(graph, entry.merge, entry.slot);
+        }
+        out.set(row, "entries", entryRows);
+        out.set(row, "shared", out.boolean(entries.size() > 1));
+        out.set(row, "adjustment", optionalId(out, adjustment));
+        out.set(row, "values", roleValues(out, scripting::layerRoleValues(comp, &layer)));
         out.append(records, row);
     }
     out.set(result, "records", records);
+    // #502: every Merge entry, whatever its layer is -- including entries that have none yet and
+    // render as an entry layer at its defaults.
+    auto* entries = out.array();
+    for (const auto& view : scripting::mergeEntryViews(comp)) {
+        auto* row = out.object();
+        out.set(row, "merge", out.number(view.merge.value()));
+        out.set(row, "slot", out.number(view.slot.value()));
+        out.set(row, "index", out.number(view.index));
+        out.set(row, "outputMerge", out.boolean(view.outputMerge));
+        appendMergeEntryFields(out, row, view);
+        out.append(entries, row);
+    }
+    out.set(result, "entries", entries);
     return result;
 }
 
@@ -618,6 +735,9 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
                 out.set(row, "slot", out.number(entries[index].slotId.value()));
                 out.set(row, "layer", out.number(entries[index].layerId.value()));
                 out.set(row, "index", out.number(index));
+                if (const auto view =
+                        scripting::mergeEntryView(composition, node.id, entries[index].slotId))
+                    appendMergeEntryFields(out, row, *view);
                 out.append(stack, row);
             }
             out.set(record, "stack", stack);
@@ -667,6 +787,19 @@ yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& compos
         }
     }
     for (const auto& layer : composition.graph().layerOutputs()) {
+        // #502: an entry layer's own transform, opacity, blend mode and Time Remap take the Layer
+        // node's parameter definitions.
+        for (const auto& binding : layer.parameters) {
+            if (binding.parameterId != parameter.id)
+                continue;
+            if (const auto* type = registry.find(document::kLayerOutputNodeType,
+                                                 document::kLayerOutputNodeSchemaVersion))
+                definition = scripting::findParameterDefinition(*type, binding.role);
+            owner = "{\"layer\":" + std::to_string(layer.layerId.value()) +
+                    ",\"merge\":" + std::to_string(layer.nodeId.value()) + ",\"slot\":" +
+                    std::to_string(layer.entrySlot ? layer.entrySlot->value() : 0) +
+                    ",\"role\":\"" + binding.role + "\"}";
+        }
         for (const auto& mask : layer.masks) {
             const std::array<std::pair<document::ParameterId, std::string_view>, 4> roles{
                 {{mask.path, "path"},

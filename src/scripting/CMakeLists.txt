@@ -24,6 +24,7 @@ target_sources(
         export_headless.cpp
         json_script.cpp
         live_session_host.cpp
+        merge_entry_view.cpp
         node_reference.cpp
         operation_docs.cpp
         operation_docs.hpp
@@ -33,6 +34,7 @@ target_sources(
         operation_registry_evaluated.cpp
         operation_registry_export.cpp
         operation_frame_times.cpp
+        operation_registry_parity_entries.cpp
         operation_registry_parity_layers.cpp
         operation_registry_parity_project.cpp
         operation_registry_footage.cpp
@@ -53,6 +55,7 @@ target_sources(
             include/bloom/scripting/facade.hpp
             include/bloom/scripting/json_script.hpp
             include/bloom/scripting/live_session_host.hpp
+            include/bloom/scripting/merge_entry_view.hpp
             include/bloom/scripting/node_reference.hpp
             include/bloom/scripting/operation_reference.hpp
             include/bloom/scripting/operation_registry.hpp

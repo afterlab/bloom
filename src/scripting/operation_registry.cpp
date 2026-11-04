@@ -1055,7 +1055,8 @@ std::vector<std::string> applyContextDefaults(const OperationSchema& schema, Arg
                                               const OperationContext& context) {
     std::vector<std::string> filled;
     for (const auto& argument : schema.arguments) {
-        if (!argument.contextual() || arguments.contains(argument.name)) {
+        if (!argument.contextual() || arguments.contains(argument.name) ||
+            (!argument.contextUnless.empty() && arguments.contains(argument.contextUnless))) {
             continue;
         }
         switch (argument.context) {
@@ -3613,6 +3614,7 @@ OperationRegistry OperationRegistry::builtIn() {
     detail::parity::addProjectOperations(all);
     detail::parity::addFootageOperations(all);
     detail::parity::addEvaluatedOperations(all);
+    detail::parity::addMergeEntryOperations(all);
     detail::describeOperations(all);
 
     std::ranges::sort(

@@ -168,6 +168,57 @@ can move, the call raises `OperationError` and nothing changes. The result is on
 measurement sees the project as it is before the transaction, so put an alignment after the edits
 it depends on, in a transaction of its own.
 
+### Merge entries and adjustment layers
+
+Every image fed into a Merge is a layer with the full layer controls
+([Layer Graph Model](../architecture/layer-graph-model.md#merge)). An entry's layer is the Layer
+node nearest the Merge on its chain, or the entry's own entry layer, or none yet: an entry
+without a layer renders exactly as an entry layer at its defaults (position the composition
+centre, anchor `(0, 0)`, scale `(1, 1)`, rotation 0, opacity 1, Normal, pivot `frame`).
+
+Every layer operation that takes `layer` also takes `merge` and `slot` instead. When the entry has
+no layer yet, its entry layer is created in the same undo step as the edit, and the result also
+outputs `layer` and the new `parameter.<role>` ids. `layer` together with `merge` and `slot` is
+refused, and a selected layer never fills `layer` when `merge` is given.
+
+```python
+entries = bloom.data.merge_entries(bloom.context.composition)
+plate = entries[-1]                          # the bottom entry of the output Merge
+bloom.ops.layer.set_solo(solo=True, merge=plate["merge"], slot=plate["slot"])
+bloom.ops.merge.set_entry_parameter(plate["merge"], plate["slot"], "opacity", 0.5)
+bloom.ops.merge.set_entry_parameter(plate["merge"], plate["slot"], "position", (960, 400), time=24)
+bloom.ops.merge.set_entry_parameter(plate["merge"], plate["slot"], "blendMode", "screen")
+added = bloom.ops.merge.add_adjustment_layer(plate["merge"])           # at the top
+bloom.ops.merge.insert_layer_node(plate["merge"], plate["slot"])
+```
+
+- `bloom.ops.merge.set_entry_parameter(merge, slot, role, value, time=None)` sets one control of
+  the entry's layer by role: `position`, `anchor`, `scale`, `rotation`, `opacity`, `blendMode` or
+  `timeRemap` (only while Time Remap is on). Without `time` the parameter becomes the constant;
+  with `time` it is keyed there. It works whatever the entry's layer is.
+- `bloom.ops.merge.ensure_entry_layer(merge, slot)` returns the entry's layer (`layer` output),
+  creating its entry layer when it has none, with its `parameter.<role>` ids for the animation
+  operations.
+- `bloom.ops.merge.insert_layer_node(merge, slot)` splices a Layer node into the entry. The picture
+  does not change: the node adopts the entry layer's values in the same undo step. Outputs `node`,
+  `layer` and `edge`.
+- `bloom.ops.merge.add_adjustment_layer(merge, above=None)` adds an Adjustment node feeding a new
+  entry directly above the slot `above` (default: the top) with an entry layer named
+  "Adjustment Layer N". Outputs `node`, `layerSlot` and `layer`. Wire filters between the
+  Adjustment node's `image` output and the entry.
+
+`bloom.data.merge_entries(composition)` lists every Merge entry, the output Merge first and each
+Merge top to bottom: `merge`, `slot`, `index` (0 is the top), `output_merge`, `layer` (the
+entry's layer id or `None`), `layer_kind` (`"node"`, `"entry"` or `"none"`), `entry_layer`,
+`layer_node`, `source_node`, `source_type`, `name`, `enabled`, `solo`, `locked`, `shy`, `pivot`
+(`"content"` or `"frame"`), `adjustment` (the Adjustment node serving it, or `None`), `shared`
+(its Layer node is the layer of more than one entry), `nested_merge` (the Merge it shows, for a
+nested Merge), `parameters` (`{role: id}`) and `values` (`{role: value}`: the constant, `None` for
+an animated or driven control, or the default an entry without a layer renders with). Layer
+records (`bloom.data.layers(composition)`) also carry `entry_layer`, `layer_kind`, `entry_slot`
+(an entry layer's slot; its `node_id` is then the Merge), `pivot`, `entries` (`[{merge, slot}]`),
+`shared`, `adjustment`, `parameters` and `values`.
+
 ## Transactions and undo
 
 ```python

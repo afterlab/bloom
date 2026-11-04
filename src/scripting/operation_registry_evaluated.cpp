@@ -347,7 +347,7 @@ OperationCreateResult anchorPreset(const std::string& op, const Arguments& args,
             continue;
         visited.push_back(current);
         for (const auto& boundary : composition.graph().layerOutputs()) {
-            if (boundary.nodeId != current)
+            if (boundary.entryOwned() || boundary.nodeId != current)
                 continue;
             if (resolved && *resolved != boundary.layerId)
                 return std::nullopt;

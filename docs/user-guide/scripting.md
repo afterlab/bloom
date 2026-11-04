@@ -99,6 +99,22 @@ built on the same command as the UI action, so it validates, labels and undoes t
   into an input that is already connected is inserted into that link, what fed the input feeding
   the new node), and
   `bloom.node.insert-reroute` inserts a Reroute into the link that feeds an input.
+- Every Merge entry is a layer
+  ([Layer Graph Model](../architecture/layer-graph-model.md#merge)). Every layer edit that takes
+  `layer` also takes `merge` and `slot` instead; an entry without a layer gets its own entry layer
+  in the same undo step. `bloom.merge.set-entry-parameter` (`merge`, `slot`, `role`, `value`,
+  optional `time`) sets an entry's position, anchor, scale, rotation, opacity, blend mode or Time
+  Remap by role, keyed when `time` is given; `bloom.merge.ensure-entry-layer` returns or creates an
+  entry's layer; `bloom.merge.insert-layer-node` splices a Layer node that adopts the entry's
+  values; `bloom.merge.add-adjustment-layer` (`merge`, optional `above` slot) is the Timeline's
+  Add > Adjustment Layer. `query kind=layers` lists every entry in `entries`.
+
+```json
+[{"op": "bloom.merge.add-adjustment-layer", "args": {"merge": 1}},
+ {"op": "bloom.merge.set-entry-parameter",
+  "args": {"merge": 1, "slot": 2, "role": "opacity", "value": 0.5}},
+ {"op": "bloom.layer.set-solo", "args": {"merge": 1, "slot": 2, "solo": true}}]
+```
 
 Project Settings > Color is not a document edit, so it is not an operation: MCP's
 `project.set-color-settings` tool and Python's `Host.set_color_settings(config, working_space=None)`

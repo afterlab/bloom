@@ -842,6 +842,222 @@ void animationReadBack() {
            "the handle mode table is listed: " + enums);
 }
 
+
+// #502 Every Merge entry is a layer: an agent creates, edits and reads back entries and adjustment
+// layers through transact and query, without knowing a layer id it could not know yet.
+struct JsonResponse final {
+    yyjson_doc* document = nullptr;
+    explicit JsonResponse(const std::string& text)
+        : document(yyjson_read(text.data(), text.size(), 0)) {}
+    ~JsonResponse() { yyjson_doc_free(document); }
+    JsonResponse(const JsonResponse&) = delete;
+    JsonResponse& operator=(const JsonResponse&) = delete;
+    [[nodiscard]] yyjson_val* content() const {
+        return document ? yyjson_obj_get(yyjson_obj_get(yyjson_doc_get_root(document), "result"),
+                                         "structuredContent")
+                        : nullptr;
+    }
+};
+
+// The first array member named `key` anywhere under `value`.
+yyjson_val* findArray(yyjson_val* value, const char* key) {
+    if (yyjson_is_obj(value)) {
+        if (auto* found = yyjson_obj_get(value, key); yyjson_is_arr(found))
+            return found;
+        yyjson_obj_iter iter = yyjson_obj_iter_with(value);
+        while (auto* name = yyjson_obj_iter_next(&iter))
+            if (auto* found = findArray(yyjson_obj_iter_get_val(name), key))
+                return found;
+    } else if (yyjson_is_arr(value)) {
+        yyjson_arr_iter iter = yyjson_arr_iter_with(value);
+        while (auto* item = yyjson_arr_iter_next(&iter))
+            if (auto* found = findArray(item, key))
+                return found;
+    }
+    return nullptr;
+}
+
+std::uint64_t outputId(const std::string& response, const std::string_view name) {
+    const JsonResponse parsed(response);
+    auto* outputs = findArray(parsed.content(), "outputs");
+    yyjson_arr_iter iter = yyjson_arr_iter_with(outputs);
+    while (auto* item = yyjson_arr_iter_next(&iter))
+        if (const auto* text = yyjson_get_str(yyjson_obj_get(item, "name")); text && text == name)
+            return yyjson_get_uint(yyjson_obj_get(item, "id"));
+    return 0;
+}
+
+// The `entries` record of one slot, or null.
+yyjson_val* entryOf(yyjson_val* content, const std::uint64_t slot) {
+    yyjson_arr_iter iter = yyjson_arr_iter_with(yyjson_obj_get(content, "entries"));
+    while (auto* item = yyjson_arr_iter_next(&iter))
+        if (yyjson_get_uint(yyjson_obj_get(item, "slot")) == slot)
+            return item;
+    return nullptr;
+}
+
+yyjson_val* layerRecord(yyjson_val* content, const std::uint64_t layer) {
+    yyjson_arr_iter iter = yyjson_arr_iter_with(yyjson_obj_get(content, "records"));
+    while (auto* item = yyjson_arr_iter_next(&iter))
+        if (yyjson_get_uint(yyjson_obj_get(item, "id")) == layer)
+            return item;
+    return nullptr;
+}
+
+double roleNumber(yyjson_val* entry, const char* group, const char* role) {
+    return yyjson_get_num(yyjson_obj_get(yyjson_obj_get(entry, group), role));
+}
+
+std::string text(yyjson_val* value, const char* key) {
+    const auto* found = yyjson_get_str(yyjson_obj_get(value, key));
+    return found ? std::string(found) : std::string{};
+}
+
+void mergeEntryReadBack() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    const auto layers = [&] { return server.call("query", R"({"kind":"layers","composition":1})"); };
+    std::uint64_t merge = 0;
+    {
+        const JsonResponse nodes(server.call("query", R"({"kind":"nodes","composition":1})"));
+        yyjson_arr_iter iter = yyjson_arr_iter_with(yyjson_obj_get(nodes.content(), "records"));
+        while (auto* node = yyjson_arr_iter_next(&iter))
+            if (text(node, "typeId") == "bloom.layer-stack")
+                merge = yyjson_get_uint(yyjson_obj_get(node, "id"));
+    }
+    expect(merge != 0, "the composition's Merge is listed");
+    const auto mergeText = std::to_string(merge);
+    auto result = transact(R"({"op":"bloom.node.add","args":{"composition":1,)"
+                           R"("nodeType":"bloom.solid-source"}})");
+    const auto solid = outputId(result, "node");
+    result = transact(R"({"op":"bloom.node.connect","args":{"composition":1,"sourceNode":)" +
+                      std::to_string(solid) + R"(,"sourcePort":"image","targetNode":)" +
+                      mergeText + R"(,"role":"content"}})");
+    const auto slot = outputId(result, "layerSlot");
+    expect(solid != 0 && slot != 0, "a plain entry is wired: " + result);
+    const auto slotText = std::to_string(slot);
+    {
+        const auto response = layers();
+        const JsonResponse read(response);
+        auto* entry = entryOf(read.content(), slot);
+        expect(entry != nullptr && text(entry, "layerKind") == "none" &&
+                   yyjson_is_null(yyjson_obj_get(entry, "resolvedLayer")) &&
+                   !yyjson_get_bool(yyjson_obj_get(entry, "entryLayer")) &&
+                   roleNumber(entry, "values", "opacity") == 1.0 &&
+                   yyjson_get_uint(yyjson_obj_get(entry, "sourceNode")) == solid &&
+                   yyjson_get_bool(yyjson_obj_get(entry, "outputMerge")),
+               "a plain entry reads back with no layer and its default values: " + response);
+    }
+
+    // One transact sets the plain entry's opacity; its layer is created in the same step.
+    result = transact(R"({"op":"bloom.merge.set-entry-parameter","args":{"composition":1,)"
+                      R"("merge":)" +
+                      mergeText + R"(,"slot":)" + slotText +
+                      R"(,"role":"opacity","value":0.5}})");
+    expect(contains(result, R"("isError":false)"), "set-entry-parameter applies: " + result);
+    const auto entryLayer = outputId(result, "layer");
+    const auto opacityId = outputId(result, "parameter.opacity");
+    {
+        const auto response = layers();
+        const JsonResponse read(response);
+        auto* entry = entryOf(read.content(), slot);
+        auto* record = layerRecord(read.content(), entryLayer);
+        expect(entry != nullptr && text(entry, "layerKind") == "entry" &&
+                   yyjson_get_bool(yyjson_obj_get(entry, "entryLayer")) &&
+                   yyjson_get_uint(yyjson_obj_get(entry, "resolvedLayer")) == entryLayer &&
+                   roleNumber(entry, "values", "opacity") == 0.5 &&
+                   yyjson_get_uint(yyjson_obj_get(yyjson_obj_get(entry, "parameters"),
+                                                  "opacity")) == opacityId &&
+                   text(entry, "pivot") == "frame",
+               "the entry reads back with its entry layer and opacity: " + response);
+        expect(record != nullptr && yyjson_get_bool(yyjson_obj_get(record, "entryLayer")) &&
+                   yyjson_is_null(yyjson_obj_get(record, "layerOutputNode")) &&
+                   yyjson_get_uint(yyjson_obj_get(record, "sourceNode")) == solid &&
+                   yyjson_get_uint(yyjson_obj_get(record, "slot")) == slot &&
+                   yyjson_get_uint(yyjson_obj_get(yyjson_obj_get(record, "parameters"),
+                                                  "opacity")) == opacityId &&
+                   roleNumber(record, "values", "opacity") == 0.5 &&
+                   !yyjson_get_bool(yyjson_obj_get(record, "shared")),
+               "the entry layer is a layers record with its own parameters: " + response);
+    }
+    const auto parameter = server.call(
+        "query", R"({"kind":"parameter","composition":1,"parameter":)" +
+                     std::to_string(opacityId) + R"(,"expectedRevision":)" + revisionOf(server) +
+                     "}");
+    expect(contains(parameter, R"("layer":)" + std::to_string(entryLayer)) &&
+               contains(parameter, R"("role":"opacity")") && contains(parameter, R"("maximum")"),
+           "an entry layer parameter names its owner and the Layer node's metadata: " +
+               parameter);
+
+    // A layer edit by merge and slot, read back, and undone in one step.
+    result = transact(R"({"op":"bloom.layer.set-solo","args":{"composition":1,"merge":)" +
+                      mergeText + R"(,"slot":)" + slotText + R"(,"solo":true}})");
+    expect(contains(result, R"("isError":false)"), "set-solo by entry applies: " + result);
+    {
+        const JsonResponse read(layers());
+        auto* entry = entryOf(read.content(), slot);
+        expect(entry && yyjson_get_bool(yyjson_obj_get(entry, "solo")), "solo reads back");
+    }
+    result = server.call("history",
+                         R"({"action":"undo","expectedRevision":)" + revisionOf(server) + "}");
+    {
+        const JsonResponse read(layers());
+        auto* entry = entryOf(read.content(), slot);
+        expect(entry && !yyjson_get_bool(yyjson_obj_get(entry, "solo")),
+               "undo clears the solo: " + result);
+    }
+
+    // An Adjustment layer, read back as the top entry with its marker.
+    result = transact(R"({"op":"bloom.merge.add-adjustment-layer","args":{"composition":1,)"
+                      R"("merge":)" +
+                      mergeText + "}}");
+    const auto adjustment = outputId(result, "node");
+    const auto adjustmentSlot = outputId(result, "layerSlot");
+    expect(adjustment != 0 && adjustmentSlot != 0, "add-adjustment-layer applies: " + result);
+    {
+        const auto response = layers();
+        const JsonResponse read(response);
+        auto* entry = entryOf(read.content(), adjustmentSlot);
+        expect(entry != nullptr && yyjson_get_uint(yyjson_obj_get(entry, "index")) == 0 &&
+                   yyjson_get_uint(yyjson_obj_get(entry, "adjustment")) == adjustment &&
+                   text(entry, "name") == "Adjustment Layer 1" &&
+                   text(entry, "layerKind") == "entry",
+               "the Adjustment layer reads back at the top: " + response);
+        auto* record = layerRecord(
+            read.content(), yyjson_get_uint(yyjson_obj_get(entry, "resolvedLayer")));
+        expect(record != nullptr &&
+                   yyjson_get_uint(yyjson_obj_get(record, "adjustment")) == adjustment,
+               "the adjustment layer's record carries the marker: " + response);
+    }
+    const auto nodes = server.call("query", R"({"kind":"nodes","composition":1})");
+    expect(contains(nodes, R"("adjustment":)" + std::to_string(adjustment)) &&
+               contains(nodes, R"("layerKind":"entry")"),
+           "the Merge's stack reports the entries: " + nodes);
+
+    // Insert a Layer node: it adopts the entry's opacity and becomes its layer.
+    result = transact(R"({"op":"bloom.merge.insert-layer-node","args":{"composition":1,)"
+                      R"("merge":)" +
+                      mergeText + R"(,"slot":)" + slotText + "}}");
+    const auto layerNode = outputId(result, "node");
+    expect(layerNode != 0, "insert-layer-node applies: " + result);
+    {
+        const auto response = layers();
+        const JsonResponse read(response);
+        auto* entry = entryOf(read.content(), slot);
+        expect(entry != nullptr && text(entry, "layerKind") == "node" &&
+                   yyjson_get_uint(yyjson_obj_get(entry, "layerNode")) == layerNode &&
+                   roleNumber(entry, "values", "opacity") == 0.5 &&
+                   layerRecord(read.content(), entryLayer) == nullptr,
+               "the Layer node adopted the entry's opacity: " + response);
+    }
+    result = transact(R"({"op":"bloom.layer.set-shy","args":{"composition":1,"merge":)" +
+                      mergeText + R"(,"shy":true}})");
+    expect(contains(result, R"("isError":true)"), "merge without slot is refused: " + result);
+}
+
 // #434 O2/O6: transact reads `null` as an omitted argument (`"parent": null` clears a parent) and
 // passes a path object through a parameter `value` to the operation instead of refusing it at the
 // protocol.
@@ -1005,6 +1221,7 @@ int main() {
         exportReveal();
         retiredTransientJobs();
         animationReadBack();
+        mergeEntryReadBack();
         fieldTestArguments();
         parityTools();
         stdioStopsWhileInputIdle();

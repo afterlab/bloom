@@ -123,3 +123,15 @@ def parameters(composition) -> Collection:
 
 def curves(composition) -> Collection:
     return Collection("curves", composition)
+
+
+def merge_entries(composition) -> tuple:
+    """Every Merge entry of a composition (#502: every entry is a layer), output Merge first and
+    each Merge top to bottom. An entry whose layer is not created yet reports layer None,
+    layer_kind "none" and the default values it renders with."""
+    view = snapshot()
+    identity = int(composition)
+    for item in view["compositions"]:
+        if item["id"] == identity:
+            return item["merge_entries"]
+    raise StaleObjectError(identity, view["revision"])

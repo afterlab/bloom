@@ -259,5 +259,10 @@ void addFootageOperations(std::vector<OperationDescriptor>& descriptors);
 // Registers the edits that read media or evaluate when they are created (#389): bloom.asset.reload,
 // bloom.layer.set-anchor-preset and bloom.cryptomatte.pick.
 void addEvaluatedOperations(std::vector<OperationDescriptor>& descriptors);
+// #502 Every Merge entry is a layer: registers bloom.merge.ensure-entry-layer, insert-layer-node,
+// add-adjustment-layer and set-entry-parameter, and lets every layer edit that takes `layer`
+// address a Merge entry by `merge` and `slot` instead (its layer is created in the same undo step
+// when it has none yet). Runs after every other family is registered.
+void addMergeEntryOperations(std::vector<OperationDescriptor>& descriptors);
 
 } // namespace bloom::scripting::detail::parity
