@@ -1810,7 +1810,12 @@ and `0` disables it. On the 2026-11-04 measurement host (RTX 4090 with nvidia-va
 integrated GPU, 16 threads) FFmpeg decoded the 240-frame 2160p bench clips, downloaded to host
 memory, in (seconds) HEVC Main 10: NVDEC 0.63, VA-API on the NVIDIA GPU 1.12, VA-API on the
 integrated GPU 3.60, threaded software 2.61 (15.1 s of CPU); H.264: 1.08 / 1.16 / 1.74 / 1.52; AV1:
-1.38 / 1.93 / 4.51 / 3.37. The older export-side VA-API execution key keeps its
+1.38 / 1.93 / 4.51 / 3.37. Exporting those clips to 2160p ProRes 422 HQ through the final route
+took 0.182 s a frame from HEVC Main 10 and 0.138 s from H.264 with NVDEC, against 1.62 s and 0.80 s
+in software (before the change, and with `BLOOM_VIDEO_HARDWARE_DECODE=0` after it), with no
+CPU-fallback frame either way; cold Viewer playback, which the GPU bounds, moved from 17.8 to 20.5
+frames/s for H.264 and stayed within run-to-run noise for HEVC Main 10 (18.1 against 17.6, with a
+wider spread) and AV1 (22). The older export-side VA-API execution key keeps its
 Development/Incomplete decode declarations, which are not selectable. Hardware provides
 acceleration only; it never changes project semantics.
 Each successful video source selection, on the CPU and GPU routes alike, publishes a

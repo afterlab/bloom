@@ -81,6 +81,15 @@ could decode.
   and hashes the bytes in the same read (the copy, not the hash, dominates it); macOS and Windows
   verify a video's digest once per process at first use, as before.
 
+Measured on 2026-11-04 (16 threads, RTX 4090; same base with and without the change, runs
+interleaved): exporting 2160p and 1080p 16-bit PNG sequences to ProRes 422 HQ took 0.178 and
+0.054 s a frame against 0.184 to 0.213 and 0.056 to 0.069. Cold playback of the 2160p multilayer
+EXR shot stayed decode-bound at the same frame rate within noise (2.83 against 2.98 frames/s over
+eight runs each, about 75 CPU-seconds in each six-second window): its hash cost about 50 ms of one
+core per 95 MB frame, under 1% of the decode work. Its first motion came later, 2.35 s against
+1.96 s, consistently across the runs, most likely because the read-ahead now issues its captures
+without a hash between them and they compete with the playhead frame for the cold reads.
+
 Residual risk, accepted with the decision: until the background pass reaches it, a file whose
 content changed between sessions without a recorded identity (a project saved before 1.36, or a
 still image) is decoded from its current bytes at first use; the pass then reports it, purges what
