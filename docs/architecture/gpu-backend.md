@@ -468,6 +468,26 @@ The 4320p cell's media was a local 2x upscale of the 2160p PNG16 frames. Before 
 of those refusals. With the fractions gone the scene cache keeps more of the device (the higher
 2160p peak) and gives it back when work waits; no cell had an admission refusal.
 
+**The final-render owner keeps room for its next frame (#492).** An export renders distinct
+frames, so its scene cache retains images no later frame reuses. The final-render owner remembers
+what its last finished phase needed (its admitted need, or its working allowance beside the most
+native storage it held, whichever is larger) and evicts its scene cache, least recently used first,
+until the root's usable device room (usable VRAM minus every claim) holds that again: after a
+request releases its phase, before its completion is visible, and as a scene's steps complete,
+because the steps insert their images into the cache. The frames queued behind the running one are
+admitted at once and their executor ceilings are not squeezed. The cache has no ceiling of its own:
+it keeps everything that fits beside that room, and pinned entries are never evicted. Since #425
+removed the scene cache's fixed share the cache had filled usable VRAM (about 20 GB on a 24 GB card)
+and each next frame waited for the room its own cache held or was squeezed onto the CPU.
+
+Measured on an RTX 4090 (24 GB, default VRAM headroom), ProRes 422 HQ export of the PNG16 B
+benchmark shot, 240 frames; the driver's peak device memory for the process:
+
+| Export | Before #425 | Before this change | After |
+|---|---|---|---|
+| 1080p | 0.086 s/frame, 0 CPU-fallback, 3.1 GB | stopped at frame 232 ("needs more memory than this computer can give the export"), 229 CPU-fallback, 20.8 GB | 0.092 s/frame, 0 CPU-fallback, 19.0 GB |
+| 2160p | 0.260 s/frame, 0 CPU-fallback, 3.8 GB | 1.49 s/frame, 69 CPU-fallback, 20.6 GB | 0.274 s/frame, 0 CPU-fallback, 17.2 GB |
+
 Each request also passes the shared phase reservation and native resource/capability checks.
 Host decode capacity stays independent of device capacity. Unknown capacity uses an explicit
 fallback; measured zero stays zero. Allocation failure is diagnosed and uses the supported CPU
