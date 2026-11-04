@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -24,9 +25,13 @@ struct ImageSequenceReadAhead::State final {
     std::size_t queueLimit = 1;
     mutable std::mutex mutex;
     std::condition_variable ready;
+    // Signalled whenever a capture ends.
+    std::condition_variable captured;
     std::deque<Job> queue;
     // Revision keys queued or being captured.
     std::set<std::string> pending;
+    // Revision keys being captured now.
+    std::set<std::string> capturing;
     std::vector<std::thread> workers;
     std::atomic<bool> stopping{false};
     Statistics statistics;
@@ -41,11 +46,17 @@ struct ImageSequenceReadAhead::State final {
                     return;
                 job = std::move(queue.front());
                 queue.pop_front();
+                capturing.insert(job.request.revisionKey);
+                ++statistics.started;
             }
-            const bool captured = capture(job);
-            const std::lock_guard lock(mutex);
-            pending.erase(job.request.revisionKey);
-            ++(captured ? statistics.captured : statistics.failed);
+            const bool stored = capture(job);
+            {
+                const std::lock_guard lock(mutex);
+                pending.erase(job.request.revisionKey);
+                capturing.erase(job.request.revisionKey);
+                ++(stored ? statistics.captured : statistics.failed);
+            }
+            captured.notify_all();
         }
     }
 
@@ -91,6 +102,7 @@ ImageSequenceReadAhead::~ImageSequenceReadAhead() {
         state_->queue.clear();
     }
     state_->ready.notify_all();
+    state_->captured.notify_all();
     for (auto& worker : state_->workers)
         if (worker.joinable())
             worker.join();
@@ -126,6 +138,29 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
     }
     if (added != 0)
         state_->ready.notify_all();
+}
+
+bool ImageSequenceReadAhead::claim(const std::string& revisionKey,
+                                   const std::function<bool()>& cancelled) {
+    std::unique_lock lock(state_->mutex);
+    if (!state_->pending.contains(revisionKey))
+        return false;
+    if (!state_->capturing.contains(revisionKey)) {
+        // Queued and not started: the frame reads it now instead.
+        const auto queued = std::ranges::find_if(state_->queue, [&](const State::Job& job) {
+            return job.request.revisionKey == revisionKey;
+        });
+        if (queued != state_->queue.end())
+            state_->queue.erase(queued);
+        state_->pending.erase(revisionKey);
+        ++state_->statistics.withdrawn;
+        return false;
+    }
+    ++state_->statistics.awaited;
+    while (state_->capturing.contains(revisionKey) && !state_->stopping.load() &&
+           !(cancelled && cancelled()))
+        state_->captured.wait_for(lock, std::chrono::milliseconds(5));
+    return true;
 }
 
 ImageSequenceReadAhead::Statistics ImageSequenceReadAhead::statistics() const {

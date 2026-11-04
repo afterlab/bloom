@@ -560,7 +560,8 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
         byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
-        context.buildUploads ? &context.buildUploads->revisions() : nullptr);
+        context.buildUploads ? &context.buildUploads->revisions() : nullptr,
+        explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
     recordSourceRevisionWork(selection, statistics);
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {
@@ -635,7 +636,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
         byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
-        context.buildUploads ? &context.buildUploads->revisions() : nullptr);
+        context.buildUploads ? &context.buildUploads->revisions() : nullptr,
+        explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
     recordSourceRevisionWork(selection, statistics);
     requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
     if (selection.cancelled) {

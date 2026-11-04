@@ -8,6 +8,7 @@
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/render/gpu_point_resample.hpp>
 #include <bloom/runtime/footage_time.hpp>
+#include <bloom/runtime/image_sequence_read_ahead.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <charconv>
 #include <cmath>
@@ -185,14 +186,13 @@ void ImageSourceRevisionMemo::share(const std::string& key,
     }
 }
 
-ImageSourceSelection
-selectImageSource(const CompiledImageSource& source, core::RationalTime time,
-                  document::FrameRate rate, const std::filesystem::path& base,
-                  const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
-                  OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
-                  const std::size_t hostByteBudget, const bool allowRevisionInsertion,
-                  LinearPassRetention* const linearPass,
-                  ImageSourceRevisionMemo* const buildRevisions) {
+ImageSourceSelection selectImageSource(
+    const CompiledImageSource& source, core::RationalTime time, document::FrameRate rate,
+    const std::filesystem::path& base, const CancellationToken& cancel,
+    const EvaluationColorIntent& colorIntent, OperationCache* revisionCache,
+    const MediaSourceRevisionPolicy revisionPolicy, const std::size_t hostByteBudget,
+    const bool allowRevisionInsertion, LinearPassRetention* const linearPass,
+    ImageSourceRevisionMemo* const buildRevisions, ImageSequenceReadAhead* const readAhead) {
     ImageSourceSelection selected;
     if (!source.asset) {
         selected.warning = "Image asset is missing; choose an asset or relink in Assets";
@@ -275,48 +275,58 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                 return true;
             }
         }
-        if (revisionCache) {
-            if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{},
-                                                        OperationCacheEntryKind::DecodedMedia);
-                cached && cached->sourceRevision &&
-                cached->sourceRevision->retainedBytes() < hostByteBudget) {
-                if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
-                    selected.sourceRevision = cached->sourceRevision;
-                    selected.retainedRevision = true;
-                } else {
-                    // Revalidate: the retained bytes stand for the original while no full hash
-                    // in the process memo refutes the recorded digest and either a cheap identity
-                    // observation still matches the one that bracketed their capture (ADR 0025:
-                    // the identity check, no hash) or the memo verified the file's current
-                    // identity to hold the retained bytes' digest (a renamed or touched file
-                    // whose content did not change).
-                    selected.path =
-                        media::resolveImagePath(locator->path, locator->relinkHint, base);
-                    const auto observed = platform::observeSource(selected.path);
-                    const auto& retained = *cached->sourceRevision;
-                    const auto& retainedDigest = retained.probe().contentDigest;
-                    const bool refuted = observed.digest && selected.recordedDigest &&
-                                         *observed.digest != *selected.recordedDigest;
-                    const bool sameIdentity =
-                        observed.identity && retained.sourceIdentity() &&
-                        *observed.identity == *retained.sourceIdentity() &&
-                        (selected.expectedStamp || retainedDigest == selected.digest);
-                    const bool verifiedContent =
-                        observed.digest && *observed.digest == retainedDigest &&
-                        (selected.expectedStamp ? observed.identity &&
-                                                      media::ImageSourceStamp{
-                                                          observed.identity->size,
-                                                          observed.identity->modifiedNanoseconds} ==
-                                                          *selected.expectedStamp
-                                                : retainedDigest == selected.digest);
-                    const bool current = !refuted && (sameIdentity || verifiedContent);
-                    if (current) {
+        const auto findRetained = [&] {
+            if (revisionCache) {
+                if (const auto cached = revisionCache->find(revisionKeyText, document::Revision{},
+                                                            OperationCacheEntryKind::DecodedMedia);
+                    cached && cached->sourceRevision &&
+                    cached->sourceRevision->retainedBytes() < hostByteBudget) {
+                    if (revisionPolicy == MediaSourceRevisionPolicy::Retained) {
                         selected.sourceRevision = cached->sourceRevision;
                         selected.retainedRevision = true;
+                    } else {
+                        // Revalidate: the retained bytes stand for the original while no full hash
+                        // in the process memo refutes the recorded digest and either a cheap
+                        // identity observation still matches the one that bracketed their capture
+                        // (ADR 0025: the identity check, no hash) or the memo verified the file's
+                        // current identity to hold the retained bytes' digest (a renamed or touched
+                        // file whose content did not change).
+                        selected.path =
+                            media::resolveImagePath(locator->path, locator->relinkHint, base);
+                        const auto observed = platform::observeSource(selected.path);
+                        const auto& retained = *cached->sourceRevision;
+                        const auto& retainedDigest = retained.probe().contentDigest;
+                        const bool refuted = observed.digest && selected.recordedDigest &&
+                                             *observed.digest != *selected.recordedDigest;
+                        const bool sameIdentity =
+                            observed.identity && retained.sourceIdentity() &&
+                            *observed.identity == *retained.sourceIdentity() &&
+                            (selected.expectedStamp || retainedDigest == selected.digest);
+                        const bool verifiedContent =
+                            observed.digest && *observed.digest == retainedDigest &&
+                            (selected.expectedStamp
+                                 ? observed.identity &&
+                                       media::ImageSourceStamp{
+                                           observed.identity->size,
+                                           observed.identity->modifiedNanoseconds} ==
+                                           *selected.expectedStamp
+                                 : retainedDigest == selected.digest);
+                        const bool current = !refuted && (sameIdentity || verifiedContent);
+                        if (current) {
+                            selected.sourceRevision = cached->sourceRevision;
+                            selected.retainedRevision = true;
+                        }
                     }
                 }
             }
-        }
+        };
+        findRetained();
+        // #477: a file the sequence read-ahead is capturing is read once: a queued capture is
+        // withdrawn and this frame reads it now; one in flight is waited for and then found in
+        // the cache.
+        if (!selected.sourceRevision && readAhead != nullptr &&
+            readAhead->claim(revisionKeyText, [&] { return cancel.isCancellationRequested(); }))
+            findRetained();
         if (!selected.sourceRevision) {
             selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
             capture = media::captureImageSourceRevision(

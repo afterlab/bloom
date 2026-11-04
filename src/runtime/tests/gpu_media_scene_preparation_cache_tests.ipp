@@ -584,3 +584,59 @@ void testSequenceReadAhead(Expectations& expectations, const MediaFixture& fixtu
                             context.sequenceReadAhead->statistics().queued == 5,
                         "released members are captured again; a cached member is not");
 }
+
+// #477: a frame claims the sequence member it needs from the read-ahead, so the file is read once.
+// A capture still queued is withdrawn (the frame reads the file itself); a capture in flight is
+// waited for until it ends, and the wait stops when the frame is cancelled.
+void testSequenceReadAheadClaim(Expectations& expectations, const MediaFixture& fixture) {
+    // A sparse file the single worker takes many milliseconds to read, then fails to probe.
+    const auto slow = fixture.directory / "claim_slow.bin";
+    { std::ofstream create(slow, std::ios::binary); }
+    std::filesystem::resize_file(slow, 256ULL << 20);
+    const auto queued = fixture.directory / "claim_queued.bin";
+    { std::ofstream(queued, std::ios::binary) << "queued"; }
+    const auto cache = std::make_shared<bloom::runtime::OperationCache>(std::size_t{1} << 30);
+    using bloom::runtime::ImageSequenceReadAhead;
+    ImageSequenceReadAhead readAhead(1);
+    const auto capture = [](const std::filesystem::path& path, std::string key) {
+        return ImageSequenceReadAhead::Request{
+            .path = path,
+            .digest = {},
+            .stamp = std::nullopt,
+            .recordedDigest = std::nullopt,
+            .revisionKey = std::move(key),
+            .byteBudget = std::size_t{1} << 30,
+            .use = {}};
+    };
+    const auto waitStarted = [&](const std::uint64_t count) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (readAhead.statistics().started < count &&
+               std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        return readAhead.statistics().started == count;
+    };
+    readAhead.request(cache, {capture(slow, "slow"), capture(queued, "queued")});
+    expectations.expect(waitStarted(1), "the single worker starts the first capture");
+    const bool queuedWaited = readAhead.claim("queued", {});
+    auto statistics = readAhead.statistics();
+    expectations.expect(!queuedWaited && statistics.withdrawn == 1 && statistics.awaited == 0,
+                        "a queued capture is withdrawn and the frame reads the file itself");
+    const bool slowWaited = readAhead.claim("slow", {});
+    statistics = readAhead.statistics();
+    expectations.expect(slowWaited && statistics.awaited == 1 &&
+                            statistics.captured + statistics.failed == 1,
+                        "a capture in flight is waited for until it ends");
+    expectations.expect(!readAhead.claim("slow", {}) && !readAhead.claim("queued", {}) &&
+                            readAhead.statistics().withdrawn == 1 &&
+                            readAhead.statistics().awaited == 1 &&
+                            readAhead.statistics().started == 1,
+                        "a withdrawn capture never starts and an ended one is not claimed again");
+    readAhead.request(cache, {capture(slow, "slow")});
+    expectations.expect(waitStarted(2), "the capture is requested again");
+    const auto claimStart = std::chrono::steady_clock::now();
+    const bool cancelledWaited = readAhead.claim("slow", [] { return true; });
+    expectations.expect(cancelledWaited && readAhead.statistics().awaited == 2 &&
+                            std::chrono::steady_clock::now() - claimStart <
+                                std::chrono::seconds(1),
+                        "a cancelled frame stops waiting for the capture");
+}

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,9 +41,14 @@ class ImageSequenceReadAhead final {
     };
     struct Statistics final {
         std::uint64_t queued = 0;
+        // Captures a worker began.
+        std::uint64_t started = 0;
         std::uint64_t captured = 0;
         std::uint64_t skipped = 0;
         std::uint64_t failed = 0;
+        // Captures a frame took over before they started, and captures a frame waited for.
+        std::uint64_t withdrawn = 0;
+        std::uint64_t awaited = 0;
     };
 
     explicit ImageSequenceReadAhead(std::size_t workers = 4, std::size_t queueLimit = 32);
@@ -54,6 +60,13 @@ class ImageSequenceReadAhead final {
     // Queues captures into `cache`, skipping files already cached, queued or in flight, and any
     // beyond the queue bound. The cache is held weakly; a cache that is gone skips its captures.
     void request(const std::shared_ptr<OperationCache>& cache, std::vector<Request> requests);
+    // A frame that needs `revisionKey` now must not read it a second time beside a capture: a
+    // queued capture of it is withdrawn (the frame reads the file itself, now), and a capture in
+    // flight is waited for, so the file is read once and that read finishes first. Returns true
+    // after waiting for a capture (its revision is then in the cache unless it failed).
+    // `cancelled` is polled while waiting.
+    [[nodiscard]] bool claim(const std::string& revisionKey,
+                             const std::function<bool()>& cancelled);
     [[nodiscard]] Statistics statistics() const;
 
   private:
