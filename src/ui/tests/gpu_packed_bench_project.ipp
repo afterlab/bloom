@@ -53,6 +53,10 @@ double gBenchPlaySeconds = 6.0;       // transport run length for either playbac
 bool gBenchWorkspace = false;         // the application's window and editors, not a bare Viewer
 bool gBenchWorkspaceAssets = true;    // the workspace also runs the application's AssetController
 std::chrono::seconds gBenchTimeout{1800};
+// #539: viewer frames requested during a RAM fill (seconds until each shows), and how long the
+// run stays idle after the fill to measure the device memory Bloom gives back.
+std::size_t gBenchViewerProbes = 0;
+double gBenchIdleSeconds = 0.0;
 // Scrub run (#421): jumps to this many frames spread over the work area, none of them cached, and
 // times each until the Viewer shows it; then clears the preview frame cache and visits them again.
 std::size_t gBenchScrubFrames = 0;
@@ -919,7 +923,37 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         const auto operationBefore = evaluator.operationCache()->statistics();
         const auto operationBudgetBefore = evaluator.operationCache()->byteBudget();
         ram.start();
+        // #539: viewer frames during the fill. Each probe jumps to a frame the fill has not
+        // reached (from the end of the work area backwards) and times it until the Viewer shows it.
+        std::vector<double> viewerProbeSeconds;
+        std::vector<core::RationalTime> probeTargets;
+        if (gBenchViewerProbes != 0) {
+            if (const auto* composition = session.composition()) {
+                const auto rate = composition->format().frameRate();
+                const auto mapping = core::FrameTimeMapping::create(
+                    composition->duration(), rate.numerator(), rate.denominator());
+                const auto area = session.workArea();
+                if (mapping.hasValue()) {
+                    auto frame = mapping.value()->nearestFrameIndex(area.end);
+                    const auto first = mapping.value()->nearestFrameIndex(area.start);
+                    for (std::size_t probe = 0; probe < gBenchViewerProbes && frame > first + 1;
+                         ++probe) {
+                        frame -= 2;
+                        if (const auto at = mapping.value()->timeForFrame(frame); at.hasValue())
+                            probeTargets.push_back(*at.value());
+                    }
+                }
+            }
+        }
+        for (const auto& target : probeTargets) {
+            if (waitUntil([&] { return !ram.isCaching(); }, 1500ms))
+                break;
+            const auto shown = benchScrubPass(session, viewer, {target});
+            viewerProbeSeconds.insert(viewerProbeSeconds.end(), shown.begin(), shown.end());
+        }
         const bool finished = waitUntil([&] { return !ram.isCaching(); }, gBenchTimeout);
+        if (gBenchViewerProbes != 0)
+            benchSecondsJson(json, "viewerDuringFillSeconds", viewerProbeSeconds);
         const auto wall =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         const auto cpu = benchProcessCpuSeconds() - cpuBefore;
@@ -997,6 +1031,33 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
                          : 0.0);
         }
     }
+    if (gBenchIdleSeconds > 0) {
+        // #539: device memory at the end of the work, and after the run has been idle.
+        const auto live = [] {
+            const auto totals = core::telemetry::gpuDeviceMemoryTotals();
+            return totals.allocatedBytes - std::min(totals.freedBytes, totals.allocatedBytes);
+        };
+        const auto trimsBefore = service.status().counters.idleTrims;
+        const auto atEnd = live();
+        const auto idleStarted = std::chrono::steady_clock::now();
+        double trimSeconds = -1.0;
+        const auto elapsed = [&idleStarted] {
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - idleStarted)
+                .count();
+        };
+        static_cast<void>(waitUntil(
+            [&] {
+                if (trimSeconds < 0 && service.status().counters.idleTrims > trimsBefore)
+                    trimSeconds = elapsed();
+                return elapsed() >= gBenchIdleSeconds;
+            },
+            std::chrono::milliseconds(static_cast<std::int64_t>(gBenchIdleSeconds * 1000) +
+                                      5000)));
+        json << ",\"deviceLiveAtWorkEndBytes\":" << atEnd
+             << ",\"deviceLiveAfterIdleBytes\":" << live() << ",\"idleTrimSeconds\":"
+             << trimSeconds << ",\"idleTrimmedBytes\":"
+             << service.status().counters.idleTrimmedBytes;
+    }
     {
         std::string codes;
         for (const auto& item : controller.state().diagnostics)
@@ -1038,8 +1099,15 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << stageSeconds(core::telemetry::Stage::Decode) - decodeBefore
          << ",\"colourConvertStageSeconds\":"
          << stageSeconds(core::telemetry::Stage::ColourConvert) - convertBefore;
+    json << ",\"cpuFallbacksByReason\":[";
+    for (std::size_t reason = 0; reason < after.cpuFallbacksByReason.size(); ++reason)
+        json << (reason == 0 ? "" : ",")
+             << after.cpuFallbacksByReason[reason] - before.cpuFallbacksByReason[reason];
+    json << ']';
     json << ",\"cpuFallbackFrames\":" << after.cpuFallbacks - before.cpuFallbacks
          << ",\"cpuFallbacksTotal\":" << after.cpuFallbacks
+         << ",\"capacityWaits\":" << after.capacityWaits - before.capacityWaits
+         << ",\"residentFailures\":" << after.residentFailures - before.residentFailures
          << ",\"nativeDispatches\":" << after.nativeDispatches - before.nativeDispatches
          << ",\"packedTransfers\":" << after.packedTransfers - before.packedTransfers
          << ",\"residentGraphJobs\":" << after.residentGraphJobs - before.residentGraphJobs

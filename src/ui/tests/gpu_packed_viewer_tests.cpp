@@ -258,6 +258,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             if (++index >= argc)
                 return 2;
             gBenchPlaySeconds = std::stod(argv[index]);
+        } else if (argument == "--bench-viewer-probes") {
+            if (++index >= argc)
+                return 2;
+            gBenchViewerProbes = static_cast<std::size_t>(std::max(0, std::atoi(argv[index])));
+        } else if (argument == "--bench-idle-seconds") {
+            if (++index >= argc)
+                return 2;
+            gBenchIdleSeconds = std::stod(argv[index]);
         } else if (argument == "--bench-timeout-seconds") {
             if (++index >= argc)
                 return 2;
