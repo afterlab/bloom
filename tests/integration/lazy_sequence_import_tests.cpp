@@ -281,7 +281,7 @@ std::string withMinor(const std::string& text, const int from, const int to) {
 
 // Document 1.35: a project saved while only some members have digests reopens to the same asset,
 // and its stamped members read as before; a document claiming 1.34 cannot carry a stamp, and 1.34
-// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests, 1.37 entry layers).
+// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests, 1.37 entry layers, 1.38 gradients).
 void partialDigestsReopen() {
     Folder folder("bloom-lazy-sequence-reopen");
     for (int frame = 1; frame <= 3; ++frame)
@@ -311,10 +311,10 @@ void partialDigestsReopen() {
                "the reopened stamped members read");
         expect(encode(draft.project()) == text, "the canonical text is stable");
     }
-    expect(!decode(withMinor(text, 37, 34)), "a document claiming 1.34 cannot carry a stamp");
+    expect(!decode(withMinor(text, 38, 34)), "a document claiming 1.34 cannot carry a stamp");
 
     const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 37, 34);
+    const auto older = withMinor(plain, 38, 34);
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
     expect(static_cast<bool>(parsed), "the 1.34 document parses");
@@ -368,13 +368,13 @@ void verifiedDigestsRoundTrip() {
     expect(reopened && reopened->size() == 1 && reopened->front() == asset,
            "verified, legacy and pending members reopen exactly");
     expect(encode(verified) == text, "the canonical text is stable");
-    expect(!decode(withMinor(text, 37, 35)),
+    expect(!decode(withMinor(text, 38, 35)),
            "a document claiming 1.35 cannot carry both a digest and a stamp");
-    expect(!decode(withMinor(text, 37, 34)),
+    expect(!decode(withMinor(text, 38, 34)),
            "a document claiming 1.34 cannot carry both a digest and a stamp");
 
     const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 37, 35);
+    const auto older = withMinor(plain, 38, 35);
     expect(static_cast<bool>(decode(older)), "a 1.35 document with one form per member decodes");
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);

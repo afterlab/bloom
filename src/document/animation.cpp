@@ -23,6 +23,8 @@ using bloom::document::KeyframeId;
 using bloom::document::KeyframeInterpolation;
 using bloom::document::PathAnimationCurve;
 using bloom::document::PathKeyframe;
+using bloom::document::GradientAnimationCurve;
+using bloom::document::GradientKeyframe;
 using bloom::document::ScalarAnimationCurve;
 using bloom::document::ScalarKeyframe;
 using bloom::document::ValidationCode;
@@ -42,6 +44,11 @@ using bloom::document::Vec3AnimationCurve;
 
 // A Path key's value is representable when the path itself is.
 [[nodiscard]] bool finiteValue(const PathKeyframe& keyframe) noexcept {
+    return keyframe.value.isValid();
+}
+
+// #541: likewise a Gradient key's.
+[[nodiscard]] bool finiteValue(const GradientKeyframe& keyframe) noexcept {
     return keyframe.value.isValid();
 }
 
@@ -306,6 +313,10 @@ template <typename Curve>
     return std::holds_alternative<PathAnimationCurve>(record);
 }
 
+[[nodiscard]] bool isGradient(const AnimationCurveRecord& record) noexcept {
+    return std::holds_alternative<GradientAnimationCurve>(record);
+}
+
 template <typename Curve>
 inline constexpr bool kWholeValueCurve = bloom::document::kWholeValueAnimationCurve<Curve>;
 
@@ -460,6 +471,9 @@ AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept {
     if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
         return path->id;
     }
+    if (const auto* gradient = std::get_if<GradientAnimationCurve>(&record)) {
+        return gradient->id;
+    }
     return {};
 }
 
@@ -504,6 +518,12 @@ AnimationCurveStore::findColor4(const AnimationCurveId id) const noexcept {
 const PathAnimationCurve* AnimationCurveStore::findPath(const AnimationCurveId id) const noexcept {
     const auto* record = find(id);
     return record == nullptr ? nullptr : std::get_if<PathAnimationCurve>(record);
+}
+
+const GradientAnimationCurve*
+AnimationCurveStore::findGradient(const AnimationCurveId id) const noexcept {
+    const auto* record = find(id);
+    return record == nullptr ? nullptr : std::get_if<GradientAnimationCurve>(record);
 }
 
 const ComponentAnimationCurve*
@@ -608,6 +628,9 @@ bool AnimationCurveStore::containsKeyframe(const KeyframeId id) const noexcept {
         if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
             return contains(*path);
         }
+        if (const auto* gradient = std::get_if<GradientAnimationCurve>(&record)) {
+            return contains(*gradient);
+        }
         return containsComponentKey(std::get_if<Vec2AnimationCurve>(&record)) ||
                containsComponentKey(std::get_if<Vec3AnimationCurve>(&record)) ||
                containsComponentKey(std::get_if<Color4AnimationCurve>(&record));
@@ -661,6 +684,22 @@ bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId, PathKey
     return curve != nullptr && ::updateKeyframe(*curve, std::move(keyframe));
 }
 
+bool AnimationCurveStore::insertKeyframe(const AnimationCurveId curveId,
+                                         GradientKeyframe keyframe) {
+    const auto keyframeId = keyframe.id;
+    auto* record = findMutable(curveId);
+    auto* curve = record == nullptr ? nullptr : std::get_if<GradientAnimationCurve>(record);
+    return curve != nullptr &&
+           ::insertKeyframe(*curve, std::move(keyframe), containsKeyframe(keyframeId));
+}
+
+bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId,
+                                         GradientKeyframe keyframe) {
+    auto* record = findMutable(curveId);
+    auto* curve = record == nullptr ? nullptr : std::get_if<GradientAnimationCurve>(record);
+    return curve != nullptr && ::updateKeyframe(*curve, std::move(keyframe));
+}
+
 bool AnimationCurveStore::updateKeyframe(const AnimationCurveId curveId,
                                          const AnimationComponent component,
                                          ScalarKeyframe keyframe) {
@@ -691,6 +730,9 @@ bool AnimationCurveStore::eraseKeyframe(const AnimationCurveId curveId,
     }
     if (auto* path = std::get_if<PathAnimationCurve>(record)) {
         return eraseCurveKeyframe(*path, keyframeId);
+    }
+    if (auto* gradient = std::get_if<GradientAnimationCurve>(record)) {
+        return eraseCurveKeyframe(*gradient, keyframeId);
     }
     bool erased = false;
     std::visit(
@@ -855,6 +897,11 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
                 result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
                            "This path parameter requires a Path animation curve");
             }
+        } else if (isGradientAnimatableSchemaKey(parameter.schemaKey)) {
+            if (!isGradient(*curve)) {
+                result.add(ValidationCode::TypeMismatch, parameterPath + ".source.curveId",
+                           "This gradient parameter requires a Gradient animation curve");
+            }
         } else {
             result.add(ValidationCode::InvalidValue, parameterPath + ".source",
                        "This parameter schema does not support animation");
@@ -882,6 +929,17 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
                                "animationCurves[" + std::to_string(path->id.value()) +
                                    "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
                                "Curve key is outside the domain its schema declares");
+        } else if (const auto* gradient = std::get_if<GradientAnimationCurve>(curve)) {
+            // #541: a Gradient key satisfies its schema like a constant.
+            for (const auto& keyframe : gradient->keyframes) {
+                ParameterStore probe;
+                if (!probe.insert({parameter.id, parameter.schemaKey,
+                                   ConstantValueSource{keyframe.value}}))
+                    result.add(ValidationCode::InvalidValue,
+                               "animationCurves[" + std::to_string(gradient->id.value()) +
+                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
+                               "Gradient key is outside the domain its schema declares");
+            }
         } else if (const auto* color = std::get_if<Color4AnimationCurve>(curve)) {
             if (const auto* alpha = color->component(AnimationComponent::Alpha)) {
                 for (const auto& keyframe : alpha->keyframes) {

@@ -244,6 +244,14 @@ void blurNodeReopen() {
                     ? document::ParameterValue{std::int64_t{3}}
                 : parameter.schemaKey == "bloom.colorize.cycle"
                     ? document::ParameterValue{std::int64_t{2}}
+                // #541: a five-stop gradient with a hard edge and an HDR, signed stop.
+                : parameter.valueKind == document::ParameterValueKind::Gradient
+                    ? document::ParameterValue{document::GradientValue{
+                          {{0.0, core::Color4d{0.0, 0.0, 0.0, 1.0}},
+                           {0.5, core::Color4d{1.5, -0.25, 0.5, 1.0}},
+                           {0.5, core::Color4d{0.2, 0.4, 0.6, 1.0}},
+                           {0.75, core::Color4d{0.9, 0.9, 0.1, 0.5}},
+                           {1.0, core::Color4d{1.0, 1.0, 1.0, 1.0}}}}}
                 : parameter.schemaKey.starts_with("bloom.colorize.") &&
                         parameter.valueKind == document::ParameterValueKind::Color4d
                     ? document::ParameterValue{core::Color4d{1.5, -0.25, 0.5, 1.0}}
@@ -382,11 +390,11 @@ void futureLayoutAttachments() {
         throw std::logic_error("layout future entries");
     const auto bytes = entries.document()->documentBytes();
     std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto rootMinor = text.find("\"minor\": 37");
+    const auto rootMinor = text.find("\"minor\": 38");
     const auto layoutStart = text.find("\"nodeLayout\"");
     if (rootMinor == std::string::npos || layoutStart == std::string::npos)
         throw std::logic_error("layout future anchors");
-    text.replace(rootMinor, std::string_view("\"minor\": 37").size(), "\"minor\": 38");
+    text.replace(rootMinor, std::string_view("\"minor\": 38").size(), "\"minor\": 39");
     const auto y = text.find("\"y\": 32.0", layoutStart);
     if (y == std::string::npos)
         throw std::logic_error("layout position anchor");
@@ -395,7 +403,7 @@ void futureLayoutAttachments() {
     if (muted == std::string::npos)
         throw std::logic_error("layout record anchor");
     text.insert(muted + std::string_view("\"muted\": false").size(), R"(, "zzzLayout":"retained")");
-    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 38}};
+    const CanonicalManifestV1 manifest{.documentSchemaVersion = {1, 39}};
     const auto size = canonicalManifestSize(manifest);
     if (!size)
         throw std::logic_error("future manifest size");
@@ -411,7 +419,7 @@ void futureLayoutAttachments() {
     if (openedResult.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto opened = std::move(openedResult).takeOpened();
-    expect(opened.roundTrip && opened.schemaMinor == 38,
+    expect(opened.roundTrip && opened.schemaMinor == 39,
            "future layout retains its schema and attachments");
     if (!opened.roundTrip)
         throw std::logic_error("layout round-trip state");
@@ -421,7 +429,7 @@ void futureLayoutAttachments() {
                                  CanonicalDocumentV1{.snapshot = &snapshot,
                                                      .colorSettings = &opened.colorSettings,
                                                      .roundTrip = &*opened.roundTrip,
-                                                     .schemaMinor = 38},
+                                                     .schemaMinor = 39},
                                  {}, memory());
     expect(static_cast<bool>(rewritten), "future layout passes verified overlay save");
     if (!rewritten)

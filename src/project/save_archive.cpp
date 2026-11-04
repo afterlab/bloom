@@ -125,6 +125,9 @@ measureScratch(const bloom::document::Snapshot& snapshot) noexcept {
             } else if (const auto* pathCurve =
                            std::get_if<bloom::document::PathAnimationCurve>(&curve)) {
                 thirdWindow = std::max(thirdWindow, pathCurve->keyframes.size());
+            } else if (const auto* gradientCurve =
+                           std::get_if<bloom::document::GradientAnimationCurve>(&curve)) {
+                thirdWindow = std::max(thirdWindow, gradientCurve->keyframes.size());
             }
         }
     }

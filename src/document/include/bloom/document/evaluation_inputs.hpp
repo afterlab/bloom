@@ -52,6 +52,7 @@ namespace bloom::document {
 // handles are later maintained; sampling reads the handles themselves.
 [[nodiscard]] ScalarKeyframe evaluationView(ScalarKeyframe keyframe) noexcept;
 [[nodiscard]] PathKeyframe evaluationView(PathKeyframe keyframe) noexcept;
+[[nodiscard]] GradientKeyframe evaluationView(GradientKeyframe keyframe) noexcept;
 [[nodiscard]] AnimationCurveRecord evaluationView(AnimationCurveRecord record);
 
 // Whether two graphs present identical evaluation inputs (topology, nodes, parameters bindings,

@@ -95,7 +95,8 @@ template <typename Edit> void forEachSequence(document::AnimationCurveRecord& re
 template <typename Keyframe>
 [[nodiscard]] double segmentChange(const Keyframe& left, const Keyframe& right) noexcept {
     // A Path key's handle offsets are fractions of the segment's 0 -> 1 progress.
-    if constexpr (std::is_same_v<Keyframe, document::PathKeyframe>)
+    if constexpr (std::is_same_v<Keyframe, document::PathKeyframe> ||
+                  std::is_same_v<Keyframe, document::GradientKeyframe>)
         return 1.0;
     else
         return right.value - left.value;

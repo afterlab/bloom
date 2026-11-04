@@ -67,6 +67,8 @@ void chargeValue(std::size_t& total, const ParameterValue& value) {
                 charge(total, item.size());
             else if constexpr (std::is_same_v<Value, PathValue>)
                 chargeRecords<PathAnchor>(total, item.anchors.size());
+            else if constexpr (std::is_same_v<Value, GradientValue>)
+                chargeRecords<GradientStop>(total, item.stops.size());
         },
         value);
 }
@@ -217,6 +219,10 @@ std::size_t Composition::calculateContentByteCharge(const Content& authored) {
                     chargeRecords<PathKeyframe>(bytes, record.keyframes.size());
                     for (const auto& keyframe : record.keyframes)
                         chargeRecords<PathAnchor>(bytes, keyframe.value.anchors.size());
+                } else if constexpr (std::is_same_v<Record, GradientAnimationCurve>) {
+                    chargeRecords<GradientKeyframe>(bytes, record.keyframes.size());
+                    for (const auto& keyframe : record.keyframes)
+                        chargeRecords<GradientStop>(bytes, keyframe.value.stops.size());
                 } else {
                     for (const auto& component : record.components)
                         chargeRecords<ScalarKeyframe>(bytes, component.keyframes.size());

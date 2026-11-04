@@ -163,7 +163,7 @@ void roundTrip() {
                plain.find("\"loopCount\"") == std::string::npos &&
                plain.find("\"missingFrames\"") == std::string::npos,
            "default members are absent");
-    expect(!decodes(replaceRegex(text, R"("minor": 37(\s*\}))", "\"minor\": 33$1")),
+    expect(!decodes(replaceRegex(text, R"("minor": 38(\s*\}))", "\"minor\": 33$1")),
            "a document claiming 1.33 cannot carry the 1.34 members");
     expect(!decodes(replaceRegex(text, R"("loopCount": 3)", "\"loopCount\": 1")),
            "a default value written out is refused");
@@ -277,7 +277,7 @@ void importMembers() {
     expect(decoded.size() == 2 && decoded[0] == asset && decoded[1] == still,
            "Skip, the frame range and the still duration round-trip exactly");
     // A 1.33 reader keeps unknown trailing members aside and reads the 1.33 meaning.
-    const auto older = decodeText(replaceRegex(text, R"("minor": 37(\s*\}))", "\"minor\": 33$1"));
+    const auto older = decodeText(replaceRegex(text, R"("minor": 38(\s*\}))", "\"minor\": 33$1"));
     expect(older.size() == 2 &&
                older[0].interpretation.missingFrames == AssetMissingFrames::HoldPrevious &&
                !older[0].manifest.range && !older[1].interpretation.stillDuration,
@@ -287,7 +287,7 @@ void importMembers() {
 }
 void migration() {
     const auto current = encode(makeDocument("01:00:00:00", 2));
-    const auto older = replaceRegex(current, R"("minor": 37(\s*\}))", "\"minor\": 33$1");
+    const auto older = replaceRegex(current, R"("minor": 38(\s*\}))", "\"minor\": 33$1");
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
     expect(static_cast<bool>(parsed), "1.33 document parses");

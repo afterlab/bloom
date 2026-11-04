@@ -28,6 +28,9 @@ namespace {
             if constexpr (std::is_same_v<Source, bloom::document::ConstantValueSource>) {
                 if (const auto* path = std::get_if<bloom::document::PathValue>(&valueSource.value))
                     return path->isValid();
+                if (const auto* gradient =
+                        std::get_if<bloom::document::GradientValue>(&valueSource.value))
+                    return gradient->isValid();
                 if (const auto* value = std::get_if<double>(&valueSource.value)) {
                     return std::isfinite(*value);
                 }
@@ -365,6 +368,16 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value != nullptr && *value >= domain->minimum && *value <= domain->maximum;
     }
+    // #541: Gradient Map's gradient, each stop's RGB within +-1e6 like the colours.
+    if (isColorizeGradientSchemaKey(schemaKey)) {
+        const auto* gradient = std::get_if<GradientValue>(&constant.value);
+        return gradient != nullptr && gradient->isValid() &&
+               std::ranges::all_of(gradient->stops, [](const GradientStop& stop) {
+                   return std::abs(stop.color.red) <= kMaximumColorizeColor &&
+                          std::abs(stop.color.green) <= kMaximumColorizeColor &&
+                          std::abs(stop.color.blue) <= kMaximumColorizeColor;
+               });
+    }
     // #339 Drop Shadow, Glow and Light Wrap.
     if (isRecipeScalarSchemaKey(schemaKey)) {
         const auto* value = std::get_if<double>(&constant.value);
@@ -604,6 +617,46 @@ bool PathValue::isValid() const noexcept {
                return finite(anchor.point) && (!anchor.inHandle || finite(*anchor.inHandle)) &&
                       (!anchor.outHandle || finite(*anchor.outHandle));
            });
+}
+
+bool GradientValue::isValid() const noexcept {
+    return !stops.empty() && stops.size() <= kMaximumGradientStops &&
+           std::ranges::all_of(stops, [](const GradientStop& stop) {
+               return std::isfinite(stop.position) && stop.position >= 0.0 &&
+                      stop.position <= 1.0 && stop.color.isValid();
+           });
+}
+
+GradientValue defaultColorizeGradient() {
+    return {{{0.0, core::Color4d{0.0, 0.0, 0.0, 1.0}},
+             {0.18, core::Color4d{0.24, 0.17, 0.1, 1.0}},
+             {1.0, core::Color4d{1.0, 1.0, 1.0, 1.0}}}};
+}
+
+std::vector<GradientStop> sortedGradientStops(const GradientValue& value) {
+    auto stops = value.stops;
+    std::ranges::stable_sort(stops, {}, &GradientStop::position);
+    return stops;
+}
+
+core::Color4d gradientColorAt(const GradientValue& value, const double position) {
+    const auto stops = sortedGradientStops(value);
+    if (stops.empty())
+        return {};
+    if (!(position > stops.front().position))
+        return stops.front().color;
+    if (position >= stops.back().position)
+        return stops.back().color;
+    // The last stop at or before the position; the next one is strictly after it.
+    std::size_t index = 0;
+    while (index + 2 < stops.size() && stops[index + 1].position <= position)
+        ++index;
+    const auto& from = stops[index];
+    const auto& to = stops[index + 1];
+    const double u = (position - from.position) / (to.position - from.position);
+    const auto mix = [u](const double a, const double b) { return a + u * (b - a); };
+    return {mix(from.color.red, to.color.red), mix(from.color.green, to.color.green),
+            mix(from.color.blue, to.color.blue), mix(from.color.alpha, to.color.alpha)};
 }
 
 const ParameterRecord* ParameterStore::find(const ParameterId id) const noexcept {

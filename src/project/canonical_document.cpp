@@ -99,6 +99,9 @@ struct SortWindows final {
             } else if (const auto* path =
                            std::get_if<bloom::document::PathAnimationCurve>(&record)) {
                 plan.window2 = maximumOf(plan.window2, path->keyframes.size());
+            } else if (const auto* gradient =
+                           std::get_if<bloom::document::GradientAnimationCurve>(&record)) {
+                plan.window2 = maximumOf(plan.window2, gradient->keyframes.size());
             }
         }
     }
@@ -705,6 +708,24 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                state.ok(writer.booleanValue(path->closed)) && emitRetainedTrailing(state) &&
                state.ok(writer.endObject());
     }
+    // Document 1.38 (#541): a gradient, its stops in stored order, each a flat object.
+    if (const auto* gradient = std::get_if<GradientValue>(&value)) {
+        if (!gradient->isValid() || !state.ok(writer.memberName("kind")) ||
+            !state.ok(writer.stringValue("gradient")) || !state.ok(writer.memberName("stops")) ||
+            !state.ok(writer.beginArray()))
+            return false;
+        for (const auto& stop : gradient->stops)
+            if (!state.ok(writer.beginObject()) ||
+                !emitFloat64Member(state, "position", stop.position) ||
+                !emitFloat64Member(state, "red", stop.color.red) ||
+                !emitFloat64Member(state, "green", stop.color.green) ||
+                !emitFloat64Member(state, "blue", stop.color.blue) ||
+                !emitFloat64Member(state, "alpha", stop.color.alpha) ||
+                !state.ok(writer.endObject()))
+                return false;
+        return state.ok(writer.endArray()) && emitRetainedTrailing(state) &&
+               state.ok(writer.endObject());
+    }
     if (const auto* rational = std::get_if<bloom::core::RationalTime>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("rational")) &&
                emitNamedSigned(state, "numerator", rational->numerator()) &&
@@ -943,6 +964,32 @@ emitInterpolation(EmitState& state,
            emitRetainedTrailing(state) && state.ok(writer.endObject());
 }
 
+// Document 1.38 (#541): a whole-value Gradient key, its value a constant of kind "gradient".
+[[nodiscard]] bool emitGradientKeyframe(EmitState& state,
+                                        const bloom::document::GradientKeyframe& key) noexcept {
+    auto& writer = state.writer;
+    const auto idText = bloom::project::formatCanonicalUInt64(key.id.value());
+    const PathScope keyframeScope(state, RoundTripCollectionKind::Keyframe, idText.view());
+    if (!state.ok(writer.beginObject()) || !emitNamedId(state, "id", key.id.value()) ||
+        !state.ok(writer.memberName("time")))
+        return false;
+    {
+        const PathScope timeScope(state, "time");
+        if (!emitRational(state, key.time.numerator(), key.time.denominator()))
+            return false;
+    }
+    if (!state.ok(writer.memberName("value")))
+        return false;
+    {
+        const PathScope valueScope(state, "value");
+        if (!emitConstantValue(state, bloom::document::ParameterValue{key.value}))
+            return false;
+    }
+    return state.ok(writer.memberName("outgoingInterpolation")) &&
+           emitInterpolation(state, key.outgoingInterpolation) && emitKeyframeHandles(state, key) &&
+           emitRetainedTrailing(state) && state.ok(writer.endObject());
+}
+
 [[nodiscard]] std::string_view
 componentName(const bloom::document::AnimationComponent component) noexcept {
     switch (component) {
@@ -1117,6 +1164,26 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
             }
             for (const auto keyIndex : keyOrder)
                 if (!emitPathKeyframe(state, path->keyframes[keyIndex])) {
+                    state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
+                                    compositionIndex);
+                    return false;
+                }
+        } else if (const auto* gradient = std::get_if<GradientAnimationCurve>(&record)) {
+            if (!state.ok(writer.memberName("kind")) ||
+                !state.ok(writer.stringValue("gradient")) ||
+                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
+                return false;
+            std::span<const std::size_t> keyOrder;
+            if (!makeOrder(
+                    gradient->keyframes,
+                    [](const GradientKeyframe& key) noexcept { return key.time; },
+                    state.sort.window2, keyOrder, state.walk.error)) {
+                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                compositionIndex);
+                return false;
+            }
+            for (const auto keyIndex : keyOrder)
+                if (!emitGradientKeyframe(state, gradient->keyframes[keyIndex])) {
                     state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
                                     compositionIndex);
                     return false;

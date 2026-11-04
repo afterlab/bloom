@@ -294,15 +294,39 @@ struct PathAnimationCurve {
     friend bool operator==(const PathAnimationCurve&, const PathAnimationCurve&) = default;
 };
 
+// #541: a whole-value Gradient key, exactly like a Path key: two keys with the same stop count
+// interpolate stop by stop (position and straight colour) along the segment's eased progress;
+// otherwise the earlier key holds until the next one.
+struct GradientKeyframe {
+    KeyframeId id;
+    core::RationalTime time;
+    GradientValue value;
+    KeyframeInterpolation outgoingInterpolation = KeyframeInterpolation::Linear;
+    KeyframeHandle outgoingHandle{};
+    KeyframeHandle incomingHandle{};
+    KeyframeEasingParameters easing{};
+    KeyframeHandleMode handleMode = KeyframeHandleMode::Free;
+
+    friend bool operator==(const GradientKeyframe&, const GradientKeyframe&) = default;
+};
+
+struct GradientAnimationCurve {
+    AnimationCurveId id;
+    std::vector<GradientKeyframe> keyframes;
+
+    friend bool operator==(const GradientAnimationCurve&, const GradientAnimationCurve&) = default;
+};
+
 using AnimationCurveRecord = std::variant<ScalarAnimationCurve, Vec2AnimationCurve,
                                           Vec3AnimationCurve, Color4AnimationCurve,
-                                          PathAnimationCurve>;
+                                          PathAnimationCurve, GradientAnimationCurve>;
 
 // Whole-value curves (scalar and Path) hold their keys directly in `keyframes`; the vector and
 // colour curves hold them per component.
 template <typename Curve>
 inline constexpr bool kWholeValueAnimationCurve = std::is_same_v<Curve, ScalarAnimationCurve> ||
-                                                  std::is_same_v<Curve, PathAnimationCurve>;
+                                                  std::is_same_v<Curve, PathAnimationCurve> ||
+                                                  std::is_same_v<Curve, GradientAnimationCurve>;
 
 [[nodiscard]] AnimationCurveId animationCurveId(const AnimationCurveRecord& record) noexcept;
 
@@ -317,6 +341,7 @@ class AnimationCurveStore final {
     [[nodiscard]] const Vec3AnimationCurve* findVec3(AnimationCurveId id) const noexcept;
     [[nodiscard]] const Color4AnimationCurve* findColor4(AnimationCurveId id) const noexcept;
     [[nodiscard]] const PathAnimationCurve* findPath(AnimationCurveId id) const noexcept;
+    [[nodiscard]] const GradientAnimationCurve* findGradient(AnimationCurveId id) const noexcept;
     [[nodiscard]] const ComponentAnimationCurve*
     findComponent(AnimationCurveId id, AnimationComponent component) const noexcept;
 
@@ -330,6 +355,9 @@ class AnimationCurveStore final {
     // ADR 0028 Path curves: whole-value keys.
     [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, PathKeyframe keyframe);
     [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, PathKeyframe keyframe);
+    // #541 Gradient curves: whole-value keys.
+    [[nodiscard]] bool insertKeyframe(AnimationCurveId curveId, GradientKeyframe keyframe);
+    [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, GradientKeyframe keyframe);
     [[nodiscard]] bool updateKeyframe(AnimationCurveId curveId, AnimationComponent component,
                                       ScalarKeyframe keyframe);
     // Erases one key by id. A scalar curve is searched directly; a vector or colour curve is

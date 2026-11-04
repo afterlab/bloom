@@ -252,6 +252,11 @@ template <typename Definition>
     scalar("cyans", kColorizeCyansSchemaKey);
     scalar("blues", kColorizeBluesSchemaKey);
     scalar("magentas", kColorizeMagentasSchemaKey);
+    // #541: Gradient Map's gradient, optional (a node made before it maps through its ramp) and
+    // animatable as a whole value, with no socket, like a Curves curve.
+    definition.parameters.push_back({"gradient", std::string(kColorizeGradientSchemaKey),
+                                     ParameterValueKind::Gradient, false, true,
+                                     defaultColorizeGradient()});
     return definition;
 }
 

@@ -6,7 +6,8 @@
 //   Tint (1)          luma mapped linearly from `shadows` (black) to `highlights` (white).
 //   Tritone (2)       luma through the three-stop ramp shadows, midtones (at `midpoint`),
 //                     highlights.
-//   Gradient Map (3)  luma or one channel (`source`) through the same ramp, scaled by
+//   Gradient Map (3)  luma or one channel (`source`) through `gradient` (#541; without one, the
+//                     same ramp as Tritone), scaled by
 //                     `repetitions`, shifted by `phase` and clamped, repeated or mirrored
 //                     (`cycle`).
 //   Black & White (4) a grey from the six hue weights (reds, yellows, greens, cyans, blues,
@@ -40,6 +41,13 @@ inline constexpr std::string_view kColorizeGreensSchemaKey = "bloom.colorize.gre
 inline constexpr std::string_view kColorizeCyansSchemaKey = "bloom.colorize.cyans";
 inline constexpr std::string_view kColorizeBluesSchemaKey = "bloom.colorize.blues";
 inline constexpr std::string_view kColorizeMagentasSchemaKey = "bloom.colorize.magentas";
+// #541: Gradient Map's gradient, a GradientValue (parameter.hpp) of any number of stops. Optional:
+// a node made before it existed has no binding and maps through its Shadows, Midtones (at the
+// Midpoint) and Highlights ramp, exactly as before; a new node binds it.
+inline constexpr std::string_view kColorizeGradientSchemaKey = "bloom.colorize.gradient";
+[[nodiscard]] constexpr bool isColorizeGradientSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kColorizeGradientSchemaKey;
+}
 
 inline constexpr std::int64_t kColorizeFill = 0;
 inline constexpr std::int64_t kColorizeTint = 1;

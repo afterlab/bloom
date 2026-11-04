@@ -304,6 +304,53 @@ using document::Vec3d;
         out = std::move(value);
         return true;
     }
+    // Document 1.38 (#541): a gradient's stops, each {position, red, green, blue, alpha}.
+    if (kindText == "gradient" && state.documentMinor >= 38) {
+        static constexpr std::array<std::string_view, 2> keys{"kind", "stops"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        const auto stopsPath = joinPath(path, "stops");
+        if (members[1]->kind() != JsonValueKind::Array ||
+            members[1]->arrayElements().size() > document::kMaximumGradientStops) {
+            state.fail(DocumentDecodeError::InvalidConstantValueKind, stopsPath);
+            return false;
+        }
+        document::GradientValue value;
+        static constexpr std::array<std::string_view, 5> stopKeys{"position", "red", "green",
+                                                                  "blue", "alpha"};
+        for (const auto& stop : members[1]->arrayElements()) {
+            const auto where = stopsPath + "/" + std::to_string(value.stops.size());
+            if (stop.kind() == JsonValueKind::Object &&
+                stop.objectMembers().size() > stopKeys.size()) {
+                state.fail(DocumentDecodeError::UnknownMember,
+                           joinPath(where, stop.objectMembers()[stopKeys.size()].key()));
+                return false;
+            }
+            std::vector<const JsonValue*> parts;
+            if (!matchOrderedMembers(stop, stopKeys, false, state, where, parts))
+                return false;
+            document::GradientStop decoded;
+            if (!decodeFloat64Member(*parts[0], state, joinPath(where, "position"),
+                                     decoded.position) ||
+                !decodeFloat64Member(*parts[1], state, joinPath(where, "red"),
+                                     decoded.color.red) ||
+                !decodeFloat64Member(*parts[2], state, joinPath(where, "green"),
+                                     decoded.color.green) ||
+                !decodeFloat64Member(*parts[3], state, joinPath(where, "blue"),
+                                     decoded.color.blue) ||
+                !decodeFloat64Member(*parts[4], state, joinPath(where, "alpha"),
+                                     decoded.color.alpha))
+                return false;
+            value.stops.push_back(decoded);
+        }
+        if (!value.isValid()) {
+            state.fail(DocumentDecodeError::DomainViolation, stopsPath);
+            return false;
+        }
+        out = std::move(value);
+        return true;
+    }
     if (kindText == "color4") {
         static constexpr std::array<std::string_view, 5> keys{"kind", "red", "green", "blue",
                                                               "alpha"};
@@ -806,6 +853,48 @@ template <typename Keyframe>
     return decodeHandleMembers(members, keys, knownCount, state, path, out);
 }
 
+// Document 1.38 (#541): a whole-value Gradient key whose value is a constant of kind "gradient".
+[[nodiscard]] bool decodeGradientKeyframe(const JsonValue& node, DecodeState& state,
+                                          const std::string& path,
+                                          document::GradientKeyframe& out) {
+    std::vector<std::string_view> keys{"id", "time", "value", "outgoingInterpolation"};
+    const auto knownCount = keys.size();
+    appendPresentHandleKeys(node, state, knownCount, keys);
+    std::vector<const JsonValue*> members;
+    std::vector<RetainedJsonMember> trailing;
+    if (!matchOrderedMembers(node, keys, true, state, path, members, trailing))
+        return false;
+    document::KeyframeId id;
+    if (!decodeObjectId(*members[0], state, joinPath(path, "id"), id))
+        return false;
+    const AttachmentScope keyframeScope(state, RoundTripCollectionKind::Keyframe,
+                                        std::to_string(id.value()));
+    if (!trailing.empty() && state.roundTrip != nullptr)
+        state.roundTrip->attach(state.attachmentPath, std::move(trailing));
+    {
+        const AttachmentScope timeScope(state, "time");
+        if (!decodeRationalTimeValue(*members[1], state, joinPath(path, "time"), out.time))
+            return false;
+    }
+    ParameterValue value;
+    {
+        const AttachmentScope valueScope(state, "value");
+        if (!decodeConstantValue(*members[2], state, joinPath(path, "value"), value))
+            return false;
+    }
+    auto* gradient = std::get_if<document::GradientValue>(&value);
+    if (gradient == nullptr || !gradient->isValid()) {
+        state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "value"));
+        return false;
+    }
+    if (!decodeInterpolation(*members[3], state, joinPath(path, "outgoingInterpolation"),
+                             out.outgoingInterpolation))
+        return false;
+    out.id = id;
+    out.value = std::move(*gradient);
+    return decodeHandleMembers(members, keys, knownCount, state, path, out);
+}
+
 [[nodiscard]] std::optional<AnimationComponent>
 componentFromText(const std::string_view text) noexcept {
     if (text == "x")
@@ -1048,6 +1137,20 @@ template <typename Keyframe, typename DecodeOne>
         curve.id = id;
         if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
                                  decodePathKeyframe))
+            return false;
+        out = std::move(curve);
+        return true;
+    }
+
+    if (kindText == "gradient" && state.documentMinor >= 38) {
+        static constexpr std::array<std::string_view, 3> keys{"id", "kind", "keyframes"};
+        std::vector<const JsonValue*> members;
+        if (!matchOrderedMembers(node, keys, true, state, path, members))
+            return false;
+        document::GradientAnimationCurve curve;
+        curve.id = id;
+        if (!decodeKeyframeArray(*members[2], state, joinPath(path, "keyframes"), curve.keyframes,
+                                 decodeGradientKeyframe))
             return false;
         out = std::move(curve);
         return true;

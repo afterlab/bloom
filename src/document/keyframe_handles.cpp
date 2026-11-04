@@ -28,7 +28,8 @@ template <typename Keyframe>
     std::vector<AutoHandleKey> result;
     result.reserve(keys.size());
     for (std::size_t index = 0; index < keys.size(); ++index) {
-        if constexpr (std::is_same_v<Keyframe, PathKeyframe>)
+        if constexpr (std::is_same_v<Keyframe, PathKeyframe> ||
+                      std::is_same_v<Keyframe, GradientKeyframe>)
             result.push_back({seconds(keys[index]), static_cast<double>(index)});
         else
             result.push_back({seconds(keys[index]), keys[index].value});
@@ -248,6 +249,16 @@ bool hasNonFreeHandleMode(const std::span<const ScalarKeyframe> keys) noexcept {
 bool hasNonFreeHandleMode(const std::span<const PathKeyframe> keys) noexcept {
     return std::ranges::any_of(
         keys, [](const auto& key) { return key.handleMode != KeyframeHandleMode::Free; });
+}
+
+bool hasNonFreeHandleMode(const std::span<const GradientKeyframe> keys) noexcept {
+    return std::ranges::any_of(
+        keys, [](const auto& key) { return key.handleMode != KeyframeHandleMode::Free; });
+}
+
+void settleKeyframeHandles(std::vector<GradientKeyframe>& after,
+                           const std::vector<GradientKeyframe>& before) {
+    settle(after, before);
 }
 
 void settleKeyframeHandles(std::vector<ScalarKeyframe>& after,

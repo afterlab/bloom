@@ -196,6 +196,7 @@ std::optional<document::ParameterValue> coerce(const document::ParameterValue& v
     case document::ParameterValueKind::Vec2d:
     case document::ParameterValueKind::Vec3d:
     case document::ParameterValueKind::Path:
+    case document::ParameterValueKind::Gradient:
         return value;
     }
     return value;
@@ -218,6 +219,8 @@ std::string valueText(const document::ParameterValue& value) {
         return "a color";
     if (std::holds_alternative<document::PathValue>(value))
         return "a path";
+    if (std::holds_alternative<document::GradientValue>(value))
+        return "a gradient";
     return "this value";
 }
 

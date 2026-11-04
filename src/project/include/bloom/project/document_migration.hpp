@@ -280,6 +280,11 @@ migrateVerifiedMemberDigestsV1_35(const JsonValue& root, std::pmr::memory_resour
 [[nodiscard]] MigrationStepOutcome
 migrateEntryLayersV1_36(const JsonValue& root, std::pmr::memory_resource* resource,
                         std::pmr::vector<char>& output);
+// Gradient values, document 1.37 -> 1.38 (#541): version-only. The gradient constant and the
+// gradient curve kind are new, and no older document can contain either.
+[[nodiscard]] MigrationStepOutcome
+migrateGradientValuesV1_37(const JsonValue& root, std::pmr::memory_resource* resource,
+                           std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -317,7 +322,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 33}, {1, 34}, migrateFootageInterpretationV1_33},
     MigrationStepDescriptor{{1, 34}, {1, 35}, migrateSequenceMemberStampsV1_34},
     MigrationStepDescriptor{{1, 35}, {1, 36}, migrateVerifiedMemberDigestsV1_35},
-    MigrationStepDescriptor{{1, 36}, {1, 37}, migrateEntryLayersV1_36}};
+    MigrationStepDescriptor{{1, 36}, {1, 37}, migrateEntryLayersV1_36},
+    MigrationStepDescriptor{{1, 37}, {1, 38}, migrateGradientValuesV1_37}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

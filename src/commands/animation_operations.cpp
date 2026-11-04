@@ -375,7 +375,45 @@ OperationResult
 setValueAtTime(document::Draft& draft, document::Composition& composition,
                const document::AnimationCurveId curveId, const core::RationalTime time,
                const std::variant<double, document::Vec2d, document::Vec3d, core::Color4d,
-                                  document::PathValue>& value) {
+                                  document::PathValue, document::GradientValue>& value) {
+    if (const auto* gradient = std::get_if<document::GradientValue>(&value)) {
+        // #541: a whole-value Gradient key, exactly like a Path key. The schema's own domain is
+        // checked when the draft is validated.
+        const auto* curve = composition.animationCurves().findGradient(curveId);
+        if (curve == nullptr)
+            return composition.animationCurves().find(curveId) == nullptr
+                       ? invalidCurve(curveId)
+                       : OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                   "Animation curve has the wrong value kind");
+        if (!gradient->isValid())
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Gradient keyframe value is invalid");
+        const auto existing =
+            std::ranges::find(curve->keyframes, time, &document::GradientKeyframe::time);
+        if (existing != curve->keyframes.end()) {
+            const auto id = existing->id;
+            if (existing->value == *gradient)
+                return OperationResult::noChange(keyframeOutput(id));
+            auto key = *existing;
+            key.value = *gradient;
+            if (!composition.animationCurves().updateKeyframe(curveId, std::move(key)))
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Gradient keyframe could not be updated");
+            return OperationResult::applied(keyframeOutput(id));
+        }
+        const auto id = draft.ids().allocateKeyframe();
+        if (!id.has_value())
+            return exhaustedIds();
+        document::GradientKeyframe key;
+        key.id = *id;
+        key.time = time;
+        key.value = *gradient;
+        key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
+        if (!composition.animationCurves().insertKeyframe(curveId, std::move(key)))
+            return OperationResult::rejected(OperationIssueCode::InvalidOrder,
+                                             "Gradient keyframe could not be inserted");
+        return OperationResult::applied(keyframeOutput(*id));
+    }
     if (const auto* path = std::get_if<document::PathValue>(&value)) {
         // A whole-value Path key: the key at exactly `time` takes the value, or a Linear key is
         // inserted there. The schema's own domain is checked when the draft is validated.
@@ -571,6 +609,37 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
         key.value = *value;
         key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
         document::PathAnimationCurve curve;
+        curve.id = *curveId;
+        curve.keyframes.push_back(std::move(key));
+        const document::ParameterValue defaultValue = constant->value;
+        if (!composition->animationCurves().insert(std::move(curve)) ||
+            !composition->parameters().setSource(
+                parameterId_, document::AnimationCurveSource{*curveId, defaultValue}))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Animation could not be attached to the parameter");
+        return OperationResult::applied(
+            {{std::string(kAnimationCurveOutput), DurableObjectId{*curveId}},
+             {std::string(kKeyframeOutput), DurableObjectId{*keyId}}});
+    }
+    if (document::isGradientAnimatableSchemaKey(parameter->schemaKey)) {
+        // #541: a whole-value Gradient curve, one key holding the constant, like a Path curve.
+        const auto* value = std::get_if<document::GradientValue>(&constant->value);
+        if (value == nullptr || !value->isValid())
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Gradient constant is invalid for its schema");
+        if (component_.has_value())
+            return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                             "Gradient parameters do not have components");
+        const auto curveId = draft.ids().allocateAnimationCurve();
+        const auto keyId = draft.ids().allocateKeyframe();
+        if (!curveId || !keyId)
+            return exhaustedIds();
+        document::GradientKeyframe key;
+        key.id = *keyId;
+        key.time = initialTime_;
+        key.value = *value;
+        key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
+        document::GradientAnimationCurve curve;
         curve.id = *curveId;
         curve.keyframes.push_back(std::move(key));
         const document::ParameterValue defaultValue = constant->value;
@@ -1142,7 +1211,8 @@ OperationResult DeleteKeyframe::apply(document::Draft& draft) const {
     // scalar curve": the key is deleted from one component, or from every component sharing its
     // exact time when the address names no component.
     const bool grouped = !std::holds_alternative<document::ScalarAnimationCurve>(*record) &&
-                         !std::holds_alternative<document::PathAnimationCurve>(*record);
+                         !std::holds_alternative<document::PathAnimationCurve>(*record) &&
+                         !std::holds_alternative<document::GradientAnimationCurve>(*record);
     if (component_.has_value()) {
         const auto* componentCurve =
             composition->animationCurves().findComponent(curveId_, *component_);
@@ -1353,6 +1423,14 @@ OperationResult ConvertAnimationToConstant::apply(document::Draft& draft) const 
                                              "Constant value does not match Path animation");
         }
         constantValue = *path;
+    } else if (const auto* gradient = std::get_if<document::GradientValue>(&value_)) {
+        if (!document::isGradientAnimatableSchemaKey(parameter->schemaKey) ||
+            composition->animationCurves().findGradient(source->curveId) == nullptr ||
+            !gradient->isValid()) {
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Constant value does not match Gradient animation");
+        }
+        constantValue = *gradient;
     } else {
         const auto color = std::get<core::Color4d>(value_);
         if (!document::isColor4AnimatableSchemaKey(parameter->schemaKey) ||
@@ -1532,6 +1610,9 @@ OperationResult DeleteKeyframes::apply(document::Draft& draft) const {
                     const auto fallback = [&]() -> document::ParameterValue {
                         if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>)
                             return curve.keyframes.empty() ? document::PathValue{}
+                                                           : curve.keyframes.front().value;
+                        else if constexpr (std::is_same_v<Curve, document::GradientAnimationCurve>)
+                            return curve.keyframes.empty() ? document::GradientValue{}
                                                            : curve.keyframes.front().value;
                         else
                             return curve.keyframes.empty() ? 0.0 : curve.keyframes.front().value;
@@ -1723,8 +1804,9 @@ namespace {
 template <typename Curve>
 [[nodiscard]] std::vector<document::ScalarKeyframe>*
 addressedKeyframes(Curve& curve, const std::optional<document::AnimationComponent> component) {
-    if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
-        return nullptr; // A Path key has no scalar axis to re-value or shape by value.
+    if constexpr (std::is_same_v<Curve, document::PathAnimationCurve> ||
+                  std::is_same_v<Curve, document::GradientAnimationCurve>) {
+        return nullptr; // A Path or Gradient key has no scalar axis to re-value or shape by value.
     } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
         return component.has_value() ? nullptr : &curve.keyframes;
     } else {
@@ -1906,8 +1988,10 @@ OperationResult PasteKeyframes::apply(document::Draft& draft) const {
         auto result = std::visit(
             [&](auto& curve) {
                 using Curve = std::decay_t<decltype(curve)>;
-                if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
-                    const auto* value = std::get_if<document::PathValue>(&paste.value);
+                if constexpr (std::is_same_v<Curve, document::PathAnimationCurve> ||
+                              std::is_same_v<Curve, document::GradientAnimationCurve>) {
+                    using Value = decltype(curve.keyframes.front().value);
+                    const auto* value = std::get_if<Value>(&paste.value);
                     if (!value || !value->isValid() || paste.component.has_value())
                         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                                          "Pasted value does not match parameter");

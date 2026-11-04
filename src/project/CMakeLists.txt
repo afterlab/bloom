@@ -381,6 +381,15 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_entry_layer_test)
     bloom_add_test(NAME bloom.project.entry-layers COMMAND bloom_project_entry_layer_test LABELS unit persistence)
 
+    # #541: a Colorize gradient's constant and whole-value curve; built from commands and sampled
+    # by the runtime, so it lives under tests/integration.
+    add_executable(bloom_project_gradient_test
+        ${PROJECT_SOURCE_DIR}/tests/integration/gradient_persistence_tests.cpp)
+    target_link_libraries(bloom_project_gradient_test PRIVATE bloom_project bloom_commands
+        bloom_runtime_compiler bloom_runtime_evaluator ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_gradient_test)
+    bloom_add_test(NAME bloom.project.gradients COMMAND bloom_project_gradient_test LABELS unit persistence)
+
     add_executable(bloom_project_channel_set_test
         ${PROJECT_SOURCE_DIR}/tests/integration/channel_set_persistence_tests.cpp)
     target_link_libraries(bloom_project_channel_set_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)

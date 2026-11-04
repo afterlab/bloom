@@ -54,6 +54,8 @@ void settleKeyframeHandles(std::vector<ScalarKeyframe>& after,
                            const std::vector<ScalarKeyframe>& before);
 void settleKeyframeHandles(std::vector<PathKeyframe>& after,
                            const std::vector<PathKeyframe>& before);
+void settleKeyframeHandles(std::vector<GradientKeyframe>& after,
+                           const std::vector<GradientKeyframe>& before);
 
 // Settles every key sequence of a curve record against the same curve before the edit (nullptr
 // when the curve is new). A curve of a different shape is left untouched.
@@ -62,6 +64,7 @@ void settleAnimationCurveHandles(AnimationCurveRecord& after, const AnimationCur
 // True when any key of the sequence is Aligned or Auto.
 [[nodiscard]] bool hasNonFreeHandleMode(std::span<const ScalarKeyframe> keys) noexcept;
 [[nodiscard]] bool hasNonFreeHandleMode(std::span<const PathKeyframe> keys) noexcept;
+[[nodiscard]] bool hasNonFreeHandleMode(std::span<const GradientKeyframe> keys) noexcept;
 
 // Makes `target` collinear with `anchor` through a key: `target` keeps its length (in time-value
 // space, over its own segment's duration) and takes the opposite direction of `anchor`. The

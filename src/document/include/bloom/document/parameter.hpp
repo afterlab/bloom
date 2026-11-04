@@ -237,6 +237,33 @@ struct PathValue {
     friend bool operator==(const PathValue&, const PathValue&) = default;
 };
 
+// #541: a colour gradient, the value of a gradient parameter (Colorize's Gradient Map). Any number
+// of stops, each a position in [0, 1] and a straight colour; the stops need not be sorted (a reader
+// sorts them by position, keeping the stored order of equal positions, which makes a hard edge).
+// Between two stops the colour interpolates linearly, outside the first and last stop it holds.
+// A gradient animates as a whole value, like a Path: two keys with the same stop count interpolate
+// stop by stop (position and colour); otherwise the earlier key holds.
+inline constexpr std::size_t kMaximumGradientStops = 64;
+struct GradientStop {
+    double position = 0.0;
+    core::Color4d color;
+    friend bool operator==(const GradientStop&, const GradientStop&) = default;
+};
+struct GradientValue {
+    std::vector<GradientStop> stops;
+    // One to kMaximumGradientStops stops, each position finite within [0, 1] and each colour
+    // finite with its alpha within [0, 1].
+    [[nodiscard]] bool isValid() const noexcept;
+    friend bool operator==(const GradientValue&, const GradientValue&) = default;
+};
+// The stops by position, equal positions in stored order.
+[[nodiscard]] std::vector<GradientStop> sortedGradientStops(const GradientValue& value);
+// The straight colour of `value` at `position` (linear between stops, held outside them).
+[[nodiscard]] core::Color4d gradientColorAt(const GradientValue& value, double position);
+// #541: a new Colorize node's gradient: its ramp's default colours, black, the warm mid grey at
+// 0.18 and white, so a new Gradient Map looks as it did before the gradient existed.
+[[nodiscard]] GradientValue defaultColorizeGradient();
+
 // The third authoring vector width (task S7). A genuinely new authoring type rather than a reuse of
 // Vec2d or Color4d: a Color is not a Vec4 under
 // docs/architecture/evaluation-primitives.md's Type Binding rule, and by the same reasoning a
@@ -325,6 +352,12 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kLayerMaskPathSchemaKey || isGradeCurveSchemaKey(schemaKey);
 }
 
+// #541: a gradient parameter animates through whole-value Gradient curves.
+[[nodiscard]] constexpr bool
+isGradientAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
+    return isColorizeGradientSchemaKey(schemaKey);
+}
+
 [[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.crop.left" || schemaKey == "bloom.crop.top" ||
            schemaKey == "bloom.crop.right" || schemaKey == "bloom.crop.bottom" ||
@@ -355,7 +388,7 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return isVec2AnimatableSchemaKey(schemaKey) || isVec3AnimatableSchemaKey(schemaKey) ||
            isScalarAnimatableSchemaKey(schemaKey) || isColor4AnimatableSchemaKey(schemaKey) ||
-           isPathAnimatableSchemaKey(schemaKey);
+           isPathAnimatableSchemaKey(schemaKey) || isGradientAnimatableSchemaKey(schemaKey);
 }
 
 // Whether a scalar value under this schema is confined to [0, 1]. Opacity is the only one: rotation
@@ -428,7 +461,7 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 }
 
 using ParameterValue = std::variant<bool, std::int64_t, double, Vec2d, Vec3d, core::Color4d,
-                                    std::string, core::RationalTime, PathValue>;
+                                    std::string, core::RationalTime, PathValue, GradientValue>;
 
 struct ConstantValueSource {
     ParameterValue value;

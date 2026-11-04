@@ -1,5 +1,6 @@
 // #502 persistence: a Merge entry's own layer (slotId, its own parameters, the frame pivot, Time
-// Remap) and an Adjustment entry save, reopen and decode exactly in document 1.37; the canonical
+// Remap) and an Adjustment entry save, reopen and decode exactly in the current document (entry
+// layers arrived in 1.37); the canonical
 // text is stable; a document claiming 1.36 that carries an entry-layer member is refused; a 1.36
 // document without them migrates by version alone and opens unchanged.
 
@@ -162,10 +163,10 @@ void entryLayersRoundTrip() {
                text.find("\"pivot\": \"frame\"") != std::string::npos &&
                text.find("\"role\": \"timeRemap\"") != std::string::npos &&
                text.find("\"bloom.adjustment\"") != std::string::npos &&
-               text.find("\"minor\": 37") != std::string::npos,
-           "entry layers, the frame pivot, their Time Remap and the Adjustment are written at 1.37");
+               text.find("\"minor\": 38") != std::string::npos,
+           "entry layers, the frame pivot, their Time Remap and the Adjustment are written at 1.38");
     const auto decoded = decodeText(text);
-    expect(static_cast<bool>(decoded), "the 1.37 document decodes");
+    expect(static_cast<bool>(decoded), "the 1.38 document decodes");
     if (decoded) {
         const auto& layers = decoded.value()->compositions.front().graph.layerOutputs;
         expect(std::ranges::count_if(layers, [](const auto& layer) { return layer.entryOwned(); }) ==
@@ -209,7 +210,7 @@ void olderDocumentsOpenUnchangedAndRefuseEntryMembers() {
     static_cast<void>(merge);
     const auto current = encode(plain.document);
     auto legacy = current;
-    replaceOnce(legacy, "\"minor\": 37", "\"minor\": 36");
+    replaceOnce(legacy, "\"minor\": 38", "\"minor\": 36");
     const auto decodedLegacy = decodeText(legacy);
     expect(static_cast<bool>(decodedLegacy), "a 1.36 document without entry layers decodes");
     auto operation = memory();
@@ -217,17 +218,17 @@ void olderDocumentsOpenUnchangedAndRefuseEntryMembers() {
     expect(static_cast<bool>(parsed), "the 1.36 fixture parses");
     if (parsed) {
         const auto migrated =
-            project::migrateDocumentDom(parsed.document()->root(), {1, 36}, {1, 37},
+            project::migrateDocumentDom(parsed.document()->root(), {1, 36}, {1, 38},
                                         project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 1,
-               "1.36 -> 1.37 is one step");
+                   migrated.stepsApplied() == 2,
+               "1.36 -> 1.38 is two steps");
         if (migrated.outcome() == project::MigrationOutcome::Migrated) {
             const auto decodedMigrated = project::decodeDocumentEnvelope(*migrated.migratedRoot());
             expect(static_cast<bool>(decodedMigrated) && decodedLegacy &&
                        decodedMigrated.value()->compositions.front().graph.layerOutputs ==
                            decodedLegacy.value()->compositions.front().graph.layerOutputs,
-                   "the 1.36 -> 1.37 step only advances the version");
+                   "the 1.36 -> 1.38 steps only advance the version");
         }
     }
 
@@ -235,7 +236,7 @@ void olderDocumentsOpenUnchangedAndRefuseEntryMembers() {
     Fixture fixture;
     fixture.withEntryLayers();
     auto text = encode(fixture.document);
-    replaceOnce(text, "\"minor\": 37", "\"minor\": 36");
+    replaceOnce(text, "\"minor\": 38", "\"minor\": 36");
     expect(!static_cast<bool>(decodeText(text)), "a 1.36 document carrying entry layers is refused");
 
     // The pivot takes only "frame".

@@ -53,6 +53,8 @@ enum class ParameterValueKind {
     Boolean,
     Vec3d,
     Path,
+    // #541: a colour gradient (GradientValue).
+    Gradient,
 };
 
 // The lower-case names scripting clients and diagnostics use for the two kinds ("scalar",
@@ -104,6 +106,8 @@ parameterValueKindName(const ParameterValueKind kind) noexcept {
         return "vector3";
     case ParameterValueKind::Path:
         return "path";
+    case ParameterValueKind::Gradient:
+        return "gradient";
     }
     return "scalar";
 }
@@ -115,7 +119,8 @@ parameterValueKindName(const ParameterValueKind kind) noexcept {
 socketKindForParameterValueKind(const ParameterValueKind kind) noexcept {
     switch (kind) {
     case ParameterValueKind::Path:
-        return std::nullopt; // Path v1 is inline and constant-only.
+    case ParameterValueKind::Gradient:
+        return std::nullopt; // Path v1 and gradients (#541) are inline: no socket carries them.
     case ParameterValueKind::Color4d:
         return SocketValueKind::Color;
     case ParameterValueKind::Vec2d:

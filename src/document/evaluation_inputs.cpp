@@ -71,6 +71,11 @@ PathKeyframe evaluationView(PathKeyframe keyframe) noexcept {
     return keyframe;
 }
 
+GradientKeyframe evaluationView(GradientKeyframe keyframe) noexcept {
+    keyframe.handleMode = KeyframeHandleMode::Free;
+    return keyframe;
+}
+
 AnimationCurveRecord evaluationView(AnimationCurveRecord record) {
     std::visit(
         [](auto& curve) {

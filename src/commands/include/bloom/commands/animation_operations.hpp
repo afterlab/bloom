@@ -300,6 +300,10 @@ class SetKeyframeAtTime final : public Operation {
     SetKeyframeAtTime(document::CompositionId compositionId, document::AnimationCurveId curveId,
                       core::RationalTime time, document::PathValue value)
         : compositionId_(compositionId), curveId_(curveId), time_(time), value_(std::move(value)) {}
+    // #541: a whole-value Gradient key.
+    SetKeyframeAtTime(document::CompositionId compositionId, document::AnimationCurveId curveId,
+                      core::RationalTime time, document::GradientValue value)
+        : compositionId_(compositionId), curveId_(curveId), time_(time), value_(std::move(value)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -312,7 +316,8 @@ class SetKeyframeAtTime final : public Operation {
     document::CompositionId compositionId_;
     document::AnimationCurveId curveId_;
     core::RationalTime time_;
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue>
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue,
+                 document::GradientValue>
         value_;
 };
 
@@ -350,6 +355,11 @@ class SetKeyframeAtTimeForParameter final : public Operation {
                                   document::PathValue value)
         : compositionId_(compositionId), parameterId_(parameterId), time_(time),
           value_(std::move(value)) {}
+    SetKeyframeAtTimeForParameter(document::CompositionId compositionId,
+                                  document::ParameterId parameterId, core::RationalTime time,
+                                  document::GradientValue value)
+        : compositionId_(compositionId), parameterId_(parameterId), time_(time),
+          value_(std::move(value)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -362,7 +372,8 @@ class SetKeyframeAtTimeForParameter final : public Operation {
     document::CompositionId compositionId_;
     document::ParameterId parameterId_;
     core::RationalTime time_;
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue>
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue,
+                 document::GradientValue>
         value_;
 };
 
@@ -431,6 +442,9 @@ class ConvertAnimationToConstant final : public Operation {
     ConvertAnimationToConstant(document::CompositionId compositionId,
                                document::ParameterId parameterId, document::PathValue value)
         : compositionId_(compositionId), parameterId_(parameterId), value_(std::move(value)) {}
+    ConvertAnimationToConstant(document::CompositionId compositionId,
+                               document::ParameterId parameterId, document::GradientValue value)
+        : compositionId_(compositionId), parameterId_(parameterId), value_(std::move(value)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -442,7 +456,8 @@ class ConvertAnimationToConstant final : public Operation {
   private:
     document::CompositionId compositionId_;
     document::ParameterId parameterId_;
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue>
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue,
+                 document::GradientValue>
         value_;
 };
 
@@ -462,7 +477,8 @@ struct KeyframePaste {
     document::ParameterId parameterId;
     core::RationalTime time;
     // PathValue: a whole-value Path key (ADR 0028).
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue> value;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue,
+                 document::GradientValue> value;
     document::KeyframeInterpolation interpolation = document::KeyframeInterpolation::Linear;
     std::optional<document::AnimationComponent> component{};
     // Ease handles travel with a copied key, so paste and move reproduce the curve SHAPE and not
