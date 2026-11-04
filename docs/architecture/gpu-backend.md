@@ -443,8 +443,9 @@ to the frame cache (`PreviewFrameCache::evictGpuResidentBytes`), dropping least 
 resident frames. A native allocation refused for device room in a device stage asks for the phase's
 need the same way before its retry. When another program takes VRAM and the live free memory falls
 below the VRAM headroom, the owner evicts the difference at its next device sample, as host caches
-shrink when free RAM falls below the RAM headroom. The retained OCIO native programs follow the
-same rule (#474): neither
+shrink when free RAM falls below the RAM headroom. A recorded shortfall does not wait for that
+sample (#474): it wakes the final-render owner too, which evicts at once when idle and between
+executor polls while a frame runs. The retained OCIO native programs follow the same rule: neither
 the scene executor's effect-program cache nor the `GpuOcioProgramExecutor` behind the display arm and
 the output colour stage has a fixed byte ceiling any more (they were 256 MiB retained and 256 MiB
 LUT per program in the scene executor, 512 MiB retained and 512 MiB owned per program in the display

@@ -110,10 +110,18 @@ struct GpuProcessFrameEvaluator::Impl final {
     // Test-only fault counter (see failPreparationAllocationAt).
     std::atomic<std::uint32_t> preparationAllocations{0};
     bool stopping = false;
-    // Evict-on-demand of this owner's scene cache when work waits for device memory (#425). The
-    // owner takes it at its next device report (at most one 50 ms idle slice later).
+    // Evict-on-demand of this owner's device retention when work waits for device memory (#425).
+    // A recorded shortfall wakes the owner at once (#474): idle, it reports at once instead of
+    // after its 50 ms slice; inside a request it reports between executor polls.
     const std::shared_ptr<GpuDeviceReclaimRequest> deviceReclaim =
         std::make_shared<GpuDeviceReclaimRequest>();
+    // The reclaimer may run on any thread, after this owner is gone: it reaches the owner's
+    // condition variable only through this guard, which the evaluator clears before teardown.
+    struct OwnerWake final {
+        std::mutex mutex;
+        std::condition_variable* cv = nullptr;
+    };
+    const std::shared_ptr<OwnerWake> ownerWake = std::make_shared<OwnerWake>();
 
     void runOwner();
     // Owner thread: evicts the scene cache by a waiting shortfall or by how far free device
@@ -326,6 +334,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
             }
             break;
         }
+        // Work elsewhere waits for device memory: give it back now, not after this request.
+        if (deviceReclaim->pending())
+            reportDevice();
         // Waiting on a fence: GPU steps retire in microseconds, so the wait is as short.
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
@@ -667,7 +678,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
         {
             std::unique_lock lock(mutex);
             cv.wait_for(lock, std::chrono::milliseconds(50),
-                        [this] { return stopping || !queue.empty(); });
+                        [this] { return stopping || !queue.empty() || deviceReclaim->pending(); });
             if (!stopping && queue.empty()) {
                 lock.unlock();
                 reportDevice();
@@ -775,6 +786,10 @@ GpuProcessFrameEvaluator::~GpuProcessFrameEvaluator() {
         // typed failure before waiting. Under that contract this join is safe.
         impl_->stopRequested.store(true, std::memory_order_release);
         {
+            const std::lock_guard wake(impl_->ownerWake->mutex);
+            impl_->ownerWake->cv = nullptr;
+        }
+        {
             std::lock_guard lock(impl_->mutex);
             impl_->stopping = true;
         }
@@ -786,8 +801,12 @@ GpuProcessFrameEvaluator::~GpuProcessFrameEvaluator() {
 }
 
 void GpuProcessFrameEvaluator::Impl::reportDevice() {
-    if (!device || !options.processingPhasePolicy)
+    if (!device || !options.processingPhasePolicy) {
+        // No device yet holds nothing to give back; clear the request so the woken idle wait
+        // does not spin on it.
+        static_cast<void>(deviceReclaim->take());
         return;
+    }
     auto live = device->availableAllocationBudget();
     const auto wanted =
         deviceReclaimBytes(*deviceReclaim, live, options.processingPhasePolicy->headroom().vramBytes);
@@ -822,8 +841,17 @@ std::unique_ptr<GpuProcessFrameEvaluator>
 GpuProcessFrameEvaluator::create(const GpuProcessFrameEvaluatorOptions& options) {
     auto impl = std::make_unique<Impl>();
     impl->options = options;
-    if (options.enabled && options.processingPhasePolicy)
-        registerDeviceReclaim(*options.processingPhasePolicy, impl->deviceReclaim);
+    if (options.enabled && options.processingPhasePolicy) {
+        impl->ownerWake->cv = &impl->cv;
+        registerDeviceReclaim(*options.processingPhasePolicy, impl->deviceReclaim,
+                              [wake = std::weak_ptr(impl->ownerWake)] {
+                                  if (const auto held = wake.lock()) {
+                                      const std::lock_guard lock(held->mutex);
+                                      if (held->cv != nullptr)
+                                          held->cv->notify_all();
+                                  }
+                              });
+    }
     auto* implPointer = impl.get();
     if (options.enabled) {
         impl->thread = std::jthread([implPointer] { implPointer->runOwner(); });
