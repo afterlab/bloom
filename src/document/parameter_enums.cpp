@@ -1,5 +1,6 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/scalar_primitives.hpp>
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -125,6 +126,11 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == kCombineChannelsAlphaModeSchemaKey)
         return {{"Premultiplied", kCombineChannelsPremultiplied},
                 {"Straight", kCombineChannelsStraight}};
+    if (schemaKey == kAlphaAssociationModeSchemaKey)
+        return {{"Unmult", kAlphaAssociationUnmult},
+                {"Premultiply", kAlphaAssociationPremultiply},
+                {"Unpremultiply", kAlphaAssociationUnpremultiply},
+                {"Remove Color Matting", kAlphaAssociationRemoveMatting}};
     if (schemaKey == kGlowModeSchemaKey)
         return {{"Classic", kGlowModeClassic},
                 {"Physical", kGlowModePhysical},

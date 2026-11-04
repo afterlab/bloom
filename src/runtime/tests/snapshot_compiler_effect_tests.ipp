@@ -1258,3 +1258,85 @@ void testImagePreviewInspection(Expectations& expectations) {
     expectations.expect(refused.plan == nullptr,
                         "an inspection of a port with no pixels is refused");
 }
+
+// #503 Alpha Association lowers to one alpha association kernel with its constant mode and white
+// switch. Remove Color Matting keeps the background parameter's identity; every other mode lowers a
+// constant black background without an identity, so animating the unused colour neither claims nor
+// invalidates anything. A muted node passes its Image through.
+void testAlphaAssociationLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto effectId = NodeId::fromRaw(996);
+    const auto* definition = builtInNodeDefinitions().find(kAlphaAssociationNodeType, 1);
+    require(definition != nullptr, "the alpha association definition exists");
+    for (const auto mode : {kAlphaAssociationUnmult, kAlphaAssociationPremultiply,
+                            kAlphaAssociationUnpremultiply, kAlphaAssociationRemoveMatting}) {
+        for (const bool muted : {false, true}) {
+            auto project = makeProject(singleLayerOptions());
+            auto* composition = project.findComposition(kCompositionId);
+            auto& graph = composition->graph();
+            std::vector<ParameterBinding> bindings;
+            std::uint64_t next = 2600;
+            for (const auto& parameter : definition->parameters) {
+                auto value = parameter.defaultValue;
+                if (parameter.role == "mode")
+                    value = mode;
+                if (parameter.role == "white")
+                    value = true;
+                if (parameter.role == "background")
+                    value = core::Color4d{0.2, 0.4, 1.5, 1.0};
+                require(composition->parameters().insert({ParameterId::fromRaw(next),
+                                                          parameter.schemaKey,
+                                                          ConstantValueSource{value}}),
+                        "alpha association parameter is valid");
+                bindings.push_back({parameter.role, ParameterId::fromRaw(next++)});
+            }
+            require(graph.addNode({effectId, std::string(kAlphaAssociationNodeType),
+                                   std::move(bindings), 1}),
+                    "alpha association node is accepted");
+            require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+            require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                                   NodeInputRef{effectId, "input"}}),
+                    "source feeds the alpha association");
+            require(graph.addEdge({EdgeId::fromRaw(996), {effectId, "image"},
+                                   NodeInputRef{kFirstLayerNode,
+                                                std::string(kLayerOutputContentInputPort)}}),
+                    "alpha association feeds Layer");
+            if (muted)
+                composition->nodeLayout()[effectId].muted = true;
+            expectations.expect(project.validate().ok(),
+                                "alpha association graph is valid document truth");
+            const auto result = compile(std::move(project), registry);
+            expectations.expect(result.plan != nullptr, "alpha association graph compiles");
+            if (!result.plan)
+                continue;
+            const auto effect = std::ranges::find_if(result.plan->operations(), [&](const auto& op) {
+                const auto* item = std::get_if<runtime::CompiledImageEffect>(&op);
+                return item && item->sourceNodeId == effectId;
+            });
+            if (muted) {
+                expectations.expect(effect == result.plan->operations().end(),
+                                    "a muted alpha association passes its Image through");
+                continue;
+            }
+            require(effect != result.plan->operations().end(),
+                    "alpha association lowers to an image effect");
+            const auto* kernel = std::get_if<runtime::AlphaAssociationKernel>(
+                &std::get<runtime::CompiledImageEffect>(*effect).kernel);
+            const auto* color =
+                kernel ? std::get_if<core::Color4d>(&kernel->background.source) : nullptr;
+            const bool matting = mode == kAlphaAssociationRemoveMatting;
+            expectations.expect(
+                kernel && static_cast<std::int64_t>(kernel->mode) == mode && kernel->white &&
+                    color &&
+                    (matting ? kernel->background.id == ParameterId::fromRaw(2602) &&
+                                   *color == core::Color4d{0.2, 0.4, 1.5, 1.0}
+                             : !kernel->background.id.isValid() &&
+                                   *color == core::Color4d{0.0, 0.0, 0.0, 1.0}),
+                "alpha association lowers its mode, white switch and (Remove Color Matting "
+                "only) its background");
+        }
+    }
+}

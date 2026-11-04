@@ -987,7 +987,9 @@ void recipeRows() {
                     "mode", "exponent", "outerTint", "radiusRed", "radiusGreen", "radiusBlue",
                     "points", "angle", "length", "chromatic", "dirtAmount", "rollOff"},
                    "glowOnly"},
-          Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"}}) {
+          Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"},
+          // #503: not a recipe, but the same shape: a mode, a colour and a switch.
+          Expected{"bloom.alpha-association", {"mode", "background"}, "white"}}) {
         const auto node = addNode(session, type);
         expect(node.isValid(), "a recipe is discoverable through generic AddNode");
         session.selectNode(node);

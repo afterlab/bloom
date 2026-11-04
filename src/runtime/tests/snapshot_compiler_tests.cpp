@@ -1,5 +1,6 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
@@ -1936,6 +1937,7 @@ int main() {
         testLightWrapLowering(expectations);
         testRecipeMute(expectations);
         testColorGradeLowering(expectations);
+        testAlphaAssociationLowering(expectations);
         testImageChannelLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);

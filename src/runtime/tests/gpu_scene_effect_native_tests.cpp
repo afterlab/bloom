@@ -1068,7 +1068,8 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
     }
 }
 
-// #340 Levels, Curves and Hue/Saturation (#493: and every Curves curve kind) of
+// #340 Levels, Curves and Hue/Saturation (#493: and every Curves curve kind; #494 Grade; #503
+// every Alpha Association mode) of
 // signed/HDR/partial-alpha solids against the CPU oracle
 // (2e-6, exact alpha), one resident dispatch, warm zero dispatch and a changed value that
 // re-dispatches with parity. Alpha transfers here are linear and cubic, never a gamma, so the
@@ -1162,6 +1163,18 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             kernel.values[index] = {ParameterId::fromRaw(id + index), values[index]};
         return bloom::runtime::ImageEffectKernel{kernel};
     };
+    // #503: every Alpha Association mode (Unmult over black and white, Premultiply,
+    // Unpremultiply, Remove Color Matting against an HDR colour).
+    const auto association = [](const std::uint64_t id, const int variant) {
+        using Mode = bloom::runtime::AlphaAssociationMode;
+        const std::array<Mode, 5> modes{Mode::Unmult, Mode::Unmult, Mode::Premultiply,
+                                        Mode::Unpremultiply, Mode::RemoveMatting};
+        return bloom::runtime::ImageEffectKernel{bloom::runtime::AlphaAssociationKernel{
+            modes[static_cast<std::size_t>(variant)],
+            variant == 1,
+            {ParameterId::fromRaw(id),
+             variant == 4 ? Color4d{0.25, 0.5, 1.5, 1.0} : Color4d{0.0, 0.0, 0.0, 1.0}}}};
+    };
     // Changes one value of each kernel to prove invalidation re-dispatches.
     const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
@@ -1174,6 +1187,17 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             h->hue.source = 15.0;
         if (auto* g = std::get_if<bloom::runtime::GradeKernel>(&kernel))
             g->values[8].source = 1.25;
+        // #503: a changed matte colour, or a different mode, changes the program's data.
+        if (auto* a = std::get_if<bloom::runtime::AlphaAssociationKernel>(&kernel)) {
+            if (a->mode == bloom::runtime::AlphaAssociationMode::RemoveMatting)
+                a->background.source = Color4d{0.75, 0.1, 0.3, 1.0};
+            else if (a->mode == bloom::runtime::AlphaAssociationMode::Unmult)
+                a->white = !a->white;
+            else
+                a->mode = a->mode == bloom::runtime::AlphaAssociationMode::Premultiply
+                              ? bloom::runtime::AlphaAssociationMode::Unpremultiply
+                              : bloom::runtime::AlphaAssociationMode::Premultiply;
+        }
     };
     std::uint64_t id = 9500;
     for (const auto color : {Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
@@ -1181,8 +1205,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         for (const auto& kernel :
              {levels(id + 50, false), levels(id + 50, true), curves(id + 50, false),
               curves(id + 50, true), hueCurves(id + 50, false), hueCurves(id + 50, true),
-              hue(id + 50, false), hue(id + 50, true), grade(id + 50, false),
-              grade(id + 50, true)}) {
+              hue(id + 50, false), hue(id + 50, true), grade(id + 50, false), grade(id + 50, true),
+              association(id + 50, 0), association(id + 50, 1), association(id + 50, 2),
+              association(id + 50, 3), association(id + 50, 4)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

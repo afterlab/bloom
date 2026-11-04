@@ -1,4 +1,5 @@
 #include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/alpha_association_nodes.hpp>
 
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
@@ -270,6 +271,9 @@ const std::vector<Entry>& table() {
         {"bloom.image-mix.factor", factor()},
         {"bloom.multiply-alpha.factor", factor()},
         {"bloom.multiply-alpha.channel", choice()},
+        // #503 Alpha Association.
+        {kAlphaAssociationModeSchemaKey, choice()},
+        {kAlphaAssociationBackgroundSchemaKey, channel()},
         {"bloom.set-alpha.channel", choice()},
         // #479 Combine Channels.
         {"bloom.combine-channels.source", choice()},

@@ -1,4 +1,5 @@
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/shape.hpp>
 
@@ -330,6 +331,22 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value != nullptr && std::isfinite(*value) &&
                isScalarWithinSchemaDomain(schemaKey, *value);
     }
+    // #503 Alpha Association: the closed mode, the white switch and a finite straight background
+    // colour whose RGB stays within +-1e6 (its alpha is unused).
+    if (schemaKey == kAlphaAssociationModeSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= kAlphaAssociationUnmult &&
+               *value <= kAlphaAssociationRemoveMatting;
+    }
+    if (schemaKey == kAlphaAssociationWhiteSchemaKey)
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == kAlphaAssociationBackgroundSchemaKey) {
+        const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
+        return color != nullptr && color->isValid() &&
+               std::abs(color->red) <= kMaximumAlphaAssociationBackground &&
+               std::abs(color->green) <= kMaximumAlphaAssociationBackground &&
+               std::abs(color->blue) <= kMaximumAlphaAssociationBackground;
+    }
     // #339 Drop Shadow, Glow and Light Wrap.
     if (isRecipeScalarSchemaKey(schemaKey)) {
         const auto* value = std::get_if<double>(&constant.value);
@@ -482,6 +499,8 @@ constantMatchesSchema(const std::string_view schemaKey,
          schemaKey == "bloom.shape.path" ||
          schemaKey == bloom::document::kImagePreviewDisplayParameterSchemaKey ||
          bloom::document::isRecipeIntegerSchemaKey(schemaKey) ||
+         schemaKey == bloom::document::kAlphaAssociationModeSchemaKey ||
+         schemaKey == bloom::document::kAlphaAssociationWhiteSchemaKey ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;

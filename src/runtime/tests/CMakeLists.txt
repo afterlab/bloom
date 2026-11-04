@@ -387,6 +387,15 @@ bloom_enable_warnings(bloom_runtime_glow_primitive_test)
 bloom_enable_strict_floating_point(bloom_runtime_glow_primitive_test)
 bloom_add_test(NAME bloom.runtime.glow-primitives COMMAND bloom_runtime_glow_primitive_test LABELS unit runtime render)
 
+# #503 Alpha Association: every mode against its formula, the epsilon, program, budget and
+# cancellation.
+add_executable(bloom_runtime_alpha_association_test alpha_association_tests.cpp)
+target_include_directories(bloom_runtime_alpha_association_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_alpha_association_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_alpha_association_test)
+bloom_enable_strict_floating_point(bloom_runtime_alpha_association_test)
+bloom_add_test(NAME bloom.runtime.alpha-association COMMAND bloom_runtime_alpha_association_test LABELS unit runtime render)
+
 add_executable(bloom_runtime_color_grade_image_effect_test color_grade_image_effect_tests.cpp)
 target_include_directories(bloom_runtime_color_grade_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_color_grade_image_effect_test PRIVATE bloom_runtime_evaluator)

@@ -140,8 +140,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
-    // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap.
-    expectations.expect(registry.definitions().size() == 152,
+    // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
+    // Association.
+    expectations.expect(registry.definitions().size() == 153,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -246,8 +247,26 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                     "bloom.matte-erode", "bloom.matte-dilate"},
                    document::NodeCategory::Filters);
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
-                    "bloom.glow", "bloom.light-wrap"},
+                    "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
                    document::NodeCategory::Compositing);
+    // #503 Alpha Association: an Image in and out, a constant mode (Unmult by default) and white
+    // switch with no socket, and an animatable background colour with a Color socket.
+    const auto* association = registry.find("bloom.alpha-association", 1);
+    expectations.expect(
+        association && association->inputs.size() == 2 &&
+            association->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            association->inputs[1].name == "background" &&
+            association->inputs[1].valueKind == runtime::SocketValueKind::Color &&
+            !association->inputs[1].required && association->parameters.size() == 3 &&
+            association->parameters[0].role == "mode" &&
+            !association->parameters[0].supportsAnimation &&
+            association->parameters[0].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            association->parameters[1].role == "white" &&
+            !association->parameters[1].supportsAnimation &&
+            association->parameters[2].role == "background" &&
+            association->parameters[2].supportsAnimation && association->outputs.size() == 1 &&
+            association->outputs[0].valueKind == runtime::SocketValueKind::Image,
+        "#503: Alpha Association has its mode, white switch and animatable background");
     expectations.expect(std::ranges::count_if(registry.definitions(),
                                               [](const auto& definition) {
                                                   return definition.category ==

@@ -175,7 +175,8 @@ void blurNodeReopen() {
          {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
-          "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"}) {
+          "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
+          "bloom.alpha-association"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -227,6 +228,14 @@ void blurNodeReopen() {
                 : parameter.role == "low"        ? document::ParameterValue{-0.25}
                 : parameter.role == "high"       ? document::ParameterValue{3.5}
                 : parameter.role == "invert"     ? document::ParameterValue{true}
+                // #503 Alpha Association: Remove Color Matting, a set white switch and an HDR,
+                // signed matte colour.
+                : parameter.schemaKey == "bloom.alpha-association.white"
+                    ? document::ParameterValue{true}
+                : parameter.schemaKey == "bloom.alpha-association.background"
+                    ? document::ParameterValue{core::Color4d{1.5, -0.25, 0.5, 1.0}}
+                : parameter.schemaKey == "bloom.alpha-association.mode"
+                    ? document::ParameterValue{std::int64_t{3}}
                 // #479 Combine Channels: a Luma alpha source and the Straight alpha mode.
                 : parameter.role == "alphaSource" ? document::ParameterValue{std::int64_t{4}}
                                                   : document::ParameterValue{std::int64_t{1}};

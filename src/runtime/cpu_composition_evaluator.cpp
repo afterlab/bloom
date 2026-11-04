@@ -552,6 +552,10 @@ enum class ScalarDomain : std::uint8_t {
                     else if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
                         validKernel = validKernel &&
                                       hasValidVec2CurveReference(operand, plan, index, failure);
+                    // #503: Alpha Association's background colour.
+                    else if constexpr (std::is_same_v<Operand, CompiledColorParameter>)
+                        validKernel = validKernel &&
+                                      hasValidColorCurveReference(operand, plan, index, failure);
                     else
                         validKernel = validKernel &&
                                       hasValidScalarCurveReference(operand, plan, index, failure);
@@ -1297,6 +1301,8 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                             return;
                         else if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
                             gradeRegistered = registerVec2(operand, "grade", operationSubject);
+                        else if constexpr (std::is_same_v<Operand, CompiledColorParameter>)
+                            gradeRegistered = registerColor(operand, "grade", operationSubject);
                         else
                             gradeRegistered = registerScalar(
                                 operand, "grade", ScalarDomain::Unbounded, operationSubject);

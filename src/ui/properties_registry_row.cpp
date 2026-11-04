@@ -19,6 +19,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -79,6 +80,11 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         : schemaKey == "bloom.multiply-alpha.channel" ||
                 schemaKey == "bloom.set-alpha.channel"
             ? QObject::tr("Matte channel")
+        // #503: Unmult's backing and Remove Color Matting's colour.
+        : schemaKey == document::kAlphaAssociationWhiteSchemaKey
+            ? QObject::tr("White background")
+        : schemaKey == document::kAlphaAssociationBackgroundSchemaKey
+            ? QObject::tr("Matte color")
         : schemaKey == "bloom.rotate-90.quarter-turns" ? QObject::tr("Quarter turns (clockwise)")
         : schemaKey == "bloom.blur.radius"             ? QObject::tr("Radius (pixels)")
         : schemaKey == "bloom.blur.edge"               ? QObject::tr("Edges")

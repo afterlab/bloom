@@ -7,6 +7,7 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/grade_curve.hpp>
 
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 
@@ -28,6 +29,7 @@ constexpr std::size_t kLevelsFloats = 4 + kGradeChannelCount * kLevelsChannelFlo
 constexpr std::size_t kHueSaturationFloats = 12;
 constexpr std::size_t kGradeFloats = 20;
 constexpr std::size_t kRollOffFloats = 4;
+constexpr std::size_t kAlphaAssociationFloats = 8;
 static_assert(kLevelsChannelFloats % 4 == 0);
 static_assert(std::tuple_size_v<decltype(GradeKernel::values)> == document::kGradeParameterCount);
 
@@ -221,6 +223,88 @@ prepareRollOff(const std::span<const double> values) {
     return std::isfinite(pixel[0]) && std::isfinite(pixel[1]) && std::isfinite(pixel[2]);
 }
 
+// #503 Alpha Association: [table mode, epsilon, 0, 0] [background r, g, b, 0]. The table mode is
+// 0 Unmult over black, 1 Unmult over white, 2 Premultiply, 3 Unpremultiply, 4 Remove Color Matting;
+// the background is zero except in Remove Color Matting, so an unused colour never changes the
+// table or the cache identity.
+[[nodiscard]] std::optional<PreparedColorGrade>
+prepareAlphaAssociation(const AlphaAssociationKernel& kernel,
+                        const std::span<const double> values) {
+    if (values.size() != 4 || static_cast<std::uint8_t>(kernel.mode) >
+                                  static_cast<std::uint8_t>(AlphaAssociationMode::RemoveMatting))
+        return std::nullopt;
+    for (std::size_t i = 0; i < 3; ++i)
+        if (!std::isfinite(values[i]) ||
+            std::abs(values[i]) > document::kMaximumAlphaAssociationBackground)
+            return std::nullopt;
+    float mode = 0.0F;
+    switch (kernel.mode) {
+    case AlphaAssociationMode::Unmult:
+        mode = kernel.white ? 1.0F : 0.0F;
+        break;
+    case AlphaAssociationMode::Premultiply:
+        mode = 2.0F;
+        break;
+    case AlphaAssociationMode::Unpremultiply:
+        mode = 3.0F;
+        break;
+    case AlphaAssociationMode::RemoveMatting:
+        mode = 4.0F;
+        break;
+    }
+    PreparedColorGrade grade{ColorGradeKind::AlphaAssociation,
+                             std::vector<float>(kAlphaAssociationFloats, 0.0F), false};
+    grade.data[0] = mode;
+    grade.data[1] = document::kAlphaAssociationEpsilon;
+    if (kernel.mode == AlphaAssociationMode::RemoveMatting)
+        for (std::size_t i = 0; i < 3; ++i)
+            grade.data[4 + i] = static_cast<float>(values[i]);
+    // Subtracting (1 - alpha) * 0 changes nothing: matting against black is the identity.
+    grade.identity =
+        mode == 4.0F && grade.data[4] == 0.0F && grade.data[5] == 0.0F && grade.data[6] == 0.0F;
+    return grade;
+}
+
+// One premultiplied pixel. Alpha is a clamped max or the input, except over white where it is
+// one binary32 subtraction from one; alpha 0 is transparent black. Only Unpremultiply divides, and
+// only above the epsilon.
+[[nodiscard]] bool alphaAssociationPixel(const std::vector<float>& d,
+                                         std::array<float, 4>& pixel) noexcept {
+    const float a = pixel[3];
+    auto out = pixel;
+    const auto mode = static_cast<int>(d[0]);
+    if (mode == 0) {
+        // The image over black is its premultiplied colour; its brightest channel is the alpha.
+        const float m = std::max(std::max(pixel[0], pixel[1]), pixel[2]);
+        out[3] = std::min(std::max(m, 0.0F), 1.0F);
+    } else if (mode == 1) {
+        // The image over white is c + (1 - a); one minus its darkest channel is the alpha, and
+        // the colour is what remains once (1 - alpha) of white is taken away.
+        const float t = 1.0F - a;
+        const std::array<float, 3> w{pixel[0] + t, pixel[1] + t, pixel[2] + t};
+        const float n = 1.0F - std::min(std::min(w[0], w[1]), w[2]);
+        out[3] = std::min(std::max(n, 0.0F), 1.0F);
+        const float s = out[3] - 1.0F;
+        for (std::size_t i = 0; i < 3; ++i)
+            out[i] = w[i] + s;
+    } else if (mode == 2) {
+        for (std::size_t i = 0; i < 3; ++i)
+            out[i] = pixel[i] * a;
+    } else if (mode == 3) {
+        if (a > d[1])
+            for (std::size_t i = 0; i < 3; ++i)
+                out[i] = pixel[i] / a;
+    } else {
+        const float t = 1.0F - a;
+        for (std::size_t i = 0; i < 3; ++i)
+            out[i] = std::fma(-t, d[4 + i], pixel[i]);
+    }
+    if (out[3] == 0.0F)
+        out = {0.0F, 0.0F, 0.0F, 0.0F};
+    pixel = out;
+    return std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2]);
+}
+
 [[nodiscard]] bool gradePixel(const std::vector<float>& d, std::array<float, 4>& pixel) noexcept {
     const auto finite = [](const float x) { return std::isfinite(x); };
     const float a = pixel[3];
@@ -368,6 +452,44 @@ prepareRollOff(const std::span<const double> values) {
             "}\n";
         return text;
     }
+    case ColorGradeKind::AlphaAssociation: {
+        // The same binary32 operations as alphaAssociationPixel: exact max/min/clamp alphas,
+        // precise sums, fused multiply-adds, the wrapper's premultiply and correctly rounded
+        // division. The wrapper makes alpha 0 transparent black and refuses a non-finite result.
+        static const std::string text =
+            "layout(set = 0, binding = 0, std430) readonly buffer BloomAlphaAssociationData { "
+            "vec4 values[]; } bloom_alpha_association_data;\n" +
+            straight +
+            "vec4 bloom_alpha_association(ivec2 c) {\n"
+            " vec4 p = imageLoad(bloom_ocio_input, c);\n"
+            " vec4 k = bloom_alpha_association_data.values[0];\n"
+            " vec4 b = bloom_alpha_association_data.values[1];\n"
+            " int mode = int(k.x);\n"
+            " vec4 o = p;\n"
+            " if (mode == 0) {\n"
+            "  o.a = min(max(max(max(p.r, p.g), p.b), 0.0), 1.0);\n"
+            " } else if (mode == 1) {\n"
+            "  precise float t = 1.0 - p.a;\n"
+            "  precise vec3 w = vec3(p.r + t, p.g + t, p.b + t);\n"
+            "  precise float n = 1.0 - min(min(w.r, w.g), w.b);\n"
+            "  o.a = min(max(n, 0.0), 1.0);\n"
+            "  precise float s = o.a - 1.0;\n"
+            "  precise vec3 r = vec3(w.r + s, w.g + s, w.b + s);\n"
+            "  o.rgb = r;\n"
+            " } else if (mode == 2) {\n"
+            "  o.rgb = bloom_ocio_cpu_premul(p.rgb, p.a);\n"
+            " } else if (mode == 3) {\n"
+            "  if (p.a > k.y) { o.rgb = vec3(bloom_ocio_cpu_div(p.r, p.a), "
+            "bloom_ocio_cpu_div(p.g, p.a), bloom_ocio_cpu_div(p.b, p.a)); }\n"
+            " } else {\n"
+            "  precise float t = 1.0 - p.a;\n"
+            "  precise vec3 r = vec3(fma(-t, b.x, p.r), fma(-t, b.y, p.g), fma(-t, b.z, p.b));\n"
+            "  o.rgb = r;\n"
+            " }\n"
+            " return o;\n"
+            "}\n";
+        return text;
+    }
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -423,6 +545,12 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
             if constexpr (std::is_same_v<Value, document::Vec2d>) {
                 values.push_back(sampled->value.x);
                 values.push_back(sampled->value.y);
+            } else if constexpr (std::is_same_v<Value, core::Color4d>) {
+                // #503: a colour as its straight red, green, blue and alpha.
+                values.push_back(sampled->value.red);
+                values.push_back(sampled->value.green);
+                values.push_back(sampled->value.blue);
+                values.push_back(sampled->value.alpha);
             } else {
                 values.push_back(sampled->value);
             }
@@ -445,6 +573,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareGrade(values);
     if (std::holds_alternative<HighlightRollOffKernel>(kernel))
         return prepareRollOff(values);
+    if (const auto* association = std::get_if<AlphaAssociationKernel>(&kernel))
+        return prepareAlphaAssociation(*association, values);
     return std::nullopt;
 }
 
@@ -467,6 +597,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         return gradePixel(grade.data, pixel);
     if (grade.kind == ColorGradeKind::RollOff)
         return rollOffPixel(grade.data, pixel);
+    if (grade.kind == ColorGradeKind::AlphaAssociation)
+        return alphaAssociationPixel(grade.data, pixel);
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
     };
@@ -562,8 +694,12 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::Grade  ? data.size() == kGradeFloats
                         : kind == ColorGradeKind::RollOff
                             ? data.size() == kRollOffFloats && data[0] >= 0.0F
+                        : kind == ColorGradeKind::AlphaAssociation
+                            ? data.size() == kAlphaAssociationFloats && data[0] >= 0.0F &&
+                                  data[0] <= 4.0F && data[0] == std::floor(data[0])
                             : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::RollOff) ||
+    if (static_cast<std::uint8_t>(kind) >
+            static_cast<std::uint8_t>(ColorGradeKind::AlphaAssociation) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -594,6 +730,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_roll_off";
         program.resourcePrefix = "bloom_roll_off_";
         program.semanticsId = "bloom.render.highlight-roll-off.v1";
+        break;
+    case ColorGradeKind::AlphaAssociation:
+        program.functionName = "bloom_alpha_association";
+        program.resourcePrefix = "bloom_alpha_association_";
+        program.semanticsId = "bloom.render.alpha-association.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);

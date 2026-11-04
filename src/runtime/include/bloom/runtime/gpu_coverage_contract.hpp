@@ -126,6 +126,9 @@ BLOOM_GPU_REQUIRED_EFFECT(DirectionalBlurKernel,
                           "directional ray blur pass of Glow's Streak mode (#506)");
 BLOOM_GPU_REQUIRED_EFFECT(HighlightRollOffKernel,
                           "Glow highlight roll-off over associated colour (#506)");
+BLOOM_GPU_REQUIRED_EFFECT(AlphaAssociationKernel,
+                          "Alpha Association: Unmult, Premultiply, Unpremultiply and Remove Color "
+                          "Matting (#503)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

@@ -420,19 +420,38 @@ struct HighlightRollOffKernel final {
     CompiledScalarParameter amount;
     friend bool operator==(const HighlightRollOffKernel&, const HighlightRollOffKernel&) = default;
 };
+// #503 Alpha Association over premultiplied (process) RGBA, alpha always in [0, 1]: Unmult takes
+// alpha from the image over black (its brightest channel) or, with `white`, over white; Premultiply
+// multiplies RGB by alpha; Unpremultiply divides it above document::kAlphaAssociationEpsilon;
+// Remove Color Matting subtracts (1 - alpha) * background. The background is used by Remove Color
+// Matting only (the compiler lowers a constant black, with no identity, for the other modes). A
+// grade kind (color_grade_image_effect.hpp); docs/architecture/image-filters.md has the formulas.
+enum class AlphaAssociationMode : std::uint8_t {
+    Unmult,
+    Premultiply,
+    Unpremultiply,
+    RemoveMatting
+};
+struct AlphaAssociationKernel final {
+    AlphaAssociationMode mode = AlphaAssociationMode::Unmult;
+    bool white = false;
+    CompiledColorParameter background{{}, core::Color4d{0.0, 0.0, 0.0, 1.0}};
+    friend bool operator==(const AlphaAssociationKernel&, const AlphaAssociationKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
                  SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
-                 ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel>;
+                 ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
+                 AlphaAssociationKernel>;
 
 // #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade;
-// #506: or Highlight Roll-off) kernel in the kernel's canonical order (channel-major), calling
-// `visit(parameter)` with a CompiledScalarParameter, a CompiledVec2Parameter or (#493 Curves) a
-// CompiledPathParameter.
-// Returns false for every other kernel. The one traversal the evaluator's validation, sampling,
-// cache key and time dependence all share.
+// #506: or Highlight Roll-off; #503: or Alpha Association) kernel in the kernel's canonical order
+// (channel-major), calling `visit(parameter)` with a CompiledScalarParameter, a
+// CompiledVec2Parameter, (#493 Curves) a CompiledPathParameter or (#503 Alpha Association) a
+// CompiledColorParameter. Returns false for every other kernel. The one traversal the evaluator's
+// validation, sampling, cache key and time dependence all share.
 template <typename Visit>
 bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
     if (const auto* levels = std::get_if<LevelsKernel>(&kernel)) {
@@ -464,6 +483,11 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         visit(rollOff->amount);
         return true;
     }
+    // #503: a CompiledColorParameter.
+    if (const auto* association = std::get_if<AlphaAssociationKernel>(&kernel)) {
+        visit(association->background);
+        return true;
+    }
     return false;
 }
 
@@ -472,7 +496,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<CurvesKernel>(kernel) ||
            std::holds_alternative<HueSaturationKernel>(kernel) ||
            std::holds_alternative<GradeKernel>(kernel) ||
-           std::holds_alternative<HighlightRollOffKernel>(kernel);
+           std::holds_alternative<HighlightRollOffKernel>(kernel) ||
+           std::holds_alternative<AlphaAssociationKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

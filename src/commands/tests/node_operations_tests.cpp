@@ -854,6 +854,26 @@ void testRecipeCommands(TestContext& test) {
     (void)exercise<SetParameterSource>(test, fixture, *amount, ConstantValueSource{0.25});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *amount,
                                ConstantValueSource{1.25});
+
+    // #503 Alpha Association: the mode, white switch and matte colour edit within their domains.
+    const auto association = addRecipe("bloom.alpha-association");
+    const auto associationMode = association.outputId<ParameterId>("parameter.mode");
+    const auto white = association.outputId<ParameterId>("parameter.white");
+    const auto background = association.outputId<ParameterId>("parameter.background");
+    if (!associationMode || !white || !background)
+        throw std::logic_error("Alpha Association exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *associationMode,
+                                       ConstantValueSource{std::int64_t{3}});
+    (void)exercise<SetParameterSource>(test, fixture, *white, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(
+        test, fixture, *background,
+        ConstantValueSource{bloom::core::Color4d{2.5, -0.5, 0.25, 1.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *associationMode,
+                               ConstantValueSource{std::int64_t{4}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *white,
+                               ConstantValueSource{std::int64_t{1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *background,
+                               ConstantValueSource{bloom::core::Color4d{2e6, 0.0, 0.0, 1.0}});
 }
 
 void testAddAndLayout(TestContext& test) {

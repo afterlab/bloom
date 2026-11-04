@@ -1,11 +1,11 @@
 #pragma once
 
-// #340 Levels, Curves and Hue/Saturation, #494 Grade and #506 Glow's Highlight Roll-off: the one
-// CPU reference of the grades, shared by the CPU evaluator and the resident GPU program generator.
-// The host prepares one packed binary32 table per grade; the CPU applies it here and the GPU program reads the identical table
-// from its storage buffer and runs the same binary32 operations, so a keyed value changes only
-// data, never the shader. No grade performs a colour transform: a Raw data pass is graded as
-// stored.
+// #340 Levels, Curves and Hue/Saturation, #494 Grade, #506 Glow's Highlight Roll-off and #503
+// Alpha Association: the one CPU reference of the grades, shared by the CPU evaluator and the
+// resident GPU program generator. The host prepares one packed binary32 table per grade; the CPU
+// applies it here and the GPU program reads the identical table from its storage buffer and runs
+// the same binary32 operations, so a keyed value changes only data, never the shader. No grade
+// performs a colour transform: a Raw data pass is graded as stored.
 
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
@@ -24,7 +24,14 @@ namespace bloom::runtime::detail {
 
 struct ResolvedEvaluation;
 
-enum class ColorGradeKind : std::uint8_t { Levels, Curves, HueSaturation, Grade, RollOff };
+enum class ColorGradeKind : std::uint8_t {
+    Levels,
+    Curves,
+    HueSaturation,
+    Grade,
+    RollOff,
+    AlphaAssociation
+};
 
 // The packed table, always a whole number of vec4s:
 //   Levels:  [clamp, 0, 0, 0], then per channel (master, red, green, blue, alpha)
@@ -35,6 +42,9 @@ enum class ColorGradeKind : std::uint8_t { Levels, Curves, HueSaturation, Grade,
 //            [contrast, contrast scale, saturation, 0] [luma weights r, g, b, 0]
 //   Highlight Roll-off (#506): [amount, luma weights r, g, b]; associated colour c becomes
 //            c / fma(amount, max(L, 0), 1) with L = fma(b, wb, fma(g, wg, wr * r)), alpha unchanged
+//   Alpha Association (#503): [table mode, epsilon, 0, 0] [background r, g, b, 0], table mode
+//            0 Unmult over black, 1 Unmult over white, 2 Premultiply, 3 Unpremultiply, 4 Remove
+//            Color Matting (docs/architecture/image-filters.md, "Alpha Association")
 // A Levels channel maps x to t = (x - pivot) * scale (or the step x >= pivot when the input range
 // is empty), raises a positive t to the inverse gamma, and returns fma(t, range, black). A Grade
 // channel maps the straight value x to t = fma(x, slope, offset), raises a positive t to its power,

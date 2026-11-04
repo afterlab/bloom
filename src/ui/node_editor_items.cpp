@@ -4,6 +4,7 @@
 #include <QPainterPathStroker>
 #include <QShortcut>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -357,6 +358,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kSeparateChannelsNodeType ||
         typeId == document::kCombineChannelsNodeType)
         return QStringLiteral("RGB RGBA channel split pass");
+    // #503: the names compositors search for.
+    if (typeId == document::kAlphaAssociationNodeType)
+        return QStringLiteral("unmult premultiply unpremultiply premult unpremult straight "
+                              "remove color matting matte black white");
     return {};
 }
 

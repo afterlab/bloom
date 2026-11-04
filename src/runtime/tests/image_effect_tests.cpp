@@ -1159,6 +1159,12 @@ void testColorGradeEvaluation() {
         return runtime::HueSaturationKernel{{document::ParameterId::fromRaw(460), hue},
                                             {document::ParameterId::fromRaw(461), saturation}};
     };
+    // #503 Alpha Association.
+    const auto association = [](const runtime::AlphaAssociationMode mode, const bool white,
+                                const core::Color4d background) {
+        return runtime::AlphaAssociationKernel{
+            mode, white, {document::ParameterId::fromRaw(470), background}};
+    };
     runtime::CpuCompositionEvaluator evaluator;
     runtime::CpuCompositionEvaluator fresh;
     const auto baseline = planWith({});
@@ -1178,6 +1184,15 @@ void testColorGradeEvaluation() {
         {curves(0.8), curves(0.3), {}},
         {hueCurves(0.2), hueCurves(-0.2), {}},
         {hueSaturation(75.0, 1.4), hueSaturation(75.0, 0.4), {}},
+        {association(runtime::AlphaAssociationMode::Unmult, false, {}),
+         association(runtime::AlphaAssociationMode::Unmult, true, {}),
+         {}},
+        {association(runtime::AlphaAssociationMode::Unpremultiply, false, {}),
+         association(runtime::AlphaAssociationMode::Premultiply, false, {}),
+         {}},
+        {association(runtime::AlphaAssociationMode::RemoveMatting, false, {0.2, 0.4, 0.8, 1.0}),
+         association(runtime::AlphaAssociationMode::RemoveMatting, false, {0.6, 0.4, 0.8, 1.0}),
+         {}},
     };
     for (const auto& item : cases) {
         const auto plan = planWith({item.kernel});
@@ -1199,6 +1214,9 @@ void testColorGradeEvaluation() {
                 const auto point = std::get<document::Vec2d>(operand.source);
                 values.push_back(point.x);
                 values.push_back(point.y);
+            } else if constexpr (std::is_same_v<Operand, runtime::CompiledColorParameter>) {
+                const auto color = std::get<core::Color4d>(operand.source);
+                values.insert(values.end(), {color.red, color.green, color.blue, color.alpha});
             } else {
                 values.push_back(std::get<double>(operand.source));
             }
@@ -1299,6 +1317,38 @@ void testColorGradeEvaluation() {
                    samePixels(evaluator.evaluate(animated, end, {}),
                               fresh.evaluate(endPlan, requestFor(*endPlan), {})),
                "an animated grade samples each frame without reuse");
+    }
+    // #503: an animated Remove Color Matting background samples each frame.
+    {
+        auto definition =
+            planWith({association(runtime::AlphaAssociationMode::RemoveMatting, false, {})})
+                ->copyDefinition();
+        std::get<runtime::AlphaAssociationKernel>(
+            std::get<runtime::CompiledImageEffect>(definition.operations[1]).kernel)
+            .background.source = runtime::Color4CurveIndex::fromRaw(0);
+        runtime::CompiledColor4Curve curve;
+        curve.id = document::AnimationCurveId::fromRaw(198);
+        const std::array<double, 4> end{0.5, 0.25, 1.5, 1.0};
+        for (std::size_t c = 0; c < 4; ++c)
+            curve.components[c] = {
+                {document::KeyframeId::fromRaw(200 + 2 * c), {}, c == 3 ? 1.0 : 0.0},
+                {document::KeyframeId::fromRaw(201 + 2 * c), *core::RationalTime::create(1, 1),
+                 end[c]}};
+        definition.color4Curves.push_back(std::move(curve));
+        const auto animated =
+            std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+        expect(animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)),
+               "an animated matte color is time-dependent");
+        auto last = requestFor(*animated);
+        last.time = *core::RationalTime::create(1, 1);
+        const auto endPlan = planWith({association(runtime::AlphaAssociationMode::RemoveMatting,
+                                                   false, {0.5, 0.25, 1.5, 1.0})});
+        const auto startPlan = planWith({});
+        expect(samePixels(evaluator.evaluate(animated, requestFor(*animated), {}),
+                          fresh.evaluate(startPlan, requestFor(*startPlan), {})) &&
+                   samePixels(evaluator.evaluate(animated, last, {}),
+                              fresh.evaluate(endPlan, requestFor(*endPlan), {})),
+               "an animated matte color samples each frame (black at the start is the identity)");
     }
     // #493: a keyed curve (a whole-value Path curve) samples each frame like any operand.
     {

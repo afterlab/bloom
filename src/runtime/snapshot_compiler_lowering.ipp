@@ -1466,6 +1466,25 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Curves parameters could not be lowered.");
         return std::nullopt;
     }
+    // #503 Alpha Association: the constant mode and white switch, and the background colour in
+    // Remove Color Matting only; the other modes lower a constant black without an identity, so an
+    // unused (even animated) colour neither claims nor invalidates anything.
+    if (node.typeId == document::kAlphaAssociationNodeType) {
+        const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+        const auto* white = parameterConstant<bool>(findParameterBinding(node, "white"));
+        const auto background = compiledColorParameter(findParameterBinding(node, "background"));
+        if (mode && white && background && *mode >= document::kAlphaAssociationUnmult &&
+            *mode <= document::kAlphaAssociationRemoveMatting) {
+            runtime::AlphaAssociationKernel kernel;
+            kernel.mode = static_cast<runtime::AlphaAssociationMode>(*mode);
+            kernel.white = *white;
+            if (kernel.mode == runtime::AlphaAssociationMode::RemoveMatting)
+                kernel.background = *background;
+            return runtime::CompiledImageEffect{node.id, *input, kernel};
+        }
+        addTopologyFailure(node.id, "Alpha Association parameters could not be lowered.");
+        return std::nullopt;
+    }
     if (node.typeId == document::kHueSaturationNodeType) {
         const auto hue = compiledScalarParameter(findParameterBinding(node, "hue"));
         const auto saturation = compiledScalarParameter(findParameterBinding(node, "saturation"));

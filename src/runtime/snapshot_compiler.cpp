@@ -7,6 +7,7 @@
 #include "snapshot_compiler_support.hpp"
 #include <bloom/runtime/layer_time_projection.hpp>
 
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>

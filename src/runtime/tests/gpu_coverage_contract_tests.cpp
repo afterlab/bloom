@@ -1336,6 +1336,42 @@ displayProofRunner(const bool customView) {
                              "full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #503 Alpha Association over the HDR, signed, partial-alpha gradient: every mode through the
+    // production builder's one resident program.
+    const auto association = [](const bloom::runtime::AlphaAssociationMode mode, const bool white,
+                                const bloom::core::Color4d background) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            return bloom::runtime::AlphaAssociationKernel{
+                mode, white, {ParameterId::fromRaw(idBase + 60), background}};
+        };
+    };
+    add(
+        "effect.AlphaAssociationKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime alpha association tests",
+        [runGrades, association] {
+            using Mode = bloom::runtime::AlphaAssociationMode;
+            return runGrades({association(Mode::Unmult, false, {}),
+                              association(Mode::Premultiply, false, {}),
+                              association(Mode::Unpremultiply, false, {}),
+                              association(Mode::RemoveMatting, false, {0.25, 0.5, 1.5, 1.0})},
+                             503000,
+                             "production Alpha Association: Unmult, Premultiply, Unpremultiply "
+                             "and Remove Color Matting over HDR and signed values, full frame "
+                             "and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.alpha-association", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime alpha association tests",
+        [runGrades, association] {
+            using Mode = bloom::runtime::AlphaAssociationMode;
+            return runGrades({association(Mode::Unmult, true, {}),
+                              association(Mode::RemoveMatting, false, {-0.5, 0.75, 2.0, 1.0})},
+                             503600,
+                             "production Alpha Association node: white-backed Unmult and a "
+                             "signed HDR matte colour, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #494 Grade: the wheels and primaries through the production builder's resident program.
     const auto grade = [](const std::array<double, 22> values) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {

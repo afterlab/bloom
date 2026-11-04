@@ -1,3 +1,4 @@
+#include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
@@ -180,6 +181,26 @@ template <typename Definition>
     definition.parameters.push_back({"clamp", std::string(kCurvesClampSchemaKey),
                                      ParameterValueKind::Boolean, true, false, false});
     return definition;
+}
+
+// #503 Alpha Association: an Image in and out; a constant mode and white-background switch (they
+// choose the arithmetic, so they have no socket) and an animatable/drivable background colour for
+// Remove Color Matting, with its own Color socket.
+[[nodiscard]] NodeDefinition alphaAssociationDefinition() {
+    using namespace bloom::document;
+    return {{std::string(kAlphaAssociationNodeType), 1},
+            NodeLoweringKind::ImageEffect,
+            {{"input", SocketValueKind::Image}, {"background", SocketValueKind::Color, false}},
+            {{"image", SocketValueKind::Image}},
+            {{"mode", std::string(kAlphaAssociationModeSchemaKey), ParameterValueKind::Integer,
+              true, false, kAlphaAssociationUnmult},
+             {"white", std::string(kAlphaAssociationWhiteSchemaKey), ParameterValueKind::Boolean,
+              true, false, false},
+             {"background", std::string(kAlphaAssociationBackgroundSchemaKey),
+              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{0.0, 0.0, 0.0, 1.0}}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Compositing};
 }
 
 // #340 Hue/Saturation: animatable/drivable hue rotation (degrees) and saturation factor.
@@ -424,6 +445,8 @@ template <typename Definition>
             return definition == curvesDefinition();
         if (definition.key.typeId == kHueSaturationNodeType)
             return definition == hueSaturationDefinition();
+        if (definition.key.typeId == kAlphaAssociationNodeType)
+            return definition == alphaAssociationDefinition();
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1461,6 +1484,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         canvasImageDefinition("bloom.crop"),
         canvasImageDefinition("bloom.pad"),
         multiplyAlphaDefinition(),
+        alphaAssociationDefinition(),
         discreteImageDefinition(false),
         discreteImageDefinition(true),
         resizeFitDefinition(false),
