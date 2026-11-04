@@ -6,13 +6,13 @@ Implementation status: version 1 durable value validation, the domain-separated 
 primitives, the canonical display-processor identity, the built-in registry with concrete
 Bloom Neutral and ACES 1.3 CG built-in resolution, in-process CPU display processing, project and
 composition working-space selection, config-managed asset input transforms, and the checked
-alpha/pixel flow are implemented and qualified on Linux. The separable
-blend modes under "Blend modes" below are implemented in the CPU reference compositing kernel and
-qualified by per-mode goldens. The
+alpha/pixel flow are implemented and qualified on Linux. The blend
+modes under "Blend modes" below are implemented in the CPU reference compositing kernel and the GPU
+BlendV1 kernels and qualified by per-mode goldens and CPU/GPU parity. The
 supervised helper, the archive and loose locator kinds, staged-graph integration, and the
 processor cache remain pending.
 
-Updated: 2026-09-18
+Updated: 2026-11-04
 
 ## Version 1.20 Decisions — Asset Input Transforms
 
@@ -497,41 +497,56 @@ still resolves against the project's qualified config revision.
 
 ## Blend modes
 
-A layer's blend mode says how its pixels combine with what is already beneath it in the Layer Stack.
-It is a Layer Output parameter, `bloom.layer.blend-mode`, stored as a small integer under one closed
-and durable mapping. `Normal` is `0`, so a document that carries no blend mode at all -- every Layer
-Output written before this contract -- decodes as `Normal` and renders exactly the picture it always
-did.
+A layer's blend mode says how its pixels combine with what is already beneath it in the Layer Stack
+(the Merge node). It is a Layer Output parameter, `bloom.layer.blend-mode`, stored as a small integer
+under one closed and durable mapping. `Normal` is `0`, so a document that carries no blend mode at
+all -- every Layer Output written before this contract -- decodes as `Normal` and renders exactly the
+picture it always did.
 
-| Stored | Mode | Separable blend function `B(Cb, Cs)` |
-| ---: | --- | --- |
-| `0` | Normal | `Cs` |
-| `1` | Add | `Cb + Cs` |
-| `2` | Multiply | `Cb * Cs` |
-| `3` | Screen | `Cb + Cs - Cb * Cs` |
-| `4` | Overlay | `2 * Cb * Cs` if `Cb <= 0.5`, else `1 - 2 * (1 - Cb) * (1 - Cs)` |
-| `5` | Darken | `min(Cb, Cs)` |
-| `6` | Lighten | `max(Cb, Cs)` |
-| `7` | Difference | `abs(Cb - Cs)` |
+The vocabulary has three families. `Cb`/`Cs` are UN-premultiplied backdrop and source channels;
+`cb`/`cs` are premultiplied channels and `ab`/`as` the alphas.
+
+| Stored | Mode | Family | Formula |
+| ---: | --- | --- | --- |
+| `0` | Normal | separable | `B = Cs` |
+| `1` | Add | separable | `B = Cb + Cs` |
+| `2` | Multiply | separable | `B = Cb * Cs` |
+| `3` | Screen | separable | `B = Cb + Cs - Cb * Cs` |
+| `4` | Overlay | separable | `B = 2 * Cb * Cs` if `Cb <= 0.5`, else `1 - 2 * (1 - Cb) * (1 - Cs)` |
+| `5` | Darken | separable | `B = min(Cb, Cs)` |
+| `6` | Lighten | separable | `B = max(Cb, Cs)` |
+| `7` | Difference | separable | `B = abs(Cb - Cs)` |
+| `8` | Subtract | separable | `B = Cb - Cs` |
+| `9` | Divide | separable | `B = Cb / Cs`, and `0` where `Cs = 0` |
+| `10` | Minimum | extreme | every component, alpha included: `min(c_s, c_b)` on premultiplied values |
+| `11` | Maximum | extreme | every component, alpha included: `max(c_s, c_b)` on premultiplied values |
+| `12` | In | matte | `Fa = ab`, `Fb = 0` |
+| `13` | Out | matte | `Fa = 1 - ab`, `Fb = 0` |
+| `14` | Atop | matte | `Fa = ab`, `Fb = 1 - as` |
+| `15` | Xor | matte | `Fa = 1 - ab`, `Fb = 1 - as` |
+| `16` | Stencil | matte | `Fa = 0`, `Fb = 1 - as` (holds the backdrop out where the layer is) |
+| `17` | Mask | matte | `Fa = 0`, `Fb = as` (keeps the backdrop only where the layer is) |
 
 Appending a mode is additive. Renumbering one, or reusing a retired number, is not: it would
-re-interpret every saved document, and would require a new schema key rather than a new number.
+re-interpret every saved document, and would require a new schema key rather than a new number. The
+mapping is also the authoring order every surface offers; dropdowns separate it into five groups
+with a hairline -- Normal; Add through Lighten; Difference, Subtract and Divide; Minimum and Maximum;
+In through Mask.
 
-`Cb` and `Cs` are UN-premultiplied backdrop and source channels. The process representation is
-premultiplied, so the kernel divides each pixel by its own alpha, applies `B` per channel, and
-re-premultiplies through one fold -- the W3C Compositing and Blending Level 1 general formula with
-source-over as the compositing operator:
+### Separable modes
+
+The separable modes apply `B` per channel to un-premultiplied colour and re-premultiply through one
+fold -- the W3C Compositing and Blending Level 1 general formula with source-over as the compositing
+operator:
 
 ```text
 co = as * (1 - ab) * Cs  +  as * ab * B(Cb, Cs)  +  (1 - as) * ab * Cb
 ao = as + ab * (1 - as)
 ```
 
-`co` is the premultiplied result channel; `as` and `ab` are source and backdrop alpha.
-
-**Alpha compositing is source-over for every mode.** Only the color combination changes, so a blend
-mode never makes a layer cover more or less of what is beneath it than its own alpha says. The alpha
-expression above is evaluated with exactly the arithmetic the source-over kernel uses.
+**Alpha compositing is source-over for every separable mode.** Only the colour combination changes,
+so such a mode never makes a layer cover more or less of what is beneath it than its own alpha says.
+The alpha expression above is evaluated with exactly the arithmetic the source-over kernel uses.
 
 Two modes are evaluated without the round trip, because substituting their own `B` into the fold
 reduces it exactly:
@@ -543,29 +558,71 @@ reduces it exactly:
 - **Add.** `B(Cb, Cs) = Cb + Cs` cancels both alpha weightings and leaves `co = cs + cb`, premultiplied
   addition. Dividing by alpha anyway would add two roundings to an exact answer.
 
-The remaining six take the division. Both alphas are strictly positive on that path: an alpha-zero
-source contributes nothing and is skipped, and an alpha-zero backdrop makes the fold collapse to the
-source pixel itself under every mode, so it is written through exactly.
+The remaining separable modes take the division. Both alphas are strictly positive on that path: an
+alpha-zero source contributes nothing and is skipped, and an alpha-zero backdrop makes the fold
+collapse to the source pixel itself under every separable mode, so it is written through exactly.
+
+**Subtract and Divide** follow the layer convention: the layer's value is taken from, or divides,
+what is beneath it (`Cb - Cs`, `Cb / Cs`). A zero divisor gives `0`, not an infinity, so a black
+layer holds the backdrop out and the result stays finite. Every other divisor divides exactly, its
+sign kept (a negative divided by a negative is positive), and an HDR quotient is
+not limited.
+
+### Channel extremes
+
+Minimum and Maximum take the per-component extreme of the two PREMULTIPLIED pixels, alpha included,
+with no fold. This is the operation that combines depth, position, or other data passes, and the
+extremes of two scene-linear images, without the colour weighting of Darken and Lighten. Because the
+transparent pixel is all zero, a transparent source under Minimum yields zero coverage, and under
+Maximum lifts a negative backdrop channel to zero.
+
+### Porter-Duff mattes
+
+The matte operators are the Porter-Duff compositing operators on premultiplied values:
+
+```text
+co = cs * Fa + cb * Fb
+ao = as * Fa + ab * Fb
+```
+
+with `Fa` and `Fb` from the table. In keeps the layer inside the backdrop, Out keeps it outside,
+Atop puts it over the backdrop only where the backdrop is, Xor keeps each where the other is not,
+Stencil is the holdout (the backdrop with the layer cut out), and Mask keeps the backdrop only under
+the layer. The operator, not source-over, decides the result's coverage.
+
+### Where a layer has no pixels
+
+The separable modes, Atop, Xor and Stencil leave the backdrop exactly as it was under a transparent
+source. Minimum, Maximum, In, Out and Mask do not: In, Out and Mask clear the backdrop, Minimum takes
+it to zero coverage, and Maximum lifts a negative channel to zero. The Layer Stack therefore applies
+those five across the whole stack window, reading transparent black outside the layer's own data
+window -- the same transparent tap the GPU kernel reads there. A layer that publishes no image at
+all for the frame -- outside its time range, carried wholly off the frame, or collapsed by a zero
+scale -- is absent rather than transparent and contributes nothing under every mode.
+
+### Range
 
 **Nothing is clamped**, at either end. The process contract forbids clamping before the declared
-display boundary, and that applies inside a blend: a negative or HDR channel goes into `B` and comes
-out of the fold unclipped. The unit references in `Screen` and `Overlay` are therefore not ceilings
-but the reference white of `lin_rec709_scene`: above it, those two formulas extrapolate rather than
-saturate, which is the honest reading of a scene-referred space that has no maximum. A non-finite
-result, or a finite-input overflow, fails the row with a typed error rather than being clamped into
-range.
+display boundary, and that applies inside a blend: a negative or HDR channel goes into `B`, the
+extremes, or the matte products and comes out unclipped. The unit references in `Screen` and
+`Overlay` are therefore not ceilings but the reference white of `lin_rec709_scene`: above it, those
+two formulas extrapolate rather than saturate, which is the honest reading of a scene-referred space
+that has no maximum. A non-finite result, or a finite-input overflow, fails the row with a typed
+error rather than being clamped into range.
 
-The vocabulary is deliberately the separable modes only. Each one combines the corresponding channels
-of two pixels and nothing else, so each has one closed formula over scene-linear values. A
-luminosity, saturation, hue, or color mode would have to commit to a luminance model and a gamut the
-process space does not fix, and belongs with a qualified colorimetry decision rather than with this
-set.
+None of the modes needs a luminance, saturation, or hue model. A luminosity, saturation, hue, or
+color mode would have to commit to a luminance model and a gamut the process space does not fix,
+and belongs with a qualified colorimetry decision rather than with this set.
 
 Blending happens in the process space, before any display transform. A blend mode is authoring truth
 and affects process results; it is not a display, view, or look choice, so it invalidates process
 cache results rather than only display ones. Qualification uses per-mode golden rows on a
-premultiplied fixture that includes partial alpha on both sides, an HDR channel above 1, and a
-negative channel, plus a bit-exactness pin of `Normal` against the retained source-over kernel.
+premultiplied fixture that includes partial alpha on both sides, an HDR channel above 1, a negative
+channel, and a zero divisor, plus a bit-exactness pin of `Normal` against the retained source-over
+kernel, the matte endpoints, and an AOV rebuild (diffuse lighting times diffuse colour plus specular
+plus emission) of a synthetic multilayer OpenEXR that must reproduce its stored beauty. The GPU
+`BlendV1` kernels carry every mode under the documented 2e-6 absolute-or-relative gate against the
+CPU reference.
 
 ## Hostile Configuration And Resource Limits
 

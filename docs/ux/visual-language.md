@@ -466,12 +466,13 @@ shared parent command. The grammar owns all dimensions.
 
 | Row control | Object name | State |
 | --- | --- | --- |
-| Blending | `layerBlendingDropdown` | Enabled. Offers every implemented blend mode, in the one shared order, starting at the layer's own authored mode. Authors the layer the row DRAWS, never the selection |
+| Blending | `layerBlendingDropdown` | Enabled. Offers every implemented blend mode, in the one shared order with a hairline between the mode groups (Normal; blends; Difference, Subtract, Divide; Minimum, Maximum; mattes), starting at the layer's own authored mode. Authors the layer the row DRAWS, never the selection |
 | Parent | `layerParentDropdown` | Offers None and eligible layer names; disabled while the layer is locked |
 
 A disabled placeholder always states its reason in its tooltip rather than merely looking
 unresponsive. The Properties panel's own Blending row (`blendModeEditor`) offers the same vocabulary in
-the same order, as does a layer node card's (`nodeBlendModeDropdown`): one set of words, one order,
+the same order and groups, as do a layer node card's (`nodeBlendModeDropdown`), a Merge input row's
+(`mergeInputBlendMode`) and the layer context menu's Blending submenu: one set of words, one order,
 one write path.
 
 ### Timeline property rows and key summaries

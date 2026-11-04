@@ -290,7 +290,8 @@ The Layer Output boundary also owns how the layer combines with what is beneath 
 | `blendMode` | `bloom.layer.blend-mode` | Int64 | `0` (`Normal`) | How this layer's color combines with the layers beneath it |
 
 The value is an enumeration stored as a small integer under one closed, durable mapping — `Normal`,
-`Add`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `Difference` as `0` through `7`. The
+`Add`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `Difference`, `Subtract`, `Divide`,
+`Minimum`, `Maximum`, `In`, `Out`, `Atop`, `Xor`, `Stencil`, `Mask` as `0` through `17`. The
 mapping, each mode's formula, and the premultiplied compositing fold that applies them are in
 [`color-management.md`](color-management.md), "Blend modes". Validation accepts exactly the integers
 that mapping names: one that names no implemented mode is refused rather than folded to `Normal`,

@@ -417,21 +417,32 @@ contract.
 - **Ordering and blending are separate.** The stack says which layer is above which and is still
   visited in reverse so the first entry is topmost; the mode comes from the Layer Output the entry
   names, so reordering two layers and re-blending one are independent edits.
-- **Alpha is source-over under every mode.** Only the color combination varies, computed with exactly
-  the alpha expression the source-over kernel uses, so a mode never changes how much of the backdrop a
-  layer covers.
+- **Alpha is source-over under every separable mode.** For `Normal` through `Divide` only the color
+  combination varies, computed with exactly the alpha expression the source-over kernel uses, so
+  such a mode never changes how much of the backdrop a layer covers. The channel extremes (`Minimum`,
+  `Maximum`) and the Porter-Duff mattes (`In` through `Mask`) own their alpha.
 - **`Normal` is bit-identical to version 4.** The kernel delegates to the retained source-over row for
   that mode rather than re-deriving it, so a composition whose every layer is `Normal` produces the
   same bits it did before blend modes existed. The semantics version still moves, because the same
-  plan value can now mean a different picture.
+  plan value can now mean a different picture. Appending modes after the first eight changes no
+  existing picture, so it did not move the version again.
 - **`Add` needs no round trip.** Its separable function reduces the general fold to premultiplied
-  addition exactly; the other five non-`Normal` modes unpremultiply, apply the mode, and
-  re-premultiply, with Float64 intermediates and one Float32 rounding at the end.
-- **Alpha endpoints are exact.** An alpha-zero source is skipped and leaves the backdrop untouched; an
-  alpha-zero backdrop takes the source pixel through unchanged, which is what the fold collapses to
-  under every mode. Source-over's other shortcut -- an opaque source replacing the destination -- does
-  NOT generalise and is deliberately absent, because every mode but `Normal` still reads the
-  backdrop's color at full source alpha.
+  addition exactly; the other separable modes unpremultiply, apply the mode, and re-premultiply, with
+  Float64 intermediates and one Float32 rounding at the end. The extremes and the mattes work on
+  premultiplied components directly: exact min/max, or two exact Float64 products summed and rounded
+  once.
+- **Alpha endpoints are exact.** Under a separable mode an alpha-zero source is skipped and leaves the
+  backdrop untouched; an alpha-zero backdrop takes the source pixel through unchanged, which is what
+  the fold collapses to. Source-over's other shortcut -- an opaque source replacing the destination --
+  does NOT generalise and is deliberately absent, because every mode but `Normal` still reads the
+  backdrop's color at full source alpha. The extremes and the mattes have no shortcut: every pixel
+  takes the formula, and a zero-alpha result is transparent black.
+- **Some modes reach past the layer.** `Minimum`, `Maximum`, `In`, `Out` and `Mask` change the
+  backdrop under a transparent source, so the stage folds them over every row and column of the stack
+  window with a transparent source outside the layer's data window
+  (`core::blendModeKeepsBackdropUnderTransparentSource`). Every other mode walks only the rows and
+  columns the layer occupies. An entry that published no image for the frame is skipped under every
+  mode.
 - **Nothing is clamped.** A negative or HDR channel survives the blend, and a non-finite or
   finite-overflow result fails the row with a typed error rather than being clipped.
 - **The blend mode is a discrete authored value.** It carries no curve: the schema declares it
