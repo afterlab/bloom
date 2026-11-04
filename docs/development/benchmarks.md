@@ -243,7 +243,16 @@ Every measurement is a fresh process.
   results and the general native display, the resident scene executor (uploads, recording,
   submission, fence polls and the packed transfer), housekeeping (cache purge, queue timings,
   presentation, capacity refresh), and idle waits for work or a fence. The first four are the
-  owner's busy time; busy over `fillSeconds` is its share of the fill.
+  owner's busy time; busy over `fillSeconds` is its share of the fill. `scenesAhead` counts frames
+  whose scene executor began while the previous frame was still displaying or transferring.
+- **Device memory** (#477): `deviceMemoryAllocations`, `deviceMemoryFrees` and
+  `deviceMemoryAllocatedBytes` are the native device-memory allocations and frees the device
+  allocator made over the measured window (each a driver call; reused storage makes none). Divide
+  by the frames filled for allocations per frame.
+- **Sequence read-ahead** (#477): `readAheadCaptured` counts the image-sequence read-ahead's stored
+  captures, `readAheadWithdrawn` the queued captures a frame withdrew to read the file itself, and
+  `readAheadAwaited` the captures in flight a frame waited for instead of reading the file again
+  (process totals).
 - **Host preparation** (#422): `windowCpuSeconds` is the process CPU time over the measured window
   (fills and playback), `uploadBytes` the host-to-device bytes uploaded in it (from the GPU
   transfer telemetry), and `decodeStageSeconds` and `colourConvertStageSeconds` the summed wall time

@@ -879,6 +879,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     // #422: host work and upload traffic over the measured window, from the runtime telemetry
     // counters: bytes copied to the device, and the decode and colour-convert stage totals.
     const auto transfersBefore = core::telemetry::gpuTransferTotals();
+    const auto deviceMemoryBefore = core::telemetry::gpuDeviceMemoryTotals();
     const auto stageSeconds = [](const core::telemetry::Stage stage) {
         core::telemetry::StageHistogram histogram;
         core::telemetry::readStage(stage, histogram);
@@ -1013,9 +1014,24 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     }
     const auto after = service.status().counters;
     const auto claims = policy->snapshot().reservations;
+    // #477: sequence read-ahead captures stored, and captures a frame withdrew or waited for
+    // instead of reading the same file a second time (process totals).
+    const auto readAhead = evaluator.sequenceReadAhead()
+                               ? evaluator.sequenceReadAhead()->statistics()
+                               : runtime::ImageSequenceReadAhead::Statistics{};
+    json << ",\"readAheadCaptured\":" << readAhead.captured
+         << ",\"readAheadWithdrawn\":" << readAhead.withdrawn
+         << ",\"readAheadAwaited\":" << readAhead.awaited;
     json << ",\"windowCpuSeconds\":" << benchProcessCpuSeconds() - cpuBefore
          << ",\"uploadBytes\":"
          << core::telemetry::gpuTransferTotals().uploadBytes - transfersBefore.uploadBytes
+         << ",\"deviceMemoryAllocations\":"
+         << core::telemetry::gpuDeviceMemoryTotals().allocations - deviceMemoryBefore.allocations
+         << ",\"deviceMemoryFrees\":"
+         << core::telemetry::gpuDeviceMemoryTotals().frees - deviceMemoryBefore.frees
+         << ",\"deviceMemoryAllocatedBytes\":"
+         << core::telemetry::gpuDeviceMemoryTotals().allocatedBytes -
+                deviceMemoryBefore.allocatedBytes
          << ",\"decodeStageSeconds\":"
          << stageSeconds(core::telemetry::Stage::Decode) - decodeBefore
          << ",\"colourConvertStageSeconds\":"
@@ -1026,6 +1042,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"packedTransfers\":" << after.packedTransfers - before.packedTransfers
          << ",\"residentGraphJobs\":" << after.residentGraphJobs - before.residentGraphJobs
          << ",\"uploadsAhead\":" << after.uploadsAhead - before.uploadsAhead
+         << ",\"scenesAhead\":" << after.scenesAhead - before.scenesAhead
          << ",\"nativeUploads\":" << after.nativeUploads - before.nativeUploads
          << ",\"nativeSubmissions\":" << after.nativeSubmissions - before.nativeSubmissions
          << ",\"uploadSubmitSeconds\":"

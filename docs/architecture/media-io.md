@@ -836,6 +836,10 @@ selection reuses them after the usual identity observation and reads nothing its
 stay outstanding, which is what a network share needs: on an SMB share measured at 61-66 MB/s with
 one reader, four and eight concurrent readers reached 75-82 MB/s. Read-ahead never evicts; a file
 that does not fit the cache's free budget, or one already cached, queued or in flight, is skipped.
+A frame that selects a member the read-ahead has queued or is reading claims it (#477): a queued
+capture is withdrawn and the frame reads the file itself, and a capture in flight is waited for
+(until the frame is cancelled) and then found in the cache. The file is read once, and the playhead
+frame's read neither queues behind nor competes with a second read of the same file.
 Destroying the evaluator cancels outstanding captures and joins the workers. Export frames do not
 read ahead (see the linear-pass retention below).
 

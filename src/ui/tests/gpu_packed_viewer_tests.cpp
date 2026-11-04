@@ -6,8 +6,8 @@
 #include <bloom/ui/application_shutdown_coordinator.hpp>
 
 #include <bloom/commands/command_stack.hpp>
-#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/output/flat_exr_output_adapter.hpp>
@@ -16,6 +16,7 @@
 #include <bloom/runtime/gpu_process_frame.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
+#include <bloom/runtime/image_sequence_read_ahead.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
