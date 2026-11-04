@@ -1,5 +1,7 @@
 #include "command_test_support.hpp"
 
+#include <bloom/commands/entry_layer_operations.hpp>
+
 #include "layer_lock.hpp"
 
 #include <bloom/commands/layer_operations.hpp>
@@ -45,6 +47,9 @@ bool reference(const Snapshot& snapshot, const Operation& operation) {
     auto draft = isolated.draft(isolated.snapshot());
     const auto result = operation.apply(draft);
     if (result.status == OperationStatus::Rejected)
+        return false;
+    // #502: the command stack reconciles entries and Layer nodes before it checks and validates.
+    if (reconcileEntryLayers(snapshot.project(), draft).failure)
         return false;
     if (detail::changesLockedLayers(snapshot.project(), draft.project()))
         return false;
@@ -151,6 +156,8 @@ void testLinkedGraph(TestContext& test) {
     Checker(test, fixture).run();
     const Checker checker(test, fixture);
     test.expect(canDissolveNode(checker.comp, loose), "connected pass-through dissolves");
+    test.expect(canDissolveNode(checker.comp, kFirstLayerNodeId),
+                "a Layer node fed by a Layer node dissolves; its entry takes the upstream layer");
     test.expect(!canDissolveNode(checker.comp, source), "a source without image input refuses");
     test.expect(canSetNodeMuted(checker.comp, source, true), "already-muted is NoChange, accepted");
 }

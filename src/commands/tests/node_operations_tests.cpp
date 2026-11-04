@@ -1103,11 +1103,10 @@ void testWiringAndRename(TestContext& test) {
                         "Missing");
 }
 
-// ADAPTED (task FIX1, item B): dissolving a PARTICIPATING Layer Output used to be refused, because
-// the stack slot it fed could not be repaired. A slot is created by connecting a Layer output to
-// Merge and removed by disconnecting it, so dissolve now simply takes the layer out of the stack --
-// which is what the gesture means -- and its own fixture says so rather than one line buried in the
-// refusals.
+// ADAPTED (#502): dissolving a PARTICIPATING Layer Output keeps its Merge entry. The slot takes the
+// Layer node's content source, and the reconcile pass gives the entry the Layer node's values as its
+// own entry layer, so the picture does not change. A child Layer node feeding the same Merge cannot
+// be parented to an entry layer (it would evaluate before its parent), so its link clears.
 void testDissolveParticipatingLayer(TestContext& test) {
     Fixture fixture;
     const auto source = addSource(fixture);
@@ -1122,10 +1121,13 @@ void testDissolveParticipatingLayer(TestContext& test) {
     test.expect(!composition(fixture.document.snapshot()).graph().findLayer(kSecondLayerId)->parent,
                 "dissolving a parent clears child links and restores them on undo");
     const auto& after = composition(fixture.document.snapshot());
+    const auto* entry = after.graph().layerStack().find(kFirstSlotId);
+    const auto* layer = entry ? after.graph().findLayer(entry->layerId) : nullptr;
     test.expect(after.graph().findNode(kFirstLayerNodeId) == nullptr &&
-                    after.graph().layerStack().entries().size() == slotsBefore - 1 &&
-                    after.graph().layerOutputs().size() == 1,
-                "dissolving a participating Layer Output takes its layer out of the stack");
+                    after.graph().layerStack().entries().size() == slotsBefore &&
+                    after.graph().layerOutputs().size() == 2 && layer != nullptr &&
+                    layer->entryOwned() && layer->name == "First",
+                "dissolving a participating Layer Output keeps its entry with the Layer's values");
 }
 
 void testRemoveAndDissolve(TestContext& test) {

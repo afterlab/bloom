@@ -14,6 +14,7 @@ target_sources(
         asset_organization_operations.cpp
         footage_interpretation_operations.cpp
         node_operations.cpp
+        entry_layer_operations.cpp
         layer_operations.cpp
         layer_time_operations.cpp
         layer_mask_operations.cpp
@@ -47,6 +48,7 @@ target_sources(
             include/bloom/commands/data_block_operations.hpp
             include/bloom/commands/export_queue_operations.hpp
             include/bloom/commands/node_operations.hpp
+            include/bloom/commands/entry_layer_operations.hpp
             include/bloom/commands/layer_operations.hpp
             include/bloom/commands/layer_time_operations.hpp
             include/bloom/commands/layer_mask_operations.hpp

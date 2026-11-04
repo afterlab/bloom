@@ -77,6 +77,26 @@ bool canDissolveNode(const document::Composition& composition, const document::N
             !graph.acceptsConnection(*sourceKind, edge.destination, registry))
             return false;
     }
+    // #502: a Layer node's slots take its upstream; an upstream Layer node becomes their layer,
+    // which a Merge already holding that Layer node as another entry refuses.
+    if (node->typeId == document::kLayerOutputNodeType) {
+        const auto upstream = std::ranges::find_if(graph.layerOutputs(), [&](const auto& layer) {
+            return !layer.entryOwned() && layer.nodeId == incoming->source.nodeId;
+        });
+        if (upstream != graph.layerOutputs().end())
+            for (const auto& edge : graph.edges()) {
+                const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
+                if (slot == nullptr || edge.source.nodeId != nodeId ||
+                    edge.source.port != output->name)
+                    continue;
+                const auto* stack = graph.merge(slot->stackNodeId);
+                if (stack != nullptr &&
+                    std::ranges::any_of(stack->entries(), [&](const auto& entry) {
+                        return entry.slotId != slot->slotId && entry.layerId == upstream->layerId;
+                    }))
+                    return false;
+            }
+    }
     return !survivorsDrivenBy(composition, {nodeId});
 }
 

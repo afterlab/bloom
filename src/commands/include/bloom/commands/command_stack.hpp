@@ -50,6 +50,13 @@ class CommandStack final {
         // #399. Applied transactions whose render impact was proven by comparing the evaluation
         // inputs before and after (document/evaluation_inputs.hpp).
         std::uint64_t evaluationInputProofs = 0;
+        // #502. Applied transactions the entry-layer reconcile pass ran for, the compositions it
+        // skipped after one topology comparison, the ones it reconciled, and the transactions it
+        // changed (adopted, returned or removed an entry layer).
+        std::uint64_t entryLayerReconcilePasses = 0;
+        std::uint64_t entryLayerReconcileSkips = 0;
+        std::uint64_t entryLayerReconcileCompositions = 0;
+        std::uint64_t entryLayerReconcileEdits = 0;
     };
     explicit CommandStack(document::Document& document);
     CommandStack(document::Document& document, HistoryLimits limits);

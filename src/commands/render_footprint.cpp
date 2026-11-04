@@ -1,5 +1,7 @@
 #include "render_footprint.hpp"
 
+#include <bloom/document/merge_entries.hpp>
+
 #include <bloom/document/animation.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 
@@ -105,16 +107,17 @@ struct RetimedLayer final {
 
 [[nodiscard]] bool hasTimeRemap(const document::Composition& composition,
                                 const document::LayerOutputBoundary& boundary) {
-    const auto* node = composition.graph().findNode(boundary.nodeId);
-    return node != nullptr && std::ranges::any_of(node->parameters, [](const auto& binding) {
-               return binding.role == document::kTimeRemapParameterRole;
-           });
+    return document::layerParameterBinding(composition.graph(), boundary,
+                                           document::kTimeRemapParameterRole) != nullptr;
 }
 
 [[nodiscard]] std::vector<RetimedLayer> retimedLayers(const document::Composition& composition) {
     const auto& graph = composition.graph();
     std::vector<RetimedLayer> result;
     for (const auto& boundary : graph.layerOutputs()) {
+        // #502: entry layers never reach here retimed (parameterEditFootprint refuses them).
+        if (boundary.entryOwned())
+            continue;
         const bool remap = hasTimeRemap(composition, boundary);
         if (boundary.timing.isIdentityMapping() && !remap)
             continue;
@@ -241,6 +244,21 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
     for (const auto& node : after->graph().nodes())
         for (const auto& binding : node.parameters)
             owners[binding.parameterId].push_back(node.id);
+    // #502: a Merge entry's own layer is read by its Merge, so its parameters' owner is the Merge.
+    // A retimed entry layer's keys are layer time on a clock this proof does not model yet: stay
+    // whole-render rather than misplace them.
+    for (const auto& layer : after->graph().layerOutputs()) {
+        if (!layer.entryOwned())
+            continue;
+        if (!layer.timing.isIdentityMapping() || hasTimeRemap(*after, layer))
+            return std::nullopt;
+        for (const auto& binding : layer.parameters)
+            owners[binding.parameterId].push_back(layer.nodeId);
+    }
+    for (const auto& layer : before->graph().layerOutputs())
+        if (layer.entryOwned() &&
+            (!layer.timing.isIdentityMapping() || hasTimeRemap(*before, layer)))
+            return std::nullopt;
 
     const auto beforeReachShared = document::RenderReachability::of(*before, registry);
     const auto& beforeReach = *beforeReachShared;

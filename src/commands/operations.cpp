@@ -1,4 +1,5 @@
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/commands/node_layout_placement.hpp>
 
 #include <bloom/core/utf8.hpp>
@@ -219,6 +220,11 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
             boundary.trackMatte->source = remap(ids->layers, boundary.trackMatte->source);
         if (sourceBoundary.parent)
             boundary.parent = remap(ids->layers, *sourceBoundary.parent);
+        // #502: an entry layer follows its slot and owns cloned parameters.
+        if (boundary.entrySlot)
+            boundary.entrySlot = remap(ids->slots, *boundary.entrySlot);
+        for (auto& binding : boundary.parameters)
+            binding.parameterId = remap(ids->parameters, binding.parameterId);
         if (!graph.addLayerOutput(std::move(boundary))) {
             return std::nullopt;
         }
@@ -1089,16 +1095,20 @@ OperationResult MoveLayerBefore::apply(document::Draft& draft) const {
         return invalidComposition(compositionId_);
     }
 
-    auto& stack = composition->graph().layerStack();
-    const auto entries = stack.entries();
-    const auto moving = std::find_if(entries.begin(), entries.end(),
-                                     [this](const auto& entry) { return entry.slotId == slotId_; });
-    if (moving == entries.end()) {
+    // #502: the slot moves within whichever Merge holds it (a nested Merge's entries too).
+    const auto holder = document::mergeEntryOfSlot(std::as_const(*composition).graph(), slotId_);
+    if (!holder) {
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
                                          "Layer slot " + std::to_string(slotId_.value()) +
                                              " does not exist");
     }
-    if (const auto* layer = composition->graph().findLayer(moving->layerId); layer && layer->locked)
+    auto& stack = *composition->graph().merge(holder->merge);
+    const auto entries = stack.entries();
+    const auto moving = std::find_if(entries.begin(), entries.end(),
+                                     [this](const auto& entry) { return entry.slotId == slotId_; });
+    if (const auto* layer =
+            document::mergeEntryLayer(std::as_const(*composition).graph(), holder->merge, slotId_);
+        layer && layer->locked)
         return OperationResult::rejected(OperationIssueCode::InvalidValue, "Layer is locked");
     if (beforeSlotId_ == slotId_) {
         return OperationResult::noChange();

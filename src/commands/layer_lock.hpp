@@ -19,6 +19,23 @@ inline bool changesLockedLayers(const document::Project& before, const document:
             if (!next || layer.inPoint != next->inPoint ||
                 layer.endPoint(composition.duration()) != next->endPoint(changed->duration()))
                 return true;
+            // #502: a locked entry layer's own parameters (and curves) are locked like a Layer
+            // node's.
+            if (layer.parameters != next->parameters)
+                return true;
+            for (const auto& binding : layer.parameters) {
+                const auto* parameter = composition.parameters().find(binding.parameterId);
+                const auto* edited = changed->parameters().find(binding.parameterId);
+                if (!parameter || !edited || *parameter != *edited)
+                    return true;
+                if (const auto* curve =
+                        std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+                    const auto* oldCurve = composition.animationCurves().find(curve->curveId);
+                    const auto* newCurve = changed->animationCurves().find(curve->curveId);
+                    if (!oldCurve || !newCurve || *oldCurve != *newCurve)
+                        return true;
+                }
+            }
         }
         for (const auto& node : composition.graph().nodes()) {
             if (!composition.nodeLocked(node.id))

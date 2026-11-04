@@ -1,3 +1,4 @@
+#include "entry_layer_support.hpp"
 #include "node_operation_support.hpp"
 #include <algorithm>
 #include <bloom/commands/layer_operations.hpp>
@@ -185,6 +186,23 @@ OperationResult SplitLayerAtTime::apply(document::Draft& draft) const {
         if (other.trackMatte && other.trackMatte->source == layer_)
             return OperationResult::rejected(OperationIssueCode::Unsupported,
                                              "A track matte source layer cannot be split");
+    // #502: an entry layer splits into a copy of its slot (same sources) directly below it, with
+    // a copy of the entry layer holding the tail of the range. Whole-render: the slot is new.
+    if (original.entryOwned()) {
+        detail::EntryLayerCopy copy;
+        std::vector<OperationOutput> outputs;
+        if (auto failure =
+                detail::duplicateEntryLayer(draft, composition_, layer_, copy, outputs))
+            return std::move(*failure);
+        auto& graph = draft.project().findComposition(composition_)->graph();
+        graph.findLayer(layer_)->outPoint = *time;
+        auto* tail = graph.findLayer(copy.layer);
+        tail->parent = original.parent;
+        tail->inPoint = *time;
+        tail->outPoint = original.outPoint;
+        outputs.push_back({"layer", copy.layer});
+        return OperationResult::applied(std::move(outputs));
+    }
     // Classify from the pre-split graph.
     const bool equivalent = splitIsOutputEquivalent(*composition, original);
     const auto originalOut = original.endPoint(composition->duration());
@@ -224,6 +242,13 @@ OperationResult SetLayerEnabled::apply(document::Draft& draft) const {
     auto* layer = composition ? composition->graph().findLayer(layer_) : nullptr;
     if (!layer)
         return detail::invalidTarget();
+    // #502: an entry layer's switch is its own; the Merge it belongs to is never muted for it.
+    if (layer->entryOwned()) {
+        if (layer->enabled == value_)
+            return OperationResult::noChange();
+        layer->enabled = value_;
+        return OperationResult::applied();
+    }
     auto layout = detail::layoutFor(*composition, layer->nodeId);
     if (layer->enabled == value_ && layout.muted == !value_)
         return OperationResult::noChange();

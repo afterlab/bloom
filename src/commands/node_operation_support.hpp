@@ -190,11 +190,23 @@ inline bool eraseStrandedReroute(document::Composition& composition, const docum
 inline void eraseOrphanedParameters(document::Composition& composition,
                                     const std::set<document::ParameterId>& candidates) {
     for (const auto id : candidates) {
+        // #502: an entry layer's own parameters and every mask's are owned outside node bindings.
         const bool referenced =
-            std::ranges::any_of(composition.graph().nodes(), [id](const auto& node) {
-                return std::ranges::any_of(node.parameters, [id](const auto& binding) {
-                    return binding.parameterId == id;
-                });
+            std::ranges::any_of(composition.graph().nodes(),
+                                [id](const auto& node) {
+                                    return std::ranges::any_of(
+                                        node.parameters, [id](const auto& binding) {
+                                            return binding.parameterId == id;
+                                        });
+                                }) ||
+            std::ranges::any_of(composition.graph().layerOutputs(), [id](const auto& layer) {
+                return std::ranges::any_of(
+                           layer.parameters,
+                           [id](const auto& binding) { return binding.parameterId == id; }) ||
+                       std::ranges::any_of(layer.masks, [id](const auto& mask) {
+                           return mask.path == id || mask.feather == id ||
+                                  mask.expansion == id || mask.opacity == id;
+                       });
             });
         if (referenced)
             continue;

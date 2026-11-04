@@ -362,7 +362,8 @@ void placeLayerCards(document::Composition& composition, const NodeId layerNode,
             const auto entries = stack->entries();
             const auto boundaryNode = [&](const document::LayerId layer) -> std::optional<NodeId> {
                 for (const auto& boundary : graph.layerOutputs())
-                    if (boundary.layerId == layer && boundary.nodeId != layerNode)
+                    if (boundary.layerId == layer && !boundary.entryOwned() &&
+                        boundary.nodeId != layerNode)
                         return boundary.nodeId;
                 return std::nullopt;
             };

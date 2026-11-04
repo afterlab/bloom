@@ -1,4 +1,5 @@
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/commands/node_layout_placement.hpp>
 #include <bloom/commands/operations.hpp>
 
@@ -6,6 +7,7 @@
 #include "render_footprint.hpp"
 
 #include <bloom/document/layer_masks.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
@@ -17,7 +19,11 @@ bool canApplyNodeOperation(const document::Snapshot& snapshot, const Operation& 
     // #357: a scratch draft shares the snapshot's content and validates only what the operation
     // changed, instead of rebuilding and revalidating a whole isolated document per query.
     auto draft = document::Draft::isolatedFrom(snapshot);
-    return operation.apply(draft).status != OperationStatus::Rejected && draft.valid();
+    if (operation.apply(draft).status == OperationStatus::Rejected)
+        return false;
+    // #502: the command stack reconciles entries and Layer nodes before it validates.
+    const auto reconciled = reconcileEntryLayers(snapshot.project(), draft);
+    return !reconciled.failure && draft.valid();
 }
 
 OperationResult checkAddNodeEligibility(const document::Project& project,
@@ -202,8 +208,10 @@ removalTimeFootprint(const document::Composition& composition,
     std::vector<const document::LayerOutputBoundary*> boundaries;
     std::set<document::LayerId> removedLayers;
     for (const auto id : nodes) {
-        const auto boundary =
-            std::ranges::find(graph.layerOutputs(), id, &document::LayerOutputBoundary::nodeId);
+        // #502: a Merge's entry layers share its node id; removing a Merge is not a layer removal.
+        const auto boundary = std::ranges::find_if(graph.layerOutputs(), [id](const auto& layer) {
+            return !layer.entryOwned() && layer.nodeId == id;
+        });
         if (boundary == graph.layerOutputs().end())
             return std::nullopt;
         boundaries.push_back(&*boundary);
@@ -343,15 +351,19 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
                 "Output and its directly connected Merge cannot be removed");
         for (const auto& binding : node->parameters)
             candidates.insert(binding.parameterId);
-        // ADR 0028: a removed layer's masks own parameters (and curves) outside node bindings.
-        if (const auto boundary = std::ranges::find(composition->graph().layerOutputs(), id,
-                                                    &document::LayerOutputBoundary::nodeId);
-            boundary != composition->graph().layerOutputs().end())
-            for (const auto& mask : boundary->masks)
+        // ADR 0028: a removed layer's masks own parameters (and curves) outside node bindings;
+        // #502 so do a removed Merge's entry layers.
+        for (const auto& boundary : composition->graph().layerOutputs()) {
+            if (boundary.nodeId != id)
+                continue;
+            for (const auto& mask : boundary.masks)
                 for (const auto& [parameterId, schemaKey] : document::layerMaskParameters(mask)) {
                     (void)schemaKey;
                     candidates.insert(parameterId);
                 }
+            for (const auto& binding : boundary.parameters)
+                candidates.insert(binding.parameterId);
+        }
     }
     // Classify from the pre-erase graph. std::nullopt is the conservative whole-render default; a
     // present footprint (possibly empty) is provable bounded reuse evidence. Issue #355: removing
@@ -456,8 +468,9 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         if (!stack)
             return detail::invalidTarget();
         const auto boundaries = graph.layerOutputs();
+        // #502: a Merge's own entry layers share its node id; only a Layer node names a slot.
         const auto boundary = std::ranges::find_if(boundaries, [this](const auto& candidate) {
-            return candidate.nodeId == source_.nodeId;
+            return !candidate.entryOwned() && candidate.nodeId == source_.nodeId;
         });
         const auto layerId = boundary == boundaries.end() ? document::LayerId{} : boundary->layerId;
         // An audio edge shares its Layer's existing row rather than opening a second one: one slot
@@ -521,10 +534,16 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
                               ? std::nullopt
                               : std::optional(std::next(found)->slotId);
         const auto boundaries = graph.layerOutputs();
-        const auto boundary =
-            std::ranges::find(boundaries, source_.nodeId, &document::LayerOutputBoundary::nodeId);
-        const auto layerId = boundary == boundaries.end() ? document::LayerId{} : boundary->layerId;
+        const auto boundary = std::ranges::find_if(boundaries, [this](const auto& candidate) {
+            return !candidate.entryOwned() && candidate.nodeId == source_.nodeId;
+        });
         const auto replacedLayer = found->layerId;
+        // #502: an entry keeps its own layer when another plain image replaces its content; a new
+        // Layer node source takes the entry over (the reconcile pass settles the entry layer).
+        const auto* own = document::entryOwnedLayer(graph, slot->stackNodeId, slot->slotId);
+        const auto layerId = boundary != boundaries.end() ? boundary->layerId
+                             : own != nullptr ? own->layerId
+                                 : document::LayerId{};
         (void)stack->erase(slot->slotId);
         if (!stack->append({slot->slotId, layerId}) || !stack->moveBefore(slot->slotId, next))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
@@ -689,16 +708,37 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
         return OperationResult::rejected(OperationIssueCode::MissingReference,
                                          "Dissolve requires a connected first Image input");
     const auto source = incoming->source;
+    const bool layerNode = node->typeId == document::kLayerOutputNodeType;
+    std::optional<document::OutputPortRef> audioSource;
+    if (layerNode)
+        if (const auto* audio = detail::inputEdge(
+                graph, document::NodeInputRef{
+                           nodeId_, std::string(document::kLayerOutputAudioInputPort)}))
+            audioSource = audio->source;
     std::vector<document::EdgeRecord> consumers;
+    // #502: a Layer node's Merge slots stay where they are and take its content (and audio)
+    // source, so the entries keep their place; the reconcile pass gives each the Layer node's
+    // values back as its own entry layer, and the picture does not change.
+    std::vector<document::EdgeRecord> slotEdges;
+    std::vector<document::EdgeId> releasedSlotEdges;
     for (auto edge : graph.edges()) {
-        if (edge.source.nodeId != nodeId_ || edge.source.port != output->name)
+        if (edge.source.nodeId != nodeId_)
             continue;
-        // A stack slot is NOT reconnected to the dissolved node's upstream source: a slot belongs
-        // to a layer, and the layer goes with its boundary node (CanonicalGraph::eraseNode removes
-        // both). Before task FIX1 this refused outright; now that a slot is created and removed by
-        // connecting and disconnecting it, dissolving a participating Layer Output simply takes the
-        // layer out of the stack, which is what the gesture means.
-        if (std::holds_alternative<document::LayerStackInputRef>(edge.destination))
+        if (std::holds_alternative<document::LayerStackInputRef>(edge.destination)) {
+            // Any other node's stack slot is NOT reconnected: dissolving takes the node out.
+            if (!layerNode)
+                continue;
+            releasedSlotEdges.push_back(edge.id);
+            if (edge.source.port == output->name) {
+                edge.source = source;
+                slotEdges.push_back(std::move(edge));
+            } else if (edge.source.port == document::kLayerOutputAudioOutputPort && audioSource) {
+                edge.source = *audioSource;
+                slotEdges.push_back(std::move(edge));
+            }
+            continue;
+        }
+        if (edge.source.port != output->name)
             continue;
         edge.source = source;
         consumers.push_back(std::move(edge));
@@ -706,8 +746,47 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
     std::set<document::ParameterId> candidates;
     for (const auto& binding : node->parameters)
         candidates.insert(binding.parameterId);
+    // ADR 0028: the Layer node's masks own parameters outside its bindings.
+    for (const auto& boundary : graph.layerOutputs())
+        if (!boundary.entryOwned() && boundary.nodeId == nodeId_)
+            for (const auto& mask : boundary.masks)
+                for (const auto& [parameterId, schemaKey] : document::layerMaskParameters(mask)) {
+                    (void)schemaKey;
+                    candidates.insert(parameterId);
+                }
     const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
     const auto touched = removalTouchedNodes(*composition, {nodeId_});
+    for (const auto id : releasedSlotEdges)
+        (void)graph.eraseEdge(id);
+    std::set<std::pair<document::NodeId, document::LayerSlotId>> released;
+    for (const auto& edge : slotEdges) {
+        const auto& slot = std::get<document::LayerStackInputRef>(edge.destination);
+        released.emplace(slot.stackNodeId, slot.slotId);
+    }
+    for (auto& stack : graph.merges()) {
+        for (const auto& entry : stack.entries()) {
+            if (!released.contains({stack.nodeId(), entry.slotId}) || !entry.layerId.isValid())
+                continue;
+            if (!graph.merge(stack.nodeId())->setLayerId(entry.slotId, {}))
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Dissolve could not keep the Layer's entries");
+        }
+    }
+    // A slot the Layer fed only audio it has no source for leaves, as before.
+    for (const auto& stack : composition->graph().merges()) {
+        std::vector<document::LayerSlotId> emptied;
+        for (const auto& entry : stack.entries())
+            if (!released.contains({stack.nodeId(), entry.slotId}) &&
+                std::ranges::none_of(graph.edges(), [&](const auto& candidate) {
+                    const auto* input =
+                        std::get_if<document::LayerStackInputRef>(&candidate.destination);
+                    return input != nullptr && input->stackNodeId == stack.nodeId() &&
+                           input->slotId == entry.slotId;
+                }))
+                emptied.push_back(entry.slotId);
+        for (const auto slot : emptied)
+            (void)graph.merge(stack.nodeId())->erase(slot);
+    }
     (void)graph.eraseNode(nodeId_);
     composition->nodeLayout().erase(nodeId_);
     (void)detail::detachFromNodeGroups(*composition, {nodeId_});
@@ -715,6 +794,29 @@ OperationResult DissolveNode::apply(document::Draft& draft) const {
         if (!graph.addEdge(edge, registry_))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                              "Dissolve could not reconnect consumers");
+    }
+    for (const auto& edge : slotEdges) {
+        if (!graph.addEdge(edge, registry_))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Dissolve could not reconnect the Layer's entries");
+    }
+    // A slot now fed straight by an upstream Layer node names that node's layer.
+    for (const auto& [stackId, slotId] : released) {
+        const auto fed = std::ranges::find_if(graph.edges(), [&](const auto& edge) {
+            const auto* input = std::get_if<document::LayerStackInputRef>(&edge.destination);
+            return input != nullptr && input->stackNodeId == stackId && input->slotId == slotId;
+        });
+        if (fed == graph.edges().end())
+            continue;
+        const auto upstream = std::ranges::find_if(graph.layerOutputs(), [&](const auto& layer) {
+            return !layer.entryOwned() && layer.nodeId == fed->source.nodeId;
+        });
+        if (upstream == graph.layerOutputs().end())
+            continue;
+        if (!graph.merge(stackId)->setLayerId(slotId, upstream->layerId))
+            return OperationResult::rejected(
+                OperationIssueCode::Unsupported,
+                "Dissolve would give the upstream Layer node a second entry of one Merge");
     }
     detail::eraseOrphanedParameters(*composition, candidates);
     if (const auto failure = detail::validateGraph(*composition, registry_))

@@ -1,6 +1,7 @@
 #include "layer_lock.hpp"
 #include "render_footprint.hpp"
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 
 #include <algorithm>
@@ -84,6 +85,7 @@ std::optional<std::size_t> firstInvalidOperation(const document::Document& docum
     std::size_t index = 0;
     for (const auto& operation : transaction.operations()) {
         static_cast<void>(operation->apply(draft));
+        static_cast<void>(reconcileEntryLayers(before.project(), draft));
         if (!draft.validate().ok())
             return index;
         ++index;
@@ -429,6 +431,39 @@ CommandResult CommandStack::execute(Transaction&& transaction) {
             }
         }
         ++operationIndex;
+    }
+
+    // #502. Entries and Layer nodes reconcile once every operation has applied, in the same draft
+    // and therefore the same undo step: an inserted Layer node adopts its entry's values, a removed
+    // one returns them, and entry layers whose slot vanished leave with their parameters.
+    if (changed) {
+        ++work_.entryLayerReconcilePasses;
+        EntryLayerReconcileWork reconcileWork;
+        auto reconciled = reconcileEntryLayers(before.project(), draft, &reconcileWork);
+        work_.entryLayerReconcileSkips += reconcileWork.compositionsSkipped;
+        work_.entryLayerReconcileCompositions += reconcileWork.compositionsReconciled;
+        ++work_.lockedLayerChecks;
+        if (!reconciled.failure && reconciled.changed &&
+            detail::changesLockedLayers(before.project(), draft.project()))
+            reconciled.failure = OperationIssue{OperationIssueCode::InvalidValue,
+                                                "Layer is locked; unlock it before editing"};
+        if (reconciled.failure) {
+            auto result = makeResult(CommandAction::Execute, CommandStatus::Rejected, before,
+                                     std::string(transaction.label()));
+            result.operationFailures.push_back({transaction.size(),
+                                                "bloom.merge.reconcile-entry-layers",
+                                                std::move(*reconciled.failure)});
+            notify(result);
+            return result;
+        }
+        if (reconciled.changed) {
+            ++work_.entryLayerReconcileEdits;
+            // The pass keeps the picture, but it edits records the operations' footprints did not
+            // describe: publish the conservative whole render.
+            renderAffecting = true;
+            wholeRender = true;
+            remapsValid = false;
+        }
     }
 
     // #399. Render impact is proven from the document, not only declared by the operations. A

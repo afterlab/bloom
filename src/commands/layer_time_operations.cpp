@@ -1,3 +1,4 @@
+#include "entry_layer_support.hpp"
 #include "node_operation_support.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
@@ -191,10 +192,16 @@ OperationResult EnableLayerTimeRemap::apply(document::Draft& draft) const {
     if (auto failure = findTarget(draft, composition_, layer_, target))
         return std::move(*failure);
     auto& composition = *target.composition;
-    auto* node = composition.graph().findNode(target.layer->nodeId);
-    if (node == nullptr || node->schemaVersion != document::kLayerOutputNodeSchemaVersion)
+    // #502: an entry layer binds its own Time Remap; a Layer node binds it on the node.
+    if (!target.layer->entryOwned()) {
+        const auto* node = composition.graph().findNode(target.layer->nodeId);
+        if (node == nullptr || node->schemaVersion != document::kLayerOutputNodeSchemaVersion)
+            return detail::invalidTarget();
+    }
+    auto* bindings = detail::mutableLayerBindings(composition.graph(), *target.layer);
+    if (bindings == nullptr)
         return detail::invalidTarget();
-    if (std::ranges::any_of(node->parameters, [](const auto& binding) {
+    if (std::ranges::any_of(*bindings, [](const auto& binding) {
             return binding.role == document::kTimeRemapParameterRole;
         }))
         return OperationResult::noChange();
@@ -219,7 +226,10 @@ OperationResult EnableLayerTimeRemap::apply(document::Draft& draft) const {
                                           std::string(document::kTimeRemapParameterSchemaKey),
                                           document::ConstantValueSource{inSeconds}}))
         return invalidTiming("Time Remap parameter could not be created");
-    node->parameters.push_back({std::string(document::kTimeRemapParameterRole), *parameterId});
+    bindings->push_back({std::string(document::kTimeRemapParameterRole), *parameterId});
+    // #502: an entry layer keeps its bindings in canonical role order.
+    if (target.layer->entryOwned())
+        std::ranges::sort(*bindings, {}, &document::ParameterBinding::role);
     auto animated = CreateAnimationForParameter(composition_, *parameterId, *inKey).apply(draft);
     if (animated.status != OperationStatus::Applied)
         return animated;
@@ -243,12 +253,12 @@ OperationResult DisableLayerTimeRemap::apply(document::Draft& draft) const {
     if (auto failure = findTarget(draft, composition_, layer_, target))
         return std::move(*failure);
     auto& composition = *target.composition;
-    auto* node = composition.graph().findNode(target.layer->nodeId);
-    if (node == nullptr)
+    auto* bindings = detail::mutableLayerBindings(composition.graph(), *target.layer);
+    if (bindings == nullptr)
         return detail::invalidTarget();
-    const auto binding = std::ranges::find(node->parameters, document::kTimeRemapParameterRole,
+    const auto binding = std::ranges::find(*bindings, document::kTimeRemapParameterRole,
                                            &document::ParameterBinding::role);
-    if (binding == node->parameters.end())
+    if (binding == bindings->end())
         return OperationResult::noChange();
     const auto parameterId = binding->parameterId;
     const auto* record = composition.parameters().find(parameterId);
@@ -256,7 +266,7 @@ OperationResult DisableLayerTimeRemap::apply(document::Draft& draft) const {
     if (record != nullptr)
         if (const auto* source = std::get_if<document::AnimationCurveSource>(&record->source))
             curve = source->curveId;
-    node->parameters.erase(binding);
+    bindings->erase(binding);
     if (!composition.parameters().erase(parameterId) ||
         (curve && !composition.animationCurves().erase(*curve)))
         return invalidTiming("Time Remap parameter could not be removed");

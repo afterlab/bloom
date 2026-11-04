@@ -1,6 +1,7 @@
 #include "node_operation_support.hpp"
 
 #include <bloom/commands/layer_mask_operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/persisted_text.hpp>
@@ -348,10 +349,13 @@ OperationResult SetTrackMatte::apply(document::Draft& draft) const {
             return OperationResult::rejected(
                 OperationIssueCode::MissingReference,
                 "Track matte source must be a layer in the composition");
+        // #502: the Merge whose entry's layer is `id` (a Layer node up its chain, or its own).
         const auto mergeOf = [&](const document::LayerId id) -> const document::LayerStack* {
             for (const auto& stack : graph.merges())
                 for (const auto& entry : stack.entries())
-                    if (entry.layerId == id)
+                    if (const auto* found =
+                            document::mergeEntryLayer(graph, stack.nodeId(), entry.slotId);
+                        found != nullptr && found->layerId == id)
                         return &stack;
             return nullptr;
         };

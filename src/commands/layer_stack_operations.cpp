@@ -3,6 +3,8 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/project.hpp>
 
+#include "entry_layer_support.hpp"
+
 #include <algorithm>
 #include <map>
 #include <set>
@@ -15,7 +17,8 @@ namespace {
 // composition does not hold.
 [[nodiscard]] std::optional<OperationResult>
 boundaryNodes(const document::Draft& draft, const document::CompositionId compositionId,
-              const std::vector<document::LayerId>& layers, std::set<document::NodeId>& nodes) {
+              const std::vector<document::LayerId>& layers, std::set<document::NodeId>& nodes,
+              std::vector<document::LayerId>* entryLayers = nullptr) {
     const auto* composition = draft.project().findComposition(compositionId);
     if (composition == nullptr)
         return OperationResult::rejected(OperationIssueCode::InvalidTarget,
@@ -28,6 +31,13 @@ boundaryNodes(const document::Draft& draft, const document::CompositionId compos
             return OperationResult::rejected(OperationIssueCode::MissingReference,
                                              "Layer " + std::to_string(layer.value()) +
                                                  " is not in the composition");
+        // #502: a Merge entry's own layer is not a node; it is handled by the caller.
+        if (boundary->entryOwned()) {
+            if (entryLayers != nullptr &&
+                std::ranges::find(*entryLayers, layer) == entryLayers->end())
+                entryLayers->push_back(layer);
+            continue;
+        }
         nodes.insert(boundary->nodeId);
     }
     return std::nullopt;
@@ -37,9 +47,20 @@ boundaryNodes(const document::Draft& draft, const document::CompositionId compos
 
 OperationResult DeleteLayers::apply(document::Draft& draft) const {
     std::set<document::NodeId> nodes;
-    if (auto failure = boundaryNodes(draft, composition_, layers_, nodes))
+    std::vector<document::LayerId> entryLayers;
+    if (auto failure = boundaryNodes(draft, composition_, layers_, nodes, &entryLayers))
         return std::move(*failure);
-    return RemoveNodes(composition_, std::move(nodes)).apply(draft);
+    // An entry layer leaves with its slot; its Merge and the slot's sources stay.
+    for (const auto layer : entryLayers)
+        if (auto failure =
+                detail::deleteEntryLayer(*draft.project().findComposition(composition_), layer))
+            return std::move(*failure);
+    if (nodes.empty())
+        return OperationResult::applied();
+    auto removed = RemoveNodes(composition_, std::move(nodes)).apply(draft);
+    if (!entryLayers.empty() && removed.status == OperationStatus::Applied)
+        removed.affectedTimes.reset();
+    return removed;
 }
 
 OperationResult DuplicateLayers::apply(document::Draft& draft) const {
@@ -63,12 +84,51 @@ OperationResult DuplicateLayers::apply(document::Draft& draft) const {
             if (count > pass)
                 copied.push_back(layer);
         std::set<document::NodeId> passNodes;
-        if (auto failure = boundaryNodes(draft, composition_, copied, passNodes))
+        std::vector<document::LayerId> passEntries;
+        if (auto failure = boundaryNodes(draft, composition_, copied, passNodes, &passEntries))
             return std::move(*failure);
         auto duplicated =
-            DuplicateNodes(composition_, std::move(passNodes), document::Vec2d{0, 0}).apply(draft);
+            passNodes.empty()
+                ? OperationResult::applied()
+                : DuplicateNodes(composition_, std::move(passNodes), document::Vec2d{0, 0})
+                      .apply(draft);
         if (duplicated.status == OperationStatus::Rejected)
             return duplicated;
+        // #502: an entry layer is copied into a new slot directly below its own.
+        std::map<document::LayerId, document::LayerId> entryCopies;
+        for (const auto layer : passEntries) {
+            detail::EntryLayerCopy copy;
+            if (auto failure = detail::duplicateEntryLayer(draft, composition_, layer, copy,
+                                                           duplicated.outputs))
+                return std::move(*failure);
+            entryCopies.emplace(layer, copy.layer);
+        }
+        if (!entryCopies.empty()) {
+            duplicated.affectedTimes.reset();
+            duplicated.layerIdentityRemaps.reset();
+            // Parent and matte links among the layers copied in this pass follow the copies,
+            // as DuplicateNodes does among Layer nodes.
+            std::map<document::LayerId, document::LayerId> copies = entryCopies;
+            for (const auto& output : duplicated.outputs)
+                if (output.name.starts_with("layer."))
+                    if (const auto* id = std::get_if<document::LayerId>(&output.id))
+                        copies.emplace(document::LayerId::fromRaw(std::stoull(
+                                           output.name.substr(std::string_view("layer.").size()))),
+                                       *id);
+            auto& graph = draft.project().findComposition(composition_)->graph();
+            for (const auto& [original, copy] : copies) {
+                const auto* source = std::as_const(graph).findLayer(original);
+                auto* target = graph.findLayer(copy);
+                if (source == nullptr || target == nullptr)
+                    continue;
+                if (source->parent && copies.contains(*source->parent))
+                    target->parent = copies.at(*source->parent);
+                else if (entryCopies.contains(original))
+                    target->parent.reset();
+                if (source->trackMatte && copies.contains(source->trackMatte->source))
+                    target->trackMatte->source = copies.at(source->trackMatte->source);
+            }
+        }
         if (pass == 0) {
             result = duplicated;
         } else {

@@ -29,9 +29,29 @@ struct ParameterOwner final {
     const document::NodeDefinition* definition = nullptr;
     const document::ParameterDefinition* parameter = nullptr;
     std::string role;
+    // #502: the Merge entry's own layer that owns the parameter, when no node does.
+    const document::LayerOutputBoundary* entryLayer = nullptr;
 };
 
 ParameterOwner ownerOf(const document::Composition& composition, const document::ParameterId id) {
+    // An entry layer binds its parameters by the Layer node's roles and schema keys, so the Layer
+    // node definition declares them.
+    for (const auto& layer : composition.graph().layerOutputs()) {
+        const auto binding =
+            std::ranges::find(layer.parameters, id, &document::ParameterBinding::parameterId);
+        if (binding == layer.parameters.end())
+            continue;
+        ParameterOwner owner{.role = binding->role, .entryLayer = &layer};
+        owner.definition = document::builtInNodeDefinitions().find(
+            document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
+        if (owner.definition != nullptr) {
+            const auto match = std::ranges::find(owner.definition->parameters, binding->role,
+                                                 &document::ParameterDefinition::role);
+            if (match != owner.definition->parameters.end())
+                owner.parameter = &*match;
+        }
+        return owner;
+    }
     for (const auto& node : composition.graph().nodes()) {
         const auto binding =
             std::ranges::find(node.parameters, id, &document::ParameterBinding::parameterId);
@@ -55,6 +75,9 @@ std::string describe(const document::ParameterRecord& record, const ParameterOwn
     if (owner.node != nullptr)
         text += " (" + owner.role + " of node " + std::to_string(owner.node->id.value()) + ", " +
                 owner.node->typeId + ")";
+    else if (owner.entryLayer != nullptr)
+        text += " (" + owner.role + " of the Merge entry layer " +
+                std::to_string(owner.entryLayer->layerId.value()) + ")";
     return text;
 }
 
@@ -219,6 +242,13 @@ std::optional<OperationResult> refusedDriver(const document::Composition& compos
             describe(record, owner) +
                 " cannot be driven: a text font is the id of a Font asset and is read as a "
                 "constant. Set a constant Font asset id instead.");
+    if (owner.entryLayer != nullptr)
+        return OperationResult::rejected(
+            OperationIssueCode::Unsupported,
+            describe(record, owner) +
+                " cannot be driven: a Merge entry's own layer takes a constant or an animation "
+                "curve. Insert a Layer node into the entry (bloom.merge.insert-layer-node) and "
+                "drive its parameter instead.");
     const auto* source = composition.graph().findNode(driver.sourceNodeId);
     if (source == nullptr)
         return OperationResult::rejected(

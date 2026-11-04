@@ -1,5 +1,7 @@
 #include <bloom/commands/parameter_reset_operations.hpp>
 
+#include "entry_layer_support.hpp"
+
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -39,6 +41,39 @@ OperationResult ResetParameter::apply(document::Draft& draft) const {
             declared = &*found;
         }
         break;
+    }
+    // #502: an entry layer's parameter resets to the entry layer default (its position to the
+    // composition centre, so the entry is the identity again).
+    std::optional<document::ParameterValue> entryDefault;
+    if (!owner)
+        for (const auto& layer : composition->graph().layerOutputs())
+            for (const auto& binding : layer.parameters)
+                if (binding.parameterId == parameter_)
+                    entryDefault = detail::entryLayerDefaultValue(*composition, binding.role);
+    if (entryDefault) {
+        if (std::holds_alternative<document::ConstantValueSource>(parameter->source))
+            return SetParameterSource(composition_, parameter_,
+                                      document::ConstantValueSource{*entryDefault})
+                .apply(draft);
+        const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source);
+        if (animated == nullptr)
+            return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                             "The parameter's source cannot be reset");
+        return std::visit(
+            [&](const auto& held) -> OperationResult {
+                using Held = std::decay_t<decltype(held)>;
+                if constexpr (std::is_same_v<Held, double> ||
+                              std::is_same_v<Held, document::Vec2d> ||
+                              std::is_same_v<Held, document::Vec3d> ||
+                              std::is_same_v<Held, core::Color4d>)
+                    return SetKeyframeAtTime(composition_, animated->curveId, keyTime_, held)
+                        .apply(draft);
+                else
+                    return OperationResult::rejected(
+                        OperationIssueCode::Unsupported,
+                        "This parameter's kind cannot carry a keyframe");
+            },
+            *entryDefault);
     }
     if (!owner || declared == nullptr)
         return OperationResult::rejected(OperationIssueCode::Unsupported,

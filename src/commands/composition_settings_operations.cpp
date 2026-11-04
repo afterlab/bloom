@@ -5,6 +5,7 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/project.hpp>
 
@@ -134,12 +135,10 @@ OperationResult SetCompositionSettings::apply(document::Draft& draft) const {
         for (const auto& boundary : composition->graph().layerOutputs()) {
             if (boundary.parent || boundary.locked)
                 continue;
-            const auto* node = composition->graph().findNode(boundary.nodeId);
-            if (node == nullptr)
-                continue;
-            for (const auto& binding : node->parameters)
-                if (binding.role == document::kPositionParameterRole)
-                    positions.push_back(binding.parameterId);
+            // #502: a Layer node's position, or an entry layer's own.
+            if (const auto* binding = document::layerParameterBinding(
+                    composition->graph(), boundary, document::kPositionParameterRole))
+                positions.push_back(binding->parameterId);
         }
         for (const auto id : positions)
             if (!shiftPosition(*composition, id, delta))

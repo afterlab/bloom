@@ -90,6 +90,8 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
     std::map<document::ParameterId, document::ParameterId> parameterIds;
     std::map<document::AnimationCurveId, document::AnimationCurveId> curveIds;
     std::map<document::LayerId, document::LayerId> layerIds;
+    // #502: the slot each duplicated Merge's entry layer belongs to, allocated with the layer.
+    std::map<document::LayerSlotId, document::LayerSlotId> slotIds;
     std::vector<OperationOutput> outputs;
     auto& graph = composition->graph();
     for (const auto id : nodes_) {
@@ -148,6 +150,38 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
         copy.nodeId = nodeIds.at(boundary.nodeId);
         copy.layerId = *layerId;
         copy.name += " copy";
+        // #502: a duplicated Merge copies each entry's own layer, with fresh parameters, for the
+        // copied slot.
+        if (boundary.entryOwned()) {
+            const auto slotId = draft.ids().allocateLayerSlot();
+            if (!slotId)
+                return detail::exhaustedIds();
+            slotIds.emplace(*boundary.entrySlot, *slotId);
+            copy.entrySlot = *slotId;
+            for (auto& binding : copy.parameters) {
+                const auto* sourceParameter = original.parameters().find(binding.parameterId);
+                if (sourceParameter == nullptr)
+                    return detail::invalidTarget();
+                auto parameter = *sourceParameter;
+                const auto parameterId = draft.ids().allocateParameter();
+                if (!parameterId)
+                    return detail::exhaustedIds();
+                parameter.id = *parameterId;
+                if (auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source)) {
+                    const auto curveId = copyCurve(draft, *composition, source->curveId);
+                    if (!curveId)
+                        return detail::exhaustedIds();
+                    source->curveId = *curveId;
+                }
+                if (!composition->parameters().insert(std::move(parameter)))
+                    return OperationResult::rejected(
+                        OperationIssueCode::InvalidValue,
+                        "Duplicated entry layer parameter could not be inserted");
+                outputs.push_back(
+                    {"parameter." + std::to_string(binding.parameterId.value()), *parameterId});
+                binding.parameterId = *parameterId;
+            }
+        }
         // ADR 0024: a duplicated content-extent source travels with its layer.
         if (auto* source = std::get_if<document::SourceLayerExtent>(&copy.timing.contentExtent))
             if (const auto mapped = nodeIds.find(source->sourceNodeId); mapped != nodeIds.end())
@@ -212,7 +246,9 @@ OperationResult DuplicateNodes::apply(document::Draft& draft) const {
                                              std::string(document::kLayerStackContentInputRole)});
             if (!originalEdge)
                 return detail::invalidTarget();
-            const auto slotId = draft.ids().allocateLayerSlot();
+            const auto slotId = slotIds.contains(entry.slotId) && copyStack
+                                    ? std::optional(slotIds.at(entry.slotId))
+                                    : draft.ids().allocateLayerSlot();
             const auto edgeId = draft.ids().allocateEdge();
             if (!slotId || !edgeId)
                 return detail::exhaustedIds();

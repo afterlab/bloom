@@ -1,5 +1,6 @@
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/layer_alignment_operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
@@ -51,12 +52,10 @@ constexpr double kInPlace = 1e-9;
 [[nodiscard]] std::optional<document::ParameterId>
 positionParameter(const document::Composition& composition,
                   const document::LayerOutputBoundary& layer) {
-    const auto* node = composition.graph().findNode(layer.nodeId);
-    if (node == nullptr)
-        return std::nullopt;
-    const auto binding = std::ranges::find(node->parameters, document::kPositionParameterRole,
-                                           &document::ParameterBinding::role);
-    return binding == node->parameters.end() ? std::nullopt : std::optional(binding->parameterId);
+    // #502: a Layer node's binding or an entry layer's own.
+    const auto* binding =
+        document::layerParameterBinding(composition.graph(), layer, document::kPositionParameterRole);
+    return binding == nullptr ? std::nullopt : std::optional(binding->parameterId);
 }
 
 // parentLinear^-1 * delta, or nullopt when the parent transform has no finite inverse.
