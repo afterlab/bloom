@@ -869,6 +869,24 @@ void testColorGradeLowering(Expectations& expectations) {
                     value = 1.25;
                 if (parameter.schemaKey == gradePrimarySchemaKey(GradePrimary::Exposure))
                     value = -0.5;
+                if (parameter.schemaKey == gradeCurveSchemaKey(GradeCurve::Red)) {
+                    // #498: a keyed curve is a whole-value Path curve, which the compiler accepts
+                    // as the Curves parameter's source like any other animated parameter.
+                    const auto curveId = AnimationCurveId::fromRaw(7000);
+                    require(composition->animationCurves().insert(PathAnimationCurve{
+                                curveId,
+                                {{KeyframeId::fromRaw(7001), core::RationalTime::fromInteger(0),
+                                  gradeCurvePath({{0.0, 0.0}, {1.0, 1.0}})},
+                                 {KeyframeId::fromRaw(7002), core::RationalTime::fromInteger(1),
+                                  gradeCurvePath({{0.0, 0.0}, {0.5, 0.7}, {1.0, 1.0}})}}}),
+                            "the keyed Red curve is publishable");
+                    require(composition->parameters().insert(
+                                {ParameterId::fromRaw(next), parameter.schemaKey,
+                                 AnimationCurveSource{curveId, value}}),
+                            "the keyed Red curve parameter is valid");
+                    bindings.push_back({parameter.role, ParameterId::fromRaw(next++)});
+                    continue;
+                }
                 require(composition->parameters().insert({ParameterId::fromRaw(next),
                                                           parameter.schemaKey,
                                                           ConstantValueSource{value}}),
@@ -935,6 +953,10 @@ void testColorGradeLowering(Expectations& expectations) {
                         *master == defaultGradeCurve(GradeCurve::Master) && hueHue &&
                         hueHue->anchors.empty(),
                     "Curves lowers its point lists, hue curves and clamp");
+                const auto* red = std::get_if<runtime::CompiledPathCurve>(
+                    &curves->curves[gradeCurveIndex(GradeCurve::Red)].source);
+                expectations.expect(red && red->keyframes.size() == 2,
+                                    "a keyed Curves curve lowers to its compiled Path curve");
             } else if (const auto* grade = std::get_if<runtime::GradeKernel>(&kernel)) {
                 // #494: gain green is the third gain value; exposure the last operand.
                 const auto* green = std::get_if<double>(&grade->values[10].source);

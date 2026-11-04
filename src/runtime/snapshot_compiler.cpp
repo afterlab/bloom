@@ -945,7 +945,11 @@ class CompilePass final {
                  // Task S5, item 1: the third curve kind. A Color4d-valued parameter demands a
                  // colour curve, exactly as a Float64 one demands a scalar.
                  (definition.valueKind == runtime::ParameterValueKind::Color4d &&
-                  std::holds_alternative<document::Color4AnimationCurve>(*curve)));
+                  std::holds_alternative<document::Color4AnimationCurve>(*curve)) ||
+                 // #498: a keyed Path parameter (a Curves curve) is a whole-value Path curve,
+                 // compiled inline where it is sampled (compiledPathParameter()).
+                 (definition.valueKind == runtime::ParameterValueKind::Path &&
+                  std::holds_alternative<document::PathAnimationCurve>(*curve)));
             if (!kindMatches) {
                 auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
                 diagnosticSubject.parameterId = parameter->id;
