@@ -10,7 +10,7 @@
 
 namespace bloom::document {
 core::Sha256Digest sequenceMemberIdentity(const AssetSequenceMember& member) {
-    if (member.contentDigest || !member.stamp)
+    if (!member.stamp)
         return member.contentDigest.value_or(core::Sha256Digest{});
     std::string text = "BloomSequenceMemberStamp";
     for (const auto& part :
@@ -202,8 +202,7 @@ ValidationResult AssetRecord::validate() const {
         std::size_t gapIndex = 0;
         for (const auto& member : manifest.members) {
             if (member.frame <= previous || member.frame > manifest.last ||
-                !validLocator(member.locator) ||
-                member.contentDigest.has_value() == member.stamp.has_value()) {
+                !validLocator(member.locator) || (!member.contentDigest && !member.stamp)) {
                 result.add(ValidationCode::InvalidValue, "manifest.members",
                            "Invalid sequence member order, locator or identity");
                 return result;

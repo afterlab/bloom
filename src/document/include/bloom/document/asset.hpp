@@ -104,16 +104,20 @@ struct AssetFileStamp {
 struct AssetSequenceMember {
     std::int64_t frame = 0;
     AssetLocator locator;
-    // Exactly one of the two: the SHA-256 of the bytes import read (the member it probed, and every
-    // member of a sequence imported before 1.35), or the stamp import listed.
+    // At least one of the two. A digest alone (legacy): the SHA-256 of the bytes import read (the
+    // member it probed, and every member of a sequence imported before 1.35). A stamp alone
+    // (pending): the stamp import listed. Both (verified, document 1.36): the digest a full hash
+    // proved for the bytes that carried that stamp.
     std::optional<core::Sha256Digest> contentDigest;
     std::optional<AssetFileStamp> stamp;
     friend bool operator==(const AssetSequenceMember&, const AssetSequenceMember&) = default;
 };
-// A member's cache and manifest identity: its content digest, or for a stamped member the
+// A member's cache and manifest identity: its content digest when it has no stamp, else the
 // provisional SHA-256 over "BloomSequenceMemberStamp", NUL, the locator path, NUL, the relink hint,
 // NUL, the decimal size, NUL and the decimal modification time. Path + size + time, so two frames
-// with one size and time never share an identity.
+// with one size and time never share an identity. A stamped member keeps that identity when a
+// verified digest is recorded beside it (document 1.36), so recording a digest never changes a
+// cache key.
 [[nodiscard]] core::Sha256Digest sequenceMemberIdentity(const AssetSequenceMember& member);
 // The numbered frames an import was limited to (document 1.34): Reload Footage reads only these.
 struct AssetSequenceRange {

@@ -127,13 +127,14 @@ emitFootageInterpretation(EmitState& state,
                 !state.ok(writer.memberName("locator")) ||
                 !emitAssetLocator(state, member.locator))
                 return false;
-            // Document 1.35 (#473): the content digest when import read the member, else the
-            // file stamp it listed.
-            if (member.contentDigest) {
-                if (!state.ok(writer.memberName("contentDigest")) ||
-                    !emitAssetDigest(state, *member.contentDigest))
-                    return false;
-            } else if (member.stamp) {
+            // Document 1.35 (#473): the content digest when import read the member, the file
+            // stamp it listed, or (document 1.36) both once a full hash verified the stamped bytes.
+            if (!member.contentDigest && !member.stamp)
+                return false;
+            if (member.contentDigest && (!state.ok(writer.memberName("contentDigest")) ||
+                                         !emitAssetDigest(state, *member.contentDigest)))
+                return false;
+            if (member.stamp) {
                 const auto size = bloom::project::formatCanonicalUInt64(member.stamp->size);
                 if (!state.ok(writer.memberName("stamp")) || !state.ok(writer.beginObject()) ||
                     !state.ok(writer.memberName("size")) ||
@@ -141,8 +142,6 @@ emitFootageInterpretation(EmitState& state,
                     !emitNamedSigned(state, "modified", member.stamp->modifiedNanoseconds) ||
                     !state.ok(writer.endObject()))
                     return false;
-            } else {
-                return false;
             }
             if (!state.ok(writer.endObject()))
                 return false;

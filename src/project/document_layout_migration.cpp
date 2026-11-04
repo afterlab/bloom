@@ -158,7 +158,8 @@ enum class Step {
     KeyframeHandleModes,
     WebmExportFormats,
     FootageInterpretation,
-    SequenceMemberStamps
+    SequenceMemberStamps,
+    VerifiedMemberDigests
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -204,6 +205,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // Sequence member stamps (1.34 -> 1.35, #473) are version-only: a stamp replaces a member's
     // digest only in a document written at 1.35, and every older member keeps its digest.
     if (step == Step::SequenceMemberStamps)
+        return false;
+    // Verified member digests (1.35 -> 1.36, #495) are version-only: a member carries both its
+    // stamp and its digest only in a document written at 1.36; every older member keeps one.
+    if (step == Step::VerifiedMemberDigests)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -392,6 +397,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::WebmExportFormats     ? "{\"major\":1,\"minor\":33}"
                            : step == Step::FootageInterpretation ? "{\"major\":1,\"minor\":34}"
                            : step == Step::SequenceMemberStamps  ? "{\"major\":1,\"minor\":35}"
+                           : step == Step::VerifiedMemberDigests ? "{\"major\":1,\"minor\":36}"
                                                                  : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -964,6 +970,13 @@ MigrationStepOutcome migrateSequenceMemberStampsV1_34(const JsonValue& root,
                                                       std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "34") ||
         !transform(root, Scope::Root, Step::SequenceMemberStamps, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateVerifiedMemberDigestsV1_35(const JsonValue& root,
+                                                       std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "35") ||
+        !transform(root, Scope::Root, Step::VerifiedMemberDigests, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

@@ -115,6 +115,49 @@ void testSparseSequenceManifest(ExpectationContext& expectations) {
     expectations.expect(!asset.validate().ok(), "partial legacy gap enumeration is refused");
 }
 
+// Document 1.36 (#495): a member may carry its stamp and a verified digest; its identity stays the
+// stamp-derived one, so recording the digest never changes a cache key. Neither is refused.
+void testVerifiedSequenceMember(ExpectationContext& expectations) {
+    using namespace bloom::document;
+    AssetSequenceMember member;
+    member.frame = 1;
+    member.locator.path = "plate.0001.png";
+    member.locator.relinkHint = "file:///plate.0001.png";
+    member.stamp = AssetFileStamp{1024, 1'700'000'000'000'000'000};
+    const auto pending = sequenceMemberIdentity(member);
+    bloom::core::Sha256Digest::Bytes bytes{};
+    bytes.fill(0x5a);
+    const auto digest = bloom::core::Sha256Digest::fromBytes(bytes);
+    member.contentDigest = digest;
+    expectations.expect(sequenceMemberIdentity(member) == pending,
+                        "a verified member keeps its stamp-derived identity");
+    expectations.expect(pending != digest, "the stamp identity is not the content digest");
+    member.stamp.reset();
+    expectations.expect(sequenceMemberIdentity(member) == digest,
+                        "a digest-only member's identity is its digest");
+
+    AssetRecord asset;
+    asset.id = AssetId::fromRaw(1);
+    asset.kind = AssetKind::Sequence;
+    asset.locator = member.locator;
+    asset.width = 1;
+    asset.height = 1;
+    asset.manifest.pattern = "plate.####.png";
+    asset.manifest.padding = 4;
+    asset.manifest.first = 1;
+    asset.manifest.last = 2;
+    member.stamp = AssetFileStamp{1024, 1'700'000'000'000'000'000};
+    auto second = member;
+    second.frame = 2;
+    second.locator.path = "plate.0002.png";
+    second.contentDigest.reset();
+    asset.manifest.members = {member, second};
+    expectations.expect(asset.validate().ok(), "a verified member (digest and stamp) validates");
+    asset.manifest.members.front().contentDigest.reset();
+    asset.manifest.members.front().stamp.reset();
+    expectations.expect(!asset.validate().ok(), "a member with neither is refused");
+}
+
 void testLargeImageMetadata(ExpectationContext& expectations) {
     using namespace bloom::document;
     AssetRecord image;
@@ -894,6 +937,7 @@ void testLayerParenting(ExpectationContext& expectations) {
 int main() try {
     ExpectationContext expectations;
     testSparseSequenceManifest(expectations);
+    testVerifiedSequenceMember(expectations);
     testLargeImageMetadata(expectations);
     testLayerParenting(expectations);
     testMultipleMerges(expectations);

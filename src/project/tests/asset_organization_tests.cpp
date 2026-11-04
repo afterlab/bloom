@@ -102,7 +102,7 @@ void roundTripAndValidation() {
         return;
     auto opened = std::move(result).takeOpened();
     auto restored = opened.document->snapshot();
-    expect(opened.schemaMinor == 35 && *restored.project().findAsset(asset.id) == asset,
+    expect(opened.schemaMinor == 36 && *restored.project().findAsset(asset.id) == asset,
            "name, tags, folder, order and media identity round-trip at 1.31");
     expect(restored.project().findAsset(lut.id) && *restored.project().findAsset(lut.id) == lut,
            "LUT locator, kind and digest round-trip at 1.31");
@@ -184,8 +184,8 @@ void migration() {
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"inputColorSpaceId": "")"), "");
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlocks"\s*:\s*\[\])"), "");
     legacy = std::regex_replace(legacy, std::regex(R"(,\s*"dataBlock"\s*:\s*"0")"), "");
-    const auto version = legacy.find("\"minor\": 35");
-    legacy.replace(version, std::string_view("\"minor\": 35").size(), "\"minor\": 15");
+    const auto version = legacy.find("\"minor\": 36");
+    legacy.replace(version, std::string_view("\"minor\": 36").size(), "\"minor\": 15");
     stripExportQueueV1_29(legacy);
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(legacy)), {}, operation);
@@ -221,7 +221,7 @@ void migration() {
     if (opened.outcome() != OpenArchiveOutcome::Opened)
         return;
     auto result = std::move(opened).takeOpened();
-    expect(result.schemaMinor == 35 &&
+    expect(result.schemaMinor == 36 &&
                result.document->snapshot().project().assets().front().name == "shot.v02",
            "opened archive reports current schema and migrated display name");
 }
@@ -244,10 +244,10 @@ void inputInterpretationMigration() {
         std::string text(*size.value(), '\0');
         if (!encodeCanonicalDocument(input, text))
             throw std::runtime_error("input migration canonical encode");
-        const auto rootVersion = text.find("\"minor\": 35\n  },\n  \"project\"");
+        const auto rootVersion = text.find("\"minor\": 36\n  },\n  \"project\"");
         if (rootVersion == std::string::npos)
             throw std::runtime_error("input migration root version anchor");
-        text.replace(rootVersion, std::string_view("\"minor\": 35").size(), "\"minor\": 19");
+        text.replace(rootVersion, std::string_view("\"minor\": 36").size(), "\"minor\": 19");
         stripExportQueueV1_29(text);
         const auto interpretation = text.find("\"interpretation\": {");
         if (interpretation == std::string::npos)
@@ -337,7 +337,7 @@ void compositionFolders() {
             auto opened = std::move(result).takeOpened();
             const auto* restored =
                 opened.document->snapshot().project().findComposition(compositionId);
-            expect(opened.schemaMinor == 35 && restored && restored->folder() == folder,
+            expect(opened.schemaMinor == 36 && restored && restored->folder() == folder,
                    "the composition folder round-trips at 1.31");
         }
     }
@@ -349,17 +349,17 @@ void compositionFolders() {
     expect(draft.project().removeAssetFolder(folder), "fixture folder removal");
     expect(!draft.validate().ok(), "removing a folder that still holds a composition is rejected");
 
-    const auto anchor = std::string_view("\"minor\": 35\n  },\n  \"project\"");
+    const auto anchor = std::string_view("\"minor\": 36\n  },\n  \"project\"");
     auto older = text;
     const auto version = older.find(anchor);
     if (version == std::string::npos)
         throw std::runtime_error("composition folder version anchor");
-    older.replace(version, std::string_view("\"minor\": 35").size(), "\"minor\": 26");
+    older.replace(version, std::string_view("\"minor\": 36").size(), "\"minor\": 26");
     stripExportQueueV1_29(older);
     expect(!decodes(older), "a 1.26 file carrying a composition folder is refused");
 
     auto legacy = rootText;
-    legacy.replace(legacy.find(anchor), std::string_view("\"minor\": 35").size(), "\"minor\": 26");
+    legacy.replace(legacy.find(anchor), std::string_view("\"minor\": 36").size(), "\"minor\": 26");
     stripExportQueueV1_29(legacy);
     auto operation = memory();
     auto parsed = parseStrictJsonDom(std::as_bytes(std::span(legacy)), {}, operation);

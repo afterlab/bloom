@@ -268,6 +268,12 @@ migrateFootageInterpretationV1_33(const JsonValue& root, std::pmr::memory_resour
 [[nodiscard]] MigrationStepOutcome
 migrateSequenceMemberStampsV1_34(const JsonValue& root, std::pmr::memory_resource* resource,
                                  std::pmr::vector<char>& output);
+// Verified member digests, document 1.35 -> 1.36 (#495): version-only. A stamped sequence member
+// may also carry the digest a full hash verified for the bytes that carried its stamp; every
+// older member carries exactly one of the two.
+[[nodiscard]] MigrationStepOutcome
+migrateVerifiedMemberDigestsV1_35(const JsonValue& root, std::pmr::memory_resource* resource,
+                                  std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -303,7 +309,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 31}, {1, 32}, migrateKeyframeHandleModesV1_31},
     MigrationStepDescriptor{{1, 32}, {1, 33}, migrateWebmExportFormatsV1_32},
     MigrationStepDescriptor{{1, 33}, {1, 34}, migrateFootageInterpretationV1_33},
-    MigrationStepDescriptor{{1, 34}, {1, 35}, migrateSequenceMemberStampsV1_34}};
+    MigrationStepDescriptor{{1, 34}, {1, 35}, migrateSequenceMemberStampsV1_34},
+    MigrationStepDescriptor{{1, 35}, {1, 36}, migrateVerifiedMemberDigestsV1_35}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

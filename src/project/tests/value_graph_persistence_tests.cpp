@@ -275,7 +275,7 @@ void roundTripAndReopen() {
            "a driven parameter is written with the driver discriminator");
     expect(text.find("\"outputPort\": \"value\"") != std::string::npos,
            "and names the output port it reads");
-    expect(text.find("\"minor\": 35") != std::string::npos,
+    expect(text.find("\"minor\": 36") != std::string::npos,
            "both constructs declare the current document schema minor");
 
     auto openedResult = openProjectArchive(archive, {}, memory());
@@ -335,7 +335,7 @@ void minorGating() {
     const auto authored = authoredProject();
     const auto settings = neutralColorSettings();
     auto baseline = documentTextOf(archiveOf(authored.document->snapshot(), settings));
-    const auto anchor = std::string_view("\"minor\": 35");
+    const auto anchor = std::string_view("\"minor\": 36");
     const auto minor = baseline.find(anchor);
     expect(minor != std::string::npos, "the value-graph fixture declares the current minor");
     if (minor == std::string::npos) {

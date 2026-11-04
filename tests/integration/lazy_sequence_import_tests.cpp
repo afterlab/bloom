@@ -281,7 +281,7 @@ std::string withMinor(const std::string& text, const int from, const int to) {
 
 // Document 1.35: a project saved while only some members have digests reopens to the same asset,
 // and its stamped members read as before; a document claiming 1.34 cannot carry a stamp, and 1.34
-// reaches 1.35 by version alone.
+// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests).
 void partialDigestsReopen() {
     Folder folder("bloom-lazy-sequence-reopen");
     for (int frame = 1; frame <= 3; ++frame)
@@ -311,10 +311,10 @@ void partialDigestsReopen() {
                "the reopened stamped members read");
         expect(encode(draft.project()) == text, "the canonical text is stable");
     }
-    expect(!decode(withMinor(text, 35, 34)), "a document claiming 1.34 cannot carry a stamp");
+    expect(!decode(withMinor(text, 36, 34)), "a document claiming 1.34 cannot carry a stamp");
 
     const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 35, 34);
+    const auto older = withMinor(plain, 36, 34);
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
     expect(static_cast<bool>(parsed), "the 1.34 document parses");
@@ -323,9 +323,71 @@ void partialDigestsReopen() {
             parsed.document()->root(), {1, 34}, project::kCanonicalDocumentSchemaVersionV1,
             project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
+                   migrated.stepsApplied() == 2 && migrated.migratedRoot() != nullptr &&
+                   static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
+               "1.34 reaches the current minor through two version-only steps");
+    }
+}
+
+// Document 1.36 (#495): a member may carry its stamp and the digest a full hash verified for the
+// bytes that carried it. The three forms round-trip; recording a digest beside a stamp keeps the
+// member's identity; a document claiming 1.35 cannot carry both; 1.35 reaches 1.36 by version.
+void verifiedDigestsRoundTrip() {
+    Folder folder("bloom-lazy-sequence-verified");
+    for (int frame = 1; frame <= 3; ++frame)
+        writeJpeg(folder.path / frameName("verified", frame));
+    auto seed = doc::makeNewProject("Lazy", "Main", *RationalTime::create(1, 1));
+    doc::Document document(std::move(seed.project));
+    auto snapshot = document.snapshot();
+    auto draft = document.draft(snapshot);
+    commands::ImportAssets import({folder.path / frameName("verified", 2)}, folder.path);
+    if (import.apply(draft).status != commands::OperationStatus::Applied)
+        throw std::runtime_error("import");
+    auto asset = draft.project().assets().front();
+    auto& pending = asset.manifest.members[0];
+    const auto pendingIdentity = doc::sequenceMemberIdentity(pending);
+    // Frame 1 becomes verified, frame 2 stays legacy (digest only), frame 3 stays pending.
+    pending.contentDigest = fileDigest(folder.path / frameName("verified", 1));
+    expect(asset.validate().ok(), "a member carrying both a stamp and a digest validates");
+    expect(doc::sequenceMemberIdentity(pending) == pendingIdentity,
+           "recording a verified digest keeps the stamp-derived identity");
+    expect(doc::sequenceMemberIdentity(asset.manifest.members[1]) ==
+               *asset.manifest.members[1].contentDigest,
+           "a digest-only member's identity stays its digest");
+    auto neither = asset;
+    neither.manifest.members[2].stamp.reset();
+    expect(!neither.validate().ok(), "a member with neither a digest nor a stamp is refused");
+
+    auto verified = draft.project();
+    *verified.findAsset(asset.id) = asset;
+    const auto text = encode(verified);
+    const auto both = text.find("\"contentDigest\"");
+    expect(both != std::string::npos && text.find("\"stamp\": {", both) != std::string::npos,
+           "the verified member writes its digest before its stamp");
+    const auto reopened = decode(text);
+    expect(reopened && reopened->size() == 1 && reopened->front() == asset,
+           "verified, legacy and pending members reopen exactly");
+    expect(encode(verified) == text, "the canonical text is stable");
+    expect(!decode(withMinor(text, 36, 35)),
+           "a document claiming 1.35 cannot carry both a digest and a stamp");
+    expect(!decode(withMinor(text, 36, 34)),
+           "a document claiming 1.34 cannot carry both a digest and a stamp");
+
+    const auto plain = encode(document.snapshot().project());
+    const auto older = withMinor(plain, 36, 35);
+    expect(static_cast<bool>(decode(older)), "a 1.35 document with one form per member decodes");
+    auto operation = memory();
+    auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
+    if (parsed) {
+        const auto migrated = project::migrateDocumentDom(
+            parsed.document()->root(), {1, 35}, project::kCanonicalDocumentSchemaVersionV1,
+            project::kProductionDocumentMigrationSteps, {}, operation);
+        expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
                    migrated.stepsApplied() == 1 && migrated.migratedRoot() != nullptr &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.34 -> 1.35 is one version-only step");
+               "1.35 -> 1.36 is one version-only step");
+    } else {
+        expect(false, "the 1.35 document parses");
     }
 }
 } // namespace
@@ -337,6 +399,7 @@ int main() {
         changedFramesAreReported();
         unreadableFrameIsAGap();
         partialDigestsReopen();
+        verifiedDigestsRoundTrip();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

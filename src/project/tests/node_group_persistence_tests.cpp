@@ -191,10 +191,10 @@ std::vector<std::byte> legacyArchive(std::string& documentText) {
         throw std::logic_error("legacy entries");
     const auto bytes = entries.document()->documentBytes();
     documentText.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    const auto minor = documentText.find("\"minor\": 35");
+    const auto minor = documentText.find("\"minor\": 36");
     if (minor == std::string::npos)
         throw std::logic_error("legacy minor anchor");
-    documentText.replace(minor, std::string_view("\"minor\": 35").size(), "\"minor\": 1");
+    documentText.replace(minor, std::string_view("\"minor\": 36").size(), "\"minor\": 1");
     stripExportQueueV1_29(documentText);
     removeImageFields(documentText);
     eraseMemberLine(documentText, "nodeGroups");

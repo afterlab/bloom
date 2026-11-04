@@ -90,21 +90,42 @@ bool manifest(const JsonValue& node, DecodeState& state, const std::string& path
     constexpr std::array<std::string_view, 3> memberKeys{"frame", "locator", "contentDigest"};
     // Document 1.35 (#473): a member import did not read carries its file stamp instead.
     constexpr std::array<std::string_view, 3> stampedKeys{"frame", "locator", "stamp"};
+    // Document 1.36 (#495): a verified member carries both, the digest a full hash proved for the
+    // bytes that carried the stamp.
+    constexpr std::array<std::string_view, 4> verifiedKeys{"frame", "locator", "contentDigest",
+                                                           "stamp"};
     constexpr std::array<std::string_view, 2> stampKeys{"size", "modified"};
     for (const auto& value : members[4]->arrayElements()) {
         std::vector<const JsonValue*> fields;
         document::AssetSequenceMember member;
-        const bool stamped = state.documentMinor >= 35 && value.kind() == JsonValueKind::Object &&
-                             value.findMember("stamp") != nullptr;
-        if (!matchOrderedMembers(value, stamped ? stampedKeys : memberKeys, false, state, path,
-                                 fields) ||
+        const bool object = value.kind() == JsonValueKind::Object;
+        const bool hasStamp = object && value.findMember("stamp") != nullptr;
+        const bool stamped = state.documentMinor >= 35 && hasStamp;
+        const bool digested = object && value.findMember("contentDigest") != nullptr;
+        // A document claiming 1.35 or older never carries both.
+        if (hasStamp && digested && state.documentMinor < 36) {
+            state.fail(DocumentDecodeError::UnknownMember, path);
+            return false;
+        }
+        const std::span<const std::string_view> layout =
+            stamped ? (digested ? std::span<const std::string_view>(verifiedKeys)
+                                : std::span<const std::string_view>(stampedKeys))
+                    : std::span<const std::string_view>(memberKeys);
+        if (!matchOrderedMembers(value, layout, false, state, path, fields) ||
             !integer(*fields[0], state, path, member.frame) ||
             !locator(*fields[1], state, path, member.locator))
             return false;
+        if (!stamped || digested) {
+            core::Sha256Digest memberDigest;
+            if (!digest(*fields[2], state, path, memberDigest))
+                return false;
+            member.contentDigest = memberDigest;
+        }
         if (stamped) {
             std::vector<const JsonValue*> stampFields;
             document::AssetFileStamp stamp;
-            if (!matchOrderedMembers(*fields[2], stampKeys, false, state, path, stampFields) ||
+            if (!matchOrderedMembers(*fields[digested ? 3 : 2], stampKeys, false, state, path,
+                                     stampFields) ||
                 !integer(*stampFields[1], state, path, stamp.modifiedNanoseconds))
                 return false;
             const auto size = stampFields[0]->asString();
@@ -119,11 +140,6 @@ bool manifest(const JsonValue& node, DecodeState& state, const std::string& path
             }
             stamp.size = *parsed.value();
             member.stamp = stamp;
-        } else {
-            core::Sha256Digest memberDigest;
-            if (!digest(*fields[2], state, path, memberDigest))
-                return false;
-            member.contentDigest = memberDigest;
         }
         out.members.push_back(std::move(member));
     }
