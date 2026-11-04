@@ -18,7 +18,6 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
-#include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -100,7 +99,6 @@ void PropertiesEditor::configureRegistryRows() {
             cryptomatteSearch_ = nullptr;
             cryptomatteNames_ = nullptr;
             cryptomatteNamesNote_ = nullptr;
-            curveGraphs_ = nullptr;
             cardWidget_ = nullptr;
             cardWidgetRows_.clear();
         }
@@ -175,8 +173,6 @@ void PropertiesEditor::configureRegistryRows() {
                 addOutputLayerRow(*node, section);
             if (node->typeId == document::kCryptomatteNodeType)
                 addCryptomatteRows(*node, section);
-            if (node->typeId == document::kCurvesNodeType)
-                addCurveGraphRows(*node, section);
             // #494: the same widget the node card draws, above the rows it keeps behind it.
             if (hasNodeCardWidget(node->typeId)) {
                 cardWidget_ =
@@ -295,7 +291,7 @@ void PropertiesEditor::configureRegistryRows() {
                 if (handcrafted ||
                     (node->typeId == document::kCompositionSourceNodeType &&
                      declared.role == "composition") ||
-                    // #493: the curves are drawn and edited by the curve graphs.
+                    // #493, #498: the curves are drawn and edited by the curve graph.
                     (node->typeId == document::kCurvesNodeType &&
                      document::isGradeCurveSchemaKey(declared.schemaKey)))
                     continue;
@@ -332,7 +328,7 @@ void PropertiesEditor::configureRegistryRows() {
         registryPanel_->setVisible(
             !registryRows_.empty() || registryPanel_->property("hasValueOutputs").toBool() ||
             imagePartPicker_ != nullptr || cryptomatteLayerPicker_ != nullptr ||
-            outputLayersField_ != nullptr || curveGraphs_ != nullptr || cardWidget_ != nullptr);
+            outputLayersField_ != nullptr || cardWidget_ != nullptr);
     applyCardWidgetRows();
     for (auto* row : registryRows_)
         row->refresh();
@@ -492,27 +488,6 @@ void PropertiesEditor::addOutputLayerRow(const document::NodeRecord& node,
 void PropertiesEditor::cryptomatteLayersMayHaveArrived() {
     if (awaitingCryptomatteLayers_)
         configureRegistryRows();
-}
-
-// #493: the channel curves (RGB, R, G, B, A) over one graph and the four hue curves over another,
-// each a tab per curve. Their parameters have no other row.
-void PropertiesEditor::addCurveGraphRows(const document::NodeRecord& node,
-                                         kit::KSection* section) {
-    using document::GradeCurve;
-    auto* channels = new CurveGraphField(
-        session_, node.id,
-        {GradeCurve::Master, GradeCurve::Red, GradeCurve::Green, GradeCurve::Blue,
-         GradeCurve::Alpha},
-        section->body());
-    channels->setObjectName(QStringLiteral("propertiesCurveGraph"));
-    auto* hue = new CurveGraphField(session_, node.id,
-                                    {GradeCurve::HueVsHue, GradeCurve::HueVsSaturation,
-                                     GradeCurve::HueVsLuma, GradeCurve::LumaVsSaturation},
-                                    section->body());
-    hue->setObjectName(QStringLiteral("propertiesHueCurveGraph"));
-    section->bodyLayout()->addWidget(channels);
-    section->bodyLayout()->addWidget(hue);
-    curveGraphs_ = channels;
 }
 
 // #494: each row a card widget keeps behind it shows only while the widget opens it.

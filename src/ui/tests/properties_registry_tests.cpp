@@ -275,14 +275,13 @@ void colorGradeRows() {
                        gammaRow->property("rowLabel").toString() == QStringLiteral("Master Gamma"),
                    "grade rows read as channel and control");
         } else {
-            // #493: Curves presents its channel curves and its hue curves as two graphs, not rows.
-            auto* channels = properties.findChild<ui::CurveGraphField*>("propertiesCurveGraph");
-            auto* hues = properties.findChild<ui::CurveGraphField*>("propertiesHueCurveGraph");
-            expect(channels && hues && channels->tabs()->count() == 5 &&
-                       hues->tabs()->count() == 4 &&
-                       channels->curve() == document::GradeCurve::Master &&
-                       hues->curve() == document::GradeCurve::HueVsHue,
-                   "Curves presents a channel graph and a hue graph with a tab per curve");
+            // #498: Curves presents the card's curve graph, a tab per channel and one for the hue
+            // curves, not rows.
+            auto* graph = properties.findChild<ui::CurvesCardWidget*>("propertiesCurvesGraph");
+            expect(graph && graph->tabs()->count() == 6 &&
+                       graph->curve() == document::GradeCurve::Master &&
+                       graph->hueCurves()->count() == 4,
+                   "Curves presents the curve graph with a tab per channel and the hue curves");
             for (const auto* role : {"master", "red", "alpha", "hueVsHue", "lumaVsSaturation"})
                 expect(row(properties, role) == nullptr, "a curve is a graph tab, not a row");
         }

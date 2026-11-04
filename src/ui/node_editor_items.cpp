@@ -545,8 +545,6 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     const auto drawPreview = [&] {
         if (imagePreview_ && !previewRect_.isEmpty())
             paintImagePreview(*painter, previewRect_, session_, id_);
-        if (curveGraph_ && !previewRect_.isEmpty())
-            paintCurveGraphCard(*painter, previewRect_, session_, id_);
     };
     if (layout_.muted)
         drawBadge(

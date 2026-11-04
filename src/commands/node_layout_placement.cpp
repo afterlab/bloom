@@ -38,8 +38,10 @@ constexpr double kPadding = 8.0;
 // operator selector or the Levels channel tabs runs wider still.
 constexpr double kCardWidth = 264.0;
 constexpr double kWideCardWidth = 288.0;
-// The Curves card's graph height over its width (node_editor_items.hpp).
+// #498: the Curves card widget's graph height over its width (curve_graph.cpp), and the card's
+// width: its six curve tabs beside the curve's keyframe diamond.
 constexpr double kCurveGraphAspect = 0.75;
+constexpr double kCurvesCardWidth = 320.0;
 // #494: the Grade and Levels card widgets' metrics (grade_wheels.cpp, levels_graph.cpp):
 // Size::Control, Spacing::XS and Spacing::S, Size::IconSmall and the Levels plot's aspect.
 constexpr double kControl = 26.0;
@@ -169,8 +171,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     double rows = 0.0;
     // #494: a Grade or Levels card shows its widget instead of its value rows (Levels keeps its
     // clamp row), until a Values group is opened.
-    const bool cardWidget =
-        node->typeId == document::kGradeNodeType || node->typeId == document::kLevelsNodeType;
+    const bool cardWidget = node->typeId == document::kGradeNodeType ||
+                            node->typeId == document::kLevelsNodeType ||
+                            node->typeId == document::kCurvesNodeType;
     for (const auto& binding : node->parameters) {
         if (cardWidget && binding.role != "clamp")
             continue;
@@ -203,8 +206,10 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     if (definition->lowering == document::NodeLoweringKind::ValueBoundsReadout)
         rows += static_cast<double>(definition->outputs.size());
     const double cardWidth = dropdowns ? std::max(width, kDropdownCardWidth)
-                             : wide    ? std::max(width, kWideCardWidth)
-                                       : width;
+                             : node->typeId == document::kCurvesNodeType
+                                 ? std::max(width, kCurvesCardWidth)
+                             : wide ? std::max(width, kWideCardWidth)
+                                    : width;
     // #490: an Image Preview draws its thumbnail below its rows at the composition's aspect, at
     // most twice as tall as it is wide.
     double thumbnail = 0.0;
@@ -216,9 +221,12 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                                                  : 1.0;
         thumbnail = std::min(inner * aspect, inner * 2.0) + kPadding;
     }
-    // #493: a Curves card draws its channel curves below its rows, three quarters as tall as wide.
+    // #498: the Curves card widget: its tab row and its curve row, the graph three quarters as tall
+    // as wide, and the selected point's row.
     if (node->typeId == document::kCurvesNodeType)
-        thumbnail = std::max(0.0, cardWidth - 2.0 * kPadding) * kCurveGraphAspect + kPadding;
+        thumbnail = 3.0 * kControl + 3.0 * kSmall +
+                    std::round(std::max(0.0, cardWidth - 2.0 * kPadding) * kCurveGraphAspect) +
+                    kPadding;
     // #494: the wheels two by two (each a square, its slider row under it) and the primaries
     // bar's title and three rows; the Levels tabs, plot, handles and output bar.
     const double inner = std::max(0.0, cardWidth - 2.0 * kPadding);

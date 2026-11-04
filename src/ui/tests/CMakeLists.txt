@@ -1362,7 +1362,8 @@ bloom_add_test(
 )
 
 add_executable(bloom_curve_graph_test curve_graph_tests.cpp)
-target_link_libraries(bloom_curve_graph_test PRIVATE bloom_ui)
+target_include_directories(bloom_curve_graph_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_curve_graph_test PRIVATE bloom_ui bloom_commands)
 bloom_enable_warnings(bloom_curve_graph_test)
 bloom_add_test(NAME bloom.ui.curve-graph COMMAND bloom_curve_graph_test LABELS ui integration TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(bloom_grade_levels_widget_test grade_levels_widget_tests.cpp)

@@ -11,9 +11,10 @@
 // for exact entry, keys and links, and are hidden otherwise, so a card shows the widget rather than
 // a long list of fields. A row whose input is linked always shows, so every link has its socket.
 //
-// The mechanism is not specific to these two nodes: makeNodeCardWidget() is the one factory the
-// node card and Properties ask, and any graphical node (Curves among them) can add its widget
-// there.
+// The mechanism is not specific to these nodes: makeNodeCardWidget() is the one factory the node
+// card and Properties ask. #498: the Curves node's curve graph is the third (curve_graph.hpp). No
+// other existing node has a graphical main control: a shape, mask, gradient or transform is drawn
+// and dragged in the Viewer, and every other node's controls are values, choices and switches.
 
 #include <QWidget>
 

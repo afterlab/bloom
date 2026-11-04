@@ -347,15 +347,14 @@ int main(int argc, char** argv) {
     expect(!previews.backgroundNode().has_value(), "a removed node is no longer the background");
 
     // #493: a Curves node's input histogram, requested only by a painted curve graph, prepared on
-    // a worker from the input's downsampled frame; and its card draws the curves.
+    // a worker from the input's downsampled frame; and (#498) its card draws the curve graph.
     expect(fixture.add(document::kCurvesNodeType, document::OutputPortRef{*solid, "image"}),
            "a Curves node is added fed by the solid");
     const auto curves = fixture.nodeOfType(document::kCurvesNodeType);
     if (curves) {
         const auto renderBefore = document::RenderReachability::compute(*session.composition());
-        ui::CurveGraphField field(session, *curves,
-                                  {document::GradeCurve::Master, document::GradeCurve::Red});
-        field.resize(320, field.sizeHint().height());
+        ui::CurvesCardWidget field(session, *curves, false);
+        field.resize(field.sizeHint());
         QApplication::processEvents();
         const auto submittedBefore = previews.submissionCount();
         expect(previews.submissionCount() == submittedBefore,
@@ -402,9 +401,9 @@ int main(int argc, char** argv) {
         QApplication::processEvents();
         auto* curveCard =
             dynamic_cast<ui::node_editor::NodeItem*>(editor.graphScene()->findNodeItem(*curves));
-        expect(curveCard != nullptr && curveCard->isCurveGraph() &&
-                   !curveCard->previewRect().isEmpty(),
-               "a Curves card draws its curves");
+        expect(curveCard != nullptr &&
+                   qobject_cast<ui::CurvesCardWidget*>(curveCard->cardWidget()) != nullptr,
+               "a Curves card draws its curve graph");
     }
 
     if (failures != 0)
