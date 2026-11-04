@@ -1335,6 +1335,43 @@ displayProofRunner(const bool customView) {
                              "full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #494 Grade: the wheels and primaries through the production builder's resident program.
+    const auto grade = [](const std::array<double, 22> values) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            bloom::runtime::GradeKernel kernel;
+            for (std::size_t index = 0; index < values.size(); ++index)
+                kernel.values[index] = {ParameterId::fromRaw(idBase + 60 + index), values[index]};
+            return kernel;
+        };
+    };
+    // lift, gamma, gain, offset (master, red, green, blue), then temperature, tint, contrast,
+    // pivot, saturation, exposure.
+    static constexpr std::array<double, 22> kWheels{
+        0.05, 0.02, -0.01, 0.0,  0.2,   -0.1, 0.0, 0.3, 1.1,  1.05, 0.95,
+        1.0,  0.01, 0.0,   0.02, -0.01, 0.0,  0.0, 1.0, 0.18, 1.0,  0.0};
+    static constexpr std::array<double, 22> kPrimaries{0.0,  0.0,   0.0, 0.0,  0.0, 0.0, 0.0, 0.0,
+                                                       1.0,  1.0,   1.0, 1.0,  0.0, 0.0, 0.0, 0.0,
+                                                       30.0, -20.0, 1.4, 0.18, 1.3, 0.5};
+    static constexpr std::array<double, 22> kEverything{
+        -0.05, 0.0, 0.03, 0.0, -0.3, 0.1,   0.0,  -0.2, 0.9, 1.0, 1.1,
+        0.9,   0.0, 0.01, 0.0, 0.0,  -45.0, 10.0, 0.7,  0.4, 0.0, -1.0};
+    add(
+        "effect.GradeKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, grade] {
+            return runGrades({grade(kWheels)}, 167600,
+                             "production Grade: lift, gamma, gain and offset wheels over HDR");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.grade", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, grade] {
+            return runGrades({grade(kPrimaries), grade(kEverything)}, 167800,
+                             "production Grade: primaries (white balance, exposure, contrast, "
+                             "saturation) and every control together, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #479 Separate Channels and Combine Channels over the HDR, signed, partial-alpha linear
     // gradient, full frame and through an ROI: a Channel Select through the production builder's
     // resident program, and a Channel Combine (the gradient as the base, a signed HDR solid as

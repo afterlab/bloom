@@ -65,9 +65,9 @@ ParameterPresentation pixels(const double minimum, const double maximum, const d
 // the 0..1 display range as its comfortable span.
 ParameterPresentation channel() { return number(kLowest, kHighest, 0.0, 1.0, 0.01, 3); }
 
-// #340: the Levels values, generated per channel so the schema list cannot drift from the
-// definitions (#493 Curves curves are point lists drawn by the curve graph, not numbers). Values
-// are unbounded in practice (a Raw data pass may span any range) with
+// #340: the Levels values (#494: and the Grade values), generated per channel so the schema list
+// cannot drift from the definitions (#493 Curves curves are point lists drawn by the curve graph,
+// not numbers). Levels values are unbounded in practice (a Raw data pass may span any range) with
 // the comfortable 0..1 span; gamma is its own bounded factor.
 const std::vector<Entry>& colorGradeTable() {
     // The schema keys are owned by this static list for the life of the process.
@@ -77,6 +77,20 @@ const std::vector<Entry>& colorGradeTable() {
             for (std::size_t field = 0; field < kLevelsFieldCount; ++field)
                 generated.push_back(levelsSchemaKey(channel, field));
         }
+        return generated;
+    }();
+    // #494 Grade: the wheels in kGradeWheels order, each master, red, green, blue.
+    static const std::vector<std::string> gradeWheelKeys = [] {
+        std::vector<std::string> generated;
+        for (const auto wheel : kGradeWheels)
+            for (std::size_t component = 0; component < kGradeWheelComponentCount; ++component)
+                generated.push_back(gradeWheelSchemaKey(wheel, component));
+        return generated;
+    }();
+    static const std::vector<std::string> gradePrimaryKeys = [] {
+        std::vector<std::string> generated;
+        for (const auto primary : kGradePrimaries)
+            generated.push_back(gradePrimarySchemaKey(primary));
         return generated;
     }();
     static const std::vector<Entry> entries = [] {
@@ -91,6 +105,40 @@ const std::vector<Entry>& colorGradeTable() {
              number(-kMaximumGradeValue, kMaximumGradeValue, -180.0, 180.0, 1.0, 1, kDegrees)});
         generated.push_back({kHueSaturationSaturationSchemaKey,
                              number(0.0, kMaximumGradeSaturation, 0.0, 2.0, 0.01, 3)});
+        // #494 Grade: the hard range is the schema domain; the soft span is the comfortable one.
+        for (std::size_t index = 0; index < gradeWheelKeys.size(); ++index) {
+            const auto wheel = kGradeWheels[index / kGradeWheelComponentCount];
+            const auto domain = gradeWheelDomain(wheel);
+            const auto presentation =
+                wheel == GradeWheel::Gain
+                    ? number(domain.minimum, domain.maximum, 0.0, 2.0, 0.01, 3)
+                : wheel == GradeWheel::Gamma
+                    ? number(domain.minimum, domain.maximum, -1.0, 1.0, 0.01, 3)
+                    : number(domain.minimum, domain.maximum, -0.5, 0.5, 0.001, 3);
+            generated.push_back({gradeWheelKeys[index], presentation});
+        }
+        for (std::size_t index = 0; index < gradePrimaryKeys.size(); ++index) {
+            const auto primary = kGradePrimaries[index];
+            const auto domain = gradePrimaryDomain(primary);
+            ParameterPresentation presentation;
+            switch (primary) {
+            case GradePrimary::Temperature:
+            case GradePrimary::Tint:
+                presentation = number(domain.minimum, domain.maximum, -100.0, 100.0, 1.0, 1);
+                break;
+            case GradePrimary::Contrast:
+            case GradePrimary::Saturation:
+                presentation = number(domain.minimum, domain.maximum, 0.0, 2.0, 0.01, 3);
+                break;
+            case GradePrimary::Pivot:
+                presentation = number(domain.minimum, domain.maximum, 0.01, 1.0, 0.001, 3);
+                break;
+            case GradePrimary::Exposure:
+                presentation = number(domain.minimum, domain.maximum, -4.0, 4.0, 0.1, 2);
+                break;
+            }
+            generated.push_back({gradePrimaryKeys[index], presentation});
+        }
         return generated;
     }();
     return entries;

@@ -1031,6 +1031,35 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             HueSaturationKernel{{ParameterId::fromRaw(id), oversaturate ? 200.0 : -70.0},
                                 {ParameterId::fromRaw(id + 1), oversaturate ? 2.5 : 0.3}}};
     };
+    // #494: every Grade control, with contrast and saturation on or off.
+    const auto grade = [](const std::uint64_t id, const bool primaries) {
+        bloom::runtime::GradeKernel kernel;
+        const std::array<double, 22> values{0.05,
+                                            0.02,
+                                            -0.01,
+                                            0.0,
+                                            0.2,
+                                            -0.1,
+                                            0.0,
+                                            0.3,
+                                            1.1,
+                                            1.05,
+                                            0.95,
+                                            1.0,
+                                            0.01,
+                                            0.0,
+                                            0.02,
+                                            -0.01,
+                                            primaries ? 30.0 : 0.0,
+                                            primaries ? -20.0 : 0.0,
+                                            primaries ? 1.4 : 1.0,
+                                            0.18,
+                                            primaries ? 1.3 : 1.0,
+                                            primaries ? 0.5 : 0.0};
+        for (std::size_t index = 0; index < values.size(); ++index)
+            kernel.values[index] = {ParameterId::fromRaw(id + index), values[index]};
+        return bloom::runtime::ImageEffectKernel{kernel};
+    };
     // Changes one value of each kernel to prove invalidation re-dispatches.
     const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
@@ -1041,6 +1070,8 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
                 bloom::runtime::testing::legacyPoints({{2, {0.5, 0.65}}}));
         if (auto* h = std::get_if<HueSaturationKernel>(&kernel))
             h->hue.source = 15.0;
+        if (auto* g = std::get_if<bloom::runtime::GradeKernel>(&kernel))
+            g->values[8].source = 1.25;
     };
     std::uint64_t id = 9500;
     for (const auto color : {Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
@@ -1048,7 +1079,8 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         for (const auto& kernel :
              {levels(id + 50, false), levels(id + 50, true), curves(id + 50, false),
               curves(id + 50, true), hueCurves(id + 50, false), hueCurves(id + 50, true),
-              hue(id + 50, false), hue(id + 50, true)}) {
+              hue(id + 50, false), hue(id + 50, true), grade(id + 50, false),
+              grade(id + 50, true)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

@@ -309,7 +309,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.transform-2d.rotation" || schemaKey == "bloom.luma-key.low" ||
            schemaKey == "bloom.luma-key.high" || isLevelsValueSchemaKey(schemaKey) ||
            schemaKey == kHueSaturationHueSchemaKey ||
-           schemaKey == kHueSaturationSaturationSchemaKey ||
+           schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
            schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -385,6 +385,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
         return value >= -kMaximumGradeValue && value <= kMaximumGradeValue;
     if (schemaKey == kHueSaturationSaturationSchemaKey)
         return value >= 0.0 && value <= kMaximumGradeSaturation;
+    // #494 Grade: each wheel value and primary within its own domain (color_grade_nodes.hpp).
+    if (const auto grade = gradeValueDomain(schemaKey))
+        return value >= grade->minimum && value <= grade->maximum;
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

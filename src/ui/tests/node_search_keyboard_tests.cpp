@@ -526,9 +526,11 @@ void testSearchKeyboardAndMenus() {
                    // #340
                    colourNodes.contains("Levels") && colourNodes.contains("Curves") &&
                    colourNodes.contains("Hue/Saturation") &&
+                   // #494
+                   colourNodes.contains("Grade") &&
                    // #479
                    colourNodes.contains("Separate Channels") &&
-                   colourNodes.contains("Combine Channels") && colourNodes.size() == 11,
+                   colourNodes.contains("Combine Channels") && colourNodes.size() == 12,
                "Color offers the registered image-effect nodes");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),

@@ -367,6 +367,14 @@ struct HueSaturationKernel final {
     CompiledScalarParameter saturation; // factor, 1 = unchanged
     friend bool operator==(const HueSaturationKernel&, const HueSaturationKernel&) = default;
 };
+// #494 Grade: Resolve-style primaries on straight colour with alpha unchanged and no colour
+// transform. `values` are the 22 operands in document::kGradeWheels order (each wheel's master,
+// red, green, blue), then the document::kGradePrimaries order (temperature, tint, contrast, pivot,
+// saturation, exposure). The formulas are in color_grade_image_effect.hpp.
+struct GradeKernel final {
+    std::array<CompiledScalarParameter, 22> values;
+    friend bool operator==(const GradeKernel&, const GradeKernel&) = default;
+};
 // #479 Separate Channels and Combine Channels move STORED channel values (render::
 // storedImageChannel) between images with no colour transform, no division by alpha and no clamp
 // except alpha's own [0, 1], so a Raw data pass and HDR or signed values travel unchanged.
@@ -397,10 +405,10 @@ using ImageEffectKernel =
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
                  SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
-                 ChannelCombineKernel>;
+                 ChannelCombineKernel, GradeKernel>;
 
-// #340: visits every animatable operand of a Levels, Curves or Hue/Saturation kernel in the
-// kernel's canonical order (channel-major), calling `visit(parameter)` with a
+// #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade)
+// kernel in the kernel's canonical order (channel-major), calling `visit(parameter)` with a
 // CompiledScalarParameter, a CompiledVec2Parameter or (#493 Curves) a CompiledPathParameter.
 // Returns false for every other kernel. The one traversal the evaluator's validation, sampling,
 // cache key and time dependence all share.
@@ -426,13 +434,19 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         visit(hueSaturation->saturation);
         return true;
     }
+    if (const auto* grade = std::get_if<GradeKernel>(&kernel)) {
+        for (const auto& value : grade->values)
+            visit(value);
+        return true;
+    }
     return false;
 }
 
 [[nodiscard]] inline bool isColorGradeKernel(const ImageEffectKernel& kernel) noexcept {
     return std::holds_alternative<LevelsKernel>(kernel) ||
            std::holds_alternative<CurvesKernel>(kernel) ||
-           std::holds_alternative<HueSaturationKernel>(kernel);
+           std::holds_alternative<HueSaturationKernel>(kernel) ||
+           std::holds_alternative<GradeKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

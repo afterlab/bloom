@@ -182,4 +182,122 @@ gradeCurveFromSchemaKey(const std::string_view schemaKey) noexcept {
     return static_cast<double>(point) / static_cast<double>(kLegacyCurvePointCount - 1);
 }
 
+// #494 Grade: Resolve-style primaries. Four wheels (Lift, Gamma, Gain, Offset), each a master and a
+// red, green and blue value, then the primaries bar (Temperature, Tint, Contrast, Pivot,
+// Saturation, Exposure): 22 animatable, drivable Scalars, each its own socket, in this order. The
+// node never converts colour; bloom/runtime's color_grade_image_effect.hpp has the formulas.
+inline constexpr std::string_view kGradeNodeType = "bloom.grade";
+enum class GradeWheel : std::uint8_t { Lift, Gamma, Gain, Offset };
+inline constexpr std::size_t kGradeWheelCount = 4;
+inline constexpr std::array<GradeWheel, kGradeWheelCount> kGradeWheels{
+    GradeWheel::Lift, GradeWheel::Gamma, GradeWheel::Gain, GradeWheel::Offset};
+inline constexpr std::array<std::string_view, kGradeWheelCount> kGradeWheelNames{"lift", "gamma",
+                                                                                 "gain", "offset"};
+// A wheel's values: the master, then red, green and blue.
+inline constexpr std::size_t kGradeWheelComponentCount = 4;
+inline constexpr std::array<std::string_view, kGradeWheelComponentCount> kGradeWheelComponentNames{
+    "master", "red", "green", "blue"};
+inline constexpr std::array<std::string_view, kGradeWheelComponentCount>
+    kGradeWheelComponentRoleSuffixes{"Master", "Red", "Green", "Blue"};
+enum class GradePrimary : std::uint8_t { Temperature, Tint, Contrast, Pivot, Saturation, Exposure };
+inline constexpr std::size_t kGradePrimaryCount = 6;
+inline constexpr std::array<GradePrimary, kGradePrimaryCount> kGradePrimaries{
+    GradePrimary::Temperature, GradePrimary::Tint,       GradePrimary::Contrast,
+    GradePrimary::Pivot,       GradePrimary::Saturation, GradePrimary::Exposure};
+// Roles and the last part of the schema key ("bloom.grade.<name>").
+inline constexpr std::array<std::string_view, kGradePrimaryCount> kGradePrimaryNames{
+    "temperature", "tint", "contrast", "pivot", "saturation", "exposure"};
+inline constexpr std::size_t kGradeParameterCount =
+    kGradeWheelCount * kGradeWheelComponentCount + kGradePrimaryCount;
+
+// One Grade value's domain and the value that changes nothing. Gain multiplies (1 is neutral); the
+// other wheels add. Gamma is in stops of the power (a power of 2^-gamma). Temperature and Tint are
+// in the -100..100 units of the bar; Exposure is in stops; the pivot is a scene-linear value.
+struct GradeValueDomain final {
+    double minimum = 0.0;
+    double maximum = 0.0;
+    double neutral = 0.0;
+};
+inline constexpr double kMaximumGradeWheelValue = 1000.0;
+inline constexpr double kMaximumGradeGamma = 8.0;
+inline constexpr double kMaximumGradeBalance = 1000.0;
+inline constexpr double kMaximumGradeContrast = 10.0;
+inline constexpr double kMinimumGradePivot = 0.001;
+inline constexpr double kMaximumGradePivot = 1000.0;
+inline constexpr double kMaximumGradeExposure = 32.0;
+inline constexpr double kDefaultGradePivot = 0.18;
+
+[[nodiscard]] constexpr GradeValueDomain gradeWheelDomain(const GradeWheel wheel) noexcept {
+    switch (wheel) {
+    case GradeWheel::Gamma:
+        return {-kMaximumGradeGamma, kMaximumGradeGamma, 0.0};
+    case GradeWheel::Gain:
+        return {-kMaximumGradeWheelValue, kMaximumGradeWheelValue, 1.0};
+    case GradeWheel::Lift:
+    case GradeWheel::Offset:
+        break;
+    }
+    return {-kMaximumGradeWheelValue, kMaximumGradeWheelValue, 0.0};
+}
+[[nodiscard]] constexpr GradeValueDomain gradePrimaryDomain(const GradePrimary primary) noexcept {
+    switch (primary) {
+    case GradePrimary::Temperature:
+    case GradePrimary::Tint:
+        return {-kMaximumGradeBalance, kMaximumGradeBalance, 0.0};
+    case GradePrimary::Contrast:
+        return {0.0, kMaximumGradeContrast, 1.0};
+    case GradePrimary::Pivot:
+        return {kMinimumGradePivot, kMaximumGradePivot, kDefaultGradePivot};
+    case GradePrimary::Saturation:
+        return {0.0, kMaximumGradeSaturation, 1.0};
+    case GradePrimary::Exposure:
+        break;
+    }
+    return {-kMaximumGradeExposure, kMaximumGradeExposure, 0.0};
+}
+
+[[nodiscard]] inline std::string gradeWheelSchemaKey(const GradeWheel wheel,
+                                                     const std::size_t component) {
+    return "bloom.grade." + std::string(kGradeWheelNames[static_cast<std::size_t>(wheel)]) + "." +
+           std::string(kGradeWheelComponentNames[component]);
+}
+// "liftMaster", "gainBlue", ...
+[[nodiscard]] inline std::string gradeWheelRole(const GradeWheel wheel,
+                                                const std::size_t component) {
+    return std::string(kGradeWheelNames[static_cast<std::size_t>(wheel)]) +
+           std::string(kGradeWheelComponentRoleSuffixes[component]);
+}
+[[nodiscard]] inline std::string gradePrimarySchemaKey(const GradePrimary primary) {
+    return "bloom.grade." + std::string(kGradePrimaryNames[static_cast<std::size_t>(primary)]);
+}
+[[nodiscard]] constexpr std::string_view gradePrimaryRole(const GradePrimary primary) noexcept {
+    return kGradePrimaryNames[static_cast<std::size_t>(primary)];
+}
+
+// The domain of a Grade schema key, or null for any other key.
+[[nodiscard]] constexpr std::optional<GradeValueDomain>
+gradeValueDomain(const std::string_view schemaKey) noexcept {
+    constexpr std::string_view prefix = "bloom.grade.";
+    if (!schemaKey.starts_with(prefix))
+        return std::nullopt;
+    const auto rest = schemaKey.substr(prefix.size());
+    for (std::size_t primary = 0; primary < kGradePrimaryCount; ++primary)
+        if (rest == kGradePrimaryNames[primary])
+            return gradePrimaryDomain(kGradePrimaries[primary]);
+    const auto dot = rest.find('.');
+    if (dot == std::string_view::npos)
+        return std::nullopt;
+    for (std::size_t wheel = 0; wheel < kGradeWheelCount; ++wheel) {
+        if (rest.substr(0, dot) != kGradeWheelNames[wheel])
+            continue;
+        for (const auto component : kGradeWheelComponentNames)
+            if (rest.substr(dot + 1) == component)
+                return gradeWheelDomain(kGradeWheels[wheel]);
+    }
+    return std::nullopt;
+}
+[[nodiscard]] constexpr bool isGradeValueSchemaKey(const std::string_view schemaKey) noexcept {
+    return gradeValueDomain(schemaKey).has_value();
+}
+
 } // namespace bloom::document

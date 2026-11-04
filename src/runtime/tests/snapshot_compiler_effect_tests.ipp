@@ -836,7 +836,8 @@ void testColorGradeLowering(Expectations& expectations) {
     runtime::NodeDefinitionRegistry registry;
     require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
     registry.freeze();
-    for (const auto type : {kLevelsNodeType, kCurvesNodeType, kHueSaturationNodeType}) {
+    for (const auto type : {kLevelsNodeType, kCurvesNodeType, kHueSaturationNodeType,
+                            kGradeNodeType}) {
         for (const bool muted : {false, true}) {
             auto project = makeProject(singleLayerOptions());
             auto* composition = project.findComposition(kCompositionId);
@@ -864,6 +865,10 @@ void testColorGradeLowering(Expectations& expectations) {
                     value = -45.0;
                 if (parameter.schemaKey == kHueSaturationSaturationSchemaKey)
                     value = 1.5;
+                if (parameter.schemaKey == gradeWheelSchemaKey(GradeWheel::Gain, 2))
+                    value = 1.25;
+                if (parameter.schemaKey == gradePrimarySchemaKey(GradePrimary::Exposure))
+                    value = -0.5;
                 require(composition->parameters().insert({ParameterId::fromRaw(next),
                                                           parameter.schemaKey,
                                                           ConstantValueSource{value}}),
@@ -902,7 +907,9 @@ void testColorGradeLowering(Expectations& expectations) {
             std::vector<ParameterId> ids;
             runtime::forEachColorGradeOperand(kernel,
                                               [&](const auto& operand) { ids.push_back(operand.id); });
-            bool ordered = ids.size() + (type == kHueSaturationNodeType ? 0U : 1U) ==
+            bool ordered = ids.size() + (type == kHueSaturationNodeType || type == kGradeNodeType
+                                             ? 0U
+                                             : 1U) ==
                            definition->parameters.size();
             for (std::size_t i = 0; ordered && i < ids.size(); ++i)
                 ordered = ids[i] == ParameterId::fromRaw(2000 + i);
@@ -928,6 +935,14 @@ void testColorGradeLowering(Expectations& expectations) {
                         *master == defaultGradeCurve(GradeCurve::Master) && hueHue &&
                         hueHue->anchors.empty(),
                     "Curves lowers its point lists, hue curves and clamp");
+            } else if (const auto* grade = std::get_if<runtime::GradeKernel>(&kernel)) {
+                // #494: gain green is the third gain value; exposure the last operand.
+                const auto* green = std::get_if<double>(&grade->values[10].source);
+                const auto* exposure = std::get_if<double>(&grade->values[21].source);
+                const auto* pivot = std::get_if<double>(&grade->values[19].source);
+                expectations.expect(green && *green == 1.25 && exposure && *exposure == -0.5 &&
+                                        pivot && *pivot == kDefaultGradePivot,
+                                    "Grade lowers its wheels and primaries in order");
             } else {
                 const auto* hue = std::get_if<runtime::HueSaturationKernel>(&kernel);
                 const auto* h = hue ? std::get_if<double>(&hue->hue.source) : nullptr;

@@ -1467,6 +1467,29 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Hue/Saturation parameters could not be lowered.");
         return std::nullopt;
     }
+    // #494 Grade: the wheels' values, then the primaries, in the kernel's order.
+    if (node.typeId == document::kGradeNodeType) {
+        runtime::GradeKernel kernel;
+        std::size_t index = 0;
+        bool lowered = true;
+        const auto lower = [&](const std::string& role) {
+            const auto parameter = compiledScalarParameter(findParameterBinding(node, role));
+            lowered = lowered && parameter.has_value();
+            if (parameter)
+                kernel.values[index] = *parameter;
+            ++index;
+        };
+        for (const auto wheel : document::kGradeWheels)
+            for (std::size_t component = 0; component < document::kGradeWheelComponentCount;
+                 ++component)
+                lower(document::gradeWheelRole(wheel, component));
+        for (const auto primary : document::kGradePrimaries)
+            lower(std::string(document::gradePrimaryRole(primary)));
+        if (lowered)
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        addTopologyFailure(node.id, "Grade parameters could not be lowered.");
+        return std::nullopt;
+    }
     const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
         if (node.typeId == "bloom.exposure")
             return runtime::PointwiseImageEffect::Exposure;

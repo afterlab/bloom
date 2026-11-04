@@ -1,5 +1,5 @@
 // #340 Levels, Curves and Hue/Saturation (#493: Curves with any number of points and the four hue
-// curves): the CPU reference against independent double-precision
+// curves; #494: Grade): the CPU reference against independent double-precision
 // formulas over HDR, negative and partial-alpha pixels; a Raw depth pass normalised with no colour
 // transform; clamp, step, identity and domain rules; windows, budget, cancellation; and the
 // resident programs the GPU route prepares.
@@ -786,6 +786,129 @@ void hueSaturationTests() {
             "Hue/Saturation refuses out-of-domain values");
 }
 
+// #494 Grade: the wheels and primaries in double precision, written from the documented formulas
+// (not from the prepared table): exposure and white balance, then lift and gain, offset, the power,
+// the contrast about the pivot and the saturation, on straight colour with alpha unchanged.
+struct GradeSettings final {
+    // lift, gamma, gain, offset: master, red, green, blue.
+    std::array<std::array<double, 4>, 4> wheels{
+        {{0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0}, {1.0, 1.0, 1.0, 1.0}, {0.0, 0.0, 0.0, 0.0}}};
+    double temperature = 0.0;
+    double tint = 0.0;
+    double contrast = 1.0;
+    double pivot = 0.18;
+    double saturation = 1.0;
+    double exposure = 0.0;
+    [[nodiscard]] std::vector<double> values() const {
+        std::vector<double> out;
+        for (const auto& wheel : wheels)
+            out.insert(out.end(), wheel.begin(), wheel.end());
+        out.insert(out.end(), {temperature, tint, contrast, pivot, saturation, exposure});
+        return out;
+    }
+    [[nodiscard]] std::array<double, 3> apply(const std::array<double, 3>& rgb) const {
+        const std::array<double, 3> balance{std::pow(2.0, temperature / 200.0 + tint / 400.0),
+                                            std::pow(2.0, -tint / 200.0),
+                                            std::pow(2.0, -temperature / 200.0 + tint / 400.0)};
+        std::array<double, 3> y{};
+        for (std::size_t c = 0; c < 3; ++c) {
+            const double lift = wheels[0][0] + wheels[0][c + 1];
+            const double gamma = wheels[1][0] + wheels[1][c + 1];
+            const double gain = wheels[2][0] * wheels[2][c + 1];
+            const double offset = wheels[3][0] + wheels[3][c + 1];
+            const double x = rgb[c] * std::pow(2.0, exposure) * balance[c];
+            double v = gain * (x + lift * (1.0 - x)) + offset;
+            if (gamma != 0.0 && v > 0.0)
+                v = std::pow(v, std::pow(2.0, -gamma));
+            if (contrast != 1.0 && v > 0.0)
+                v = pivot * std::pow(v / pivot, contrast);
+            y[c] = v;
+        }
+        const double luma = 0.213 * y[0] + 0.715 * y[1] + 0.072 * y[2];
+        for (auto& v : y)
+            v = luma + (v - luma) * saturation;
+        return y;
+    }
+};
+
+void gradeTests() {
+    const auto input = image(kPixels);
+    runtime::GradeKernel kernel;
+    for (std::size_t index = 0; index < kernel.values.size(); ++index)
+        kernel.values[index] = {document::ParameterId::fromRaw(400 + index), 0.0};
+    const auto check = [&](const GradeSettings& settings, const char* message) {
+        const auto grade = runtime::detail::prepareColorGrade(kernel, settings.values());
+        require(grade && grade->kind == ColorGradeKind::Grade && !grade->identity,
+                "Grade prepares");
+        checkImage(
+            *grade, input,
+            [&](const std::array<double, 3>& straight, const double a, const render::Rgba32f& p) {
+                // Alpha is left alone, and a pixel with no coverage is unchanged.
+                if (a == 0.0)
+                    return std::array<double, 4>{static_cast<double>(p.red()),
+                                                 static_cast<double>(p.green()),
+                                                 static_cast<double>(p.blue()), 0.0};
+                const auto y = settings.apply(straight);
+                return std::array<double, 4>{y[0] * a, y[1] * a, y[2] * a, a};
+            },
+            message);
+    };
+    GradeSettings wheels;
+    wheels.wheels = {{{0.05, 0.02, -0.01, 0.0},
+                      {0.2, -0.1, 0.0, 0.3},
+                      {1.1, 1.05, 0.95, 1.0},
+                      {0.01, 0.0, 0.02, -0.01}}};
+    check(wheels, "Grade wheels equal lift, gain, offset and power over HDR and signed pixels");
+    GradeSettings primaries;
+    primaries.temperature = 30.0;
+    primaries.tint = -20.0;
+    primaries.contrast = 1.4;
+    primaries.pivot = 0.18;
+    primaries.saturation = 1.3;
+    primaries.exposure = 0.5;
+    check(primaries, "Grade primaries equal white balance, exposure, contrast and saturation");
+    GradeSettings all = wheels;
+    all.temperature = -45.0;
+    all.tint = 10.0;
+    all.contrast = 0.7;
+    all.pivot = 0.4;
+    all.saturation = 0.0;
+    all.exposure = -1.0;
+    check(all, "every Grade control together, with saturation zero the luma");
+    // The defaults are an identity, a partial grade is not, and every domain is enforced.
+    require(runtime::detail::prepareColorGrade(kernel, GradeSettings{}.values())->identity,
+            "the Grade defaults are an identity");
+    GradeSettings cancelling;
+    cancelling.exposure = 1.0;
+    cancelling.wheels[2][0] = 0.5;
+    require(runtime::detail::prepareColorGrade(kernel, cancelling.values())->identity,
+            "a Grade whose table is the identity aliases its input");
+    for (const auto& [index, value] : std::vector<std::pair<std::size_t, double>>{
+             {0, 1001.0},
+             {4, 9.0},
+             {8, -1001.0},
+             {16, 1001.0},
+             {18, 11.0},
+             {18, -0.1},
+             {19, 0.0},
+             {20, -1.0},
+             {21, 33.0},
+             {5, std::numeric_limits<double>::quiet_NaN()}}) {
+        auto values = GradeSettings{}.values();
+        values[index] = value;
+        require(!runtime::detail::prepareColorGrade(kernel, values), "Grade refuses its domain");
+    }
+    require(!runtime::detail::prepareColorGrade(kernel, std::vector<double>(21, 0.0)),
+            "Grade refuses a short operand list");
+    // A Raw data pass is graded as stored: no colour conversion, values far outside 0..1 kept.
+    GradeSettings depth;
+    depth.wheels[2][0] = 0.001;
+    const auto raw = runtime::detail::prepareColorGrade(kernel, depth.values());
+    std::array<float, 4> far{1500.0F, 1500.0F, 1500.0F, 1.0F};
+    require(runtime::detail::colorGradePixel(*raw, far) && near(far[0], 1.5) && near(far[2], 1.5),
+            "a Raw depth value is scaled as stored");
+}
+
 void programTests() {
     std::array<Levels, 5> channels{};
     channels[0] = Levels{0.1, 0.9, 2.0, 0.0, 1.0};
@@ -799,6 +922,10 @@ void programTests() {
         runtime::HueSaturationKernel{{document::ParameterId::fromRaw(1), 0.0},
                                      {document::ParameterId::fromRaw(2), 1.0}},
         std::vector<double>{45.0, 1.25});
+    GradeSettings gradeSettings;
+    gradeSettings.contrast = 1.2;
+    runtime::GradeKernel gradeKernel;
+    const auto gradeTable = runtime::detail::prepareColorGrade(gradeKernel, gradeSettings.values());
     struct Case final {
         const runtime::detail::PreparedColorGrade* grade;
         const char* semantics;
@@ -807,7 +934,8 @@ void programTests() {
     for (const auto& [grade, semantics, function] :
          {Case{&*levels, "bloom.render.levels.v1", "bloom_levels"},
           Case{&*curves, "bloom.render.curves.v1", "bloom_curves"},
-          Case{&*hue, "bloom.render.hue-saturation.v1", "bloom_hue_saturation"}}) {
+          Case{&*hue, "bloom.render.hue-saturation.v1", "bloom_hue_saturation"},
+          Case{&*gradeTable, "bloom.render.grade.v1", "bloom_grade"}}) {
         auto program = runtime::detail::buildColorGradeProgram(grade->kind, grade->data);
         require(program.succeeded() && render::validateOcioGpuProgram(*program.program(), {}) ==
                                            render::OcioGpuProgramError::None,
@@ -896,12 +1024,14 @@ int main() {
         hueModelTests();
         hueCurvesTests();
         hueSaturationTests();
+        gradeTests();
         programTests();
         cancellationTest();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: Levels, Curves (any number of points, hue curves) and Hue/Saturation reference, Raw depth normalisation, "
+    std::cout << "PASS: Levels, Curves (any number of points, hue curves), Hue/Saturation and "
+                 "Grade reference, Raw depth normalisation, "
                  "HDR/alpha/windows, budget, resident programs and cancellation\n";
 }

@@ -1,10 +1,11 @@
 #pragma once
 
-// #340 Levels, Curves and Hue/Saturation: the one CPU reference of the three grades, shared by the
-// CPU evaluator and the resident GPU program generator. The host prepares one packed binary32 table
-// per grade; the CPU applies it here and the GPU program reads the identical table from its
-// storage buffer and runs the same binary32 operations, so a keyed value changes only data, never
-// the shader. No grade performs a colour transform: a Raw data pass is graded as stored.
+// #340 Levels, Curves and Hue/Saturation, and #494 Grade: the one CPU reference of the grades,
+// shared by the CPU evaluator and the resident GPU program generator. The host prepares one packed
+// binary32 table per grade; the CPU applies it here and the GPU program reads the identical table
+// from its storage buffer and runs the same binary32 operations, so a keyed value changes only
+// data, never the shader. No grade performs a colour transform: a Raw data pass is graded as
+// stored.
 
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/render/ocio_gpu_program.hpp>
@@ -23,15 +24,20 @@ namespace bloom::runtime::detail {
 
 struct ResolvedEvaluation;
 
-enum class ColorGradeKind : std::uint8_t { Levels, Curves, HueSaturation };
+enum class ColorGradeKind : std::uint8_t { Levels, Curves, HueSaturation, Grade };
 
 // The packed table, always a whole number of vec4s:
 //   Levels:  [clamp, 0, 0, 0], then per channel (master, red, green, blue, alpha)
 //            [pivot, scale, inverse gamma, output black] [output range, step, identity, 0]
 //   Curves:  see kCurvesTableHeader below (#493: any number of points per curve, hue curves)
 //   Hue/Saturation: the three rows of the RGB matrix [m0, m1, m2, 0]
+//   Grade (#494): [slope r, g, b, 0] [offset r, g, b, 0] [power r, g, b, 0]
+//            [contrast, contrast scale, saturation, 0] [luma weights r, g, b, 0]
 // A Levels channel maps x to t = (x - pivot) * scale (or the step x >= pivot when the input range
-// is empty), raises a positive t to the inverse gamma, and returns fma(t, range, black). A Curves
+// is empty), raises a positive t to the inverse gamma, and returns fma(t, range, black). A Grade
+// channel maps the straight value x to t = fma(x, slope, offset), raises a positive t to its power,
+// then a positive t to the contrast as scale * pow(t, contrast); the saturation then moves the
+// three results from their luma, fma(t - L, saturation, L). A Curves
 // curve selects segment s = the number of knots <= x (a binary search), measures dx from the
 // segment's origin and evaluates fma(dx, fma(dx, fma(dx, d, c), b), a).
 //

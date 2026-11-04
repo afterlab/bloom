@@ -174,7 +174,7 @@ void blurNodeReopen() {
     for (const auto* type :
          {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
-          "bloom.curves", "bloom.hue-saturation", "bloom.separate-channels",
+          "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
@@ -200,13 +200,18 @@ void blurNodeReopen() {
                     ? document::ParameterValue{-250.5}
                 : document::isHueGradeCurve(document::gradeCurveFromSchemaKey(parameter.schemaKey)
                                                 .value_or(document::GradeCurve::Master))
-                    ? document::ParameterValue{document::gradeCurvePath({{0.125, 0.375},
-                                                                         {0.625, 0.25},
-                                                                         {0.875, 0.5}})}
-                : document::isGradeCurveSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{document::gradeCurvePath(
-                          {{0.0, 0.0}, {0.375, 4.25}, {0.5, 0.5}, {0.75, 0.6}, {0.9, 0.95},
-                           {1.0, 1.0}})}
+                          {{0.125, 0.375}, {0.625, 0.25}, {0.875, 0.5}})}
+                : document::isGradeCurveSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{document::gradeCurvePath({{0.0, 0.0},
+                                                                         {0.375, 4.25},
+                                                                         {0.5, 0.5},
+                                                                         {0.75, 0.6},
+                                                                         {0.9, 0.95},
+                                                                         {1.0, 1.0}})}
+                // #494 Grade: a non-neutral value inside every wheel and primary domain.
+                : document::isGradeValueSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{0.75}
                 : parameter.role == "clamp"      ? document::ParameterValue{true}
                 : parameter.role == "hue"        ? document::ParameterValue{-30.0}
                 : parameter.role == "saturation" ? document::ParameterValue{1.75}

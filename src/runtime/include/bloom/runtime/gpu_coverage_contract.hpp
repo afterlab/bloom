@@ -121,6 +121,7 @@ BLOOM_GPU_REQUIRED_EFFECT(HueSaturationKernel, "Hue/Saturation linear RGB matrix
 BLOOM_GPU_REQUIRED_EFFECT(ChannelSelectKernel, "stored-channel select of one image (#479)");
 BLOOM_GPU_REQUIRED_EFFECT(ChannelCombineKernel,
                           "stored-channel set from a second image (#479 Combine Channels)");
+BLOOM_GPU_REQUIRED_EFFECT(GradeKernel, "Grade wheels and primaries straight-colour grade (#494)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

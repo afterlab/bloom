@@ -199,6 +199,33 @@ template <typename Definition>
             NodeCategory::Color};
 }
 
+// #494 Grade: an Image in and out; the four wheels (lift, gamma, gain, offset), each a master, red,
+// green and blue Scalar, then the six primaries, all animatable/drivable and each its own socket.
+[[nodiscard]] NodeDefinition gradeDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{{std::string(kGradeNodeType), 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Color};
+    const auto add = [&](std::string role, std::string schemaKey, const double neutral) {
+        definition.parameters.push_back(
+            {role, std::move(schemaKey), ParameterValueKind::Float64, true, true, neutral});
+        definition.inputs.push_back({std::move(role), SocketValueKind::Scalar, false});
+    };
+    for (const auto wheel : kGradeWheels)
+        for (std::size_t component = 0; component < kGradeWheelComponentCount; ++component)
+            add(gradeWheelRole(wheel, component), gradeWheelSchemaKey(wheel, component),
+                gradeWheelDomain(wheel).neutral);
+    for (const auto primary : kGradePrimaries)
+        add(std::string(gradePrimaryRole(primary)), gradePrimarySchemaKey(primary),
+            gradePrimaryDomain(primary).neutral);
+    return definition;
+}
+
 // #479 Separate Channels: one Image in; red, green, blue and alpha Image outputs.
 [[nodiscard]] NodeDefinition separateChannelsDefinition() {
     using namespace bloom::document;
@@ -309,6 +336,8 @@ template <typename Definition>
             return definition == curvesDefinition();
         if (definition.key.typeId == kHueSaturationNodeType)
             return definition == hueSaturationDefinition();
+        if (definition.key.typeId == kGradeNodeType)
+            return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
             return definition == separateChannelsDefinition();
         if (definition.key.typeId == kCombineChannelsNodeType)
@@ -1355,6 +1384,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         levelsDefinition(),
         curvesDefinition(),
         hueSaturationDefinition(),
+        gradeDefinition(),
         separateChannelsDefinition(),
         combineChannelsDefinition(),
         videoDefinition(),

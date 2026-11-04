@@ -313,9 +313,10 @@ constantMatchesSchema(const std::string_view schemaKey,
         schemaKey == kCurvesClampSchemaKey)
         return std::holds_alternative<bool>(constant.value);
     // #340: every Levels value, the hue and the saturation are finite within their schema domain.
+    // #494: so is every Grade wheel value and primary.
     // #493: a Curves curve is a point list within its curve's domain (grade_curves.hpp).
     if (isLevelsValueSchemaKey(schemaKey) || schemaKey == kHueSaturationHueSchemaKey ||
-        schemaKey == kHueSaturationSaturationSchemaKey) {
+        schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey)) {
         const auto* value = std::get_if<double>(&constant.value);
         return value != nullptr && std::isfinite(*value) &&
                isScalarWithinSchemaDomain(schemaKey, *value);

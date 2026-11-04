@@ -138,8 +138,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
-    // Channel Set.
-    expectations.expect(registry.definitions().size() == 148,
+    // Channel Set; #494 adds Grade.
+    expectations.expect(registry.definitions().size() == 149,
                         "startup contribution includes every built-in definition");
     for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
                              "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",
@@ -202,6 +202,26 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             hueSaturation->parameters[1].defaultValue ==
                                 document::ParameterValue{1.0},
                         "#340: Hue/Saturation exposes an animatable hue and saturation");
+    // #494: Grade has the four wheels (master, red, green, blue each) then the six primaries,
+    // every one an animatable Scalar with its own socket.
+    const auto* grade = registry.find("bloom.grade", 1);
+    expectations.expect(
+        grade && grade->lowering == runtime::NodeLoweringKind::ImageEffect &&
+            grade->category == document::NodeCategory::Color && grade->inputs.size() == 23 &&
+            grade->parameters.size() == 22 &&
+            grade->inputs[1] == document::InputPortDefinition{"liftMaster",
+                                                              runtime::SocketValueKind::Scalar,
+                                                              false} &&
+            grade->parameters[0].schemaKey == "bloom.grade.lift.master" &&
+            grade->parameters[9].role == "gainRed" &&
+            grade->parameters[9].defaultValue == document::ParameterValue{1.0} &&
+            grade->parameters[15].schemaKey == "bloom.grade.offset.blue" &&
+            grade->parameters[19].role == "pivot" &&
+            grade->parameters[19].defaultValue == document::ParameterValue{0.18} &&
+            grade->parameters[21].schemaKey == "bloom.grade.exposure" &&
+            std::ranges::all_of(grade->parameters,
+                                [](const auto& parameter) { return parameter.supportsAnimation; }),
+        "#494: Grade exposes the wheels and primaries, neutral by default");
     // #479: Separate Channels takes one Image and offers its four channels as grey Images;
     // Combine Channels takes four optional Images, a constant source channel dropdown per input
     // (red, green, blue and red by default) and a constant alpha mode (Premultiplied).

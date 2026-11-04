@@ -14,6 +14,7 @@
 #include <limits>
 #include <numbers>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace bloom::runtime::detail {
@@ -23,7 +24,9 @@ using document::kGradeChannelCount;
 constexpr std::size_t kLevelsChannelFloats = 8;
 constexpr std::size_t kLevelsFloats = 4 + kGradeChannelCount * kLevelsChannelFloats;
 constexpr std::size_t kHueSaturationFloats = 12;
+constexpr std::size_t kGradeFloats = 20;
 static_assert(kLevelsChannelFloats % 4 == 0);
+static_assert(std::tuple_size_v<decltype(GradeKernel::values)> == document::kGradeParameterCount);
 
 // The CSS/SVG Filter Effects luminance weights its saturate and hue-rotate matrices are built on.
 constexpr double kLumaRed = 0.213;
@@ -137,6 +140,110 @@ prepareHueSaturation(const std::span<const double> values) {
     return grade;
 }
 
+// #494 Grade. Every value is checked against its document domain, then the wheels and the
+// primaries fold into one slope, offset and power per channel (the ASC CDL form), the contrast and
+// its scale, and the saturation; see docs/architecture/image-filters.md for the derivation.
+[[nodiscard]] std::optional<PreparedColorGrade> prepareGrade(const std::span<const double> values) {
+    using document::GradePrimary;
+    using document::GradeWheel;
+    if (values.size() != document::kGradeParameterCount)
+        return std::nullopt;
+    std::size_t index = 0;
+    for (const auto wheel : document::kGradeWheels) {
+        const auto domain = document::gradeWheelDomain(wheel);
+        for (std::size_t component = 0; component < document::kGradeWheelComponentCount;
+             ++component, ++index)
+            if (!std::isfinite(values[index]) || values[index] < domain.minimum ||
+                values[index] > domain.maximum)
+                return std::nullopt;
+    }
+    for (const auto primary : document::kGradePrimaries) {
+        const auto domain = document::gradePrimaryDomain(primary);
+        if (!std::isfinite(values[index]) || values[index] < domain.minimum ||
+            values[index] > domain.maximum)
+            return std::nullopt;
+        ++index;
+    }
+    const auto wheel = [&](const GradeWheel which, const std::size_t component) {
+        return values[static_cast<std::size_t>(which) * document::kGradeWheelComponentCount +
+                      component];
+    };
+    const auto primary = [&](const GradePrimary which) {
+        return values[document::kGradeWheelCount * document::kGradeWheelComponentCount +
+                      static_cast<std::size_t>(which)];
+    };
+    const double temperature = primary(GradePrimary::Temperature);
+    const double tint = primary(GradePrimary::Tint);
+    const double contrast = primary(GradePrimary::Contrast);
+    const double pivot = primary(GradePrimary::Pivot);
+    const double saturation = primary(GradePrimary::Saturation);
+    const double exposure = std::exp2(primary(GradePrimary::Exposure));
+    // White balance as channel gains in stops: Temperature trades red against blue and Tint trades
+    // green against red and blue, each keeping the product of the three gains at one.
+    const std::array<double, 3> balance{std::exp2(temperature / 200.0 + tint / 400.0),
+                                        std::exp2(-tint / 200.0),
+                                        std::exp2(-temperature / 200.0 + tint / 400.0)};
+    PreparedColorGrade grade{ColorGradeKind::Grade, std::vector<float>(kGradeFloats, 0.0F), false};
+    auto& d = grade.data;
+    bool identity = contrast == 1.0 && saturation == 1.0;
+    for (std::size_t channel = 0; channel < 3; ++channel) {
+        const double lift = wheel(GradeWheel::Lift, 0) + wheel(GradeWheel::Lift, channel + 1);
+        const double gamma = wheel(GradeWheel::Gamma, 0) + wheel(GradeWheel::Gamma, channel + 1);
+        const double gain = wheel(GradeWheel::Gain, 0) * wheel(GradeWheel::Gain, channel + 1);
+        const double offset = wheel(GradeWheel::Offset, 0) + wheel(GradeWheel::Offset, channel + 1);
+        const double slope = exposure * balance[channel] * gain * (1.0 - lift);
+        const double shift = gain * lift + offset;
+        const double power = std::exp2(-gamma);
+        if (!representable(slope) || !representable(shift) || !representable(power))
+            return std::nullopt;
+        d[channel] = static_cast<float>(slope);
+        d[4 + channel] = static_cast<float>(shift);
+        d[8 + channel] = static_cast<float>(power);
+        identity =
+            identity && d[channel] == 1.0F && d[4 + channel] == 0.0F && d[8 + channel] == 1.0F;
+    }
+    // Contrast about the pivot: pivot * (t / pivot)^contrast = pivot^(1 - contrast) * t^contrast.
+    const double scale = std::pow(pivot, 1.0 - contrast);
+    if (!representable(scale) || static_cast<float>(scale) == 0.0F)
+        return std::nullopt;
+    d[12] = static_cast<float>(contrast);
+    d[13] = static_cast<float>(scale);
+    d[14] = static_cast<float>(saturation);
+    d[16] = static_cast<float>(kLumaRed);
+    d[17] = static_cast<float>(kLumaGreen);
+    d[18] = static_cast<float>(kLumaBlue);
+    grade.identity = identity;
+    return grade;
+}
+
+[[nodiscard]] bool gradePixel(const std::vector<float>& d, std::array<float, 4>& pixel) noexcept {
+    const auto finite = [](const float x) { return std::isfinite(x); };
+    const float a = pixel[3];
+    // Alpha is left alone, and a pixel with no coverage has no straight colour to grade.
+    if (a == 0.0F)
+        return true;
+    std::array<float, 3> y{};
+    for (std::size_t i = 0; i < 3; ++i) {
+        const float straight = pixel[i] / a;
+        if (!finite(straight))
+            return false;
+        float t = std::fma(straight, d[i], d[4 + i]);
+        if (d[8 + i] != 1.0F && t > 0.0F)
+            t = std::pow(t, d[8 + i]);
+        if (d[12] != 1.0F && t > 0.0F)
+            t = d[13] * std::pow(t, d[12]);
+        y[i] = t;
+    }
+    if (d[14] != 1.0F) {
+        const float luma = std::fma(d[18], y[2], std::fma(d[17], y[1], d[16] * y[0]));
+        for (auto& value : y)
+            value = std::fma(value - luma, d[14], luma);
+    }
+    pixel = {y[0] * a, y[1] * a, y[2] * a, a};
+    return finite(y[0]) && finite(y[1]) && finite(y[2]) && finite(pixel[0]) && finite(pixel[1]) &&
+           finite(pixel[2]);
+}
+
 [[nodiscard]] std::string glslProgramText(const ColorGradeKind kind) {
     // The straight-colour grades divide and re-associate exactly as the CPU reference does, through
     // the wrapper's correctly rounded division (defined after this body, hence the prototypes).
@@ -195,6 +302,51 @@ prepareHueSaturation(const std::span<const double> values) {
     }
     case ColorGradeKind::Curves:
         return curvesProgramText();
+    case ColorGradeKind::Grade: {
+        static const std::string text =
+            "layout(set = 0, binding = 0, std430) readonly buffer BloomGradeData { vec4 values[]; "
+            "} bloom_grade_data;\n" +
+            straight + finite +
+            "vec4 bloom_grade(ivec2 c) {\n"
+            " vec4 p = imageLoad(bloom_ocio_input, c);\n"
+            " float a = p.a;\n"
+            " if (a == 0.0) { return p; }\n"
+            " vec4 slope = bloom_grade_data.values[0];\n"
+            " vec4 shift = bloom_grade_data.values[1];\n"
+            " vec4 power = bloom_grade_data.values[2];\n"
+            " vec4 shape = bloom_grade_data.values[3];\n"
+            " vec4 w = bloom_grade_data.values[4];\n"
+            " vec3 s = vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), "
+            "bloom_ocio_cpu_div(p.b, a));\n"
+            " vec3 y = vec3(0.0);\n"
+            " for (int i = 0; i < 3; ++i) {\n"
+            "  if (!bloom_grade_finite(s[i])) {" +
+            failure +
+            "  }\n"
+            "  precise float t = fma(s[i], slope[i], shift[i]);\n"
+            "  if (power[i] != 1.0 && t > 0.0) { t = pow(t, power[i]); }\n"
+            "  if (shape.x != 1.0 && t > 0.0) { precise float r = pow(t, shape.x); t = shape.y * "
+            "r; "
+            "}\n"
+            "  y[i] = t;\n"
+            " }\n"
+            " if (shape.z != 1.0) {\n"
+            "  precise float luma = fma(w.z, y.z, fma(w.y, y.y, w.x * y.x));\n"
+            "  for (int i = 0; i < 3; ++i) {\n"
+            "   precise float d = y[i] - luma;\n"
+            "   precise float m = fma(d, shape.z, luma);\n"
+            "   y[i] = m;\n"
+            "  }\n"
+            " }\n"
+            " for (int i = 0; i < 3; ++i) {\n"
+            "  if (!bloom_grade_finite(y[i])) {" +
+            failure +
+            "  }\n"
+            " }\n"
+            " return vec4(bloom_ocio_cpu_premul(y, a), a);\n"
+            "}\n";
+        return text;
+    }
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -268,6 +420,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareCurvesGrade(curves->clamp, values);
     if (std::holds_alternative<HueSaturationKernel>(kernel))
         return prepareHueSaturation(values);
+    if (std::holds_alternative<GradeKernel>(kernel))
+        return prepareGrade(values);
     return std::nullopt;
 }
 
@@ -286,6 +440,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
     }
     if (grade.kind == ColorGradeKind::Curves)
         return curvesGradePixel(grade.data, pixel);
+    if (grade.kind == ColorGradeKind::Grade)
+        return gradePixel(grade.data, pixel);
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
     };
@@ -378,9 +534,9 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                                                     const std::vector<float>& data) {
     const bool shaped = kind == ColorGradeKind::Levels   ? data.size() == kLevelsFloats
                         : kind == ColorGradeKind::Curves ? validCurvesTable(data)
+                        : kind == ColorGradeKind::Grade  ? data.size() == kGradeFloats
                                                          : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) >
-            static_cast<std::uint8_t>(ColorGradeKind::HueSaturation) ||
+    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Grade) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -401,6 +557,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_hue_saturation";
         program.resourcePrefix = "bloom_hue_saturation_";
         program.semanticsId = "bloom.render.hue-saturation.v1";
+        break;
+    case ColorGradeKind::Grade:
+        program.functionName = "bloom_grade";
+        program.resourcePrefix = "bloom_grade_";
+        program.semanticsId = "bloom.render.grade.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);
