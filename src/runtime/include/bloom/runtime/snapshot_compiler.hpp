@@ -50,6 +50,8 @@ enum class CompileDiagnosticCode {
     // ADR 0024: a Source content extent names no resolvable media or composition length; the
     // layer compiles with an Unbounded extent.
     LayerExtentUnresolved,
+    // #502: an Adjustment's chain reaches more than one Merge entry; the Adjustment draws nothing.
+    AdjustmentTargetAmbiguous,
 };
 
 [[nodiscard]] std::string_view compileDiagnosticCodeId(CompileDiagnosticCode code) noexcept;

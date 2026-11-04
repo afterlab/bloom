@@ -44,21 +44,36 @@ firstImageInput(const document::NodeRecord& node) const {
     return std::nullopt;
 }
 
-[[nodiscard]] bool mutedLayer(const document::LayerStackEntry& entry) const {
-    const auto boundaries = composition_->graph().layerOutputs();
-    const bool anySolo = std::ranges::any_of(boundaries, &document::LayerOutputBoundary::solo);
-    for (const auto& boundary : boundaries) {
-        if (boundary.layerId == entry.layerId)
-            return !boundary.enabled || (anySolo && !boundary.solo) || isMuted(boundary.nodeId);
-    }
-    return false;
+// #502: the entry's layer (document::mergeEntryLayer): the Layer node nearest the Merge up its image
+// chain, else the entry's own layer, else none (a plain slot, an identity layer at its defaults).
+[[nodiscard]] const document::LayerOutputBoundary* entryLayerOf(const document::NodeId merge,
+                                                               const document::LayerSlotId slot) const {
+    const auto key = std::pair{merge, slot};
+    if (const auto found = entryLayerCache_.find(key); found != entryLayerCache_.end())
+        return found->second;
+    const auto* layer = document::mergeEntryLayer(composition_->graph(), merge, slot, registry_);
+    entryLayerCache_.emplace(key, layer);
+    return layer;
+}
+
+// A disabled, solo-excluded or (Layer node) muted layer contributes nothing to its Merges.
+[[nodiscard]] bool mutedLayer(const document::LayerOutputBoundary& layer) const {
+    return !layer.enabled || (anySolo_ && !layer.solo) ||
+           (!layer.entryOwned() && isMuted(layer.nodeId));
 }
 
 // ADR 0028: a layer that is any layer's track matte contributes nothing to its Merge.
 [[nodiscard]] bool isMatteSource(const document::LayerId layer) const {
-    return std::ranges::any_of(composition_->graph().layerOutputs(), [&](const auto& boundary) {
-        return boundary.trackMatte && boundary.trackMatte->source == layer;
-    });
+    return matteSources_.contains(layer);
+}
+
+// Whether a Merge entry is left out of its Merge's image: its layer is muted, or (unless
+// `hideMatteSources` is false, for the audio mix) its layer is a track matte source.
+[[nodiscard]] bool entryExcluded(const document::NodeId merge, const document::LayerStackEntry& entry,
+                                 const bool hideMatteSources = true) const {
+    const auto* layer = entryLayerOf(merge, entry.slotId);
+    return layer != nullptr &&
+           (mutedLayer(*layer) || (hideMatteSources && isMatteSource(layer->layerId)));
 }
 
 // A track matte source's slot carries no pixels, but its audio still plays, so the audio mix asks
@@ -75,8 +90,43 @@ firstImageInput(const document::NodeRecord& node) const {
     if (const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination)) {
         const auto* stack = composition_->graph().merge(slot->stackNodeId);
         const auto* entry = stack ? stack->find(slot->slotId) : nullptr;
-        if (entry && (mutedLayer(*entry) || (hideMatteSources && isMatteSource(entry->layerId))))
+        if (entry && entryExcluded(slot->stackNodeId, *entry, hideMatteSources))
             return false;
     }
     return true;
+}
+
+// #502 Adjustment: the Merge entries the Adjustment's image paths first reach (memoized).
+[[nodiscard]] const std::vector<document::MergeEntryRef>&
+adjustmentTargetsOf(const document::NodeId adjustment) const {
+    if (const auto found = adjustmentTargetCache_.find(adjustment);
+        found != adjustmentTargetCache_.end())
+        return found->second;
+    return adjustmentTargetCache_
+        .emplace(adjustment, document::adjustmentTargets(composition_->graph(), adjustment, registry_))
+        .first->second;
+}
+
+// The one entry an Adjustment serves; none when its chain reaches no entry or several.
+[[nodiscard]] std::optional<document::MergeEntryRef>
+singleAdjustmentTarget(const document::NodeId adjustment) const {
+    const auto& targets = adjustmentTargetsOf(adjustment);
+    return targets.size() == 1 ? std::optional(targets.front()) : std::nullopt;
+}
+
+// The Adjustment an entry is the adjustment entry of: a reachable, unmuted Adjustment whose only
+// target is this entry. Several Adjustments serving one entry all read the same stack below; the
+// lowest node id names it.
+[[nodiscard]] std::optional<document::NodeId>
+entryAdjustment(const document::NodeId merge, const document::LayerSlotId slot) const {
+    if (!hasAdjustments_)
+        return std::nullopt;
+    for (const auto* node : reachableNodes_) {
+        if (node->typeId != document::kAdjustmentNodeType || isMuted(node->id))
+            continue;
+        const auto target = singleAdjustmentTarget(node->id);
+        if (target && target->merge == merge && target->slot == slot)
+            return node->id;
+    }
+    return std::nullopt;
 }

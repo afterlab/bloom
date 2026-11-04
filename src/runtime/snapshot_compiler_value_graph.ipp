@@ -67,6 +67,7 @@ struct DriverReference final {
     case runtime::NodeLoweringKind::ImageSource:
         case runtime::NodeLoweringKind::LayerOutput:
         case runtime::NodeLoweringKind::LayerStack:
+        case runtime::NodeLoweringKind::Adjustment:
         case runtime::NodeLoweringKind::CompositionOutput:
             return true;
         default:
@@ -565,6 +566,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::Text:
     case runtime::NodeLoweringKind::LayerOutput:
     case runtime::NodeLoweringKind::LayerStack:
+    case runtime::NodeLoweringKind::Adjustment:
     case runtime::NodeLoweringKind::CompositionOutput:
     case runtime::NodeLoweringKind::Unsupported:
     case runtime::NodeLoweringKind::Mask:

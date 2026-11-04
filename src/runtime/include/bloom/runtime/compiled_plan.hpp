@@ -768,6 +768,10 @@ struct CompiledLayerOutput {
     // content in layer space, before its scale and rotation, like a pixel-aspect conversion; a
     // child layer inherits the layer's transform without it. 1 for everything else.
     double sourcePixelAspect = 1.0;
+    // #502: scale and rotation pivot about the composition frame's centre (plus the anchor)
+    // instead of the content bounds' centre, so a Merge entry's own layer at its defaults is the
+    // identity whatever its content's bounds. Appended false: no existing plan changes meaning.
+    bool framePivot = false;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 
@@ -985,14 +989,51 @@ class CompiledCompositionPlan final {
 
 // ADR 0028: the operation a Merge entry takes its layer blend mode and clock from -- the entry's
 // own input, or the Layer Output behind a track-matte effect.
-[[nodiscard]] inline OperationIndex mergeEntryLayerIndex(const CompiledCompositionPlan& plan,
-                                                         const OperationIndex input) noexcept {
-    if (input.value() < plan.operations().size())
-        if (const auto* effect =
-                std::get_if<CompiledImageEffect>(&plan.operations()[input.value()]);
+[[nodiscard]] inline OperationIndex
+mergeEntryLayerIndex(std::span<const CompiledOperation> operations,
+                     const OperationIndex input) noexcept {
+    if (input.value() < operations.size())
+        if (const auto* effect = std::get_if<CompiledImageEffect>(&operations[input.value()]);
             effect != nullptr && effect->trackMatte)
             return effect->input;
     return input;
+}
+
+// #502: an entry naming a layer takes them from that layer's Layer Output, which may sit further up
+// the entry's image chain (Layer -> Blur -> Merge): the CompiledLayerOutput with the entry's layer
+// id reached from the entry's input back through image effects' primary input, track-matte effects
+// included. An entry with no layer, or whose chain reaches no such Layer Output, keeps the rule
+// above exactly.
+[[nodiscard]] inline OperationIndex
+mergeEntryLayerIndex(std::span<const CompiledOperation> operations,
+                     const CompiledMergeInput& entry) noexcept {
+    if (entry.layerId.isValid()) {
+        auto current = entry.input;
+        while (current.value() < operations.size()) {
+            const auto& operation = operations[current.value()];
+            if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {
+                if (layer->layerId == entry.layerId)
+                    return current;
+                break;
+            }
+            const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+            // Inputs always precede their consumer, so the walk ends.
+            if (effect == nullptr || effect->input.value() >= current.value())
+                break;
+            current = effect->input;
+        }
+    }
+    return mergeEntryLayerIndex(operations, entry.input);
+}
+
+[[nodiscard]] inline OperationIndex mergeEntryLayerIndex(const CompiledCompositionPlan& plan,
+                                                         const OperationIndex input) noexcept {
+    return mergeEntryLayerIndex(plan.operations(), input);
+}
+
+[[nodiscard]] inline OperationIndex mergeEntryLayerIndex(const CompiledCompositionPlan& plan,
+                                                         const CompiledMergeInput& entry) noexcept {
+    return mergeEntryLayerIndex(plan.operations(), entry);
 }
 
 } // namespace bloom::runtime

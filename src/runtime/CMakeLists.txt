@@ -68,6 +68,7 @@ target_sources(
         plan_time_scopes.cpp
         profiler_gpu_reader.cpp
         layer_time_projection.cpp
+        snapshot_compiler_entries.ipp
         snapshot_compiler_layer_time.ipp
         snapshot_compiler_lowering.ipp
         snapshot_compiler_recipes.ipp

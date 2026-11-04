@@ -2120,3 +2120,36 @@ target_include_directories(bloom_runtime_footage_time_test PRIVATE ${PROJECT_SOU
 target_link_libraries(bloom_runtime_footage_time_test PRIVATE bloom_runtime_evaluator)
 bloom_enable_warnings(bloom_runtime_footage_time_test)
 bloom_add_test(NAME bloom.runtime.footage-time COMMAND bloom_runtime_footage_time_test LABELS unit runtime)
+
+# #502 every Merge entry is a layer; Adjustment entries replace the stack below them. Real documents
+# through the snapshot compiler and the CPU reference: lowering, diagnostics, the issue's pixel
+# equivalences and cache identity of the stack below an Adjustment.
+add_executable(bloom_runtime_merge_entry_layer_test merge_entry_layer_tests.cpp)
+target_link_libraries(bloom_runtime_merge_entry_layer_test PRIVATE bloom_runtime_evaluator bloom_render)
+target_include_directories(bloom_runtime_merge_entry_layer_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${PROJECT_SOURCE_DIR}/tests/support")
+bloom_enable_warnings(bloom_runtime_merge_entry_layer_test)
+bloom_enable_strict_floating_point(bloom_runtime_merge_entry_layer_test)
+bloom_add_test(NAME bloom.runtime.merge-entry-layers COMMAND bloom_runtime_merge_entry_layer_test
+    LABELS runtime unit)
+
+# #502 Merge entry layers and Adjustment entries on the GPU: real compiled documents prepared by the
+# production builder and executed on the production executor, matched to the CPU oracle full frame
+# and ROI. Skips (77) without the packaged tools or a device.
+add_executable(bloom_runtime_gpu_merge_entry_native_test gpu_merge_entry_native_tests.cpp)
+target_link_libraries(bloom_runtime_gpu_merge_entry_native_test
+    PRIVATE bloom_runtime_evaluator bloom_render)
+target_include_directories(bloom_runtime_gpu_merge_entry_native_test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_merge_entry_native_test PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_merge_entry_native_test>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_merge_entry_native_test)
+bloom_enable_warnings(bloom_runtime_gpu_merge_entry_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_gpu_merge_entry_native_test)
+bloom_add_test(
+    NAME bloom.runtime.gpu_merge_entry_native
+    COMMAND bloom_runtime_gpu_merge_entry_native_test
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_merge_entry_native PROPERTIES SKIP_RETURN_CODE 77)

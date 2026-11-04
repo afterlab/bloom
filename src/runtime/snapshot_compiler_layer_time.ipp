@@ -5,13 +5,20 @@
 // nullopt is a topology failure (already reported); an engaged empty optional is identity timing.
 [[nodiscard]] std::optional<std::optional<runtime::CompiledLayerTime>>
 lowerLayerTime(const document::NodeRecord& node, const document::LayerOutputBoundary& boundary) {
+    return lowerLayerTime(node.id, boundary,
+                          findParameterBinding(node, document::kTimeRemapParameterRole));
+}
+
+// #502: any layer's timing, given its Time Remap binding (a Layer node's, or an entry layer's own).
+[[nodiscard]] std::optional<std::optional<runtime::CompiledLayerTime>>
+lowerLayerTime(const document::NodeId nodeId, const document::LayerOutputBoundary& boundary,
+               const document::ParameterBinding* remapBinding) {
     const auto& timing = boundary.timing;
-    const auto* remapBinding = findParameterBinding(node, document::kTimeRemapParameterRole);
     std::optional<runtime::CompiledScalarParameter> remap;
     if (remapBinding != nullptr) {
         remap = compiledScalarParameter(remapBinding);
         if (!remap) {
-            addTopologyFailure(node.id, "Validated Layer Output Time Remap could not be lowered.");
+            addTopologyFailure(nodeId, "Validated Layer Output Time Remap could not be lowered.");
             return std::nullopt;
         }
     }
@@ -34,7 +41,7 @@ lowerLayerTime(const document::NodeRecord& node, const document::LayerOutputBoun
             result.extentDuration = resolved->duration;
             result.extentFrameRate = resolved->frameRate;
         } else {
-            auto diagnosticSubject = subject(node.id, "layerTime.contentExtent");
+            auto diagnosticSubject = subject(nodeId, "layerTime.contentExtent");
             diagnosticSubject.layerId = boundary.layerId;
             addWarning(runtime::CompileDiagnosticCode::LayerExtentUnresolved,
                        std::move(diagnosticSubject),

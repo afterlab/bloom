@@ -488,6 +488,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::Mask:
     case NodeLoweringKind::Channel:
     case NodeLoweringKind::Cryptomatte:
+    case NodeLoweringKind::Adjustment:
         return true;
     // #490: an inspection sink lowers to no operation; its preview is its upstream operations
     // through the Viewer's GPU preview route.
@@ -546,6 +547,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::LayerOutput:
         return "operation.CompiledLayerOutput";
     case NodeLoweringKind::LayerStack:
+    case NodeLoweringKind::Adjustment: // the stack below its entry: a Merge of those entries
         return "operation.CompiledMerge";
     case NodeLoweringKind::CompositionOutput:
         return "operation.CompiledCompositionOutput";

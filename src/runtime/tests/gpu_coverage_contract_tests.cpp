@@ -35,6 +35,7 @@
 #include "gpu_coverage_working_space_support.hpp"
 #include "gpu_route_proof_io.hpp"
 #include "grade_curves_test_support.hpp"
+#include "merge_entry_test_support.hpp"
 
 #include <bloom/document/graph.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -293,12 +294,33 @@ displayProofRunner(const bool customView) {
             [kernel, idBase] { return runBuilder(effectPlan(kernel, idBase)); });
     };
 
-    for (const std::string_view id :
-         {"operation.CompiledSolid", "operation.CompiledLayerOutput", "operation.CompiledMerge",
-          "operation.CompiledCompositionOutput"}) {
+    for (const std::string_view id : {"operation.CompiledSolid", "operation.CompiledMerge",
+                                      "operation.CompiledCompositionOutput"}) {
         add(std::string{id}, GpuCoverageFixtureCriterion::Prepared,
             "src/runtime gpu scene preparation tests", [] { return runBuilder(basePlan()); });
     }
+    // #502: a Merge entry's own layer is a CompiledLayerOutput with a frame pivot; the second
+    // variant pivots both layers about the frame centre (off-centre content, scaled and rotated).
+    add("operation.CompiledLayerOutput", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime gpu scene preparation tests + merge entry layer tests", [] {
+            FixtureRun combined;
+            combined.prepared = true;
+            auto definition = basePlan()->copyDefinition();
+            for (auto& operation : definition.operations)
+                if (auto* layer = std::get_if<bloom::runtime::CompiledLayerOutput>(&operation)) {
+                    layer->framePivot = true;
+                    layer->scale = CompiledVec2Parameter{layer->scale.id, Vec2d{1.25, 0.75}};
+                    layer->rotation = CompiledScalarParameter{layer->rotation.id, 20.0};
+                }
+            for (const auto& plan : {basePlan(), publish(std::move(definition))}) {
+                auto frame = runBuilder(plan);
+                combined.prepared = combined.prepared && frame.prepared;
+                combined.evidence += frame.evidence + "; ";
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            return combined;
+        });
     const auto checkerPlan = [] {
         return withSource(
             CompiledChecker{NodeId::fromRaw(94700),
@@ -1667,6 +1689,56 @@ displayProofRunner(const bool customView) {
             return runRecipes(bloom::recipe_test::Recipe::Glow, {shared}, 171400,
                               "production Glow shared controls: per-channel radius, octave "
                               "gradient, lens dirt and highlight roll-off, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    // #502 Adjustment: production compiles of real documents. Adjustment -> Curves at the top of a
+    // Merge over two layers, its entry layer at a partial opacity with its coverage moved (the
+    // white-frame coverage, Stencil inverse and masked Image Mix), and at its defaults with a
+    // Screen blend (the explicitly blended Merge), each full frame and ROI.
+    add(
+        "node.bloom.adjustment", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime merge entry layer tests (snapshot compiler Adjustment lowering)",
+        [] {
+            using bloom::merge_entry_test::Builder;
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const bool moved : {true, false}) {
+                Builder builder;
+                const auto blue = builder.solid({0.1, 0.2, 0.9, 0.75}, 6.0, 4.0);
+                const auto [blueNode, blueLayer] = builder.layerNode(
+                    blue, {.position = {6.0, 5.0}, .pivot = bloom::document::LayerPivot::Content});
+                builder.slot(builder.root(), blueNode, blueLayer);
+                builder.slot(builder.root(), builder.solid({0.8, 0.1, 0.05, 1.0}, 16.0, 12.0));
+                const auto slot =
+                    builder.topSlot(builder.root(), builder.curves(builder.adjustment()));
+                builder.entryLayer(
+                    builder.root(), slot,
+                    moved ? bloom::merge_entry_test::LayerValues{.position = {5.0, 7.0},
+                                                                 .rotation = 15.0,
+                                                                 .opacity = 0.6}
+                          : bloom::merge_entry_test::LayerValues{
+                                .blendMode = bloom::core::BlendMode::Screen});
+                const auto compiled = bloom::merge_entry_test::compile(builder.project());
+                if (!compiled.plan) {
+                    combined.prepared = false;
+                    combined.evidence = "the Adjustment document did not compile";
+                    return combined;
+                }
+                auto request = requestFor(*compiled.plan);
+                for (const bool roi : {false, true}) {
+                    if (roi) {
+                        const auto window = bloom::render::ImageWindow::create(5, 4, 9, 7);
+                        request.roi = *window.value();
+                    }
+                    auto frame = runBuilderWithRequest(compiled.plan, request);
+                    combined.prepared = combined.prepared && frame.prepared;
+                    for (auto& value : frame.frames)
+                        combined.frames.push_back(std::move(value));
+                }
+            }
+            combined.evidence = "production Adjustment: Curves of the stack below, a moved partial "
+                                "coverage and a Screen blend, full frame and ROI";
+            return combined;
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     return list;

@@ -16,6 +16,7 @@
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/layer_source.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/runtime/curve_compilation.hpp>
@@ -184,12 +185,22 @@ class CompilePass final {
             if (cancelled()) {
                 return false;
             }
-            layerOutputs_.emplace(boundary.nodeId, &boundary);
+            anySolo_ = anySolo_ || boundary.solo;
+            if (boundary.trackMatte)
+                matteSources_.insert(boundary.trackMatte->source);
+            // #502: a Merge entry's own layer has no node of its own; its nodeId is the Merge's.
+            if (!boundary.entryOwned())
+                layerOutputs_.emplace(boundary.nodeId, &boundary);
             if (boundary.parent) {
                 if (const auto* parent = composition_->graph().findLayer(*boundary.parent))
-                    transformParents_.insert(parent->nodeId);
+                    parent->entryOwned()
+                        ? static_cast<void>(entryLayerParents_.insert(parent->layerId))
+                        : static_cast<void>(transformParents_.insert(parent->nodeId));
             }
         }
+        for (const auto& node : composition_->graph().nodes())
+            if (node.typeId == document::kAdjustmentNodeType)
+                hasAdjustments_ = true;
         return true;
     }
 
@@ -331,21 +342,13 @@ class CompilePass final {
                 continue;
             }
             reachableNodes.emplace(nodeId, node);
-            if (const auto boundary = layerOutputs_.find(nodeId);
-                boundary != layerOutputs_.end() && boundary->second->parent) {
-                const auto* parent = composition_->graph().findLayer(*boundary->second->parent);
-                if (parent)
-                    pending.push_back(parent->nodeId);
-            }
-            // ADR 0028: a reached matte target evaluates its source layer, which its own Merge
-            // hides (see consumesEdge) and whose enabled and solo state do not apply.
-            if (const auto boundary = layerOutputs_.find(nodeId);
-                boundary != layerOutputs_.end() && boundary->second->trackMatte) {
-                const auto* source =
-                    composition_->graph().findLayer(boundary->second->trackMatte->source);
-                if (source)
-                    pending.push_back(source->nodeId);
-            }
+            if (const auto boundary = layerOutputs_.find(nodeId); boundary != layerOutputs_.end())
+                reachLayerRelations(*boundary->second, pending, reachableEdges);
+            // #502: the Adjustment's output is the stack below its entry, which its target Merge
+            // lowers; a reached Adjustment reaches that Merge.
+            if (node->typeId == document::kAdjustmentNodeType)
+                if (const auto target = singleAdjustmentTarget(nodeId))
+                    pending.push_back(target->merge);
             if (const auto iterator = incoming.find(nodeId); iterator != incoming.end()) {
                 for (const auto* edge : iterator->second) {
                     if (cancelled()) {
@@ -353,6 +356,13 @@ class CompilePass final {
                     }
                     if (!consumesEdge(*node, *edge))
                         continue;
+                    // #502: a consumed entry's own layer is reached with its slot.
+                    if (const auto* slot =
+                            std::get_if<document::LayerStackInputRef>(&edge->destination);
+                        slot != nullptr && slot->role == document::kLayerStackContentInputRole)
+                        if (const auto* layer = entryLayerOf(slot->stackNodeId, slot->slotId);
+                            layer != nullptr && layer->entryOwned())
+                            reachEntryLayer(*layer, pending, reachableEdges);
                     // A Viewer inspection plan needs only the inspected node's channel sets.
                     // The Cryptomatte preview also shows the node's input image, a pixel output
                     // inspection (#490 Image Preview) needs every input of its node, and an
@@ -400,6 +410,45 @@ class CompilePass final {
             reachableEdges_.push_back(edge);
         }
         return !hasFailure_;
+    }
+
+    // ADR 0028, #502: a reached layer reaches its transform parent and its track matte source,
+    // whatever their slots' enabled and solo state, as a Layer node always has.
+    void reachLayerRelations(const document::LayerOutputBoundary& layer,
+                             std::vector<document::NodeId>& pending,
+                             std::map<document::EdgeId, const document::EdgeRecord*>& edges) {
+        const auto& graph = composition_->graph();
+        for (const auto related :
+             {layer.parent, layer.trackMatte ? std::optional(layer.trackMatte->source)
+                                             : std::optional<document::LayerId>{}}) {
+            const auto* other = related ? graph.findLayer(*related) : nullptr;
+            if (other == nullptr)
+                continue;
+            if (other->entryOwned())
+                reachEntryLayer(*other, pending, edges);
+            else
+                pending.push_back(other->nodeId);
+        }
+    }
+
+    // #502: an entry layer is reached with its Merge's slot, or as a reached layer's parent or
+    // matte source; it then reaches its slot's image content (even a hidden or disabled slot's, as
+    // a parent Layer node's content is), its Merge, its parent and its matte source.
+    void reachEntryLayer(const document::LayerOutputBoundary& layer,
+                         std::vector<document::NodeId>& pending,
+                         std::map<document::EdgeId, const document::EdgeRecord*>& edges) {
+        if (!reachedEntryLayerIds_.insert(layer.layerId).second)
+            return;
+        reachedEntryLayers_.push_back(&layer);
+        pending.push_back(layer.nodeId);
+        if (const auto* stack = composition_->graph().merge(layer.nodeId);
+            stack != nullptr && stack->enabled())
+            if (const auto* edge = document::mergeSlotImageEdge(composition_->graph(), layer.nodeId,
+                                                                *layer.entrySlot)) {
+                edges.emplace(edge->id, edge);
+                pending.push_back(edge->source.nodeId);
+            }
+        reachLayerRelations(layer, pending, edges);
     }
 
     [[nodiscard]] bool indexReachableGraph() {
@@ -660,7 +709,7 @@ class CompilePass final {
                 continue;
             }
             for (const auto& entry : graph.merge(node->id)->entries()) {
-                if (mutedLayer(entry) || isMatteSource(entry.layerId))
+                if (entryExcluded(node->id, entry))
                     continue;
                 if (cancelled()) {
                     return;
@@ -774,11 +823,8 @@ class CompilePass final {
         // ADR 0028: a mask's path, feather, expansion and opacity belong to its reachable layer,
         // not to a node binding. The Viewer previews a mask drag through this same override.
         std::optional<runtime::ParameterValueKind> maskKind;
-        for (const auto* node : reachableNodes_) {
-            const auto boundary = layerOutputs_.find(node->id);
-            if (boundary == layerOutputs_.end())
-                continue;
-            for (const auto& mask : boundary->second->masks) {
+        const auto considerMasks = [&](const document::LayerOutputBoundary& boundary) {
+            for (const auto& mask : boundary.masks) {
                 if (mask.path == parameterOverride.parameterId)
                     maskKind = runtime::ParameterValueKind::Path;
                 else if (mask.feather == parameterOverride.parameterId ||
@@ -786,7 +832,15 @@ class CompilePass final {
                          mask.opacity == parameterOverride.parameterId)
                     maskKind = runtime::ParameterValueKind::Float64;
             }
+        };
+        for (const auto* node : reachableNodes_) {
+            const auto boundary = layerOutputs_.find(node->id);
+            if (boundary != layerOutputs_.end())
+                considerMasks(*boundary->second);
         }
+        // #502: an entry layer's masks and parameters belong to it, not to a node binding.
+        for (const auto* layer : reachedEntryLayers_)
+            considerMasks(*layer);
         if (maskKind) {
             document::ParameterValue value =
                 std::visit([](const auto& entry) -> document::ParameterValue { return entry; },
@@ -849,6 +903,31 @@ class CompilePass final {
             ownerDefinition = definition->second;
             parameterDefinition = &*declaredParameter;
             diagnosticSubject.nodeId = node->id;
+        }
+        for (const auto* layer : reachedEntryLayers_) {
+            const auto binding = std::ranges::find(layer->parameters, parameterOverride.parameterId,
+                                                   &document::ParameterBinding::parameterId);
+            if (binding == layer->parameters.end())
+                continue;
+            if (ownerNode != nullptr || ownerDefinition != nullptr) {
+                reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
+                       "Parameter override target has multiple reachable owners",
+                       "Version-one parameters must have one canonical node binding.");
+                return;
+            }
+            // An entry layer binds the Layer node's roles, so the Layer definition types them.
+            ownerDefinition = registry_.find(document::kLayerOutputNodeType,
+                                             document::kLayerOutputNodeSchemaVersion);
+            if (ownerDefinition == nullptr)
+                return;
+            const auto declaredParameter = std::ranges::find(
+                ownerDefinition->parameters, binding->role, &runtime::ParameterDefinition::role);
+            if (declaredParameter == ownerDefinition->parameters.end())
+                return;
+            parameterDefinition = &*declaredParameter;
+            ownerNode = findNode(layer->nodeId);
+            diagnosticSubject.nodeId = layer->nodeId;
+            diagnosticSubject.layerId = layer->layerId;
         }
         if (ownerNode == nullptr || ownerDefinition == nullptr || parameterDefinition == nullptr) {
             reject(runtime::CompileDiagnosticCode::InvalidParameterOverride,
@@ -1067,9 +1146,29 @@ class CompilePass final {
     // #364: operations of a node with several pixel outputs, by output port (a Cryptomatte's Mask
     // and Image). A port listed here wins over the node's entry in the lowering index.
     std::map<std::pair<document::NodeId, std::string>, runtime::OperationIndex> portOperations_;
-    // ADR 0028: the track-matte effect a Merge entry composites in place of its Layer Output.
-    std::unordered_map<document::NodeId, runtime::OperationIndex> trackMatteEntries_;
     std::unordered_set<document::NodeId> transformParents_;
+    // #502 every Merge entry is a layer. Entry layers (LayerOutputBoundary::entryOwned) that are
+    // transform parents, the entry layers the reachable set reached (a consumed entry's, or a
+    // reached layer's parent or matte source), each entry's layer (mergeEntryLayer, memoized), the
+    // lowered operation of each entry layer, and the Adjustment nodes with their single target.
+    std::unordered_set<document::LayerId> entryLayerParents_;
+    std::unordered_set<document::LayerId> reachedEntryLayerIds_;
+    std::vector<const document::LayerOutputBoundary*> reachedEntryLayers_;
+    mutable std::map<std::pair<document::NodeId, document::LayerSlotId>,
+                     const document::LayerOutputBoundary*>
+        entryLayerCache_;
+    std::unordered_map<document::LayerId, runtime::OperationIndex> entryLayerOps_;
+    std::unordered_set<document::LayerId> entryLayersInProgress_;
+    mutable std::map<document::NodeId, std::vector<document::MergeEntryRef>> adjustmentTargetCache_;
+    // The stack below an entry (an Adjustment's image, memoized per Merge and slot) and each
+    // adjustment entry's composite.
+    std::map<std::pair<document::NodeId, document::LayerSlotId>, runtime::OperationIndex>
+        stacksBelow_;
+    std::map<std::pair<document::NodeId, document::LayerSlotId>, runtime::OperationIndex>
+        adjustmentComposites_;
+    std::unordered_set<document::LayerId> matteSources_;
+    bool anySolo_ = false;
+    bool hasAdjustments_ = false;
     runtime::CompiledPlanCache* planCache_ = nullptr;
     std::vector<std::shared_ptr<const runtime::CompiledCompositionPlan>> nestedPlans_;
     std::unordered_map<document::NodeId, runtime::CompiledCompositionSource> compositionSources_;

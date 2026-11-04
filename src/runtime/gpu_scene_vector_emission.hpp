@@ -400,7 +400,7 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
     for (auto entry = stack.entries.rbegin(); entry != stack.entries.rend(); ++entry) {
         // #339: a plain image entry may name its mode explicitly (never a Layer entry).
         core::BlendMode mode = entry->blendMode.value_or(core::BlendMode::Normal);
-        const auto layerIndex = mergeEntryLayerIndex(plan, entry->input);
+        const auto layerIndex = mergeEntryLayerIndex(plan, *entry);
         if (const auto* layerOutput =
                 std::get_if<CompiledLayerOutput>(&plan.operations()[layerIndex.value()]);
             layerOutput != nullptr && entry->layerId.isValid()) {

@@ -52,6 +52,8 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
         return "bloom.runtime.compile.time-scope-limit";
     case CompileDiagnosticCode::LayerExtentUnresolved:
         return "bloom.runtime.compile.layer-extent-unresolved";
+    case CompileDiagnosticCode::AdjustmentTargetAmbiguous:
+        return "bloom.runtime.compile.adjustment-target-ambiguous";
     }
     return "bloom.runtime.compile.unknown-diagnostic";
 }

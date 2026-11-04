@@ -458,6 +458,14 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // the CPU evaluator computes them in operation order before it evaluates any layer.
     std::vector<std::optional<detail::LayerMatrix>> layerMatrices(operationCount);
     std::vector<std::optional<GpuSceneVectorChain>> vectors(operationCount);
+    // #502: a raster layer's resample from the first non-layer image up its chain of layers, as
+    // on the CPU: that operation, the composed AUTHOR-space content matrix and the opacity product.
+    struct RasterChain {
+        std::size_t source;
+        detail::LayerMatrix matrix;
+        double opacity = 1;
+    };
+    std::vector<std::optional<RasterChain>> rasterChains(operationCount);
     // Reachable text leaves publish no command of their own; the Layer Output that consumes one
     // builds the coverage command from the layer matrix. This records that consumption so a text
     // that reaches the output by any other route fails closed instead of silently disappearing.
@@ -780,7 +788,14 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // the parent matrix (which retains shear and inherits neither visibility nor opacity),
             // and records it for every layer whether or not the layer is active. The layer's own
             // published bounds are only written inside its active range, exactly as on the CPU.
-            const auto centre = inputLocal.centre();
+            // #502: a frame pivot is the composition frame's centre, as on the CPU.
+            const auto centre =
+                layer->framePivot
+                    ? decltype(inputLocal.centre()){static_cast<double>(plan->format().width()) /
+                                                        2.0,
+                                                    static_cast<double>(plan->format().height()) /
+                                                        2.0}
+                    : inputLocal.centre();
             const auto authoredMatrix = detail::LayerMatrix::authored(
                 position->value, {centre.x + anchor->value.x, centre.y + anchor->value.y},
                 scale->value, rotation->value);
@@ -811,6 +826,12 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 chained = GpuSceneVectorChain{inputVec->source, composed.times(inputVec->matrix),
                                               inputVec->opacity * opacity->value};
                 vectors[index] = *chained;
+            } else {
+                const auto& inner = rasterChains[inputIndexValue];
+                rasterChains[index] =
+                    inner ? RasterChain{inner->source, contentComposed.times(inner->matrix),
+                                        inner->opacity * opacity->value}
+                          : RasterChain{inputIndexValue, contentComposed, opacity->value};
             }
             // The CPU Layer Output stage publishes no image and no bounds outside its active range.
             if (*placementTime < layer->inPoint ||
@@ -955,6 +976,41 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 continue;
             }
 
+            // #502: fed by another raster layer, this layer resamples the chain's first non-layer
+            // image once through the composed matrix, exactly as the CPU evaluator does. Its
+            // bounds still follow its own transform of the earlier layer's bounds.
+            if (const auto& chain = rasterChains[inputIndexValue];
+                chain && commandForOperation[chain->source] != kInvalidGpuSceneCommand &&
+                outputWindowOf[chain->source].has_value()) {
+                const auto chainWindow = *outputWindowOf[chain->source];
+                const auto concatenatedMatrix = contentComposed.times(chain->matrix);
+                const auto concatenatedOpacity = opacity->value * chain->opacity;
+                const detail::ParentedLayerTransform concatenated(
+                    concatenatedMatrix, chainWindow, hScale, vScale,
+                    static_cast<float>(concatenatedOpacity));
+                if (!concatenated.finite()) {
+                    return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                                "Concatenated transform exceeds the supported numeric range");
+                }
+                if (!concatenated.invertible()) {
+                    outputWindowOf[index].reset();
+                    continue;
+                }
+                const auto chainLayerWindow = concatenated.supportBounds(*workingWindow.value());
+                if (!chainLayerWindow) {
+                    outputWindowOf[index].reset();
+                    continue;
+                }
+                outputWindowOf[index] = *chainLayerWindow;
+                if (const auto error = detail::emitAffineLayerCommand(
+                        commandForOperation[chain->source], keyOf[chain->source], chainWindow,
+                        *chainLayerWindow, concatenatedMatrix, hScale, vScale, concatenatedOpacity,
+                        fullPixelAspect, operationIndex, chargeTransient, emit,
+                        commandForOperation[index], keyOf[index])) {
+                    return fail(error->code, error->message);
+                }
+                continue;
+            }
             // A raster input (media, merge, or another raster layer). The exact translation path is
             // retained when it applies; every other affine appears on the accepted GpuAffine
             // command so rotation, nonuniform/signed scale, anchor and any parent-composed shear

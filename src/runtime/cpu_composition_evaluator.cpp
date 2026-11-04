@@ -249,6 +249,28 @@ template <typename Value>
     return !std::holds_alternative<CompiledCompositionOutput>(operation);
 }
 
+// #502: consecutive raster Layer Outputs concatenate into one resample. A Layer Output fed by
+// another Layer Output resamples the first non-layer image up that chain once, through every
+// layer's matrix, so each image of the chain stays resident until the last layer has run. This is
+// the one liveness rule shared by preflight counting, storage simulation and release.
+template <typename Function>
+void forEachResidentInput(const CompiledCompositionPlan& plan, const std::size_t index,
+                          Function&& function) {
+    const auto& operations = plan.operations();
+    forEachInput(operations[index], function);
+    const auto* layer = std::get_if<CompiledLayerOutput>(&operations[index]);
+    if (layer == nullptr)
+        return;
+    auto current = layer->input.value();
+    while (current < index && current < operations.size()) {
+        const auto* inner = std::get_if<CompiledLayerOutput>(&operations[current]);
+        if (inner == nullptr || inner->input.value() >= current)
+            return;
+        function(inner->input);
+        current = inner->input.value();
+    }
+}
+
 struct PixelStoragePeak final {
     std::optional<std::size_t> bytes = {};
     bool cancelled = false;
@@ -283,7 +305,7 @@ pixelStoragePeak(const CompiledCompositionPlan& plan, const std::vector<std::siz
         }
         if (index == plan.output().value())
             continue;
-        forEachInput(plan.operations()[index], [&](const OperationIndex input) {
+        forEachResidentInput(plan, index, [&](const OperationIndex input) {
             auto& count = remaining[input.value()];
             --count;
             if (count == 0)
@@ -759,7 +781,7 @@ enum class ScalarDomain : std::uint8_t {
                         return false;
                     }
                     const auto* layer = std::get_if<CompiledLayerOutput>(
-                        &plan.operations()[mergeEntryLayerIndex(plan, entry.input).value()]);
+                        &plan.operations()[mergeEntryLayerIndex(plan, entry).value()]);
                     // #339: an explicit blend mode belongs to a plain image entry only.
                     if ((entry.layerId.isValid() &&
                          (layer == nullptr || layer->layerId != entry.layerId)) ||
@@ -938,15 +960,14 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
             return PreflightOutcome::failure(std::move(invalidOperation));
         }
         bool overflow = false;
-        forEachInput(plan->operations()[index],
-                     [&consumers, &overflow](const OperationIndex input) {
-                         auto& count = consumers[input.value()];
-                         if (count == std::numeric_limits<std::size_t>::max()) {
-                             overflow = true;
-                         } else {
-                             ++count;
-                         }
-                     });
+        forEachResidentInput(*plan, index, [&consumers, &overflow](const OperationIndex input) {
+            auto& count = consumers[input.value()];
+            if (count == std::numeric_limits<std::size_t>::max()) {
+                overflow = true;
+            } else {
+                ++count;
+            }
+        });
         if (overflow) {
             return PreflightOutcome::failure(diagnostic(
                 EvaluationDiagnosticCode::ArithmeticOverflow, "Operation consumer count overflowed",
@@ -2248,7 +2269,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         const auto releaseInputs = [&](const std::size_t index) {
             if (index == request.output.value())
                 return;
-            forEachInput(plan->operations()[index], [&](const OperationIndex input) {
+            detail::forEachResidentInput(*plan, index, [&](const OperationIndex input) {
                 auto& remaining = frameResolved.remainingConsumers[input.value()];
                 --remaining;
                 if (remaining == 0) {
@@ -2267,6 +2288,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             double opacity = 1;
         };
         std::vector<std::optional<VectorChain>> vectors(plan->operations().size());
+        // #502: a raster Layer Output's resample, expressed from the first non-layer image up its
+        // chain of Layer Outputs: that image's operation, the AUTHOR-space matrix composed through
+        // every layer of the chain (pixel aspect and parents included), and the product of their
+        // opacities. A raster layer fed by another layer resamples that image once through the
+        // composed matrix instead of resampling the earlier layer's already resampled pixels.
+        struct RasterChain {
+            std::size_t source;
+            detail::LayerMatrix matrix;
+            double opacity = 1;
+        };
+        std::vector<std::optional<RasterChain>> rasterChains(plan->operations().size());
 
         for (std::size_t index = 0; index < plan->operations().size(); ++index) {
             if (cancellation.isCancellationRequested()) {
@@ -2582,7 +2614,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     return EvaluationResult::failed(
                         diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                                    "Layer transform could not be resolved", {}, operationSubject));
-                const auto centre = bounds[layer->input.value()].output.centre();
+                // #502: a frame pivot is the composition frame's centre.
+                const auto centre =
+                    layer->framePivot
+                        ? document::Vec2d{static_cast<double>(plan->format().width()) / 2.0,
+                                          static_cast<double>(plan->format().height()) / 2.0}
+                        : bounds[layer->input.value()].output.centre();
                 const document::Vec2d pivot{centre.x + anchor->value.x, centre.y + anchor->value.y};
                 auto matrix = detail::LayerMatrix::authored(position->value, pivot, scale->value,
                                                             rotation->value);
@@ -2613,6 +2650,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     vectors[index] =
                         VectorChain{input.source, layerMatrices[index].times(input.matrix),
                                     opacity ? input.opacity * opacity->value : 0};
+                } else if (const auto opacity =
+                               detail::resolveParameter(layer->opacity, *plan, resolved)) {
+                    const auto inputIndex = layer->input.value();
+                    const auto& inner = rasterChains[inputIndex];
+                    rasterChains[index] =
+                        inner ? RasterChain{inner->source,
+                                            contentMatrices[index].times(inner->matrix),
+                                            inner->opacity * opacity->value}
+                              : RasterChain{inputIndex, contentMatrices[index], opacity->value};
                 }
             }
             // Issue #414: only an operation that clips to the ROI (and Composition Output, which
@@ -2870,6 +2916,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // #448: the footage pixel aspect scales the layer's content, so a
                             // changed interpretation must not reuse the previous aspect's image.
                             key.add(step.sourcePixelAspect);
+                            key.add(step.framePivot);
                             authored(step.blendModeParameterId,
                                      core::blendModeStoredValue(step.blendMode),
                                      step.drivenBlendMode);
@@ -3814,7 +3861,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (geometry.local.empty())
                                 return;
 
-                            const auto centre = geometry.local.centre();
+                            const auto contentCentre = geometry.local.centre();
+                            const auto centre =
+                                layer.framePivot
+                                    ? decltype(contentCentre){static_cast<double>(
+                                                                  plan->format().width()) /
+                                                                  2.0,
+                                                              static_cast<double>(
+                                                                  plan->format().height()) /
+                                                                  2.0}
+                                    : contentCentre;
                             const auto window = sourceDescriptor->dataWindow();
                             const auto bufferCentre =
                                 detail::boundsForWindow(window, resolved.horizontalScale,
@@ -3874,6 +3930,40 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 if (!parented->invertible())
                                     return;
                             }
+                            // #502: fed by another raster layer, this layer resamples the chain's
+                            // first non-layer image once through the composed matrix. Its bounds
+                            // still follow its own transform of the earlier layer's bounds.
+                            std::optional<detail::ParentedLayerTransform> concatenated;
+                            std::optional<render::Rgba32fImageView> chainView;
+                            if (const auto& chain = rasterChains[layer.input.value()];
+                                !vectors[index] && chain && slots[chain->source]) {
+                                auto view = slots[chain->source]->view();
+                                const auto descriptor =
+                                    view ? view.value()->descriptor() : std::nullopt;
+                                if (!view || !descriptor.has_value()) {
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                                   "Concatenated layer source image is unavailable",
+                                                   {}, operationSubject);
+                                    return;
+                                }
+                                concatenated.emplace(
+                                    contentMatrices[index].times(chain->matrix),
+                                    descriptor->dataWindow(), resolved.horizontalScale,
+                                    resolved.verticalScale,
+                                    static_cast<float>(opacity->value * chain->opacity));
+                                if (!concatenated->finite()) {
+                                    operationFailure = diagnostic(
+                                        EvaluationDiagnosticCode::InvalidParameter,
+                                        "Concatenated transform exceeds the supported numeric "
+                                        "range",
+                                        {}, operationSubject);
+                                    return;
+                                }
+                                if (!concatenated->invertible())
+                                    return;
+                                chainView.emplace(*view.value());
+                            }
                             const auto forward = [&](double x, double y) {
                                 return parented ? parented->forwardMap(x, y)
                                                 : transform.value()->forwardMap(x, y);
@@ -3924,8 +4014,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto workingWindow = render::ImageWindow::create(
                                 -16777216, -16777216, 33554432, 33554432);
                             auto layerWindow =
-                                parented ? parented->supportBounds(*workingWindow.value())
-                                         : transform.value()->supportBounds(*workingWindow.value());
+                                concatenated ? concatenated->supportBounds(*workingWindow.value())
+                                : parented
+                                    ? parented->supportBounds(*workingWindow.value())
+                                    : transform.value()->supportBounds(*workingWindow.value());
                             if (layerWindow)
                                 layerWindow = clipWindow(*layerWindow, index);
                             if (!layerWindow.has_value()) {
@@ -4000,12 +4092,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             const auto height = layerWindow->extent().height();
                             reportRowPassStarted(progress, operationIndex, height);
                             auto& image = *builder.value();
-                            const auto& source = *sourceView.value();
+                            const auto& source = chainView ? *chainView : *sourceView.value();
                             const auto& layerTransform = *transform.value();
+                            const auto* resample = concatenated ? &*concatenated
+                                                   : parented   ? &*parented
+                                                                : nullptr;
                             const auto outputWindow = *layerWindow;
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, outputWindow.originY(),
-                                [&image, &source, &layerTransform, &parented, outputWindow,
+                                [&image, &source, &layerTransform, resample, outputWindow,
                                  &operationSubject, &vectorRaster, vectorFill, vectorStroke,
                                  vectorHasFill, vectorHasStroke, vectorRule, vectorOpacity,
                                  &cancellation](const std::int64_t y) -> RowFailure {
@@ -4063,7 +4158,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         return std::nullopt;
                                     }
                                     if (const auto rowStatus =
-                                            parented ? parented->row(source, outputWindow, y,
+                                            resample ? resample->row(source, outputWindow, y,
                                                                      *outputRow.value())
                                                      : render::layerTransformBilinearRow(
                                                            source, outputWindow, y, layerTransform,
@@ -4166,7 +4261,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 // reroute can resolve to a Layer operation while remaining a plain
                                 // image input, so the slot identity also participates in this
                                 // choice.
-                                const auto layerIndex = mergeEntryLayerIndex(*plan, entry->input);
+                                const auto layerIndex = mergeEntryLayerIndex(*plan, *entry);
                                 const auto* layerOutput = std::get_if<CompiledLayerOutput>(
                                     &plan->operations()[layerIndex.value()]);
                                 // #339: a plain image entry may name its mode explicitly.

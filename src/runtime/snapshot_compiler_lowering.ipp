@@ -31,6 +31,14 @@
         }
     }
 
+    // #502: an ordering edge that no document edge carries.
+    const auto orderBefore = [&](const document::NodeId before, const document::NodeId after) {
+        if (before == after || !indegree.contains(before) || !indegree.contains(after))
+            return;
+        outgoing[before].push_back(after);
+        ++indegree[after];
+    };
+
     for (const auto* node : reachableNodes_) {
         const auto boundary = layerOutputs_.find(node->id);
         if (boundary == layerOutputs_.end())
@@ -39,7 +47,14 @@
         if (!parentId)
             continue;
         const auto* parent = composition_->graph().findLayer(*parentId);
-        if (parent && indegree.contains(parent->nodeId)) {
+        // #502: an entry layer parent is lowered on demand from its slot's content.
+        if (parent && parent->entryOwned()) {
+            std::vector<document::NodeId> dependencies;
+            std::unordered_set<document::LayerId> seen;
+            layerOperationDependencies(*parent, dependencies, seen);
+            for (const auto dependency : dependencies)
+                orderBefore(dependency, node->id);
+        } else if (parent && indegree.contains(parent->nodeId)) {
             outgoing[parent->nodeId].push_back(node->id);
             ++indegree[node->id];
         }
@@ -51,9 +66,41 @@
         if (boundary == layerOutputs_.end() || !boundary->second->trackMatte)
             continue;
         const auto* source = composition_->graph().findLayer(boundary->second->trackMatte->source);
-        if (source && indegree.contains(source->nodeId) && source->nodeId != node->id) {
+        if (source && !source->entryOwned() && indegree.contains(source->nodeId) &&
+            source->nodeId != node->id) {
             outgoing[source->nodeId].push_back(node->id);
             ++indegree[node->id];
+        }
+    }
+
+    // #502: a Merge lowers its entries' own layers, parents and track mattes on demand, and an
+    // Adjustment lowers the entries below its entry, so each comes after what those need.
+    for (const auto* node : reachableNodes_) {
+        if (const auto* stack = composition_->graph().merge(node->id);
+            stack != nullptr && stack->enabled()) {
+            for (const auto& entry : stack->entries())
+                if (entryLowered(node->id, entry)) {
+                    std::vector<document::NodeId> dependencies;
+                    entryDependencies(node->id, entry, dependencies);
+                    for (const auto dependency : dependencies)
+                        orderBefore(dependency, node->id);
+                }
+        }
+        if (node->typeId != document::kAdjustmentNodeType || isMuted(node->id))
+            continue;
+        const auto target = singleAdjustmentTarget(node->id);
+        const auto* stack = target ? composition_->graph().merge(target->merge) : nullptr;
+        if (stack == nullptr || !stack->enabled())
+            continue;
+        bool below = false;
+        for (const auto& entry : stack->entries()) {
+            if (below && entryLowered(target->merge, entry)) {
+                std::vector<document::NodeId> dependencies;
+                entryDependencies(target->merge, entry, dependencies);
+                for (const auto dependency : dependencies)
+                    orderBefore(dependency, node->id);
+            }
+            below = below || entry.slotId == target->slot;
         }
     }
 
@@ -102,6 +149,57 @@
     return order;
 }
 
+// #502: whether a Merge lowers this entry's image (its Merge's consumption rules).
+[[nodiscard]] bool entryLowered(const document::NodeId merge,
+                                const document::LayerStackEntry& entry) const {
+    const auto* stack = composition_->graph().merge(merge);
+    if (stack == nullptr || !stack->enabled() || stack->entries().empty())
+        return false;
+    if (isMuted(merge) && entry.slotId != stack->entries().front().slotId)
+        return false;
+    return !entryExcluded(merge, entry);
+}
+
+// #502: the nodes a layer's operation is lowered from: a Layer node's own node, or an entry
+// layer's slot content and its parent's.
+void layerOperationDependencies(const document::LayerOutputBoundary& layer,
+                                std::vector<document::NodeId>& dependencies,
+                                std::unordered_set<document::LayerId>& seen) const {
+    if (!seen.insert(layer.layerId).second)
+        return;
+    if (!layer.entryOwned()) {
+        dependencies.push_back(layer.nodeId);
+        return;
+    }
+    if (const auto* edge = layerSlotInputEdge(layer.nodeId, *layer.entrySlot,
+                                              document::kLayerStackContentInputRole))
+        dependencies.push_back(edge->source.nodeId);
+    if (layer.parent)
+        if (const auto* parent = composition_->graph().findLayer(*layer.parent))
+            layerOperationDependencies(*parent, dependencies, seen);
+}
+
+// #502: what lowering one Merge entry needs: its content, its own layer and its track matte.
+void entryDependencies(const document::NodeId merge, const document::LayerStackEntry& entry,
+                       std::vector<document::NodeId>& dependencies) const {
+    if (const auto* edge =
+            layerSlotInputEdge(merge, entry.slotId, document::kLayerStackContentInputRole))
+        dependencies.push_back(edge->source.nodeId);
+    const auto* layer = entryLayerOf(merge, entry.slotId);
+    if (layer == nullptr)
+        return;
+    std::unordered_set<document::LayerId> seen;
+    if (layer->entryOwned())
+        layerOperationDependencies(*layer, dependencies, seen);
+    else if (layer->parent)
+        // An adjustment entry's coverage is placed with its Layer node's parent.
+        if (const auto* parent = composition_->graph().findLayer(*layer->parent))
+            layerOperationDependencies(*parent, dependencies, seen);
+    if (layer->trackMatte)
+        if (const auto* source = composition_->graph().findLayer(layer->trackMatte->source))
+            layerOperationDependencies(*source, dependencies, seen);
+}
+
 [[nodiscard]] std::optional<CompiledCurveTables> compileReachableCurves() {
     std::unordered_set<document::AnimationCurveId> reachableCurveIds;
     const auto addParameterCurve = [&](const document::ParameterId id) {
@@ -132,6 +230,16 @@
                     static_cast<void>(schema);
                     addParameterCurve(id);
                 }
+    }
+    // #502: a reached entry layer owns its parameters and masks outside any node binding.
+    for (const auto* layer : reachedEntryLayers_) {
+        for (const auto& binding : layer->parameters)
+            addParameterCurve(binding.parameterId);
+        for (const auto& mask : layer->masks)
+            for (const auto& [id, schema] : document::layerMaskParameters(mask)) {
+                static_cast<void>(schema);
+                addParameterCurve(id);
+            }
     }
     // #436: the audio mix samples an audible layer's Time Remap whether or not the layer has a
     // picture. An audio-only Layer Output is an empty image, so the loop above skips it; its remap
@@ -248,6 +356,19 @@ lower(const std::vector<document::NodeId>& order) {
         // source.
         if (isValueNode(id))
             continue;
+        // #502: an Adjustment draws its target entry's stack below; with no single target, or
+        // muted, it draws nothing. Several targets are a mistake the artist is told about.
+        if (definition->lowering == runtime::NodeLoweringKind::Adjustment) {
+            if (!isMuted(id) && adjustmentTargetsOf(id).size() > 1)
+                addWarning(runtime::CompileDiagnosticCode::AdjustmentTargetAmbiguous,
+                           subject(id, "image"),
+                           "Adjustment reaches more than one Merge entry; it draws nothing",
+                           "An Adjustment's image is the stack below the one Merge entry its "
+                           "chain lands in. Connect its chain to a single entry.");
+            if (isMuted(id) || !singleAdjustmentTarget(id))
+                emptyImages_.insert(id);
+            continue;
+        }
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput &&
             definition->lowering != runtime::NodeLoweringKind::ImageEffect)
             continue;
@@ -336,6 +457,14 @@ lower(const std::vector<document::NodeId>& order) {
             continue;
         if (isValueNode(nodeId))
             continue;
+        // #502: an Adjustment's operation is the stack below its entry.
+        if (definition->second->lowering == runtime::NodeLoweringKind::Adjustment) {
+            const auto below = lowerStackBelowAdjustment(nodeId, indices);
+            if (!below)
+                return {};
+            indices.emplace(nodeId, *below);
+            continue;
+        }
         // Channel algebra (Remove, Channel Copy, a Shuffle's channel output) touches no pixels and
         // compiles into the expression of the Shuffle whose image output reads it.
         if (definition->second->lowering == runtime::NodeLoweringKind::Channel) {
@@ -613,46 +742,6 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, index);
             continue;
         }
-        // ADR 0028 track mattes: each matted entry of this Merge composites a Multiply Alpha of its
-        // Layer Output by its source layer's output; an absent source is a transparent matte.
-        if (definition->second->lowering == runtime::NodeLoweringKind::LayerStack) {
-            if (const auto* stack = composition_->graph().merge(nodeId); stack != nullptr)
-                for (const auto& entry : stack->entries()) {
-                    const auto* target = composition_->graph().findLayer(entry.layerId);
-                    if (target == nullptr || !target->trackMatte)
-                        continue;
-                    const auto targetIndex = indices.find(target->nodeId);
-                    if (targetIndex == indices.end())
-                        continue;
-                    const auto* source =
-                        composition_->graph().findLayer(target->trackMatte->source);
-                    std::optional<runtime::OperationIndex> matte;
-                    if (source != nullptr)
-                        if (const auto found = indices.find(source->nodeId); found != indices.end())
-                            matte = found->second;
-                    if (!matte) {
-                        matte = runtime::OperationIndex::fromRaw(operations.size());
-                        operations.emplace_back(runtime::CompiledMerge{target->nodeId, {}});
-                    }
-                    runtime::CompiledImageEffect effect{
-                        target->nodeId,
-                        targetIndex->second,
-                        runtime::ImageCombineKernel{
-                            runtime::ImageCombineMode::MultiplyAlpha,
-                            runtime::CompiledScalarParameter{document::ParameterId{}, 1.0},
-                            target->trackMatte->channel == document::TrackMatteChannel::Luma
-                                ? render::ImageCoverageChannel::Luma
-                                : render::ImageCoverageChannel::Alpha,
-                            std::nullopt, target->trackMatte->inverted},
-                        false,
-                        false,
-                        *matte};
-                    effect.trackMatte = true;
-                    trackMatteEntries_.insert_or_assign(
-                        target->nodeId, runtime::OperationIndex::fromRaw(operations.size()));
-                    operations.emplace_back(std::move(effect));
-                }
-        }
         auto operation = emptyParentInput ? lowerLayerOutput(*node, indices, emptyParentInput)
                                           : lowerNode(*node, *definition->second, indices);
         if (!operation.has_value()) {
@@ -914,7 +1003,7 @@ void collectAudibleLayers() {
         const auto* layerNode = findNode(layerNodeId);
         const auto boundary =
             std::ranges::find_if(graph.layerOutputs(), [&](const auto& candidate) {
-                return candidate.nodeId == layerNodeId;
+                return !candidate.entryOwned() && candidate.nodeId == layerNodeId;
             });
         if (layerNode == nullptr || layerNode->typeId != document::kLayerOutputNodeType ||
             boundary == graph.layerOutputs().end()) {
@@ -1051,6 +1140,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::Shape:
         return lowerShape(node);
     case NodeLoweringKind::Mask: // lowered in the main loop: a canvas Solid then a mask effect
+    case NodeLoweringKind::Adjustment: // lowered in the main loop: the stack below its entry
     // ADR 0026: channel nodes are lowered in the main loop (a Shuffle's image output is a
     // CompiledChannelShuffle; channel algebra compiles into its expression).
     case NodeLoweringKind::Channel:
@@ -2463,138 +2553,7 @@ lowerText(const document::NodeRecord& node) {
     return result;
 }
 
-[[nodiscard]] std::optional<runtime::CompiledOperation>
-lowerLayerOutput(const document::NodeRecord& node,
-                 const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices,
-                 std::optional<runtime::OperationIndex> emptyInput = std::nullopt) {
-    using namespace document;
-    const auto input = emptyInput
-                           ? emptyInput
-                           : findInputOperation(node.id, kLayerOutputContentInputPort, indices);
-    const auto boundary = layerOutputs_.find(node.id);
-    const auto* positionBinding = findParameterBinding(node, kPositionParameterRole);
-    const auto* anchorBinding = findParameterBinding(node, kAnchorParameterRole);
-    const auto* scaleBinding = findParameterBinding(node, kScaleParameterRole);
-    const auto* rotationBinding = findParameterBinding(node, kRotationParameterRole);
-    const auto* opacityBinding = findParameterBinding(node, kOpacityParameterRole);
-    const auto* blendModeBinding = findParameterBinding(node, kBlendModeParameterRole);
-    // The blend mode lowers like CompiledText's three values: a validated constant read straight
-    // off the parameter store, not a curve source, because the schema declares it non-animatable.
-    // An integer naming no implemented mode cannot reach here -- ParameterStore refuses it on
-    // insert and document validation refuses it on publication -- so failing to resolve one is a
-    // topology failure, exactly as a missing transform binding is.
-    const auto* storedBlendMode = parameterConstant<std::int64_t>(blendModeBinding);
-    const auto blendMode = storedBlendMode == nullptr
-                               ? std::nullopt
-                               : core::blendModeFromStoredValue(*storedBlendMode);
-    // Task DRIVE-1: driven, the mode has no stored constant, so the plan carries the registry
-    // default beside the driver and the evaluator reads the driver. A mode is a jump between two
-    // named modes rather than a value with a midpoint, which is exactly what a driver expresses.
-    const auto drivenBlendMode = drivenOutput(blendModeBinding, runtime::SocketValueKind::Integer);
-    if (unreadableDriver(node, blendModeBinding, runtime::SocketValueKind::Integer,
-                         drivenBlendMode))
-        return std::nullopt;
-    const auto position = compiledVec2Parameter(positionBinding);
-    const auto anchor = compiledVec2Parameter(anchorBinding);
-    const auto scale = compiledVec2Parameter(scaleBinding);
-    const auto rotation = compiledScalarParameter(rotationBinding);
-    const auto opacity = compiledScalarParameter(opacityBinding);
-    if (!input || boundary == layerOutputs_.end() || positionBinding == nullptr ||
-        anchorBinding == nullptr || scaleBinding == nullptr || rotationBinding == nullptr ||
-        opacityBinding == nullptr || blendModeBinding == nullptr || !position.has_value() ||
-        !anchor.has_value() || !scale.has_value() || !rotation.has_value() ||
-        !opacity.has_value() || (!blendMode.has_value() && !drivenBlendMode.has_value())) {
-        addTopologyFailure(node.id, "Validated Layer Output could not be lowered.");
-        return std::nullopt;
-    }
-    std::optional<runtime::OperationIndex> parentIndex;
-    if (boundary->second->parent) {
-        const auto* parent = composition_->graph().findLayer(*boundary->second->parent);
-        const auto found = parent ? indices.find(parent->nodeId) : indices.end();
-        if (found == indices.end()) {
-            addTopologyFailure(node.id, "Layer parent must be lowered before its child.");
-            return std::nullopt;
-        }
-        parentIndex = found->second;
-    }
-    const auto time = lowerLayerTime(node, *boundary->second);
-    if (!time)
-        return std::nullopt;
-    // #381: the footage's pixel aspect override, relative to its decoded (file) ratio.
-    double sourcePixelAspect = 1.0;
-    if (const auto source = document::layerSource(*composition_, *boundary->second))
-        if (const auto* assetId = std::get_if<document::AssetId>(&*source))
-            if (const auto* asset = request_.snapshot.project().findAsset(*assetId);
-                asset != nullptr && asset->interpretation.pixelAspect) {
-                const auto file = document::footageFilePixelAspect(*asset);
-                const auto shown = *asset->interpretation.pixelAspect;
-                sourcePixelAspect =
-                    (static_cast<double>(shown.numerator()) / shown.denominator()) /
-                    (static_cast<double>(file.numerator()) / file.denominator());
-            }
-    return runtime::CompiledLayerOutput{node.id,
-                                        boundary->second->layerId,
-                                        *input,
-                                        *position,
-                                        *anchor,
-                                        *scale,
-                                        *rotation,
-                                        *opacity,
-                                        blendModeBinding->parameterId,
-                                        blendMode.value_or(core::kDefaultBlendMode),
-                                        boundary->second->inPoint,
-                                        boundary->second->endPoint(composition_->duration()),
-                                        drivenBlendMode,
-                                        parentIndex,
-                                        *time,
-                                        sourcePixelAspect};
-}
-
-[[nodiscard]] std::optional<runtime::CompiledOperation>
-lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition& definition,
-                const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
-    if (!definition.layerSlotInput.has_value()) {
-        addTopologyFailure(node.id, "Layer Stack definition has no slot-input contract.");
-        return std::nullopt;
-    }
-    if (!composition_->graph().merge(node.id)->enabled())
-        return runtime::CompiledMerge{node.id, {}};
-    const auto& layerSlotInput = *definition.layerSlotInput;
-    std::vector<runtime::CompiledMergeInput> entries;
-    entries.reserve(composition_->graph().merge(node.id)->entries().size());
-    const auto slots = composition_->graph().merge(node.id)->entries();
-    for (const auto& entry : slots) {
-        if ((isMuted(node.id) && entry.slotId != slots.front().slotId) || mutedLayer(entry) ||
-            isMatteSource(entry.layerId))
-            continue;
-        if (cancelled()) {
-            return std::nullopt;
-        }
-        const auto* edge = layerSlotInputEdge(node.id, entry.slotId, layerSlotInput.role);
-        if (edge == nullptr) {
-            // An audio-only layer occupies the same stable stack slot but has no image operation.
-            // Its typed audio edge is lowered by lowerAudioMix(), so it is intentionally absent
-            // from the image merge entries.
-            if (definition.audioLayerSlotInput.has_value() &&
-                layerSlotInputEdge(node.id, entry.slotId, definition.audioLayerSlotInput->role) !=
-                    nullptr)
-                continue;
-            addTopologyFailure(node.id, "Validated Layer Stack input could not be lowered.");
-            return std::nullopt;
-        }
-        if (emptyImages_.contains(edge->source.nodeId))
-            continue;
-        const auto source = indices.find(edge->source.nodeId);
-        if (source == indices.end()) {
-            addTopologyFailure(node.id, "Layer Stack input operation is unavailable.");
-            return std::nullopt;
-        }
-        const auto matted = trackMatteEntries_.find(edge->source.nodeId);
-        entries.push_back({entry.slotId, entry.layerId,
-                           matted == trackMatteEntries_.end() ? source->second : matted->second});
-    }
-    return runtime::CompiledMerge{node.id, std::move(entries)};
-}
+#include "snapshot_compiler_entries.ipp"
 
 [[nodiscard]] std::optional<runtime::CompiledOperation> lowerCompositionOutput(
     const document::NodeRecord& node,

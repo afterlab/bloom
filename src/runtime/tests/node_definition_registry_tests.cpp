@@ -141,8 +141,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
-    // Association.
-    expectations.expect(registry.definitions().size() == 153,
+    // Association; #502 adds Adjustment.
+    expectations.expect(registry.definitions().size() == 154,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
