@@ -33,6 +33,7 @@ target_sources(
         session_open.cpp
         session_recovery.cpp
         session_save.cpp
+        sequence_digest_recording.cpp
     PUBLIC
         FILE_SET HEADERS
         BASE_DIRS include
@@ -61,6 +62,7 @@ target_sources(
             include/bloom/host/session_open.hpp
             include/bloom/host/session_recovery.hpp
             include/bloom/host/session_save.hpp
+            include/bloom/host/sequence_digest_recording.hpp
 )
 
 target_compile_features(bloom_host PUBLIC cxx_std_20)

@@ -1,6 +1,9 @@
+#include <bloom/host/sequence_digest_recording.hpp>
 #include <bloom/host/session_save.hpp>
 
+#include <filesystem>
 #include <new>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -66,8 +69,21 @@ SavePublicationResult executeSessionSaveMiddle(
                                               project::kCanonicalDocumentSchemaVersionV1.minor)},
         .requirements = input.capturedInput.retainedRequirements(),
     };
+    // #495: record what the ADR 0025 memo already proved about sequence members into the bytes
+    // published, here on the save worker. No hashing and no waiting; a failure to record leaves
+    // the captured snapshot as it is, and the live document is never touched.
+    std::optional<document::Snapshot> verified;
+    try {
+        std::optional<std::filesystem::path> projectPath;
+        if (input.capturedInput.displayPath())
+            projectPath = input.capturedInput.displayPath()->value();
+        verified = snapshotWithVerifiedSequenceDigests(input.capturedInput.snapshot(),
+                                                       assetBaseDirectory(projectPath));
+    } catch (...) {
+        verified.reset();
+    }
     const project::CanonicalDocumentV1 documentInput{
-        .snapshot = &input.capturedInput.snapshot(),
+        .snapshot = verified ? &*verified : &input.capturedInput.snapshot(),
         .colorSettings = &input.capturedInput.colorSettings(),
         .roundTrip = input.capturedInput.roundTrip(),
         .schemaMinor = input.capturedInput.schemaMinor(),

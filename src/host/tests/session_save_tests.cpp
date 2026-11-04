@@ -2,6 +2,7 @@
 
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/core/file_uri.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/color_settings.hpp>
@@ -11,6 +12,8 @@
 #include <bloom/document/project.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
+#include <bloom/host/sequence_digest_recording.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/canonical_manifest.hpp>
@@ -18,6 +21,7 @@
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/manifest_decode.hpp>
 #include <bloom/project/manifest_requirements.hpp>
+#include <bloom/project/open_archive.hpp>
 #include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/round_trip_state.hpp>
 #include <bloom/project/save_archive.hpp>
@@ -526,14 +530,14 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         return;
     }
 
-    const std::string anchor = "\"minor\": 35\n  },\n  \"project\"";
+    const std::string anchor = "\"minor\": 36\n  },\n  \"project\"";
     const auto anchorPos = text.find(anchor);
     expectations.expect(anchorPos != std::string::npos,
                         "round-tripped newer minor: root schemaVersion anchor is located");
     if (anchorPos == std::string::npos) {
         return;
     }
-    text.replace(anchorPos, std::string_view("\"minor\": 35").size(), "\"minor\": 36");
+    text.replace(anchorPos, std::string_view("\"minor\": 36").size(), "\"minor\": 37");
     expectations.expect(text.size() >= 2 && text.back() == '\n' && text[text.size() - 2] == '}',
                         "round-tripped newer minor: baseline ends with the root's closing brace");
     if (text.size() < 2 || text.back() != '\n' || text[text.size() - 2] != '}') {
@@ -577,7 +581,7 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
                          .displayPath = std::nullopt,
                          .persistedAllocatorHighWater = persistedHighWater,
                          .roundTrip = std::move(roundTrip),
-                         .schemaMinor = 36,
+                         .schemaMinor = 37,
                          .retainedRequirements = {}});
     expectations.expect(static_cast<bool>(sessionResult),
                         "round-tripped newer minor: the session installs the round-tripped "
@@ -625,8 +629,8 @@ void testRoundTrippedNewerMinorGreenChain(Expectations& expectations) {
         expectations.expect(
             static_cast<bool>(decodedManifest) && decodedManifest.value() != nullptr &&
                 decodedManifest.value()->documentSchemaVersion ==
-                    bloom::document::SchemaVersion{1, 36},
-            "round-tripped newer minor: the published manifest declares document schema {1, 36}");
+                    bloom::document::SchemaVersion{1, 37},
+            "round-tripped newer minor: the published manifest declares document schema {1, 37}");
     }
 
     auto documentDom =
@@ -1151,6 +1155,177 @@ void testDeterminism(Expectations& expectations) {
 
 } // namespace
 
+// ---------------------------------------------------------------------------------------------
+// #495 / document 1.36: a save records what the ADR 0025 memo already proved about sequence
+// members, without hashing and without touching the live document.
+// ---------------------------------------------------------------------------------------------
+
+void writeFile(const std::filesystem::path& path, const std::string& bytes) {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
+[[nodiscard]] bloom::core::Sha256Digest digestOf(const std::string& bytes) {
+    return *bloom::core::Sha256Hasher::hash(std::as_bytes(std::span(bytes)));
+}
+
+[[nodiscard]] bloom::document::AssetFileStamp stampOf(const std::filesystem::path& path) {
+    const auto identity = bloom::platform::observeFileIdentity(path);
+    if (!identity)
+        throw std::logic_error("stamp fixture");
+    return {identity->size, identity->modifiedNanoseconds};
+}
+
+// A four-member sequence in `directory`, project-relative: frame 1 pending, frame 2 legacy with
+// its true digest, frame 3 legacy with a digest the bytes do not have, frame 4 pending with a
+// stamp the file no longer carries. Only frames 1-3 are hashed into the memo.
+[[nodiscard]] bloom::document::AssetRecord memoSequence(const std::filesystem::path& directory) {
+    using namespace bloom::document;
+    AssetRecord asset;
+    asset.id = AssetId::fromRaw(900);
+    asset.kind = AssetKind::Sequence;
+    asset.width = 8;
+    asset.height = 8;
+    asset.name = "plate";
+    asset.manifest.pattern = "plate.####.bin";
+    asset.manifest.padding = 4;
+    asset.manifest.first = 1;
+    asset.manifest.last = 4;
+    for (int frame = 1; frame <= 4; ++frame) {
+        const auto name = "plate.000" + std::to_string(frame) + ".bin";
+        const auto path = directory / name;
+        const auto bytes = "frame " + std::to_string(frame) + " bytes";
+        writeFile(path, bytes);
+        AssetSequenceMember member;
+        member.frame = frame;
+        member.locator.path = name;
+        member.locator.relinkHint = *bloom::core::fileUriFromAbsolutePath(path);
+        if (frame == 1 || frame == 4)
+            member.stamp = stampOf(path);
+        if (frame == 2)
+            member.contentDigest = digestOf(bytes);
+        if (frame == 3)
+            member.contentDigest = digestOf("other bytes");
+        if (frame == 4)
+            member.stamp->size += 1;
+        if (frame != 4 &&
+            bloom::platform::hashSourceFile(path).error != bloom::platform::SourceHashError::None)
+            throw std::logic_error("memo fixture");
+        asset.manifest.members.push_back(std::move(member));
+    }
+    asset.locator = asset.manifest.members.front().locator;
+    return asset;
+}
+
+void testRecordVerifiedSequenceDigests(Expectations& expectations) {
+    TempDirectory directory;
+    if (!directory.isValid()) {
+        expectations.expect(false, "verified digests: fixture directory");
+        return;
+    }
+    auto created = bloom::document::makeNewProject("Digests", "Main",
+                                                   bloom::core::RationalTime::fromInteger(10));
+    const auto asset = memoSequence(directory.path());
+    expectations.expect(asset.validate().ok(), "verified digests: the fixture asset validates");
+    if (!created.project.addAsset(asset))
+        throw std::logic_error("add asset");
+    bloom::host::VerifiedDigestRecording counts;
+    const auto completed =
+        bloom::host::recordVerifiedSequenceDigests(created.project, directory.path(), &counts);
+    expectations.expect(completed.has_value() && counts.digestsRecorded == 1 &&
+                            counts.stampsRecorded == 1,
+                        "verified digests: one pending member gains a digest, one legacy member "
+                        "gains a stamp");
+    if (!completed)
+        return;
+    const auto& members = completed->findAsset(asset.id)->manifest.members;
+    const auto& before = asset.manifest.members;
+    expectations.expect(members[0].stamp == before[0].stamp &&
+                            members[0].contentDigest == digestOf("frame 1 bytes"),
+                        "verified digests: a pending member gains the memo digest for its stamp");
+    expectations.expect(bloom::document::sequenceMemberIdentity(members[0]) ==
+                            bloom::document::sequenceMemberIdentity(before[0]),
+                        "verified digests: recording the digest keeps the member's identity");
+    expectations.expect(members[1].contentDigest == before[1].contentDigest &&
+                            members[1].stamp == stampOf(directory.path() / "plate.0002.bin"),
+                        "verified digests: a legacy member gains the stamp of the verified file");
+    expectations.expect(members[2] == before[2],
+                        "verified digests: a memo digest that differs leaves the member as it is");
+    expectations.expect(members[3] == before[3],
+                        "verified digests: a member whose file left its stamp stays pending");
+    expectations.expect(completed->findAsset(asset.id)->validate().ok(),
+                        "verified digests: the completed asset validates");
+    expectations.expect(
+        !bloom::host::recordVerifiedSequenceDigests(*completed, directory.path()).has_value(),
+        "verified digests: a verified member is left unchanged, and nothing changes twice");
+}
+
+void testSaveRecordsVerifiedDigests(Expectations& expectations) {
+    TempDirectory directory;
+    ProjectSessionIdentitySource identitySource;
+    auto coordinator = makePublicationCoordinator(expectations);
+    auto artifacts = makeArtifactsCoordinator(expectations);
+    if (!directory.isValid() || !coordinator.has_value() || !artifacts.has_value()) {
+        expectations.expect(false, "save records digests: fixture is available");
+        return;
+    }
+    const auto targetPath = directory.path() / "project.bloom";
+    auto created = bloom::document::makeNewProject("Digests", "Main",
+                                                   bloom::core::RationalTime::fromInteger(10));
+    const auto asset = memoSequence(directory.path());
+    if (!created.project.addAsset(asset))
+        throw std::logic_error("add asset");
+    auto sessionResult = ProjectSession::createDecoded(
+        identitySource, {.project = std::move(created.project),
+                         .colorSettings = neutralColorSettings(),
+                         .editability = DecodedProjectEditability::Editable,
+                         .displayPath = ProjectDisplayPath::create(targetPath),
+                         .persistedAllocatorHighWater = std::nullopt});
+    if (!sessionResult)
+        throw std::logic_error("session fixture");
+    auto session = std::move(sessionResult).takeSession();
+    expectations.expect(session.execute(rename("Edited", session)).changed(),
+                        "save records digests: the edit commits");
+    const auto revision = currentRevision(session);
+    const auto liveBefore = session.decodedSnapshot();
+    const auto liveAsset = *liveBefore.snapshot().project().findAsset(asset.id);
+
+    const SessionSaveRequest request{
+        .targetPath = targetPath,
+        .overwritePolicy = ArtifactOverwritePolicy::CreateOnly,
+        .expectedTarget = std::nullopt,
+        .limits = {},
+        .intent = session.capturePlainSavePathIntent(),
+    };
+    auto result = saveProjectSession(session, *coordinator, *artifacts, request, makeOperation());
+    expectations.expect(static_cast<bool>(result), "save records digests: the save publishes");
+    const auto state = session.stateSnapshot();
+    expectations.expect(state.currentRevision == revision,
+                        "save records digests: the live revision is unchanged");
+    expectations.expect(state.cleanRevision == revision && state.dirty == false,
+                        "save records digests: the saved revision is the clean one");
+    const auto liveAfter = session.decodedSnapshot();
+    expectations.expect(*liveAfter.snapshot().project().findAsset(asset.id) == liveAsset,
+                        "save records digests: the live document's members are untouched");
+
+    const auto published = readFile(targetPath);
+    auto reopened = bloom::project::openProjectArchive(asBytes(published), SaveArchiveLimits{},
+                                                       makeOperation());
+    expectations.expect(reopened.outcome() == bloom::project::OpenArchiveOutcome::Opened,
+                        "save records digests: the published file reopens");
+    if (reopened.outcome() != bloom::project::OpenArchiveOutcome::Opened)
+        return;
+    const auto opened = std::move(reopened).takeOpened();
+    const auto* saved = opened.document->snapshot().project().findAsset(asset.id);
+    expectations.expect(saved != nullptr && saved->manifest.members[0].contentDigest &&
+                            saved->manifest.members[0].stamp &&
+                            saved->manifest.members[1].contentDigest &&
+                            saved->manifest.members[1].stamp && !saved->manifest.members[2].stamp &&
+                            !saved->manifest.members[3].contentDigest,
+                        "save records digests: the saved file holds the verified members, and "
+                        "the unproven ones as they were");
+}
+
 int main() {
     Expectations expectations;
     try {
@@ -1163,6 +1338,8 @@ int main() {
         testPublishedSavepointBookkeepingFailedShape(expectations);
         testBudgetExhaustionPassThrough(expectations);
         testDeterminism(expectations);
+        testRecordVerifiedSequenceDigests(expectations);
+        testSaveRecordsVerifiedDigests(expectations);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected fixture exception: " << error.what() << '\n';
         return EXIT_FAILURE;
