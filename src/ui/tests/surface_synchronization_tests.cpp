@@ -13,8 +13,10 @@
 
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/node_editor.hpp>
 
 #include "node_editor_add.hpp"
@@ -328,6 +330,18 @@ void agree(const Surfaces& surfaces, const std::string& where) {
     for (const auto& row : rows) {
         const auto* parameter = parameterOf(surfaces, nodeId, row.role);
         auto* card = cardCell(surfaces, nodeId, row.cardName);
+        bool dialCell = false;
+        // #541: a role the card draws beside its dial is shown, edited and synchronised through
+        // the dial row's own cell; the plain row stays hidden behind it for its socket.
+        if (card != nullptr) {
+            auto* dialRow = qobject_cast<AngleDialRow*>(surfaces.nodes->graphScene()->nodeFieldForTest(
+                nodeId, QStringLiteral("angleDialRow.%1").arg(QString::fromStdString(
+                            std::string(row.role)))));
+            if (dialRow != nullptr) {
+                card = dialRow->valueRow()->field();
+                dialCell = true;
+            }
+        }
         auto* panel = panelCell(surfaces, row.panelName);
         if (parameter == nullptr) {
             check.say(card == nullptr, "a card builds no cell for a parameter its node lacks");
@@ -367,7 +381,9 @@ void agree(const Surfaces& surfaces, const std::string& where) {
                 check.say(card->isEnabled() == value.has_value(),
                           "a card cell is live exactly when its parameter has a readable value");
             }
-            if (value.has_value()) {
+            // A dial row's cell reads "Linked" while driven and is hidden with it, so only its
+            // unlinked number is a promise.
+            if (value.has_value() && !(dialCell && driven)) {
                 check.say(same(card->value(), *value * row.displayScale),
                           "the card shows the document's value");
             }

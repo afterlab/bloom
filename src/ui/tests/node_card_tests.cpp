@@ -51,9 +51,19 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
     std::vector<std::pair<QGraphicsProxyWidget*, QWidget*>> hosted;
     std::size_t diamondCount = 0;
     std::size_t componentDiamondCount = 0;
+    bool rotationDial = false;
     for (const auto& entry : allHosted) {
         if (entry.second->objectName() == QStringLiteral("nodeKeyframeDiamond")) {
             ++diamondCount;
+            continue;
+        }
+        // #541: Rotation is drawn by the card's controls widget -- its value beside a dial, with
+        // its own diamond -- and its plain row stays hidden behind it.
+        if (entry.second->objectName() == QStringLiteral("nodeControls")) {
+            rotationDial = entry.second->findChild<QWidget*>(QStringLiteral("angleDial.rotation")) !=
+                           nullptr;
+            diamondCount +=
+                static_cast<std::size_t>(entry.second->findChildren<KeyframeDiamond*>().size());
             continue;
         }
         diamondCount += static_cast<std::size_t>(
@@ -62,9 +72,10 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
             entry.second->findChildren<KeyframeDiamond*>("nodeComponentKeyframeDiamond").size());
         hosted.push_back(entry);
     }
-    // ADAPTED (task S4, then blend modes): the Layer Output card now hosts position X/Y, anchor
-    // X/Y, scale X/Y, rotation, opacity and the blending dropdown -- nine value controls.
-    expect(hosted.size() == 9,
+    // ADAPTED (task S4, then blend modes, then #541): the Layer Output card hosts position X/Y,
+    // anchor X/Y, scale X/Y, opacity and the blending dropdown as rows -- eight value controls --
+    // and Rotation in its controls widget beside a dial.
+    expect(hosted.size() == 8 && rotationDial,
            "the layer output card hosts its transform, opacity and blending controls");
     // Five parameter indicators plus the six independently keyable vector components.
     expect(diamondCount == 5, "one parameter diamond per animatable parameter");

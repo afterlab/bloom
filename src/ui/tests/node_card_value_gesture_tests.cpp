@@ -11,11 +11,13 @@
 // between the viewport and the hosted control.
 #include "node_production_harness.hpp"
 
+#include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/color_picker.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/value_field.hpp>
+#include <bloom/ui/node_controls_widget.hpp>
 
 #include <QGraphicsProxyWidget>
 #include <QLineEdit>
@@ -75,6 +77,14 @@ void key(App& app, const Qt::Key code) {
 
 [[nodiscard]] kit::KValueField* field(App& app, const document::NodeId node, const QString& name) {
     return qobject_cast<kit::KValueField*>(app.editor.graphScene()->nodeFieldForTest(node, name));
+}
+
+// #541: the Layer card draws Rotation as a value beside its dial; that row's cell is the one an
+// artist types into (the plain row stays behind it for its socket).
+[[nodiscard]] kit::KValueField* rotationCell(App& app, const document::NodeId layer) {
+    auto* row = qobject_cast<AngleDialRow*>(
+        app.editor.graphScene()->nodeFieldForTest(layer, QStringLiteral("angleDialRow.rotation")));
+    return row == nullptr ? nullptr : row->valueRow()->field();
 }
 
 // The n-th control of `name` on a card: a Math node carries several "nodeOperandEditor" fields, and
@@ -297,7 +307,7 @@ void tabMovesBetweenCells(App& app, const document::NodeId layer) {
 
 // --- (e) Esc confirms ---------------------------------------------------------------------------
 void escapeCancels(App& app, const document::NodeId layer) {
-    auto* rotation = field(app, layer, QStringLiteral("nodeRotationEditor"));
+    auto* rotation = rotationCell(app, layer);
     expect(rotation != nullptr, "the Layer card carries a Rotation cell");
     if (rotation == nullptr) {
         return;
@@ -466,7 +476,7 @@ void editingAValueKeepsTheSelection(App& app, const document::NodeId layer,
     app.session.selectNodes({layer, other}, layer);
     QCoreApplication::processEvents();
     expect(app.session.selectedNodes().size() == 2, "two cards are selected before the edit");
-    auto* rotation = field(app, layer, QStringLiteral("nodeRotationEditor"));
+    auto* rotation = rotationCell(app, layer);
     if (rotation == nullptr) {
         return;
     }

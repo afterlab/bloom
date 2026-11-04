@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <variant>
 
 namespace bloom::ui {
 namespace {
@@ -134,6 +135,14 @@ void AngleDialRow::resizeEvent(QResizeEvent* event) {
 void AngleDialRow::refresh(const bool locked) {
     row_->refresh(locked);
     const auto id = row_->parameter();
+    // A driven angle shows its label and socket and nothing else, like every other card row: the
+    // link owns the value, so neither the number nor the dial is offered.
+    const auto* composition = session_.composition();
+    const auto* record = composition && id ? composition->parameters().find(*id) : nullptr;
+    const bool linked =
+        record != nullptr && std::holds_alternative<document::DriverBindingSource>(record->source);
+    row_->field()->setVisible(!linked);
+    dial_->setVisible(!linked);
     dial_->setEnabled(id && !locked && scalarEditable(session_, *id));
     if (const auto value = id ? liveScalar(session_, *id) : std::nullopt;
         value && !dial_->hasLiveEdit()) {

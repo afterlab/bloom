@@ -15,6 +15,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <string_view>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -57,6 +58,38 @@ constexpr double kLevelsCardWidth = 360.0;
 // the Properties panel's field control, which is wider still.
 constexpr double kDropdownCardWidth = 384.0;
 constexpr double kSlotPitch = 12.0;
+// #541: the node-controls card widget (node_controls_widget.cpp). An angle's row grows to its dial
+// (Size::Control + Size::ToggleCell), a pair of bounds adds its range track (Size::Control) under
+// its two rows, and a point pad is at most Size::DropdownWidthExpanded less Size::ControlRoomy tall;
+// each section is followed by Spacing::XS and the widget by the card's padding. A pad card is as
+// wide as a label beside two position cells.
+constexpr double kDialSide = 50.0;
+constexpr double kPadMaxHeight = 208.0;
+constexpr double kPadCardWidth = 336.0;
+
+struct NodeControlsEstimate final {
+    int angles = 0;
+    int ranges = 0;
+    bool pad = false;
+};
+
+[[nodiscard]] NodeControlsEstimate nodeControlsEstimate(const std::string_view typeId) {
+    if (typeId == "bloom.transform-2d")
+        return {1, 0, true};
+    if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient")
+        return {0, 0, true};
+    if (typeId == "bloom.drop-shadow" || typeId == "bloom.glow" || typeId == "bloom.layer-output" ||
+        typeId == "bloom.hue-shift" || typeId == "bloom.rotate-2d" ||
+        typeId == "bloom.polar-to-cartesian" || typeId == "bloom.degrees-to-radians" ||
+        typeId == "bloom.radians-to-degrees")
+        return {1, 0, false};
+    if (typeId == "bloom.map-range")
+        return {0, 2, false};
+    if (typeId == "bloom.luma-key" || typeId == "bloom.clamp" || typeId == "bloom.in-range" ||
+        typeId == "bloom.random" || typeId == "bloom.wrap" || typeId == "bloom.smoothstep")
+        return {0, 1, false};
+    return {};
+}
 
 struct Rect final {
     double left = 0.0;
@@ -250,7 +283,15 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         thumbnail = 2.0 * (kControl + kSmall) + std::round(inner * kLevelsPlotAspect) +
                     2.0 * kLevelsHandle + kSmall + kPadding + kSmall + 2.0 * kControl + kSmall +
                     kPadding;
-    return {cardWidth, kTitleBand + sockets * kRow + pills + rows * kRow + kPadding + thumbnail};
+    const auto controls = nodeControlsEstimate(node->typeId);
+    double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
+                            static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +
+                            (controls.pad ? kPadMaxHeight + kSmall : 0.0);
+    if (controlsHeight > 0.0)
+        controlsHeight += kPadding;
+    const double controlsWidth = controls.pad ? std::max(cardWidth, kPadCardWidth) : cardWidth;
+    return {controlsWidth, kTitleBand + sockets * kRow + pills + rows * kRow + kPadding + thumbnail +
+                               controlsHeight};
 }
 
 NodeCardSizes nodeCardSizes(const document::Composition& composition,
