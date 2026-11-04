@@ -2527,6 +2527,12 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
     }
     if (valueEdit_ && valueEdit_->anchor && valueEdit_->anchor->parameter == parameter->id)
         return ParameterSample(valueEdit_->anchor->value);
+    // #494: a parameter that follows a several-parameter gesture.
+    if (valueEdit_)
+        for (const auto& linked : valueEdit_->linked)
+            if (linked.parameter == parameter->id)
+                if (const auto* scalar = std::get_if<double>(&linked.value))
+                    return ParameterSample(*scalar);
     if (valueEdit_ && isValueEditing(parameter->id))
         return std::visit(
             [](const auto& value) -> std::optional<ParameterSample> {

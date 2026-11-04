@@ -10,6 +10,7 @@
 #include <bloom/document/image_preview.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
+#include <bloom/ui/node_card_widget.hpp>
 #pragma once
 #include <bloom/ui/node_editor.hpp>
 
@@ -660,6 +661,7 @@ class NodeItem final : public QGraphicsObject {
     // while collapsed).
     [[nodiscard]] bool isImagePreview() const noexcept { return imagePreview_; }
     [[nodiscard]] bool isCurveGraph() const noexcept { return curveGraph_; }
+    [[nodiscard]] NodeCardWidget* cardWidget() const noexcept { return cardWidget_; }
     [[nodiscard]] QRectF previewRect() const noexcept { return previewRect_; }
 
     [[nodiscard]] QRectF boundingRect() const override {
@@ -1236,6 +1238,16 @@ class NodeItem final : public QGraphicsObject {
             wrapPropertyRow(colorRowLabel_, colorChip_, colorDiamond_);
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             wrapPropertyRow(readOnlyRows_[index].first, readOnlyLabels_[index], nullptr);
+        // #494: a graphically edited node draws its widget on the card; the widget says which of
+        // the rows above show beside it (a linked row always does).
+        cardWidget_ = nullptr;
+        if (session_ != nullptr && hasNodeCardWidget(node.typeId)) {
+            cardWidget_ = makeNodeCardWidget(*session_, id_, node.typeId, true);
+            prepareField(cardWidget_);
+            auto* proxy = new QGraphicsProxyWidget(this);
+            proxy->setWidget(cardWidget_);
+            connect(cardWidget_, &NodeCardWidget::rowsChanged, this, [this] { relayout(); });
+        }
         builtRoles_ = std::move(roles);
         fieldsBuilt_ = true;
     }
@@ -2156,9 +2168,14 @@ class NodeItem final : public QGraphicsObject {
         rowHeight = kit::px(kit::Size::PropertyRow);
         labelColumn = std::min(std::ceil(labelColumn), labelColumnCap);
 
+        // #494: rows a card widget keeps behind it take no room.
+        std::size_t hiddenRows = 0;
+        for (const auto& row : valueRows_)
+            if (!rowShown(row.widget))
+                ++hiddenRows;
         const auto rowCount =
-            static_cast<qreal>(valueRows_.size() - (imageRange_ && !imageSequence_ ? 1 : 0) +
-                               readOnlyRows_.size() + (colorChip_ != nullptr ? 1 : 0));
+            static_cast<qreal>(valueRows_.size() - (imageRange_ && !imageSequence_ ? 1 : 0) -
+                               hiddenRows + readOnlyRows_.size() + (colorChip_ != nullptr ? 1 : 0));
         // The card's own floor, measured from what it actually carries (task S1, item 2): the
         // shared label column, the narrowest usable control beside it, and the widest socket name,
         // each inside the card's padding. A persisted or dragged width never goes below it, so no
@@ -2181,6 +2198,9 @@ class NodeItem final : public QGraphicsObject {
             minimumWidth_ =
                 std::max(minimumWidth_, row->sizeHint().width() + (kCardPadding + kCardPadding));
         }
+        if (cardWidget_ != nullptr)
+            minimumWidth_ = std::max(minimumWidth_, cardWidget_->minimumWidthHint() +
+                                                        (kCardPadding + kCardPadding));
         const QFontMetricsF titleMetrics(kit::font(kit::TypeRole::Ui));
         minimumWidth_ = std::max(minimumWidth_, (kCardPadding + kCardPadding) +
                                                     kit::px(kit::Size::IconSmall) +
@@ -2232,10 +2252,13 @@ class NodeItem final : public QGraphicsObject {
         const qreal previewHeight =
             imagePreview_ || curveGraph_ ? std::min(previewWidth * previewAspect_, previewWidth * 2.0)
                                          : 0.0;
+        const int widgetWidth = static_cast<int>(std::floor(width - (kCardPadding + kCardPadding)));
+        const qreal widgetHeight =
+            cardWidget_ != nullptr ? cardWidget_->heightAt(widgetWidth) + kCardPadding : 0.0;
         const qreal height =
             layout_.collapsed
                 ? std::max({kCardHeaderHeight, collapsedExtent(true), collapsedExtent(false)})
-                : kCardHeaderHeight + socketHeight + outputHeight +
+                : kCardHeaderHeight + socketHeight + outputHeight + widgetHeight +
                       (rowCount > 0.0
                            ? rowCount * (rowHeight + kCardRowGap) - kCardRowGap + kCardPadding
                            : 0.0) +
@@ -2250,6 +2273,14 @@ class NodeItem final : public QGraphicsObject {
         rowHeight_ = rowHeight;
 
         qreal y = parameterRowsTop_;
+        if (cardWidget_ != nullptr) {
+            auto* proxy = cardWidget_->graphicsProxyWidget();
+            cardWidget_->resize(widgetWidth, cardWidget_->heightAt(widgetWidth));
+            positionProxy(cardWidget_, kCardPadding, y);
+            proxy->setVisible(!layout_.collapsed);
+            proxy->setOpacity(layout_.muted ? 0.5 : 1.0);
+            y += widgetHeight;
+        }
         const auto placeRow = [this, rowHeight, labelColumn](QWidget* field, qreal top) {
             auto* row = propertyRows_.at(field);
             row->setLabelWidth(static_cast<int>(labelColumn));
@@ -2265,7 +2296,7 @@ class NodeItem final : public QGraphicsObject {
             row->graphicsProxyWidget()->setOpacity(layout_.muted ? 0.5 : 1.0);
         };
         for (const auto& row : valueRows_) {
-            if (row.widget == imageRange_ && !imageSequence_) {
+            if ((row.widget == imageRange_ && !imageSequence_) || !rowShown(row.widget)) {
                 propertyRows_.at(row.widget)->graphicsProxyWidget()->hide();
                 continue;
             }
@@ -2299,10 +2330,15 @@ class NodeItem final : public QGraphicsObject {
                 top += socket->pillLength() + collapsedPitch;
                 continue;
             }
-            socket->setVisible(true);
             const qreal rowExtent = socket->rowHeight();
             auto& socketY = input ? inputY : outputY;
             const auto parameter = parameterSocketY_.find(socket->name);
+            // #494: the socket of a row kept behind a card widget waits with its row.
+            const bool hiddenRow = input && parameter == parameterSocketY_.end() &&
+                                   parameterRoles.contains(socket->name);
+            socket->setVisible(!hiddenRow);
+            if (hiddenRow)
+                continue;
             const qreal center = parameter != parameterSocketY_.end() ? parameter->second
                                                                       : socketY + rowExtent / 2.0;
             socket->setPos(input ? 0 : width_, center);
@@ -2310,6 +2346,16 @@ class NodeItem final : public QGraphicsObject {
                 socketY += rowExtent;
         }
         update();
+    }
+
+    // #494: whether `field`'s row shows: always, unless this card's widget keeps it behind it and
+    // its input is not linked.
+    [[nodiscard]] bool rowShown(const QWidget* field) const {
+        if (cardWidget_ == nullptr)
+            return true;
+        const auto role = controlRoles_.find(field);
+        return role == controlRoles_.end() || linkedInputs_.contains(role->second) ||
+               cardWidget_->showsRole(role->second.toStdString());
     }
 
     void positionProxy(const QWidget* widget, const qreal x, const qreal y) {
@@ -2338,6 +2384,8 @@ class NodeItem final : public QGraphicsObject {
     bool reroute_ = false;
     bool imagePreview_ = false;
     bool curveGraph_ = false;
+    // #494: the interactive widget of a graphically edited node (Grade, Levels), or null.
+    NodeCardWidget* cardWidget_ = nullptr;
     qreal previewAspect_ = 9.0 / 16.0;
     QRectF previewRect_;
     bool shapeSource_ = false;

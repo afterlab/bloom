@@ -601,6 +601,19 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool updateValueEdit(document::ParameterValue value);
     [[nodiscard]] bool commitValueEdit();
     void cancelValueEdit();
+    // #494: one live edit of several parameters as one gesture (a Grade wheel's puck moves its
+    // red, green and blue together). The first parameter is the edit's own (isValueEditing); every
+    // one of them reads its live value in liveValue(), the readouts and the request overrides.
+    // updateValueEdits() takes one value per parameter in the same order. The commit writes every
+    // changed value in one transaction labelled `commandLabel`: one undo step, a key at the
+    // playhead on an animated parameter. Refused when any parameter is locked or driven.
+    [[nodiscard]] bool beginValueEdits(const std::vector<document::ParameterId>& parameters,
+                                       const QString& commandLabel);
+    [[nodiscard]] bool updateValueEdits(const std::vector<document::ParameterValue>& values);
+    // #494: several parameters set in one transaction and one undo step (a Grade wheel's reset).
+    [[nodiscard]] bool setParameterValues(
+        std::vector<std::pair<document::ParameterId, document::ParameterValue>> values,
+        const QString& commandLabel);
     [[nodiscard]] bool valueEditActive() const noexcept;
     [[nodiscard]] bool beginTextEdit(document::ParameterId parameter);
     [[nodiscard]] bool beginPathEdit(document::ParameterId parameter);
@@ -1019,6 +1032,14 @@ class CompositionSession final : public QObject {
         };
         std::optional<PathAnchorEdit> anchor{};
         bool text = false;
+        // #494: the other parameters of a beginValueEdits() gesture, and its undo label.
+        struct LinkedEdit {
+            document::ParameterId parameter;
+            document::ParameterValue base;
+            document::ParameterValue value;
+        };
+        std::vector<LinkedEdit> linked{};
+        QString label{};
     };
     std::optional<ValueEdit> valueEdit_;
     struct KeyframePreview final {

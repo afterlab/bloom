@@ -59,6 +59,10 @@ CompositionSession::liveValue(const document::ParameterId parameterId) const {
         return valueEdit_->anchor->value;
     if (valueEdit_ && isValueEditing(parameterId))
         return valueEdit_->value;
+    if (valueEdit_)
+        for (const auto& linked : valueEdit_->linked)
+            if (linked.parameter == parameterId)
+                return linked.value;
     if (parameter) {
         const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
         if (constant && std::holds_alternative<document::PathValue>(constant->value))
@@ -130,6 +134,77 @@ bool CompositionSession::updateValueEdit(document::ParameterValue value) {
         emit liveValueChanged();
     }
     return true;
+}
+
+bool CompositionSession::beginValueEdits(const std::vector<document::ParameterId>& parameters,
+                                         const QString& commandLabel) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (parameters.empty() || !beginValueEdit(parameters.front()))
+        return false;
+    const auto* current = composition();
+    for (std::size_t index = 1; index < parameters.size(); ++index) {
+        const auto id = parameters[index];
+        const auto* parameter = current->parameters().find(id);
+        auto base = liveValue(id);
+        const bool repeated =
+            id == parameters.front() ||
+            std::ranges::find(valueEdit_->linked, id, &ValueEdit::LinkedEdit::parameter) !=
+                valueEdit_->linked.end();
+        if (!parameter || !base || repeated || current->parameterLocked(id) ||
+            std::holds_alternative<document::DriverBindingSource>(parameter->source)) {
+            valueEdit_.reset();
+            reportUnavailable(tr("This parameter is not available for editing"));
+            return false;
+        }
+        valueEdit_->linked.push_back({id, *base, *base});
+    }
+    valueEdit_->label = commandLabel;
+    return true;
+}
+
+bool CompositionSession::updateValueEdits(const std::vector<document::ParameterValue>& values) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!valueEdit_ || valueEdit_->component || values.size() != valueEdit_->linked.size() + 1)
+        return false;
+    // Every value is checked before any is taken, so a refused step changes nothing.
+    for (std::size_t index = 1; index < values.size(); ++index) {
+        const auto& linked = valueEdit_->linked[index - 1];
+        const auto* parameter = composition()->parameters().find(linked.parameter);
+        document::ParameterStore validation;
+        if (values[index].index() != linked.base.index() || !parameter ||
+            !validation.insert({linked.parameter, parameter->schemaKey,
+                                document::ConstantValueSource{values[index]}}) ||
+            !validation.validate().ok()) {
+            reportUnavailable(tr("The value is outside this parameter's domain"));
+            return false;
+        }
+    }
+    if (!updateValueEdit(values.front()) || !valueEdit_)
+        return false;
+    bool changed = false;
+    for (std::size_t index = 1; index < values.size(); ++index) {
+        auto& linked = valueEdit_->linked[index - 1];
+        if (linked.value != values[index]) {
+            linked.value = values[index];
+            changed = true;
+        }
+    }
+    if (changed)
+        emit liveValueChanged();
+    return true;
+}
+
+bool CompositionSession::setParameterValues(
+    std::vector<std::pair<document::ParameterId, document::ParameterValue>> values,
+    const QString& commandLabel) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (values.empty())
+        return false;
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    for (auto& [parameter, value] : values)
+        if (!appendParameterEdit(transaction, parameter, currentTime_, std::move(value)))
+            return false;
+    return executeTransaction(std::move(transaction)).succeeded();
 }
 
 bool CompositionSession::beginTextEdit(const document::ParameterId parameter) {
@@ -213,6 +288,9 @@ std::vector<runtime::SnapshotParameterOverride> CompositionSession::valueEditOve
     if (valueEdit_->anchor)
         result.push_back(
             {valueEdit_->revision, valueEdit_->anchor->parameter, valueEdit_->anchor->value});
+    for (const auto& linked : valueEdit_->linked)
+        if (const auto* scalar = std::get_if<double>(&linked.value))
+            result.push_back({valueEdit_->revision, linked.parameter, *scalar});
     return result;
 }
 
@@ -231,15 +309,21 @@ bool CompositionSession::commitValueEdit() {
     auto edit = std::move(*valueEdit_);
     valueEdit_.reset();
     bool result = edit.revision == snapshot_.revision() && edit.time == currentTime_;
-    if (result && edit.value != edit.base) {
+    // #494: a gesture over several parameters commits when any of them changed.
+    const bool linkedChanged = std::ranges::any_of(
+        edit.linked, [](const auto& linked) { return linked.value != linked.base; });
+    if (result && (edit.value != edit.base || linkedChanged)) {
         const auto* parameter = composition()->parameters().find(edit.parameter);
-        const auto label = edit.text ? QStringLiteral("Edit Text")
+        const auto label = !edit.label.isEmpty() ? edit.label
+                           : edit.text           ? QStringLiteral("Edit Text")
                            : parameter
                                ? componentCommandLabel(*parameter, QStringLiteral("Set Parameter"))
                                : QStringLiteral("Set Parameter");
         commands::Transaction transaction(label.toStdString(), edit.revision);
-        if (edit.component && parameter &&
-            std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {
+        if (edit.value == edit.base) {
+            // Only the linked parameters moved.
+        } else if (edit.component && parameter &&
+                   std::holds_alternative<document::AnimationCurveSource>(parameter->source)) {
             transaction.emplace<commands::SetKeyframeAtTimeForParameterComponent>(
                 compositionId_, edit.parameter, *edit.component,
                 keyTimeOf(edit.parameter, edit.time),
@@ -250,6 +334,10 @@ bool CompositionSession::commitValueEdit() {
         if (result && edit.anchor && edit.anchor->base != edit.anchor->value)
             result = appendParameterEdit(transaction, edit.anchor->parameter, edit.time,
                                          edit.anchor->value);
+        for (const auto& linked : edit.linked)
+            if (result && linked.value != linked.base)
+                result = appendParameterEdit(transaction, linked.parameter, edit.time,
+                                             linked.value);
         if (result)
             result = executeTransaction(std::move(transaction)).succeeded();
     }

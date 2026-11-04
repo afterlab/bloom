@@ -557,6 +557,9 @@ target_sources(
         tool_controller.cpp
         composition_thumbnail_controller.cpp
         curve_graph.cpp
+        grade_wheels.cpp
+        levels_graph.cpp
+        node_card_widget.cpp
         image_preview_controller.cpp
         node_editor_image_preview.cpp
         colour_space_names.hpp
@@ -736,6 +739,9 @@ target_sources(
             include/bloom/ui/tool_controller.hpp
             include/bloom/ui/composition_thumbnail_controller.hpp
             include/bloom/ui/curve_graph.hpp
+            include/bloom/ui/grade_wheels.hpp
+            include/bloom/ui/levels_graph.hpp
+            include/bloom/ui/node_card_widget.hpp
             include/bloom/ui/image_preview_controller.hpp
             include/bloom/ui/media_disk_cache_settings.hpp
             include/bloom/ui/node_editor.hpp

@@ -28,6 +28,7 @@ namespace bloom::ui {
 
 class CompositionSession;
 class PropertiesRegistryRow;
+class NodeCardWidget;
 class ChannelChecklistField;
 class PropertiesAnchorGrid;
 
@@ -88,6 +89,11 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     // #493: the Curves node's two curve graphs (the channel curves and the hue curves).
     void addCurveGraphRows(const document::NodeRecord& node, kit::KSection* section);
     QPointer<QWidget> curveGraphs_;
+    // #494: a graphically edited node's card widget (Grade, Levels) and the rows it keeps behind
+    // it, each in a holder whose visibility the widget decides.
+    QPointer<NodeCardWidget> cardWidget_;
+    std::vector<std::pair<QPointer<QWidget>, std::string>> cardWidgetRows_;
+    void applyCardWidgetRows();
     void populateCryptomatteRows(const document::NodeRecord& node);
     void cryptomatteLayersMayHaveArrived();
     bool awaitingCryptomatteLayers_ = false;

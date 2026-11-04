@@ -40,6 +40,12 @@ constexpr double kCardWidth = 264.0;
 constexpr double kWideCardWidth = 288.0;
 // The Curves card's graph height over its width (node_editor_items.hpp).
 constexpr double kCurveGraphAspect = 0.75;
+// #494: the Grade and Levels card widgets' metrics (grade_wheels.cpp, levels_graph.cpp):
+// Size::Control, Spacing::XS and Spacing::S, Size::IconSmall and the Levels plot's aspect.
+constexpr double kControl = 26.0;
+constexpr double kSmall = 4.0;
+constexpr double kLevelsHandle = 12.0;
+constexpr double kLevelsPlotAspect = 0.45;
 // A card whose parameters draw as dropdowns (enum choices, OCIO and input colour spaces) carries
 // the Properties panel's field control, which is wider still.
 constexpr double kDropdownCardWidth = 384.0;
@@ -159,7 +165,13 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         });
     // A vector parameter takes one row per component (they share the first one's socket).
     double rows = 0.0;
+    // #494: a Grade or Levels card shows its widget instead of its value rows (Levels keeps its
+    // clamp row), until a Values group is opened.
+    const bool cardWidget =
+        node->typeId == document::kGradeNodeType || node->typeId == document::kLevelsNodeType;
     for (const auto& binding : node->parameters) {
+        if (cardWidget && binding.role != "clamp")
+            continue;
         const auto parameter = std::ranges::find(definition->parameters, binding.role,
                                                  &document::ParameterDefinition::role);
         const auto kind = parameter == definition->parameters.end()
@@ -205,6 +217,17 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // #493: a Curves card draws its channel curves below its rows, three quarters as tall as wide.
     if (node->typeId == document::kCurvesNodeType)
         thumbnail = std::max(0.0, cardWidth - 2.0 * kPadding) * kCurveGraphAspect + kPadding;
+    // #494: the wheels two by two (each a square, its slider row under it) and the primaries
+    // bar's title and three rows; the Levels tabs, plot, handles and output bar.
+    const double inner = std::max(0.0, cardWidth - 2.0 * kPadding);
+    if (node->typeId == document::kGradeNodeType) {
+        const double cell = std::max(0.0, std::floor((inner - kPadding) / 2.0));
+        thumbnail = 2.0 * (cell + kSmall + kControl) + kPadding + kPadding + 4.0 * kControl +
+                    3.0 * kSmall + kPadding;
+    }
+    if (node->typeId == document::kLevelsNodeType)
+        thumbnail = kControl + kSmall + std::round(inner * kLevelsPlotAspect) +
+                    2.0 * kLevelsHandle + kSmall + kPadding + kPadding;
     return {cardWidth, kTitleBand + sockets * kRow + pills + rows * kRow + kPadding + thumbnail};
 }
 

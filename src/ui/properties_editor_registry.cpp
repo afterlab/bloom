@@ -24,6 +24,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/node_card_widget.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <limits>
 
@@ -100,6 +101,8 @@ void PropertiesEditor::configureRegistryRows() {
             cryptomatteNames_ = nullptr;
             cryptomatteNamesNote_ = nullptr;
             curveGraphs_ = nullptr;
+            cardWidget_ = nullptr;
+            cardWidgetRows_.clear();
         }
         registrySignature_ = signature;
         const auto* definition =
@@ -174,6 +177,14 @@ void PropertiesEditor::configureRegistryRows() {
                 addCryptomatteRows(*node, section);
             if (node->typeId == document::kCurvesNodeType)
                 addCurveGraphRows(*node, section);
+            // #494: the same widget the node card draws, above the rows it keeps behind it.
+            if (hasNodeCardWidget(node->typeId)) {
+                cardWidget_ =
+                    makeNodeCardWidget(session_, node->id, node->typeId, false, section->body());
+                section->bodyLayout()->addWidget(cardWidget_);
+                connect(cardWidget_, &NodeCardWidget::rowsChanged, this,
+                        &PropertiesEditor::applyCardWidgetRows);
+            }
             if (node->typeId == "bloom.video-source") {
                 // Document 1.25: the played audio stream and the source's field order/timecode.
                 auto* label = kit::makePropertyRowLabel(tr("Audio Stream"), section->body());
@@ -294,10 +305,22 @@ void PropertiesEditor::configureRegistryRows() {
                     continue;
                 auto* row = new PropertiesRegistryRow(session_, node->id, found->parameterId,
                                                       declared, section->body());
-                if (definition->lowering == document::NodeLoweringKind::Text)
+                if (definition->lowering == document::NodeLoweringKind::Text) {
                     section->bodyLayout()->insertWidget(textRowIndex++, row);
-                else
+                } else if (cardWidget_) {
+                    // The row's own refresh decides its visibility, so the widget hides a holder.
+                    auto* holder = new QWidget(section->body());
+                    holder->setObjectName(QStringLiteral("propertiesCardWidgetRow"));
+                    holder->setProperty("parameterRole", QString::fromStdString(declared.role));
+                    auto* holderLayout = new QVBoxLayout(holder);
+                    holderLayout->setContentsMargins(0, 0, 0, 0);
+                    row->setParent(holder);
+                    holderLayout->addWidget(row);
+                    section->bodyLayout()->addWidget(holder);
+                    cardWidgetRows_.emplace_back(holder, declared.role);
+                } else {
                     section->bodyLayout()->addWidget(row);
+                }
                 registryRows_.push_back(row);
                 connect(section, &kit::KSection::resetRequested, row, [row] { row->reset(); });
             }
@@ -306,10 +329,11 @@ void PropertiesEditor::configureRegistryRows() {
     if (registryPanel_)
         // Purpose-built rows (Image part/layer, the Cryptomatte, the output layers) count too: a
         // node whose every parameter has a purpose-built row still shows its section.
-        registryPanel_->setVisible(!registryRows_.empty() ||
-                                   registryPanel_->property("hasValueOutputs").toBool() ||
-                                   imagePartPicker_ != nullptr || cryptomatteLayerPicker_ != nullptr ||
-                                   outputLayersField_ != nullptr || curveGraphs_ != nullptr);
+        registryPanel_->setVisible(
+            !registryRows_.empty() || registryPanel_->property("hasValueOutputs").toBool() ||
+            imagePartPicker_ != nullptr || cryptomatteLayerPicker_ != nullptr ||
+            outputLayersField_ != nullptr || curveGraphs_ != nullptr || cardWidget_ != nullptr);
+    applyCardWidgetRows();
     for (auto* row : registryRows_)
         row->refresh();
     if (node != nullptr && node->typeId == document::kImageSourceNodeType)
@@ -489,6 +513,13 @@ void PropertiesEditor::addCurveGraphRows(const document::NodeRecord& node,
     section->bodyLayout()->addWidget(channels);
     section->bodyLayout()->addWidget(hue);
     curveGraphs_ = channels;
+}
+
+// #494: each row a card widget keeps behind it shows only while the widget opens it.
+void PropertiesEditor::applyCardWidgetRows() {
+    for (const auto& [holder, role] : cardWidgetRows_)
+        if (holder)
+            holder->setVisible(cardWidget_ && cardWidget_->showsRole(role));
 }
 
 // #364: the Cryptomatte layer picker lists the types in the node's channel set (a worker read);
