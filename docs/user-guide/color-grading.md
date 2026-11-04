@@ -11,8 +11,8 @@ defaults changes nothing.
 
 ## Grade
 
-Grade is a primary colour correction with colour wheels, like the primaries in DaVinci Resolve or
-Lumetri's colour wheels. Edit it right on its node card, or in Properties, which shows the same
+Grade is a primary colour correction with lift, gamma, gain and offset colour wheels, as used in
+colour-grading suites. Edit it right on its node card, or in Properties, which shows the same
 controls.
 
 ### Wheels

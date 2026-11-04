@@ -368,8 +368,8 @@ solids at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value ru
 ## Grade
 
 `bloom.grade`, schema 1 (#494), is an Image-in, Image-out primary grade listed under Color, in the
-manner of DaVinci Resolve's primaries and the ASC CDL. It lowers to the `GradeKernel` alternative
-and shares the grade machinery above (`color_grade_image_effect.hpp`): one host-prepared binary32
+manner of lift/gamma/gain primaries and the ASC CDL. It lowers to the `GradeKernel` alternative and
+shares the grade machinery above (`color_grade_image_effect.hpp`): one host-prepared binary32
 table, the CPU reference that applies it, and one fixed resident GPU program
 (`bloom.render.grade.v1`) that reads it from its storage buffer.
 
@@ -397,8 +397,8 @@ alpha; a pixel with zero alpha passes unchanged. For channel `c` (red, green, bl
    `b_r = 2^(T/200 + N/400)`, `b_g = 2^(-N/200)`, `b_b = 2^(-T/200 + N/400)` for Temperature `T`
    and Tint `N` (positive is warmer, positive tint is magenta; the product of the three gains is
    one, so a grey keeps its geometric mean).
-2. Lift and gain: `y = K * (x + L * (1 - x))`, Resolve's convention, which raises black to `K * L`
-   and keeps white at `K`.
+2. Lift and gain: `y = K * (x + L * (1 - x))`, the common grading convention, which raises black to
+   `K * L` and keeps white at `K`.
 3. Offset: `y = y + O`.
 4. Gamma: `y = y^(2^-G)` for `y > 0`; zero and negative values pass, so a positive gamma
    brightens the middle and a negative value never produces NaN.
