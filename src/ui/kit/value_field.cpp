@@ -397,7 +397,23 @@ QLineEdit* KValueField::lineEdit() const noexcept { return editor_; }
 QString KValueField::refusal() const { return inline_->refusal(); }
 
 QString KValueField::numberText(const int decimals) const {
-    return integer_ ? valueFieldExactText(integerValue_) : valueFieldNumber(value_, decimals);
+    auto text = integer_ ? valueFieldExactText(integerValue_) : valueFieldNumber(value_, decimals);
+    if (showsSign_ && !text.startsWith(QLatin1Char('-')))
+        text.prepend(QLatin1Char('+'));
+    return text;
+}
+
+void KValueField::setShowsSign(const bool shows) {
+    if (showsSign_ == shows)
+        return;
+    showsSign_ = shows;
+    updateGeometry();
+    update();
+}
+
+void KValueField::setChannelLine(const QColor& color) {
+    channelLine_ = color;
+    update();
 }
 
 QString KValueField::editText() const {
@@ -598,6 +614,14 @@ void KValueField::paintEvent(QPaintEvent* event) {
         painter.drawPixmap(QRect(width() - extent, height() / 2, extent, height() / 2),
                            iconPixmap(IconId::CaretDown, Size::IconSmall, tint, devicePixelRatioF(),
                                       iconWeight(IconRole::Chrome)));
+    }
+    if (channelLine_.isValid()) {
+        // The channel's colour along the cell's foot, inside its rounded corners.
+        const qreal line = px(Spacing::XXS);
+        const qreal inset = px(Spacing::XS);
+        painter.fillRect(QRectF(cell.left() + inset, cell.bottom() - line - px(Spacing::XXS) / 2.0,
+                                cell.width() - 2.0 * inset, line),
+                         isEnabled() ? channelLine_ : withOpacity(channelLine_, kDisabledOpacity));
     }
     if (isNonDefault()) {
         // The differs-from-default dot, inside the cell's top-right corner, clear of the number.

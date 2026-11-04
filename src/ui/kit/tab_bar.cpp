@@ -1,5 +1,8 @@
 #include <bloom/ui/kit/tab_bar.hpp>
 
+#include <QHelpEvent>
+#include <QToolTip>
+
 #include <bloom/ui/kit/accessibility.hpp>
 #include <bloom/ui/kit/mnemonic_style.hpp>
 #include <bloom/ui/kit/painting.hpp>
@@ -27,7 +30,7 @@ KTabBar::KTabBar(QWidget* parent) : QWidget(parent) {
 }
 
 int KTabBar::addTab(const QString& text) {
-    tabs_.push_back({text, false});
+    tabs_.push_back({text, false, false, {}});
     if (current_ < 0)
         current_ = 0;
     updateGeometry();
@@ -58,6 +61,38 @@ void KTabBar::setTabAlert(const int index, const bool alert) {
 
 bool KTabBar::tabAlert(const int index) const {
     return index >= 0 && index < count() && tabs_[index].alert;
+}
+
+void KTabBar::setTabModified(const int index, const bool modified) {
+    if (index < 0 || index >= count() || tabs_[index].modified == modified)
+        return;
+    tabs_[index].modified = modified;
+    update();
+}
+
+bool KTabBar::tabModified(const int index) const {
+    return index >= 0 && index < count() && tabs_[index].modified;
+}
+
+void KTabBar::setTabToolTip(const int index, const QString& text) {
+    if (index >= 0 && index < count())
+        tabs_[index].toolTip = text;
+}
+
+QString KTabBar::tabToolTip(const int index) const {
+    return index >= 0 && index < count() ? tabs_[index].toolTip : QString{};
+}
+
+bool KTabBar::event(QEvent* event) {
+    if (event->type() == QEvent::ToolTip) {
+        auto* help = static_cast<QHelpEvent*>(event);
+        const int index = tabAt(help->pos());
+        if (index >= 0 && !tabs_[index].toolTip.isEmpty()) {
+            QToolTip::showText(help->globalPos(), tabs_[index].toolTip, this, tabRect(index));
+            return true;
+        }
+    }
+    return QWidget::event(event);
 }
 
 int KTabBar::tabWidth(const int index) const {
@@ -110,13 +145,13 @@ void KTabBar::paintEvent(QPaintEvent*) {
         const QRect text = tab.adjusted(
             px(Spacing::M), 0, -(px(Spacing::M) + px(Size::NonDefaultMark) + px(Spacing::XS)), 0);
         painter.drawText(text, Qt::AlignLeft | Qt::AlignVCenter, tabs_[index].text);
-        if (tabs_[index].alert) {
+        if (tabs_[index].alert || tabs_[index].modified) {
             const int dot = px(Size::NonDefaultMark);
             const QRectF mark(text.left() + metrics.horizontalAdvance(tabs_[index].text) +
                                   px(Spacing::XS),
                               tab.center().y() - dot / 2.0, dot, dot);
             painter.setPen(Qt::NoPen);
-            painter.setBrush(color(Color::Error));
+            painter.setBrush(color(tabs_[index].alert ? Color::Error : Color::Accent));
             painter.drawEllipse(mark);
         }
         if (current) {

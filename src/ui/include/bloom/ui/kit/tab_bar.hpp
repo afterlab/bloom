@@ -15,7 +15,9 @@ namespace bloom::ui::kit {
 // The kit tab bar (lane C, for the Composition dialog's Basic / Advanced, compositor style).
 // Tabs are Ui text in a row; the current tab is Foreground ink over a Size::SelectionEdge Accent
 // underline, the others Muted (Foreground under the pointer). A tab can carry an alert: a small
-// Error dot after its text, for a refused value the tab hides. Keyboard: the bar takes focus and
+// Error dot after its text, for a refused value the tab hides. #501: a tab can instead be marked
+// modified (an Accent dot in the same place: what the tab shows differs from its default), and
+// carry its own tooltip (its full name, where the text is short). Keyboard: the bar takes focus and
 // shows the kit's keyboard-focus border around the current tab; Left/Right step, Home/End jump.
 // Accessible as a page tab list with one page tab per tab.
 class KTabBar final : public QWidget {
@@ -31,6 +33,10 @@ class KTabBar final : public QWidget {
     void setCurrentIndex(int index);
     void setTabAlert(int index, bool alert);
     [[nodiscard]] bool tabAlert(int index) const;
+    void setTabModified(int index, bool modified);
+    [[nodiscard]] bool tabModified(int index) const;
+    void setTabToolTip(int index, const QString& text);
+    [[nodiscard]] QString tabToolTip(int index) const;
     // The rectangle a tab occupies, in this widget's coordinates.
     [[nodiscard]] QRect tabRect(int index) const;
 
@@ -46,11 +52,14 @@ class KTabBar final : public QWidget {
     void mouseMoveEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void leaveEvent(QEvent* event) override;
+    bool event(QEvent* event) override;
 
   private:
     struct Tab {
         QString text;
         bool alert = false;
+        bool modified = false;
+        QString toolTip;
     };
     [[nodiscard]] int tabWidth(int index) const;
     [[nodiscard]] int tabAt(QPoint point) const;

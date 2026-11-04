@@ -89,6 +89,14 @@ class KValueField final : public QWidget {
     void setUnit(const QString& unit);
     [[nodiscard]] QString unit() const;
 
+    // #501: a signed reading ("+0.250", "-0.100"), for a bipolar value whose neutral is zero.
+    void setShowsSign(bool shows);
+    [[nodiscard]] bool showsSign() const noexcept { return showsSign_; }
+    // A coloured line along the cell's foot that names the channel the field carries (the Grade
+    // wheels' red, green and blue); an invalid colour draws none.
+    void setChannelLine(const QColor& color);
+    [[nodiscard]] QColor channelLine() const { return channelLine_; }
+
     // Replaces the minimum value and its unit while the cell is at rest (for example, Automatic
     // for a zero budget). Editing still exposes the numeric value. Empty text restores numbers.
     void setSpecialValueText(const QString& text);
@@ -274,6 +282,8 @@ class KValueField final : public QWidget {
 
     bool compact_ = false;
     bool outlinedAtRest_ = false;
+    bool showsSign_ = false;
+    QColor channelLine_;
     bool stepper_ = false;
     QString label_;
     QString unit_;

@@ -3,6 +3,7 @@
 
 #include <bloom/ui/kit/value_field.hpp>
 
+#include "pointer_wrap.hpp"
 #include "value_field_format.hpp"
 
 #include <bloom/ui/kit/controls.hpp>
@@ -76,16 +77,6 @@ struct Typed {
     if (delta < 0 && base < std::numeric_limits<std::int64_t>::min() - delta)
         return std::numeric_limits<std::int64_t>::min();
     return base + delta;
-}
-
-// Only where the windowing system lets an application move the pointer.
-[[nodiscard]] bool pointerCanWarp() {
-    static const bool warps = [] {
-        const auto platform = QGuiApplication::platformName();
-        return platform == QLatin1String("xcb") || platform == QLatin1String("windows") ||
-               platform == QLatin1String("cocoa");
-    }();
-    return warps;
 }
 
 [[nodiscard]] bool isStepKey(const int key) {
@@ -309,22 +300,7 @@ void KValueField::finishScrub() {
 }
 
 void KValueField::wrapPointer(const QPointF& global) {
-    if (!pointerCanWarp() || screen() == nullptr)
-        return;
-    // Within a margin of the screen edge the pointer jumps to the other side, and every later x is
-    // shifted back by the jump, so the gesture carries on as if the screen had no edge.
-    const QRect bounds = screen()->geometry();
-    const int margin = px(Size::ScrubWrapMargin);
-    const int x = static_cast<int>(std::lround(global.x()));
-    int target = x;
-    if (x <= bounds.left() + margin)
-        target = bounds.right() - margin - 1;
-    else if (x >= bounds.right() - margin)
-        target = bounds.left() + margin + 1;
-    if (target == x)
-        return;
-    QCursor::setPos(screen(), QPoint(target, static_cast<int>(std::lround(global.y()))));
-    wrapOffset_ -= target - x;
+    wrapPointerAtScreenEdge(*this, global, wrapOffset_);
 }
 
 void KValueField::mousePressEvent(QMouseEvent* event) {
