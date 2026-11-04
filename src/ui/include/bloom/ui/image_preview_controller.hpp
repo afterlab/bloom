@@ -14,6 +14,11 @@
 // identity (the inspected output, revision, time, extent, display and view) so a node, a time or a
 // size seen before is drawn without evaluating again. Which node is the background, and whether it
 // is shown, is session state: never saved, never undoable.
+//
+// #493: the same requests draw a Curves node's input luminance histogram behind its curve graph:
+// the input is prepared through the display route (on the GPU, its CPU fallback labelled) at a
+// small proxy extent, and a worker bins its displayed luma. It is requested only by a visible
+// graph's paint and never touches the render output.
 
 #include <QImage>
 #include <QObject>
@@ -79,6 +84,23 @@ class ImagePreviewController final : public QObject {
     // not answer the current input, time, size and display; never evaluates on the calling thread.
     [[nodiscard]] Preview preview(document::NodeId node, QSize devicePixels);
 
+    // #493: a Curves node's input histogram: kHistogramBins counts of the displayed luma
+    // (0.213 R + 0.715 G + 0.072 B, the node's own weights) over 0..1, scaled so the fullest bin is
+    // one. Requested at kHistogramEdge on the longest side, like preview(): only when asked, from
+    // a visible graph's paint, never on the calling thread.
+    static constexpr std::size_t kHistogramBins = 128;
+    static constexpr int kHistogramEdge = 256;
+    struct Histogram final {
+        std::vector<float> bins;
+        State state = State::Unconnected;
+        bool cpu = false;
+        QString message;
+    };
+    [[nodiscard]] Histogram histogram(document::NodeId node);
+    // Session state, not project truth: whether curve graphs draw the histogram (on by default).
+    [[nodiscard]] bool histogramsShown() const noexcept { return histogramsShown_; }
+    void setHistogramsShown(bool shown);
+
     // The display an Image Preview node asks for (its `display` parameter).
     [[nodiscard]] document::ImagePreviewDisplay display(document::NodeId node) const;
 
@@ -119,10 +141,13 @@ class ImagePreviewController final : public QObject {
         std::string displayName;
         std::string viewName;
         bool showLook = true;
+        // #493: a Curves node's input histogram rather than an Image Preview's picture.
+        bool histogram = false;
         friend bool operator==(const Key&, const Key&) = default;
     };
     struct Converted final {
         QImage image;
+        std::vector<float> bins;
         std::thread::id thread;
     };
     using ConvertedHandle = std::shared_ptr<const Converted>;
@@ -138,19 +163,24 @@ class ImagePreviewController final : public QObject {
     struct Kept final {
         Key key;
         QImage image;
+        std::vector<float> bins;
         bool cpu = false;
         std::uint64_t used = 0;
     };
     struct Shown final {
         std::optional<Key> key;
         QImage image;
+        std::vector<float> bins;
         bool cpu = false;
         std::optional<Key> failed;
         QString failure;
     };
 
-    [[nodiscard]] std::optional<Key> keyFor(document::NodeId node, QSize devicePixels) const;
+    [[nodiscard]] std::optional<Key> keyFor(document::NodeId node, QSize devicePixels,
+                                            bool histogram = false) const;
     void want(document::NodeId node, const Key& key);
+    // Cancels the node's request in flight and forgets what it wanted (its input went away).
+    void drop(document::NodeId node);
     void submit(document::NodeId node, Key key);
     // False when the request could not start (fail() has said why); the caller drops it.
     [[nodiscard]] bool startFrame(document::NodeId node, Pending& pending);
@@ -179,6 +209,7 @@ class ImagePreviewController final : public QObject {
     std::optional<document::CompositionId> backgroundComposition_;
     std::optional<document::NodeId> backgroundNode_;
     bool backgroundVisible_ = true;
+    bool histogramsShown_ = true;
     std::uint64_t submissions_ = 0;
     std::uint64_t cancellations_ = 0;
     std::uint64_t uses_ = 0;

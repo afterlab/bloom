@@ -6,6 +6,7 @@
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
@@ -164,6 +165,10 @@ class NodeGroupItem;
 // session's ImagePreviewController at the size the painter draws it.
 void paintImagePreview(QPainter& painter, const QRectF& rect, CompositionSession* session,
                        document::NodeId node);
+// #493: a Curves card's channel curves over the identity diagonal and the 0..1 box, read from the
+// session (a live drag included); no histogram.
+void paintCurveGraphCard(QPainter& painter, const QRectF& rect, CompositionSession* session,
+                         document::NodeId node);
 QString displayTypeName(std::string_view typeId);
 // The artist-facing name of a node TYPE (task S1, item 7). Four built-ins are named rather than
 // spelled out of their type id -- Solid, Layer, Merge, Output -- and everything else falls back to
@@ -430,6 +435,10 @@ class NodeItem final : public QGraphicsObject {
         // #490: an Image Preview card draws its input below its rows, at the composition's
         // aspect.
         imagePreview_ = document::isImagePreviewNodeType(node.typeId);
+        // #493: a Curves card draws its channel curves below its rows.
+        curveGraph_ = node.typeId == document::kCurvesNodeType;
+        if (curveGraph_)
+            previewAspect_ = 0.75;
         if (imagePreview_) {
             const auto& format = composition.format();
             previewAspect_ = format.width() > 0 ? static_cast<qreal>(format.height()) /
@@ -650,6 +659,7 @@ class NodeItem final : public QGraphicsObject {
     // #490: an Image Preview card, and where its thumbnail is drawn (card coordinates; empty
     // while collapsed).
     [[nodiscard]] bool isImagePreview() const noexcept { return imagePreview_; }
+    [[nodiscard]] bool isCurveGraph() const noexcept { return curveGraph_; }
     [[nodiscard]] QRectF previewRect() const noexcept { return previewRect_; }
 
     [[nodiscard]] QRectF boundingRect() const override {
@@ -2220,7 +2230,8 @@ class NodeItem final : public QGraphicsObject {
         const qreal previewWidth =
             std::max(0.0, std::max(layout_.width, minimumWidth_) - (kCardPadding + kCardPadding));
         const qreal previewHeight =
-            imagePreview_ ? std::min(previewWidth * previewAspect_, previewWidth * 2.0) : 0.0;
+            imagePreview_ || curveGraph_ ? std::min(previewWidth * previewAspect_, previewWidth * 2.0)
+                                         : 0.0;
         const qreal height =
             layout_.collapsed
                 ? std::max({kCardHeaderHeight, collapsedExtent(true), collapsedExtent(false)})
@@ -2228,7 +2239,7 @@ class NodeItem final : public QGraphicsObject {
                       (rowCount > 0.0
                            ? rowCount * (rowHeight + kCardRowGap) - kCardRowGap + kCardPadding
                            : 0.0) +
-                      (imagePreview_ ? previewHeight + kCardPadding : 0.0);
+                      (imagePreview_ || curveGraph_ ? previewHeight + kCardPadding : 0.0);
 
         if (!qFuzzyCompare(width, width_) || !qFuzzyCompare(height, height_)) {
             prepareGeometryChange();
@@ -2269,7 +2280,7 @@ class NodeItem final : public QGraphicsObject {
             placeRow(label, y);
             y += rowHeight + kCardRowGap;
         }
-        previewRect_ = imagePreview_ && !layout_.collapsed
+        previewRect_ = (imagePreview_ || curveGraph_) && !layout_.collapsed
                            ? QRectF(kCardPadding, height_ - kCardPadding - previewHeight,
                                     previewWidth, previewHeight)
                            : QRectF{};
@@ -2326,6 +2337,7 @@ class NodeItem final : public QGraphicsObject {
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;
     bool imagePreview_ = false;
+    bool curveGraph_ = false;
     qreal previewAspect_ = 9.0 / 16.0;
     QRectF previewRect_;
     bool shapeSource_ = false;

@@ -85,6 +85,9 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     QPointer<ChannelChecklistField> outputLayersField_;
     // #364 Cryptomatte: the layer picker, the selected matte list and a name field.
     void addCryptomatteRows(const document::NodeRecord& node, kit::KSection* section);
+    // #493: the Curves node's two curve graphs (the channel curves and the hue curves).
+    void addCurveGraphRows(const document::NodeRecord& node, kit::KSection* section);
+    QPointer<QWidget> curveGraphs_;
     void populateCryptomatteRows(const document::NodeRecord& node);
     void cryptomatteLayersMayHaveArrived();
     bool awaitingCryptomatteLayers_ = false;

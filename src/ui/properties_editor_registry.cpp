@@ -12,11 +12,13 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
+#include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -97,6 +99,7 @@ void PropertiesEditor::configureRegistryRows() {
             cryptomatteSearch_ = nullptr;
             cryptomatteNames_ = nullptr;
             cryptomatteNamesNote_ = nullptr;
+            curveGraphs_ = nullptr;
         }
         registrySignature_ = signature;
         const auto* definition =
@@ -169,6 +172,8 @@ void PropertiesEditor::configureRegistryRows() {
                 addOutputLayerRow(*node, section);
             if (node->typeId == document::kCryptomatteNodeType)
                 addCryptomatteRows(*node, section);
+            if (node->typeId == document::kCurvesNodeType)
+                addCurveGraphRows(*node, section);
             if (node->typeId == "bloom.video-source") {
                 // Document 1.25: the played audio stream and the source's field order/timecode.
                 auto* label = kit::makePropertyRowLabel(tr("Audio Stream"), section->body());
@@ -276,8 +281,12 @@ void PropertiesEditor::configureRegistryRows() {
                      (declared.role == document::kTextParameterRole ||
                       declared.role == document::kTextSizeParameterRole ||
                       declared.role == document::kTextColorParameterRole));
-                if (handcrafted || (node->typeId == document::kCompositionSourceNodeType &&
-                                    declared.role == "composition"))
+                if (handcrafted ||
+                    (node->typeId == document::kCompositionSourceNodeType &&
+                     declared.role == "composition") ||
+                    // #493: the curves are drawn and edited by the curve graphs.
+                    (node->typeId == document::kCurvesNodeType &&
+                     document::isGradeCurveSchemaKey(declared.schemaKey)))
                     continue;
                 const auto found = std::ranges::find(node->parameters, declared.role,
                                                      &document::ParameterBinding::role);
@@ -300,7 +309,7 @@ void PropertiesEditor::configureRegistryRows() {
         registryPanel_->setVisible(!registryRows_.empty() ||
                                    registryPanel_->property("hasValueOutputs").toBool() ||
                                    imagePartPicker_ != nullptr || cryptomatteLayerPicker_ != nullptr ||
-                                   outputLayersField_ != nullptr);
+                                   outputLayersField_ != nullptr || curveGraphs_ != nullptr);
     for (auto* row : registryRows_)
         row->refresh();
     if (node != nullptr && node->typeId == document::kImageSourceNodeType)
@@ -459,6 +468,27 @@ void PropertiesEditor::addOutputLayerRow(const document::NodeRecord& node,
 void PropertiesEditor::cryptomatteLayersMayHaveArrived() {
     if (awaitingCryptomatteLayers_)
         configureRegistryRows();
+}
+
+// #493: the channel curves (RGB, R, G, B, A) over one graph and the four hue curves over another,
+// each a tab per curve. Their parameters have no other row.
+void PropertiesEditor::addCurveGraphRows(const document::NodeRecord& node,
+                                         kit::KSection* section) {
+    using document::GradeCurve;
+    auto* channels = new CurveGraphField(
+        session_, node.id,
+        {GradeCurve::Master, GradeCurve::Red, GradeCurve::Green, GradeCurve::Blue,
+         GradeCurve::Alpha},
+        section->body());
+    channels->setObjectName(QStringLiteral("propertiesCurveGraph"));
+    auto* hue = new CurveGraphField(session_, node.id,
+                                    {GradeCurve::HueVsHue, GradeCurve::HueVsSaturation,
+                                     GradeCurve::HueVsLuma, GradeCurve::LumaVsSaturation},
+                                    section->body());
+    hue->setObjectName(QStringLiteral("propertiesHueCurveGraph"));
+    section->bodyLayout()->addWidget(channels);
+    section->bodyLayout()->addWidget(hue);
+    curveGraphs_ = channels;
 }
 
 // #364: the Cryptomatte layer picker lists the types in the node's channel set (a worker read);

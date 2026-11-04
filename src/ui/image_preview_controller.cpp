@@ -160,6 +160,42 @@ displayImage(const runtime::PreparedPreviewFrame& frame,
     return out;
 }
 
+// #493: the displayed luma of every covered pixel of `frame`, binned over 0..1 and scaled so the
+// fullest bin is one. Worker-only.
+[[nodiscard]] std::optional<std::vector<float>>
+displayHistogram(const runtime::PreparedPreviewFrame& frame, runtime::TaskContext& context) {
+    const auto view = frame.displayBufferView();
+    if (!view)
+        return std::nullopt;
+    const auto window = view->dataWindow.value_or(view->displayWindow).extent();
+    const auto stride = static_cast<std::size_t>(view->layout.rowStrideBytes) / sizeof(render::Rgba8);
+    std::vector<std::uint32_t> counts(ImagePreviewController::kHistogramBins, 0);
+    for (std::uint32_t row = 0; row < window.height(); ++row) {
+        if (context.isCancellationRequested())
+            return std::nullopt;
+        for (std::uint32_t column = 0; column < window.width(); ++column) {
+            const auto index = static_cast<std::size_t>(row) * stride + column;
+            if (index >= view->pixels.size())
+                return std::nullopt;
+            const auto& pixel = view->pixels[index];
+            if (pixel.alpha == 0)
+                continue;
+            const double luma =
+                (0.213 * pixel.red + 0.715 * pixel.green + 0.072 * pixel.blue) / 255.0;
+            const auto bin = std::min<std::size_t>(
+                counts.size() - 1,
+                static_cast<std::size_t>(std::max(0.0, luma) * static_cast<double>(counts.size())));
+            ++counts[bin];
+        }
+    }
+    const auto fullest = std::ranges::max(counts);
+    std::vector<float> bins(counts.size(), 0.0F);
+    if (fullest > 0)
+        for (std::size_t bin = 0; bin < counts.size(); ++bin)
+            bins[bin] = static_cast<float>(counts[bin]) / static_cast<float>(fullest);
+    return bins;
+}
+
 [[nodiscard]] std::optional<std::int64_t> constantInteger(const document::Composition& composition,
                                                           const document::NodeRecord& node,
                                                           const std::string_view role) {
@@ -253,11 +289,14 @@ document::ImagePreviewDisplay ImagePreviewController::display(const document::No
 }
 
 std::optional<ImagePreviewController::Key>
-ImagePreviewController::keyFor(const document::NodeId node, const QSize devicePixels) const {
+ImagePreviewController::keyFor(const document::NodeId node, const QSize devicePixels,
+                               const bool histogram) const {
     const auto* composition = session_.composition();
     if (composition == nullptr)
         return std::nullopt;
-    const auto source = document::imagePreviewSource(composition->graph(), node);
+    const auto source = histogram
+                            ? document::inspectedInputSource(composition->graph(), node, "input")
+                            : document::imagePreviewSource(composition->graph(), node);
     if (!source)
         return std::nullopt;
     const auto extent =
@@ -276,12 +315,13 @@ ImagePreviewController::keyFor(const document::NodeId node, const QSize devicePi
                .time = time,
                .width = extent->width(),
                .height = extent->height(),
-               .display = display(node),
+               .display = histogram ? ImagePreviewDisplay::Rgba : display(node),
                .source = source->output,
                .channelSet = source->kind == document::SocketValueKind::ChannelSet,
                .displayName = settings.displayName,
                .viewName = settings.viewName,
-               .showLook = settings.showLook};
+               .showLook = settings.showLook,
+               .histogram = histogram};
 }
 
 ImagePreviewController::Preview ImagePreviewController::preview(const document::NodeId node,
@@ -291,16 +331,7 @@ ImagePreviewController::Preview ImagePreviewController::preview(const document::
     const auto key = keyFor(node, devicePixels);
     auto& shown = shown_[node];
     if (!key) {
-        if (const auto pending = pending_.find(node); pending != pending_.end()) {
-            pending->second.cancelled = true;
-            if (pending->second.listing)
-                pending->second.listing->cancel();
-            if (pending->second.frame)
-                pending->second.frame->cancel();
-            if (pending->second.convert)
-                pending->second.convert->cancel();
-        }
-        wanted_.erase(node);
+        drop(node);
         return {.image = {},
                 .state = State::Unconnected,
                 .cpu = false,
@@ -329,6 +360,56 @@ ImagePreviewController::Preview ImagePreviewController::preview(const document::
             .state = State::Pending,
             .cpu = shown.cpu,
             .message = tr("Preparing preview…")};
+}
+
+ImagePreviewController::Histogram ImagePreviewController::histogram(const document::NodeId node) {
+    if (session_.snapshot().project().id() != project_)
+        resetForProject();
+    const auto key = keyFor(node, QSize(kHistogramEdge, kHistogramEdge), true);
+    auto& shown = shown_[node];
+    if (!key) {
+        drop(node);
+        return {.bins = {}, .state = State::Unconnected, .cpu = false, .message = {}};
+    }
+    if (shown.key == key)
+        return {.bins = shown.bins, .state = State::Ready, .cpu = shown.cpu, .message = {}};
+    if (const auto kept = std::ranges::find(kept_, *key, &Kept::key); kept != kept_.end()) {
+        kept->used = ++uses_;
+        shown.key = key;
+        shown.bins = kept->bins;
+        shown.cpu = kept->cpu;
+        shown.failed.reset();
+        if (pending_.contains(node))
+            want(node, *key);
+        return {.bins = shown.bins, .state = State::Ready, .cpu = shown.cpu, .message = {}};
+    }
+    if (shown.failed == key)
+        return {.bins = shown.bins,
+                .state = State::Failed,
+                .cpu = shown.cpu,
+                .message = shown.failure};
+    want(node, *key);
+    return {.bins = shown.bins, .state = State::Pending, .cpu = shown.cpu, .message = {}};
+}
+
+void ImagePreviewController::drop(const document::NodeId node) {
+    if (const auto pending = pending_.find(node); pending != pending_.end()) {
+        pending->second.cancelled = true;
+        if (pending->second.listing)
+            pending->second.listing->cancel();
+        if (pending->second.frame)
+            pending->second.frame->cancel();
+        if (pending->second.convert)
+            pending->second.convert->cancel();
+    }
+    wanted_.erase(node);
+}
+
+void ImagePreviewController::setHistogramsShown(const bool shown) {
+    if (histogramsShown_ == shown)
+        return;
+    histogramsShown_ = shown;
+    emit changed();
 }
 
 void ImagePreviewController::want(const document::NodeId node, const Key& key) {
@@ -456,10 +537,20 @@ bool ImagePreviewController::startConvert(const document::NodeId node, Pending& 
     const auto channel = viewerChannel(pending.key.display).value_or(ViewerChannel::Rgba);
     auto submission = scheduler_.submit<ConvertedHandle>(
         std::move(request),
-        [frame = result->frame(), normalized, channel](runtime::TaskContext& context) {
+        [frame = result->frame(), normalized, channel,
+         histogram = pending.key.histogram](runtime::TaskContext& context) {
             using Result = runtime::TaskResult<ConvertedHandle>;
             if (context.isCancellationRequested())
                 return Result::cancelled();
+            if (histogram) {
+                auto bins = displayHistogram(*frame, context);
+                if (context.isCancellationRequested())
+                    return Result::cancelled();
+                if (!bins)
+                    return Result::failed(unavailable("The histogram pixels could not be read"));
+                return Result::succeeded(std::make_shared<const Converted>(
+                    Converted{{}, std::move(*bins), std::this_thread::get_id()}));
+            }
             auto image = normalized ? normalizedImage(*frame, context)
                                     : displayImage(*frame, frame, channel, context);
             if (context.isCancellationRequested())
@@ -467,7 +558,7 @@ bool ImagePreviewController::startConvert(const document::NodeId node, Pending& 
             if (!image)
                 return Result::failed(unavailable("The preview pixels could not be read"));
             return Result::succeeded(std::make_shared<const Converted>(
-                Converted{std::move(*image), std::this_thread::get_id()}));
+                Converted{std::move(*image), {}, std::this_thread::get_id()}));
         });
     if (!submission.accepted()) {
         fail(node, pending.key, tr("The preview could not be drawn"));
@@ -549,12 +640,15 @@ void ImagePreviewController::poll() {
             lastWorkerThread_ = (*value)->thread;
             const auto existing = std::ranges::find(kept_, pending.key, &Kept::key);
             if (existing != kept_.end())
-                *existing = Kept{pending.key, (*value)->image, pending.cpu, ++uses_};
+                *existing =
+                    Kept{pending.key, (*value)->image, (*value)->bins, pending.cpu, ++uses_};
             else
-                kept_.push_back(Kept{pending.key, (*value)->image, pending.cpu, ++uses_});
+                kept_.push_back(
+                    Kept{pending.key, (*value)->image, (*value)->bins, pending.cpu, ++uses_});
             auto& shown = shown_[node];
             shown.key = pending.key;
             shown.image = (*value)->image;
+            shown.bins = (*value)->bins;
             shown.cpu = pending.cpu;
             shown.failed.reset();
             published = true;

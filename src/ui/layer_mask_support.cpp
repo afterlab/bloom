@@ -108,7 +108,13 @@ document::PathValue ellipsePath(const QRectF& rect) {
 std::optional<document::PathValue> maskPathAt(const document::Composition& composition,
                                               const document::LayerMask& mask,
                                               const core::RationalTime keyTime) {
-    const auto* record = composition.parameters().find(mask.path);
+    return pathParameterAt(composition, mask.path, keyTime);
+}
+
+std::optional<document::PathValue> pathParameterAt(const document::Composition& composition,
+                                                   const document::ParameterId parameter,
+                                                   const core::RationalTime keyTime) {
+    const auto* record = composition.parameters().find(parameter);
     if (record == nullptr)
         return std::nullopt;
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&record->source)) {

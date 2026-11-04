@@ -27,6 +27,8 @@
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/curve_graph.hpp>
+#include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -248,7 +250,7 @@ void imageChannelRows() {
 }
 
 // #340: Levels presents every channel's black/white/gamma rows and a clamp switch (off), Curves
-// every channel's points and a clamp switch, Hue/Saturation its hue and saturation; the clamp edits
+// (#493) its curve graphs and a clamp switch, Hue/Saturation its hue and saturation; the clamp edits
 // through command history.
 void colorGradeRows() {
     auto project = document::makeNewProject("Grades", "Main", core::RationalTime::fromInteger(10));
@@ -263,16 +265,27 @@ void colorGradeRows() {
         session.selectNode(node);
         QCoreApplication::processEvents();
         const bool levels = std::string_view(type) == "bloom.levels";
-        for (const auto* role :
-             levels
-                 ? std::array{"masterInputBlack", "redGamma", "greenOutputWhite", "alphaInputWhite"}
-                 : std::array{"masterPoint1", "redPoint3", "bluePoint5", "alphaPoint2"})
-            expect(row(properties, role) != nullptr, "a grade presents each channel's controls");
-        auto* gammaRow = row(properties, levels ? "masterGamma" : "masterPoint3");
-        expect(gammaRow &&
-                   gammaRow->property("rowLabel").toString() ==
-                       (levels ? QStringLiteral("Master Gamma") : QStringLiteral("Master Point 3")),
-               "grade rows read as channel and control");
+        if (levels) {
+            for (const auto* role :
+                 {"masterInputBlack", "redGamma", "greenOutputWhite", "alphaInputWhite"})
+                expect(row(properties, role) != nullptr,
+                       "a grade presents each channel's controls");
+            auto* gammaRow = row(properties, "masterGamma");
+            expect(gammaRow &&
+                       gammaRow->property("rowLabel").toString() == QStringLiteral("Master Gamma"),
+                   "grade rows read as channel and control");
+        } else {
+            // #493: Curves presents its channel curves and its hue curves as two graphs, not rows.
+            auto* channels = properties.findChild<ui::CurveGraphField*>("propertiesCurveGraph");
+            auto* hues = properties.findChild<ui::CurveGraphField*>("propertiesHueCurveGraph");
+            expect(channels && hues && channels->tabs()->count() == 5 &&
+                       hues->tabs()->count() == 4 &&
+                       channels->curve() == document::GradeCurve::Master &&
+                       hues->curve() == document::GradeCurve::HueVsHue,
+                   "Curves presents a channel graph and a hue graph with a tab per curve");
+            for (const auto* role : {"master", "red", "alpha", "hueVsHue", "lumaVsSaturation"})
+                expect(row(properties, role) == nullptr, "a curve is a graph tab, not a row");
+        }
         auto* clampRow = row(properties, "clamp");
         auto* toggle = clampRow ? clampRow->findChild<ui::kit::KSwitch*>() : nullptr;
         expect(toggle != nullptr && !toggle->isChecked(), "a grade presents an unset clamp switch");

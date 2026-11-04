@@ -10,6 +10,7 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/new_project.hpp>
@@ -22,6 +23,7 @@
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/node_editor.hpp>
@@ -29,6 +31,7 @@
 
 #include "node_editor_items.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
@@ -342,6 +345,67 @@ int main(int argc, char** argv) {
                                           std::set<document::NodeId>{*node});
     expect(session.executeNodeTransaction(std::move(remove)).changed(), "the preview is removed");
     expect(!previews.backgroundNode().has_value(), "a removed node is no longer the background");
+
+    // #493: a Curves node's input histogram, requested only by a painted curve graph, prepared on
+    // a worker from the input's downsampled frame; and its card draws the curves.
+    expect(fixture.add(document::kCurvesNodeType, document::OutputPortRef{*solid, "image"}),
+           "a Curves node is added fed by the solid");
+    const auto curves = fixture.nodeOfType(document::kCurvesNodeType);
+    if (curves) {
+        const auto renderBefore = document::RenderReachability::compute(*session.composition());
+        ui::CurveGraphField field(session, *curves,
+                                  {document::GradeCurve::Master, document::GradeCurve::Red});
+        field.resize(320, field.sizeHint().height());
+        QApplication::processEvents();
+        const auto submittedBefore = previews.submissionCount();
+        expect(previews.submissionCount() == submittedBefore,
+               "an unshown curve graph asks for no histogram");
+        previews.setHistogramsShown(false);
+        field.show();
+        static_cast<void>(field.canvas()->grab());
+        QApplication::processEvents();
+        expect(previews.submissionCount() == submittedBefore,
+               "a graph with the histogram hidden asks for none");
+        previews.setHistogramsShown(true);
+        static_cast<void>(field.canvas()->grab());
+        expect(previews.submissionCount() == submittedBefore + 1,
+               "painting the graph asks for its input histogram once");
+        ui::ImagePreviewController::Histogram histogram;
+        expect(waitUntil([&] {
+                   histogram = previews.histogram(*curves);
+                   return histogram.state == State::Ready || histogram.state == State::Failed;
+               }),
+               "the histogram is prepared");
+        std::size_t filled = 0;
+        float fullest = 0.0F;
+        for (const auto bin : histogram.bins) {
+            filled += bin > 0.0F ? 1U : 0U;
+            fullest = std::max(fullest, bin);
+        }
+        expect(histogram.state == State::Ready &&
+                   histogram.bins.size() == ui::ImagePreviewController::kHistogramBins &&
+                   fullest == 1.0F && filled == 1,
+               "a solid's histogram is one full bin");
+        expect(previews.lastWorkerThread().has_value() &&
+                   *previews.lastWorkerThread() != std::this_thread::get_id(),
+               "the histogram is binned on a worker");
+        expect(document::RenderReachability::compute(*session.composition()).nodes().size() ==
+                   renderBefore.nodes().size(),
+               "the histogram never changes what the output renders");
+        const auto kept = previews.submissionCount();
+        static_cast<void>(field.canvas()->grab());
+        expect(previews.histogram(*curves).state == State::Ready &&
+                   previews.submissionCount() == kept,
+               "repainting the same input asks for nothing");
+        field.setCurve(document::GradeCurve::Red);
+        expect(previews.histogramsShown(), "the histogram is shown by default");
+        QApplication::processEvents();
+        auto* curveCard =
+            dynamic_cast<ui::node_editor::NodeItem*>(editor.graphScene()->findNodeItem(*curves));
+        expect(curveCard != nullptr && curveCard->isCurveGraph() &&
+                   !curveCard->previewRect().isEmpty(),
+               "a Curves card draws its curves");
+    }
 
     if (failures != 0)
         return 1;

@@ -2,6 +2,7 @@
 #include <bloom/ui/tool_controller.hpp>
 
 #include "animation_components.hpp"
+#include "layer_mask_support.hpp"
 #include "timeline_key_time.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -1650,7 +1651,9 @@ bool CompositionSession::appendParameterEdit(commands::Transaction& transaction,
             using Held = std::decay_t<decltype(held)>;
             if constexpr (std::is_same_v<Held, double> || std::is_same_v<Held, document::Vec2d> ||
                           std::is_same_v<Held, document::Vec3d> ||
-                          std::is_same_v<Held, core::Color4d>) {
+                          std::is_same_v<Held, core::Color4d> ||
+                          std::is_same_v<Held, document::PathValue>) {
+                // A Path (a #493 Curves curve) sets the whole-value key at this time.
                 transaction.emplace<commands::SetKeyframeAtTime>(
                     compositionId_, animated->curveId, keyTimeOf(parameterId, time), held);
                 return true;
@@ -2903,6 +2906,8 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     const auto parameterId = parameter->id;
     if (parameter->schemaKey == document::kLayerMaskPathSchemaKey)
         return toggleMaskPathKey(parameter->id);
+    if (document::isPathAnimatableSchemaKey(parameter->schemaKey))
+        return togglePathParameterKey(*parameter);
     const auto label = keyframeCommandLabel(parameter->schemaKey);
     // The key lands on the parameter's own clock (ADR 0024), not the composition's.
     const auto keyTime = keyTimeAtPlayhead(parameterId);

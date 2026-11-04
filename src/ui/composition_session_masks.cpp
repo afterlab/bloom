@@ -123,4 +123,48 @@ bool CompositionSession::setTrackMatte(const document::LayerId target,
     return handleResult(commandStack_->execute(std::move(transaction)));
 }
 
+// #493: the keyframe gesture for any other Path parameter (a Curves curve), on the parameter's own
+// clock: constant -> one key, no key here -> a key at the sampled curve, key here -> delete it (the
+// last key becomes the constant it held). One transaction each.
+bool CompositionSession::togglePathParameterKey(const document::ParameterRecord& parameter) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    if (current == nullptr)
+        return false;
+    const auto keyTime = keyTimeAtPlayhead(parameter.id);
+    if (std::holds_alternative<document::ConstantValueSource>(parameter.source)) {
+        commands::Transaction transaction("Add Curve Key", snapshot_.revision());
+        transaction.emplace<commands::CreateAnimationForParameter>(compositionId_, parameter.id,
+                                                                   keyTime);
+        return handleResult(commandStack_->execute(std::move(transaction)));
+    }
+    const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
+    const auto* curve = source ? current->animationCurves().findPath(source->curveId) : nullptr;
+    if (curve == nullptr) {
+        reportUnavailable(tr("Disconnect the driven parameter before keying its value"));
+        return false;
+    }
+    const auto existing =
+        std::ranges::find(curve->keyframes, keyTime, &document::PathKeyframe::time);
+    if (existing == curve->keyframes.end()) {
+        auto sampled = masks::pathParameterAt(*current, parameter.id, keyTime);
+        if (!sampled) {
+            reportUnavailable(tr("The curve could not be sampled here"));
+            return false;
+        }
+        commands::Transaction transaction("Add Curve Key", snapshot_.revision());
+        transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, source->curveId, keyTime,
+                                                         std::move(*sampled));
+        return handleResult(commandStack_->execute(std::move(transaction)));
+    }
+    commands::Transaction transaction("Remove Curve Key", snapshot_.revision());
+    if (curve->keyframes.size() > 1)
+        transaction.emplace<commands::DeleteKeyframe>(compositionId_, source->curveId,
+                                                      existing->id);
+    else
+        transaction.emplace<commands::ConvertAnimationToConstant>(compositionId_, parameter.id,
+                                                                  existing->value);
+    return handleResult(commandStack_->execute(std::move(transaction)));
+}
+
 } // namespace bloom::ui

@@ -137,12 +137,15 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Luma Key");
     if (typeId == "bloom.hue-saturation")
         return QCoreApplication::translate("node_editor", "Hue/Saturation");
-    // #340 Curves points: "redPoint3" reads "Red Point 3" (input along X, output along Y).
-    if (const auto marker = typeId.rfind("Point"); marker != std::string_view::npos && marker > 0 &&
-                                                   marker + 6 == typeId.size() &&
-                                                   typeId.back() >= '1' && typeId.back() <= '9')
-        return QCoreApplication::translate("node_editor", "%1 Point %2")
-            .arg(displayTypeName(typeId.substr(0, marker)), QChar(typeId.back()));
+    // #493 Curves hue curves.
+    if (typeId == "hueVsHue")
+        return QCoreApplication::translate("node_editor", "Hue vs Hue");
+    if (typeId == "hueVsSaturation")
+        return QCoreApplication::translate("node_editor", "Hue vs Saturation");
+    if (typeId == "hueVsLuma")
+        return QCoreApplication::translate("node_editor", "Hue vs Luma");
+    if (typeId == "lumaVsSaturation")
+        return QCoreApplication::translate("node_editor", "Luma vs Saturation");
     if (typeId == "bloom.exposure")
         return QCoreApplication::translate("node_editor", "Exposure");
     if (typeId == "bloom.offset")
@@ -542,6 +545,8 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     const auto drawPreview = [&] {
         if (imagePreview_ && !previewRect_.isEmpty())
             paintImagePreview(*painter, previewRect_, session_, id_);
+        if (curveGraph_ && !previewRect_.isEmpty())
+            paintCurveGraphCard(*painter, previewRect_, session_, id_);
     };
     if (layout_.muted)
         drawBadge(

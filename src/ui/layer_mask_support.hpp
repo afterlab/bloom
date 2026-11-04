@@ -36,6 +36,11 @@ contentToComposition(const runtime::EvaluatedOperationBounds& bounds);
 
 // The mask path parameter's value at `keyTime` (the parameter's own clock): the constant, or the
 // Path curve sampled exactly as the evaluator samples it.
+// A Path parameter (a mask path, a #493 Curves curve) at its own clock time `keyTime`: the constant,
+// or the whole-value Path curve sampled there.
+[[nodiscard]] std::optional<document::PathValue>
+pathParameterAt(const document::Composition& composition, document::ParameterId parameter,
+                core::RationalTime keyTime);
 [[nodiscard]] std::optional<document::PathValue>
 maskPathAt(const document::Composition& composition, const document::LayerMask& mask,
            core::RationalTime keyTime);

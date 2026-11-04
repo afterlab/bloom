@@ -63,6 +63,12 @@ CompositionSession::liveValue(const document::ParameterId parameterId) const {
         const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
         if (constant && std::holds_alternative<document::PathValue>(constant->value))
             return constant->value;
+        // #493: an animated Path (a Curves curve) at the playhead on its own clock.
+        if (const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source);
+            animated && current->animationCurves().findPath(animated->curveId))
+            if (auto path = masks::pathParameterAt(*current, parameterId,
+                                                   keyTimeAtPlayhead(parameterId)))
+                return document::ParameterValue{std::move(*path)};
     }
     if (const auto sample = effectiveParameterValue(parameter))
         return std::visit([](const auto& value) -> document::ParameterValue { return value; },

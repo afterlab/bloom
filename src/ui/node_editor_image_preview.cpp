@@ -4,6 +4,8 @@
 
 #include "node_editor_items.hpp"
 
+#include <bloom/ui/curve_graph.hpp>
+
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/kit/color.hpp>
@@ -105,6 +107,21 @@ void paintImagePreview(QPainter& painter, const QRectF& rect, CompositionSession
                          Qt::AlignCenter | Qt::TextWordWrap, preview.message);
     }
     painter.restore();
+}
+
+void paintCurveGraphCard(QPainter& painter, const QRectF& rect, CompositionSession* session,
+                         const document::NodeId node) {
+    if (session == nullptr)
+        return;
+    CurveGraphPicture picture;
+    picture.overview = true;
+    picture.curves = curveGraphValues(*session, node);
+    std::vector<document::PathValue> shown;
+    for (std::size_t index = 0; index < document::kGradeChannelCount; ++index)
+        if (picture.curves[index])
+            shown.push_back(*picture.curves[index]);
+    picture.range = curveGraphRange(document::GradeCurve::Master, shown);
+    paintCurveGraph(painter, rect, picture);
 }
 
 } // namespace node_editor

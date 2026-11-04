@@ -174,6 +174,14 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
             if (!view_->backgroundRect().isEmpty())
                 view_->viewport()->update();
         });
+        // #493: a Curves card follows a curve drag in Properties before it commits.
+        connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
+            if (!isVisible())
+                return;
+            for (auto* item : scene_->nodeItems())
+                if (item->isCurveGraph())
+                    item->update();
+        });
         // A newly chosen background starts fitted; hiding or showing it keeps its view.
         connect(previews, &ImagePreviewController::backgroundChanged, this,
                 [this, previews, shown = std::optional<document::NodeId>{}]() mutable {
