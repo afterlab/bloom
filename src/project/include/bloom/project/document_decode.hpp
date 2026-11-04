@@ -470,6 +470,12 @@ void migrateLegacySourceColorSpaces(DecodedDocumentEnvelope& envelope);
 // where its keys begin and a driven point its default; their curves and drivers are removed.
 void migrateLegacyCurvesNodes(DecodedDocumentEnvelope& envelope);
 
+// #534: opening a project binds each optional Glow parameter (the #506 modes and shared controls) a
+// Glow saved before them lacks, at its definition default and on a newly allocated id, so every
+// Glow presents the full control set. Those defaults are what an unbound parameter already lowered
+// with, so the picture is unchanged. Open path only, like the migrations above.
+void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope);
+
 // Decodes `root` (the document.json root value from a parsed StrictJsonDomDocument) into a
 // DecodedDocumentEnvelope. `root` must outlive the call; nothing is retained past return. See the
 // file-level comment above for exact scope. May throw std::bad_alloc; never throws otherwise.

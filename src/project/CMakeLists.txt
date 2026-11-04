@@ -27,6 +27,7 @@ target_sources(
         document_decode_internal.hpp
         document_components_migration.cpp
         document_curves_migration.cpp
+        document_glow_migration.cpp
         document_migration.cpp
         document_layout_migration.cpp
         document_decode_layout.cpp
