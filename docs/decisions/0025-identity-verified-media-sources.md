@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Date: 2026-10-23
+Date: 2026-10-23; amended 2026-11-04 (digests leave the frame path, issue #495)
 
 ## Context
 
@@ -48,6 +48,43 @@ time reading the same file again (issue #356).
   timestamp tick. Explicit refresh/relink and the immutable decode snapshot bound the damage: a
   decode never mixes old and new bytes.
 - The behavior is identical on Linux, macOS and Windows; only the identity query differs.
+
+## Amendment (2026-11-04): digests leave the frame path
+
+Owner decision, issue #495: loosen decision records that cost throughput, as long as colours and
+pixels stay correct. The full SHA-256 was still on the first-use path of every source and, because
+each image-sequence member is a source used once during playback, on the per-frame path: a cold
+2160p multilayer EXR shot (95 MB a frame) hashed every frame on the read-ahead workers before it
+could decode.
+
+- The file identity authorises preview and export from first use. A capture reads the file into its
+  immutable revision and observes the identity (length, modification and status-change time, volume
+  and file id) before and after the read. When it held, the bytes are admitted without a hash: under
+  the process memo's digest when the memo verified this identity, under the stamp for a stamped
+  member that still carries it, else under the recorded digest. The admitted identity is remembered
+  in the memo without vouching for a digest (`VerifiedSourceDigests::admit`).
+- A changed identity still forces a full hash: one that changed during the read, a stamp that
+  differs, or a memo that knows the path under another identity. Changed content then reports
+  `SourceChanged`/`DigestMismatch` and the relink diagnostic as before; a memo digest that refutes
+  the recorded digest does the same.
+- Digests are computed in the background: a project task ("Verifying footage", idle OS priority,
+  cancellable, with progress in Jobs) hashes members still pending a digest and verifies recorded
+  digests. Its hashes enter the memo, so a refuted file is reported at its next use and the caches
+  holding frames made from it are purged. A save records what the memo has already verified
+  (document 1.36: a member may carry its stamp and its digest) and never waits; a member without a
+  digest saves pending. See
+  [`project-format.md`](../architecture/project-format.md#verified-member-digests-in-document-136).
+- Decode still reads only the immutable revision (image) or snapshot (video), so old and new bytes
+  never mix. Pixels are unchanged: a deferred and a digest-first capture decode identical pixels
+  (`bloom.media.image` tests).
+- Video sources keep their single capture pass on Linux, which copies the immutable decode snapshot
+  and hashes the bytes in the same read (the copy, not the hash, dominates it); macOS and Windows
+  verify a video's digest once per process at first use, as before.
+
+Residual risk, accepted with the decision: until the background pass reaches it, a file whose
+content changed between sessions without a recorded identity (a project saved before 1.36, or a
+still image) is decoded from its current bytes at first use; the pass then reports it, purges what
+was rendered from it, and later uses show the relink diagnostic.
 
 ## Related
 

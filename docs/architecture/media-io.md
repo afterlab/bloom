@@ -1784,29 +1784,39 @@ what fits four in-flight 16-bit 4:4:4 frames per thread into half of the worker'
 and slice threading are bit-exact for these decoders, so threading does not change the
 determinism claim.
 
-Preview hardware decode (issue #366) is a separate, decode-only worker generation started with
-`--vaapi-decode` and identified by its own execution key: `Hardware`, device
-`vaapi-render-node-discovered`, H.264/HEVC `VideoDecode` only, `PreviewQualified`, and
-`NoDeterminismClaim`. The worker discovers `/dev/dri/renderD*` nodes in numeric order instead of
-assuming one; a node whose driver cannot decode the stream makes FFmpeg return software frames,
-which the worker treats as a miss and moves to the next node. The first hardware frame of every
-worker generation is decoded again by the software reference on an independent reader of the same
-immutable input and must match byte for byte (the documented tolerance is zero); downloaded
-limited-range NV12 is de-interleaved into the same YUV420P8 product as software, other surfaces
-use the same 16-bit conversion. Any typed hardware refusal or parity failure retires hardware for
-that source and decodes the software reference; the frame's `FrameDecodeProvenance` then reads
-`software (fallback: <reason>)`. Only retained (interactive preview) revisions may request
-hardware. Revalidated requests — final, still, sequence, video and headless rendering — always
-decode in software, decoded-cache keys and GPU raw-upload identities separate hardware frames from
-software ones. The route is preferred automatically only on hosts with at most four hardware
-threads, where it measured faster than threaded software decode; `BLOOM_VIDEO_HARDWARE_DECODE=1`
-prefers it on any host with a render node and `0` disables it. The older export-side
-VA-API execution key keeps its Development/Incomplete decode declarations, which are not
-selectable. Hardware provides acceleration only; it never changes project semantics.
+Hardware decode (issue #366; final route and NVDEC since issue #495, ADR 0027 amended 2026-11-04)
+is a separate, decode-only, retained worker generation with its own execution key, `Hardware`,
+H.264/HEVC/AV1 `VideoDecode` only, `PreviewQualified`, and `NoDeterminismClaim`: `--vaapi-decode`
+(driver `vaapi-libva`, device `vaapi-render-node-discovered`) or, where the NVIDIA kernel driver is
+loaded, `--nvdec-decode` (FFmpeg's CUDA hwaccel; driver `nvdec-cuda`, device
+`cuda-device-discovered`, provider `ffmpeg-nvdec`). The VA-API worker discovers `/dev/dri/renderD*`
+nodes in numeric order instead of assuming one; a node whose driver cannot decode the stream makes
+FFmpeg return software frames, which the worker treats as a miss and moves to the next node. AV1
+decodes through FFmpeg's native AV1 decoder, which only decodes through a hwaccel; software AV1
+stays dav1d. The first hardware frame of every worker generation is decoded again by the software
+reference on an independent reader of the same immutable input and must match byte for byte (the
+documented tolerance is zero); downloaded limited-range NV12 is de-interleaved into the same
+YUV420P8 product as software, other surfaces (P010) use the same 16-bit conversion. Any typed
+hardware refusal or parity failure retires hardware for that source and decodes the software
+reference; the frame's `FrameDecodeProvenance` then reads `software (fallback: <reason>)`. Preview
+(retained) and final (revalidated: still, sequence, video and headless rendering) requests may both
+use it; the hardware generation is always retained on the source's snapshot, so it proves one frame
+and continues forward. Decoded-cache keys, the selection key and GPU raw-upload identities carry the
+route (`vaapi` or `nvdec`), so hardware frames never stand in for software ones. The route is
+preferred automatically wherever it is NVDEC, and for VA-API only on hosts with at most four
+hardware threads, where it measured faster than threaded software decode;
+`BLOOM_VIDEO_HARDWARE_DECODE=1` prefers the host's route on any host, `vaapi` or `nvdec` names one,
+and `0` disables it. On the 2026-11-04 measurement host (RTX 4090 with nvidia-vaapi-driver, AMD
+integrated GPU, 16 threads) FFmpeg decoded the 240-frame 2160p bench clips, downloaded to host
+memory, in (seconds) HEVC Main 10: NVDEC 0.63, VA-API on the NVIDIA GPU 1.12, VA-API on the
+integrated GPU 3.60, threaded software 2.61 (15.1 s of CPU); H.264: 1.08 / 1.16 / 1.74 / 1.52; AV1:
+1.38 / 1.93 / 4.51 / 3.37. The older export-side VA-API execution key keeps its
+Development/Incomplete decode declarations, which are not selectable. Hardware provides
+acceleration only; it never changes project semantics.
 Each successful video source selection, on the CPU and GPU routes alike, publishes a
 `VideoSourceReport` (asset digest, decode route, assumed-color note) on the video source context;
 `OperationCache::videoSourceReports()` reads the 32 most recent. The window status bar's video cell
-shows, for the active composition's Video sources, the latest route ("Video: software", "vaapi" or
+shows, for the active composition's Video sources, the latest route ("Video: software", "vaapi", "nvdec" or
 "software (fallback: <reason>)") followed by any assumed-color note, with one line per source in
 its tooltip. The report is status beside evaluation, never an evaluation diagnostic, so frames
 that carry it stay cacheable in RAM preview.
@@ -1918,7 +1928,8 @@ worker keeps frame-sized allocations in its heap (glibc `M_MMAP_THRESHOLD` 32 Mi
 mapping and faulting in each frame again, about 21,000 page faults per 1080p frame, and Linux worker
 pipes use 1 MiB buffers. On the 1080p ProRes 422 HQ benchmark shot (project B) a RAM preview fill
 went from 21.6 to 29.4 fps at Full and from 22.7 to 28.6 fps at Quarter (benchmark runner, warm); hardware decode is
-unchanged. File content is rehashed before a cache hit, so edits cannot reuse stale decoded pixels.
+unchanged. The file identity is checked before a cache hit and a changed identity forces a rehash (ADR
+0025), so edits cannot reuse stale decoded pixels.
 Thumbnail and waveform/audio buffers reuse the existing bounded preview storage after the same
 content check; scrubbing does not decode the complete audio clip again.
 No operation-cache or memory-ledger implementation changes are required.
