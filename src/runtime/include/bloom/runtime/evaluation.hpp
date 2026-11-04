@@ -42,7 +42,9 @@ namespace bloom::runtime {
 // content bounds, so a nested composition with off-centre content renders in a new place.
 // Semantics 13 (#460) reads a Luma matte from premultiplied colour, so its alpha feathers the
 // coverage, and weights a fractional Box Blur radius's outermost taps by its fraction.
-inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 13;
+// Semantics 14 (#480) refuses a Shuffle's Color mode on a data channel instead of colour-converting
+// it, so a saved plan with that mapping no longer produces its previous picture.
+inline constexpr std::uint32_t kCpuCompositionEvaluatorSemanticsVersion = 14;
 
 enum class EvaluationQuality : std::uint8_t {
     Reference,
