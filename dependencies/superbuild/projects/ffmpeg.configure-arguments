@@ -34,6 +34,7 @@
 --enable-decoder=tiff
 --enable-decoder=vp9
 --enable-decoder=libdav1d
+--enable-decoder=av1
 --enable-decoder=aac
 --enable-decoder=mp3
 --enable-decoder=opus
@@ -151,6 +152,12 @@
 --enable-libopus
 --enable-ffnvcodec
 --enable-nvenc
+--enable-cuda
+--enable-nvdec
+--enable-hwaccel=h264_nvdec
+--enable-hwaccel=hevc_nvdec
+--enable-hwaccel=av1_nvdec
 --enable-vaapi
 --enable-hwaccel=h264_vaapi
 --enable-hwaccel=hevc_vaapi
+--enable-hwaccel=av1_vaapi

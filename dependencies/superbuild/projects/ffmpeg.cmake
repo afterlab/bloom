@@ -32,7 +32,8 @@ if(NOT BLOOM_FFMPEG_ENABLE_VAAPI)
         --enable-encoder=h264_vaapi
         --enable-encoder=hevc_vaapi
         --enable-hwaccel=h264_vaapi
-        --enable-hwaccel=hevc_vaapi)
+        --enable-hwaccel=hevc_vaapi
+        --enable-hwaccel=av1_vaapi)
     list(APPEND BLOOM_FFMPEG_CONFIGURE_ARGUMENTS --disable-vaapi)
 else()
     find_program(BLOOM_FFMPEG_PKG_CONFIG pkg-config)
@@ -65,8 +66,9 @@ set(BLOOM_FFMPEG_DEPENDS
     bloom_dependency_libvpx
     bloom_dependency_opus)
 
-# NVENC (nv-codec-headers.cmake): FFmpeg's h264_nvenc/hevc_nvenc compile against the MIT headers and
-# load the NVIDIA driver at run time. macOS has no NVENC, so its build omits them.
+# NVENC and NVDEC (nv-codec-headers.cmake): FFmpeg's h264_nvenc/hevc_nvenc encoders and its CUDA
+# hwaccel (h264/hevc/av1 NVDEC decode, ADR 0027) compile against the MIT headers and load the NVIDIA
+# driver at run time. macOS has neither, so its build omits them.
 if(BLOOM_NV_CODEC_HEADERS_REQUIRED)
     list(APPEND BLOOM_FFMPEG_DEPENDS bloom_dependency_nv_codec_headers)
 else()
@@ -74,7 +76,12 @@ else()
         --enable-ffnvcodec
         --enable-nvenc
         --enable-encoder=h264_nvenc
-        --enable-encoder=hevc_nvenc)
+        --enable-encoder=hevc_nvenc
+        --enable-cuda
+        --enable-nvdec
+        --enable-hwaccel=h264_nvdec
+        --enable-hwaccel=hevc_nvdec
+        --enable-hwaccel=av1_nvdec)
 endif()
 
 # Reviewed source patches (dependencies/patches/ffmpeg/, recorded in the lock with their digests and

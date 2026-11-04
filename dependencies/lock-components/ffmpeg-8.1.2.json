@@ -99,6 +99,11 @@
       "cmakeOptions": [],
       "featureDecisions": [
         {
+          "id": "bloom.feature.ffmpeg-av1-hwaccel",
+          "state": "enabled",
+          "reason": "FFmpeg's native AV1 decoder, used only with a VA-API or NVDEC hwaccel; software AV1 decode stays dav1d"
+        },
+        {
           "id": "bloom.feature.ffmpeg-bwdif",
           "state": "enabled",
           "reason": "libavfilter bwdif with buffer/buffersink: field-aware deinterlacing of interlaced video in the worker"
@@ -117,6 +122,11 @@
           "id": "bloom.feature.ffmpeg-libvpx",
           "state": "enabled",
           "reason": "VP9 software encode (8-bit Profile 0 and 10-bit Profile 2) through the libvpx wrapper; libvpx 1.17.0 is a static archive linked into libavcodec"
+        },
+        {
+          "id": "bloom.feature.ffmpeg-nvdec",
+          "state": "enabled",
+          "reason": "NVIDIA NVDEC H.264/HEVC/AV1 decode through FFmpeg's CUDA hwaccel and ffnvcodec; the driver is loaded at run time and the build needs no nonfree component (Linux and Windows). Hardware frames are proven byte-identical to the software reference per source (ADR 0027)"
         },
         {
           "id": "bloom.feature.ffmpeg-nvenc",
@@ -162,6 +172,7 @@
       "capabilities": [
         "bloom.capability.ffmpeg",
         "bloom.capability.ffmpeg.av1-decode-dav1d",
+        "bloom.capability.ffmpeg.av1-hwaccel-decode",
         "bloom.capability.ffmpeg.av1-software-svt-av1",
         "bloom.capability.ffmpeg.decode",
         "bloom.capability.ffmpeg.encode",
@@ -172,6 +183,7 @@
         "bloom.capability.ffmpeg.hevc-nvenc-encode",
         "bloom.capability.ffmpeg.hevc-software-kvazaar",
         "bloom.capability.ffmpeg.hevc-vaapi-encode",
+        "bloom.capability.ffmpeg.nvdec-decode",
         "bloom.capability.ffmpeg.opus-encode-libopus",
         "bloom.capability.ffmpeg.prores-preview",
         "bloom.capability.ffmpeg.vaapi",
