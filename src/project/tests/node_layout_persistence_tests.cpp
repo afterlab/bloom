@@ -172,7 +172,8 @@ void blurNodeReopen() {
     // #490: the Image Preview's display (1, RGB) reopens with the node.
     for (const auto* type :
          {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
-          "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview"}) {
+          "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
+          "bloom.curves", "bloom.hue-saturation"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -185,12 +186,23 @@ void blurNodeReopen() {
             if (!id)
                 throw std::logic_error("blur parameter identity");
             // #338 Luma Key: animatable thresholds (an HDR high) and a set invert.
+            // #340 grades: a Raw-range Levels value, an HDR Curves point, a set clamp, a hue
+            // and a saturation.
             const document::ParameterValue value =
-                parameter.role == "radius"   ? document::ParameterValue{2.5}
-                : parameter.role == "low"    ? document::ParameterValue{-0.25}
-                : parameter.role == "high"   ? document::ParameterValue{3.5}
-                : parameter.role == "invert" ? document::ParameterValue{true}
-                                             : document::ParameterValue{std::int64_t{1}};
+                document::isLevelsGammaSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{1.5}
+                : document::isLevelsValueSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{-250.5}
+                : document::isCurvePointSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{document::Vec2d{0.375, 4.25}}
+                : parameter.role == "clamp"      ? document::ParameterValue{true}
+                : parameter.role == "hue"        ? document::ParameterValue{-30.0}
+                : parameter.role == "saturation" ? document::ParameterValue{1.75}
+                : parameter.role == "radius"     ? document::ParameterValue{2.5}
+                : parameter.role == "low"        ? document::ParameterValue{-0.25}
+                : parameter.role == "high"       ? document::ParameterValue{3.5}
+                : parameter.role == "invert"     ? document::ParameterValue{true}
+                                                 : document::ParameterValue{std::int64_t{1}};
             if (!composition->parameters().insert(
                     {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
                 throw std::logic_error("blur parameter inserts");

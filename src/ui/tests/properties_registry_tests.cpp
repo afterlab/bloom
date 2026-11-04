@@ -197,6 +197,59 @@ void matteBlurRows() {
     }
 }
 
+// #340: Levels presents every channel's black/white/gamma rows and a clamp switch (off), Curves
+// every channel's points and a clamp switch, Hue/Saturation its hue and saturation; the clamp edits
+// through command history.
+void colorGradeRows() {
+    auto project = document::makeNewProject("Grades", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    for (const auto* type : {"bloom.levels", "bloom.curves"}) {
+        const auto node = addNode(session, type);
+        expect(node.isValid(), "a grade is discoverable through generic AddNode");
+        session.selectNode(node);
+        QCoreApplication::processEvents();
+        const bool levels = std::string_view(type) == "bloom.levels";
+        for (const auto* role :
+             levels
+                 ? std::array{"masterInputBlack", "redGamma", "greenOutputWhite", "alphaInputWhite"}
+                 : std::array{"masterPoint1", "redPoint3", "bluePoint5", "alphaPoint2"})
+            expect(row(properties, role) != nullptr, "a grade presents each channel's controls");
+        auto* gammaRow = row(properties, levels ? "masterGamma" : "masterPoint3");
+        expect(gammaRow &&
+                   gammaRow->property("rowLabel").toString() ==
+                       (levels ? QStringLiteral("Master Gamma") : QStringLiteral("Master Point 3")),
+               "grade rows read as channel and control");
+        auto* clampRow = row(properties, "clamp");
+        auto* toggle = clampRow ? clampRow->findChild<ui::kit::KSwitch*>() : nullptr;
+        expect(toggle != nullptr && !toggle->isChecked(), "a grade presents an unset clamp switch");
+        if (toggle) {
+            toggle->setChecked(true);
+            const auto* record = [&]() -> const document::ParameterRecord* {
+                for (const auto& binding :
+                     session.composition()->graph().findNode(node)->parameters)
+                    if (binding.role == "clamp")
+                        return session.composition()->parameters().find(binding.parameterId);
+                return nullptr;
+            }();
+            expect(record && std::get<bool>(
+                                 std::get<document::ConstantValueSource>(record->source).value),
+                   "setting the clamp publishes the stored switch through a command");
+            expect(session.undo(), "grade clamp edit undoes");
+            expect(session.redo(), "grade clamp edit redoes");
+        }
+    }
+    const auto hue = addNode(session, "bloom.hue-saturation");
+    expect(hue.isValid(), "Hue/Saturation is discoverable through generic AddNode");
+    session.selectNode(hue);
+    QCoreApplication::processEvents();
+    expect(row(properties, "hue") != nullptr && row(properties, "saturation") != nullptr,
+           "Hue/Saturation presents its hue and saturation");
+}
+
 // #338: Matte Erode and Matte Dilate present the Matte Blur controls; Luma Key presents its low
 // and high thresholds and an invert switch, and edits them through command history.
 void matteKeyRows() {
@@ -864,6 +917,7 @@ int main(int argc, char** argv) try {
     transform2DRows();
     matteBlurRows();
     matteKeyRows();
+    colorGradeRows();
     widthRule();
     videoRows();
     QSettings().clear();

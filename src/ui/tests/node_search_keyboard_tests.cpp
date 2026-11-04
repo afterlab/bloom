@@ -503,7 +503,9 @@ void testSearchKeyboardAndMenus() {
                    colourNodes.contains("OCIO File Transform") &&
                    colourNodes.contains("Exposure") && colourNodes.contains("Offset") &&
                    colourNodes.contains("Multiply") && colourNodes.contains("Invert") &&
-                   colourNodes.size() == 6,
+                   // #340
+                   colourNodes.contains("Levels") && colourNodes.contains("Curves") &&
+                   colourNodes.contains("Hue/Saturation") && colourNodes.size() == 9,
                "Color offers the registered image-effect nodes");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),

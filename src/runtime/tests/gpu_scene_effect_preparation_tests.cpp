@@ -558,6 +558,93 @@ void testRealMatteMorphology(Expectations& expectations) {
     }
 }
 
+// #340: each grade prepares one resident neighborhood command over the input window from its
+// kind's fixed program. A changed value changes the command identity and data but reuses the
+// compiled shader and native program key; an identity grade aliases its input with no command.
+void testRealColorGrades(Expectations& expectations) {
+    auto context = ocioContext();
+    const CpuGpuSceneBuilder builder(nullptr, {}, context);
+    const auto commandsOf = [&](const bloom::runtime::ImageEffectKernel& kernel) {
+        const auto plan = effectPlan({solidLeaf(830)}, kernel, 8300);
+        std::vector<GpuSceneOcioEffectCommand> commands;
+        const auto prepared = builder.build(plan, requestFor(*plan));
+        expectations.expect(static_cast<bool>(prepared), "grade scene prepares");
+        if (prepared)
+            for (const auto& command : prepared.scene->commands())
+                if (const auto* ocio = std::get_if<GpuSceneOcioEffectCommand>(&command))
+                    commands.push_back(*ocio);
+        return commands;
+    };
+    const auto levels = [](const double gamma) {
+        bloom::runtime::LevelsKernel kernel;
+        std::uint64_t id = 8390;
+        for (auto& channel : kernel.channels) {
+            channel = {{ParameterId::fromRaw(id), 0.0},
+                       {ParameterId::fromRaw(id + 1), 1.0},
+                       {ParameterId::fromRaw(id + 2), 1.0},
+                       {ParameterId::fromRaw(id + 3), 0.0},
+                       {ParameterId::fromRaw(id + 4), 1.0}};
+            id += 5;
+        }
+        kernel.channels[0].gamma.source = gamma;
+        return kernel;
+    };
+    const auto curves = [](const double middle) {
+        bloom::runtime::CurvesKernel kernel;
+        std::uint64_t id = 8420;
+        for (auto& channel : kernel.points)
+            for (std::size_t point = 0; point < channel.size(); ++point) {
+                const double x = static_cast<double>(point) / 4.0;
+                channel[point] = {ParameterId::fromRaw(id++), bloom::document::Vec2d{x, x}};
+            }
+        kernel.points[1][2].source = bloom::document::Vec2d{0.5, middle};
+        return kernel;
+    };
+    const auto hue = [](const double degrees) {
+        return bloom::runtime::HueSaturationKernel{{ParameterId::fromRaw(8450), degrees},
+                                                   {ParameterId::fromRaw(8451), 1.2}};
+    };
+    struct Case final {
+        bloom::runtime::ImageEffectKernel first;
+        bloom::runtime::ImageEffectKernel changed;
+        bloom::runtime::ImageEffectKernel identity;
+        const char* semantics;
+    };
+    for (const auto& item :
+         {Case{levels(2.2), levels(0.5), levels(1.0), "bloom.render.levels.v1"},
+          Case{curves(0.7), curves(0.2), curves(0.5), "bloom.render.curves.v1"},
+          Case{hue(30.0), hue(-80.0),
+               bloom::runtime::HueSaturationKernel{{ParameterId::fromRaw(8450), 0.0},
+                                                   {ParameterId::fromRaw(8451), 1.0}},
+               "bloom.render.hue-saturation.v1"}}) {
+        const auto first = commandsOf(item.first);
+        const auto compiles = context.preparer->counters().shaderCompilerRuns;
+        const auto changed = commandsOf(item.changed);
+        const auto repeated = commandsOf(item.first);
+        expectations.expect(first.size() == 1 && changed.size() == 1 && repeated.size() == 1,
+                            "a grade prepares one resident command");
+        if (first.size() != 1 || changed.size() != 1 || repeated.size() != 1)
+            continue;
+        expectations.expect(first[0].program &&
+                                first[0].program->program().semanticsId == item.semantics &&
+                                first[0].outputWindow.originX() == 0 &&
+                                first[0].outputWindow.extent().width() == 8 &&
+                                first[0].outputWindow.extent().height() == 6,
+                            "a grade keeps its input window");
+        expectations.expect(changed[0].program->identity() != first[0].program->identity() &&
+                                changed[0].semanticKey != first[0].semanticKey &&
+                                changed[0].program->nativeProgramKey() ==
+                                    first[0].program->nativeProgramKey() &&
+                                context.preparer->counters().shaderCompilerRuns == compiles,
+                            "a changed grade value changes data, never the compiled shader");
+        expectations.expect(repeated[0].semanticKey == first[0].semanticKey &&
+                                repeated[0].program->identity() == first[0].program->identity(),
+                            "an unchanged grade reuses its command identity");
+        expectations.expect(commandsOf(item.identity).empty(),
+                            "an identity grade aliases its input with no command");
+    }
+}
+
 // #338: Luma Key prepares exactly one resident neighborhood command over the input window. A
 // changed threshold changes the command identity and data but reuses the compiled shader and the
 // native program key, so keyed thresholds never recompile.
@@ -703,6 +790,7 @@ int main() {
         testRealMatteBlur(expectations);
         testRealMatteMorphology(expectations);
         testRealLumaKey(expectations);
+        testRealColorGrades(expectations);
 #if defined(__linux__)
         testRealFileTransform(expectations, from, to);
 #endif

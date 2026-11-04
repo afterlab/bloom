@@ -971,6 +971,184 @@ void testLumaKeyEvaluation() {
            "an out-of-domain Luma Key threshold fails explicitly");
 }
 
+// #340 Levels, Curves and Hue/Saturation through the evaluator: each grade's pixels equal the CPU
+// reference applied to the composited baseline, warm reuse, ROI equality, value/clamp
+// invalidation, animation, an exact identity and an out-of-domain refusal.
+void testColorGradeEvaluation() {
+    const auto levels = [](const double gamma, const double outWhite, const bool clamp) {
+        runtime::LevelsKernel kernel;
+        std::uint64_t id = 400;
+        for (auto& channel : kernel.channels) {
+            channel = {{document::ParameterId::fromRaw(id), 0.0},
+                       {document::ParameterId::fromRaw(id + 1), 1.0},
+                       {document::ParameterId::fromRaw(id + 2), 1.0},
+                       {document::ParameterId::fromRaw(id + 3), 0.0},
+                       {document::ParameterId::fromRaw(id + 4), 1.0}};
+            id += 5;
+        }
+        kernel.channels[0].gamma.source = gamma;
+        kernel.channels[1].outputWhite.source = outWhite;
+        kernel.channels[3].inputBlack.source = -0.5;
+        kernel.clamp = clamp;
+        return kernel;
+    };
+    const auto curves = [](const double middle) {
+        runtime::CurvesKernel kernel;
+        std::uint64_t id = 430;
+        for (auto& channel : kernel.points)
+            for (std::size_t point = 0; point < channel.size(); ++point) {
+                const double x = static_cast<double>(point) / 4.0;
+                channel[point] = {document::ParameterId::fromRaw(id++), document::Vec2d{x, x}};
+            }
+        kernel.points[0][2].source = document::Vec2d{0.5, middle};
+        kernel.points[2][4].source = document::Vec2d{1.0, 1.5};
+        return kernel;
+    };
+    const auto hueSaturation = [](const double hue, const double saturation) {
+        return runtime::HueSaturationKernel{{document::ParameterId::fromRaw(460), hue},
+                                            {document::ParameterId::fromRaw(461), saturation}};
+    };
+    runtime::CpuCompositionEvaluator evaluator;
+    runtime::CpuCompositionEvaluator fresh;
+    const auto baseline = planWith({});
+    const auto original = evaluator.evaluate(baseline, requestFor(*baseline), {});
+    expect(original.frame() != nullptr, "grade baseline evaluates");
+    if (!original.frame())
+        return;
+    const auto& source = original.frame()->processImage();
+    struct Case final {
+        runtime::ImageEffectKernel kernel;
+        runtime::ImageEffectKernel changed;
+        std::vector<double> values;
+    };
+    const std::vector<Case> cases{
+        {levels(2.2, 1.5, false), levels(2.2, 1.5, true), {}},
+        {levels(0.6, 3.0, false), levels(0.6, 2.0, false), {}},
+        {curves(0.8), curves(0.3), {}},
+        {hueSaturation(75.0, 1.4), hueSaturation(75.0, 0.4), {}},
+    };
+    for (const auto& item : cases) {
+        const auto plan = planWith({item.kernel});
+        const auto cold = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(cold.frame() && cold.diagnostics().empty(), "grade evaluates");
+        if (!cold.frame())
+            continue;
+        std::vector<double> values;
+        runtime::forEachColorGradeOperand(item.kernel, [&](const auto& operand) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(operand)>,
+                                         runtime::CompiledVec2Parameter>) {
+                const auto point = std::get<document::Vec2d>(operand.source);
+                values.push_back(point.x);
+                values.push_back(point.y);
+            } else {
+                values.push_back(std::get<double>(operand.source));
+            }
+        });
+        const auto prepared = runtime::detail::prepareColorGrade(item.kernel, values);
+        expect(prepared && !prepared->identity, "grade prepares a non-identity table");
+        const auto& image = cold.frame()->processImage();
+        expect(image.descriptor()->dataWindow() == source.descriptor()->dataWindow(),
+               "grade keeps the composited window");
+        bool changedPixel = false;
+        const auto window = image.descriptor()->dataWindow();
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y)
+            for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
+                const auto s = source.read(x, y);
+                const auto p = image.read(x, y);
+                if (!s || !p || !prepared) {
+                    expect(false, "grade samples exist");
+                    continue;
+                }
+                std::array<float, 4> expected{s.value()->red(), s.value()->green(),
+                                              s.value()->blue(), s.value()->alpha()};
+                expect(runtime::detail::colorGradePixel(*prepared, expected), "grade pixel");
+                if (expected[3] == 0.0F)
+                    expected = {0.0F, 0.0F, 0.0F, 0.0F};
+                expect(p.value()->red() == expected[0] && p.value()->green() == expected[1] &&
+                           p.value()->blue() == expected[2] && p.value()->alpha() == expected[3],
+                       "the evaluator publishes the grade reference over the baseline pixels");
+                changedPixel = changedPixel || !(*p.value() == *s.value());
+            }
+        expect(changedPixel, "the grade changes the image");
+        const auto warm = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(samePixels(cold, warm) && warm.frame()->operationCacheStatistics().misses == 0,
+               "grade warm memo reuses identical pixels");
+        auto roiRequest = requestFor(*plan);
+        const auto roiWindow = render::ImageWindow::create(1, 0, 2, 2);
+        roiRequest.roi = *roiWindow.value();
+        const auto roi = evaluator.evaluate(plan, roiRequest, {});
+        expect(roi.frame() != nullptr, "grade ROI evaluates");
+        if (roi.frame())
+            for (std::int64_t y = 0; y < 2; ++y)
+                for (std::int64_t x = 1; x < 3; ++x) {
+                    const auto actual = roi.frame()->processImage().read(x, y);
+                    const auto expected = image.read(x, y);
+                    expect(actual && expected && *actual.value() == *expected.value(),
+                           "grade ROI pixels equal the full-frame pixels");
+                }
+        const auto changed = planWith({item.changed});
+        const auto changedResult = evaluator.evaluate(changed, requestFor(*changed), {});
+        expect(changedResult.frame() && !samePixels(changedResult, cold) &&
+                   samePixels(changedResult, fresh.evaluate(changed, requestFor(*changed), {})),
+               "a changed grade value or clamp invalidates the memoized image");
+    }
+    // Identities alias the input exactly.
+    for (const auto& identity : {runtime::ImageEffectKernel{levels(1.0, 1.0, false)},
+                                 runtime::ImageEffectKernel{curves(0.5)},
+                                 runtime::ImageEffectKernel{hueSaturation(0.0, 1.0)}}) {
+        auto kernel = identity;
+        if (auto* l = std::get_if<runtime::LevelsKernel>(&kernel))
+            l->channels[3].inputBlack.source = 0.0;
+        if (auto* c = std::get_if<runtime::CurvesKernel>(&kernel))
+            c->points[2][4].source = document::Vec2d{1.0, 1.0};
+        const auto plan = planWith({kernel});
+        expect(samePixels(original, evaluator.evaluate(plan, requestFor(*plan), {})),
+               "a default grade is an exact identity");
+    }
+    // Animated master gamma and hue sample each frame.
+    for (const bool hue : {false, true}) {
+        auto definition = planWith({hue ? runtime::ImageEffectKernel{hueSaturation(0.0, 1.4)}
+                                        : runtime::ImageEffectKernel{levels(1.0, 1.5, false)}})
+                              ->copyDefinition();
+        auto& kernel = std::get<runtime::CompiledImageEffect>(definition.operations[1]).kernel;
+        if (hue)
+            std::get<runtime::HueSaturationKernel>(kernel).hue.source =
+                runtime::ScalarCurveIndex::fromRaw(0);
+        else
+            std::get<runtime::LevelsKernel>(kernel).channels[0].gamma.source =
+                runtime::ScalarCurveIndex::fromRaw(0);
+        definition.scalarCurves.push_back(
+            {document::AnimationCurveId::fromRaw(194),
+             {{document::KeyframeId::fromRaw(194), {}, hue ? 0.0 : 1.0},
+              {document::KeyframeId::fromRaw(195), *core::RationalTime::create(1, 1),
+               hue ? 90.0 : 2.0}}});
+        const auto animated =
+            std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+        expect(animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)),
+               "an animated grade is time-dependent");
+        auto start = requestFor(*animated);
+        auto end = start;
+        end.time = *core::RationalTime::create(1, 1);
+        const auto startPlan =
+            planWith({hue ? runtime::ImageEffectKernel{hueSaturation(0.0, 1.4)}
+                          : runtime::ImageEffectKernel{levels(1.0, 1.5, false)}});
+        const auto endPlan = planWith({hue ? runtime::ImageEffectKernel{hueSaturation(90.0, 1.4)}
+                                           : runtime::ImageEffectKernel{levels(2.0, 1.5, false)}});
+        expect(samePixels(evaluator.evaluate(animated, start, {}),
+                          fresh.evaluate(startPlan, requestFor(*startPlan), {})) &&
+                   samePixels(evaluator.evaluate(animated, end, {}),
+                              fresh.evaluate(endPlan, requestFor(*endPlan), {})),
+               "an animated grade samples each frame without reuse");
+    }
+    for (const auto& outside : {runtime::ImageEffectKernel{levels(0.0, 1.0, false)},
+                                runtime::ImageEffectKernel{hueSaturation(0.0, -1.0)}}) {
+        const auto plan = planWith({outside});
+        const auto refused = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(!refused.frame() && !refused.diagnostics().empty(),
+               "an out-of-domain grade value fails explicitly");
+    }
+}
+
 void testSpatialEffectBudgets() {
     const auto check = [](const runtime::ImageEffectKernel& kernel, const std::size_t peak) {
         auto definition = planWith({kernel})->copyDefinition();
@@ -1636,6 +1814,7 @@ int main(const int argc, char** argv) {
             testMatteBlurEvaluation();
             testMatteMorphologyEvaluation();
             testLumaKeyEvaluation();
+            testColorGradeEvaluation();
             testSpatialEffectBudgets();
             testAliasedBlurBudgets();
             return failures == 0 ? 0 : 1;
@@ -1660,6 +1839,7 @@ int main(const int argc, char** argv) {
         testMatteBlurEvaluation();
         testMatteMorphologyEvaluation();
         testLumaKeyEvaluation();
+        testColorGradeEvaluation();
         testSpatialEffectBudgets();
         testAliasedBlurBudgets();
         testLookBypass();

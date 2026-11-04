@@ -1058,6 +1058,139 @@ displayProofRunner(const bool customView) {
                                   "Mix's mask, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #340 Levels, Curves and Hue/Saturation over an HDR, signed, partial-alpha linear gradient,
+    // full frame and through an ROI, each through the production builder's resident program.
+    const auto runGrades =
+        [](const std::vector<std::function<ImageEffectKernel(std::uint64_t)>>& kernels,
+           std::uint64_t idBase, std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const auto& kernel : kernels) {
+                auto definition =
+                    bloom::gpu_coverage_plans::effectPlan(kernel(idBase), idBase)->copyDefinition();
+                definition.operations[0] = bloom::gpu_coverage_plans::gradient(false, idBase + 50);
+                const auto plan = std::make_shared<const bloom::runtime::CompiledCompositionPlan>(
+                    std::move(definition));
+                idBase += 100;
+                auto request = requestFor(*plan);
+                auto frame = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && frame.prepared;
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 6, 4);
+                request.roi = *roiWindow.value();
+                frame = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && frame.prepared;
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            combined.evidence = std::move(evidence);
+            return combined;
+        };
+    const auto levels = [](const std::array<double, 5> master, const std::array<double, 5> red,
+                           const std::array<double, 5> alpha, const bool clamp) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            bloom::runtime::LevelsKernel kernel;
+            std::uint64_t id = idBase + 60;
+            for (std::size_t channel = 0; channel < kernel.channels.size(); ++channel) {
+                const auto& values = channel == 0   ? master
+                                     : channel == 1 ? red
+                                     : channel == 4 ? alpha
+                                                    : std::array{0.0, 1.0, 1.0, 0.0, 1.0};
+                auto& c = kernel.channels[channel];
+                c = {{ParameterId::fromRaw(id), values[0]},
+                     {ParameterId::fromRaw(id + 1), values[1]},
+                     {ParameterId::fromRaw(id + 2), values[2]},
+                     {ParameterId::fromRaw(id + 3), values[3]},
+                     {ParameterId::fromRaw(id + 4), values[4]}};
+                id += 5;
+            }
+            kernel.clamp = clamp;
+            return kernel;
+        };
+    };
+    const auto curves = [](const double middle, const double alphaLift, const bool clamp) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            bloom::runtime::CurvesKernel kernel;
+            std::uint64_t id = idBase + 60;
+            for (auto& channel : kernel.points)
+                for (std::size_t point = 0; point < channel.size(); ++point) {
+                    const double x = static_cast<double>(point) / 4.0;
+                    channel[point] = {ParameterId::fromRaw(id++), bloom::document::Vec2d{x, x}};
+                }
+            kernel.points[0][1].source = bloom::document::Vec2d{0.25, 0.1};
+            kernel.points[0][2].source = bloom::document::Vec2d{0.5, middle};
+            kernel.points[0][3].source = bloom::document::Vec2d{0.75, 0.9};
+            kernel.points[2][4].source = bloom::document::Vec2d{1.0, 1.6};
+            kernel.points[4][0].source = bloom::document::Vec2d{0.0, alphaLift};
+            kernel.clamp = clamp;
+            return kernel;
+        };
+    };
+    const auto hueSaturation = [](const double hue, const double saturation) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            return bloom::runtime::HueSaturationKernel{
+                {ParameterId::fromRaw(idBase + 60), hue},
+                {ParameterId::fromRaw(idBase + 61), saturation}};
+        };
+    };
+    add(
+        "effect.LevelsKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, levels] {
+            return runGrades({levels({-0.25, 2.0, 1.8, 0.0, 1.0}, {0.0, 1.0, 1.0, 0.0, 1.0},
+                                     {0.0, 1.0, 1.0, 0.0, 1.0}, false)},
+                             165000, "production Levels: gamma over HDR, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.levels", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, levels] {
+            return runGrades(
+                {levels({-0.25, 2.0, 2.2, 0.0, 1.0}, {0.0, 1.0, 0.5, 0.1, 3.0},
+                        {0.0, 1.0, 1.0, 0.2, 0.9}, false),
+                 levels({0.5, 0.5, 1.0, 0.0, 1.0}, {1.0, 0.0, 1.0, 0.0, 1.0},
+                        {0.0, 1.0, 1.0, 0.0, 1.0}, true)},
+                165200,
+                "production Levels: per-channel gamma, alpha lift, step and clamp, full frame and "
+                "ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "effect.CurvesKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, curves] {
+            return runGrades({curves(0.6, 0.0, false)}, 165600,
+                             "production Curves: monotone cubic with HDR extrapolation");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.curves", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, curves] {
+            return runGrades({curves(0.4, 0.3, false), curves(0.7, 0.0, true)}, 165800,
+                             "production Curves: S-curve, HDR extrapolation, alpha lift and clamp, "
+                             "full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "effect.HueSaturationKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, hueSaturation] {
+            return runGrades({hueSaturation(60.0, 1.3)}, 166200,
+                             "production Hue/Saturation: linear RGB matrix over associated colour");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.hue-saturation", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime color grade image effect tests",
+        [runGrades, hueSaturation] {
+            return runGrades({hueSaturation(-120.0, 0.0), hueSaturation(200.0, 2.5)}, 166400,
+                             "production Hue/Saturation: desaturate and oversaturated rotation, "
+                             "full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 

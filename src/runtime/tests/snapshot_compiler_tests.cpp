@@ -1926,6 +1926,7 @@ int main() {
         testImagePreviewInspection(expectations);
         testMatteMorphologyLowering(expectations);
         testLumaKeyLowering(expectations);
+        testColorGradeLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

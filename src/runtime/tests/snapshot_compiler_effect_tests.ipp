@@ -828,6 +828,104 @@ void testLumaKeyLowering(Expectations& expectations) {
 // #490: an Image Preview never enters the composition's plan, and the Viewer-only inspection plan
 // it is previewed through is exactly the inspected node's output -- here a Gaussian Blur's image --
 // without the layer stack or any other part of the composition.
+// #340: Levels, Curves and Hue/Saturation between a Solid and its Layer lower to their kernels in
+// channel-major order with every parameter identity and value; a driven Levels value is a
+// value-graph operand; a muted grade passes its Image through.
+void testColorGradeLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    for (const auto type : {kLevelsNodeType, kCurvesNodeType, kHueSaturationNodeType}) {
+        for (const bool muted : {false, true}) {
+            auto project = makeProject(singleLayerOptions());
+            auto* composition = project.findComposition(kCompositionId);
+            auto& graph = composition->graph();
+            const auto effectId = NodeId::fromRaw(995);
+            const auto* definition = builtInNodeDefinitions().find(type, 1);
+            require(definition != nullptr, "grade definition exists");
+            std::vector<ParameterBinding> bindings;
+            std::uint64_t next = 2000;
+            for (const auto& parameter : definition->parameters) {
+                auto value = parameter.defaultValue;
+                if (parameter.schemaKey == "bloom.levels.red.gamma")
+                    value = 2.2;
+                if (parameter.schemaKey == "bloom.levels.alpha.output-white")
+                    value = 0.5;
+                if (parameter.schemaKey == kLevelsClampSchemaKey ||
+                    parameter.schemaKey == kCurvesClampSchemaKey)
+                    value = true;
+                if (parameter.schemaKey == "bloom.curves.blue.point-3")
+                    value = Vec2d{0.5, 0.8};
+                if (parameter.schemaKey == kHueSaturationHueSchemaKey)
+                    value = -45.0;
+                if (parameter.schemaKey == kHueSaturationSaturationSchemaKey)
+                    value = 1.5;
+                require(composition->parameters().insert({ParameterId::fromRaw(next),
+                                                          parameter.schemaKey,
+                                                          ConstantValueSource{value}}),
+                        "grade parameter is valid");
+                bindings.push_back({parameter.role, ParameterId::fromRaw(next++)});
+            }
+            require(graph.addNode({effectId, std::string(type), std::move(bindings), 1}),
+                    "grade node is accepted");
+            require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+            require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                                   NodeInputRef{effectId, "input"}}),
+                    "source feeds the grade");
+            require(graph.addEdge({EdgeId::fromRaw(995), {effectId, "image"},
+                                   NodeInputRef{kFirstLayerNode,
+                                                std::string(kLayerOutputContentInputPort)}}),
+                    "grade feeds Layer");
+            if (muted)
+                composition->nodeLayout()[effectId].muted = true;
+            expectations.expect(project.validate().ok(), "grade graph is valid document truth");
+            const auto result = compile(std::move(project), registry);
+            expectations.expect(result.plan != nullptr, "grade graph compiles");
+            if (!result.plan)
+                continue;
+            const auto effect = std::ranges::find_if(result.plan->operations(), [&](const auto& op) {
+                const auto* item = std::get_if<runtime::CompiledImageEffect>(&op);
+                return item && item->sourceNodeId == effectId;
+            });
+            if (muted) {
+                expectations.expect(effect == result.plan->operations().end(),
+                                    "a muted grade passes its Image through");
+                continue;
+            }
+            require(effect != result.plan->operations().end(), "grade lowers to an image effect");
+            const auto& kernel = std::get<runtime::CompiledImageEffect>(*effect).kernel;
+            std::vector<ParameterId> ids;
+            runtime::forEachColorGradeOperand(kernel,
+                                              [&](const auto& operand) { ids.push_back(operand.id); });
+            bool ordered = ids.size() + (type == kHueSaturationNodeType ? 0U : 1U) ==
+                           definition->parameters.size();
+            for (std::size_t i = 0; ordered && i < ids.size(); ++i)
+                ordered = ids[i] == ParameterId::fromRaw(2000 + i);
+            expectations.expect(ordered, "grade operands keep their channel-major identities");
+            if (const auto* levels = std::get_if<runtime::LevelsKernel>(&kernel)) {
+                const auto* gamma = std::get_if<double>(&levels->channels[1].gamma.source);
+                const auto* white = std::get_if<double>(&levels->channels[4].outputWhite.source);
+                expectations.expect(levels->clamp && gamma && *gamma == 2.2 && white &&
+                                        *white == 0.5,
+                                    "Levels lowers its values and clamp");
+            } else if (const auto* curves = std::get_if<runtime::CurvesKernel>(&kernel)) {
+                const auto* point = std::get_if<Vec2d>(&curves->points[3][2].source);
+                const auto* identity = std::get_if<Vec2d>(&curves->points[0][1].source);
+                expectations.expect(curves->clamp && point && *point == Vec2d{0.5, 0.8} &&
+                                        identity && *identity == Vec2d{0.25, 0.25},
+                                    "Curves lowers its points and clamp");
+            } else {
+                const auto* hue = std::get_if<runtime::HueSaturationKernel>(&kernel);
+                const auto* h = hue ? std::get_if<double>(&hue->hue.source) : nullptr;
+                const auto* sat = hue ? std::get_if<double>(&hue->saturation.source) : nullptr;
+                expectations.expect(h && *h == -45.0 && sat && *sat == 1.5,
+                                    "Hue/Saturation lowers its hue and saturation");
+            }
+        }
+    }
+}
+
 void testImagePreviewInspection(Expectations& expectations) {
     using namespace document;
     const auto blurNode = NodeId::fromRaw(970);

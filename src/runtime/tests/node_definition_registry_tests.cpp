@@ -136,8 +136,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions. ADR 0028
     // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove; #364 adds Cryptomatte.
     // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
-    // Dilate and Luma Key; #490 adds the Image Preview sink.
-    expectations.expect(registry.definitions().size() == 141,
+    // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
+    // Hue/Saturation.
+    expectations.expect(registry.definitions().size() == 144,
                         "startup contribution includes every built-in definition");
     for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
                              "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",
@@ -145,6 +146,56 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                              "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"})
         expectations.expect(registry.find(type, 1) != nullptr,
                             "each pinned image-node addition is registered");
+    // #340: Levels has five animatable Scalars per channel (RGB master, red, green, blue, alpha)
+    // and Curves five animatable Vector 2 points per channel, each its own socket, then a
+    // constant clamp; Hue/Saturation has an animatable hue and saturation.
+    const auto* levels = registry.find("bloom.levels", 1);
+    const auto* curves = registry.find("bloom.curves", 1);
+    const auto* hueSaturation = registry.find("bloom.hue-saturation", 1);
+    expectations.expect(
+        levels && levels->lowering == runtime::NodeLoweringKind::ImageEffect &&
+            levels->category == document::NodeCategory::Color && levels->inputs.size() == 26 &&
+            levels->parameters.size() == 26 &&
+            levels->inputs[0] ==
+                document::InputPortDefinition{"input", runtime::SocketValueKind::Image} &&
+            levels->inputs[1] == document::InputPortDefinition{"masterInputBlack",
+                                                               runtime::SocketValueKind::Scalar,
+                                                               false} &&
+            levels->parameters[2].schemaKey == "bloom.levels.master.gamma" &&
+            levels->parameters[2].supportsAnimation &&
+            levels->parameters[2].defaultValue == document::ParameterValue{1.0} &&
+            levels->parameters[24].role == "alphaOutputWhite" &&
+            levels->parameters[25].schemaKey == "bloom.levels.clamp" &&
+            !levels->parameters[25].supportsAnimation &&
+            levels->parameters[25].defaultValue == document::ParameterValue{false} &&
+            levels->outputs ==
+                std::vector<document::OutputPortDefinition>{
+                    {"image", runtime::SocketValueKind::Image}},
+        "#340: Levels exposes per-channel input/output black and white and gamma, clamp off");
+    expectations.expect(curves && curves->inputs.size() == 26 && curves->parameters.size() == 26 &&
+                            curves->inputs[25] ==
+                                document::InputPortDefinition{
+                                    "alphaPoint5", runtime::SocketValueKind::Vector2, false} &&
+                            curves->parameters[7].schemaKey == "bloom.curves.red.point-3" &&
+                            curves->parameters[7].defaultValue ==
+                                document::ParameterValue{document::Vec2d{0.5, 0.5}} &&
+                            curves->parameters[7].supportsAnimation &&
+                            curves->parameters[25].schemaKey == "bloom.curves.clamp",
+                        "#340: Curves exposes five identity points per channel and an unset clamp");
+    expectations.expect(hueSaturation && hueSaturation->inputs.size() == 3 &&
+                            hueSaturation->parameters.size() == 2 &&
+                            hueSaturation->parameters[0].schemaKey == "bloom.hue-saturation.hue" &&
+                            hueSaturation->parameters[1].defaultValue ==
+                                document::ParameterValue{1.0},
+                        "#340: Hue/Saturation exposes an animatable hue and saturation");
+    if (levels) {
+        auto socketless = *levels;
+        socketless.inputs.pop_back();
+        runtime::NodeDefinitionRegistry scratch;
+        expectations.expect(scratch.registerDefinition(socketless) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "#340: a Levels missing a parameter socket is refused");
+    }
 
     for (const auto& [kind, version] : std::array<std::pair<std::string_view, std::uint32_t>, 4>{
              {{document::kSolidSourceNodeType, 1},

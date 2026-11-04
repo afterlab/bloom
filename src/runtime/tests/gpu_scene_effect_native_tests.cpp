@@ -953,6 +953,127 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
     }
 }
 
+// #340 Levels, Curves and Hue/Saturation of signed/HDR/partial-alpha solids against the CPU oracle
+// (2e-6, exact alpha), one resident dispatch, warm zero dispatch and a changed value that
+// re-dispatches with parity. Alpha transfers here are linear and cubic, never a gamma, so the
+// alpha stays bit-exact.
+void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::CurvesKernel;
+    using bloom::runtime::HueSaturationKernel;
+    using bloom::runtime::LevelsKernel;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const auto levels = [](const std::uint64_t id, const bool clamp) {
+        LevelsKernel kernel;
+        const std::array<std::array<double, 5>, 5> values{{{-0.25, 2.0, 1.8, 0.0, 1.0},
+                                                           {0.0, 1.0, 0.5, 0.1, 3.0},
+                                                           {0.2, 0.8, 1.0, -1.0, 1.0},
+                                                           {1.0, 0.0, 2.2, 0.0, 1.0},
+                                                           {0.0, 1.0, 1.0, 0.2, 0.9}}};
+        for (std::size_t c = 0; c < 5; ++c)
+            kernel.channels[c] = {{ParameterId::fromRaw(id + 5 * c), values[c][0]},
+                                  {ParameterId::fromRaw(id + 5 * c + 1), values[c][1]},
+                                  {ParameterId::fromRaw(id + 5 * c + 2), values[c][2]},
+                                  {ParameterId::fromRaw(id + 5 * c + 3), values[c][3]},
+                                  {ParameterId::fromRaw(id + 5 * c + 4), values[c][4]}};
+        kernel.clamp = clamp;
+        return bloom::runtime::ImageEffectKernel{kernel};
+    };
+    const auto curves = [](const std::uint64_t id, const bool clamp) {
+        CurvesKernel kernel;
+        std::uint64_t next = id;
+        for (auto& channel : kernel.points)
+            for (std::size_t point = 0; point < channel.size(); ++point) {
+                const double x = static_cast<double>(point) / 4.0;
+                channel[point] = {ParameterId::fromRaw(next++), bloom::document::Vec2d{x, x}};
+            }
+        kernel.points[0][1].source = bloom::document::Vec2d{0.25, 0.15};
+        kernel.points[0][3].source = bloom::document::Vec2d{0.75, 0.85};
+        kernel.points[1][2].source = bloom::document::Vec2d{0.4, 0.7};
+        kernel.points[3][4].source = bloom::document::Vec2d{1.0, 1.75};
+        kernel.points[4][0].source = bloom::document::Vec2d{0.0, 0.2};
+        kernel.clamp = clamp;
+        return bloom::runtime::ImageEffectKernel{kernel};
+    };
+    const auto hue = [](const std::uint64_t id, const bool oversaturate) {
+        return bloom::runtime::ImageEffectKernel{
+            HueSaturationKernel{{ParameterId::fromRaw(id), oversaturate ? 200.0 : -70.0},
+                                {ParameterId::fromRaw(id + 1), oversaturate ? 2.5 : 0.3}}};
+    };
+    // Changes one value of each kernel to prove invalidation re-dispatches.
+    const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
+        if (auto* l = std::get_if<LevelsKernel>(&kernel))
+            l->channels[0].outputWhite.source = 1.5;
+        if (auto* c = std::get_if<CurvesKernel>(&kernel))
+            c->points[0][2].source = bloom::document::Vec2d{0.5, 0.65};
+        if (auto* h = std::get_if<HueSaturationKernel>(&kernel))
+            h->hue.source = 15.0;
+    };
+    std::uint64_t id = 9500;
+    for (const auto color : {Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
+                             Color4d{0.3, 0.6, 0.2, 0.25}}) {
+        for (const auto& kernel :
+             {levels(id + 50, false), levels(id + 50, true), curves(id + 50, false),
+              curves(id + 50, true), hue(id + 50, false), hue(id + 50, true)}) {
+            cache.clear();
+            const auto plan = effectPlan(kernel, id, std::nullopt, color);
+            id += 100;
+            const auto request = requestFor(*plan);
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+            const auto prepared = builder.build(plan, request);
+            expectations.expect(oracle.frame() && prepared,
+                                "grade native: CPU oracle and production scene prepare");
+            if (!oracle.frame() || !prepared)
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), "grade native: executor creates");
+            if (!executor)
+                continue;
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            const auto coldCounters = executor.executor->counters();
+            std::string detail;
+            expectations.expect(
+                cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                "grade native: HDR/partial-alpha CPU parity (2e-6, exact alpha): " + detail);
+            const auto& descriptor = *oracle.frame()->processImage().descriptor();
+            expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                    cold.displayWindow == descriptor.displayWindow() &&
+                                    cold.pixelAspect == descriptor.pixelAspect(),
+                                "grade native: data/display-window and PAR parity");
+            expectations.expect(coldCounters.ocioEffectDispatches == 1 &&
+                                    coldCounters.readbacks == 0,
+                                "grade native: one resident dispatch and no frame readback");
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(
+                warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches,
+                "grade native: warm RAM reuse has identical pixels and zero dispatches");
+            auto changedDefinition = plan->copyDefinition();
+            change(std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel);
+            const auto changedPlan =
+                std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
+            const auto changed = builder.build(changedPlan, request);
+            const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+            expectations.expect(changed && changedOracle.frame(),
+                                "grade native: changed value prepares");
+            if (!changed || !changedOracle.frame())
+                continue;
+            const auto rerun = runScene(*executor.executor, changed.scene);
+            expectations.expect(
+                rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches + 1,
+                "grade native: a changed value re-dispatches with CPU parity: " + detail);
+        }
+    }
+}
+
 // #338 Luma Key: ramp, inverted ramp, hard and inverted hard keys of signed/HDR/partial-alpha
 // solids against the CPU oracle (2e-6, exact alpha), one resident dispatch, warm zero dispatch and
 // a changed threshold that re-dispatches with parity.
@@ -1047,6 +1168,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runTransform2D(expectations, device, cache);
     runBlurs(expectations, device, cache);
     runLumaKeys(expectations, device, cache);
+    runColorGrades(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

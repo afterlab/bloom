@@ -597,6 +597,49 @@ void testMatteBlurCommands(TestContext& test, const char* type = "bloom.matte-bl
                                ConstantValueSource{std::int64_t{2}});
 }
 
+// #340: Levels, Curves and Hue/Saturation are added between an Image and a Layer, edited, undone
+// and redone through the generic node commands; their schemas refuse unrenderable values and keep
+// HDR and Raw-data ranges authorable.
+void testColorGradeCommands(TestContext& test) {
+    Fixture fixture;
+    const auto levels = exercise<AddNode>(test, fixture, "bloom.levels", Vec2d{});
+    const auto levelsId = levels.outputId<NodeId>(kAddNodeOutput);
+    const auto inputWhite = levels.outputId<ParameterId>("parameter.masterInputWhite");
+    const auto gamma = levels.outputId<ParameterId>("parameter.redGamma");
+    const auto clamp = levels.outputId<ParameterId>("parameter.clamp");
+    const auto curves = exercise<AddNode>(test, fixture, "bloom.curves", Vec2d{40, 0});
+    const auto curvesId = curves.outputId<NodeId>(kAddNodeOutput);
+    const auto point = curves.outputId<ParameterId>("parameter.alphaPoint5");
+    const auto hue = exercise<AddNode>(test, fixture, "bloom.hue-saturation", Vec2d{80, 0});
+    const auto hueId = hue.outputId<NodeId>(kAddNodeOutput);
+    const auto saturation = hue.outputId<ParameterId>("parameter.saturation");
+    if (!levelsId || !inputWhite || !gamma || !clamp || !curvesId || !point || !hueId ||
+        !saturation)
+        throw std::logic_error("grades expose registered control identities");
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"},
+                           InputPortRef{NodeInputRef{*levelsId, "input"}});
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*levelsId, "image"},
+                           InputPortRef{NodeInputRef{*curvesId, "input"}});
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*curvesId, "image"},
+                           InputPortRef{NodeInputRef{*hueId, "input"}});
+    // A Raw depth range and an HDR curve point stay authorable.
+    (void)exercise<SetParameterSource>(test, fixture, *inputWhite, ConstantValueSource{1000.0});
+    (void)exercise<SetParameterSource>(test, fixture, *gamma, ConstantValueSource{2.2});
+    (void)exercise<SetParameterSource>(test, fixture, *clamp, ConstantValueSource{true});
+    (void)exercise<SetParameterSource>(test, fixture, *point, ConstantValueSource{Vec2d{4.0, 6.0}});
+    (void)exercise<SetParameterSource>(test, fixture, *saturation, ConstantValueSource{2.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *gamma,
+                               ConstantValueSource{0.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *inputWhite,
+                               ConstantValueSource{std::numeric_limits<double>::infinity()});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *point,
+                               ConstantValueSource{Vec2d{2.0e6, 0.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *saturation,
+                               ConstantValueSource{-0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *clamp,
+                               ConstantValueSource{1.0});
+}
+
 // #338: Luma Key is added, keyed from an Image into Image Mix's or a matte filter's Mask input,
 // edited, undone and redone through the generic node commands. Its Mask never connects to an
 // Image input, a Mask never connects to its Image input, and its schema refuses unrenderable
@@ -1589,6 +1632,7 @@ int main() {
         bloom::commands::test::testMatteBlurCommands(test, "bloom.matte-erode");
         bloom::commands::test::testMatteBlurCommands(test, "bloom.matte-dilate");
         bloom::commands::test::testLumaKeyCommands(test);
+        bloom::commands::test::testColorGradeCommands(test);
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);
