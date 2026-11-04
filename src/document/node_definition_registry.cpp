@@ -1,5 +1,6 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -226,6 +227,68 @@ template <typename Definition>
     return definition;
 }
 
+// #339 Drop Shadow, Glow and Light Wrap: compositing recipes over the existing image primitives.
+// Their leading Image inputs come first, then one socket per animatable value in parameter order,
+// so a value-graph driver can feed any of them; the switches (and Glow's octave count) are
+// constants without a socket.
+[[nodiscard]] NodeDefinition recipeDefinition(const std::string_view typeId) {
+    using namespace bloom::document;
+    NodeDefinition definition{{std::string(typeId), 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Compositing};
+    if (typeId == kGlowNodeType) {
+        // An optional key pass glows instead of the input; an optional Mask limits the glow.
+        definition.inputs.push_back({"key", SocketValueKind::Image, false});
+        definition.inputs.push_back({"mask", SocketValueKind::Mask, false});
+    } else if (typeId == kLightWrapNodeType) {
+        definition.inputs.push_back({"background", SocketValueKind::Image, false});
+    }
+    const auto scalar = [&](std::string role, const std::string_view schemaKey) {
+        definition.parameters.push_back({role, std::string(schemaKey), ParameterValueKind::Float64,
+                                         true, true, recipeScalarDomain(schemaKey)->defaultValue});
+        definition.inputs.push_back({std::move(role), SocketValueKind::Scalar, false});
+    };
+    const auto color = [&](std::string role, const std::string_view schemaKey,
+                           const bloom::core::Color4d value) {
+        definition.parameters.push_back(
+            {role, std::string(schemaKey), ParameterValueKind::Color4d, true, true, value});
+        definition.inputs.push_back({std::move(role), SocketValueKind::Color, false});
+    };
+    const auto flag = [&](std::string role, const std::string_view schemaKey) {
+        definition.parameters.push_back({std::move(role), std::string(schemaKey),
+                                         ParameterValueKind::Boolean, true, false, false});
+    };
+    if (typeId == kDropShadowNodeType) {
+        color("color", kDropShadowColorSchemaKey, bloom::core::Color4d{0.0, 0.0, 0.0, 1.0});
+        scalar("opacity", kDropShadowOpacitySchemaKey);
+        scalar("direction", kDropShadowDirectionSchemaKey);
+        scalar("distance", kDropShadowDistanceSchemaKey);
+        scalar("softness", kDropShadowSoftnessSchemaKey);
+        flag("shadowOnly", kDropShadowShadowOnlySchemaKey);
+    } else if (typeId == kGlowNodeType) {
+        scalar("threshold", kGlowThresholdSchemaKey);
+        scalar("knee", kGlowKneeSchemaKey);
+        scalar("intensity", kGlowIntensitySchemaKey);
+        scalar("size", kGlowSizeSchemaKey);
+        scalar("falloff", kGlowFalloffSchemaKey);
+        color("tint", kGlowTintSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
+        definition.parameters.push_back({"octaves", std::string(kGlowOctavesSchemaKey),
+                                         ParameterValueKind::Integer, true, false,
+                                         kDefaultGlowOctaves});
+        flag("glowOnly", kGlowGlowOnlySchemaKey);
+    } else {
+        scalar("radius", kLightWrapRadiusSchemaKey);
+        scalar("amount", kLightWrapAmountSchemaKey);
+        flag("wrapOnly", kLightWrapWrapOnlySchemaKey);
+    }
+    return definition;
+}
+
 // #479 Separate Channels: one Image in; red, green, blue and alpha Image outputs.
 [[nodiscard]] NodeDefinition separateChannelsDefinition() {
     using namespace bloom::document;
@@ -342,6 +405,9 @@ template <typename Definition>
             return definition == separateChannelsDefinition();
         if (definition.key.typeId == kCombineChannelsNodeType)
             return definition == combineChannelsDefinition();
+        if (definition.key.typeId == kDropShadowNodeType ||
+            definition.key.typeId == kGlowNodeType || definition.key.typeId == kLightWrapNodeType)
+            return definition == recipeDefinition(definition.key.typeId);
         if (definition.key.typeId == "bloom.transform-2d") {
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
                    hasLeadingImageInput(definition, "input") &&
@@ -1387,6 +1453,9 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         gradeDefinition(),
         separateChannelsDefinition(),
         combineChannelsDefinition(),
+        recipeDefinition(kDropShadowNodeType),
+        recipeDefinition(kGlowNodeType),
+        recipeDefinition(kLightWrapNodeType),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),

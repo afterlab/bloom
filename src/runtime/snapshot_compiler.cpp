@@ -2,12 +2,14 @@
 #include <bloom/runtime/snapshot_compiler.hpp>
 
 #include "channel_static.hpp"
+#include "compositing_recipes.hpp"
 #include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"
 #include <bloom/runtime/layer_time_projection.hpp>
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -991,6 +993,7 @@ class CompilePass final {
 
 #include "snapshot_compiler_layer_time.ipp"
 #include "snapshot_compiler_lowering.ipp"
+#include "snapshot_compiler_recipes.ipp"
 #include "snapshot_compiler_value_graph.ipp"
 
     void addTopologyFailure(const document::NodeId nodeId, std::string detail) {

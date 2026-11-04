@@ -522,6 +522,14 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *combined);
             continue;
         }
+        // #339 Drop Shadow, Glow and Light Wrap: a chain of the existing primitives.
+        if (isRecipeNodeType(node->typeId)) {
+            const auto lowered = lowerRecipe(*node, operations, indices);
+            if (!lowered)
+                return {};
+            indices.emplace(nodeId, *lowered);
+            continue;
+        }
         const auto* outputEdge = fixedInputEdge(nodeId, document::kCompositionOutputInputPort);
         // An unconnected composition output draws nothing, whether or not it is muted. Like a Layer
         // Output with no content ("added but not yet fed"), a disconnected output is an ordinary

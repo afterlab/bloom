@@ -63,11 +63,14 @@ target_sources(
         curve_compilation.cpp
         cryptomatte_matte_list.cpp
         snapshot_compiler.cpp
+        compositing_recipes.cpp
+        compositing_recipes.hpp
         plan_time_scopes.cpp
         profiler_gpu_reader.cpp
         layer_time_projection.cpp
         snapshot_compiler_layer_time.ipp
         snapshot_compiler_lowering.ipp
+        snapshot_compiler_recipes.ipp
         snapshot_compiler_support.hpp
         snapshot_compiler_value_graph.ipp
     PUBLIC

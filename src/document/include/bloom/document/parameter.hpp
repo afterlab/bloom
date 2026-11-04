@@ -4,6 +4,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
 
@@ -189,6 +190,8 @@ inline constexpr double kMaximumTextSizePixels = 4096.0;
 // Neighborhood v1 authors at most 513 coefficients per axis at full resolution. Larger
 // unsupported radii are rejected explicitly, never silently clamped by preview or final render.
 inline constexpr double kMaximumBlurRadiusPixels = 256.0;
+// #339: the recipe radii are blur radii.
+static_assert(kMaximumRecipeBlurRadius == kMaximumBlurRadiusPixels);
 // #338 Luma Key thresholds are luma values bounded to [-1e6, 1e6], so every value the key prepares
 // (the ramp's reciprocal included) stays a normal binary32 number on the CPU and GPU routes.
 inline constexpr double kMaximumLumaKeyThreshold = 1.0e6;
@@ -310,8 +313,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.luma-key.high" || isLevelsValueSchemaKey(schemaKey) ||
            schemaKey == kHueSaturationHueSchemaKey ||
            schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
-           schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
-           schemaKey == kLayerMaskOpacitySchemaKey;
+           isRecipeScalarSchemaKey(schemaKey) || schemaKey == kLayerMaskFeatherSchemaKey ||
+           schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
 
 // ADR 0028: Path parameters animate through whole-value Path curves. #493: so does each Curves
@@ -342,7 +345,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kSolidColorParameterSchemaKey ||
            schemaKey == kGradientStartColorParameterSchemaKey ||
            schemaKey == kGradientEndColorParameterSchemaKey ||
-           schemaKey == kTextColorParameterSchemaKey || schemaKey == kColorValueParameterSchemaKey;
+           schemaKey == kTextColorParameterSchemaKey ||
+           schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -388,6 +392,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #494 Grade: each wheel value and primary within its own domain (color_grade_nodes.hpp).
     if (const auto grade = gradeValueDomain(schemaKey))
         return value >= grade->minimum && value <= grade->maximum;
+    // #339 Drop Shadow, Glow and Light Wrap (compositing_recipe_nodes.hpp).
+    if (const auto recipe = recipeScalarDomain(schemaKey))
+        return value >= recipe->minimum && value <= recipe->maximum;
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

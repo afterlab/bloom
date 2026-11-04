@@ -330,6 +330,22 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value != nullptr && std::isfinite(*value) &&
                isScalarWithinSchemaDomain(schemaKey, *value);
     }
+    // #339 Drop Shadow, Glow and Light Wrap.
+    if (isRecipeScalarSchemaKey(schemaKey)) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               isScalarWithinSchemaDomain(schemaKey, *value);
+    }
+    if (isRecipeColorSchemaKey(schemaKey)) {
+        const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
+        return color != nullptr && color->isValid();
+    }
+    if (isRecipeBooleanSchemaKey(schemaKey))
+        return std::holds_alternative<bool>(constant.value);
+    if (schemaKey == kGlowOctavesSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= kMinimumGlowOctaves && *value <= kMaximumGlowOctaves;
+    }
     if (schemaKey == "bloom.rotate-90.quarter-turns")
         return std::holds_alternative<std::int64_t>(constant.value);
     if (schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
@@ -463,7 +479,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
          schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter" ||
          schemaKey == "bloom.shape.path" ||
-         schemaKey == bloom::document::kImagePreviewDisplayParameterSchemaKey) &&
+         schemaKey == bloom::document::kImagePreviewDisplayParameterSchemaKey ||
+         schemaKey == bloom::document::kGlowOctavesSchemaKey ||
+         bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
     if (!isGenericallyValidSource(source)) {
