@@ -113,16 +113,36 @@ void pruneUnreachable(CompiledCompositionPlanDefinition& definition) {
     for (const auto& value : definition.valueOperations)
         if (const auto* bounds = std::get_if<CompiledBoundsReadout>(&value.kernel))
             work.push_back(bounds->operationIndex.value());
+    // The clocks a kept operation evaluates or is placed on, with their parents. A used clock keeps
+    // the Layer Output that defines it (its time mapping), so reaching is repeated until no used
+    // clock names an unreached layer (#480: a channel layer plan in a retimed composition).
+    std::vector<bool> usedClocks(definition.clocks.size(), false);
+    const auto clockOf = [](const std::vector<std::uint32_t>& clocks, const std::size_t index) {
+        return index < clocks.size() ? clocks[index] : 0U;
+    };
     while (!work.empty()) {
-        const auto index = work.back();
-        work.pop_back();
-        if (index >= operations.size() || reached[index])
-            continue;
-        reached[index] = true;
-        forEachScopedInput(operations[index], 0, 0,
-                           [&](const OperationIndex input, std::uint32_t) {
-                               work.push_back(input.value());
-                           });
+        while (!work.empty()) {
+            const auto index = work.back();
+            work.pop_back();
+            if (index >= operations.size() || reached[index])
+                continue;
+            reached[index] = true;
+            forEachScopedInput(operations[index], 0, 0,
+                               [&](const OperationIndex input, std::uint32_t) {
+                                   work.push_back(input.value());
+                               });
+        }
+        for (std::size_t index = 0; index < operations.size(); ++index) {
+            if (!reached[index])
+                continue;
+            for (auto clock : {clockOf(definition.operationClocks, index),
+                               clockOf(definition.placementClocks, index)})
+                while (clock != 0 && clock < usedClocks.size() && !usedClocks[clock]) {
+                    usedClocks[clock] = true;
+                    work.push_back(definition.clocks[clock].layer.value());
+                    clock = definition.clocks[clock].parent;
+                }
+        }
     }
     if (std::ranges::all_of(reached, [](const bool value) { return value; }))
         return;
@@ -177,9 +197,28 @@ void pruneUnreachable(CompiledCompositionPlanDefinition& definition) {
         definition.operationClocks = std::move(operationClocks);
     if (!definition.placementClocks.empty())
         definition.placementClocks = std::move(placementClocks);
-    for (auto& clock : definition.clocks)
-        if (clock.layer.value() < mapped.size() && mapped[clock.layer.value()])
-            clock.layer = map(clock.layer);
+    // Clocks no kept operation uses are dropped (their Layer Output may be gone); the rest keep
+    // their order, so a parent still precedes its children.
+    if (!definition.clocks.empty()) {
+        std::vector<std::uint32_t> clockMap(definition.clocks.size(), 0);
+        std::vector<CompiledTimeClock> clocks;
+        for (std::size_t clock = 0; clock < definition.clocks.size(); ++clock) {
+            if (clock != 0 && !usedClocks[clock])
+                continue;
+            clockMap[clock] = static_cast<std::uint32_t>(clocks.size());
+            auto copy = definition.clocks[clock];
+            if (clock != 0) {
+                copy.parent = clockMap[copy.parent];
+                copy.layer = map(copy.layer);
+            }
+            clocks.push_back(copy);
+        }
+        for (auto& clock : definition.operationClocks)
+            clock = clock < clockMap.size() ? clockMap[clock] : 0U;
+        for (auto& clock : definition.placementClocks)
+            clock = clock < clockMap.size() ? clockMap[clock] : 0U;
+        definition.clocks = std::move(clocks);
+    }
     for (auto& value : definition.valueOperations)
         if (auto* bounds = std::get_if<CompiledBoundsReadout>(&value.kernel);
             bounds != nullptr && bounds->operationIndex.value() < mapped.size() &&
