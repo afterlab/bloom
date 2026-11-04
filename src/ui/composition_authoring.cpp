@@ -314,4 +314,75 @@ void KeyframeDiamond::leaveEvent(QEvent* event) {
     QWidget::leaveEvent(event);
 }
 
+// --- KeyframeGroupDiamond -----------------------------------------------------------------------
+
+KeyframeGroupDiamond::KeyframeGroupDiamond(CompositionSession& session, QString name,
+                                           QWidget* parent)
+    : kit::KDiamond(parent), session_(session), name_(std::move(name)) {
+    setObjectName(QStringLiteral("keyframeGroupDiamond"));
+    setAccessibleName(QStringLiteral("Keyframe for %1").arg(name_));
+    setFixedSize(kit::px(kit::Size::IconSmall), kit::px(kit::Size::IconSmall));
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::NoFocus);
+    setAttribute(Qt::WA_Hover, true);
+    refresh();
+}
+
+void KeyframeGroupDiamond::setParameters(std::vector<document::ParameterId> parameters) {
+    if (parameters_ == parameters)
+        return;
+    parameters_ = std::move(parameters);
+    refresh();
+}
+
+void KeyframeGroupDiamond::refresh() {
+    std::size_t keyable = 0;
+    std::size_t keyed = 0;
+    bool animated = false;
+    for (const auto id : parameters_) {
+        const auto state = session_.keyframeDiamondStateForParameter(id);
+        if (state == KeyframeDiamondState::Unsupported)
+            continue;
+        ++keyable;
+        animated = animated || state != KeyframeDiamondState::Constant;
+        if (state == KeyframeDiamondState::AnimatedWithKey)
+            ++keyed;
+    }
+    keyable_ = keyable;
+    keyed_ = keyed;
+    // A group nothing in which can be keyed shows no diamond, as a single parameter's does not.
+    setVisible(keyable != 0);
+    if (keyable == 0)
+        setToolTip({});
+    else if (keyed == keyable)
+        setToolTip(QStringLiteral("%1 keyed at this time — click to remove the keys").arg(name_));
+    else if (keyed != 0)
+        setToolTip(QStringLiteral("Some %1 values keyed — click to key all of them at this time")
+                       .arg(name_));
+    else if (animated)
+        setToolTip(QStringLiteral("Animated — click to key %1 at this time").arg(name_));
+    else
+        setToolTip(QStringLiteral("Constant — click to animate %1 from here").arg(name_));
+    setIndicator(animated, keyed == 0          ? Fill::None
+                           : keyed == keyable ? Fill::Full
+                                              : Fill::Half);
+}
+
+bool KeyframeGroupDiamond::toggle() {
+    if (keyable_ == 0)
+        return false;
+    return session_.toggleKeyframesForParameters(
+        parameters_, keyed_ == keyable_ ? QStringLiteral("Remove %1 Keys").arg(name_)
+                                        : QStringLiteral("Key %1").arg(name_));
+}
+
+void KeyframeGroupDiamond::mousePressEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton || keyable_ == 0) {
+        QWidget::mousePressEvent(event);
+        return;
+    }
+    static_cast<void>(toggle());
+    event->accept();
+}
+
 } // namespace bloom::ui

@@ -483,6 +483,14 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool toggleKeyframe(document::ParameterId parameterId,
                                       document::AnimationComponent component,
                                       core::RationalTime time);
+    // #501: one diamond for a group of scalar parameters edited by one widget (a Grade wheel's
+    // master and colour, a Levels channel's five points). When every parameter of the group has a
+    // key at the playhead, the click removes those keys (a last key converts its parameter back to
+    // a constant); otherwise it adds a key, at the value there, to each parameter that has none.
+    // Either way ONE transaction labelled `label`. A driven or missing parameter is left out; with
+    // none left the gesture is refused.
+    [[nodiscard]] bool toggleKeyframesForParameters(const std::vector<document::ParameterId>& ids,
+                                                    const QString& label);
     // The selected key's outgoing interpolation (task S5, item 2). A no-op false with no
     // transaction when no keyframe is selected or the command layer refuses (notably the final key,
     // whose interpolation is canonical Linear).

@@ -9,6 +9,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace bloom::core {
 struct Color4d;
@@ -145,6 +146,39 @@ class KeyframeDiamond final : public kit::KDiamond {
     std::optional<document::AnimationComponent> component_;
     KeyframeDiamondState state_ = KeyframeDiamondState::Unsupported;
     bool hovered_ = false;
+};
+
+// #501: one diamond for a widget that edits several values together (a Grade wheel's master and
+// colour, a Levels channel's five points), drawn on the widget itself. It paints the group's state
+// in the same four forms -- a muted outline when every value is constant, gold once one is
+// animated, a half fill when some have a key at the playhead and a fill when all do -- and a click
+// keys or unkeys the whole group as one command (CompositionSession::toggleKeyframesForParameters).
+class KeyframeGroupDiamond final : public kit::KDiamond {
+    Q_OBJECT
+
+  public:
+    KeyframeGroupDiamond(CompositionSession& session, QString name, QWidget* parent = nullptr);
+
+    void setParameters(std::vector<document::ParameterId> parameters);
+    [[nodiscard]] const std::vector<document::ParameterId>& parameters() const noexcept {
+        return parameters_;
+    }
+    void refresh();
+    // How many of the group's keyable values have a key at the playhead, of how many.
+    [[nodiscard]] std::size_t keyed() const noexcept { return keyed_; }
+    [[nodiscard]] std::size_t keyable() const noexcept { return keyable_; }
+    // The click: keys or unkeys the group as one command.
+    bool toggle();
+
+  protected:
+    void mousePressEvent(QMouseEvent* event) override;
+
+  private:
+    CompositionSession& session_;
+    QString name_;
+    std::vector<document::ParameterId> parameters_;
+    std::size_t keyed_ = 0;
+    std::size_t keyable_ = 0;
 };
 
 } // namespace bloom::ui

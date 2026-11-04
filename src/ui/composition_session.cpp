@@ -3001,6 +3001,96 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     return execute(std::move(transaction));
 }
 
+bool CompositionSession::toggleKeyframesForParameters(
+    const std::vector<document::ParameterId>& ids, const QString& label) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    const auto* current = composition();
+    if (current == nullptr) {
+        reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
+        return false;
+    }
+    struct Member final {
+        const document::ParameterRecord* parameter = nullptr;
+        core::RationalTime time;
+        std::optional<document::KeyframeId> key;
+    };
+    std::vector<Member> members;
+    for (const auto id : ids) {
+        const auto* parameter = current->parameters().find(id);
+        if (parameter == nullptr || !document::isAnimatableSchemaKey(parameter->schemaKey) ||
+            document::isPathAnimatableSchemaKey(parameter->schemaKey) ||
+            parameter->schemaKey == document::kLayerMaskPathSchemaKey)
+            continue;
+        const bool constant = std::holds_alternative<document::ConstantValueSource>(parameter->source);
+        if (!constant && !std::holds_alternative<document::AnimationCurveSource>(parameter->source))
+            continue;
+        const auto time = keyTimeAtPlayhead(id);
+        members.push_back(
+            {parameter, time,
+             constant ? std::nullopt : keyframeAtExactTime(*parameter, time)});
+    }
+    if (members.empty()) {
+        reportUnavailable(QStringLiteral("None of these values can be keyed"));
+        return false;
+    }
+    const bool allKeyed =
+        std::ranges::all_of(members, [](const Member& member) { return member.key.has_value(); });
+    commands::Transaction transaction(label.toStdString(), snapshot_.revision());
+    for (const auto& member : members) {
+        const auto& parameter = *member.parameter;
+        if (allKeyed) {
+            const auto curveId = std::get<document::AnimationCurveSource>(parameter.source).curveId;
+            if (keyframeCount(curveId) > 1) {
+                transaction.emplace<commands::DeleteKeyframe>(compositionId_, curveId, *member.key);
+                continue;
+            }
+            // The curve's final key is the parameter's whole animation: removing it converts the
+            // parameter back to a constant holding that key's value.
+            const auto sample = sampleParameterValue(parameter, member.time);
+            if (!sample.has_value()) {
+                reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));
+                return false;
+            }
+            std::visit(
+                [&](const auto& value) {
+                    if constexpr (interpolable<std::decay_t<decltype(value)>>)
+                        transaction.emplace<commands::ConvertAnimationToConstant>(
+                            compositionId_, parameter.id, value);
+                },
+                *sample);
+            continue;
+        }
+        if (member.key.has_value())
+            continue;
+        if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter.source)) {
+            transaction.emplace<commands::CreateAnimationForParameter>(compositionId_, parameter.id,
+                                                                       member.time);
+            std::visit(
+                [&](const auto& value) {
+                    if constexpr (interpolable<std::decay_t<decltype(value)>>)
+                        transaction.emplace<commands::SetKeyframeAtTimeForParameter>(
+                            compositionId_, parameter.id, member.time, value);
+                },
+                constant->value);
+            continue;
+        }
+        const auto sample = sampleParameterValue(parameter, member.time);
+        if (!sample.has_value()) {
+            reportUnavailable(QStringLiteral("The animation curve could not be sampled here"));
+            return false;
+        }
+        const auto curveId = std::get<document::AnimationCurveSource>(parameter.source).curveId;
+        std::visit(
+            [&](const auto& value) {
+                if constexpr (interpolable<std::decay_t<decltype(value)>>)
+                    transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, curveId,
+                                                                     member.time, value);
+            },
+            *sample);
+    }
+    return execute(std::move(transaction));
+}
+
 std::optional<document::KeyframeInterpolation>
 CompositionSession::selectedKeyframeInterpolation() const {
     const auto* keySelection = std::get_if<KeyframeSelection>(&selection_.primary);
