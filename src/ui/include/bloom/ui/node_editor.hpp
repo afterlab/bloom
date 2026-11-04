@@ -260,7 +260,7 @@ class NodeGraphicsView final : public QGraphicsView {
     // following the whole graph".
     void frameRect(QRectF bounds);
 
-    // #490: the Image Preview the node editor draws behind the graph (Blender's backdrop). The
+    // #490: the Image Preview the node editor draws behind the graph. The
     // background has its own Fit / 100% / zoom / pan, independent of the graph's: the Viewer's
     // ViewTransform over the viewport, so its 100% is the Viewer's 100%. Null `previews` draws
     // none. Alt + wheel zooms it about the pointer and Alt + middle drag pans it.
