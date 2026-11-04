@@ -38,8 +38,8 @@ using bloom::render::GpuBlendParameters;
 using bloom::render::GpuBlendPollResult;
 using bloom::render::blend_proof::blendPixels;
 using bloom::render::blend_proof::runBlendBenchmark;
-using bloom::render::blend_proof::runPortableBlendTests;
 using bloom::render::blend_proof::runImageCombineTests;
+using bloom::render::blend_proof::runPortableBlendTests;
 
 void runMode(Expectations& expectations, GpuBlend& blend, GpuImageUpload& uploader,
              const BlendMode mode, const std::string& name, const std::uint32_t width,
@@ -156,6 +156,18 @@ void testAllModes(Expectations& expectations, GpuDevice& device) {
             "overlay-differing-origins", 32, 8, 5, 5, -20, 40);
     runMode(expectations, *blend.blend, *uploader.upload, BlendMode::Add,
             "add-source-out-of-bounds", 16, 4, 1000, 1000, 0, 0);
+    // The modes that change the backdrop under a transparent source must apply the formula to the
+    // out-of-window taps too: partly offset, then wholly outside the source.
+    for (const auto mode : bloom::core::kBlendModes) {
+        if (bloom::core::blendModeKeepsBackdropUnderTransparentSource(mode)) {
+            continue;
+        }
+        const auto value = std::to_string(bloom::core::blendModeStoredValue(mode));
+        runMode(expectations, *blend.blend, *uploader.upload, mode,
+                "mode-" + value + "-differing-origins", 16, 4, 7, 3, 2, -1);
+        runMode(expectations, *blend.blend, *uploader.upload, mode,
+                "mode-" + value + "-source-out-of-bounds", 16, 4, 1000, 1000, 0, 0);
+    }
 }
 
 void testRejections(Expectations& expectations, GpuDevice& device) {

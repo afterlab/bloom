@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "80b1805269f394051a86231638cf0fcc5fa46a31fd1299a7def14e81ecfc7c91",
-    "spirvSha256": "a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf",
+    "sha256": "4451c7a3aa6f6e6df0d971e46d64aba74add2f46a5d4f220e727bd8bc63c3395",
+    "spirvSha256": "8db5b5ec94430a70c70d7fea42cd1da49cd327e8ece61cd475df44e0779740ff",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -68,17 +68,17 @@
     "order": "source is the foreground blended OVER the read-only destination backdrop, matching blendLinearRec709SceneRow(mode, source, destination)",
     "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin (componentwise); sourceLocal = destLocal + sourceOffset",
     "windows": "destWidth/Height and sourceWidth/Height are data-window extents",
-    "mode": "mode is core::BlendMode's stored integer (Normal=0 .. Difference=7), the same durable mapping the CPU oracle switches on",
+    "mode": "mode is core::BlendMode's stored integer (Normal=0 .. Mask=17), the same durable mapping the CPU oracle switches on; only the general modes (Multiply=2 .. Mask=17) reach this kernel",
     "checked": "dispatch ceil(destWidth*destHeight/256); host preflights the same overflow/budget the CPU primitive checks"
   },
   "contracts": {
-    "numeric": "per-finite-component abs-or-rel 2e-6 against render::blendLinearRec709SceneRow for all 8 core::BlendMode values; never bit-exact by claim except at the exact endpoints",
-    "arithmetic": "Float64 straight-alpha division, separable blend, and W3C fold, rounded once to Float32 exactly as the CPU oracle; requires the core shaderFloat64 feature",
+    "numeric": "per-finite-component abs-or-rel 2e-6 against render::blendLinearRec709SceneRow for every general core::BlendMode value (Multiply=2 .. Mask=17); never bit-exact by claim except at the exact endpoints",
+    "arithmetic": "Float64 straight-alpha division, separable blend, and W3C fold, or the exact Float64 sum of the Porter-Duff products, rounded once to Float32 exactly as the CPU oracle; requires the core shaderFloat64 feature",
     "order": "fixed source-over-backdrop; the destination is read-only and a separate output image is written, so the caller's destination is never mutated",
-    "outOfBounds": "a source tap outside the source data window is transparent black, which leaves the backdrop unchanged -- the CPU oracle's transparent aligned pixel",
+    "outOfBounds": "a source tap outside the source data window is transparent black: it leaves the backdrop unchanged under the separable modes, Atop, Xor and Stencil, and takes the formula under Minimum, Maximum, In, Out and Mask -- the CPU oracle's transparent aligned pixel",
     "nonFinitePolicy": "non-finite input sets bit0, nonzero subnormal input sets bit2, a non-finite result sets bit1; on any error the backdrop pixel is written and the consumer must not publish while flags[0] != 0",
     "cpuFallback": "non-finite/subnormal domains and any precision the shader cannot match stay on the CPU reference path; no silent substitution",
     "offsets": "sourceOffset = destinationDataWindow.origin - sourceDataWindow.origin; sourceLocal = destLocal + sourceOffset (the exact CPU oracle mapping)",
-    "modes": "Normal=0, Add=1, Multiply=2, Screen=3, Overlay=4, Darken=5, Lighten=6, Difference=7; unknown stored values are rejected by the host before dispatch"
+    "modes": "Multiply=2, Screen=3, Overlay=4, Darken=5, Lighten=6, Difference=7, Subtract=8, Divide=9 (Cb - Cs and Cb / Cs with x/0 = 0, separable); Minimum=10, Maximum=11 (per-component premultiplied extreme, alpha included); In=12, Out=13, Atop=14, Xor=15, Stencil=16, Mask=17 (Porter-Duff co = cs*Fa + cb*Fb, ao = as*Fa + ab*Fb, no endpoint shortcut, zero alpha written as transparent black); unknown stored values are rejected by the host before dispatch"
   }
 }

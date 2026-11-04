@@ -36,6 +36,26 @@ std::string_view blendModeLabel(const core::BlendMode mode) noexcept {
         return "Lighten";
     case core::BlendMode::Difference:
         return "Difference";
+    case core::BlendMode::Subtract:
+        return "Subtract";
+    case core::BlendMode::Divide:
+        return "Divide";
+    case core::BlendMode::Minimum:
+        return "Minimum";
+    case core::BlendMode::Maximum:
+        return "Maximum";
+    case core::BlendMode::In:
+        return "In";
+    case core::BlendMode::Out:
+        return "Out";
+    case core::BlendMode::Atop:
+        return "Atop";
+    case core::BlendMode::Xor:
+        return "Xor";
+    case core::BlendMode::Stencil:
+        return "Stencil";
+    case core::BlendMode::Mask:
+        return "Mask";
     }
     return "Normal";
 }

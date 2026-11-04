@@ -404,7 +404,7 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     }
 
     // Normal is the exact retained fma source-over and Add is the exact premultiplied sum, so both
-    // stay on the exact Float32 kernel. The six general separable modes use the exact Float64
+    // stay on the exact Float32 kernel. The general modes (Multiply .. Mask) use the exact Float64
     // companion when it was selected, and the compensated-Float32 portable kernel otherwise; both
     // hold the documented 2e-6 absolute-or-relative gate, so no device is left on the CPU path.
     const bool generalMode =

@@ -697,7 +697,10 @@ void testBlendModes(Expectations& expectations) {
         pixel(0.5F, 0.5F, 0.5F, 1.0F),          // opaque mid grey
         pixel(0.0625F, 0.125F, 0.1875F, 0.25F), // straight (0.25, 0.5, 0.75) at quarter alpha
     };
-    const std::array<BlendGolden, 8> goldens{{
+    // Divide's 0.4583333... (11/24) is the one non-dyadic value: the exact quotient rounded once
+    // to binary32. Its blue-free third row and the zero green of the fourth source pixel also pin
+    // a zero divisor to zero.
+    const std::array<BlendGolden, 18> goldens{{
         {BlendMode::Normal,
          {pixel(0.625F, 0.5F, 0.5F, 1.0F), pixel(2.0F, 0.5F, -0.25F, 1.0F),
           pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.765625F, 0.03125F, 0.796875F, 0.8125F)}},
@@ -722,6 +725,36 @@ void testBlendModes(Expectations& expectations) {
         {BlendMode::Difference,
          {pixel(0.5F, 0.25F, 0.625F, 1.0F), pixel(1.625F, 0.375F, 0.625F, 1.0F),
           pixel(0.375F, 0.625F, 0.5F, 1.0F), pixel(0.71875F, 0.125F, 0.65625F, 0.8125F)}},
+        {BlendMode::Subtract,
+         {pixel(-0.25F, 0.25F, 0.625F, 1.0F), pixel(0.375F, 0.125F, 0.625F, 1.0F),
+          pixel(0.375F, 0.125F, 0.25F, 1.0F), pixel(0.4375F, 0.125F, 0.5625F, 0.8125F)}},
+        {BlendMode::Divide,
+         {pixel(0.25F, 0.75F, 1.875F, 1.0F), pixel(1.1875F, 0.5F, -2.625F, 1.0F),
+          pixel(0.625F, 0.4583333432674408F, 0.5F, 1.0F), pixel(0.625F, 0.03125F, 0.75F, 0.8125F)}},
+        {BlendMode::Minimum,
+         {pixel(0.25F, 0.25F, 0.125F, 0.5F), pixel(0.375F, 0.125F, -0.25F, 0.5F),
+          pixel(0.125F, 0.375F, 0.25F, 0.25F), pixel(0.0625F, 0.0F, 0.1875F, 0.25F)}},
+        {BlendMode::Maximum,
+         {pixel(0.5F, 0.5F, 0.75F, 1.0F), pixel(2.0F, 0.5F, 0.625F, 1.0F),
+          pixel(0.5F, 0.5F, 0.5F, 1.0F), pixel(0.75F, 0.125F, 0.75F, 0.75F)}},
+        {BlendMode::In,
+         {pixel(0.5F, 0.25F, 0.125F, 0.5F), pixel(1.0F, 0.25F, -0.125F, 0.5F),
+          pixel(0.125F, 0.375F, 0.25F, 0.25F), pixel(0.1875F, 0.0F, 0.1875F, 0.1875F)}},
+        {BlendMode::Out,
+         {Rgba32f::transparent(), pixel(1.0F, 0.25F, -0.125F, 0.5F), Rgba32f::transparent(),
+          pixel(0.5625F, 0.0F, 0.5625F, 0.5625F)}},
+        {BlendMode::Atop,
+         {pixel(0.625F, 0.5F, 0.5F, 1.0F), pixel(1.0F, 0.25F, -0.125F, 0.5F),
+          pixel(0.5F, 0.75F, 0.625F, 1.0F), pixel(0.203125F, 0.03125F, 0.234375F, 0.25F)}},
+        {BlendMode::Xor,
+         {pixel(0.125F, 0.25F, 0.375F, 0.5F), pixel(1.0F, 0.25F, -0.125F, 0.5F),
+          pixel(0.375F, 0.375F, 0.375F, 0.75F), pixel(0.578125F, 0.03125F, 0.609375F, 0.625F)}},
+        {BlendMode::Stencil,
+         {pixel(0.125F, 0.25F, 0.375F, 0.5F), Rgba32f::transparent(),
+          pixel(0.375F, 0.375F, 0.375F, 0.75F), pixel(0.015625F, 0.03125F, 0.046875F, 0.0625F)}},
+        {BlendMode::Mask,
+         {pixel(0.125F, 0.25F, 0.375F, 0.5F), pixel(0.375F, 0.125F, 0.625F, 0.5F),
+          pixel(0.125F, 0.125F, 0.125F, 0.25F), pixel(0.046875F, 0.09375F, 0.140625F, 0.1875F)}},
     }};
     expectations.expect(goldens.size() == bloom::core::kBlendModes.size(),
                         "every implemented blend mode has a golden row");
@@ -743,9 +776,13 @@ void testBlendModes(Expectations& expectations) {
             blended == composited,
         "Normal is bit-exactly the pre-blend-mode source-over result");
 
-    // Alpha compositing is source-over under EVERY mode: a mode changes a layer's colour, never how
-    // much of the backdrop it covers.
+    // Alpha compositing is source-over under every SEPARABLE mode: such a mode changes a layer's
+    // colour, never how much of the backdrop it covers. The extremes and the mattes own their
+    // alpha.
     for (const auto mode : bloom::core::kBlendModes) {
+        if (!bloom::core::blendModeIsSeparable(mode)) {
+            continue;
+        }
         auto modeDestination = blendDestination;
         auto overDestination = blendDestination;
         const bool ok =
@@ -768,7 +805,53 @@ void testBlendModes(Expectations& expectations) {
             endpointDestination[0] == untouchedBackdrop &&
             endpointDestination[1] == endpointSource[1],
         "a transparent source leaves the backdrop alone and a transparent backdrop takes the "
-        "source exactly, under every mode");
+        "source exactly, under every separable mode");
+
+    // The extremes and the mattes take their formula at the endpoints too: a transparent source
+    // clears the backdrop under In, Out and Mask and keeps it under Atop, Xor and Stencil, and an
+    // empty backdrop removes the source under In, Atop and Mask. That split is exactly
+    // blendModeKeepsBackdropUnderTransparentSource().
+    for (const auto mode : bloom::core::kBlendModes) {
+        if (bloom::core::blendModeIsSeparable(mode)) {
+            continue;
+        }
+        const std::array transparentSource{Rgba32f::transparent()};
+        std::array backdrop{pixel(0.25F, -0.5F, 3.0F, 1.0F)};
+        const auto original = backdrop[0];
+        const bool ok = !blendLinearRec709SceneRow(mode, transparentSource, backdrop).has_value();
+        expectations.expect(
+            ok && (backdrop[0] == original) ==
+                      bloom::core::blendModeKeepsBackdropUnderTransparentSource(mode),
+            "a transparent source keeps the backdrop exactly when the mode says it does");
+    }
+    {
+        const std::array source{pixel(0.5F, 0.25F, 0.125F, 0.5F)};
+        for (const auto mode : {BlendMode::In, BlendMode::Atop, BlendMode::Mask, BlendMode::Out,
+                                BlendMode::Xor, BlendMode::Stencil}) {
+            std::array empty{Rgba32f::transparent()};
+            const bool ok = !blendLinearRec709SceneRow(mode, source, empty).has_value();
+            const bool keepsSource = mode == BlendMode::Out || mode == BlendMode::Xor;
+            expectations.expect(ok &&
+                                    empty[0] == (keepsSource ? source[0] : Rgba32f::transparent()),
+                                "over an empty backdrop Out and Xor keep the source and In, Atop, "
+                                "Mask and Stencil leave nothing");
+        }
+    }
+
+    // Divide: a zero divisor is zero, a negative divisor keeps its sign, HDR is never clamped.
+    {
+        const std::array source{pixel(0.0F, -0.5F, 0.25F, 1.0F)};
+        std::array backdrop{pixel(7.0F, 3.0F, 40.0F, 1.0F)};
+        const bool ok = !blendLinearRec709SceneRow(BlendMode::Divide, source, backdrop).has_value();
+        expectations.expect(ok && backdrop[0] == pixel(0.0F, -6.0F, 160.0F, 1.0F),
+                            "Divide maps x/0 to 0 and keeps negative and HDR quotients unclamped");
+        const std::array subtrahend{pixel(5.0F, -1.0F, 0.5F, 1.0F)};
+        std::array minuend{pixel(1.0F, 2.0F, 0.5F, 1.0F)};
+        expectations.expect(
+            !blendLinearRec709SceneRow(BlendMode::Subtract, subtrahend, minuend).has_value() &&
+                minuend[0] == pixel(-4.0F, 3.0F, 0.0F, 1.0F),
+            "Subtract takes the source from the backdrop and keeps a negative result");
+    }
 
     std::array<Rgba32f, 1> wrongSize{Rgba32f::transparent()};
     expectations.expect(

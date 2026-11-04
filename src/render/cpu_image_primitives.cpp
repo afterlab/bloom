@@ -274,8 +274,92 @@ struct ClampedSpan final {
         return std::max(backdrop, source);
     case bloom::core::BlendMode::Difference:
         return std::abs(backdrop - source);
+    case bloom::core::BlendMode::Subtract:
+        // The source is taken FROM the backdrop, as a layer subtracts from what is beneath it.
+        return backdrop - source;
+    case bloom::core::BlendMode::Divide:
+        // The backdrop divided by the source. A zero divisor gives zero rather than an infinity:
+        // the result stays finite and a black source holds the backdrop out, the safe-divide every
+        // compositor uses. Any other divisor, negative or HDR, divides exactly with its sign kept.
+        return source == 0.0 ? 0.0 : backdrop / source;
+    case bloom::core::BlendMode::Minimum:
+    case bloom::core::BlendMode::Maximum:
+    case bloom::core::BlendMode::In:
+    case bloom::core::BlendMode::Out:
+    case bloom::core::BlendMode::Atop:
+    case bloom::core::BlendMode::Xor:
+    case bloom::core::BlendMode::Stencil:
+    case bloom::core::BlendMode::Mask:
+        // Not separable: premultipliedOperator() below owns these, and they never reach the fold.
+        break;
     }
     return source;
+}
+
+// The modes that are NOT a separable blend function: the channel extremes and the Porter-Duff
+// matte operators, all evaluated directly on PREMULTIPLIED components, alpha included.
+//
+//   Minimum / Maximum   every component, alpha too, is min/max(source, backdrop)
+//   Porter-Duff         co = cs*Fa + cb*Fb, ao = as*Fa + ab*Fb with
+//                         In      Fa = ab       Fb = 0
+//                         Out     Fa = 1 - ab   Fb = 0
+//                         Atop    Fa = ab       Fb = 1 - as
+//                         Xor     Fa = 1 - ab   Fb = 1 - as
+//                         Stencil Fa = 0        Fb = 1 - as
+//                         Mask    Fa = 0        Fb = as
+//
+// Every product of two Float32 values is exact in Float64, so each component is the exact sum of
+// two exact products rounded once to Float32 -- the same value the Float64 GPU kernel produces. No
+// component is clamped; a non-finite result fails the row.
+[[nodiscard]] std::optional<RawPixel> premultipliedOperator(const bloom::core::BlendMode mode,
+                                                            const RawPixel& source,
+                                                            const RawPixel& backdrop) noexcept {
+    RawPixel result{};
+    if (mode == bloom::core::BlendMode::Minimum || mode == bloom::core::BlendMode::Maximum) {
+        for (std::size_t component = 0; component < result.size(); ++component) {
+            result[component] = mode == bloom::core::BlendMode::Minimum
+                                    ? std::min(source[component], backdrop[component])
+                                    : std::max(source[component], backdrop[component]);
+        }
+        return result;
+    }
+    const auto sourceAlpha = static_cast<double>(source[3]);
+    const auto backdropAlpha = static_cast<double>(backdrop[3]);
+    double sourceFactor = 0.0;
+    double backdropFactor = 0.0;
+    switch (mode) {
+    case bloom::core::BlendMode::In:
+        sourceFactor = backdropAlpha;
+        break;
+    case bloom::core::BlendMode::Out:
+        sourceFactor = 1.0 - backdropAlpha;
+        break;
+    case bloom::core::BlendMode::Atop:
+        sourceFactor = backdropAlpha;
+        backdropFactor = 1.0 - sourceAlpha;
+        break;
+    case bloom::core::BlendMode::Xor:
+        sourceFactor = 1.0 - backdropAlpha;
+        backdropFactor = 1.0 - sourceAlpha;
+        break;
+    case bloom::core::BlendMode::Stencil:
+        backdropFactor = 1.0 - sourceAlpha;
+        break;
+    case bloom::core::BlendMode::Mask:
+        backdropFactor = sourceAlpha;
+        break;
+    default:
+        return std::nullopt;
+    }
+    for (std::size_t component = 0; component < result.size(); ++component) {
+        const auto value = checkedFloat(static_cast<double>(source[component]) * sourceFactor +
+                                        static_cast<double>(backdrop[component]) * backdropFactor);
+        if (!value.has_value()) {
+            return std::nullopt;
+        }
+        result[component] = *value;
+    }
+    return result;
 }
 
 [[nodiscard]] std::uint8_t displayChannelByte(const float premultiplied,
@@ -713,6 +797,26 @@ ImageStatus blendLinearRec709SceneRow(const core::BlendMode mode,
     }
     if (!supportedEnvironment()) {
         return codeError(ImageErrorCode::UnsupportedFloatingPointEnvironment);
+    }
+
+    if (!core::blendModeIsSeparable(mode)) {
+        // The extremes and the mattes have no alpha endpoint shortcut: a transparent source still
+        // clears the backdrop under In, Out and Mask, and an empty backdrop still removes the
+        // source under In, Atop and Mask. Every pixel takes the formula; a zero-alpha result is
+        // published as transparent black, exactly as every process pixel is.
+        for (std::size_t index = 0; index < source.size(); ++index) {
+            const auto composited =
+                premultipliedOperator(mode, rawPixel(source[index]), rawPixel(destination[index]));
+            if (!composited.has_value()) {
+                return codeError(ImageErrorCode::NonFiniteResult);
+            }
+            const auto pixel = checkedProcessPixel(*composited);
+            if (!pixel) {
+                return *pixel.error();
+            }
+            destination[index] = *pixel.value();
+        }
+        return std::nullopt;
     }
 
     for (std::size_t index = 0; index < source.size(); ++index) {

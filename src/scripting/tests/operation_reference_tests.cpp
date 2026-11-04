@@ -193,7 +193,7 @@ void everyChoiceParameterHasValues() {
         }
     }
     const auto blend = parameterChoices("bloom.layer.blend-mode");
-    expect(blend.size() == 8 && blend[3].label == "Screen" && blend[3].value == 3,
+    expect(blend.size() == 18 && blend[3].label == "Screen" && blend[3].value == 3,
            "blend modes are labelled");
     const auto markdown = nodeReferenceMarkdown();
     for (const auto* part : {"# Bloom node and parameter reference", "## Blend modes", "3 Screen",

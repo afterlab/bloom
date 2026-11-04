@@ -118,10 +118,11 @@ struct GpuBlend::Impl final {
     bool pipelinesReady = false;
 
     // pipeline is the exact Float32 blend.comp kernel for Normal/Add. pipelineF64 is the exact
-    // Float64 kernel for the six general modes, built only when the device advertised and enabled
-    // shaderFloat64. pipelinePortable is the compensated-Float32 general-mode kernel, built
-    // whenever the Float64 companion is not selected. `generalUsesF64` records which of the two the
-    // six general modes dispatch, and therefore which identity the executor keys them under.
+    // Float64 kernel for the general modes (Multiply .. Mask), built only when the device
+    // advertised and enabled shaderFloat64. pipelinePortable is the compensated-Float32
+    // general-mode kernel, built whenever the Float64 companion is not selected. `generalUsesF64`
+    // records which of the two the general modes dispatch, and therefore which identity the
+    // executor keys them under.
     CompositePipeline pipeline;
     CompositePipeline pipelineF64;
     CompositePipeline pipelinePortable;

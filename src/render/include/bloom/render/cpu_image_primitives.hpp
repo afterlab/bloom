@@ -241,16 +241,21 @@ class LayerTransform final {
 
 // Composites source onto destination in lin_rec709_scene process space under one blend mode, with
 // the same span contract sourceOverLinearRec709SceneRow() has. ALPHA compositing is source-over for
-// every mode -- only the colour combination changes -- so a blend mode never makes a layer cover
-// more or less of what is beneath it than its own alpha says, and Normal is the case where the
-// colour combination is source-over too.
+// every SEPARABLE mode (Normal .. Divide) -- only the colour combination changes -- so such a mode
+// never makes a layer cover more or less of what is beneath it than its own alpha says, and Normal
+// is the case where the colour combination is source-over too. The channel extremes (Minimum,
+// Maximum) and the Porter-Duff mattes (In .. Mask) work on premultiplied components, alpha
+// included, and own their coverage.
 //
 // The formulas, and why each one is evaluated where it is, are in
 // docs/architecture/color-management.md, "Blend modes". In brief: Add is premultiplied addition,
 // which the general compositing formula reduces to exactly, so it needs no round trip; every other
-// non-Normal mode is a separable function of UN-premultiplied colour, so the kernel divides both
-// pixels by their own alpha, applies the mode, and re-premultiplies through the general formula.
-// Process RGB is never clamped, at either end.
+// separable mode is a function of UN-premultiplied colour, so the kernel divides both pixels by
+// their own alpha, applies the mode, and re-premultiplies through the general formula. Divide maps
+// a zero divisor to zero. Under Minimum, Maximum, In, Out and Mask a transparent source still
+// changes the destination (core::blendModeKeepsBackdropUnderTransparentSource), so a caller
+// compositing a layer smaller than its destination passes those modes a transparent-padded source
+// row. Process RGB is never clamped, at either end.
 [[nodiscard]] ImageStatus blendLinearRec709SceneRow(core::BlendMode mode,
                                                     std::span<const Rgba32f> source,
                                                     std::span<Rgba32f> destination) noexcept;

@@ -215,7 +215,7 @@ void runPortableBlendTests(Expectations& expectations, GpuDevice& device) {
         return;
     }
 
-    // All eight modes on the retained small fixture, forced through the portable pipeline.
+    // Every mode on the retained small fixture, forced through the portable pipeline.
     constexpr std::uint32_t kWidth = 7;
     constexpr std::uint32_t kHeight = 3;
     const auto smallSource = blendPixels(kWidth, kHeight, true);
@@ -226,7 +226,7 @@ void runPortableBlendTests(Expectations& expectations, GpuDevice& device) {
                        smallDest, kWidth, kHeight, "portable-small-mode-" + std::to_string(value));
     }
 
-    // Wider HDR and tiny normal-alpha boundaries on the six general modes.
+    // Wider HDR and tiny normal-alpha boundaries on every general mode.
     constexpr std::uint32_t kFieldWidth = 257;
     constexpr std::uint32_t kFieldHeight = 3;
     const auto wideSource = widerHdrField(kFieldWidth, kFieldHeight, true);
@@ -237,7 +237,7 @@ void runPortableBlendTests(Expectations& expectations, GpuDevice& device) {
     const auto tinyDest = tinyAlphaField(kFieldWidth, kFieldHeight, false);
     expectations.expect(hasNoSubnormalLane(tinySource) && hasNoSubnormalLane(tinyDest),
                         "portable: tiny-alpha field has no subnormal lane");
-    for (std::uint32_t modeValue = 2; modeValue <= 7; ++modeValue) {
+    for (std::uint32_t modeValue = 2; modeValue < bloom::core::kBlendModes.size(); ++modeValue) {
         const auto mode = bloom::core::kBlendModes[modeValue];
         const auto tag = std::to_string(modeValue);
         runAlignedMode(expectations, *portable.blend, *uploader.upload, mode, wideSource, wideDest,

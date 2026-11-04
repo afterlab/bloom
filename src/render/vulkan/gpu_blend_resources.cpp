@@ -67,7 +67,7 @@ bool GpuBlend::Impl::createPipeline() {
         return false;
     }
     // The portable compensated-Float32 kernel needs no Float64 capability and no 64-bit integer
-    // type, so it is built unconditionally and backs the six general modes on every device that
+    // type, so it is built unconditionally and backs the general modes on every device that
     // lacks the exact Float64 companion.
     if (!createCompositePipeline(*control, vulkan_detail::kBlendPortableSpirvCode,
                                  vulkan_detail::kBlendPortableSpirvByteCount, kBlendBindings,

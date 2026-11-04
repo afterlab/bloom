@@ -3,9 +3,10 @@
 // Offline-generated/embedded; do not edit at runtime.
 //
 // This is the Float64-free companion to blend_f64.comp. It reproduces the CPU oracle
-// render::blendLinearRec709SceneRow() for the six general core::BlendMode values (Multiply, Screen,
-// Overlay, Darken, Lighten, Difference) without the core shaderFloat64 feature and without any
-// 64-bit integer type, so it runs on common Apple/MoltenVK and other Float32-only devices.
+// render::blendLinearRec709SceneRow() for every general core::BlendMode value -- the separable
+// Multiply .. Divide (mode 2-9) and the premultiplied Minimum, Maximum and Porter-Duff mattes (mode
+// 10-17) -- without the core shaderFloat64 feature and without any 64-bit integer type, so it runs
+// on common Apple/MoltenVK and other Float32-only devices.
 //
 // Why plain Float32 is not enough: the oracle divides premultiplied channels by their alpha, applies
 // the W3C separable blend function B(Cb, Cs), and evaluates the source-over fold
@@ -20,8 +21,13 @@
 // ~48 significand bits, enough to track the Float64 oracle far inside the gate, and rounds the
 // premultiplied result to Float32 exactly once, mirroring the oracle.
 //
-// Bindings, push constants, window mapping, endpoint shortcuts, alpha compositing, and the
-// non-finite/subnormal error policy are identical to blend.comp and blend_f64.comp.
+// The premultiplied operators are exact min/max or two exact double-float products summed once
+// (co = cs*Fa + cb*Fb, ao = as*Fa + ab*Fb); they take no endpoint shortcut and write a zero-alpha
+// result as transparent black, as blend_f64.comp does.
+//
+// Bindings, push constants, window mapping, the separable modes' endpoint shortcuts and alpha
+// compositing, and the non-finite/subnormal error policy are identical to blend.comp and
+// blend_f64.comp.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_blend_source;
@@ -65,17 +71,23 @@ struct BloomDf { float hi; float lo; };
 
 BloomDf bloom_df(float value) { return BloomDf(value, 0.0); }
 
+// The error-free transforms are `precise`: without it a driver may fold fma(a, b, -(a * b)) to zero
+// or reassociate (a + b) - a to b, which silently turns the double-float back into plain Float32.
 void bloom_two_sum(float a, float b, out float sum, out float error)
 {
-    sum = a + b;
-    float virtualB = sum - a;
-    error = (a - (sum - virtualB)) + (b - virtualB);
+    precise float total = a + b;
+    precise float virtualB = total - a;
+    precise float residual = (a - (total - virtualB)) + (b - virtualB);
+    sum = total;
+    error = residual;
 }
 
 void bloom_two_prod(float a, float b, out float product, out float error)
 {
-    product = a * b;
-    error = fma(a, b, -product);
+    precise float rounded = a * b;
+    precise float residual = fma(a, b, -rounded);
+    product = rounded;
+    error = residual;
 }
 
 BloomDf bloom_df_add(BloomDf a, BloomDf b)
@@ -114,8 +126,8 @@ BloomDf bloom_df_div(BloomDf numerator, BloomDf denominator)
 
 float bloom_df_to_float(BloomDf value) { return value.hi + value.lo; }
 
-// The W3C separable blend function B(Cb, Cs) for the six general modes, in double-float. The Overlay
-// pivot reads the backdrop exactly as the CPU oracle's separableBlend() does.
+// The W3C separable blend function B(Cb, Cs) for the general separable modes, in double-float. The
+// Overlay pivot reads the backdrop exactly as the CPU oracle's separableBlend() does.
 BloomDf bloom_separable_df(uint mode, BloomDf backdrop, BloomDf source)
 {
     if (mode == 2u) { return bloom_df_mul(backdrop, source); }                       // Multiply
@@ -139,7 +151,50 @@ BloomDf bloom_separable_df(uint mode, BloomDf backdrop, BloomDf source)
         return negative ? BloomDf(-difference.hi, -difference.lo)
                         : BloomDf(difference.hi, difference.lo);
     }
+    if (mode == 8u) { return bloom_df_sub(backdrop, source); }                       // Subtract
+    if (mode == 9u) {                                                               // Divide
+        if (source.hi == 0.0 && source.lo == 0.0) { return bloom_df(0.0); }        // x/0 = 0
+        return bloom_df_div(backdrop, source);
+    }
     return source;
+}
+
+// One premultiplied component of a Porter-Duff matte: component*Fa + backdrop*Fb, rounded once.
+float bloom_matte_component(float source, float backdrop, BloomDf sourceFactor,
+                            BloomDf backdropFactor)
+{
+    return bloom_df_to_float(bloom_df_add(bloom_df_mul(bloom_df(source), sourceFactor),
+                                          bloom_df_mul(bloom_df(backdrop), backdropFactor)));
+}
+
+// Minimum, Maximum, and the Porter-Duff mattes on premultiplied pixels (mode 10-17).
+vec4 bloom_premultiplied_operator(uint mode, vec4 source, vec4 backdrop)
+{
+    if (mode == 10u) { return min(source, backdrop); }                              // Minimum
+    if (mode == 11u) { return max(source, backdrop); }                              // Maximum
+    BloomDf zero = bloom_df(0.0);
+    BloomDf sourceAlpha = bloom_df(source.a);
+    BloomDf backdropAlpha = bloom_df(backdrop.a);
+    BloomDf inverseSourceAlpha = bloom_df_sub(bloom_df(1.0), sourceAlpha);
+    BloomDf inverseBackdropAlpha = bloom_df_sub(bloom_df(1.0), backdropAlpha);
+    BloomDf sourceFactor = zero;
+    BloomDf backdropFactor = zero;
+    if (mode == 12u) { sourceFactor = backdropAlpha; }                              // In
+    else if (mode == 13u) { sourceFactor = inverseBackdropAlpha; }                  // Out
+    else if (mode == 14u) {                                                         // Atop
+        sourceFactor = backdropAlpha;
+        backdropFactor = inverseSourceAlpha;
+    } else if (mode == 15u) {                                                       // Xor
+        sourceFactor = inverseBackdropAlpha;
+        backdropFactor = inverseSourceAlpha;
+    } else if (mode == 16u) { backdropFactor = inverseSourceAlpha; }                // Stencil
+    else { backdropFactor = sourceAlpha; }                                          // Mask
+    vec4 result;
+    for (int component = 0; component < 4; ++component) {
+        result[component] = bloom_matte_component(source[component], backdrop[component],
+                                                   sourceFactor, backdropFactor);
+    }
+    return result;
 }
 
 void main()
@@ -163,6 +218,17 @@ void main()
     if (errors != 0u) {
         atomicOr(bloom_error.flags[0], errors);
         imageStore(bloom_blend_output, destLocal, backdrop);
+        return;
+    }
+
+    if (bloom_blend_push.mode >= 10u) {
+        vec4 operated = bloom_premultiplied_operator(bloom_blend_push.mode, source, backdrop);
+        if (any(isnan(operated)) || any(isinf(operated))) {
+            atomicOr(bloom_error.flags[0], kErrorResultNonFinite);
+            imageStore(bloom_blend_output, destLocal, backdrop);
+            return;
+        }
+        imageStore(bloom_blend_output, destLocal, operated.a == 0.0 ? vec4(0.0) : operated);
         return;
     }
 

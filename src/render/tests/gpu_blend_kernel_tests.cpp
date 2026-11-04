@@ -4,7 +4,7 @@
 //   - the checked-in SPIR-V array hashes to its pinned digest (a changed word fails even if the
 //     comments are intact), and the digest string embedded in the .inc matches;
 //   - a Float32 host emulation of the exact arithmetic in blend.comp agrees with the REAL Float64
-//     CPU oracle render::blendLinearRec709SceneRow() for all eight core::BlendMode values, within
+//     CPU oracle render::blendLinearRec709SceneRow() for every core::BlendMode value, within
 //     the documented per-finite-component 2e-6 absolute-or-relative gate, over alpha endpoints
 //     (0/partial/1), an empty backdrop, negative and HDR RGB, and odd extents. This is a real
 //     numeric guard against a wrong shader formula, not just a fixture echo.
@@ -23,11 +23,11 @@
 #endif
 #ifndef BLOOM_BLEND_F64_SPV_SHA256
 #define BLOOM_BLEND_F64_SPV_SHA256                                                                 \
-    "a910e190a05875c22f16d1571dea9e05496b32d5a588ede8cc8d95520ea7dbcf"
+    "8db5b5ec94430a70c70d7fea42cd1da49cd327e8ece61cd475df44e0779740ff"
 #endif
 #ifndef BLOOM_BLEND_PORTABLE_SPV_SHA256
 #define BLOOM_BLEND_PORTABLE_SPV_SHA256                                                            \
-    "41c0272525b19c8dd43439244411b078e6c2936926fd8456c33fabf60cf68841"
+    "554a64a5170e2bc806f4c910188397f7c599b59a789480fb78ce81e281047823"
 #endif
 
 #include "shaders/blend_f64_spirv.inc"
@@ -142,11 +142,63 @@ struct Pixel final {
     return composited;
 }
 
+// Double emulation of the premultiplied operators (mode 10-17) of blend_f64.comp: per-component
+// min/max, or the Porter-Duff products summed in Float64 and rounded once.
+[[nodiscard]] Pixel premultipliedOperatorF64(const std::uint32_t mode, const Pixel source,
+                                             const Pixel backdrop) noexcept {
+    const std::array<float, 4> s{source.r, source.g, source.b, source.a};
+    const std::array<float, 4> b{backdrop.r, backdrop.g, backdrop.b, backdrop.a};
+    std::array<float, 4> out{};
+    const auto as = static_cast<double>(source.a);
+    const auto ab = static_cast<double>(backdrop.a);
+    double fa = 0.0;
+    double fb = 0.0;
+    switch (mode) {
+    case 12:
+        fa = ab;
+        break;
+    case 13:
+        fa = 1.0 - ab;
+        break;
+    case 14:
+        fa = ab;
+        fb = 1.0 - as;
+        break;
+    case 15:
+        fa = 1.0 - ab;
+        fb = 1.0 - as;
+        break;
+    case 16:
+        fb = 1.0 - as;
+        break;
+    default:
+        fb = as;
+        break;
+    }
+    for (std::size_t c = 0; c < out.size(); ++c) {
+        if (mode == 10U) {
+            out[c] = std::min(s[c], b[c]);
+        } else if (mode == 11U) {
+            out[c] = std::max(s[c], b[c]);
+        } else {
+            out[c] =
+                static_cast<float>(static_cast<double>(s[c]) * fa + static_cast<double>(b[c]) * fb);
+        }
+    }
+    if (out[3] == 0.0F) {
+        return {};
+    }
+    return {out[0], out[1], out[2], out[3]};
+}
+
 // Double emulation of blend_f64.comp (the exact-arithmetic kernel the general modes select).
 // Mirrors its straight-alpha division, separable blend, and fold in Float64 with one final Float32
 // rounding, exactly as the CPU oracle does.
 [[nodiscard]] Pixel shaderBlendF64(const std::uint32_t mode, const Pixel source,
                                    const Pixel backdrop) noexcept {
+    if (mode >= 10U) {
+        return premultipliedOperatorF64(mode, source, backdrop);
+    }
     if (source.a == 0.0F) {
         return backdrop;
     }
@@ -189,6 +241,12 @@ struct Pixel final {
             break;
         case 7:
             blended = std::fabs(cb - cs);
+            break;
+        case 8:
+            blended = cb - cs;
+            break;
+        case 9:
+            blended = cs == 0.0 ? 0.0 : cb / cs;
             break;
         default:
             blended = cs;
@@ -275,13 +333,67 @@ void dfTwoProd(const float a, const float b, float& product, float& error) noexc
             difference.hi < 0.0F || (difference.hi == 0.0F && difference.lo < 0.0F);
         return negative ? Df{-difference.hi, -difference.lo} : difference;
     }
+    case 8:
+        return dfSub(backdrop, source);
+    case 9:
+        return source.hi == 0.0F && source.lo == 0.0F ? dfValue(0.0F) : dfDiv(backdrop, source);
     default:
         return source;
     }
 }
 
+// Host emulation of blend_portable.comp's premultiplied operators (mode 10-17).
+[[nodiscard]] Pixel premultipliedOperatorPortable(const std::uint32_t mode, const Pixel source,
+                                                  const Pixel backdrop) noexcept {
+    if (mode == 10U || mode == 11U) {
+        return premultipliedOperatorF64(mode, source, backdrop);
+    }
+    const Df zero = dfValue(0.0F);
+    const Df sourceAlpha = dfValue(source.a);
+    const Df backdropAlpha = dfValue(backdrop.a);
+    const Df inverseSourceAlpha = dfSub(dfValue(1.0F), sourceAlpha);
+    const Df inverseBackdropAlpha = dfSub(dfValue(1.0F), backdropAlpha);
+    Df fa = zero;
+    Df fb = zero;
+    switch (mode) {
+    case 12:
+        fa = backdropAlpha;
+        break;
+    case 13:
+        fa = inverseBackdropAlpha;
+        break;
+    case 14:
+        fa = backdropAlpha;
+        fb = inverseSourceAlpha;
+        break;
+    case 15:
+        fa = inverseBackdropAlpha;
+        fb = inverseSourceAlpha;
+        break;
+    case 16:
+        fb = inverseSourceAlpha;
+        break;
+    default:
+        fb = sourceAlpha;
+        break;
+    }
+    const std::array<float, 4> s{source.r, source.g, source.b, source.a};
+    const std::array<float, 4> b{backdrop.r, backdrop.g, backdrop.b, backdrop.a};
+    std::array<float, 4> out{};
+    for (std::size_t c = 0; c < out.size(); ++c) {
+        out[c] = dfToFloat(dfAdd(dfMul(dfValue(s[c]), fa), dfMul(dfValue(b[c]), fb)));
+    }
+    if (out[3] == 0.0F) {
+        return {};
+    }
+    return {out[0], out[1], out[2], out[3]};
+}
+
 [[nodiscard]] Pixel shaderBlendPortable(const std::uint32_t mode, const Pixel source,
                                         const Pixel backdrop) noexcept {
+    if (mode >= 10U) {
+        return premultipliedOperatorPortable(mode, source, backdrop);
+    }
     if (source.a == 0.0F) {
         return backdrop;
     }
@@ -311,8 +423,8 @@ void dfTwoProd(const float a, const float b, float& product, float& error) noexc
 }
 
 // The kernel pipeline the operation actually selects for a mode: Normal and Add stay on the Float32
-// blend.comp (both exact), and the six general separable modes use the Float64 blend_f64.comp when
-// the device supports it and the portable compensated-Float32 kernel otherwise.
+// blend.comp (both exact), and the general modes (Multiply .. Mask) use the Float64 blend_f64.comp
+// when the device supports it and the portable compensated-Float32 kernel otherwise.
 [[nodiscard]] Pixel kernelEmulation(const std::uint32_t mode, const Pixel source,
                                     const Pixel backdrop) noexcept {
     if (mode == 0U || mode == 1U) {
@@ -399,6 +511,7 @@ struct Fixture final {
         {"negative-rgb", {-0.3F, 0.25F, -0.7F, 0.6F}, {0.2F, -0.4F, 0.9F, 0.8F}},
         {"hdr-rgb", {3.5F, 0.2F, 12.0F, 0.9F}, {2.0F, 5.5F, 0.1F, 0.7F}},
         {"pivot-half-backdrop", {0.3F, 0.3F, 0.3F, 1.0F}, {0.5F, 0.5F, 0.5F, 1.0F}},
+        {"zero-divisor-channel", {0.0F, 0.5F, -0.25F, 0.5F}, {0.6F, 0.2F, 0.4F, 0.8F}},
     };
 }
 
@@ -533,7 +646,7 @@ void testPortableDenseAgainstOracle(Expectations& expectations) {
     std::size_t checked = 0;
     std::size_t mismatches = 0;
     std::string firstFailure;
-    for (std::uint32_t modeValue = 2; modeValue <= 7; ++modeValue) {
+    for (std::uint32_t modeValue = 2; modeValue < bloom::core::kBlendModes.size(); ++modeValue) {
         for (const auto& fixture : dense) {
             const auto source = makePixel(fixture.source);
             const auto backdrop = makePixel(fixture.destination);
@@ -595,7 +708,7 @@ void testPortableDenseAgainstOracle(Expectations& expectations) {
 }
 
 void testRejectsUnknownStoredValues(Expectations& expectations) {
-    expectations.expect(!bloom::core::blendModeFromStoredValue(8).has_value(),
+    expectations.expect(!bloom::core::blendModeFromStoredValue(18).has_value(),
                         "an unknown stored blend mode is rejected, not folded to Normal");
     for (const auto& mode : bloom::core::kBlendModes) {
         const auto stored = bloom::core::blendModeStoredValue(mode);
