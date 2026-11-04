@@ -122,6 +122,15 @@ resolveBloomNeutralV1BuiltIn(OcioConfigLocatorKind locatorKind, std::string_view
 // scene-linear, non-data color space in that exact config. An empty workingColorSpaceId selects
 // the config's scene_linear role. The old Bloom Neutral entry point remains as a compatibility
 // wrapper for callers that have not yet selected a non-default working space.
+//
+// Issue #474: a built-in payload is a build-time constant, so a Ready resolution is a pure
+// function of (locator, working space) once the expected revision matches. The first Ready
+// resolution of each pair is kept for the life of the process and later calls return a copy that
+// shares its parsed config (and so OCIO's own processor cache), instead of parsing, validating
+// and extending the config again on every frame. The expected revision is still compared on every
+// call: a different one reports Changed with the recomputed revision exactly as before. Only Ready
+// pairs are kept, and only scene-linear spaces of the two built-ins can be Ready, so the set is
+// bounded by those configs.
 [[nodiscard]] OcioBuiltInResolutionResult
 resolveOcioBuiltIn(OcioConfigLocatorKind locatorKind, std::string_view locatorValue,
                    const core::Sha256Digest& expectedRevision,
@@ -139,8 +148,8 @@ ocioBuiltInContentRevision(OcioConfigLocatorKind locatorKind,
 // filesystem read.
 [[nodiscard]] std::span<const std::byte> bloomNeutralV1EmbeddedPayload() noexcept;
 
-// Immutable, move-only successful-resolution product. Retains the parsed and validated OCIO
-// config privately (never exposed) plus the exact discovered interop-ID mapping this registry
+// Immutable successful-resolution product. Retains the parsed and validated OCIO config privately
+// (never exposed; copies share it, issue #474) plus the exact discovered interop-ID mapping this registry
 // used, per the contract's "exact unambiguous mapping" rule: process/output color-space names are
 // discovered by scanning every non-data color space's declared interop ID
 // (OCIO::ColorSpace::getInteropID()), not by matching a name, role, or alias; the display/view
@@ -169,8 +178,8 @@ class ResolvedBloomNeutralConfig final {
   public:
     ResolvedBloomNeutralConfig(ResolvedBloomNeutralConfig&&) noexcept;
     ResolvedBloomNeutralConfig& operator=(ResolvedBloomNeutralConfig&&) noexcept;
-    ResolvedBloomNeutralConfig(const ResolvedBloomNeutralConfig&) = delete;
-    ResolvedBloomNeutralConfig& operator=(const ResolvedBloomNeutralConfig&) = delete;
+    ResolvedBloomNeutralConfig(const ResolvedBloomNeutralConfig&);
+    ResolvedBloomNeutralConfig& operator=(const ResolvedBloomNeutralConfig&);
     ~ResolvedBloomNeutralConfig();
 
     [[nodiscard]] const core::Sha256Digest& expectedRevision() const& noexcept;
@@ -233,7 +242,7 @@ class ResolvedBloomNeutralConfig final {
                                std::string rec2100PqColorSpaceId,
                                std::string rec2100HlgColorSpaceId) noexcept;
 
-    std::unique_ptr<Impl> impl_;
+    std::shared_ptr<const Impl> impl_;
     core::Sha256Digest expectedRevision_;
     std::string processColorSpaceId_;
     std::string outputColorSpaceId_;

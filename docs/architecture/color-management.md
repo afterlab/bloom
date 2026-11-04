@@ -439,6 +439,15 @@ immutable registry entry; its digest is computed from the serialized OCIO config
 same content-revision algorithm. A composition override is not a second config reference: it reuses
 the project reference and changes only the effective working-space id.
 
+A built-in payload is a build-time constant, so a Ready resolution depends only on the locator and
+the working-space id once the expected revision matches. The registry keeps the first Ready
+resolution of each (locator, working space) pair for the life of the process; later resolutions
+(every image and video frame resolves its input config) return a copy that shares the parsed config
+and with it OCIO's processor cache (issue #474). The expected revision is still compared on every
+call, so a reference with another revision reports Changed exactly as before, and a different
+config or working space is a different pair. Only Ready pairs are kept, and only the scene-linear
+spaces of the two built-ins can be Ready, so the set is bounded by those configs.
+
 ### OCIO Content Revision Version 1
 
 `expectedRevision.algorithm` is exactly `sha256`. Its lowercase hexadecimal digest is computed from

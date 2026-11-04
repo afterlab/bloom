@@ -9,7 +9,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstddef>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -505,6 +507,9 @@ ResolvedBloomNeutralConfig::ResolvedBloomNeutralConfig(
 
 ResolvedBloomNeutralConfig::ResolvedBloomNeutralConfig(ResolvedBloomNeutralConfig&&) noexcept =
     default;
+ResolvedBloomNeutralConfig::ResolvedBloomNeutralConfig(const ResolvedBloomNeutralConfig&) = default;
+ResolvedBloomNeutralConfig&
+ResolvedBloomNeutralConfig::operator=(const ResolvedBloomNeutralConfig&) = default;
 ResolvedBloomNeutralConfig&
 ResolvedBloomNeutralConfig::operator=(ResolvedBloomNeutralConfig&&) noexcept = default;
 ResolvedBloomNeutralConfig::~ResolvedBloomNeutralConfig() = default;
@@ -577,223 +582,287 @@ std::span<const std::byte> bloomNeutralV1EmbeddedPayload() noexcept {
     return embeddedPayloadBytes();
 }
 
+namespace {
+// Issue #474: the Ready resolutions of the immutable built-ins, by (locator, working space). See
+// resolveOcioBuiltIn in the header.
+class ResolvedBuiltInCache final {
+  public:
+    using Key = std::pair<std::string, std::string>;
+    [[nodiscard]] std::shared_ptr<const ResolvedBloomNeutralConfig>
+    find(const std::string_view locator, const std::string_view working) const {
+        const std::lock_guard lock(mutex_);
+        const auto found = entries_.find(Key{std::string(locator), std::string(working)});
+        return found == entries_.end() ? nullptr : found->second;
+    }
+    void keep(const std::string_view locator, const std::string_view working,
+              const ResolvedBloomNeutralConfig& resolved) {
+        auto entry = std::make_shared<const ResolvedBloomNeutralConfig>(resolved);
+        const std::lock_guard lock(mutex_);
+        entries_.try_emplace(Key{std::string(locator), std::string(working)}, std::move(entry));
+    }
+
+  private:
+    mutable std::mutex mutex_;
+    std::map<Key, std::shared_ptr<const ResolvedBloomNeutralConfig>> entries_;
+};
+
+[[nodiscard]] ResolvedBuiltInCache& resolvedBuiltIns() {
+    static ResolvedBuiltInCache cache;
+    return cache;
+}
+
+} // namespace
+
 OcioBuiltInResolutionResult
 resolveOcioBuiltIn(const OcioConfigLocatorKind locatorKind, const std::string_view locatorValue,
                    const core::Sha256Digest& expectedRevision,
                    const std::string_view requestedWorkingColorSpaceId) noexcept {
-    if (locatorKind != OcioConfigLocatorKind::BloomBuiltIn) {
-        // A real, planned locator kind this in-process registry never resolves -- see
-        // OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper.
-        return OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper);
+    if (locatorKind == OcioConfigLocatorKind::BloomBuiltIn) {
+        try {
+            if (const auto cached =
+                    resolvedBuiltIns().find(locatorValue, requestedWorkingColorSpaceId)) {
+                const auto recomputed = cached->expectedRevision();
+                if (recomputed != expectedRevision) {
+                    auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Changed);
+                    result.recomputedRevision_ = recomputed;
+                    return result;
+                }
+                auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Ready);
+                result.recomputedRevision_ = recomputed;
+                result.resolved_ = *cached;
+                return result;
+            }
+        } catch (const std::exception&) {
+            // Out of memory for the copy: resolve afresh below.
+        }
     }
-    const bool isNeutral = locatorValue == kBloomNeutralV1ConfigUri;
-    const bool isAces = locatorValue == kAcesCgV1ConfigUri;
-    if (!isNeutral && !isAces) {
-        return OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Missing);
-    }
+    // The full resolution. A lambda so that it keeps this function's access to the private
+    // result and config constructors.
+    const auto resolveUncached = [&]() noexcept -> OcioBuiltInResolutionResult {
+        if (locatorKind != OcioConfigLocatorKind::BloomBuiltIn) {
+            // A real, planned locator kind this in-process registry never resolves -- see
+            // OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper.
+            return OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::LocatorKindRequiresHelper);
+        }
+        const bool isNeutral = locatorValue == kBloomNeutralV1ConfigUri;
+        const bool isAces = locatorValue == kAcesCgV1ConfigUri;
+        if (!isNeutral && !isAces) {
+            return OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Missing);
+        }
 
-    std::string serializedAcesConfig;
-    std::span<const std::byte> payload;
-    OCIO::ConstConfigRcPtr config;
-    try {
+        std::string serializedAcesConfig;
+        std::span<const std::byte> payload;
+        OCIO::ConstConfigRcPtr config;
+        try {
+            if (isNeutral) {
+                payload = embeddedPayloadBytes();
+                std::istringstream stream(
+                    std::string(reinterpret_cast<const char*>(payload.data()), payload.size()));
+                config = OCIO::Config::CreateFromStream(stream);
+            } else {
+                config = OCIO::Config::CreateFromBuiltinConfig(
+                    std::string(kAcesCgV1BuiltinConfigName).c_str());
+                std::ostringstream stream;
+                config->serialize(stream);
+                serializedAcesConfig = stream.str();
+                payload =
+                    std::as_bytes(std::span(serializedAcesConfig.data(), serializedAcesConfig.size()));
+            }
+            config->validate();
+        } catch (const OCIO::Exception&) {
+            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+            result.invalidReason_ = OcioBuiltInInvalidReason::ParseFailed;
+            return result;
+        } catch (const std::exception&) {
+            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+            result.invalidReason_ = OcioBuiltInInvalidReason::ValidateFailed;
+            return result;
+        }
+
+        const auto revisionResult =
+            computeOcioContentRevisionV1(OcioContentLocatorKind::BuiltIn, payload);
+        if (!revisionResult) {
+            // The embedded payload is a fixed, small, checked-in build-time constant; a
+            // revision-computation failure here is an internal invariant violation, never a
+            // hostile-input case, so it is reported Invalid rather than crashing or fabricating Ready.
+            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+            result.invalidReason_ = OcioBuiltInInvalidReason::ParseFailed;
+            return result;
+        }
+        const auto recomputed = *revisionResult.revision();
+
+        if (recomputed != expectedRevision) {
+            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Changed);
+            result.recomputedRevision_ = recomputed;
+            return result;
+        }
+
+        // Match -- proceed to OCIO parse/validation from the embedded bytes via the memory/stream
+        // API only; never a file path, and no environment, working-directory, or search-path
+        // influence.
+        // Assert the config declares exactly the empty recorded environment-variable set: this is
+        // Config::getNumEnvironmentVars(), the config's OWN "environment:" YAML section (empty for
+        // this asset -- see assets/ocio/neutral-v1/config.ocio), not Config::getCurrentContext(),
+        // which OCIO auto-populates from every process environment variable by default
+        // (EnvironmentMode::ENV_ENVIRONMENT_LOAD_ALL, observed ~90 entries on a real developer
+        // shell) regardless of what the config file declares or references. That auto-population is
+        // therefore not "no environment influence entering resolution" by itself; this registry
+        // relies instead on never invoking loadEnvironment() and on
+        // buildBloomNeutralCpuDisplayProcessor (ocio_cpu_display_processor.cpp) explicitly
+        // constructing and passing a freshly created, never-loaded OCIO::Context to every
+        // Config::getProcessor call, so the actual transform build and application never consult
+        // ambient environment variables regardless of the config's own default context population.
+        if (config->getNumEnvironmentVars() != 0) {
+            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+            result.recomputedRevision_ = recomputed;
+            result.invalidReason_ = OcioBuiltInInvalidReason::ValidateFailed;
+            return result;
+        }
+
+        std::optional<std::string> processColorSpace;
         if (isNeutral) {
-            payload = embeddedPayloadBytes();
-            std::istringstream stream(
-                std::string(reinterpret_cast<const char*>(payload.data()), payload.size()));
-            config = OCIO::Config::CreateFromStream(stream);
+            processColorSpace =
+                findUniqueColorSpaceByInteropId(config, kDisplayProcessorIdentitySourceColorSpaceId);
         } else {
-            config = OCIO::Config::CreateFromBuiltinConfig(
-                std::string(kAcesCgV1BuiltinConfigName).c_str());
-            std::ostringstream stream;
-            config->serialize(stream);
-            serializedAcesConfig = stream.str();
-            payload =
-                std::as_bytes(std::span(serializedAcesConfig.data(), serializedAcesConfig.size()));
+            const char* const sceneLinearRole = config->getRoleColorSpace("scene_linear");
+            const std::string_view selected =
+                requestedWorkingColorSpaceId.empty()
+                    ? (sceneLinearRole == nullptr ? std::string_view{}
+                                                  : std::string_view(sceneLinearRole))
+                    : requestedWorkingColorSpaceId;
+            const OCIO::ConstColorSpaceRcPtr colorSpace =
+                selected.empty() ? OCIO::ConstColorSpaceRcPtr{}
+                                 : config->getColorSpace(std::string(selected).c_str());
+            if (!colorSpace) {
+                auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+                result.recomputedRevision_ = recomputed;
+                result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceMissing;
+                return result;
+            }
+            if (colorSpace->isData() ||
+                colorSpace->getReferenceSpaceType() != OCIO::REFERENCE_SPACE_SCENE ||
+                !config->isColorSpaceLinear(std::string(selected).c_str(),
+                                            OCIO::REFERENCE_SPACE_SCENE)) {
+                auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+                result.recomputedRevision_ = recomputed;
+                result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceNotSceneLinear;
+                return result;
+            }
+            processColorSpace = std::string(selected);
         }
-        config->validate();
-    } catch (const OCIO::Exception&) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.invalidReason_ = OcioBuiltInInvalidReason::ParseFailed;
-        return result;
-    } catch (const std::exception&) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.invalidReason_ = OcioBuiltInInvalidReason::ValidateFailed;
-        return result;
-    }
-
-    const auto revisionResult =
-        computeOcioContentRevisionV1(OcioContentLocatorKind::BuiltIn, payload);
-    if (!revisionResult) {
-        // The embedded payload is a fixed, small, checked-in build-time constant; a
-        // revision-computation failure here is an internal invariant violation, never a
-        // hostile-input case, so it is reported Invalid rather than crashing or fabricating Ready.
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.invalidReason_ = OcioBuiltInInvalidReason::ParseFailed;
-        return result;
-    }
-    const auto recomputed = *revisionResult.revision();
-
-    if (recomputed != expectedRevision) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Changed);
-        result.recomputedRevision_ = recomputed;
-        return result;
-    }
-
-    // Match -- proceed to OCIO parse/validation from the embedded bytes via the memory/stream
-    // API only; never a file path, and no environment, working-directory, or search-path
-    // influence.
-    // Assert the config declares exactly the empty recorded environment-variable set: this is
-    // Config::getNumEnvironmentVars(), the config's OWN "environment:" YAML section (empty for
-    // this asset -- see assets/ocio/neutral-v1/config.ocio), not Config::getCurrentContext(),
-    // which OCIO auto-populates from every process environment variable by default
-    // (EnvironmentMode::ENV_ENVIRONMENT_LOAD_ALL, observed ~90 entries on a real developer
-    // shell) regardless of what the config file declares or references. That auto-population is
-    // therefore not "no environment influence entering resolution" by itself; this registry
-    // relies instead on never invoking loadEnvironment() and on
-    // buildBloomNeutralCpuDisplayProcessor (ocio_cpu_display_processor.cpp) explicitly
-    // constructing and passing a freshly created, never-loaded OCIO::Context to every
-    // Config::getProcessor call, so the actual transform build and application never consult
-    // ambient environment variables regardless of the config's own default context population.
-    if (config->getNumEnvironmentVars() != 0) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.recomputedRevision_ = recomputed;
-        result.invalidReason_ = OcioBuiltInInvalidReason::ValidateFailed;
-        return result;
-    }
-
-    std::optional<std::string> processColorSpace;
-    if (isNeutral) {
-        processColorSpace =
-            findUniqueColorSpaceByInteropId(config, kDisplayProcessorIdentitySourceColorSpaceId);
-    } else {
-        const char* const sceneLinearRole = config->getRoleColorSpace("scene_linear");
-        const std::string_view selected =
-            requestedWorkingColorSpaceId.empty()
-                ? (sceneLinearRole == nullptr ? std::string_view{}
-                                              : std::string_view(sceneLinearRole))
-                : requestedWorkingColorSpaceId;
-        const OCIO::ConstColorSpaceRcPtr colorSpace =
-            selected.empty() ? OCIO::ConstColorSpaceRcPtr{}
-                             : config->getColorSpace(std::string(selected).c_str());
-        if (!colorSpace) {
+        if (!processColorSpace.has_value()) {
             auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
             result.recomputedRevision_ = recomputed;
-            result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceMissing;
+            result.invalidReason_ = OcioBuiltInInvalidReason::ProcessColorSpaceNotUniquelyMapped;
             return result;
         }
-        if (colorSpace->isData() ||
-            colorSpace->getReferenceSpaceType() != OCIO::REFERENCE_SPACE_SCENE ||
-            !config->isColorSpaceLinear(std::string(selected).c_str(),
-                                        OCIO::REFERENCE_SPACE_SCENE)) {
+        if (isNeutral && !requestedWorkingColorSpaceId.empty() &&
+            requestedWorkingColorSpaceId != *processColorSpace) {
+            const auto selected = std::string(requestedWorkingColorSpaceId);
+            const OCIO::ConstColorSpaceRcPtr colorSpace = config->getColorSpace(selected.c_str());
+            if (!colorSpace) {
+                auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+                result.recomputedRevision_ = recomputed;
+                result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceMissing;
+                return result;
+            }
+            if (colorSpace->isData() ||
+                colorSpace->getReferenceSpaceType() != OCIO::REFERENCE_SPACE_SCENE ||
+                !config->isColorSpaceLinear(selected.c_str(), OCIO::REFERENCE_SPACE_SCENE)) {
+                auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+                result.recomputedRevision_ = recomputed;
+                result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceNotSceneLinear;
+                return result;
+            }
+            *processColorSpace = selected;
+        }
+        std::optional<std::string> outputColorSpace;
+        if (isNeutral) {
+            outputColorSpace =
+                findUniqueColorSpaceByInteropId(config, kDisplayProcessorIdentityOutputColorSpaceId);
+            if (!outputColorSpace.has_value()) {
+                auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+                result.recomputedRevision_ = recomputed;
+                result.invalidReason_ = OcioBuiltInInvalidReason::OutputColorSpaceNotUniquelyMapped;
+                return result;
+            }
+        } else {
+            outputColorSpace = std::string("display");
+        }
+        std::optional<DisplayViewPair> displayView;
+        if (isNeutral) {
+            displayView = findUniqueDisplayViewForColorSpace(config, *outputColorSpace);
+        } else {
+            const char* const display = config->getDefaultDisplay();
+            const char* const view = display == nullptr
+                                         ? nullptr
+                                         : config->getDefaultView(display, processColorSpace->c_str());
+            if (display != nullptr && view != nullptr && *display != '\0' && *view != '\0') {
+                displayView = DisplayViewPair{std::string(display), std::string(view)};
+            }
+        }
+        if (!displayView.has_value()) {
             auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
             result.recomputedRevision_ = recomputed;
-            result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceNotSceneLinear;
+            result.invalidReason_ = OcioBuiltInInvalidReason::DisplayViewNotUniquelyMapped;
             return result;
         }
-        processColorSpace = std::string(selected);
-    }
-    if (!processColorSpace.has_value()) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.recomputedRevision_ = recomputed;
-        result.invalidReason_ = OcioBuiltInInvalidReason::ProcessColorSpaceNotUniquelyMapped;
-        return result;
-    }
-    if (isNeutral && !requestedWorkingColorSpaceId.empty() &&
-        requestedWorkingColorSpaceId != *processColorSpace) {
-        const auto selected = std::string(requestedWorkingColorSpaceId);
-        const OCIO::ConstColorSpaceRcPtr colorSpace = config->getColorSpace(selected.c_str());
-        if (!colorSpace) {
-            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-            result.recomputedRevision_ = recomputed;
-            result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceMissing;
-            return result;
-        }
-        if (colorSpace->isData() ||
-            colorSpace->getReferenceSpaceType() != OCIO::REFERENCE_SPACE_SCENE ||
-            !config->isColorSpaceLinear(selected.c_str(), OCIO::REFERENCE_SPACE_SCENE)) {
-            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-            result.recomputedRevision_ = recomputed;
-            result.invalidReason_ = OcioBuiltInInvalidReason::WorkingColorSpaceNotSceneLinear;
-            return result;
-        }
-        *processColorSpace = selected;
-    }
-    std::optional<std::string> outputColorSpace;
-    if (isNeutral) {
-        outputColorSpace =
-            findUniqueColorSpaceByInteropId(config, kDisplayProcessorIdentityOutputColorSpaceId);
-        if (!outputColorSpace.has_value()) {
-            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-            result.recomputedRevision_ = recomputed;
-            result.invalidReason_ = OcioBuiltInInvalidReason::OutputColorSpaceNotUniquelyMapped;
-            return result;
-        }
-    } else {
-        outputColorSpace = std::string("display");
-    }
-    std::optional<DisplayViewPair> displayView;
-    if (isNeutral) {
-        displayView = findUniqueDisplayViewForColorSpace(config, *outputColorSpace);
-    } else {
-        const char* const display = config->getDefaultDisplay();
-        const char* const view = display == nullptr
-                                     ? nullptr
-                                     : config->getDefaultView(display, processColorSpace->c_str());
-        if (display != nullptr && view != nullptr && *display != '\0' && *view != '\0') {
-            displayView = DisplayViewPair{std::string(display), std::string(view)};
-        }
-    }
-    if (!displayView.has_value()) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.recomputedRevision_ = recomputed;
-        result.invalidReason_ = OcioBuiltInInvalidReason::DisplayViewNotUniquelyMapped;
-        return result;
-    }
 
-    OcioBuiltInInvalidReason displayEnumerationReason = OcioBuiltInInvalidReason::None;
-    const auto viewerDisplayView = viewerDefaultDisplayView(config, *displayView);
-    const auto displays =
-        enumerateDisplayViews(config, *displayView, viewerDisplayView, displayEnumerationReason);
-    if (!displays.has_value()) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.recomputedRevision_ = recomputed;
-        result.invalidReason_ = displayEnumerationReason;
-        return result;
-    }
+        OcioBuiltInInvalidReason displayEnumerationReason = OcioBuiltInInvalidReason::None;
+        const auto viewerDisplayView = viewerDefaultDisplayView(config, *displayView);
+        const auto displays =
+            enumerateDisplayViews(config, *displayView, viewerDisplayView, displayEnumerationReason);
+        if (!displays.has_value()) {
+            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+            result.recomputedRevision_ = recomputed;
+            result.invalidReason_ = displayEnumerationReason;
+            return result;
+        }
 
-    try {
-        config = withBloomHlgInput(config, isNeutral);
-        config = withBloomPqInput(config, isNeutral);
-        config = withBloomRec709CameraInput(config, isNeutral);
-        // #381: camera log inputs Interpret Footage offers in every pinned config.
-        config = detail::withBloomCameraLogInputs(config, isNeutral);
-    } catch (const OCIO::Exception&) {
-        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
-        result.recomputedRevision_ = recomputed;
-        result.invalidReason_ = OcioBuiltInInvalidReason::ParseFailed;
-        return result;
-    }
-    const auto inputMappings = inputColorSpaceMappings(config, isNeutral);
-    auto impl = std::make_unique<ResolvedBloomNeutralConfig::Impl>(config);
-    ResolvedBloomNeutralConfig resolved(
-        std::move(impl), expectedRevision, *processColorSpace,
-        isNeutral
-            ? *outputColorSpace
-            : std::string(config->getDisplayViewColorSpaceName(displayView->display.c_str(),
-                                                               displayView->view.c_str()) != nullptr
-                              ? config->getDisplayViewColorSpaceName(displayView->display.c_str(),
-                                                                     displayView->view.c_str())
-                              : displayView->display),
-        displayView->display, displayView->view,
-        config->getName() == nullptr ? std::string(locatorValue) : std::string(config->getName()),
-        inputMappings.spaces, *displays, inputMappings.sRgbTexture, inputMappings.rec709Video,
-        inputMappings.rec2100Pq, inputMappings.rec2100Hlg);
+        try {
+            config = withBloomHlgInput(config, isNeutral);
+            config = withBloomPqInput(config, isNeutral);
+            config = withBloomRec709CameraInput(config, isNeutral);
+            // #381: camera log inputs Interpret Footage offers in every pinned config.
+            config = detail::withBloomCameraLogInputs(config, isNeutral);
+        } catch (const OCIO::Exception&) {
+            auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Invalid);
+            result.recomputedRevision_ = recomputed;
+            result.invalidReason_ = OcioBuiltInInvalidReason::ParseFailed;
+            return result;
+        }
+        const auto inputMappings = inputColorSpaceMappings(config, isNeutral);
+        auto impl = std::make_unique<ResolvedBloomNeutralConfig::Impl>(config);
+        ResolvedBloomNeutralConfig resolved(
+            std::move(impl), expectedRevision, *processColorSpace,
+            isNeutral
+                ? *outputColorSpace
+                : std::string(config->getDisplayViewColorSpaceName(displayView->display.c_str(),
+                                                                   displayView->view.c_str()) != nullptr
+                                  ? config->getDisplayViewColorSpaceName(displayView->display.c_str(),
+                                                                         displayView->view.c_str())
+                                  : displayView->display),
+            displayView->display, displayView->view,
+            config->getName() == nullptr ? std::string(locatorValue) : std::string(config->getName()),
+            inputMappings.spaces, *displays, inputMappings.sRgbTexture, inputMappings.rec709Video,
+            inputMappings.rec2100Pq, inputMappings.rec2100Hlg);
 
-    auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Ready);
-    result.recomputedRevision_ = recomputed;
-    result.resolved_ = std::move(resolved);
+        auto result = OcioBuiltInResolutionResult(OcioBuiltInRegistryOutcome::Ready);
+        result.recomputedRevision_ = recomputed;
+        result.resolved_ = std::move(resolved);
+        return result;
+    };
+    auto result = resolveUncached();
+    if (result.ready()) {
+        try {
+            resolvedBuiltIns().keep(locatorValue, requestedWorkingColorSpaceId, *result.resolved());
+        } catch (const std::exception&) {
+            // Keeping it is an optimization; the next call resolves again.
+        }
+    }
     return result;
 }
+
 
 OcioBuiltInResolutionResult
 resolveBloomNeutralV1BuiltIn(const OcioConfigLocatorKind locatorKind,

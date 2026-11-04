@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <string_view>
 
 namespace {
@@ -228,6 +229,76 @@ void testDisplayViewLabels(Expectations& expectations) {
 
 } // namespace
 
+// Issue #474: a Ready built-in resolution is kept per (locator, working space); later calls share
+// its parsed config instead of parsing the payload again on every frame, and still check the
+// expected revision on every call.
+void testResolutionReuse(Expectations& expectations) {
+    const auto neutral = [](const bloom::core::Sha256Digest& revision,
+                            const std::string_view working = {}) {
+        return bloom::color::resolveOcioBuiltIn(OcioConfigLocatorKind::BloomBuiltIn,
+                                                bloom::color::kBloomNeutralV1ConfigUri, revision,
+                                                working);
+    };
+    auto first = neutral(bloom::color::kBloomNeutralV1ConfigDigest);
+    auto second = neutral(bloom::color::kBloomNeutralV1ConfigDigest);
+    expectations.expect(first.ready() && second.ready(), "repeated Neutral resolutions are Ready");
+    if (first.ready() && second.ready()) {
+        expectations.expect(&first.resolved()->impl() == &second.resolved()->impl(),
+                            "a repeated resolution shares the parsed config");
+        expectations.expect(second.recomputedRevision() == first.recomputedRevision() &&
+                                second.resolved()->processColorSpaceId() ==
+                                    first.resolved()->processColorSpaceId() &&
+                                second.resolved()->colorSpaces() == first.resolved()->colorSpaces(),
+                            "a repeated resolution carries the same mapping and revision");
+        const auto copy = *second.resolved();
+        expectations.expect(&copy.impl() == &first.resolved()->impl() &&
+                                copy.displays().size() == first.resolved()->displays().size(),
+                            "a copied resolution shares the parsed config");
+    }
+    std::array<std::uint8_t, 32> flipped{};
+    std::ranges::copy(bloom::color::kBloomNeutralV1ConfigDigest.bytes(), flipped.begin());
+    flipped[0] ^= 0x01U;
+    const auto changed = neutral(bloom::core::Sha256Digest::fromBytes(flipped));
+    expectations.expect(changed.outcome() == OcioBuiltInRegistryOutcome::Changed &&
+                            changed.resolved() == nullptr &&
+                            changed.recomputedRevision() ==
+                                std::optional(bloom::color::kBloomNeutralV1ConfigDigest),
+                        "a kept resolution still reports a different revision as Changed");
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const auto missing = neutral(bloom::color::kBloomNeutralV1ConfigDigest, "ACES2065-1");
+        expectations.expect(missing.outcome() == OcioBuiltInRegistryOutcome::Invalid &&
+                                missing.invalidReason() ==
+                                    OcioBuiltInInvalidReason::WorkingColorSpaceMissing,
+                            "an invalid working space stays Invalid on every call");
+    }
+    const auto revision = bloom::color::ocioBuiltInContentRevision(
+        OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kAcesCgV1ConfigUri);
+    if (!revision.has_value())
+        return;
+    const auto aces = [&](const std::string_view working) {
+        return bloom::color::resolveOcioBuiltIn(OcioConfigLocatorKind::BloomBuiltIn,
+                                                bloom::color::kAcesCgV1ConfigUri, *revision,
+                                                working);
+    };
+    auto acescg = aces("ACEScg");
+    auto acescgAgain = aces("ACEScg");
+    auto aces2065 = aces("ACES2065-1");
+    expectations.expect(acescg.ready() && acescgAgain.ready() && aces2065.ready(),
+                        "repeated ACES resolutions are Ready");
+    if (acescg.ready() && acescgAgain.ready() && aces2065.ready() && first.ready()) {
+        expectations.expect(&acescg.resolved()->impl() == &acescgAgain.resolved()->impl(),
+                            "the same ACES working space shares one parsed config");
+        expectations.expect(&acescg.resolved()->impl() != &aces2065.resolved()->impl() &&
+                                aces2065.resolved()->processColorSpaceId() == "ACES2065-1" &&
+                                acescg.resolved()->processColorSpaceId() == "ACEScg",
+                            "another working space is its own resolution");
+        expectations.expect(&acescg.resolved()->impl() != &first.resolved()->impl() &&
+                                acescg.resolved()->expectedRevision() !=
+                                    first.resolved()->expectedRevision(),
+                            "another config is its own resolution with its own revision");
+    }
+}
+
 int main() {
     Expectations expectations;
     testReadyExactDigest(expectations);
@@ -237,5 +308,6 @@ int main() {
     testEmbeddedPayloadDigestEqualsProfileConstant(expectations);
     testAcesCgBuiltIn(expectations);
     testDisplayViewLabels(expectations);
+    testResolutionReuse(expectations);
     return expectations.failures() == 0 ? 0 : 1;
 }
