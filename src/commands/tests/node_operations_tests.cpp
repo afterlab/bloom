@@ -597,6 +597,43 @@ void testMatteBlurCommands(TestContext& test, const char* type = "bloom.matte-bl
                                ConstantValueSource{std::int64_t{2}});
 }
 
+// #479: Separate Channels and Combine Channels are added between an Image and a Layer, wired
+// channel by channel, edited, undone and redone through the generic node commands; the source and
+// alpha mode dropdowns refuse values outside their enumerations and accept their entry names.
+void testImageChannelCommands(TestContext& test) {
+    Fixture fixture;
+    const auto separate = exercise<AddNode>(test, fixture, "bloom.separate-channels", Vec2d{});
+    const auto separateId = separate.outputId<NodeId>(kAddNodeOutput);
+    const auto combine = exercise<AddNode>(test, fixture, "bloom.combine-channels", Vec2d{40, 0});
+    const auto combineId = combine.outputId<NodeId>(kAddNodeOutput);
+    const auto alphaSource = combine.outputId<ParameterId>("parameter.alphaSource");
+    const auto alphaMode = combine.outputId<ParameterId>("parameter.alphaMode");
+    if (!separateId || !combineId || !alphaSource || !alphaMode)
+        throw std::logic_error("channel nodes expose registered control identities");
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"},
+                           InputPortRef{NodeInputRef{*separateId, "input"}});
+    // Swap red and blue, keep green and carry alpha.
+    for (const auto& [output, input] : {std::pair{"blue", "red"}, std::pair{"green", "green"},
+                                        std::pair{"red", "blue"}, std::pair{"alpha", "alpha"}})
+        exercise<ConnectPorts>(test, fixture, OutputPortRef{*separateId, output},
+                               InputPortRef{NodeInputRef{*combineId, input}});
+    (void)exercise<SetParameterSource>(test, fixture, *alphaSource,
+                                       ConstantValueSource{std::int64_t{4}});
+    (void)exercise<SetParameterSource>(test, fixture, *alphaMode,
+                                       ConstantValueSource{std::int64_t{1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *alphaSource,
+                               ConstantValueSource{std::int64_t{5}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *alphaSource,
+                               ConstantValueSource{std::int64_t{-1}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *alphaMode,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *alphaMode,
+                               ConstantValueSource{std::string{"Unassociated"}});
+    // A dropdown entry is also authorable by its name (a script or the MCP surface).
+    (void)exercise<SetParameterSource>(test, fixture, *alphaMode,
+                                       ConstantValueSource{std::string{"Premultiplied"}});
+}
+
 // #340: Levels, Curves and Hue/Saturation are added between an Image and a Layer, edited, undone
 // and redone through the generic node commands; their schemas refuse unrenderable values and keep
 // HDR and Raw-data ranges authorable.
@@ -1633,6 +1670,7 @@ int main() {
         bloom::commands::test::testMatteBlurCommands(test, "bloom.matte-dilate");
         bloom::commands::test::testLumaKeyCommands(test);
         bloom::commands::test::testColorGradeCommands(test);
+        bloom::commands::test::testImageChannelCommands(test);
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
         bloom::commands::test::testWiringAndRename(test);
         bloom::commands::test::testRemoveAndDissolve(test);

@@ -6,6 +6,8 @@
 #include <QRegion>
 #include <QShortcut>
 #include <QStringList>
+#include <bloom/document/image_channel_nodes.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <limits>
 #include <memory>
 
@@ -314,6 +316,24 @@ void testSearchKeyboardAndMenus() {
                .flags()
                .testFlag(Qt::ItemIsEnabled),
            "while a kind a composition may hold many of stays addable");
+    // #479: an artist searching "Separate RGB" or "Combine RGB" means the image channel nodes;
+    // the Color-value utilities are named as values and listed after them.
+    for (const auto& [query, typeId] :
+         {std::pair{QStringLiteral("Separate RGB"), document::kSeparateChannelsNodeType},
+          std::pair{QStringLiteral("Combine RGB"), document::kCombineChannelsNodeType}}) {
+        field->setText(query);
+        QModelIndex first;
+        for (int row = 0; row < list->model()->rowCount() && !first.isValid(); ++row)
+            if (!list->model()->index(row, 0).data(kit::kSearchSectionRole).toBool())
+                first = list->model()->index(row, 0);
+        expect(first.isValid() && first.data(Qt::UserRole).toString() == QString::fromUtf8(typeId),
+               "a channel search lists the image channel node first");
+        expect(rowForKey(list->model(), typeId == document::kSeparateChannelsNodeType
+                                            ? document::kSeparateRgbaNodeType
+                                            : document::kCombineRgbaNodeType)
+                   .isValid(),
+               "and still finds the Color-value node after it");
+    }
     field->setText(QStringLiteral("text"));
     const auto textRow = rowForKey(list->model(), document::kTextSourceNodeType);
     // ADAPTED (task S3): text used to be a disabled row carrying AddTextLayer's real refusal; the
@@ -505,7 +525,10 @@ void testSearchKeyboardAndMenus() {
                    colourNodes.contains("Multiply") && colourNodes.contains("Invert") &&
                    // #340
                    colourNodes.contains("Levels") && colourNodes.contains("Curves") &&
-                   colourNodes.contains("Hue/Saturation") && colourNodes.size() == 9,
+                   colourNodes.contains("Hue/Saturation") &&
+                   // #479
+                   colourNodes.contains("Separate Channels") &&
+                   colourNodes.contains("Combine Channels") && colourNodes.size() == 11,
                "Color offers the registered image-effect nodes");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),

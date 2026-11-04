@@ -4,6 +4,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
@@ -1927,6 +1928,7 @@ int main() {
         testMatteMorphologyLowering(expectations);
         testLumaKeyLowering(expectations);
         testColorGradeLowering(expectations);
+        testImageChannelLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);
         testLayerFlagsAndRangeLowering(expectations);

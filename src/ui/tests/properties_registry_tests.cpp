@@ -197,6 +197,55 @@ void matteBlurRows() {
     }
 }
 
+// #479: Combine Channels presents a five-entry source dropdown per input (red, green, blue and red
+// by default) and a two-entry alpha mode (Premultiplied); a source edits through command history.
+void imageChannelRows() {
+    auto project =
+        document::makeNewProject("Channels", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    expect(addNode(session, "bloom.separate-channels").isValid(),
+           "Separate Channels is discoverable through generic AddNode");
+    const auto node = addNode(session, "bloom.combine-channels");
+    expect(node.isValid(), "Combine Channels is discoverable through generic AddNode");
+    session.selectNode(node);
+    QCoreApplication::processEvents();
+    const auto dropdown = [&](const char* role) {
+        auto* line = row(properties, role);
+        return line ? line->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum") : nullptr;
+    };
+    const std::array<std::pair<const char*, QString>, 4> sources{
+        std::pair{"redSource", QStringLiteral("Red")},
+        std::pair{"greenSource", QStringLiteral("Green")},
+        std::pair{"blueSource", QStringLiteral("Blue")},
+        std::pair{"alphaSource", QStringLiteral("Red")}};
+    for (const auto& [role, current] : sources) {
+        auto* selector = dropdown(role);
+        expect(selector && selector->count() == 5 && selector->currentText() == current,
+               "each input's source is a five-entry dropdown with its channel default");
+    }
+    auto* mode = dropdown("alphaMode");
+    expect(mode && mode->count() == 2 && mode->currentText() == QStringLiteral("Premultiplied"),
+           "the alpha mode is a two-entry dropdown defaulting to Premultiplied");
+    if (auto* alpha = dropdown("alphaSource")) {
+        alpha->chooseIndex(4);
+        const auto* record = [&]() -> const document::ParameterRecord* {
+            for (const auto& binding : session.composition()->graph().findNode(node)->parameters)
+                if (binding.role == "alphaSource")
+                    return session.composition()->parameters().find(binding.parameterId);
+            return nullptr;
+        }();
+        expect(record && std::get<std::int64_t>(
+                             std::get<document::ConstantValueSource>(record->source).value) == 4,
+               "choosing Luma publishes the stored source through a command");
+        expect(session.undo(), "Combine Channels source edit undoes");
+        expect(session.redo(), "Combine Channels source edit redoes");
+    }
+}
+
 // #340: Levels presents every channel's black/white/gamma rows and a clamp switch (off), Curves
 // every channel's points and a clamp switch, Hue/Saturation its hue and saturation; the clamp edits
 // through command history.
@@ -918,6 +967,7 @@ int main(int argc, char** argv) try {
     matteBlurRows();
     matteKeyRows();
     colorGradeRows();
+    imageChannelRows();
     widthRule();
     videoRows();
     QSettings().clear();

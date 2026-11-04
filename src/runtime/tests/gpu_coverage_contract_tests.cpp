@@ -1191,6 +1191,95 @@ displayProofRunner(const bool customView) {
                              "full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #479 Separate Channels and Combine Channels over the HDR, signed, partial-alpha linear
+    // gradient, full frame and through an ROI: a Channel Select through the production builder's
+    // resident program, and a Channel Combine (the gradient as the base, a signed HDR solid as
+    // the second image) through the resident ImageCombineV1 Set Channel dispatch.
+    const auto runImageChannels = [](const std::vector<ImageEffectKernel>& kernels,
+                                     std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& kernel : kernels) {
+            const bool twoInputs =
+                std::holds_alternative<bloom::runtime::ChannelCombineKernel>(kernel);
+            auto definition =
+                (twoInputs ? imageCombinePlan(bloom::runtime::ImageCombineMode::Mix, idBase)
+                           : bloom::gpu_coverage_plans::effectPlan(kernel, idBase))
+                    ->copyDefinition();
+            definition.operations[0] = bloom::gpu_coverage_plans::gradient(false, idBase + 50);
+            if (twoInputs)
+                std::get<CompiledImageEffect>(definition.operations[2]).kernel = kernel;
+            const auto plan = std::make_shared<const bloom::runtime::CompiledCompositionPlan>(
+                std::move(definition));
+            idBase += 100;
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 6, 4);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    using bloom::runtime::ChannelCombineKernel;
+    using bloom::runtime::ChannelSelectKernel;
+    using bloom::runtime::ImageChannelSource;
+    const auto greySelect = [](const ImageChannelSource c) -> ImageEffectKernel {
+        return ChannelSelectKernel{{c, c, c, ImageChannelSource::One}, false};
+    };
+    add(
+        "effect.ChannelSelectKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel image effect tests",
+        [runImageChannels] {
+            return runImageChannels(
+                {ChannelSelectKernel{{ImageChannelSource::Blue, ImageChannelSource::Luma,
+                                      ImageChannelSource::Zero, ImageChannelSource::Alpha},
+                                     true}},
+                166600, "production Channel Select: swizzle, Luma and premultiply");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.separate-channels", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel image effect tests",
+        [runImageChannels, greySelect] {
+            return runImageChannels(
+                {greySelect(ImageChannelSource::Red), greySelect(ImageChannelSource::Green),
+                 greySelect(ImageChannelSource::Blue), greySelect(ImageChannelSource::Alpha)},
+                166800,
+                "production Separate Channels: the four grey stored-channel "
+                "outputs, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "effect.ChannelCombineKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel image effect tests",
+        [runImageChannels] {
+            return runImageChannels({ChannelCombineKernel{1, ImageChannelSource::Red, false}},
+                                    167400,
+                                    "production Channel Combine: one slot from a second image");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.combine-channels", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel image effect tests",
+        [runImageChannels] {
+            return runImageChannels(
+                {ChannelSelectKernel{{ImageChannelSource::Red, ImageChannelSource::Zero,
+                                      ImageChannelSource::Zero, ImageChannelSource::One},
+                                     false},
+                 ChannelCombineKernel{2, ImageChannelSource::Luma, false},
+                 ChannelCombineKernel{3, ImageChannelSource::Alpha, true}},
+                167600,
+                "production Combine Channels: base select, a Luma slot and a Straight alpha, "
+                "full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 

@@ -10,6 +10,7 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -558,9 +559,10 @@ void testRealMatteMorphology(Expectations& expectations) {
     }
 }
 
-// #340: each grade prepares one resident neighborhood command over the input window from its
-// kind's fixed program. A changed value changes the command identity and data but reuses the
-// compiled shader and native program key; an identity grade aliases its input with no command.
+// #340 and #479: each grade and each channel select prepares one resident neighborhood command over
+// the input window from its kind's fixed program. A changed value changes the command identity and
+// data but reuses the compiled shader and native program key; an identity grade aliases its input
+// with no command.
 void testRealColorGrades(Expectations& expectations) {
     auto context = ocioContext();
     const CpuGpuSceneBuilder builder(nullptr, {}, context);
@@ -604,6 +606,10 @@ void testRealColorGrades(Expectations& expectations) {
         return bloom::runtime::HueSaturationKernel{{ParameterId::fromRaw(8450), degrees},
                                                    {ParameterId::fromRaw(8451), 1.2}};
     };
+    using Source = bloom::runtime::ImageChannelSource;
+    const auto select = [](const std::array<Source, 4> sources, const bool premultiply) {
+        return bloom::runtime::ChannelSelectKernel{sources, premultiply};
+    };
     struct Case final {
         bloom::runtime::ImageEffectKernel first;
         bloom::runtime::ImageEffectKernel changed;
@@ -616,7 +622,14 @@ void testRealColorGrades(Expectations& expectations) {
           Case{hue(30.0), hue(-80.0),
                bloom::runtime::HueSaturationKernel{{ParameterId::fromRaw(8450), 0.0},
                                                    {ParameterId::fromRaw(8451), 1.0}},
-               "bloom.render.hue-saturation.v1"}}) {
+               "bloom.render.hue-saturation.v1"},
+          // #479 Channel Select (Separate Channels' outputs, Combine Channels' base): a changed
+          // mapping is new data for the same program; the red, green, blue, alpha mapping
+          // without premultiply aliases its input.
+          Case{select({Source::Blue, Source::Green, Source::Red, Source::Alpha}, false),
+               select({Source::Luma, Source::Luma, Source::Luma, Source::One}, true),
+               select({Source::Red, Source::Green, Source::Blue, Source::Alpha}, false),
+               "bloom.render.channel-select.v1"}}) {
         const auto first = commandsOf(item.first);
         const auto compiles = context.preparer->counters().shaderCompilerRuns;
         const auto changed = commandsOf(item.changed);

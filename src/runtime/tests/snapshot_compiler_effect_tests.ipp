@@ -926,6 +926,194 @@ void testColorGradeLowering(Expectations& expectations) {
     }
 }
 
+// #479: Separate Channels lowers one Channel Select per used output; Combine Channels lowers a
+// Channel Select of its first connected input then one Channel Combine per further input (alpha
+// last, Straight premultiplying only in the last), folding inputs that read the same image. A
+// muted Separate passes its Image through every output, a Combine with no input is empty, and an
+// Image Preview of one Separate output inspects exactly that output's operation.
+void testImageChannelLowering(Expectations& expectations) {
+    using namespace document;
+    using runtime::ImageChannelSource;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto separateId = NodeId::fromRaw(1990);
+    const auto combineId = NodeId::fromRaw(1991);
+    enum class Wiring { Separated, SameImage, AlphaOnly, None };
+    const auto build = [&](const Wiring wiring, const std::int64_t mode, const bool muteSeparate,
+                           const bool muteCombine) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        std::uint64_t next = 2100;
+        std::vector<ParameterBinding> bindings;
+        const auto* definition = builtInNodeDefinitions().find(kCombineChannelsNodeType, 1);
+        require(definition != nullptr, "Combine Channels definition exists");
+        for (const auto& parameter : definition->parameters) {
+            auto value = parameter.defaultValue;
+            if (parameter.role == kCombineChannelsAlphaModeRole)
+                value = mode;
+            if (parameter.role == "alphaSource" && wiring == Wiring::SameImage)
+                value = kImageChannelSourceAlpha;
+            if (parameter.role == "alphaSource" && wiring == Wiring::AlphaOnly)
+                value = kImageChannelSourceLuma;
+            require(
+                composition->parameters().insert(
+                    {ParameterId::fromRaw(next), parameter.schemaKey, ConstantValueSource{value}}),
+                "Combine Channels parameter is valid");
+            bindings.push_back({parameter.role, ParameterId::fromRaw(next++)});
+        }
+        require(graph.addNode({separateId, std::string(kSeparateChannelsNodeType), {}, 1}) &&
+                    graph.addNode(
+                        {combineId, std::string(kCombineChannelsNodeType), std::move(bindings), 1}),
+                "channel nodes are accepted");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+        std::uint64_t edge = 1990;
+        require(
+            graph.addEdge(
+                {kFirstSourceEdge, {kFirstSolidNode, "image"}, NodeInputRef{separateId, "input"}}),
+            "source feeds Separate Channels");
+        for (std::size_t slot = 0; slot < kImageChannelCount; ++slot) {
+            const auto port = std::string(kImageChannelPortNames[slot]);
+            if (wiring == Wiring::None || (wiring == Wiring::AlphaOnly && slot != 3))
+                continue;
+            const OutputPortRef source = wiring == Wiring::Separated
+                                             ? OutputPortRef{separateId, port}
+                                             : OutputPortRef{kFirstSolidNode, "image"};
+            require(graph.addEdge({EdgeId::fromRaw(edge++), source, NodeInputRef{combineId, port}}),
+                    "an input feeds Combine Channels");
+        }
+        require(graph.addEdge(
+                    {EdgeId::fromRaw(edge++),
+                     {combineId, "image"},
+                     NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+                "Combine Channels feeds the Layer");
+        if (muteSeparate)
+            composition->nodeLayout()[separateId].muted = true;
+        if (muteCombine)
+            composition->nodeLayout()[combineId].muted = true;
+        expectations.expect(project.validate().ok(), "channel graph is valid document truth");
+        return project;
+    };
+    const auto effectsOf = [](const runtime::CompiledCompositionPlan& plan, const NodeId node) {
+        std::vector<runtime::CompiledImageEffect> effects;
+        for (const auto& operation : plan.operations())
+            if (const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+                effect && effect->sourceNodeId == node)
+                effects.push_back(*effect);
+        return effects;
+    };
+    const auto grey = [](const ImageChannelSource c) {
+        return runtime::ImageEffectKernel{
+            runtime::ChannelSelectKernel{{c, c, c, ImageChannelSource::One}, false}};
+    };
+    for (const auto mode : {kCombineChannelsPremultiplied, kCombineChannelsStraight}) {
+        const auto result = compile(build(Wiring::Separated, mode, false, false), registry);
+        expectations.expect(result.plan != nullptr, "Separate into Combine compiles");
+        if (!result.plan)
+            continue;
+        const auto separate = effectsOf(*result.plan, separateId);
+        const auto combine = effectsOf(*result.plan, combineId);
+        expectations.expect(separate.size() == 4 &&
+                                separate[0].kernel == grey(ImageChannelSource::Red) &&
+                                separate[1].kernel == grey(ImageChannelSource::Green) &&
+                                separate[2].kernel == grey(ImageChannelSource::Blue) &&
+                                separate[3].kernel == grey(ImageChannelSource::Alpha) &&
+                                separate[0].input == separate[3].input,
+                            "Separate Channels lowers one grey Channel Select per used output");
+        const bool straight = mode == kCombineChannelsStraight;
+        expectations.expect(
+            combine.size() == 4 &&
+                combine[0].kernel == runtime::ImageEffectKernel{runtime::ChannelSelectKernel{
+                                         {ImageChannelSource::Red, ImageChannelSource::Zero,
+                                          ImageChannelSource::Zero, ImageChannelSource::One},
+                                         false}} &&
+                combine[1].kernel == runtime::ImageEffectKernel{runtime::ChannelCombineKernel{
+                                         1, ImageChannelSource::Green, false}} &&
+                combine[2].kernel == runtime::ImageEffectKernel{runtime::ChannelCombineKernel{
+                                         2, ImageChannelSource::Blue, false}} &&
+                combine[3].kernel == runtime::ImageEffectKernel{runtime::ChannelCombineKernel{
+                                         3, ImageChannelSource::Red, straight}} &&
+                combine[1].secondaryInput && combine[3].secondaryInput &&
+                *combine[1].secondaryInput != *combine[3].secondaryInput,
+            "Combine Channels selects its base then sets each further slot, alpha last");
+    }
+    {
+        const auto result = compile(
+            build(Wiring::SameImage, kCombineChannelsPremultiplied, false, false), registry);
+        const auto combine = result.plan ? effectsOf(*result.plan, combineId)
+                                         : std::vector<runtime::CompiledImageEffect>{};
+        expectations.expect(combine.size() == 1 &&
+                                combine[0].kernel ==
+                                    runtime::ImageEffectKernel{runtime::ChannelSelectKernel{}} &&
+                                effectsOf(*result.plan, separateId).empty(),
+                            "inputs reading the same image fold into one Channel Select");
+    }
+    {
+        const auto result =
+            compile(build(Wiring::AlphaOnly, kCombineChannelsStraight, false, false), registry);
+        const auto combine = result.plan ? effectsOf(*result.plan, combineId)
+                                         : std::vector<runtime::CompiledImageEffect>{};
+        expectations.expect(combine.size() == 1 &&
+                                combine[0].kernel ==
+                                    runtime::ImageEffectKernel{runtime::ChannelSelectKernel{
+                                        {ImageChannelSource::Zero, ImageChannelSource::Zero,
+                                         ImageChannelSource::Zero, ImageChannelSource::Luma},
+                                        true}},
+                            "unconnected colour inputs are zero and a lone input is the base");
+    }
+    {
+        const auto result =
+            compile(build(Wiring::None, kCombineChannelsPremultiplied, false, false), registry);
+        expectations.expect(result.plan != nullptr && effectsOf(*result.plan, combineId).empty(),
+                            "a Combine Channels with no input is an empty image");
+    }
+    {
+        const auto result =
+            compile(build(Wiring::Separated, kCombineChannelsPremultiplied, true, false), registry);
+        const auto combine = result.plan ? effectsOf(*result.plan, combineId)
+                                         : std::vector<runtime::CompiledImageEffect>{};
+        expectations.expect(result.plan != nullptr && effectsOf(*result.plan, separateId).empty() &&
+                                combine.size() == 1 &&
+                                combine[0].kernel ==
+                                    runtime::ImageEffectKernel{runtime::ChannelSelectKernel{
+                                        {ImageChannelSource::Red, ImageChannelSource::Green,
+                                         ImageChannelSource::Blue, ImageChannelSource::Red},
+                                        false}},
+                            "a muted Separate passes its Image through every output");
+        const auto mutedCombine =
+            compile(build(Wiring::Separated, kCombineChannelsPremultiplied, false, true), registry);
+        expectations.expect(mutedCombine.plan != nullptr &&
+                                effectsOf(*mutedCombine.plan, combineId).empty() &&
+                                effectsOf(*mutedCombine.plan, separateId).size() == 1,
+                            "a muted Combine passes its red input through");
+    }
+    document::Document document(
+        build(Wiring::Separated, kCombineChannelsPremultiplied, false, false));
+    runtime::SnapshotCompiler compiler(registry);
+    const auto inspected =
+        compiler.compile({.snapshot = document.snapshot(),
+                          .compositionId = kCompositionId,
+                          .parameterOverrides = {},
+                          .channelInspection = runtime::ChannelInspection{separateId, "blue", {}}},
+                         runtime::CancellationToken{});
+    expectations.expect(inspected.plan != nullptr, "a Separate Channels output can be inspected");
+    if (!inspected.plan)
+        return;
+    const auto& operations = inspected.plan->operations();
+    const auto* output = std::get_if<runtime::CompiledCompositionOutput>(
+        &operations[inspected.plan->output().value()]);
+    const auto* merge =
+        output ? std::get_if<runtime::CompiledMerge>(&operations[output->input.value()]) : nullptr;
+    const auto* shown = merge && merge->entries.size() == 1
+                            ? std::get_if<runtime::CompiledImageEffect>(
+                                  &operations[merge->entries.front().input.value()])
+                            : nullptr;
+    expectations.expect(shown != nullptr && shown->sourceNodeId == separateId &&
+                            shown->kernel == grey(ImageChannelSource::Blue),
+                        "the inspection shows the inspected output's own Channel Select");
+}
+
 void testImagePreviewInspection(Expectations& expectations) {
     using namespace document;
     const auto blurNode = NodeId::fromRaw(970);

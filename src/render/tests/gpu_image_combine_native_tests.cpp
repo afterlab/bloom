@@ -16,6 +16,14 @@ using namespace bloom::render::composite_proof;
 
 [[nodiscard]] Rgba32f oracle(const Rgba32f base, const Rgba32f second,
                             const GpuImageCombineParameters mode) {
+    if (mode.kind == GpuImageCombineKind::SetChannel) {
+        // #479 Combine Channels: the production CPU reference's own channel read and write.
+        const auto result = setImageChannel(base, storedImageChannel(second, mode.channel),
+                                            mode.slot, mode.premultiply);
+        if (!result)
+            throw std::logic_error("invalid Set Channel oracle");
+        return *result.value();
+    }
     if (mode.kind == GpuImageCombineKind::SetAlpha) {
         const auto result =
             setImageAlpha(base, matteCoverage(second, {mode.channel, mode.invert}));
@@ -36,6 +44,14 @@ using namespace bloom::render::composite_proof;
                  static_cast<float>(static_cast<double>(base.green()) * baseWeight + static_cast<double>(second.green()) * secondWeight),
                  static_cast<float>(static_cast<double>(base.blue()) * baseWeight + static_cast<double>(second.blue()) * secondWeight),
                  static_cast<float>(static_cast<double>(base.alpha()) * baseWeight + static_cast<double>(second.alpha()) * secondWeight));
+}
+[[nodiscard]] GpuImageCombineParameters setChannel(const ImageCoverageChannel channel,
+                                                   const std::uint8_t slot, const bool premultiply,
+                                                   const bool absent) {
+    GpuImageCombineParameters mode{GpuImageCombineKind::SetChannel, 1.0F, channel, false, absent};
+    mode.slot = slot;
+    mode.premultiply = premultiply;
+    return mode;
 }
 } // namespace
 
@@ -114,11 +130,46 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
         GpuImageCombineParameters{GpuImageCombineKind::MultiplyAlpha, 1.0F,
                                   ImageCoverageChannel::Alpha, true, true},
         GpuImageCombineParameters{GpuImageCombineKind::Mix, 1.0F, ImageCoverageChannel::Alpha,
-                                  false, true}};
+                                  false, true},
+        // #479 Set Channel: one stored channel of the second image (HDR, signed, partial alpha)
+        // written into one base component, alpha clamped to [0, 1], optionally premultiplied.
+        setChannel(ImageCoverageChannel::Red, 0, false, false),
+        setChannel(ImageCoverageChannel::Luma, 1, false, false),
+        setChannel(ImageCoverageChannel::Blue, 2, false, true),
+        setChannel(ImageCoverageChannel::Red, 3, false, false),
+        setChannel(ImageCoverageChannel::Alpha, 3, true, false)};
+    // #479: Set Channel writes one of four components and reads its channel uninverted; a slot
+    // or a selector outside that is refused before dispatch, and no other kind takes a slot.
+    {
+        auto slotFour = setChannel(ImageCoverageChannel::Red, 4, false, false);
+        auto inverted = setChannel(ImageCoverageChannel::Red, 0, false, false);
+        inverted.invert = true;
+        GpuImageCombineParameters mixWithSlot{GpuImageCombineKind::Mix, 0.5F,
+                                              ImageCoverageChannel::Alpha};
+        mixWithSlot.slot = 1;
+        GpuImageCombineParameters mixPremultiplied{GpuImageCombineKind::Mix, 0.5F,
+                                                   ImageCoverageChannel::Alpha};
+        mixPremultiplied.premultiply = true;
+        for (const auto& [invalid, what] :
+             {std::pair{slotFour, "a Set Channel slot past alpha"},
+              std::pair{inverted, "an inverted Set Channel selector"},
+              std::pair{mixWithSlot, "a slot on another combine kind"},
+              std::pair{mixPremultiplied, "premultiply on another combine kind"}}) {
+            const auto refused = blend.blend->beginBlend(
+                GpuBlendParameters{second, base, core::BlendMode::Normal, invalid}, kBudget);
+            expectations.expect(refused.code == GpuBlendDiagnosticCode::InvalidArgument &&
+                                    blend.blend->state() == GpuBlendJobState::Idle,
+                                std::string(what) + " is refused before dispatch");
+        }
+    }
     for (const auto mode : modes) {
-        const auto label = "image-combine-" + std::to_string(static_cast<int>(mode.kind)) + "-" +
-                           std::to_string(static_cast<int>(mode.channel)) +
-                           (mode.invert ? "-inverted" : "") + (mode.matteAbsent ? "-absent" : "");
+        const auto label =
+            "image-combine-" + std::to_string(static_cast<int>(mode.kind)) + "-" +
+            std::to_string(static_cast<int>(mode.channel)) + (mode.invert ? "-inverted" : "") +
+            (mode.matteAbsent ? "-absent" : "") +
+            (mode.kind == GpuImageCombineKind::SetChannel
+                 ? "-slot" + std::to_string(mode.slot) + (mode.premultiply ? "-premultiply" : "")
+                 : std::string{});
         // An absent matte binds the base image in the matte slot; no matte texel is read.
         const auto begin = blend.blend->beginBlend(
             GpuBlendParameters{mode.matteAbsent ? base : second, base, core::BlendMode::Normal,
@@ -169,7 +220,8 @@ void runImageCombineTests(Expectations& expectations, GpuDevice& device) {
         // The feathered matte pixel lands on opaque base pixel 12; its Luma coverage must follow
         // its alpha on both routes instead of saturating the edge (Set Alpha publishes it as the
         // output alpha, so the readback below compares it directly).
-        if (mode.channel == ImageCoverageChannel::Luma && !mode.matteAbsent) {
+        if (mode.kind != GpuImageCombineKind::SetChannel &&
+            mode.channel == ImageCoverageChannel::Luma && !mode.matteAbsent) {
             const float edge = expected[12].alpha();
             const float straight = mode.invert ? 1.0F - edge : edge;
             expectations.expect(straight > 0.44F && straight < 0.45F,

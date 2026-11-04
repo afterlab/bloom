@@ -264,7 +264,8 @@ int main() {
     for (const auto* type :
          {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
           "bloom.matte-dilate", "bloom.luma-key", "bloom.levels", "bloom.curves",
-          "bloom.hue-saturation", "bloom.video-source", "bloom.image-preview"})
+          "bloom.hue-saturation", "bloom.separate-channels", "bloom.combine-channels",
+          "bloom.video-source", "bloom.image-preview"})
         expect(completeRegistry.find(type, 1) != nullptr,
                "blur registration does not truncate the built-in registry");
     const auto* shape = builtInNodeDefinitions().find(kShapeSourceNodeType, 1);

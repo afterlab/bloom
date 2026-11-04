@@ -173,7 +173,8 @@ void blurNodeReopen() {
     for (const auto* type :
          {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
-          "bloom.curves", "bloom.hue-saturation"}) {
+          "bloom.curves", "bloom.hue-saturation", "bloom.separate-channels",
+          "bloom.combine-channels"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -202,7 +203,9 @@ void blurNodeReopen() {
                 : parameter.role == "low"        ? document::ParameterValue{-0.25}
                 : parameter.role == "high"       ? document::ParameterValue{3.5}
                 : parameter.role == "invert"     ? document::ParameterValue{true}
-                                                 : document::ParameterValue{std::int64_t{1}};
+                // #479 Combine Channels: a Luma alpha source and the Straight alpha mode.
+                : parameter.role == "alphaSource" ? document::ParameterValue{std::int64_t{4}}
+                                                  : document::ParameterValue{std::int64_t{1}};
             if (!composition->parameters().insert(
                     {*id, parameter.schemaKey, document::ConstantValueSource{value}}))
                 throw std::logic_error("blur parameter inserts");

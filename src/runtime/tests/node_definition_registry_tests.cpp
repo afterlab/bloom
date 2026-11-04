@@ -137,8 +137,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove; #364 adds Cryptomatte.
     // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
-    // Hue/Saturation.
-    expectations.expect(registry.definitions().size() == 144,
+    // Hue/Saturation; #479 adds Separate Channels and Combine Channels.
+    expectations.expect(registry.definitions().size() == 146,
                         "startup contribution includes every built-in definition");
     for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
                              "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",
@@ -188,6 +188,54 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             hueSaturation->parameters[1].defaultValue ==
                                 document::ParameterValue{1.0},
                         "#340: Hue/Saturation exposes an animatable hue and saturation");
+    // #479: Separate Channels takes one Image and offers its four channels as grey Images;
+    // Combine Channels takes four optional Images, a constant source channel dropdown per input
+    // (red, green, blue and red by default) and a constant alpha mode (Premultiplied).
+    const auto* separate = registry.find("bloom.separate-channels", 1);
+    const auto* combine = registry.find("bloom.combine-channels", 1);
+    expectations.expect(separate && separate->lowering == runtime::NodeLoweringKind::ImageEffect &&
+                            separate->category == document::NodeCategory::Color &&
+                            separate->inputs ==
+                                std::vector<document::InputPortDefinition>{
+                                    {"input", runtime::SocketValueKind::Image}} &&
+                            separate->parameters.empty() &&
+                            separate->outputs ==
+                                std::vector<document::OutputPortDefinition>{
+                                    {"red", runtime::SocketValueKind::Image},
+                                    {"green", runtime::SocketValueKind::Image},
+                                    {"blue", runtime::SocketValueKind::Image},
+                                    {"alpha", runtime::SocketValueKind::Image}},
+                        "#479: Separate Channels offers red, green, blue and alpha Image outputs");
+    expectations.expect(
+        combine && combine->lowering == runtime::NodeLoweringKind::ImageEffect &&
+            combine->category == document::NodeCategory::Color &&
+            combine->inputs ==
+                std::vector<document::InputPortDefinition>{
+                    {"red", runtime::SocketValueKind::Image, false},
+                    {"green", runtime::SocketValueKind::Image, false},
+                    {"blue", runtime::SocketValueKind::Image, false},
+                    {"alpha", runtime::SocketValueKind::Image, false}} &&
+            combine->parameters.size() == 5 &&
+            combine->parameters[0].schemaKey == "bloom.combine-channels.source" &&
+            combine->parameters[0].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            combine->parameters[2].defaultValue == document::ParameterValue{std::int64_t{2}} &&
+            combine->parameters[3].role == "alphaSource" &&
+            combine->parameters[3].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            !combine->parameters[3].supportsAnimation &&
+            combine->parameters[4].schemaKey == "bloom.combine-channels.alpha-mode" &&
+            combine->parameters[4].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            combine->outputs ==
+                std::vector<document::OutputPortDefinition>{
+                    {"image", runtime::SocketValueKind::Image}},
+        "#479: Combine Channels takes four optional Images, sources and a Premultiplied mode");
+    if (separate) {
+        auto threeOutputs = *separate;
+        threeOutputs.outputs.pop_back();
+        runtime::NodeDefinitionRegistry scratch;
+        expectations.expect(scratch.registerDefinition(threeOutputs) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "#479: a Separate Channels missing an output is refused");
+    }
     if (levels) {
         auto socketless = *levels;
         socketless.inputs.pop_back();

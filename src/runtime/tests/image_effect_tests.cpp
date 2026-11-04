@@ -971,6 +971,147 @@ void testLumaKeyEvaluation() {
            "an out-of-domain Luma Key threshold fails explicitly");
 }
 
+// #479 Separate Channels and Combine Channels through the evaluator: a Channel Select and a
+// two-input Channel Combine equal the CPU reference over the composited HDR, signed,
+// partial-alpha baselines, with warm reuse, ROI equality, invalidation by mapping, an exact
+// identity select and plan-arity refusals.
+void testChannelEvaluation() {
+    using runtime::ImageChannelSource;
+    const core::Color4d colorA{-0.125, 0.18, 2.0, 0.5};
+    const core::Color4d colorB{3.0, -1.5, 0.25, 0.75};
+    // Solid A, Solid B, an effect reading A (and B), its Layer, Merge and Output.
+    const auto twoInputPlan = [&](const runtime::ImageEffectKernel& kernel) {
+        auto definition = planWith({kernel}, colorA)->copyDefinition();
+        auto second = std::get<runtime::CompiledSolid>(planWith({}, colorB)->operations()[0]);
+        second.sourceNodeId = document::NodeId::fromRaw(2);
+        second.color.id = document::ParameterId::fromRaw(4);
+        second.width.id = document::ParameterId::fromRaw(5);
+        second.height.id = document::ParameterId::fromRaw(6);
+        auto& ops = definition.operations;
+        ops.insert(ops.begin() + 1, second);
+        auto& effect = std::get<runtime::CompiledImageEffect>(ops[2]);
+        effect.input = runtime::OperationIndex::fromRaw(0);
+        effect.secondaryInput = runtime::OperationIndex::fromRaw(1);
+        std::get<runtime::CompiledLayerOutput>(ops[3]).input = runtime::OperationIndex::fromRaw(2);
+        std::get<runtime::CompiledMerge>(ops[4]).entries.front().input =
+            runtime::OperationIndex::fromRaw(3);
+        std::get<runtime::CompiledCompositionOutput>(ops[5]).input =
+            runtime::OperationIndex::fromRaw(4);
+        definition.output = runtime::OperationIndex::fromRaw(5);
+        return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+    };
+    runtime::CpuCompositionEvaluator evaluator;
+    runtime::CpuCompositionEvaluator fresh;
+    const auto planA = planWith({}, colorA);
+    const auto planB = planWith({}, colorB);
+    const auto a = evaluator.evaluate(planA, requestFor(*planA), {});
+    const auto b = evaluator.evaluate(planB, requestFor(*planB), {});
+    expect(a.frame() && b.frame(), "channel baselines evaluate");
+    if (!a.frame() || !b.frame())
+        return;
+    const auto& sourceA = a.frame()->processImage();
+    const auto& sourceB = b.frame()->processImage();
+    struct Case final {
+        runtime::ImageEffectKernel kernel;
+        runtime::ImageEffectKernel changed;
+        bool twoInputs = false;
+    };
+    const std::vector<Case> cases{
+        {runtime::ChannelSelectKernel{{ImageChannelSource::Red, ImageChannelSource::Red,
+                                       ImageChannelSource::Red, ImageChannelSource::One}},
+         runtime::ChannelSelectKernel{{ImageChannelSource::Blue, ImageChannelSource::Blue,
+                                       ImageChannelSource::Blue, ImageChannelSource::One}}},
+        {runtime::ChannelSelectKernel{{ImageChannelSource::Luma, ImageChannelSource::Zero,
+                                       ImageChannelSource::Red, ImageChannelSource::Alpha},
+                                      true},
+         runtime::ChannelSelectKernel{{ImageChannelSource::Luma, ImageChannelSource::Zero,
+                                       ImageChannelSource::Red, ImageChannelSource::Alpha},
+                                      false}},
+        {runtime::ChannelCombineKernel{1, ImageChannelSource::Red, false},
+         runtime::ChannelCombineKernel{2, ImageChannelSource::Red, false}, true},
+        {runtime::ChannelCombineKernel{3, ImageChannelSource::Alpha, true},
+         runtime::ChannelCombineKernel{3, ImageChannelSource::Luma, true}, true},
+    };
+    for (const auto& item : cases) {
+        const auto plan =
+            item.twoInputs ? twoInputPlan(item.kernel) : planWith({item.kernel}, colorA);
+        const auto cold = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(cold.frame() && cold.diagnostics().empty(), "channel effect evaluates");
+        if (!cold.frame())
+            continue;
+        const auto& image = cold.frame()->processImage();
+        expect(image.descriptor()->dataWindow() == sourceA.descriptor()->dataWindow(),
+               "a channel effect keeps the composited window");
+        const auto* select = std::get_if<runtime::ChannelSelectKernel>(&item.kernel);
+        const auto* combine = std::get_if<runtime::ChannelCombineKernel>(&item.kernel);
+        const auto window = image.descriptor()->dataWindow();
+        bool changedPixel = false;
+        for (auto y = window.originY(); y < window.maxYExclusive(); ++y)
+            for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
+                const auto s = sourceA.read(x, y);
+                const auto t = sourceB.read(x, y);
+                const auto p = image.read(x, y);
+                if (!s || !t || !p) {
+                    expect(false, "channel samples exist");
+                    continue;
+                }
+                const auto expected =
+                    select ? runtime::detail::channelSelectPixel(
+                                 *runtime::detail::prepareChannelSelect(*select), *s.value())
+                           : runtime::detail::channelCombinePixel(
+                                 *runtime::detail::prepareChannelCombine(*combine), *s.value(),
+                                 *t.value());
+                expect(expected.hasValue() && *p.value() == *expected.value(),
+                       "the evaluator publishes the channel reference over the baseline pixels");
+                changedPixel = changedPixel || !(*p.value() == *s.value());
+            }
+        expect(changedPixel, "the channel effect changes the image");
+        const auto warm = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(samePixels(cold, warm) && warm.frame()->operationCacheStatistics().misses == 0,
+               "channel warm memo reuses identical pixels");
+        auto roiRequest = requestFor(*plan);
+        const auto roiWindow = render::ImageWindow::create(1, 0, 2, 2);
+        roiRequest.roi = *roiWindow.value();
+        const auto roi = evaluator.evaluate(plan, roiRequest, {});
+        expect(roi.frame() != nullptr, "channel ROI evaluates");
+        if (roi.frame())
+            for (std::int64_t y = 0; y < 2; ++y)
+                for (std::int64_t x = 1; x < 3; ++x) {
+                    const auto actual = roi.frame()->processImage().read(x, y);
+                    const auto expected = image.read(x, y);
+                    expect(actual && expected && *actual.value() == *expected.value(),
+                           "channel ROI pixels equal the full-frame pixels");
+                }
+        const auto changed =
+            item.twoInputs ? twoInputPlan(item.changed) : planWith({item.changed}, colorA);
+        const auto changedResult = evaluator.evaluate(changed, requestFor(*changed), {});
+        expect(changedResult.frame() && !samePixels(changedResult, cold) &&
+                   samePixels(changedResult, fresh.evaluate(changed, requestFor(*changed), {})),
+               "a changed channel mapping invalidates the memoized image");
+    }
+    const auto identity = planWith({runtime::ChannelSelectKernel{}}, colorA);
+    expect(samePixels(a, evaluator.evaluate(identity, requestFor(*identity), {})),
+           "the red, green, blue, alpha select is an exact identity");
+    // A combine needs its second input; a select refuses one.
+    auto missing = twoInputPlan(runtime::ChannelCombineKernel{})->copyDefinition();
+    std::get<runtime::CompiledImageEffect>(missing.operations[2]).secondaryInput.reset();
+    auto extra = twoInputPlan(runtime::ChannelSelectKernel{})->copyDefinition();
+    auto unknown = twoInputPlan(runtime::ChannelCombineKernel{})->copyDefinition();
+    std::get<runtime::CompiledImageEffect>(unknown.operations[2]).kernel =
+        runtime::ChannelCombineKernel{4, ImageChannelSource::Red, false};
+    for (auto* definition : {&missing, &extra, &unknown}) {
+        const auto plan = std::make_shared<const runtime::CompiledCompositionPlan>(*definition);
+        const auto refused = evaluator.evaluate(plan, requestFor(*plan), {});
+        expect(!refused.frame() &&
+                   std::ranges::any_of(refused.diagnostics(),
+                                       [](const auto& diagnostic) {
+                                           return diagnostic.code ==
+                                                  runtime::EvaluationDiagnosticCode::InvalidPlan;
+                                       }),
+               "a channel effect with the wrong inputs or an unknown slot is an invalid plan");
+    }
+}
+
 // #340 Levels, Curves and Hue/Saturation through the evaluator: each grade's pixels equal the CPU
 // reference applied to the composited baseline, warm reuse, ROI equality, value/clamp
 // invalidation, animation, an exact identity and an out-of-domain refusal.
@@ -1815,6 +1956,7 @@ int main(const int argc, char** argv) {
             testMatteMorphologyEvaluation();
             testLumaKeyEvaluation();
             testColorGradeEvaluation();
+            testChannelEvaluation();
             testSpatialEffectBudgets();
             testAliasedBlurBudgets();
             return failures == 0 ? 0 : 1;
@@ -1840,6 +1982,7 @@ int main(const int argc, char** argv) {
         testMatteMorphologyEvaluation();
         testLumaKeyEvaluation();
         testColorGradeEvaluation();
+        testChannelEvaluation();
         testSpatialEffectBudgets();
         testAliasedBlurBudgets();
         testLookBypass();

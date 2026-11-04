@@ -1074,6 +1074,86 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
     }
 }
 
+// #479 Channel Select (each Separate Channels output and Combine Channels' base) of
+// signed/HDR/partial-alpha solids against the CPU oracle: grey stored channels, a swizzle with a
+// Luma read and a premultiplied Straight alpha; one resident dispatch, warm zero dispatch and a
+// changed mapping that re-dispatches with parity.
+void runChannelSelects(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::runtime::ChannelSelectKernel;
+    using Source = bloom::runtime::ImageChannelSource;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const std::array<ChannelSelectKernel, 4> kernels{
+        ChannelSelectKernel{{Source::Red, Source::Red, Source::Red, Source::One}, false},
+        ChannelSelectKernel{{Source::Alpha, Source::Alpha, Source::Alpha, Source::One}, false},
+        ChannelSelectKernel{{Source::Blue, Source::Luma, Source::Zero, Source::Alpha}, false},
+        ChannelSelectKernel{{Source::Green, Source::Red, Source::Blue, Source::Luma}, true}};
+    std::uint64_t id = 9800;
+    for (const auto color : {Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
+                             Color4d{0.3, 0.6, 0.2, 0.25}}) {
+        for (const auto& kernel : kernels) {
+            cache.clear();
+            const auto plan = effectPlan(kernel, id, std::nullopt, color);
+            id += 100;
+            const auto request = requestFor(*plan);
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+            const auto prepared = builder.build(plan, request);
+            expectations.expect(oracle.frame() && prepared,
+                                "channel native: CPU oracle and production scene prepare");
+            if (!oracle.frame() || !prepared)
+                continue;
+            auto executor = GpuSceneExecutor::create(device, cache);
+            expectations.expect(executor.hasValue(), "channel native: executor creates");
+            if (!executor)
+                continue;
+            const auto cold = runScene(*executor.executor, prepared.scene);
+            const auto coldCounters = executor.executor->counters();
+            std::string detail;
+            expectations.expect(
+                cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                "channel native: HDR/partial-alpha CPU parity (2e-6, exact alpha): " + detail);
+            const auto& descriptor = *oracle.frame()->processImage().descriptor();
+            expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                    cold.displayWindow == descriptor.displayWindow() &&
+                                    cold.pixelAspect == descriptor.pixelAspect(),
+                                "channel native: data/display-window and PAR parity");
+            expectations.expect(coldCounters.ocioEffectDispatches == 1 &&
+                                    coldCounters.readbacks == 0,
+                                "channel native: one resident dispatch and no frame readback");
+            const auto warm = runScene(*executor.executor, prepared.scene);
+            expectations.expect(
+                warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches,
+                "channel native: warm RAM reuse has identical pixels and zero dispatches");
+            auto changedDefinition = plan->copyDefinition();
+            auto& changedKernel = std::get<ChannelSelectKernel>(
+                std::get<CompiledImageEffect>(changedDefinition.operations[1]).kernel);
+            changedKernel.sources[0] =
+                changedKernel.sources[0] == Source::Luma ? Source::Green : Source::Luma;
+            const auto changedPlan =
+                std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
+            const auto changed = builder.build(changedPlan, request);
+            const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+            expectations.expect(changed && changedOracle.frame(),
+                                "channel native: changed mapping prepares");
+            if (!changed || !changedOracle.frame())
+                continue;
+            const auto rerun = runScene(*executor.executor, changed.scene);
+            expectations.expect(
+                rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                    parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail) &&
+                    executor.executor->counters().ocioEffectDispatches ==
+                        coldCounters.ocioEffectDispatches + 1,
+                "channel native: a changed mapping re-dispatches with CPU parity: " + detail);
+        }
+    }
+}
+
 // #338 Luma Key: ramp, inverted ramp, hard and inverted hard keys of signed/HDR/partial-alpha
 // solids against the CPU oracle (2e-6, exact alpha), one resident dispatch, warm zero dispatch and
 // a changed threshold that re-dispatches with parity.
@@ -1169,6 +1249,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runBlurs(expectations, device, cache);
     runLumaKeys(expectations, device, cache);
     runColorGrades(expectations, device, cache);
+    runChannelSelects(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif
