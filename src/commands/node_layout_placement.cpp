@@ -1,6 +1,7 @@
 #include <bloom/commands/node_layout_placement.hpp>
 
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter.hpp>
@@ -37,6 +38,8 @@ constexpr double kPadding = 8.0;
 // operator selector runs wider still.
 constexpr double kCardWidth = 264.0;
 constexpr double kWideCardWidth = 288.0;
+// The Curves card's graph height over its width (node_editor_items.hpp).
+constexpr double kCurveGraphAspect = 0.75;
 // A card whose parameters draw as dropdowns (enum choices, OCIO and input colour spaces) carries
 // the Properties panel's field control, which is wider still.
 constexpr double kDropdownCardWidth = 384.0;
@@ -199,6 +202,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                                                  : 1.0;
         thumbnail = std::min(inner * aspect, inner * 2.0) + kPadding;
     }
+    // #493: a Curves card draws its channel curves below its rows, three quarters as tall as wide.
+    if (node->typeId == document::kCurvesNodeType)
+        thumbnail = std::max(0.0, cardWidth - 2.0 * kPadding) * kCurveGraphAspect + kPadding;
     return {cardWidth, kTitleBand + sockets * kRow + pills + rows * kRow + kPadding + thumbnail};
 }
 

@@ -32,8 +32,9 @@ namespace {
 using document::GradeCurve;
 using document::Vec2d;
 
-constexpr qreal kPointRadius = 4.0;
-constexpr qreal kHitRadius = 7.0;
+// A point is drawn as large as a node socket and can be picked a little outside it.
+constexpr qreal kPointRadius = kit::px(kit::Size::NodeSocketDot) / 2.0;
+constexpr qreal kHitRadius = kPointRadius + kit::px(kit::Spacing::XS);
 // The share of the range a channel curve's view keeps above its highest point (and above 1).
 constexpr double kHeadroom = 0.25;
 
@@ -244,7 +245,7 @@ void paintCurveGraph(QPainter& painter, const QRectF& rect, const CurveGraphPict
         painter.drawRect(QRectF(at(0.0, 1.0), at(1.0, 0.0)).normalized());
     }
     // The identity: the diagonal for a channel curve, the neutral line otherwise.
-    QPen identity(kit::color(kit::Color::Faint), 1.0, Qt::DashLine);
+    QPen identity(kit::color(kit::Color::Faint), kit::kHairlineWidth, Qt::DashLine);
     painter.setPen(identity);
     if (picture.overview || document::isChannelGradeCurve(active)) {
         painter.drawLine(at(range.left, range.left), at(range.right, range.right));
@@ -352,7 +353,7 @@ std::optional<document::PathValue> CurveGraphCanvas::value() const {
 }
 
 QRectF CurveGraphCanvas::plotRect() const {
-    const qreal inset = kPointRadius + 2.0;
+    const qreal inset = kPointRadius + kit::px(kit::Spacing::XXS);
     return QRectF(rect()).adjusted(inset, inset, -inset, -inset);
 }
 

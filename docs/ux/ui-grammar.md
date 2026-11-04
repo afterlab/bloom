@@ -166,8 +166,9 @@ promoting the Properties layout into the kit. Timeline and properties use these 
 layouts. Tables with sortable columns (Assets, Jobs) use the kit theme's item-view and header
 styling at the `ListRow` pitch, with no per-row widgets.
 
-Painting outside the kit is limited to viewer canvas, node scene items, and timeline
-ruler, lanes, graph editor, work area and navigator. Other surfaces compose kit widgets.
+Painting outside the kit is limited to viewer canvas, node scene items, timeline
+ruler, lanes, graph editor, work area and navigator, and the Curves graph (`CurveGraphCanvas`, a
+value-over-input graph like the graph editor). Other surfaces compose kit widgets.
 
 ## Export panel
 
