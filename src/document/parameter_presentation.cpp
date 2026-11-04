@@ -5,8 +5,9 @@
 #include <bloom/document/value_nodes.hpp>
 
 #include <array>
-#include <vector>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace bloom::document {
 namespace {
@@ -63,6 +64,38 @@ ParameterPresentation pixels(const double minimum, const double maximum, const d
 // A colour channel: straight RGBA, any finite value (HDR and signed colour stay authorable), with
 // the 0..1 display range as its comfortable span.
 ParameterPresentation channel() { return number(kLowest, kHighest, 0.0, 1.0, 0.01, 3); }
+
+// #340: the Levels values and Curves points, generated per channel so the schema list cannot drift
+// from the definitions. Values are unbounded in practice (a Raw data pass may span any range) with
+// the comfortable 0..1 span; gamma is its own bounded factor.
+const std::vector<Entry>& colorGradeTable() {
+    // The schema keys are owned by this static list for the life of the process.
+    static const std::vector<std::string> keys = [] {
+        std::vector<std::string> generated;
+        for (std::size_t channel = 0; channel < kGradeChannelCount; ++channel) {
+            for (std::size_t field = 0; field < kLevelsFieldCount; ++field)
+                generated.push_back(levelsSchemaKey(channel, field));
+            for (std::size_t point = 0; point < kCurvePointCount; ++point)
+                generated.push_back(curvePointSchemaKey(channel, point));
+        }
+        return generated;
+    }();
+    static const std::vector<Entry> entries = [] {
+        std::vector<Entry> generated;
+        for (const auto& key : keys)
+            generated.push_back(
+                {key, isLevelsGammaSchemaKey(key)
+                          ? number(kMinimumLevelsGamma, kMaximumLevelsGamma, 0.1, 4.0, 0.01, 2)
+                          : number(-kMaximumGradeValue, kMaximumGradeValue, 0.0, 1.0, 0.01, 3)});
+        generated.push_back(
+            {kHueSaturationHueSchemaKey,
+             number(-kMaximumGradeValue, kMaximumGradeValue, -180.0, 180.0, 1.0, 1, kDegrees)});
+        generated.push_back({kHueSaturationSaturationSchemaKey,
+                             number(0.0, kMaximumGradeSaturation, 0.0, 2.0, 0.01, 3)});
+        return generated;
+    }();
+    return entries;
+}
 
 const std::vector<Entry>& table() {
     static const std::vector<Entry> entries{
@@ -230,6 +263,9 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
                                             const ParameterValueKind kind,
                                             const std::string_view role) {
     for (const auto& entry : table())
+        if (entry.schemaKey == schemaKey)
+            return entry.presentation;
+    for (const auto& entry : colorGradeTable())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;
     for (const auto name : kChoiceSchemas)

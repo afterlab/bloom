@@ -75,6 +75,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [The Viewer](user-guide/viewer.md) — moving layers directly, including the Shift axis lock.
 - [The Image Preview node](user-guide/image-preview.md) — a node-card thumbnail of any point in the
   graph, its display choices, and showing it as the node editor background.
+- [Levels, Curves and Hue/Saturation](user-guide/color-grading.md) — per-channel grades for colour
+  and render passes, clamp, HDR curves and normalizing a depth pass.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard
   easing curves, Easy Ease, shy layers and layer names that follow their source.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.

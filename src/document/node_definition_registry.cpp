@@ -1,4 +1,5 @@
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 
 #include <bloom/document/image_preview.hpp>
@@ -129,6 +130,76 @@ template <typename Definition>
     return definition.key.typeId == typeId && definition.key.schemaVersion == schemaVersion;
 }
 
+// #340 Levels: an Image in and out; per channel (RGB master, red, green, blue, alpha) five
+// animatable/drivable Scalars, each its own socket, then the constant clamp switch (no socket, like
+// Luma Key's invert).
+[[nodiscard]] NodeDefinition levelsDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{{std::string(kLevelsNodeType), 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Color};
+    for (std::size_t channel = 0; channel < kGradeChannelCount; ++channel)
+        for (std::size_t field = 0; field < kLevelsFieldCount; ++field) {
+            definition.parameters.push_back(
+                {levelsRole(channel, field), levelsSchemaKey(channel, field),
+                 ParameterValueKind::Float64, true, true, kLevelsFieldDefaults[field]});
+            definition.inputs.push_back(
+                {levelsRole(channel, field), SocketValueKind::Scalar, false});
+        }
+    definition.parameters.push_back({"clamp", std::string(kLevelsClampSchemaKey),
+                                     ParameterValueKind::Boolean, true, false, false});
+    return definition;
+}
+
+// #340 Curves: per channel kCurvePointCount animatable/drivable Vector 2 points (input, output) on
+// the identity line by default, each its own socket, then the constant clamp switch.
+[[nodiscard]] NodeDefinition curvesDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{{std::string(kCurvesNodeType), 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Color};
+    for (std::size_t channel = 0; channel < kGradeChannelCount; ++channel)
+        for (std::size_t point = 0; point < kCurvePointCount; ++point) {
+            const double coordinate = defaultCurvePointCoordinate(point);
+            definition.parameters.push_back(
+                {curvePointRole(channel, point), curvePointSchemaKey(channel, point),
+                 ParameterValueKind::Vec2d, true, true, Vec2d{coordinate, coordinate}});
+            definition.inputs.push_back(
+                {curvePointRole(channel, point), SocketValueKind::Vector2, false});
+        }
+    definition.parameters.push_back({"clamp", std::string(kCurvesClampSchemaKey),
+                                     ParameterValueKind::Boolean, true, false, false});
+    return definition;
+}
+
+// #340 Hue/Saturation: animatable/drivable hue rotation (degrees) and saturation factor.
+[[nodiscard]] NodeDefinition hueSaturationDefinition() {
+    using namespace bloom::document;
+    return {{std::string(kHueSaturationNodeType), 1},
+            NodeLoweringKind::ImageEffect,
+            {{"input", SocketValueKind::Image},
+             {"hue", SocketValueKind::Scalar, false},
+             {"saturation", SocketValueKind::Scalar, false}},
+            {{"image", SocketValueKind::Image}},
+            {{"hue", std::string(kHueSaturationHueSchemaKey), ParameterValueKind::Float64, true,
+              true, 0.0},
+             {"saturation", std::string(kHueSaturationSaturationSchemaKey),
+              ParameterValueKind::Float64, true, true, 1.0}},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Color};
+}
+
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
@@ -186,6 +257,13 @@ template <typename Definition>
                        std::vector<OutputPortDefinition>{{"mask", SocketValueKind::Mask}} &&
                    !definition.layerSlotInput && !definition.audioLayerSlotInput;
         }
+        // #340: the exact generated shapes, sockets and defaults.
+        if (definition.key.typeId == kLevelsNodeType)
+            return definition == levelsDefinition();
+        if (definition.key.typeId == kCurvesNodeType)
+            return definition == curvesDefinition();
+        if (definition.key.typeId == kHueSaturationNodeType)
+            return definition == hueSaturationDefinition();
         if (definition.key.typeId == "bloom.transform-2d") {
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
                    hasLeadingImageInput(definition, "input") &&
@@ -1214,6 +1292,9 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         matteFilterDefinition("bloom.matte-erode"),
         matteFilterDefinition("bloom.matte-dilate"),
         lumaKeyDefinition(),
+        levelsDefinition(),
+        curvesDefinition(),
+        hueSaturationDefinition(),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),

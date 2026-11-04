@@ -1266,6 +1266,61 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Luma Key parameters could not be lowered.");
         return std::nullopt;
     }
+    // #340 Levels, Curves and Hue/Saturation: every operand in the kernel's channel-major order.
+    if (node.typeId == document::kLevelsNodeType) {
+        runtime::LevelsKernel kernel;
+        const auto* clamp = parameterConstant<bool>(findParameterBinding(node, "clamp"));
+        bool lowered = clamp != nullptr;
+        for (std::size_t channel = 0; lowered && channel < document::kGradeChannelCount;
+             ++channel) {
+            auto& target = kernel.channels[channel];
+            const std::array<runtime::CompiledScalarParameter*, document::kLevelsFieldCount>
+                fields{&target.inputBlack, &target.inputWhite, &target.gamma, &target.outputBlack,
+                       &target.outputWhite};
+            for (std::size_t field = 0; lowered && field < fields.size(); ++field) {
+                const auto parameter = compiledScalarParameter(
+                    findParameterBinding(node, document::levelsRole(channel, field)));
+                lowered = parameter.has_value();
+                if (parameter)
+                    *fields[field] = *parameter;
+            }
+        }
+        if (lowered) {
+            kernel.clamp = *clamp;
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        }
+        addTopologyFailure(node.id, "Levels parameters could not be lowered.");
+        return std::nullopt;
+    }
+    if (node.typeId == document::kCurvesNodeType) {
+        runtime::CurvesKernel kernel;
+        const auto* clamp = parameterConstant<bool>(findParameterBinding(node, "clamp"));
+        bool lowered = clamp != nullptr;
+        for (std::size_t channel = 0; lowered && channel < document::kGradeChannelCount;
+             ++channel)
+            for (std::size_t point = 0; lowered && point < document::kCurvePointCount; ++point) {
+                const auto parameter = compiledVec2Parameter(
+                    findParameterBinding(node, document::curvePointRole(channel, point)));
+                lowered = parameter.has_value();
+                if (parameter)
+                    kernel.points[channel][point] = *parameter;
+            }
+        if (lowered) {
+            kernel.clamp = *clamp;
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        }
+        addTopologyFailure(node.id, "Curves parameters could not be lowered.");
+        return std::nullopt;
+    }
+    if (node.typeId == document::kHueSaturationNodeType) {
+        const auto hue = compiledScalarParameter(findParameterBinding(node, "hue"));
+        const auto saturation = compiledScalarParameter(findParameterBinding(node, "saturation"));
+        if (hue && saturation)
+            return runtime::CompiledImageEffect{node.id, *input,
+                                                runtime::HueSaturationKernel{*hue, *saturation}};
+        addTopologyFailure(node.id, "Hue/Saturation parameters could not be lowered.");
+        return std::nullopt;
+    }
     const auto pointwise = [&]() -> std::optional<runtime::PointwiseImageEffect> {
         if (node.typeId == "bloom.exposure")
             return runtime::PointwiseImageEffect::Exposure;

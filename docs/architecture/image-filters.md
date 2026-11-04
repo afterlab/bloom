@@ -2,7 +2,7 @@
 
 Status: implemented; grouped native and cross-platform qualification pending
 
-Updated: 2026-11-03
+Updated: 2026-11-04
 
 ## Gaussian Blur and Box Blur
 
@@ -186,3 +186,98 @@ invalidation, animation and ROI. Compiler, command, Properties and archive tests
 mute and empty propagation, add, wiring, undo/redo, refusals and reopen. The native image-effect
 harness runs ramp, inverted, hard and HDR keys plus a warm zero-dispatch and a changed-threshold
 run at the 2e-6/exact-alpha gate.
+
+## Levels, Curves and Hue/Saturation
+
+`bloom.levels`, `bloom.curves` and `bloom.hue-saturation`, schema 1 (#340), are Image-in,
+Image-out grades listed under Color in the Add menu. None of them performs a colour transform or
+reads the working colour space: the values are graded exactly as stored, so a Raw data pass (Z
+depth, mist, normals, position) interpreted with the Raw input colour space can be normalised or
+remapped directly. They lower to the `LevelsKernel`, `CurvesKernel` and `HueSaturationKernel`
+alternatives; `color_grade_image_effect.hpp` holds the one CPU reference and the GPU program text.
+
+Levels and Curves address five channels in a fixed order: the RGB master, then red, green, blue
+and alpha. Red, green and blue are graded by the master first and then by their own channel; alpha
+is graded by the alpha channel only. Both operate on straight colour: each RGB value is divided by
+the pixel's alpha (a zero-alpha pixel's straight colour is zero), graded, and re-associated by the
+graded alpha. Graded alpha is always limited to `[0, 1]`, the storage invariant; a graded alpha of
+zero publishes transparent black. An alpha transfer can therefore lift transparent pixels inside the
+input's data window, so the content bounds of a grade are its data window. The windows and pixel
+aspect are preserved and no display clamp is applied to colour.
+
+Levels has five animatable/drivable Scalars per channel, each its own socket: `<channel>InputBlack`
+(default 0), `InputWhite` (1), `Gamma` (1), `OutputBlack` (0) and `OutputWhite` (1), with schema
+keys `bloom.levels.<channel>.<field>`. Black and white points are any finite value within
+`[-1e6, 1e6]`; gamma is `[0.01, 100]`. A channel maps `x` to `t = (x - inputBlack) /
+(inputWhite - inputBlack)` (an inverted range is allowed), raises a positive `t` to `1 / gamma`
+(zero and negative `t` stay linear, so negative values never produce NaN), and returns
+`outputBlack + t * (outputWhite - outputBlack)`. Values beyond the input range extrapolate, so HDR
+and out-of-range data keep their slope. An input range too narrow for binary32 (including an empty
+one) is a hard step at input black. The constant `clamp` switch (`bloom.levels.clamp`, default
+off, no socket) limits each graded RGB value to `[0, 1]`.
+
+Curves has `kCurvePointCount` (5) animatable/drivable Vector 2 points per channel, `(input,
+output)`, each its own socket (`<channel>Point1`..`Point5`, schema keys
+`bloom.curves.<channel>.point-<n>`), on the identity line at 0, 0.25, 0.5, 0.75 and 1 by default.
+Coordinates are finite within `[-1e6, 1e6]`. The points are narrowed to binary32 and sorted by
+input; a point whose input repeats an earlier one is dropped, and a single distinct input is a
+constant. The curve is the Fritsch-Carlson monotone piecewise cubic (PCHIP, the tangents SciPy's
+`PchipInterpolator` computes) through the points: it passes through every point, never overshoots
+between monotone points and is flat at a local extremum. Below the first and above the last point
+it extrapolates linearly along the end tangent, so values above 1 continue the curve for HDR. A
+channel whose points all lie on `y = x` is an exact pass-through. Points too close together for
+binary32 segment coefficients refuse with a diagnostic. The constant `clamp` switch
+(`bloom.curves.clamp`) limits each graded RGB value to `[0, 1]`.
+
+Hue/Saturation has an animatable/drivable `hue` (`bloom.hue-saturation.hue`, degrees, default 0,
+within `[-1e6, 1e6]`) and `saturation` (`bloom.hue-saturation.saturation`, a factor, default 1,
+within `[0, 1000]`). Its colour model is the CSS/SVG Filter Effects Module Level 1 `feColorMatrix`
+pair: the `hueRotate` matrix for the hue, then the `saturate` matrix, multiplied in double and
+narrowed once. Both use that standard's luminance weights `0.213, 0.715, 0.072`: any hue keeps
+neutrals exactly and that luminance to within the standard's rounded coefficients (about 0.1%), and
+saturation zero is the luminance on every channel.
+The matrix is linear, so it is applied directly to associated RGB: alpha is unchanged, HDR and
+negative values scale linearly and are never clamped, and no unpremultiply is needed.
+
+Each grade prepares one packed binary32 table on the host (`PreparedColorGrade`): per Levels
+channel the pivot, reciprocal range, inverse gamma, output black and range; per Curves channel the
+knots and one cubic polynomial `a + dx(b + dx(c + dx d))` per segment, with the extrapolations as
+the first and last segments; for Hue/Saturation the three matrix rows. The CPU reference applies
+that table with the same binary32 operations, ordered `fma`, and correctly rounded division. A grade
+whose every channel is the identity and that does not clamp (the defaults, zero hue with unit
+saturation) aliases its input exactly. A non-finite straight value or result is a diagnosed
+failure, never a published pixel; a value outside its domain fails the frame explicitly.
+
+The prepared table forms the effect cache identity; the clamp switch and every operand's resolved
+value enter the operation key, and animated or driven operands propagate time dependence. ROI
+evaluation is pointwise. The CPU reference checks cancellation at every row and every 4096 pixels,
+reports per-row progress, and allocates its output only within the request's pixel budget;
+cancellation, budget refusal and failures publish no partial image.
+
+The GPU route emits one resident `ProcessNeighborhood` command from one fixed program per kind
+(semantics `bloom.render.levels.v1`, `bloom.render.curves.v1`, `bloom.render.hue-saturation.v1`)
+whose storage buffer holds the prepared table, so animated values change only data and the command
+identity, never the shader. The straight-colour grades use the wrapper's correctly rounded division,
+matching the CPU. The command runs through the same scene builder, executor, admission, caches,
+cancellation and retirement for preview, still and sequence export, video export and headless
+render. The kernels are classified Required as `effect.LevelsKernel`, `effect.CurvesKernel` and
+`effect.HueSaturationKernel`, and covered by the Required `node.bloom.levels`, `node.bloom.curves`
+and `node.bloom.hue-saturation` fixtures (an HDR, signed, partial-alpha gradient, full frame and
+ROI); there is no exception. Gamma uses the device `pow`, so a gamma other than 1 on the alpha
+channel matches the CPU within the 2e-6 gate rather than bit-exactly.
+
+None of the three has a mask input yet: the shared mask input for image effects belongs to #383.
+Their curves are edited as numeric points in Properties and on the node card, because Bloom has no
+graphical transfer-curve editor.
+
+Tests: the direct CPU test compares Levels and Curves against independent double-precision
+formulas (Curves in the Hermite basis) over HDR, negative and partial-alpha pixels with clamp on and
+off, normalises a Raw depth pass, and checks steps, identities, point order, constants, domains,
+windows, budget, cancellation and the generated programs; Hue/Saturation is compared against the
+Filter Effects matrices with neutral and luminance preservation. Evaluator tests cover the
+reference over a composited baseline, warm reuse, ROI, value and clamp invalidation, animation,
+identity aliasing and refusals. Compiler, registry, command, Properties and archive tests cover
+lowering, mute pass-through, the definitions, add, wiring, undo/redo, refusals and reopen. Scene
+preparation checks one command per grade, that a changed value reuses the compiled shader, and
+identity aliasing; the native image-effect harness runs every kind over signed/HDR/partial-alpha
+solids at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value runs.

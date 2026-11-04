@@ -2,7 +2,7 @@
 
 Status: first 18 nodes implemented and locally checked; later chunks remain planned
 
-Updated: 2026-11-03
+Updated: 2026-11-04
 
 Owner: [issue #331](https://github.com/kinetik-gg/bloom/issues/331).
 
@@ -20,7 +20,9 @@ Standalone Transform 2D is implemented by #336 (see
 [evaluation primitives](../architecture/evaluation-primitives.md#transform-2d)). Matte Blur is
 implemented by #337 (see [image filters](../architecture/image-filters.md#matte-blur)). Luma Key,
 Matte Erode and Matte Dilate are implemented by #338 (see
-[image filters](../architecture/image-filters.md#luma-key)). Chunks #339–#349 remain planned. The
+[image filters](../architecture/image-filters.md#luma-key)). Levels, Curves and Hue/Saturation are
+implemented by #340 (see [image filters](../architecture/image-filters.md#levels-curves-and-huesaturation)).
+Chunks #339 and #341–#349 remain planned. The
 inventory below records
 the original audit baseline rather than claiming those delivered nodes remain absent.
 
@@ -121,7 +123,7 @@ Depends on #337, #338.
 
 ### 9. [#340: Levels, Curves and image Hue/Saturation](https://github.com/kinetik-gg/bloom/issues/340)
 
-Build on pointwise effects and usable typed curve/ramp editing. Explicit color model and HDR/alpha behavior. Prerequisite: data reader block picker/create/edit workflow and color audit corrections.
+Build on pointwise effects and usable typed curve/ramp editing. Explicit color model and HDR/alpha behavior. Prerequisite: data reader block picker/create/edit workflow and color audit corrections. Implemented: per-channel Levels and Curves (RGB master, R/G/B/A; clamp off by default; Curves are numeric PCHIP points with linear HDR extrapolation) and Hue/Saturation (Filter Effects hue-rotate and saturate matrices), with no colour transform so Raw data passes grade as stored. The optional mask input waits on #383.
 
 Depends on #332.
 

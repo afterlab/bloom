@@ -1,5 +1,6 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 
+#include "color_grade_image_effect.hpp"
 #include "footage_interpretation_pass.hpp"
 #include "layer_mask_coverage.hpp"
 #include "luma_key_image_effect.hpp"
@@ -79,6 +80,14 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
     if (transform.kind == GpuOcioTransformKind::LumaKey) {
         appendText(bytes, "luma-key");
         for (const auto value : transform.lumaKey)
+            appendF64(bytes, static_cast<double>(value));
+    }
+    // Appended only for #340 grades, so every earlier key keeps its exact bytes.
+    if (transform.kind == GpuOcioTransformKind::ColorGrade) {
+        appendText(bytes, "color-grade");
+        appendU64(bytes, transform.gradeKind);
+        appendU64(bytes, transform.gradeData.size());
+        for (const auto value : transform.gradeData)
             appendF64(bytes, static_cast<double>(value));
     }
     appendU64(bytes, transform.maskData.size());
@@ -291,6 +300,9 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
                                                      static_cast<SeparableBlurKind>(transform.blurKind));
         case GpuOcioTransformKind::LumaKey:
             return detail::buildLumaKeyProgram(transform.lumaKey);
+        case GpuOcioTransformKind::ColorGrade:
+            return detail::buildColorGradeProgram(
+                static_cast<detail::ColorGradeKind>(transform.gradeKind), transform.gradeData);
         case GpuOcioTransformKind::LayerMask:
             return detail::buildLayerMaskProgram(transform.maskData);
         case GpuOcioTransformKind::FootageInterpretation:

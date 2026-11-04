@@ -146,18 +146,16 @@ applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage
 }
 } // namespace
 
-PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effect,
-                                                const EvaluationColorIntent& intent,
-                                                const std::filesystem::path& base,
-                                                const CancellationToken& cancellation,
-                                                const std::optional<double> sampledAmount,
-                                                const std::optional<std::array<double, 4>> canvasMargins,
-                                                const double horizontalScale,
-                                                const double verticalScale,
-                                                const std::optional<std::int64_t> sampledChannel,
-                                                std::shared_ptr<const PreparedLayerMasks> layerMasks,
-                                                const std::optional<Transform2DValues> transform2D,
-                                                const std::optional<std::array<double, 2>> lumaKeyRange) {
+PreparedImageEffect ImageEffectContext::prepare(
+    const CompiledImageEffect& effect, const EvaluationColorIntent& intent,
+    const std::filesystem::path& base, const CancellationToken& cancellation,
+    const std::optional<double> sampledAmount,
+    const std::optional<std::array<double, 4>> canvasMargins, const double horizontalScale,
+    const double verticalScale, const std::optional<std::int64_t> sampledChannel,
+    std::shared_ptr<const PreparedLayerMasks> layerMasks,
+    const std::optional<Transform2DValues> transform2D,
+    const std::optional<std::array<double, 2>> lumaKeyRange,
+    const std::optional<std::vector<double>> gradeValues) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
@@ -282,6 +280,20 @@ PreparedImageEffect ImageEffectContext::prepare(const CompiledImageEffect& effec
         keyIdentity.add(static_cast<double>(prepared.lumaKey->pivot));
         keyIdentity.add(static_cast<double>(prepared.lumaKey->slope));
         prepared.cacheIdentity = keyIdentity.bytes();
+        return prepared;
+    }
+    if (isColorGradeKernel(effect.kernel)) {
+        auto grade = gradeValues ? prepareColorGrade(effect.kernel, *gradeValues) : std::nullopt;
+        if (!grade) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Color grade values are out of domain");
+            return prepared;
+        }
+        // An identity grade aliases its input exactly, like every other identity effect.
+        if (grade->identity)
+            return {};
+        prepared.cacheIdentity = colorGradeIdentity(*grade);
+        prepared.colorGrade = std::move(grade);
         return prepared;
     }
     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
@@ -420,6 +432,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.lumaKey)
         return applyLumaKey(*effect.lumaKey, input, pixelBudget, cancellation, operation,
                             progress);
+    if (effect.colorGrade)
+        return applyColorGrade(*effect.colorGrade, input, pixelBudget, cancellation, operation,
+                               progress);
     if (effect.transform2D)
         return applyTransform2D(*effect.transform2D, input, pixelBudget, cancellation, operation,
                                 progress, horizontalScale, verticalScale);

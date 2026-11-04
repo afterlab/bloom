@@ -1,10 +1,11 @@
 #pragma once
 
-#include "pointwise_image_effect.hpp"
 #include "canvas_image_effect.hpp"
-#include "separable_image_effect.hpp"
+#include "color_grade_image_effect.hpp"
 #include "layer_mask_coverage.hpp"
 #include "luma_key_image_effect.hpp"
+#include "pointwise_image_effect.hpp"
+#include "separable_image_effect.hpp"
 #include "transform_2d_geometry.hpp"
 
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
@@ -30,6 +31,8 @@ struct PreparedImageEffect final {
     std::optional<PreparedTransform2D> transform2D;
     // #338 Luma Key: never an identity, since it turns an Image into a Mask.
     std::optional<PreparedLumaKey> lumaKey;
+    // #340 Levels, Curves and Hue/Saturation (absent for an identity grade).
+    std::optional<PreparedColorGrade> colorGrade;
     // ADR 0028: prepared layer-mask geometry (null for every other kernel).
     std::shared_ptr<const PreparedLayerMasks> masks;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
@@ -39,7 +42,7 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        if (resizeFit || lumaKey)
+        if (resizeFit || lumaKey || colorGrade)
             return false;
         return !diagnostic && !cancelled
                    ? (!combine || (combine->mode == ImageCombineMode::Mix &&
@@ -59,18 +62,16 @@ struct PreparedImageEffect final {
 // No OCIO work runs on the UI thread. The bounded cache belongs to the evaluator session.
 class ImageEffectContext final {
   public:
-    [[nodiscard]] PreparedImageEffect prepare(const CompiledImageEffect& effect,
-                                              const EvaluationColorIntent& intent,
-                                              const std::filesystem::path& base = {},
-                                              const CancellationToken& cancellation = {},
-                                              std::optional<double> sampledAmount = {},
-                                              std::optional<std::array<double, 4>> canvasMargins = {},
-                                              double horizontalScale = 1.0,
-                                              double verticalScale = 1.0,
-                                              std::optional<std::int64_t> sampledChannel = {},
-                                              std::shared_ptr<const PreparedLayerMasks> layerMasks = {},
-                                              std::optional<Transform2DValues> transform2D = {},
-                                              std::optional<std::array<double, 2>> lumaKeyRange = {});
+    [[nodiscard]] PreparedImageEffect
+    prepare(const CompiledImageEffect& effect, const EvaluationColorIntent& intent,
+            const std::filesystem::path& base = {}, const CancellationToken& cancellation = {},
+            std::optional<double> sampledAmount = {},
+            std::optional<std::array<double, 4>> canvasMargins = {}, double horizontalScale = 1.0,
+            double verticalScale = 1.0, std::optional<std::int64_t> sampledChannel = {},
+            std::shared_ptr<const PreparedLayerMasks> layerMasks = {},
+            std::optional<Transform2DValues> transform2D = {},
+            std::optional<std::array<double, 2>> lumaKeyRange = {},
+            std::optional<std::vector<double>> gradeValues = {});
 
   private:
     std::mutex mutex_;

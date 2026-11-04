@@ -297,8 +297,22 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value && value->size() <= 256 && value->find('\0') == std::string::npos;
     }
     if (schemaKey == "bloom.flip.horizontal" || schemaKey == "bloom.flip.vertical" ||
-        schemaKey == "bloom.luma-key.invert")
+        schemaKey == "bloom.luma-key.invert" || schemaKey == kLevelsClampSchemaKey ||
+        schemaKey == kCurvesClampSchemaKey)
         return std::holds_alternative<bool>(constant.value);
+    // #340: every Levels value, the hue and the saturation are finite within their schema domain;
+    // a Curves point is a finite (input, output) pair within +-kMaximumGradeValue.
+    if (isLevelsValueSchemaKey(schemaKey) || schemaKey == kHueSaturationHueSchemaKey ||
+        schemaKey == kHueSaturationSaturationSchemaKey) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               isScalarWithinSchemaDomain(schemaKey, *value);
+    }
+    if (isCurvePointSchemaKey(schemaKey)) {
+        const auto* value = std::get_if<Vec2d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y) &&
+               std::abs(value->x) <= kMaximumGradeValue && std::abs(value->y) <= kMaximumGradeValue;
+    }
     if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high") {
         const auto* value = std::get_if<double>(&constant.value);
         return value != nullptr && std::isfinite(*value) &&

@@ -20,6 +20,7 @@
 //    takes the existing CPU reference path; it is never substituted with an identity result.
 
 #include "canvas_image_effect.hpp"
+#include "color_grade_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_preparation_common.hpp"
@@ -29,8 +30,8 @@
 #include "luma_key_image_effect.hpp"
 #include "pointwise_image_effect.hpp"
 #include "resize_fit_geometry.hpp"
-#include "transform_2d_geometry.hpp"
 #include "separable_image_effect.hpp"
+#include "transform_2d_geometry.hpp"
 
 #include "layer_mask_sampling.hpp"
 #include <bloom/media/image.hpp>
@@ -455,7 +456,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* lumaKeyKernel = std::get_if<LumaKeyKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
-        blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr) {
+        blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr &&
+        !isColorGradeKernel(effect.kernel)) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
     }
@@ -562,6 +564,21 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             leg.blurKind = static_cast<std::uint8_t>(blur->kind);
             legs.push_back(std::move(leg));
         }
+    } else if (isColorGradeKernel(effect.kernel)) {
+        // #340: the CPU reference's prepared table as the kind's one fixed program's data; an
+        // identity grade aliases its input exactly, as on the CPU.
+        const auto values = sampleColorGradeOperands(effect.kernel, plan, resolved);
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Color grade values are out of domain");
+        if (grade->identity)
+            return identity();
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::ColorGrade;
+        leg.gradeKind = static_cast<std::uint8_t>(grade->kind);
+        leg.gradeData = grade->data;
+        legs.push_back(std::move(leg));
     } else if (lumaKeyKernel != nullptr) {
         // #338: the CPU reference's prepared key as the one fixed program's data. Never an
         // identity for an input with pixels; an input with no image stays empty (below).
@@ -826,8 +843,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     result.command = currentCommand;
     result.key = std::move(currentKey);
     result.window = outputWindow;
-    result.local =
-        blur ? boundsForWindow(outputWindow, ctx.hScale, ctx.vScale) : bounds[inputValue].output;
+    // A grade can lift transparent pixels inside the data window (an alpha transfer), so its
+    // content bounds are that whole window, as on the CPU reference.
+    result.local = blur || isColorGradeKernel(effect.kernel)
+                       ? boundsForWindow(outputWindow, ctx.hScale, ctx.vScale)
+                       : bounds[inputValue].output;
     result.output = result.local;
     return std::nullopt;
 }

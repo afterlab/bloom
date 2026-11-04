@@ -513,6 +513,15 @@ enum class ScalarDomain : std::uint8_t {
                 if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel))
                     validKernel = hasValidScalarCurveReference(key->low, plan, index, failure) &&
                                   hasValidScalarCurveReference(key->high, plan, index, failure);
+                forEachColorGradeOperand(effect.kernel, [&](const auto& operand) {
+                    using Operand = std::decay_t<decltype(operand)>;
+                    if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
+                        validKernel = validKernel &&
+                                      hasValidVec2CurveReference(operand, plan, index, failure);
+                    else
+                        validKernel = validKernel &&
+                                      hasValidScalarCurveReference(operand, plan, index, failure);
+                });
                 if (const auto* file = std::get_if<FileTransformKernel>(&effect.kernel))
                     validKernel = file->interpolation >= 0 && file->interpolation <= 2 &&
                                   file->direction >= 0 && file->direction <= 1 &&
@@ -1218,6 +1227,19 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                            operationSubject) &&
                             registerScalar(key->high, "high", ScalarDomain::LumaKeyThreshold,
                                            operationSubject));
+                    // #340: the grades' domains are checked when they are prepared (every value
+                    // must also be finite), so each operand registers as an ordinary claim.
+                    bool gradeRegistered = true;
+                    forEachColorGradeOperand(effect.kernel, [&](const auto& operand) {
+                        using Operand = std::decay_t<decltype(operand)>;
+                        if (!gradeRegistered)
+                            return;
+                        if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
+                            gradeRegistered = registerVec2(operand, "grade", operationSubject);
+                        else
+                            gradeRegistered = registerScalar(
+                                operand, "grade", ScalarDomain::Unbounded, operationSubject);
+                    });
                     if (const auto* transform = std::get_if<Transform2DKernel>(&effect.kernel))
                         static_cast<void>(
                             registerVec2(transform->translate, "translate", operationSubject) &&
@@ -2320,6 +2342,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (low && high)
                         lumaKeyRange = std::array{low->value, high->value};
                 }
+                std::optional<std::vector<double>> gradeValues;
+                if (isColorGradeKernel(effect->kernel))
+                    gradeValues = detail::sampleColorGradeOperands(effect->kernel, *plan, resolved);
                 std::shared_ptr<const detail::PreparedLayerMasks> layerMasks;
                 if (const auto* masks = std::get_if<LayerMaskKernel>(&effect->kernel)) {
                     const auto maskTime =
@@ -2336,13 +2361,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                               *effect, request.colorIntent, mediaBase, cancellation,
                               pointwiseAmount, canvasMargins, resolved.horizontalScale,
                               resolved.verticalScale, sampledChannel, std::move(layerMasks),
-                              transform2D, lumaKeyRange);
+                              transform2D, lumaKeyRange, std::move(gradeValues));
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&
                     (std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
                      std::holds_alternative<Transform2DKernel>(effect->kernel) ||
-                     std::holds_alternative<LumaKeyKernel>(effect->kernel))) {
+                     std::holds_alternative<LumaKeyKernel>(effect->kernel) ||
+                     isColorGradeKernel(effect->kernel))) {
                     auto failure = *preparedEffect->diagnostic;
                     failure.subject = operationSubject;
                     return EvaluationResult::failed(std::move(failure));
@@ -2657,6 +2683,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(luma->invert);
                                 parameter(luma->low);
                                 parameter(luma->high);
+                            }
+                            if (isColorGradeKernel(step.kernel)) {
+                                key.add(std::string{"color-grade-v1"});
+                                if (const auto* levels = std::get_if<LevelsKernel>(&step.kernel))
+                                    key.add(levels->clamp);
+                                if (const auto* curves = std::get_if<CurvesKernel>(&step.kernel))
+                                    key.add(curves->clamp);
+                                forEachColorGradeOperand(step.kernel, parameter);
                             }
                             if (const auto* transform =
                                     std::get_if<Transform2DKernel>(&step.kernel)) {
@@ -3204,7 +3238,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     if (std::holds_alternative<DiscreteImageKernel>(
                                             effect.kernel) ||
                                         preparedEffect->resizeFit || preparedEffect->blur ||
-                                        preparedEffect->transform2D || preparedEffect->lumaKey) {
+                                        preparedEffect->transform2D || preparedEffect->lumaKey ||
+                                        preparedEffect->colorGrade) {
                                         operationFailure = std::move(*result.diagnostic);
                                         return;
                                     }

@@ -108,8 +108,7 @@ The full, current priority order lives in [issue #384](https://github.com/kineti
 
 **Next: core compositing**
 
-- Levels, Curves and Hue/Saturation; Drop Shadow, Glow and Light Wrap; a standalone Transform
-  node.
+- Drop Shadow, Glow and Light Wrap; a standalone Transform node.
 - Cryptomatte and node mattes as masks, and proxy generation.
 
 **Later**

@@ -131,6 +131,14 @@ QString displayTypeName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Matte Dilate");
     if (typeId == "bloom.luma-key")
         return QCoreApplication::translate("node_editor", "Luma Key");
+    if (typeId == "bloom.hue-saturation")
+        return QCoreApplication::translate("node_editor", "Hue/Saturation");
+    // #340 Curves points: "redPoint3" reads "Red Point 3" (input along X, output along Y).
+    if (const auto marker = typeId.rfind("Point"); marker != std::string_view::npos && marker > 0 &&
+                                                   marker + 6 == typeId.size() &&
+                                                   typeId.back() >= '1' && typeId.back() <= '9')
+        return QCoreApplication::translate("node_editor", "%1 Point %2")
+            .arg(displayTypeName(typeId.substr(0, marker)), QChar(typeId.back()));
     if (typeId == "bloom.exposure")
         return QCoreApplication::translate("node_editor", "Exposure");
     if (typeId == "bloom.offset")

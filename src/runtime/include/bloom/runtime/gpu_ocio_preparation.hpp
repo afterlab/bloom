@@ -62,6 +62,10 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // prepared pivot, slope and mode) is its storage-buffer data, part of the prepare key and the
     // command identity, so keyed thresholds never recompile.
     LumaKey = 10,
+    // #340 Levels, Curves and Hue/Saturation: one fixed neighbourhood program per `gradeKind`
+    // (detail::ColorGradeKind); `gradeData` (the prepared table) is its storage-buffer data, part
+    // of the prepare key and the command identity, so keyed grades never recompile.
+    ColorGrade = 11,
 };
 
 struct GpuOcioTransformSpec final {
@@ -84,6 +88,9 @@ struct GpuOcioTransformSpec final {
     std::uint8_t blurKind = 0;
     // LumaKey only: detail::lumaKeyProgramData.
     std::array<float, 4> lumaKey{};
+    // ColorGrade only: detail::ColorGradeKind and detail::PreparedColorGrade::data.
+    std::uint8_t gradeKind = 0;
+    std::vector<float> gradeData;
     // LayerMask only.
     std::vector<std::byte> maskData;
     // FootageInterpretation only.

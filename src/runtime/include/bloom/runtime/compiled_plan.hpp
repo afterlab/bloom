@@ -348,10 +348,79 @@ struct LumaKeyKernel final {
     bool invert = false;
     friend bool operator==(const LumaKeyKernel&, const LumaKeyKernel&) = default;
 };
+// #340 Levels, Curves and Hue/Saturation: per-channel grades with no colour transform, so a Raw
+// data pass is graded exactly as stored. Channels are the RGB master (applied to red, green and
+// blue first), then red, green, blue and alpha. Levels and Curves work on straight colour and
+// re-associate by the graded alpha; Hue/Saturation is a linear RGB matrix over associated colour.
+// The prepared arithmetic is in color_grade_image_effect.hpp (CPU reference and GPU program).
+struct LevelsChannelParameters final {
+    CompiledScalarParameter inputBlack;
+    CompiledScalarParameter inputWhite;
+    CompiledScalarParameter gamma;
+    CompiledScalarParameter outputBlack;
+    CompiledScalarParameter outputWhite;
+    friend bool operator==(const LevelsChannelParameters&,
+                           const LevelsChannelParameters&) = default;
+};
+struct LevelsKernel final {
+    std::array<LevelsChannelParameters, 5> channels;
+    // Limits each channel's result to [0, 1]. Alpha is always within [0, 1].
+    bool clamp = false;
+    friend bool operator==(const LevelsKernel&, const LevelsKernel&) = default;
+};
+struct CurvesKernel final {
+    // [channel][point]: (input, output) control points of a monotone cubic through the points,
+    // extrapolated linearly along its end tangents.
+    std::array<std::array<CompiledVec2Parameter, 5>, 5> points;
+    bool clamp = false;
+    friend bool operator==(const CurvesKernel&, const CurvesKernel&) = default;
+};
+struct HueSaturationKernel final {
+    CompiledScalarParameter hue;        // degrees
+    CompiledScalarParameter saturation; // factor, 1 = unchanged
+    friend bool operator==(const HueSaturationKernel&, const HueSaturationKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
-                 SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel>;
+                 SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
+                 LevelsKernel, CurvesKernel, HueSaturationKernel>;
+
+// #340: visits every animatable operand of a Levels, Curves or Hue/Saturation kernel in the
+// kernel's canonical order (channel-major), calling `visit(parameter)` with a
+// CompiledScalarParameter or CompiledVec2Parameter. Returns false for every other kernel. The one
+// traversal the evaluator's validation, sampling, cache key and time dependence all share.
+template <typename Visit>
+bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
+    if (const auto* levels = std::get_if<LevelsKernel>(&kernel)) {
+        for (const auto& channel : levels->channels) {
+            visit(channel.inputBlack);
+            visit(channel.inputWhite);
+            visit(channel.gamma);
+            visit(channel.outputBlack);
+            visit(channel.outputWhite);
+        }
+        return true;
+    }
+    if (const auto* curves = std::get_if<CurvesKernel>(&kernel)) {
+        for (const auto& channel : curves->points)
+            for (const auto& point : channel)
+                visit(point);
+        return true;
+    }
+    if (const auto* hueSaturation = std::get_if<HueSaturationKernel>(&kernel)) {
+        visit(hueSaturation->hue);
+        visit(hueSaturation->saturation);
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] inline bool isColorGradeKernel(const ImageEffectKernel& kernel) noexcept {
+    return std::holds_alternative<LevelsKernel>(kernel) ||
+           std::holds_alternative<CurvesKernel>(kernel) ||
+           std::holds_alternative<HueSaturationKernel>(kernel);
+}
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
     OperationIndex input;

@@ -3,6 +3,7 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
 
@@ -277,8 +278,8 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kGradientStartParameterSchemaKey ||
            schemaKey == kGradientEndParameterSchemaKey ||
            schemaKey == kVector2ValueParameterSchemaKey ||
-           schemaKey == "bloom.transform-2d.translate" ||
-           schemaKey == "bloom.transform-2d.pivot" || schemaKey == "bloom.transform-2d.scale";
+           schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
+           schemaKey == "bloom.transform-2d.scale" || isCurvePointSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -306,7 +307,9 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.pad.right" || schemaKey == "bloom.pad.bottom" ||
            schemaKey == "bloom.multiply-alpha.factor" || schemaKey == "bloom.blur.radius" ||
            schemaKey == "bloom.transform-2d.rotation" || schemaKey == "bloom.luma-key.low" ||
-           schemaKey == "bloom.luma-key.high" ||
+           schemaKey == "bloom.luma-key.high" || isLevelsValueSchemaKey(schemaKey) ||
+           schemaKey == kHueSaturationHueSchemaKey ||
+           schemaKey == kHueSaturationSaturationSchemaKey ||
            schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
            schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -375,6 +378,12 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
         return value >= 0.0 && value <= kMaximumBlurRadiusPixels;
     if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high")
         return value >= -kMaximumLumaKeyThreshold && value <= kMaximumLumaKeyThreshold;
+    if (isLevelsGammaSchemaKey(schemaKey))
+        return value >= kMinimumLevelsGamma && value <= kMaximumLevelsGamma;
+    if (isLevelsValueSchemaKey(schemaKey) || schemaKey == kHueSaturationHueSchemaKey)
+        return value >= -kMaximumGradeValue && value <= kMaximumGradeValue;
+    if (schemaKey == kHueSaturationSaturationSchemaKey)
+        return value >= 0.0 && value <= kMaximumGradeSaturation;
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

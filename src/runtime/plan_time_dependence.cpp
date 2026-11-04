@@ -89,6 +89,13 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         return parameter(blur->radius);
                     if (const auto* key = std::get_if<LumaKeyKernel>(&step.kernel))
                         return parameter(key->low) || parameter(key->high);
+                    if (isColorGradeKernel(step.kernel)) {
+                        bool animated = false;
+                        forEachColorGradeOperand(step.kernel, [&](const auto& operand) {
+                            animated = animated || parameter(operand);
+                        });
+                        return animated;
+                    }
                     if (const auto* transform = std::get_if<Transform2DKernel>(&step.kernel))
                         return parameter(transform->translate) || parameter(transform->pivot) ||
                                parameter(transform->scale) || parameter(transform->rotation);
