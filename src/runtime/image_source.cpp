@@ -329,6 +329,9 @@ ImageSourceSelection selectImageSource(
             findRetained();
         if (!selected.sourceRevision) {
             selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
+            // #477: this frame's own read goes first; the read-ahead starts no capture meanwhile.
+            const auto foreground = readAhead != nullptr ? readAhead->foregroundRead()
+                                                         : ImageSequenceReadAhead::ForegroundRead{};
             capture = media::captureImageSourceRevision(
                 selected.path, hostByteBudget, [&] { return cancel.isCancellationRequested(); },
                 selected.recordedDigest, selected.expectedStamp);

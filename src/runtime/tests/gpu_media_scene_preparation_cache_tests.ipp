@@ -587,7 +587,8 @@ void testSequenceReadAhead(Expectations& expectations, const MediaFixture& fixtu
 
 // #477: a frame claims the sequence member it needs from the read-ahead, so the file is read once.
 // A capture still queued is withdrawn (the frame reads the file itself); a capture in flight is
-// waited for until it ends, and the wait stops when the frame is cancelled.
+// waited for until it ends, and the wait stops when the frame is cancelled. While a frame reads
+// its own source, no capture starts.
 void testSequenceReadAheadClaim(Expectations& expectations, const MediaFixture& fixture) {
     // A sparse file the single worker takes many milliseconds to read, then fails to probe.
     const auto slow = fixture.directory / "claim_slow.bin";
@@ -631,8 +632,16 @@ void testSequenceReadAheadClaim(Expectations& expectations, const MediaFixture& 
                             readAhead.statistics().awaited == 1 &&
                             readAhead.statistics().started == 1,
                         "a withdrawn capture never starts and an ended one is not claimed again");
-    readAhead.request(cache, {capture(slow, "slow")});
-    expectations.expect(waitStarted(2), "the capture is requested again");
+    // A frame reading its own source holds every capture start back until its read ends.
+    {
+        const auto foreground = readAhead.foregroundRead();
+        readAhead.request(cache, {capture(slow, "slow")});
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        expectations.expect(readAhead.statistics().started == 1 &&
+                                readAhead.statistics().deferred != 0,
+                            "no capture starts while a frame reads its own source");
+    }
+    expectations.expect(waitStarted(2), "the capture starts once the frame's read ends");
     const auto claimStart = std::chrono::steady_clock::now();
     const bool cancelledWaited = readAhead.claim("slow", [] { return true; });
     expectations.expect(cancelledWaited && readAhead.statistics().awaited == 2 &&

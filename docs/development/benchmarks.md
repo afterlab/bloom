@@ -251,8 +251,9 @@ Every measurement is a fresh process.
   by the frames filled for allocations per frame.
 - **Sequence read-ahead** (#477): `readAheadCaptured` counts the image-sequence read-ahead's stored
   captures, `readAheadWithdrawn` the queued captures a frame withdrew to read the file itself, and
-  `readAheadAwaited` the captures in flight a frame waited for instead of reading the file again
-  (process totals).
+  `readAheadAwaited` the captures in flight a frame waited for instead of reading the file again,
+  and `readAheadDeferred` the times a worker with queued captures waited for frames' own source
+  reads (process totals).
 - **Host preparation** (#422): `windowCpuSeconds` is the process CPU time over the measured window
   (fills and playback), `uploadBytes` the host-to-device bytes uploaded in it (from the GPU
   transfer telemetry), and `decodeStageSeconds` and `colourConvertStageSeconds` the summed wall time

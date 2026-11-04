@@ -839,7 +839,10 @@ that does not fit the cache's free budget, or one already cached, queued or in f
 A frame that selects a member the read-ahead has queued or is reading claims it (#477): a queued
 capture is withdrawn and the frame reads the file itself, and a capture in flight is waited for
 (until the frame is cancelled) and then found in the cache. The file is read once, and the playhead
-frame's read neither queues behind nor competes with a second read of the same file.
+frame's read neither queues behind nor competes with a second read of the same file. Frames read
+first: while any frame is reading its own source file, the workers start no capture (a capture
+already reading finishes), so the read-ahead uses the storage the frames being prepared leave idle,
+for example while they decode.
 Destroying the evaluator cancels outstanding captures and joins the workers. Export frames do not
 read ahead (see the linear-pass retention below).
 

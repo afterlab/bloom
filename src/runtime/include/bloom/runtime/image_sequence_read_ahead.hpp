@@ -16,6 +16,7 @@
 namespace bloom::runtime {
 
 class OperationCache;
+struct ImageSequenceReadAheadState;
 
 // Captures upcoming image-sequence files into an evaluator's operation cache on its own I/O
 // workers. A frame's source read then overlaps earlier frames instead of running inside that
@@ -49,6 +50,27 @@ class ImageSequenceReadAhead final {
         // Captures a frame took over before they started, and captures a frame waited for.
         std::uint64_t withdrawn = 0;
         std::uint64_t awaited = 0;
+        // Times a worker with queued captures waited for frames' own source reads to finish.
+        std::uint64_t deferred = 0;
+    };
+
+    // A frame reading its own source file (#477). While any is held, workers start no capture
+    // (a capture already reading continues), so the frames being prepared, the playhead frame
+    // among them, read from storage first and the read-ahead uses the storage they leave idle.
+    class ForegroundRead final {
+      public:
+        ForegroundRead() = default;
+        ~ForegroundRead();
+        ForegroundRead(ForegroundRead&& other) noexcept;
+        ForegroundRead& operator=(ForegroundRead&& other) noexcept;
+        ForegroundRead(const ForegroundRead&) = delete;
+        ForegroundRead& operator=(const ForegroundRead&) = delete;
+
+      private:
+        friend class ImageSequenceReadAhead;
+        explicit ForegroundRead(std::shared_ptr<struct ImageSequenceReadAheadState> state);
+        void release() noexcept;
+        std::shared_ptr<struct ImageSequenceReadAheadState> state_;
     };
 
     explicit ImageSequenceReadAhead(std::size_t workers = 4, std::size_t queueLimit = 32);
@@ -67,10 +89,12 @@ class ImageSequenceReadAhead final {
     // `cancelled` is polled while waiting.
     [[nodiscard]] bool claim(const std::string& revisionKey,
                              const std::function<bool()>& cancelled);
+    // Holds back capture starts until the returned read is destroyed.
+    [[nodiscard]] ForegroundRead foregroundRead();
     [[nodiscard]] Statistics statistics() const;
 
   private:
-    struct State;
+    using State = ImageSequenceReadAheadState;
     std::shared_ptr<State> state_;
 };
 

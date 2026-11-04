@@ -16,9 +16,9 @@
 
 namespace bloom::runtime {
 
-struct ImageSequenceReadAhead::State final {
+struct ImageSequenceReadAheadState final {
     struct Job final {
-        Request request;
+        ImageSequenceReadAhead::Request request;
         std::weak_ptr<OperationCache> cache;
     };
     std::size_t workerLimit = 1;
@@ -34,14 +34,29 @@ struct ImageSequenceReadAhead::State final {
     std::set<std::string> capturing;
     std::vector<std::thread> workers;
     std::atomic<bool> stopping{false};
-    Statistics statistics;
+    // Frames reading their own source file now; no capture starts while any is.
+    std::size_t foregroundReads = 0;
+    ImageSequenceReadAhead::Statistics statistics;
 
     void run() {
         for (;;) {
             Job job;
             {
                 std::unique_lock lock(mutex);
-                ready.wait(lock, [&] { return stopping.load() || !queue.empty(); });
+                bool deferred = false;
+                ready.wait(lock, [&] {
+                    if (stopping.load())
+                        return true;
+                    if (queue.empty())
+                        return false;
+                    if (foregroundReads == 0)
+                        return true;
+                    // Work is queued but a frame is reading its own source: wait for it.
+                    if (!deferred)
+                        ++statistics.deferred;
+                    deferred = true;
+                    return false;
+                });
                 if (stopping.load())
                     return;
                 job = std::move(queue.front());
@@ -161,6 +176,43 @@ bool ImageSequenceReadAhead::claim(const std::string& revisionKey,
            !(cancelled && cancelled()))
         state_->captured.wait_for(lock, std::chrono::milliseconds(5));
     return true;
+}
+
+ImageSequenceReadAhead::ForegroundRead::ForegroundRead(std::shared_ptr<State> state)
+    : state_(std::move(state)) {
+    const std::lock_guard lock(state_->mutex);
+    ++state_->foregroundReads;
+}
+
+ImageSequenceReadAhead::ForegroundRead::~ForegroundRead() { release(); }
+
+ImageSequenceReadAhead::ForegroundRead::ForegroundRead(ForegroundRead&& other) noexcept
+    : state_(std::move(other.state_)) {}
+
+ImageSequenceReadAhead::ForegroundRead&
+ImageSequenceReadAhead::ForegroundRead::operator=(ForegroundRead&& other) noexcept {
+    if (this != &other) {
+        release();
+        state_ = std::move(other.state_);
+    }
+    return *this;
+}
+
+void ImageSequenceReadAhead::ForegroundRead::release() noexcept {
+    if (!state_)
+        return;
+    bool idle = false;
+    {
+        const std::lock_guard lock(state_->mutex);
+        idle = --state_->foregroundReads == 0;
+    }
+    if (idle)
+        state_->ready.notify_all();
+    state_.reset();
+}
+
+ImageSequenceReadAhead::ForegroundRead ImageSequenceReadAhead::foregroundRead() {
+    return ForegroundRead(state_);
 }
 
 ImageSequenceReadAhead::Statistics ImageSequenceReadAhead::statistics() const {
