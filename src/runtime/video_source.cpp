@@ -94,14 +94,64 @@ void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
 bool videoFramesDecodeIndependently(const std::string_view codec) noexcept {
     return codec == "prores" || codec == "dnxhd" || codec == "mjpeg" || codec == "tiff";
 }
+std::optional<std::size_t>
+chooseOrderedDecoderLane(const std::span<const media::video::DecoderReach> lanes,
+                         const std::uint64_t frame, const bool mayStartLane) noexcept {
+    std::optional<std::size_t> nearest, unplaced, furthestBack;
+    for (std::size_t index = 0; index < lanes.size(); ++index) {
+        const auto& lane = lanes[index];
+        if (!lane.lowest) {
+            // A decoder with no frames starts from a keyframe whatever it is given: using it sends
+            // no other decoder back.
+            if (!unplaced)
+                unplaced = index;
+            continue;
+        }
+        if (lane.nearest && *lane.nearest <= frame &&
+            (!nearest || *lane.nearest > *lanes[*nearest].nearest))
+            nearest = index;
+        if (!furthestBack || *lane.lowest < *lanes[*furthestBack].lowest)
+            furthestBack = index;
+    }
+    if (nearest)
+        return nearest;
+    if (unplaced)
+        return unplaced;
+    if (mayStartLane)
+        return std::nullopt;
+    return furthestBack;
+}
 std::list<VideoSourceContext::SessionEntry>::iterator
 VideoSourceContext::chooseLocked(const std::string& key, const std::filesystem::path* path,
                                  const VideoSessionUse& use) {
     const auto matches = [&](const SessionEntry& entry) {
         return entry.key == key && (path == nullptr || entry.path == *path);
     };
-    if (!use.independentFrames)
-        return std::ranges::find_if(sessions_, matches);
+    if (!use.independentFrames) {
+        // #474: the decoder that reaches this frame without seeking back.
+        std::vector<std::list<SessionEntry>::iterator> entries;
+        std::vector<media::video::DecoderReach> lanes;
+        std::size_t total = 0;
+        std::size_t laneBytes = 0;
+        for (auto it = sessions_.begin(); it != sessions_.end(); ++it) {
+            total += it->workerBytes;
+            if (!matches(*it))
+                continue;
+            entries.push_back(it);
+            lanes.push_back(it->session->reach(use.stream, use.frame));
+            laneBytes = std::max(laneBytes, it->workerBytes);
+        }
+        if (lanes.empty())
+            return sessions_.end();
+        if (sessionByteBudget_ == 0)
+            sessionByteBudget_ = processMemoryBudgetLedger().defaultTotalByteBudget();
+        // Another lane only beside the others, never by evicting them.
+        const bool mayStartLane = lanes.size() < kOrderedDecoderLanes &&
+                                  laneBytes <= sessionByteBudget_ &&
+                                  total <= sessionByteBudget_ - laneBytes;
+        const auto chosen = chooseOrderedDecoderLane(lanes, use.frame, mayStartLane);
+        return chosen ? entries[*chosen] : sessions_.end();
+    }
     const std::pair frame{use.stream, use.frame};
     auto idle = sessions_.end();
     auto least = sessions_.end();
@@ -178,12 +228,17 @@ VideoSourceContext::session(const std::string& key, const std::filesystem::path&
         if (closed_ || generation != generation_ ||
             generation == std::numeric_limits<std::uint64_t>::max())
             return session;
-        // A source decoded in order keeps one session; an intra-only source adds this one beside
-        // its others.
-        if (!use.independentFrames)
-            if (const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
-                found != sessions_.end())
-                detached.splice(detached.end(), sessions_, found);
+        // A source decoded in order keeps at most kOrderedDecoderLanes sessions of its current
+        // path (the most recently used); an intra-only source adds this one beside its others.
+        if (!use.independentFrames) {
+            std::size_t lanes = 1;
+            for (auto it = sessions_.begin(); it != sessions_.end();) {
+                if (it->key == key && (it->path != path || ++lanes > kOrderedDecoderLanes))
+                    detached.splice(detached.end(), sessions_, it++);
+                else
+                    ++it;
+            }
+        }
         sessions_.push_front({.key = key,
                               .path = path,
                               .session = session,

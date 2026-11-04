@@ -136,6 +136,12 @@ inline constexpr std::uint64_t kFrameWaiterMaximumBypass = 16;
 nextAdmittedFrameWaiter(std::span<const FrameWaiter> waiters,
                         std::optional<std::pair<std::uint32_t, std::uint64_t>> lastGranted,
                         std::uint64_t grants) noexcept;
+// A decoder's frames in one stream as a request for `frame` finds them (#474): the last frame it
+// was given and the frames queued for it. Both empty when it has none.
+struct DecoderReach final {
+    std::optional<std::uint64_t> nearest; // the greatest of them at or before `frame`
+    std::optional<std::uint64_t> lowest;  // the lowest of them
+};
 // Blocking off-UI facade. One worker request per asset at a time: identical frame requests share
 // the in-flight result and other requests wait (cancellably) rather than fail Busy. Waiting
 // requests are admitted by nextAdmittedFrameWaiter. The caller's
@@ -174,6 +180,11 @@ class VideoDecodeSession final {
     // snapshot for choosing among sessions of an intra-only source; it may change at once.
     enum class Occupancy : std::uint8_t { Idle, Joins, Busy };
     [[nodiscard]] Occupancy occupancy(std::uint32_t stream, std::uint64_t frame);
+    // Where this session's decoder will be in `stream` (#474): the frames of `stream` it was last
+    // given or has queued. A request at or after one of them is decoded on the way forward from
+    // it; one before all of them sends the decoder back to a keyframe. A snapshot, like
+    // occupancy().
+    [[nodiscard]] DecoderReach reach(std::uint32_t stream, std::uint64_t frame);
     [[nodiscard]] static std::string defaultWorker();
     // Host-side capability screen and preference. A VA-API decode worker is attempted only when
     // the platform exposes a DRM render node and either BLOOM_VIDEO_HARDWARE_DECODE is "1" or,

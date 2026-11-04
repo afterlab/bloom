@@ -9,6 +9,7 @@
 #include <bloom/runtime/video_source_report.hpp>
 #include <list>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 namespace bloom::runtime::detail {
@@ -34,10 +35,12 @@ struct VideoSourceSelection {
     // #381: the footage interpretation pass (alpha, deinterlace) the frame runs.
     std::optional<FootagePass> footagePass;
 };
-// What a request asks a source's sessions for (#474). A source decoded in order (long-GOP) has one
-// session: its decoder keeps its position between requests, which the requests queue for. An
-// intra-only source (every frame decodes on its own) is served by parallel sessions instead, each
-// with its own decoder, so concurrent requests for different frames do not queue on one decoder.
+// What a request asks a source's sessions for (#474). A source decoded in order (long-GOP) has at
+// most kOrderedDecoderLanes sessions: each decoder keeps its position between requests, which the
+// requests queue for, and a request goes to the decoder that reaches its frame without seeking
+// back. An intra-only source (every frame decodes on its own) is served by parallel sessions
+// instead, each with its own decoder, so concurrent requests for different frames do not queue on
+// one decoder.
 struct VideoSessionUse final {
     bool independentFrames = false;
     std::uint32_t stream = 0;
@@ -46,17 +49,32 @@ struct VideoSessionUse final {
 // True for the codecs whose every frame is a random-access point, matching the decode worker's
 // intra-only list (slice-threaded decoders).
 [[nodiscard]] bool videoFramesDecodeIndependently(std::string_view codec) noexcept;
+// A long-GOP decoder sent back decodes again from the keyframe before the frame: up to a whole GOP,
+// about a second at 2160p HEVC with one keyframe per clip. Playback keeps one decoder moving
+// forward. A request for a frame it has passed (a frame the read-ahead skipped, the playhead's own
+// frame, a loop restart, a backward scrub) goes to a second decoder instead of sending it back.
+inline constexpr std::size_t kOrderedDecoderLanes = 2;
+// The lane to serve `frame`, given each lane's VideoDecodeSession::reach for it, or empty to start
+// another lane. The lane with a frame nearest at or before this one (the last frame it was given or
+// one queued for it) decodes it on the way forward, else a lane with no frames (it starts from a
+// keyframe anyway). When every lane would seek back, another lane starts while `mayStartLane`, else
+// the lane furthest back seeks, busy or not: the one most likely carrying a forward run is never
+// sent back while another lane can take the seek. With no lanes, empty.
+[[nodiscard]] std::optional<std::size_t>
+chooseOrderedDecoderLane(std::span<const media::video::DecoderReach> lanes, std::uint64_t frame,
+                         bool mayStartLane) noexcept;
 class VideoSourceContext final {
   public:
     media::video::DecodedVideoCache cache{0};
     // An intra-only use is served by the session already decoding its frame, else an idle one,
     // else a new one while the source has fewer than one per hardware thread, else the least
-    // occupied. Any other use gets the source's one session.
+    // occupied. Any other use gets the source's lane chooseOrderedDecoderLane picks; another lane
+    // starts only while its worker bytes fit the session budget beside the others.
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
     session(const std::string& key, const std::filesystem::path& path, bool allowInsertion,
             std::size_t workerBytes = 0, VideoSessionUse use = {});
-    // A retained session of `key` chosen as above, or null when there is none (or an intra-only
-    // use should start another).
+    // A retained session of `key` chosen as above, or null when there is none (or the use should
+    // start another).
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
     retainedSession(const std::string& key, VideoSessionUse use = {});
     void discardFailedSession(const std::string& key,

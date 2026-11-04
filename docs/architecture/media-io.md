@@ -1826,8 +1826,23 @@ playback, which cancels requests all the time, start a new worker for almost eve
 long-GOP stream then decoded again from its keyframe (2160p HEVC with one keyframe in 240 frames
 played at 2.5 fps).
 
-A stream decoded in order (long-GOP) keeps one session per source, so its decoder continues
-forward. An intra-only stream (ProRes, DNxHD/HR, MJPEG, TIFF: every frame a random-access point,
+A stream decoded in order (long-GOP) keeps at most two sessions per source
+(`kOrderedDecoderLanes`). A request goes to the decoder that reaches its frame without seeking back
+(`chooseOrderedDecoderLane`): the session with a frame nearest at or before it, counting the frame
+its decoder was last given and the frames queued for it, else a session with no frames yet, else a
+second session while the source has one and its worker estimate fits the session budget beside the
+others, else the session furthest back, busy or not, so the decoder carrying a forward run is not
+sent back while the other can take the seek. During cold playback one decoder runs forward with the
+read-ahead, while the playhead's own frame, frames the read-ahead skipped when its lead grew, and
+loop restarts lie behind it. With one session these requests sent the decoder back to its keyframe
+for 0.45-1.3 s each on a 2160p HEVC stream with one keyframe in 240 frames, the forward requests
+queued behind them, and playback swung between 4 and 9.7 fps (#474). The second session serves them
+beside the forward one, and a cancellation that interrupts its exchange retires only its worker.
+Counting queued frames keeps concurrent first requests together: when the decoder is given frame 5
+before frames 1-4 of the same preroll, frame 2 follows the queued frame 1 instead of starting a
+second worker. On that 2160p HEVC shot (RTX 4090, 6 s runs) cold playback went from 7.2-8.7 to
+16.7-18.7 fps, with first motion unchanged at about 0.7 s; 2160p AV1 stayed at 22 fps.
+An intra-only stream (ProRes, DNxHD/HR, MJPEG, TIFF: every frame a random-access point,
 the worker's slice-threaded codecs) is served by parallel sessions instead
 (`VideoSourceContext::session` with `VideoSessionUse::independentFrames`): a request joins the
 session already decoding its frame, else takes an idle one, else starts another while the source

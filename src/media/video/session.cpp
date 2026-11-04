@@ -831,6 +831,22 @@ VideoDecodeSession::Occupancy VideoDecodeSession::occupancy(const std::uint32_t 
     return state_->inFlightFrame || !state_->frameWaiters.empty() ? Occupancy::Busy
                                                                   : Occupancy::Idle;
 }
+DecoderReach VideoDecodeSession::reach(const std::uint32_t stream, const std::uint64_t frame) {
+    DecoderReach result;
+    const auto add = [&](const std::uint64_t point) {
+        if (point <= frame && (!result.nearest || point > *result.nearest))
+            result.nearest = point;
+        if (!result.lowest || point < *result.lowest)
+            result.lowest = point;
+    };
+    const std::lock_guard lock(state_->frameMutex);
+    if (state_->lastGrantedFrame && state_->lastGrantedFrame->first == stream)
+        add(state_->lastGrantedFrame->second);
+    for (const auto& waiter : state_->frameWaiters)
+        if (waiter.stream == stream)
+            add(waiter.frame);
+    return result;
+}
 std::optional<std::uint64_t>
 nextAdmittedFrameWaiter(const std::span<const FrameWaiter> waiters,
                         const std::optional<std::pair<std::uint32_t, std::uint64_t>> lastGranted,

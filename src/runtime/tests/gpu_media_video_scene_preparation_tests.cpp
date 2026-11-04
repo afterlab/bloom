@@ -522,6 +522,117 @@ void testIntraOnlySourceDecodesInParallel(Expectations& expectations,
                         "a source decoded in order keeps one session");
 }
 
+// Issue #474: a source decoded in order serves a request on the decoder that reaches its frame
+// without seeking back. Cold playback runs one decoder forward with the read-ahead; a request for a
+// frame it has passed (the playhead's frame, a skipped frame, a loop restart, a backward scrub)
+// gets a second decoder instead of sending the forward one back to its keyframe.
+void testOrderedLaneChoice(Expectations& expectations) {
+    using bloom::runtime::detail::chooseOrderedDecoderLane;
+    using Reach = bloom::media::video::DecoderReach;
+    using Lanes = std::vector<Reach>;
+    expectations.expect(!chooseOrderedDecoderLane({}, 5, true) &&
+                            !chooseOrderedDecoderLane({}, 5, false),
+                        "with no lanes a lane starts");
+    // One decoder at 40 with 41-45 queued: what a request for frame 44 or 10 finds.
+    expectations.expect(chooseOrderedDecoderLane(Lanes{{.nearest = 44, .lowest = 40}}, 44, true) ==
+                            0U,
+                        "a frame ahead of the forward decoder continues on it");
+    expectations.expect(
+        !chooseOrderedDecoderLane(Lanes{{.nearest = std::nullopt, .lowest = 40}}, 10, true),
+        "a frame the forward decoder passed starts a second lane");
+    expectations.expect(
+        chooseOrderedDecoderLane(Lanes{{.nearest = std::nullopt, .lowest = 40}}, 10, false) == 0U,
+        "without room for a second lane the frame queues on the only decoder");
+    expectations.expect(
+        chooseOrderedDecoderLane(Lanes{{.nearest = std::nullopt, .lowest = std::nullopt}}, 3,
+                                 true) == 0U,
+        "a decoder with no frames takes any frame");
+    // Concurrent first requests: the decoder was given 5 first, and 1 is already queued behind it.
+    // Frame 2 follows 1 forward instead of starting a second decoder.
+    expectations.expect(chooseOrderedDecoderLane(Lanes{{.nearest = 1, .lowest = 1}}, 2, true) == 0U,
+                        "a frame after one the decoder already goes back for joins it");
+    // A forward decoder at 111 and a second one at 79.
+    const Lanes forHundred{{.nearest = std::nullopt, .lowest = 111}, {.nearest = 79, .lowest = 79}};
+    expectations.expect(chooseOrderedDecoderLane(forHundred, 100, false) == 1U,
+                        "a frame behind the forward decoder goes to the decoder nearest before it");
+    const Lanes forNext{{.nearest = 111, .lowest = 111}, {.nearest = 79, .lowest = 79}};
+    expectations.expect(chooseOrderedDecoderLane(forNext, 112, false) == 0U,
+                        "the forward run stays on the forward decoder");
+    const Lanes forSix{{.nearest = std::nullopt, .lowest = 111},
+                       {.nearest = std::nullopt, .lowest = 79}};
+    expectations.expect(chooseOrderedDecoderLane(forSix, 6, false) == 1U,
+                        "a frame behind both seeks the one furthest back, not the forward run");
+    const Lanes swapped{{.nearest = std::nullopt, .lowest = 79},
+                        {.nearest = std::nullopt, .lowest = 111}};
+    expectations.expect(chooseOrderedDecoderLane(swapped, 6, false) == 0U,
+                        "the lane furthest back is chosen wherever it is listed");
+}
+
+void testOrderedSourceKeepsForwardDecoder(Expectations& expectations,
+                                          const std::filesystem::path& fixtures) {
+    const auto path = fixtures / "numbered-h264.mp4";
+    if (!std::filesystem::is_regular_file(path)) {
+        expectations.expect(false, "the H.264 fixture is present");
+        return;
+    }
+    using Use = bloom::runtime::detail::VideoSessionUse;
+    using FramePointer = std::shared_ptr<const bloom::media::provider::FrameProduct>;
+    bloom::runtime::detail::VideoSourceContext context;
+    const auto forward = context.session("h264", path, true, 0,
+                                         Use{.independentFrames = false, .stream = 0, .frame = 20});
+    expectations.expect(forward != nullptr, "the forward decoder opens");
+    if (forward == nullptr)
+        return;
+    const auto probed = forward->probe();
+    const auto* probe = std::get_if<bloom::media::provider::ProbeResult>(&probed);
+    expectations.expect(probe != nullptr, "the H.264 fixture probes");
+    if (probe == nullptr)
+        return;
+    expectations.expect(
+        std::holds_alternative<FramePointer>(forward->frame(*probe, 0, 20, 0, nullptr)) &&
+            forward->reach(0, 20).nearest == 20U,
+        "the forward decoder stands at the frame it decoded");
+    expectations.expect(
+        context.session("h264", path, true, 0,
+                        Use{.independentFrames = false, .stream = 0, .frame = 24}) == forward,
+        "a later frame continues on the forward decoder");
+    const auto back = context.session("h264", path, true, 0,
+                                      Use{.independentFrames = false, .stream = 0, .frame = 6});
+    expectations.expect(back != nullptr && back != forward && context.retainedSessionCount() == 2,
+                        "a frame the forward decoder passed gets a second decoder");
+    if (back == nullptr)
+        return;
+    expectations.expect(
+        std::holds_alternative<FramePointer>(back->frame(*probe, 0, 6, 0, nullptr)) &&
+            forward->reach(0, 20).nearest == 20U,
+        "the passed frame decodes without moving the forward decoder");
+    expectations.expect(
+        context.retainedSession("h264", Use{.independentFrames = false, .stream = 0, .frame = 8}) ==
+            back,
+        "a frame between the decoders continues on the one before it");
+    expectations.expect(context.retainedSession(
+                            "h264", Use{.independentFrames = false, .stream = 0, .frame = 30}) ==
+                            forward,
+                        "the forward run stays on the forward decoder");
+    const auto loop = context.session("h264", path, true, 0,
+                                      Use{.independentFrames = false, .stream = 0, .frame = 0});
+    expectations.expect(loop != nullptr && context.retainedSessionCount() == 2,
+                        "a loop restart behind both decoders starts no third one");
+    // A budget with room for one decoder keeps one: a passed frame then queues on it.
+    bloom::runtime::detail::VideoSourceContext tight;
+    tight.setSessionByteBudget(150);
+    const auto only = tight.session("h264", path, true, 100,
+                                    Use{.independentFrames = false, .stream = 0, .frame = 20});
+    expectations.expect(only != nullptr && std::holds_alternative<FramePointer>(
+                                               only->frame(*probe, 0, 20, 0, nullptr)),
+                        "the budgeted decoder decodes");
+    expectations.expect(tight.session("h264", path, true, 100,
+                                      Use{.independentFrames = false, .stream = 0, .frame = 6}) ==
+                                only &&
+                            tight.retainedSessionCount() == 1,
+                        "a second decoder starts only when its worker estimate fits the budget");
+}
+
 int main(int argc, char** argv) {
     try {
         std::filesystem::path fixtures;
@@ -551,6 +662,8 @@ int main(int argc, char** argv) {
         testRootedVideoSourceClosure(expectations, fixtures);
         testCancelledRequestKeepsSession(expectations, fixtures);
         testIntraOnlySourceDecodesInParallel(expectations, fixtures);
+        testOrderedLaneChoice(expectations);
+        testOrderedSourceKeepsForwardDecoder(expectations, fixtures);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media video scene preparation expectations failed\n";
             return 1;
