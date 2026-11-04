@@ -72,6 +72,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   and distributing layers.
 - [Workspace presets](user-guide/workspace-presets.md) — the Workspace picker, your own layouts and how the Export panel opens.
 - [The status bar](user-guide/status-bar.md) — the labelled groups along the bottom of the window.
+- [Ways to apply an effect](user-guide/ways-to-apply-an-effect.md) — every Merge entry is a layer,
+  adjustment layers, Layer nodes, nested Merges and the graphs that give the same pixels.
 - [The Viewer](user-guide/viewer.md) — moving layers directly, including the Shift axis lock.
 - [The Image Preview node](user-guide/image-preview.md) — a node-card thumbnail of any point in the
   graph, its display choices, and showing it as the node editor background.

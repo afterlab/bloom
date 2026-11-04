@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-02
+Updated: 2026-11-04
 
 ## Geometry and transform levels
 
@@ -105,37 +105,108 @@ copy or translate it.
 
 ### Merge
 
+The whole layer model is three rules (#502):
+
+1. Images flow along the wires, and every node applies exactly where it sits.
+2. A Merge stacks its entries bottom to top. **Every entry is a layer**, whatever image feeds it.
+3. An **Adjustment** entry processes everything below it in its own Merge.
+
 Merge (`bloom.layer-stack`, the preserved durable type ID) has `Many` cardinality. Each Merge
 owns an ordered collection of stable slots addressed by `(merge node ID, slot ID, content)`.
 Every slot has one image edge and may have one audio edge. Any image producer, including an image
-effect, can feed its image port; audio sources feed the separate audio port. A
-slot records its direct Layer identity when its source is a Layer Output;
-plain image slots have no Layer identity. A Layer may participate once in each Merge, and membership
-is optional. An unconnected Layer contributes no pixels to Output.
+effect, can feed its image port; audio sources feed the separate audio port. A slot's stored
+`layerId` is its direct Layer node's layer when a Layer Output feeds it, its own entry layer when it
+has one, and otherwise absent. A Layer may participate once in each Merge, and membership is
+optional. An unconnected Layer contributes no pixels to Output.
+
+**The entry's layer** (`document::mergeEntryLayer`, `merge_entries.hpp`) is the Layer node nearest
+the Merge along the entry's image chain -- walking up through image effects' first Image input and
+Image Reroutes -- else the entry's own layer, else none yet. Every Merge entry has the full layer
+controls: name and label; timing (in/out, start, speed, Time Remap, before/after modes); enable,
+solo, audio, lock and shy; blend mode and opacity; transform; parent, track matte and masks. The
+Timeline row, Properties and the node graph all edit the same stored values.
+
+- **Entry layers.** An entry that has no Layer node stores its controls on the entry: a
+  `LayerOutputBoundary` whose `nodeId` is the Merge, whose `entrySlot` names the slot, and which owns
+  its transform, opacity, blend-mode and Time Remap parameters (`parameters`, bound by role exactly
+  as a Layer node binds them; constants or animation curves). Its `pivot` is `Frame`: scale and
+  rotation turn about the composition frame's centre plus the anchor, and the default position is
+  that centre, so an entry layer at its defaults is the identity whatever its content's bounds. A
+  Layer node keeps the `Content` pivot (the centre of its local content bounds) unless it adopted an
+  entry's values. Documents saved before 1.37 have no entry layers: a plain entry behaves as an
+  entry layer at its defaults, and the first edit of any of its controls creates the entry layer in
+  the same undo step (`EntryLayerEdit`). No document is migrated.
+- **Layer node.** A Layer node is a handle for the same controls in the node graph: there is one
+  stored set of values. Inserting or removing a Layer node never changes the picture -- it adopts
+  the entry's values, or returns its own to the entry, in a single undo step. The command stack's
+  reconcile pass does this after every transaction, comparing each entry's layer before and after.
+  A Layer node applies its settings where it sits, so it also works standalone. With several Layer
+  nodes in one chain, the one nearest the Merge is the entry's layer; consecutive Layer or transform
+  steps with no filter between them concatenate into one resample. A Layer node reaching two Merge
+  entries shares its values across both, like a clone, and both rows show a shared marker.
+- **Nested Merges.** In Merge → Merge → Merge, a nested Merge is a layer of the Merge it feeds (that
+  entry's layer). It is a group row with live controls that expands to show and edit its own
+  entries in place. It is never flattened: with the group's controls at their defaults the picture
+  equals the flattened stack for Normal-over composition, while non-Normal blends are not
+  associative and grouping may intentionally change their backdrop.
 
 Entry zero is topmost, matching the pill and timeline. Evaluation folds the list bottom to top,
-preserving existing single-Merge documents exactly. Each image Layer input supplies its own transform,
-opacity, blend mode, half-open range, enabled and solo state. Audio Layer inputs carry the same
-enabled, solo and range boundary, plus the source's start frame and level. Plain image inputs
-composite with Normal blending at full opacity. Merge inputs are topologically evaluated before
-their consumers. Merge outputs can feed a Layer image input; its audio output is the sum of its
-audio slots. A direct source or Layer connection to Output is
-normalized by a derived Normal Merge so the output remains a full composition image; this creates
-no document node or slot and does not change timeline membership.
-Nested grouping preserves the flattened result for Normal-over composition; arbitrary non-Normal
-blends are not associative and grouping may intentionally change their backdrop.
+preserving existing single-Merge documents exactly. Each entry's layer supplies its transform,
+opacity, blend mode, half-open range, enabled and solo state; the Merge reads the blend mode of the
+entry's layer even when filters follow its Layer node. Audio Layer inputs carry the same enabled,
+solo and range boundary, plus the source's start frame and level. A plain entry without an entry
+layer composites with Normal blending at full opacity, which is what its default layer is. Merge
+inputs are topologically evaluated before their consumers. Merge outputs can feed a Layer image
+input; its audio output is the sum of its audio slots. A direct source or Layer connection to
+Output is normalized by a derived Normal Merge so the output remains a full composition image; this
+creates no document node or slot and does not change timeline membership.
 
-Solo is composition-wide across all Layer boundaries: any solo Layer suppresses non-solo Layers in
-every image or audio Merge, including nested Merges. Plain image inputs have no solo flag and remain active.
+Solo is composition-wide: any solo layer suppresses non-solo layers in every image or audio Merge,
+including nested Merges. A plain entry without an entry layer has no solo flag and remains active.
 A disabled Merge produces transparency and does not traverse its inputs. Its enabled flag differs
 from node mute, whose existing first-image-input bypass semantics remain available.
 
-The timeline follows the Merge directly connected to Output. Its direct Layers are editable rows;
-a direct nested Merge is one collapsed `DataComposition` row named by the Merge's display name,
-with only enabled editable among the layer toggles. Plain source inputs are collapsed image rows.
-Nested contents are never flattened into the outer timeline. Output with no direct Merge has no
-timeline rows. Properties lists the selected Merge's own inputs in topmost-first order; Layer blend
-and opacity are editable, while plain-image Normal/100% values are read-only.
+### Adjustment Layers
+
+`bloom.adjustment` (Add → Layers → Adjustment, or the Timeline's Add menu, which creates the same
+node with a new entry for it) has no inputs or parameters and one Image output. That output is
+**the stack below** the entry its chain lands in:
+
+```text
+Adjustment ─→ Curves ─→ Merge entry 3
+Source ───────────────→ Merge entry 1, 2
+```
+
+The entry an Adjustment serves is the first Merge entry each of its image paths reaches
+(`document::adjustmentTargets`). That entry **replaces** the stack below it rather than compositing
+over it: with `B` the stack below, `X` the chain's image and `k` the entry layer's coverage (opacity
+times masks times track matte, inside its range, positioned by its transform), the Merge continues
+from `lerp(B, X', k)`, where `X'` is `X` for Normal and `X` blended over `B` with the entry's blend
+mode otherwise. Opacity therefore mixes adjusted with unadjusted. The compiler lowers this to
+existing operations -- a Merge of the entries below, the chain, a coverage image and an Image Mix --
+so the CPU reference and the GPU route are the ones every other Merge uses, and the plan's cache
+identity covers the stack below. If an Adjustment's chain reaches more than one Merge entry the
+compile reports a node-addressed diagnostic and the Adjustment draws nothing; a disconnected
+Adjustment draws nothing. A disabled or solo-excluded adjustment entry leaves the stack below
+unchanged.
+
+Every valid graph gives the same pixels: an Adjustment → Curves at the top of a Merge equals Merge →
+Curves, which equals Merge → Curves into the bottom entry of a second Merge holding the remaining
+layers; an Adjustment at opacity *o* equals the curved stack mixed over the unadjusted stack at
+*o*; a Layer node's values equal the same values set on the entry when no filter follows the Layer
+node; and a nested Merge at default layer controls equals the same stack flattened into one Merge.
+These are tested on the CPU reference and the GPU route. The user guide shows them side by side in
+[Ways to apply an effect](../user-guide/ways-to-apply-an-effect.md).
+
+### Timeline And Properties Projection
+
+The timeline follows the Merge directly connected to Output. Each of its entries is a row, and every
+control on every row works: a Layer node's row edits the Layer node, any other row edits (and on
+first edit creates) its entry layer. A nested Merge is a group row whose disclosure shows its own
+entries in place, indented, recursively, each just as live; Adjustment entries are adjustment rows.
+Rows of a shared Layer node show the shared marker. Output with no direct Merge has no timeline
+rows. Properties lists the selected Merge's own entries in topmost-first order with editable blend
+mode and opacity on every entry, and shows the full layer controls of the selected row.
 
 Only Output and the Merge directly feeding it are protected from removal. Other Merges can be
 added, duplicated, disconnected or deleted through ordinary commands. There is no secondary layer
@@ -489,7 +560,8 @@ truth on the `LayerOutputBoundary`:
   relation. Parenting does not imply compositing or a matte.
 - **Shared graph:** multiple layers may reference one upstream result. Removing a layer does not
   imply deleting shared nodes.
-- **Adjustment layer:** explicit stack semantic that consumes the accumulated image below; not a
+- **Adjustment layer:** an Adjustment node whose Image output is the stack below the entry its
+  chain lands in; that entry replaces the stack below (see **Adjustment Layers**). Not a
   transparent ordinary layer.
 - **Nested composition:** explicit composition-instance node with time mapping and overrides. The
   child retains its own graph; recursive same-time dependencies are rejected.

@@ -522,10 +522,16 @@ slot, or away to disconnect. Only Output and its directly connected Merge are pr
 
 ## Timeline
 
-The timeline follows the Merge directly feeding Output. Direct Layer inputs remain editable;
-nested Merges appear as one collapsed composition-colored row, with enabled as the only editable
-layer toggle. Properties on a Merge lists its own inputs in order, with Layer blend/opacity editable
-and plain-image values read-only. Solo on a Layer applies composition-wide, including nested Merges.
+The timeline follows the Merge directly feeding Output. Every Merge entry is a row and every row is
+fully live: name and label, the eye, audio, solo, lock and shy switches, blend mode, parent, track
+matte, the clip bar (trim, move, slip, stretch, split) and the twirl-down transform, opacity, mask
+and Time Remap rows all edit the entry's layer -- the Layer node nearest the Merge, or the controls
+stored on the entry, which the first edit of a plain entry creates in the same undo step. A nested
+Merge is a composition-colored group row with the same live controls; its disclosure triangle
+expands it to show and edit its own entries in place, indented, recursively. An adjustment entry
+shows the adjustment marker; rows of a Layer node shared by two entries show the shared marker.
+Properties on a Merge lists its own entries in order with editable blend mode and opacity on every
+entry. Solo applies composition-wide, including nested Merges.
 
 Space uses the shared window transport, even with no Timeline panel open. Middle-drag pans the
 Viewer and Nodes; Space no longer arms a pan gesture.
@@ -574,7 +580,9 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | Click a row's Shy switch | Marks the layer shy, or not (the selected layers when it is one of them) |
 | Click the header's Shy toggle (Hide Shy Layers) | Hides shy layers from the layer list and shows them again; they still render. Per composition, persisted with the workspace UI state in `timeline/hide-shy-layers/<id>` (not in the project) |
 | Click a group, parameter or component row | Selects it: a group selects its layer; a parameter or component row selects every key it shows (or the parameter, with none). It keeps the selected-row wash, in both halves, while that selection stands |
-| Right-click empty layer-table space | Add submenu (existing Solid, Text and shape actions); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
+| Timeline Add → Adjustment Layer | Adds an Adjustment node and a new entry for it above the selected row (else at the top) of the row's Merge, named Adjustment Layer N, in one undo step |
+| Right-click a row → Insert Layer Node / Remove Layer Node | Puts a Layer node in front of the entry, which adopts the entry's values, or dissolves the entry's Layer node and returns its values to the entry; the picture does not change |
+| Right-click empty layer-table space | Add submenu (Solid, Text, the shapes and Adjustment Layer); direct Keyframes, Graph Editor, Snap to Frames, Zoom to Fit, Select All and Deselect All actions. Opening or dismissing the menu preserves selection |
 | `Ctrl+wheel` over ruler or lanes | Zoom time about the pointer; the pointer's time stays fixed until a composition boundary clamps the range |
 | `Shift+wheel` or horizontal wheel | Scroll the visible time range |
 | Drag the navigator window | Scroll; drag either window edge to resize the visible range; `Escape` cancels |

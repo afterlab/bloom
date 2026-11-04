@@ -543,7 +543,7 @@ context menu. Dropdown-backed submenus mirror their footer dropdown item for ite
 | --- | --- |
 | View | Fit (`Ctrl+0`), 100% (`Ctrl+1`), Zoom In, Zoom Out, Zoom ▸ (the zoom presets), Resolution ▸; Channel ▸, Display / View ▸, Look, Reset Exposure and Gamma, Region of Interest, Clear Region of Interest; Guides ▸ (Safe Areas `Ctrl+Alt+S`, Safe Area Preset ▸, Custom Safe Areas…, Center Cross, Thirds, Rulers, Pixel Grid), Background ▸ (Solid, Gray, Black, White: the surround), Transparency Grid |
 | Select | Select All / Deselect All / Invert (`Ctrl+A`, `Ctrl+Shift+A`, `Ctrl+Alt+A`), naming their target: anchors while a path is edited (the Pen tool, a selected mask, or an anchor selection), layers otherwise |
-| Add | Solid, Text; the shape kinds; Import and Add… (the drop path's import, then layers at the playhead) |
+| Add | Solid, Text; the shape kinds; Adjustment Layer (the same Adjustment node as Add → Layers → Adjustment, with a new entry above the selected row); Import and Add… (the drop path's import, then layers at the playhead) |
 | Canvas context menu | On a layer: Select it, Duplicate Layer, Delete Layer; then Fit, 100%, Zoom In, Zoom Out; Add ▸, Guides ▸; Composition Settings…. The anchor menu stays first while a path is edited |
 
 The frame field defaults to `HH:MM:SS:FF`, honors `timeline/time-format`, accepts either
@@ -1047,7 +1047,8 @@ section menu. KSection headers carry only the chevron, title, and Reset.
 
 Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Grade, Color
 Management, Values, Math, Convert, String, Logic, Time, Color Values, Vector, Utilities, Output.
-Transform holds geometric image operations (Resize, Fit, Transform 2D, Crop, Pad, Flip, Rotate 90);
+Layers holds Layer and Adjustment (#502: an Adjustment's Image output is the stack below the Merge
+entry its chain lands in). Transform holds geometric image operations (Resize, Fit, Transform 2D, Crop, Pad, Flip, Rotate 90);
 Filters (`NodeCategory::Filters`) holds the blurs (Gaussian, Box, Matte) and Matte Erode/Dilate; Luma
 Key, the Drop Shadow, Glow and Light Wrap recipes and the image Separate/Combine Channels (beside
 Shuffle, Channel Copy, Remove and Pass) are under Compositing. Grade (`NodeCategory::Grade`) holds the
