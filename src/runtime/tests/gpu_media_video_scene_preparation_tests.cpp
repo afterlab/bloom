@@ -450,6 +450,78 @@ void testCancelledRequestKeepsSession(Expectations& expectations,
                         "a cancelled request keeps the retained session");
 }
 
+// Issue #474: an intra-only source decodes concurrent frames on parallel sessions. While one
+// session decodes a frame, a request for another frame gets a second session; a request for the
+// same frame joins the first. A source decoded in order keeps its one session.
+void testIntraOnlySourceDecodesInParallel(Expectations& expectations,
+                                          const std::filesystem::path& fixtures) {
+    const auto path = fixtures / "numbered-prores.mov";
+    if (!std::filesystem::is_regular_file(path)) {
+        expectations.expect(false, "the ProRes fixture is present");
+        return;
+    }
+    using Use = bloom::runtime::detail::VideoSessionUse;
+    expectations.expect(bloom::runtime::detail::videoFramesDecodeIndependently("prores") &&
+                            !bloom::runtime::detail::videoFramesDecodeIndependently("h264"),
+                        "ProRes frames decode independently, H.264 frames do not");
+    bloom::runtime::detail::VideoSourceContext context;
+    const auto first = context.session("prores", path, true, 0,
+                                       Use{.independentFrames = true, .stream = 0, .frame = 1});
+    expectations.expect(first != nullptr, "the first session opens");
+    if (first == nullptr)
+        return;
+    const auto probed = first->probe();
+    const auto* probe = std::get_if<bloom::media::provider::ProbeResult>(&probed);
+    expectations.expect(probe != nullptr, "the ProRes fixture probes");
+    if (probe == nullptr)
+        return;
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    std::jthread decoding([&] {
+        // The cancellation probe holds the decode open, so the session stays busy with frame 1.
+        static_cast<void>(first->frame(*probe, 0, 1, 0, nullptr, [&] {
+            std::unique_lock lock(mutex);
+            entered = true;
+            condition.notify_all();
+            condition.wait(lock, [&] { return release; });
+            return false;
+        }));
+    });
+    {
+        std::unique_lock lock(mutex);
+        condition.wait(lock, [&] { return entered; });
+    }
+    const auto joined = context.session("prores", path, true, 0,
+                                        Use{.independentFrames = true, .stream = 0, .frame = 1});
+    const auto other = context.session("prores", path, true, 0,
+                                       Use{.independentFrames = true, .stream = 0, .frame = 2});
+    expectations.expect(joined.get() == first.get(),
+                        "a request for the frame being decoded joins its session");
+    expectations.expect(other != nullptr && other.get() != first.get() &&
+                            context.retainedSessionCount() == 2,
+                        "a request for another frame gets a parallel session");
+    {
+        std::lock_guard lock(mutex);
+        release = true;
+    }
+    condition.notify_all();
+    decoding.join();
+    if (other != nullptr) {
+        const auto decoded = other->frame(*probe, 0, 2, 0, nullptr);
+        expectations.expect(
+            std::holds_alternative<std::shared_ptr<const bloom::media::provider::FrameProduct>>(
+                decoded),
+            "the parallel session decodes its own frame");
+    }
+    bloom::runtime::detail::VideoSourceContext ordered;
+    const auto one = ordered.session("h264", fixtures / "numbered-h264.mp4", true, 0, Use{});
+    const auto again = ordered.session("h264", fixtures / "numbered-h264.mp4", true, 0, Use{});
+    expectations.expect(one != nullptr && one == again && ordered.retainedSessionCount() == 1,
+                        "a source decoded in order keeps one session");
+}
+
 int main(int argc, char** argv) {
     try {
         std::filesystem::path fixtures;
@@ -478,6 +550,7 @@ int main(int argc, char** argv) {
         testVideoSourceRevisionBoundary(expectations, fixtures);
         testRootedVideoSourceClosure(expectations, fixtures);
         testCancelledRequestKeepsSession(expectations, fixtures);
+        testIntraOnlySourceDecodesInParallel(expectations, fixtures);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media video scene preparation expectations failed\n";
             return 1;

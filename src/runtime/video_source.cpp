@@ -12,6 +12,8 @@
 #include <bloom/runtime/video_asset.hpp>
 #include <limits>
 #include <numeric>
+#include <thread>
+#include <vector>
 namespace bloom::runtime::detail {
 namespace {
 struct SessionRetirement final : render::detail::PackedHostRetirementNode {
@@ -68,13 +70,20 @@ void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
     if (sessionByteBudget_ == 0)
         sessionByteBudget_ = processMemoryBudgetLedger().defaultTotalByteBudget();
     std::size_t total = 0;
-    std::size_t kept = 0;
+    // Distinct sources kept, most recent first: the parallel sessions of one intra-only source
+    // share its snapshot, so the file quota and the two-source minimum count sources.
+    std::vector<const std::string*> sources;
     for (auto it = sessions_.begin(); it != sessions_.end();) {
         total += it->workerBytes;
-        const bool admitted = kept < kSnapshotFiles &&
-                              (kept < kMinimumRetainedSessions || total <= sessionByteBudget_);
+        const bool known =
+            std::ranges::any_of(sources, [&](const std::string* key) { return *key == it->key; });
+        const bool admitted =
+            known ? total <= sessionByteBudget_
+                  : sources.size() < kSnapshotFiles &&
+                        (sources.size() < kMinimumRetainedSessions || total <= sessionByteBudget_);
         if (admitted) {
-            ++kept;
+            if (!known)
+                sources.push_back(&it->key);
             ++it;
         } else {
             total -= it->workerBytes;
@@ -82,20 +91,81 @@ void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
         }
     }
 }
+bool videoFramesDecodeIndependently(const std::string_view codec) noexcept {
+    return codec == "prores" || codec == "dnxhd" || codec == "mjpeg" || codec == "tiff";
+}
+std::list<VideoSourceContext::SessionEntry>::iterator
+VideoSourceContext::chooseLocked(const std::string& key, const std::filesystem::path* path,
+                                 const VideoSessionUse& use) {
+    const auto matches = [&](const SessionEntry& entry) {
+        return entry.key == key && (path == nullptr || entry.path == *path);
+    };
+    if (!use.independentFrames)
+        return std::ranges::find_if(sessions_, matches);
+    const std::pair frame{use.stream, use.frame};
+    auto idle = sessions_.end();
+    auto least = sessions_.end();
+    std::size_t count = 0;
+    for (auto it = sessions_.begin(); it != sessions_.end(); ++it) {
+        if (!matches(*it))
+            continue;
+        ++count;
+        const auto users = it->users->load();
+        const auto occupancy = it->session->occupancy(use.stream, use.frame);
+        // The session decoding (or handed out for) this frame: join it.
+        if (occupancy == media::video::VideoDecodeSession::Occupancy::Joins ||
+            (users != 0 && it->leasedFrame == frame))
+            return it;
+        if (idle == sessions_.end() && users == 0 &&
+            occupancy == media::video::VideoDecodeSession::Occupancy::Idle)
+            idle = it;
+        if (least == sessions_.end() || users < least->users->load())
+            least = it;
+    }
+    if (idle != sessions_.end())
+        return idle;
+    // Every session is busy: another decoder while the source has fewer than one per hardware
+    // thread (each decoder keeps at least one busy), else queue on the least occupied.
+    if (count < std::max(1U, std::thread::hardware_concurrency()))
+        return sessions_.end();
+    return least;
+}
+std::shared_ptr<media::video::VideoDecodeSession>
+VideoSourceContext::handOutLocked(const std::list<SessionEntry>::iterator entry,
+                                  const VideoSessionUse& use) {
+    sessions_.splice(sessions_.begin(), sessions_, entry);
+    auto& front = sessions_.front();
+    if (!use.independentFrames)
+        return front.session;
+    // The returned handle counts as a user of the entry until the caller releases it.
+    struct Lease final {
+        Lease(std::shared_ptr<media::video::VideoDecodeSession> held,
+              std::shared_ptr<std::atomic<std::size_t>> count)
+            : session(std::move(held)), users(std::move(count)) {
+            ++*users;
+        }
+        Lease(const Lease&) = delete;
+        Lease& operator=(const Lease&) = delete;
+        ~Lease() { --*users; }
+        std::shared_ptr<media::video::VideoDecodeSession> session;
+        std::shared_ptr<std::atomic<std::size_t>> users;
+    };
+    front.leasedFrame = std::pair{use.stream, use.frame};
+    const auto lease = std::make_shared<Lease>(front.session, front.users);
+    return {lease, lease->session.get()};
+}
 std::shared_ptr<media::video::VideoDecodeSession>
 VideoSourceContext::session(const std::string& key, const std::filesystem::path& path,
-                            const bool allowInsertion, const std::size_t workerBytes) {
+                            const bool allowInsertion, const std::size_t workerBytes,
+                            const VideoSessionUse use) {
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
     std::uint64_t generation = 0;
     {
         std::lock_guard lock(mutex_);
         if (closed_)
             return {};
-        const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
-        if (found != sessions_.end() && found->path == path) {
-            sessions_.splice(sessions_.begin(), sessions_, found);
-            return sessions_.front().session;
-        }
+        if (const auto found = chooseLocked(key, &path, use); found != sessions_.end())
+            return handOutLocked(found, use);
         retirement = retirement_;
         generation = generation_;
     }
@@ -108,32 +178,43 @@ VideoSourceContext::session(const std::string& key, const std::filesystem::path&
         if (closed_ || generation != generation_ ||
             generation == std::numeric_limits<std::uint64_t>::max())
             return session;
-        const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
-        if (found != sessions_.end())
-            detached.splice(detached.end(), sessions_, found);
-        sessions_.push_front({key, path, session, workerBytes});
+        // A source decoded in order keeps one session; an intra-only source adds this one beside
+        // its others.
+        if (!use.independentFrames)
+            if (const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
+                found != sessions_.end())
+                detached.splice(detached.end(), sessions_, found);
+        sessions_.push_front({.key = key,
+                              .path = path,
+                              .session = session,
+                              .workerBytes = workerBytes,
+                              .users = std::make_shared<std::atomic<std::size_t>>(0),
+                              .leasedFrame = std::nullopt});
         admitLocked(detached);
+        if (!sessions_.empty() && sessions_.front().session == session)
+            return handOutLocked(sessions_.begin(), use);
     }
     return session;
 }
 std::shared_ptr<media::video::VideoDecodeSession>
-VideoSourceContext::retainedSession(const std::string& key) {
+VideoSourceContext::retainedSession(const std::string& key, const VideoSessionUse use) {
     std::lock_guard lock(mutex_);
     if (closed_)
         return {};
-    const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
+    const auto found = chooseLocked(key, nullptr, use);
     if (found == sessions_.end())
         return {};
-    sessions_.splice(sessions_.begin(), sessions_, found);
-    return sessions_.front().session;
+    return handOutLocked(found, use);
 }
 void VideoSourceContext::discardFailedSession(
     const std::string& key, const std::shared_ptr<media::video::VideoDecodeSession>& session) {
     std::list<SessionEntry> detached;
     {
         std::lock_guard lock(mutex_);
-        const auto found = std::ranges::find(sessions_, key, &SessionEntry::key);
-        if (found != sessions_.end() && found->session == session)
+        const auto found = std::ranges::find_if(sessions_, [&](const SessionEntry& entry) {
+            return entry.key == key && entry.session.get() == session.get();
+        });
+        if (found != sessions_.end())
             detached.splice(detached.end(), sessions_, found);
     }
 }
@@ -268,15 +349,19 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     const auto baseUtf8 = base.generic_u8string();
     sourceKey.add(std::string(baseUtf8.begin(), baseUtf8.end()));
     const auto revisionKey = sourceKey.digest();
+    // #474: an intra-only stream decodes concurrent frames on parallel sessions.
+    const VideoSessionUse use{.independentFrames = videoFramesDecodeIndependently(stream->codec),
+                              .stream = stream->id,
+                              .frame = index};
     auto session = revisionPolicy == MediaSourceRevisionPolicy::Retained
-                       ? context.retainedSession(revisionKey)
+                       ? context.retainedSession(revisionKey, use)
                        : nullptr;
     if (!session) {
         const auto path =
             media::resolveImagePath(asset.locator.path, asset.locator.relinkHint, base);
-        session =
-            context.session(revisionKey, path, allowInsertion,
-                            media::video::estimatedDecodeWorkerBytes(asset.width, asset.height));
+        session = context.session(
+            revisionKey, path, allowInsertion,
+            media::video::estimatedDecodeWorkerBytes(asset.width, asset.height), use);
     }
     if (!session) {
         selection.warning = "Video source owner is closing";

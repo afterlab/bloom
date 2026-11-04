@@ -1,5 +1,6 @@
 #pragma once
 #include "footage_interpretation_pass.hpp"
+#include <atomic>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/runtime/cancellation.hpp>
@@ -7,6 +8,9 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/video_source_report.hpp>
 #include <list>
+#include <optional>
+#include <string_view>
+#include <utility>
 namespace bloom::runtime::detail {
 struct VideoSourceSelection {
     std::shared_ptr<const media::provider::FrameProduct> frame;
@@ -30,14 +34,31 @@ struct VideoSourceSelection {
     // #381: the footage interpretation pass (alpha, deinterlace) the frame runs.
     std::optional<FootagePass> footagePass;
 };
+// What a request asks a source's sessions for (#474). A source decoded in order (long-GOP) has one
+// session: its decoder keeps its position between requests, which the requests queue for. An
+// intra-only source (every frame decodes on its own) is served by parallel sessions instead, each
+// with its own decoder, so concurrent requests for different frames do not queue on one decoder.
+struct VideoSessionUse final {
+    bool independentFrames = false;
+    std::uint32_t stream = 0;
+    std::uint64_t frame = 0;
+};
+// True for the codecs whose every frame is a random-access point, matching the decode worker's
+// intra-only list (slice-threaded decoders).
+[[nodiscard]] bool videoFramesDecodeIndependently(std::string_view codec) noexcept;
 class VideoSourceContext final {
   public:
     media::video::DecodedVideoCache cache{0};
+    // An intra-only use is served by the session already decoding its frame, else an idle one,
+    // else a new one while the source has fewer than one per hardware thread, else the least
+    // occupied. Any other use gets the source's one session.
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
     session(const std::string& key, const std::filesystem::path& path, bool allowInsertion,
-            std::size_t workerBytes = 0);
+            std::size_t workerBytes = 0, VideoSessionUse use = {});
+    // A retained session of `key` chosen as above, or null when there is none (or an intra-only
+    // use should start another).
     [[nodiscard]] std::shared_ptr<media::video::VideoDecodeSession>
-    retainedSession(const std::string& key);
+    retainedSession(const std::string& key, VideoSessionUse use = {});
     void discardFailedSession(const std::string& key,
                               const std::shared_ptr<media::video::VideoDecodeSession>& session);
     void bindRetirement(std::shared_ptr<render::detail::PackedHostRetirementState> retirement);
@@ -51,8 +72,9 @@ class VideoSourceContext final {
     [[nodiscard]] std::size_t sourceSnapshotCount() const { return quota_->residentFiles(); }
     // Retained sessions are admitted by memory, not a fixed count: their estimated worker bytes
     // must fit this budget (default usable memory, the ledger's automatic total: no fixed fraction,
-    // ADR 0037). At least two are kept so two sources can alternate, and never more than the
-    // source-snapshot file quota can retain.
+    // ADR 0037). At least two sources are kept so two sources can alternate, and never more
+    // sources than the source-snapshot file quota can retain (the parallel sessions of one
+    // intra-only source share its snapshot).
     void setSessionByteBudget(std::size_t bytes);
     [[nodiscard]] std::size_t retainedSessionCount();
     // Decode route and colour note of the most recently selected sources (most recent first, at
@@ -73,9 +95,22 @@ class VideoSourceContext final {
         std::filesystem::path path;
         std::shared_ptr<media::video::VideoDecodeSession> session;
         std::size_t workerBytes = 0;
+        // Intra-only use: the requests holding this session now, and the frame it was last
+        // handed out for, so a request for the same frame joins it rather than decoding it twice.
+        std::shared_ptr<std::atomic<std::size_t>> users =
+            std::make_shared<std::atomic<std::size_t>>(0);
+        std::optional<std::pair<std::uint32_t, std::uint64_t>> leasedFrame;
     };
     // Called with mutex_ held; moves evicted entries into `detached` for destruction unlocked.
     void admitLocked(std::list<SessionEntry>& detached);
+    // Called with mutex_ held: the entry to serve `use`, or end() when there is none or an
+    // intra-only use should start another session.
+    std::list<SessionEntry>::iterator chooseLocked(const std::string& key,
+                                                   const std::filesystem::path* path,
+                                                   const VideoSessionUse& use);
+    // Called with mutex_ held: moves `entry` to the front and hands its session out.
+    std::shared_ptr<media::video::VideoDecodeSession>
+    handOutLocked(std::list<SessionEntry>::iterator entry, const VideoSessionUse& use);
     std::size_t sessionByteBudget_ = 0;
     std::list<SessionEntry> sessions_;
     std::shared_ptr<platform::FileSnapshotQuota> quota_ =

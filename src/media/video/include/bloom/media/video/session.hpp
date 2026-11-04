@@ -169,6 +169,11 @@ class VideoDecodeSession final {
     [[nodiscard]] provider::Result<provider::DemuxIndex>
     index(const provider::ProbeResult& source, const Cancel& cancel = {},
           const SourceRevisionAccess& revision = {});
+    // How this session would serve `frame` of `stream` now (#474): Joins when that frame is the
+    // one being decoded, Idle when nothing holds or waits for the decoder, Busy otherwise. A
+    // snapshot for choosing among sessions of an intra-only source; it may change at once.
+    enum class Occupancy : std::uint8_t { Idle, Joins, Busy };
+    [[nodiscard]] Occupancy occupancy(std::uint32_t stream, std::uint64_t frame);
     [[nodiscard]] static std::string defaultWorker();
     // Host-side capability screen and preference. A VA-API decode worker is attempted only when
     // the platform exposes a DRM render node and either BLOOM_VIDEO_HARDWARE_DECODE is "1" or,

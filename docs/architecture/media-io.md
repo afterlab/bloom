@@ -1809,11 +1809,20 @@ its reply arrived keeps the retained worker and its decoder position; only a can
 interrupts an exchange retires the worker. Discarding the session on every cancellation made
 playback, which cancels requests all the time, start a new worker for almost every frame, and a
 long-GOP stream then decoded again from its keyframe (2160p HEVC with one keyframe in 240 frames
-played at 2.5 fps). The evaluator admits retained sessions by memory: each is
-charged a conservative worker estimate (64 MiB plus 24 frames of 16-bit 4:4:4 planes, capped at
-the stream's worker address space) against a session budget of usable memory, keeping
-at least two so two sources can alternate and at most the eight files the source-snapshot quota
-can retain. Least-recently-used sessions beyond that are retired. `DecodedVideoCache` has a
+played at 2.5 fps).
+
+A stream decoded in order (long-GOP) keeps one session per source, so its decoder continues
+forward. An intra-only stream (ProRes, DNxHD/HR, MJPEG, TIFF: every frame a random-access point,
+the worker's slice-threaded codecs) is served by parallel sessions instead
+(`VideoSourceContext::session` with `VideoSessionUse::independentFrames`): a request joins the
+session already decoding its frame, else takes an idle one, else starts another while the source
+has fewer than one session per hardware thread, else queues on the least occupied. Concurrent
+read-ahead and RAM-fill frames then decode in parallel workers instead of queueing on one; the
+sessions of one source share its verified snapshot. The evaluator admits retained sessions by
+memory: each is charged a conservative worker estimate (64 MiB plus 24 frames of 16-bit 4:4:4
+planes, capped at the stream's worker address space) against a session budget of usable memory,
+keeping at least two sources so two can alternate and at most the eight sources the
+source-snapshot quota can retain. Least-recently-used sessions beyond that are retired. `DecodedVideoCache` has a
 separate LRU byte budget and keys frames by content digest, stream, frame index,
 interpretation, color identity and decode route. Its target is the `playback/decoded-video-cache-bytes`
 setting, or automatically usable memory, the ceiling every automatic reusable pool has (ADR 0037:

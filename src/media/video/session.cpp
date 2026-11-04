@@ -822,6 +822,15 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
     publish(flight->provenance);
     return flight->result;
 }
+VideoDecodeSession::Occupancy VideoDecodeSession::occupancy(const std::uint32_t stream,
+                                                            const std::uint64_t frame) {
+    const std::lock_guard lock(state_->frameMutex);
+    if (state_->inFlightFrame && state_->inFlightFrame->key.stream == stream &&
+        state_->inFlightFrame->key.frame == frame)
+        return Occupancy::Joins;
+    return state_->inFlightFrame || !state_->frameWaiters.empty() ? Occupancy::Busy
+                                                                  : Occupancy::Idle;
+}
 std::optional<std::uint64_t>
 nextAdmittedFrameWaiter(const std::span<const FrameWaiter> waiters,
                         const std::optional<std::pair<std::uint32_t, std::uint64_t>> lastGranted,
