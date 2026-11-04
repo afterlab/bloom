@@ -323,9 +323,9 @@ void partialDigestsReopen() {
             parsed.document()->root(), {1, 34}, project::kCanonicalDocumentSchemaVersionV1,
             project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 3 && migrated.migratedRoot() != nullptr &&
+                   migrated.stepsApplied() == 4 && migrated.migratedRoot() != nullptr &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.34 reaches the current minor through three version-only steps");
+               "1.34 reaches the current minor through four version-only steps");
     }
 }
 
@@ -383,9 +383,9 @@ void verifiedDigestsRoundTrip() {
             parsed.document()->root(), {1, 35}, project::kCanonicalDocumentSchemaVersionV1,
             project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 2 && migrated.migratedRoot() != nullptr &&
+                   migrated.stepsApplied() == 3 && migrated.migratedRoot() != nullptr &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.35 reaches the current minor through two version-only steps");
+               "1.35 reaches the current minor through three version-only steps");
     } else {
         expect(false, "the 1.35 document parses");
     }
