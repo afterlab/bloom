@@ -23,7 +23,7 @@ This contract supersedes conflicting component metrics in [Visual Language](visu
 
 Every interactive control is a kit class: `KDropdown`, `KMenuButton`, `KButton`,
 `KIconButton`, `KIconToggle`, `KCheckBox`, `KSwitch`, `KValueField`, `KSlider`, `KRangeSelector`,
-`KTextField` (and its `KLineEdit` and `KSearchField` forms), `KTextArea`, `KFieldFrame`, `KSection`,
+`KAngleDial`, `KPointPad`, `KGradientEditor`, `KTextField` (and its `KLineEdit` and `KSearchField` forms), `KTextArea`, `KFieldFrame`, `KSection`,
 `KRadioGroup`, or `KColorSwatchRow`. Text uses TypeRole-bound `KLabel`.
 Read-only progress uses `KProgressBar` (see "Import Progress Dialog" below). Live read-only numbers
 and their history use `KReadoutGrid`, `KTimeSeriesChart` and `KHistogramChart` over
@@ -628,12 +628,27 @@ Hue/Saturation draws its Hue row over the hue strip (input spectrum over the tur
 Saturation row over its slider. Exposure, Offset and Multiply draw their amount's row over a slider
 ticked along its soft range. Colorize shows only its mode's controls (a mode change re-lays the
 card): its Amount row over a slider; a colour row per colour (name, a colour chip that opens the
-colour picker, diamond); for Tint, Tritone and Gradient Map the ramp bar, the gradient drawn from the
-node's colours in display colour with a handle per stop under it (the midtones handle drags the
-midpoint, a Shift-press jumps it, a click on a handle opens that colour's picker, a double-click
-resets the midpoint); Gradient Map's Repetitions and Phase over jog-toned sliders with its Map from
-and Outside the ramp dropdowns as ordinary rows; and for Black & White one slider row per hue over a
-track from black to the hue. Every grading graph (Levels, Curves, the contrast picture) is one
+colour picker, diamond); for Tint and Tritone the ramp bar, the gradient drawn from the node's
+colours in display colour with a handle per stop under it (the midtones handle drags the midpoint, a
+Shift-press jumps it, a click on a handle opens that colour's picker, a double-click resets the
+midpoint); for Gradient Map (#541) its Gradient row -- the `KGradientEditor` with the gradient's
+diamond, then a Stop row with the selected stop's colour chip and its position in percent -- then
+Repetitions and Phase over jog-toned sliders with its Map from and Outside the ramp dropdowns as
+ordinary rows; and for Black & White one slider row per hue over a track from black to the hue.
+
+#541: no node asks for a colour, gradient, curve, angle, position or range as bare numbers. Besides
+the grading cards, a node whose values have a visual form draws them with the node-controls widget
+(`bloom/ui/node_controls_widget.hpp`), above its other rows, on the card and in Properties alike: an
+angle is its row (name, number with `°`, diamond, socket) with a `KAngleDial` beside the number
+(Drop Shadow direction, Glow angle, Transform 2D and Layer rotation, Hue Shift, Rotate 2D, Polar To
+Cartesian, Degrees To Radians and Radians To Degrees); a low/high pair is its two rows over one
+`KRangeSelector` that drags both as one gesture, its ends free to cross where a reversed pair is
+meaningful (Luma Key, Map Range's from and to, Clamp, In Range, Random, Wrap, Smoothstep); and a
+position is a point on a `KPointPad` over its frame, the exact X/Y rows staying below it (a Linear or
+Radial Gradient's start and end, joined by a line, on the node's own width and height; Transform
+2D's pivot and offset on the composition frame). Properties' Layer Transform section turns rotation
+on a `KAngleDial` beside its field. A layer, shape, text box or solid is still dragged in the Viewer
+with its native handles. Every grading graph (Levels, Curves, the contrast picture) is one
 uniform grey with a grid line every quarter: no lighter 0..1 box and no dark band past 1.
 
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
@@ -1536,6 +1551,22 @@ hover highlight. A range
 selector's arrow, Page and Home/End keys move its active handle, Tab moves to the other handle
 before focus leaves, and handles that sit on each other are told apart by the first move's
 direction. Preview rendering runs independently of these control readbacks.
+
+The #541 kit controls keep the same contract. `KAngleDial` turns by the pointer's own turn around
+its centre (a press never jumps; a Shift-press jumps to the pointer by the shorter way round, then
+Shift held snaps to 15°; Ctrl is a tenth of the speed); its value winds past a revolution, zero
+points up or right, it turns clockwise on screen unless the value's convention is counter-clockwise,
+arrow keys step a degree and Page Up/Down 15°, and a double-click resets it. `KPointPad` draws its
+frame at its aspect ratio with room around it (a point further out sits hollow on the edge); a point
+moves by the pointer's travel in the frame's units (Ctrl a tenth), a Shift-press on bare pad jumps
+the active point there, arrows move it a unit (Shift ten), Tab walks the points and a double-click
+resets them. `KGradientEditor` keeps its stops sorted (a dragged stop may pass a neighbour), adds a
+stop coloured as the gradient already is where the bare bar is pressed, removes one pulled well off
+the bar (it returns if the pointer comes back first) or by Delete, keeps its minimum stop count, asks
+its owner for a stop's colour on a double-click or Enter, moves the selected stop by the arrow keys
+(Shift or Page ten times as far) and offers Add Stop, Remove Stop, Distribute Evenly and Reverse on
+its menu. Each of them draws its focus ring on its active part and treats a drag, a run of keys or
+one menu action as one edit.
 
 ## MCP Server panel
 

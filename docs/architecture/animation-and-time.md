@@ -1479,6 +1479,21 @@ returns the curve to a constant. Keyframe
 move, delete, interpolation and paste commands treat a Path key as a whole-value key; value and
 handle edits that address a scalar axis do not apply to it.
 
+## Gradient Curves
+
+#541 adds `GradientAnimationCurve`, the same whole-value shape for a `GradientValue` (a multi-stop
+colour ramp; see project-format.md, "Gradient Values In Document 1.38"): `GradientKeyframe { id,
+time, value: GradientValue, outgoingInterpolation, easing, handles }`. Only Colorize's gradient
+(`bloom.colorize.gradient`) may own one. It samples as a Path curve does: the end keys hold, a
+segment's eased 0 → 1 progress interpolates each stop's position and straight colour between two
+keys with the same stop count, and keys whose stop counts differ (or a Hold key) hold the earlier
+key's gradient. Positions are clamped to `[0, 1]` and alpha to `[0, 1]` after interpolation
+(`runtime::sampleGradientCurve`). A Gradient curve compiles inline into the Colorize kernel that
+samples it and is not in the compiled curve tables. Keying, value edits at a time
+(`SetKeyframeAtTime` with a Gradient value), Convert To Constant, move, delete, interpolation and
+paste treat a Gradient key as a whole-value key; it has no value graph lane, so the Graph editor
+shows it only as keys.
+
 ## Layer Time
 
 Status: accepted and implemented ([ADR 0024](../decisions/0024-layer-owned-time.md), issue #353).

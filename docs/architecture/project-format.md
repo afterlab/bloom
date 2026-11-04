@@ -1,8 +1,10 @@
 # Bloom Project Format
 
-The current document schema is 1.37. It lets a Merge entry own its layer controls -- a layer output
-record that names its slot and binds its own parameters -- adds the layer `pivot`, and adds the
-Adjustment node type (see "Entry Layers In Document 1.37"). Document 1.36 let a stamped image-sequence
+The current document schema is 1.38. It adds the gradient value -- a multi-stop colour ramp, a
+parameter constant and a whole-value animation curve -- that Colorize's Gradient Map maps through
+(see "Gradient Values In Document 1.38"). Document 1.37 let a Merge entry own its layer controls -- a
+layer output record that names its slot and binds its own parameters -- added the layer `pivot`, and
+added the Adjustment node type (see "Entry Layers In Document 1.37"). Document 1.36 let a stamped image-sequence
 member also carry the content digest a full hash verified for the bytes that carried its stamp (see
 "Verified Member Digests In Document 1.36"). Document 1.35 let an image-sequence member carry the file stamp import listed
 instead of its content digest (see "Sequence Member Stamps In Document 1.35"). Document 1.34
@@ -1440,9 +1442,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.37`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.38`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.37.schema.json` and `manifest-1.37.schema.json`; the
+The current artifacts are `document-1.38.schema.json` and `manifest-1.38.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1676,6 +1678,37 @@ digest of the file chosen.
 The `1.34` -> `1.35` DOM step `migrateSequenceMemberStampsV1_34` only advances the version: every
 older member has its digest. The schema artifacts add `assetMember-1.35` and `assetManifest-1.35`;
 the schema check restores the 1.34 artifact from them exactly.
+
+## Gradient Values In Document 1.38
+
+A parameter constant may be a gradient (issue #541): `{"kind": "gradient", "stops": [...]}`, its
+stops in stored order, each `{position, red, green, blue, alpha}` -- a position in `[0, 1]` and a
+straight scene-linear colour exactly as a `color4` constant's. A gradient has 1 to 64 stops
+(`document::kMaximumGradientStops`); stops may share a position and need not be sorted, and every
+reader orders them by position with ties kept in stored order (`document::sortedGradientStops`).
+The colour between two stops is the linear blend of their colours; before the first and after the
+last the end colour holds. A missing, misordered or unknown member is refused like any constant's;
+`stops` that is not an array or holds more than 64 stops is `InvalidConstantValueKind`; no stops, a
+position outside `[0, 1]` or an invalid colour is `DomainViolation` at `stops`.
+
+A gradient animates as one whole value, like a Path: an animation curve of kind `gradient` whose
+keys carry the usual time, interpolation, easing and handle members and a `value` that is a
+gradient constant. Between two keys with the same stop count each stop's position and colour
+interpolate by the eased progress; keys with different stop counts, and Hold keys, hold the earlier
+key's gradient until the next (`runtime::sampleGradientCurve`).
+
+The only schema key with a gradient value is `bloom.colorize.gradient`, the Colorize node's
+optional `gradient` role. Its colour channels are held to the Colorize colour domain; its default is
+black at 0, (0.24, 0.17, 0.10) at 0.18 and white at 1 -- the three-colour ramp Gradient Map used
+before. A new Colorize node binds it; a Colorize node saved before 1.38 has no binding and keeps
+mapping through its Shadows, Midtones, Highlights and Midpoint until the gradient is first edited,
+which binds it seeded with that same ramp, so nothing changes on screen.
+
+The `1.37` -> `1.38` DOM step `migrateGradientValuesV1_37` only advances the version. A document
+claiming 1.37 or older that carries a gradient constant or a gradient curve is refused at its `kind`.
+The schema artifacts add `gradientStop-1.38`, `gradientValue-1.38` and `gradientKeyframe-1.38`, put
+the gradient value in `parameterValue-1.4` and the gradient curve in `animationCurve-1.9`; the schema
+check restores the 1.37 artifact from them exactly.
 
 ## Entry Layers In Document 1.37
 

@@ -238,17 +238,30 @@ section with the nodes above. Choose what it does with **Mode**:
 | **Fill** | Paints every visible pixel with **Fill color**. |
 | **Tint** | Maps black to **Shadows** and white to **Highlights**; brighter-than-white values keep going past Highlights. |
 | **Tritone** | Maps the brightness through three colours: **Shadows**, **Midtones** at the **Midpoint**, **Highlights**. |
-| **Gradient Map** | Maps the brightness, or one channel (**Map from**), through the same three colours. **Repetitions** fits the gradient that many times into 0 to 1, **Phase** slides it along (in whole gradients) and **Outside the ramp** chooses what happens past its ends: **Clamp** holds the end colours, **Repeat** starts over and **Mirror** runs back and forth. Animate Phase with Repeat or Mirror for cycling colours. |
+| **Gradient Map** | Maps the brightness, or one channel (**Map from**), through a **Gradient** with as many colour stops as you like (up to 64). **Repetitions** fits the gradient that many times into 0 to 1, **Phase** slides it along (in whole gradients) and **Outside the ramp** chooses what happens past its ends: **Clamp** holds the end colours, **Repeat** starts over and **Mirror** runs back and forth. Animate Phase with Repeat or Mirror for cycling colours. |
 | **Black & White** | Turns the image grey, with a slider for how bright each of **Reds**, **Yellows**, **Greens**, **Cyans**, **Blues** and **Magentas** become (from -200% to 300%). |
 
 **Amount** blends the result with the original colour: 100% is the full effect, 0% leaves the image
 unchanged. The default Midpoint, 0.18, is mid grey in scene-linear light.
 
-On the card, Tint, Tritone and Gradient Map show the gradient they map through, drawn from the
-node's own colours, with a stop under it for each colour. Click a stop, or a colour swatch below the
-gradient, to pick its colour. Drag the middle stop to move the Midpoint (hold **Ctrl** for finer
-control, or **Shift**-click the gradient to jump it to the pointer); double-click the gradient to
-reset it. Black & White shows a slider per colour over a track from black to that colour. The card
+On the card, Tint and Tritone show the gradient they map through, drawn from the node's own
+colours, with a stop under it for each colour. Click a stop, or a colour swatch below the gradient,
+to pick its colour. Drag the middle stop to move the Midpoint (hold **Ctrl** for finer control, or
+**Shift**-click the gradient to jump it to the pointer); double-click the gradient to reset it.
+
+Gradient Map shows its **Gradient** as an editable bar with a stop under it for each colour:
+
+- Drag a stop left or right to move it (hold **Ctrl** for finer control); it can pass another stop.
+- Click the bar where there is no stop to add one, already coloured as the gradient is there.
+- Drag a stop well below the bar, or select it and press **Delete**, to remove it.
+- Double-click a stop to pick its colour. The **Stop** row under the bar shows the selected stop's
+  colour and position (0% at the left, 100% at the right) for exact values.
+- Right-click the bar for **Add Stop**, **Remove Stop**, **Distribute Evenly** and **Reverse**.
+
+The diamond beside the gradient keys the whole gradient at the playhead. Between two keys with the
+same number of stops each stop moves and changes colour smoothly; adding or removing a stop between
+keys switches at the next key. A Colorize node from an older project keeps its Shadows, Midtones and
+Highlights ramp until you first edit the gradient, which starts from that same ramp. Black & White shows a slider per colour over a track from black to that colour. The card
 shows only the current mode's controls; the others keep their values.
 
 ## Masks
