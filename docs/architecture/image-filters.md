@@ -766,3 +766,78 @@ a pre-#506 Glow lowers exactly as a default Classic one and check the Physical, 
 control chains. The native image-effect harness runs each mode and the shared controls on the
 device against the CPU oracle at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value
 runs.
+
+## Alpha Association
+
+`bloom.alpha-association`, schema 1 (#503), converts between the ways an image's colour relates to
+its alpha. It is listed under Compositing (beside Set Alpha and Multiply Alpha; search also finds
+it as Unmult, Premultiply, Unpremultiply or Remove Color Matting) and has one Image in, `input`, and
+one Image out, `image`, over the input's data and display windows with its pixel aspect.
+
+Parameters:
+
+| Control | Role | Default | Kind |
+| --- | --- | --- | --- |
+| Mode | `mode` | Unmult | Constant dropdown: Unmult (0), Premultiply (1), Unpremultiply (2), Remove Color Matting (3) |
+| White background | `white` | Off | Constant switch, Unmult only |
+| Matte color | `background` | Black (0, 0, 0) | Animatable colour with a Color socket, Remove Color Matting only; its alpha is unused |
+
+The mode and switch choose the arithmetic, so they have no socket. The matte colour's RGB is any
+finite value within `+-1e6` (HDR and signed colours are allowed).
+
+Bloom's process image is premultiplied (associated) scene-linear RGBA with alpha in `[0, 1]`. Every
+mode works on the stored values with no colour transform and no clamp of colour. For an input pixel
+`(r, g, b, a)`:
+
+- **Unmult** derives alpha for footage shot on black (fire, smoke, flares, lens elements). The image
+  over black is its premultiplied colour, so `a' = clamp(max(r, g, b), 0, 1)` and the colour is
+  unchanged: the result composited over black is exactly the input over black, and over any other
+  background it screens in as the footage's own light. HDR colour above one gives an opaque pixel
+  whose colour stays above one; it is never clipped. With **White background** on, the image over
+  white is `w = c + (1 - a)`, so `a' = clamp(1 - min(w), 0, 1)` and the colour is
+  `w - (1 - a')`: the result over white is the input over white.
+- **Premultiply** treats the colour as straight: `rgb * a`, alpha unchanged.
+- **Unpremultiply** returns straight colour: `rgb / a`, alpha unchanged, for `a` above the epsilon
+  `2^-20` (about 9.5e-7, exact in binary32). At or below it the colour passes unchanged and is never
+  divided, so a near-zero alpha cannot amplify noise into huge values. A quotient that cannot be
+  represented in binary32 (an RGB above about 3e32 over a small alpha) is reported as the grades'
+  non-finite pixel failure, never published as an infinity. Premultiply after Unpremultiply returns
+  the input (within rounding) wherever alpha is above the epsilon.
+- **Remove Color Matting** recovers footage premultiplied against `background` instead of black.
+  Such a pixel stores `aF + (1 - a)B`; the straight colour is `(c - (1 - a)B) / a`, so the
+  associated result is `c - (1 - a)B` with alpha unchanged. No division is needed, so no epsilon
+  applies. Against black it is the exact identity and aliases its input. Import such footage as
+  premultiplied so its stored colour is the matted colour.
+
+Alpha 0 is always transparent black (the storage invariant). Alpha is the input or a clamped
+maximum, so it is exact, except over white, where it is computed from the image over white in
+binary32 (the same operations on the CPU and the device, so they still agree exactly, within
+binary32 rounding of the exact value). A transparent pixel stays transparent in every mode, so the
+data window is unchanged. Unmult cannot keep colour where the alpha it derives is 0 (an
+all-negative pixel over black, or one at or above white everywhere over white): such a pixel
+becomes transparent black, as the process image cannot store colour at zero alpha.
+
+The node lowers to one `AlphaAssociationKernel` (Required in the GPU coverage contract), a grade
+kind of the shared colour grade machinery (`color_grade_image_effect.hpp`): the host prepares one
+packed table `[table mode, epsilon, 0, 0] [background r, g, b, 0]`, the CPU reference applies it per
+pixel, and the device runs one fixed resident program that reads the same table, with the same
+binary32 operations (precise sums, fused multiply-adds, the wrapper's premultiply and correctly
+rounded division). A changed mode, switch or colour changes only data, never the shader. The
+background is lowered only in Remove Color Matting; the other modes lower a constant black without a
+parameter identity, so an unused (even animated) colour neither claims the parameter nor
+invalidates a cached frame. Cache identity is the prepared table; an animated matte colour makes
+the operation time-dependent. Cancellation is checked per row, the output is charged to the pixel
+budget, and preview, RAM preview, still and sequence export, video export and headless render all
+take the same resident command; there is no exception.
+
+Tests: the alpha association test compares every mode with an independent double-precision formula
+over HDR, signed, partial, zero, near-zero and exactly-epsilon alpha (2e-6, with exact alpha
+except over white);
+checks Unmult over black and white, Unpremultiply then Premultiply, Remove Color Matting of a matted
+pixel, the epsilon boundary and the overflow refusal; and covers identity, domains, the fixed
+program, cache identity, the budget and cancellation. The image effect test runs the modes through
+the evaluator (cold, warm reuse, ROI, invalidation) and samples an animated matte colour. The
+compiler test checks the lowering. The `effect.AlphaAssociationKernel` and
+`node.bloom.alpha-association` coverage fixtures prepare every mode on the production builder, and
+the native grade harness runs every mode on the device against the CPU oracle at the 2e-6/exact-alpha
+gate with a warm zero-dispatch rerun and a changed value that re-dispatches.
