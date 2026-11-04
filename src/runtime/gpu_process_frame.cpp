@@ -119,6 +119,19 @@ struct GpuProcessFrameEvaluator::Impl final {
     // Owner thread: evicts the scene cache by a waiting shortfall or by how far free device
     // memory is below the VRAM headroom, then reports the live device budget to the policy.
     void reportDevice();
+    // Room for this owner's next phase (#492): what its last finished phase needed, its admitted
+    // need or its working allowance beside the most native storage it held, whichever is larger.
+    // Owner thread only.
+    std::uint64_t nextPhaseRoomBytes = 0;
+    // Owner thread: evicts the scene cache, least recently used first, until the root's usable
+    // device room (usable VRAM minus every claim) holds `nextPhaseRoomBytes` again. It runs after
+    // a request released its phase, and as a scene's steps complete, because the steps insert
+    // their images into the cache: the frames queued behind are admitted into that room, beside
+    // the running one, with their executors unsqueezed. Without it a long export of distinct
+    // frames filled usable VRAM with retained images no later frame reuses, and every next frame
+    // waited for, or was squeezed onto the CPU by, the room its own cache held. Pinned entries
+    // (the running scene's own images and hits) are never evicted.
+    void keepRoomForNextPhase();
     GpuProcessFrameOutcome
     runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                const EvaluationRequest& request,
@@ -291,6 +304,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         // poll waiting on a fence yields the thread briefly.
         if (gpuSceneExecutorStepProgress(executor->counters()) != progressBefore &&
             std::chrono::steady_clock::now() - startedAt < options.nativeDeadline) {
+            keepRoomForNextPhase();
             continue;
         }
         if (std::chrono::steady_clock::now() - startedAt >= options.nativeDeadline) {
@@ -696,8 +710,18 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
 
         // Completed preparation and phase aliases must end on the owner before completion is
         // visible. Unknown work remains retained independently by the device/native slots.
+        if (active->phaseLease) {
+            const auto used = active->phaseLease->peakDeviceAllocationBytes();
+            const auto beside = used > std::numeric_limits<std::uint64_t>::max() -
+                                           active->readbackByteAllowance
+                                    ? std::numeric_limits<std::uint64_t>::max()
+                                    : used + active->readbackByteAllowance;
+            nextPhaseRoomBytes = std::max(active->phaseLease->deviceNeedBytes(), beside);
+        }
         active->scene.reset();
         active->phaseLease.reset();
+        // Before completion is visible, so the caller's next frame is admitted into the room.
+        keepRoomForNextPhase();
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
         active->done = true;
@@ -765,6 +789,17 @@ void GpuProcessFrameEvaluator::Impl::reportDevice() {
     if (wanted != 0 && cache && cache->reclaim(wanted) != 0)
         live = device->availableAllocationBudget();
     static_cast<void>(options.processingPhasePolicy->reportDevice(device->ownershipEpoch(), live));
+}
+
+void GpuProcessFrameEvaluator::Impl::keepRoomForNextPhase() {
+    if (nextPhaseRoomBytes == 0 || !device || !cache || !options.processingPhasePolicy)
+        return;
+    const auto room = options.processingPhasePolicy->usableCapacity();
+    if (!room.deviceReady || room.deviceFreeBytes >= nextPhaseRoomBytes)
+        return;
+    if (cache->reclaim(nextPhaseRoomBytes - room.deviceFreeBytes) != 0)
+        static_cast<void>(options.processingPhasePolicy->reportDevice(
+            device->ownershipEpoch(), device->availableAllocationBudget()));
 }
 
 std::unique_ptr<GpuProcessFrameEvaluator>

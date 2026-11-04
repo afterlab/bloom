@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -517,6 +518,86 @@ void runProcessingPhaseTest(Expectations& expectations, const Options& options) 
     std::cout << "PHASE_FINAL Full1080 parity/readback=1 warm-native-reuse/refusal/recovery\n";
 }
 
+// #492: a long export renders distinct frames, so its scene cache retains images no later frame
+// reuses. Usable VRAM is the only device ceiling and the cache is not partitioned, so the cache
+// must give the room back on demand: after each frame the owner evicts until its next frame's need
+// fits again. Without that, the cache filled usable VRAM, the next frame waited on (or was squeezed
+// out of) the room its own cache held, and a 1080p ProRes export stopped after falling back to the
+// CPU. A second device report with a fixed live budget makes the usable room small and exact while
+// the real device still runs every frame.
+void runDistinctFramesKeepRoomTest(Expectations& expectations, const Options& options) {
+    using namespace bloom::runtime;
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    bloom::render::test::FinalHostRetirementScope host;
+    const auto policy = std::make_shared<GpuProcessingPhasePolicy>(4, host.owner);
+    policy->setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    auto configured = gpuEvaluatorOptions(options.loader_path);
+    configured.processingPhasePolicy = policy;
+    const auto evaluator = GpuProcessFrameEvaluator::create(configured);
+    if (!evaluator || !evaluator->gpuAvailable()) {
+        expectations.expect(false, "distinct frames: the owner reaches native readiness");
+        return;
+    }
+    MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.process.status = ProcessMemoryStatus::Unsupported;
+    sample.process.source = ProcessMemorySource::OtherHostOnly;
+    sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
+    sample.processSampleFresh = true;
+    sample.sampleSerial = 1;
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    const auto framePlan = [](const unsigned index) {
+        const double shade = static_cast<double>(index + 1) / 64.0;
+        return twoSolidPlan(format(1920, 1080), Color4d{shade, 0.25, 0.125, 1.0}, LayerValues{},
+                            Color4d{0.125, shade, 0.75, 0.5}, LayerValues{}, 1920.0, 1080.0, 9700);
+    };
+    auto request = requestFor(*framePlan(0));
+    request.pixelStorageByteLimit = gib;
+    const auto first = evaluator->evaluate(framePlan(0), request);
+    const auto retained = policy->snapshot().reservations.totalDeviceClaimBytes;
+    expectations.expect(first.frame != nullptr && retained != 0,
+                        "distinct frames: the first frame renders and its scene cache retains");
+    if (!first.frame || retained == 0) {
+        evaluator->beginShutdown();
+        return;
+    }
+    // Usable room for the stated need of one frame beside three frames of retention: without
+    // eviction, retention from the next frames alone exceeds it.
+    constexpr std::uint64_t pixels = 1920ULL * 1080;
+    constexpr std::uint64_t need = pixels * 32 + mib + pixels * 16;
+    constexpr std::uint64_t fixedEpoch = std::numeric_limits<std::uint64_t>::max() - 492;
+    const bloom::render::GpuAllocationBudget fixed{
+        .source = bloom::render::GpuAllocationBudgetSource::MemoryBudget,
+        .device_local_bytes = 64 * gib,
+        .available_bytes = need + 4 * retained,
+        .device_uuid = {0x49, 0x02}};
+    expectations.expect(policy->reportDevice(fixedEpoch, fixed),
+                        "distinct frames: the fixed device report is accepted");
+    constexpr unsigned kFrames = 16;
+    unsigned rendered = 0;
+    for (unsigned index = 1; index <= kFrames; ++index) {
+        const auto outcome = evaluator->evaluate(framePlan(index), request);
+        if (outcome.frame &&
+            outcome.frame->identity().provider == EvaluationProvider::GpuResident &&
+            outcome.counters.readbacks == 1) {
+            ++rendered;
+            continue;
+        }
+        std::cerr << "distinct frame " << index << ": diagnostic "
+                  << static_cast<int>(outcome.diagnostic.code) << ' ' << outcome.diagnostic.message
+                  << '\n';
+    }
+    const auto room = policy->usableCapacity();
+    expectations.expect(rendered == kFrames,
+                        "distinct frames: every frame renders on the GPU without waiting");
+    expectations.expect(room.deviceClaimBytes != 0 && room.deviceFreeBytes >= need,
+                        "distinct frames: the cache keeps what fits and leaves the next need");
+    static_cast<void>(policy->retireDeviceReport(fixedEpoch, true));
+    evaluator->beginShutdown();
+    std::cout << "DISTINCT_FRAMES Full1080 x" << rendered << " cache evicted on demand\n";
+}
+
 int run(int argc, char** argv) {
     const Options options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -615,6 +696,7 @@ int run(int argc, char** argv) {
 
     runLifecycleTests(expectations, options);
     runProcessingPhaseTest(expectations, options);
+    runDistinctFramesKeepRoomTest(expectations, options);
 
     if (!expectations.ok()) {
         std::cerr << "FAIL: GPU process-frame expectations failed\n";
