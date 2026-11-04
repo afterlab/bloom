@@ -1438,7 +1438,7 @@ void testBlendModeLowersFromItsStoredInteger(Expectations& expectations) {
         !parameters.setSource(
             kFirstBlendMode,
             document::ConstantValueSource{
-                bloom::core::blendModeStoredValue(bloom::core::BlendMode::Difference) + 1}),
+                bloom::core::blendModeStoredValue(bloom::core::BlendMode::Mask) + 1}),
         "an integer naming no implemented blend mode is refused by the document layer");
     expectations.expect(
         !parameters.setSource(kFirstBlendMode, document::ConstantValueSource{std::int64_t{-1}}),
