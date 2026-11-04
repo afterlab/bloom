@@ -100,19 +100,46 @@ highest value, which helps you find the near and far values.
 
 ## Curves
 
-Curves has a graph for each channel and four hue curves. Select the node to edit them in
-Properties: the first graph has a tab for **RGB** (the master), **R**, **G**, **B** and **A**, and the
-second a tab for each hue curve. The node card draws the channel curves too.
+Curves has a curve for each channel and four hue curves, edited in one graph on the node card and,
+the same, in Properties. The tabs pick **RGB** (the master), **R**, **G**, **B**, **A** or **Hue**;
+on the **Hue** tab the menu beside **Preset** picks the hue curve by name.
 
 - **Click** the graph to add a point there, and keep the button down to drag it into place.
-- **Drag** a point to move it. **Escape** or the right mouse button cancels the drag.
-- **Double-click** a point, or select it and press **Delete**, to remove it.
-- **In** and **Out** under the graph set the selected point exactly.
+- **Drag** a point to move it. It moves with the pointer from where you pressed it, so it never
+  jumps. Hold **Ctrl** (**Cmd** on macOS) to move it a tenth as far; you can press or release Ctrl
+  during the drag. **Escape** or the right mouse button cancels the drag.
+- **Drag a point off the graph** to remove it, or right-click it and choose **Delete Point**. The
+  **Delete** key removes the selected point.
+- **Double-click** the graph to reset the curve.
+- **Right-click** the graph for **Delete Point**, **Reset Curve** and a key for the curve at the
+  playhead.
+- The two numbers under the graph are the selected point's input and output. Drag or type them to
+  set it exactly. Hue values are in degrees, gains are multipliers (×).
 
-A curve can have any number of points, up to 256. Each drag, added point or removed point is one
-step to undo. The diamond next to the tabs adds a key for the whole curve at the playhead, so a
-curve can change over time; between two keys with the same number of points each point moves in a
-straight line, otherwise the curve changes at the next key.
+A curve can have any number of points, up to 256. Each drag, added point, removed point, reset or
+preset is one step to undo. The diamond next to the tabs adds a key for the whole curve at the
+playhead, so a curve can change over time; between two keys with the same number of points each
+point moves in a straight line, otherwise the curve changes at the next key. A curve's keys select,
+move and delete in the timeline like any other key.
+
+### Presets
+
+**Preset** sets the curve you're editing to a starting shape, as one step to undo:
+
+| Preset | Shape |
+| --- | --- |
+| **Linear** | The straight diagonal, which changes nothing. |
+| **Medium Contrast** | A gentle S-curve: darker shadows, brighter highlights. |
+| **Strong Contrast** | A steeper S-curve. |
+| **Low Contrast** | An inverse S-curve: lighter shadows, darker highlights. |
+| **Lighten** | Raises the midtones; black and white stay. |
+| **Darken** | Lowers the midtones; black and white stay. |
+| **Fade** | Lifts black to 0.1 and brings white down to 0.92. |
+| **Crush Blacks** | Takes everything below 0.12 to black. |
+| **Invert** | Swaps black and white. |
+
+Past 1 a preset continues in a straight line like any curve, so HDR values are still graded. A hue
+curve has a single preset, **Reset**, which empties it.
 
 ### Channel curves
 
@@ -127,8 +154,8 @@ points it continues in a straight line in the direction it was heading, so HDR v
 still graded. Points with the same input value count once.
 
 Behind the curve the graph draws a histogram of the node's input brightness, as the Viewer would
-show it. Turn it off with the **Histogram** check box; it is only worked out while the graph is on
-screen and never changes the image.
+show it. Turn it off with the **Histogram** check box beside **Preset**; it is only worked out while
+the graph is on screen and never changes the image.
 
 ### Hue curves
 
@@ -139,7 +166,10 @@ screen and never changes the image.
 | **Hue vs Luma** | Brightens (above 1) or darkens (below 1) each hue. |
 | **Luma vs Sat** | Makes dark, middle or bright parts more or less colourful. |
 
-The hue curves run along the colour strip drawn behind them, which wraps: the right edge is the
+Each hue curve names its two axes and draws a colour band along each: the hue strip (or black to
+white for luma) along the bottom, and up the side the turned hue for Hue vs Hue, grey to colour for
+saturation or black to white for luma. The hue curves run along the colour strip drawn behind them,
+which wraps: the right edge is the
 same red as the left edge, so a point near one edge also shapes the curve near the other. A new hue
 curve is empty and changes nothing; the dashed line marks the value that leaves colours unchanged.
 Greys are never changed by the hue curves, and alpha never is.

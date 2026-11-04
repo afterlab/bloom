@@ -167,10 +167,10 @@ layouts. Tables with sortable columns (Assets, Jobs) use the kit theme's item-vi
 styling at the `ListRow` pitch, with no per-row widgets.
 
 Painting outside the kit is limited to viewer canvas, node scene items, timeline
-ruler, lanes, graph editor, work area and navigator, the Curves graph (`CurveGraphCanvas`, a
-value-over-input graph like the graph editor), and the graphical grade controls a node card and
-Properties share (`NodeCardWidget`): the Grade colour wheel (`GradeWheelCanvas`) and the Levels
-histogram with its handles (`LevelsGraphCanvas`). Other surfaces compose kit widgets.
+ruler, lanes, graph editor, work area and navigator, and the graphical grade controls a node card
+and Properties share (`NodeCardWidget`): the Grade colour wheel (`GradeWheelCanvas`), the Levels
+histogram with its handles (`LevelsGraphCanvas`) and the Curves graph (`CurveGraphCanvas`, a
+value-over-input graph like the graph editor). Other surfaces compose kit widgets.
 
 ## Export panel
 

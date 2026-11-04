@@ -332,16 +332,39 @@ shows the widget and the Clamp row instead of the 25 value rows; Alt-click the p
 caret, to show the current channel's five rows (with their sockets) for exact entry, keys and
 links. A linked value's row always shows.
 
-The curves are edited in a graph (`bloom/ui/curve_graph.hpp`), two of them in Properties (the
-channel curves, tabs RGB/R/G/B/A, and the hue curves, tabs Hue/Hue, Hue/Sat, Hue/Luma, Luma/Sat),
-and the node card draws the channel curves read-only. A click adds a point and the drag that
-follows moves it; a press that moves nothing commits nothing; Delete or a double-click removes a
-point (a channel curve keeps two); Escape, the right button, losing focus or hiding cancels. A drag
-is a session value edit (ADR 0017): the graph and the Viewer follow it through the request-scoped
-override and the release commits one command, or a key at the playhead on a keyed curve. The graph
-draws the identity diagonal (a neutral line for the other curves) and the 0..1 box; a channel
-curve's square view grows to hold every point plus 25% headroom above 1, a gain view spans 0..2
-and Hue vs Hue half a turn either way, and the hue curves draw the hue strip behind them.
+The curves are edited in one graph (`bloom/ui/curve_graph.hpp`, `CurvesCardWidget`, a
+`NodeCardWidget`) drawn the same on the node card and in Properties (#498): a tab bar picks the
+channel curve (RGB/R/G/B/A) or the hue curves, whose curve a dropdown picks by its full name, with
+the curve's keyframe diamond and a Preset menu beside it, the graph, and the selected point's input
+and output always shown under it in their units (a hue in degrees, a gain as a multiplier). The card
+has no rows for the curves and lists no points; Clamp is its one row. A click on the background adds
+a point and the drag that follows moves it; a press on a point drags it relative to where it was
+pressed, so it never jumps, Ctrl (Cmd) moves it at 0.1x, and a modifier change mid-drag starts a new
+segment from where the point is. Dragging a point more than `Spacing::M` off the graph removes it
+(dragging back restores it; a channel curve keeps two), as does Delete Point in the right-click menu
+or the Delete key; the menu also offers Reset Curve and the curve's key at the playhead. A
+double-click resets the curve; when its first click added a point, that commit is undone first, so
+the reset is the double-click's one history step. Escape, the right button, losing focus or hiding
+cancels a drag. A drag is a session value edit (ADR 0017): the graph and the Viewer follow it
+through the request-scoped override and the release commits one command, or a key at the playhead on
+a keyed curve; a preset or reset is one command the same way. The graph draws the identity diagonal
+(a neutral line for the other curves) and the 0..1 box; a channel curve's square view grows to hold
+every point plus 25% headroom above 1, a gain view spans 0..2 and Hue vs Hue half a turn either way.
+The hue curves draw the hue strip behind them, and every curve that is not a channel curve names its
+axes and draws a band along each: the hue strip or a black-to-white luma ramp along the input, and
+the turned hue (Hue vs Hue), grey to colour (a saturation gain) or black to white (a luma gain) up
+the output.
+
+The presets (`document::GradeCurvePreset`, `gradeCurvePreset()`) are point lists over 0..1: Linear
+(0,0)(1,1); Medium Contrast (0,0)(0.25,0.18)(0.75,0.82)(1,1); Strong Contrast
+(0,0)(0.25,0.12)(0.75,0.88)(1,1); Low Contrast (0,0)(0.25,0.31)(0.75,0.69)(1,1); Lighten
+(0,0)(0.5,0.62)(1,1); Darken (0,0)(0.5,0.38)(1,1); Fade (0,0.1)(0.5,0.52)(1,0.92); Crush Blacks
+(0,0)(0.12,0)(1,1); Invert (0,1)(1,0). A channel curve extends past its end points linearly, as
+any curve does; a hue or Luma vs Saturation curve offers only Reset, its empty default.
+
+A keyed curve is a whole-value Path curve: the compiler accepts it as a Path parameter's source
+(it used to refuse it as "Animation curve type does not match") and the lowering compiles it inline
+where the curve is sampled, so its keys select, move and delete in the timeline like any other.
 
 Behind a channel curve and Luma vs Saturation the graph draws the node input's luminance
 histogram, on by default as session state. It is requested from `ImagePreviewController` only by
