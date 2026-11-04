@@ -4,13 +4,15 @@
 // non-identity CST emits, including the explicit materialization of a text leaf input. It needs no
 // device and no loader; the native builder -> executor -> CPU oracle parity is a separate harness.
 
-#include "grade_curves_test_support.hpp"
+#include "compositing_recipe_test_support.hpp"
 #include "gpu_scene_preparation_test_support.hpp"
+#include "grade_curves_test_support.hpp"
 
 #include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/input_color_context.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -701,6 +703,53 @@ void testRealLumaKey(Expectations& expectations) {
                         "an unchanged Luma Key reuses its command identity");
 }
 
+// #339: every recipe prepares entirely on the production GPU route. Its Merge reaches the
+// resident BlendV1 path with the recipe's explicit mode (Add for Glow, Atop and In for Light Wrap),
+// never the Normal source-over chain or a CPU frame; Drop Shadow's Normal Merge stays on the
+// source-over chain.
+void testRealRecipes(Expectations& expectations) {
+    using bloom::recipe_test::Recipe;
+    using bloom::recipe_test::RecipeValues;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const auto modesOf = [&](const Recipe recipe, const RecipeValues& values) {
+        const auto plan = bloom::recipe_test::recipePlan(recipe, values).plan;
+        const auto prepared = builder.build(plan, requestFor(*plan));
+        std::vector<bloom::core::BlendMode> modes;
+        std::size_t merges = 0;
+        expectations.expect(static_cast<bool>(prepared),
+                            "a recipe prepares on the production GPU route");
+        if (prepared)
+            for (const auto& command : prepared.scene->commands()) {
+                if (const auto* blend = std::get_if<bloom::runtime::GpuSceneBlendCommand>(&command);
+                    blend && !blend->imageCombine)
+                    modes.push_back(blend->mode);
+                merges += std::holds_alternative<bloom::runtime::GpuSceneMergeCommand>(command);
+            }
+        return std::pair{modes, merges};
+    };
+    const auto has = [](const std::vector<bloom::core::BlendMode>& modes,
+                        const bloom::core::BlendMode mode) {
+        return std::ranges::find(modes, mode) != modes.end();
+    };
+    const auto [glow, glowMerges] = modesOf(Recipe::Glow, {});
+    expectations.expect(has(glow, bloom::core::BlendMode::Add),
+                        "Glow adds its glow through a resident Add blend");
+    const auto [wrap, wrapMerges] = modesOf(Recipe::LightWrap, {});
+    expectations.expect(has(wrap, bloom::core::BlendMode::Atop),
+                        "Light Wrap composites through a resident Atop blend");
+    RecipeValues wrapOnly;
+    wrapOnly.wrapOnly = true;
+    const auto [only, onlyMerges] = modesOf(Recipe::LightWrap, wrapOnly);
+    expectations.expect(has(only, bloom::core::BlendMode::In),
+                        "Light Wrap's wrap only composites through a resident In blend");
+    const auto [shadow, shadowMerges] = modesOf(Recipe::DropShadow, {});
+    expectations.expect(shadowMerges >= 2 && !has(shadow, bloom::core::BlendMode::Add),
+                        "Drop Shadow's Normal Merge stays on the source-over chain");
+    static_cast<void>(glowMerges);
+    static_cast<void>(wrapMerges);
+    static_cast<void>(onlyMerges);
+}
+
 #if defined(__linux__)
 void testRealFileTransform(Expectations& expectations, const std::string& working,
                            const std::string& process) {
@@ -801,6 +850,7 @@ int main() {
         testRealMatteMorphology(expectations);
         testRealLumaKey(expectations);
         testRealColorGrades(expectations);
+        testRealRecipes(expectations);
 #if defined(__linux__)
         testRealFileTransform(expectations, from, to);
 #endif

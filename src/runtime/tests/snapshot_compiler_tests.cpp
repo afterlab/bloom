@@ -33,6 +33,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1911,6 +1912,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_effect_tests.ipp"
 #include "snapshot_compiler_layout_tests.ipp"
 #include "snapshot_compiler_mute_tests.ipp"
+#include "snapshot_compiler_recipe_tests.ipp"
 
 } // namespace
 
@@ -1928,6 +1930,10 @@ int main() {
         testImagePreviewInspection(expectations);
         testMatteMorphologyLowering(expectations);
         testLumaKeyLowering(expectations);
+        testDropShadowLowering(expectations);
+        testGlowLowering(expectations);
+        testLightWrapLowering(expectations);
+        testRecipeMute(expectations);
         testColorGradeLowering(expectations);
         testImageChannelLowering(expectations);
         testLiveValueOverrideOwners(expectations);

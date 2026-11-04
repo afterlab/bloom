@@ -175,7 +175,7 @@ void blurNodeReopen() {
          {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
-          "bloom.combine-channels"}) {
+          "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -193,8 +193,16 @@ void blurNodeReopen() {
             // #338 Luma Key: animatable thresholds (an HDR high) and a set invert.
             // #340 grades: a Raw-range Levels value, an HDR Curves point (#493: in a curve of
             // any number of points, and a hue curve), a set clamp, a hue and a saturation.
+            // #339 recipes: a non-default value in every domain, an HDR colour, set switches and
+            // one octave.
             const document::ParameterValue value =
-                document::isLevelsGammaSchemaKey(parameter.schemaKey)
+                document::isRecipeScalarSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{0.5}
+                : document::isRecipeColorSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{core::Color4d{2.0, -0.25, 0.5, 0.75}}
+                : document::isRecipeBooleanSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{true}
+                : document::isLevelsGammaSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{1.5}
                 : document::isLevelsValueSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{-250.5}

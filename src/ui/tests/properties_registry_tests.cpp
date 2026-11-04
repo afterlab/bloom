@@ -1,6 +1,5 @@
 #include <QAction>
 #include <QApplication>
-#include <bloom/ui/kit/controls.hpp>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QGraphicsItem>
@@ -28,17 +27,19 @@
 #include <bloom/ui/assets_editor.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/curve_graph.hpp>
-#include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/radio_group.hpp>
 #include <bloom/ui/kit/section.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
+#include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <iostream>
 #include <limits>
+#include <vector>
 using namespace bloom;
 namespace {
 int failures = 0;
@@ -962,6 +963,57 @@ void fontCatalogueRefreshIsNotAnEdit() {
         expect(stack.size() > history, "choosing a face is one undoable edit");
     }
 }
+// #339: Drop Shadow, Glow and Light Wrap present every control from the registry, and a switch
+// edits through command history.
+void recipeRows() {
+    auto project = document::makeNewProject("Recipes", "Main", core::RationalTime::fromInteger(10));
+    document::Document document(std::move(project.project));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, project.initialCompositionId);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    struct Expected final {
+        const char* type;
+        std::vector<const char*> roles;
+        const char* flag;
+    };
+    for (const auto& [type, roles, flag] :
+         {Expected{"bloom.drop-shadow",
+                   {"color", "opacity", "direction", "distance", "softness"},
+                   "shadowOnly"},
+          Expected{"bloom.glow",
+                   {"threshold", "knee", "intensity", "size", "falloff", "tint", "octaves"},
+                   "glowOnly"},
+          Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"}}) {
+        const auto node = addNode(session, type);
+        expect(node.isValid(), "a recipe is discoverable through generic AddNode");
+        session.selectNode(node);
+        QCoreApplication::processEvents();
+        bool present = true;
+        for (const auto* role : roles)
+            present = present && row(properties, role) != nullptr;
+        expect(present, "a recipe presents every value control");
+        auto* toggleRow = row(properties, flag);
+        auto* toggle = toggleRow ? toggleRow->findChild<ui::kit::KSwitch*>() : nullptr;
+        expect(toggle != nullptr && !toggle->isChecked(), "a recipe presents an unset switch");
+        if (toggle) {
+            toggle->setChecked(true);
+            const auto* record = [&]() -> const document::ParameterRecord* {
+                for (const auto& binding :
+                     session.composition()->graph().findNode(node)->parameters)
+                    if (binding.role == flag)
+                        return session.composition()->parameters().find(binding.parameterId);
+                return nullptr;
+            }();
+            expect(record && std::get<bool>(
+                                 std::get<document::ConstantValueSource>(record->source).value),
+                   "setting a recipe switch publishes it through a command");
+            expect(session.undo(), "the recipe switch edit undoes");
+            expect(session.redo(), "the recipe switch edit redoes");
+        }
+    }
+}
+
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
@@ -979,6 +1031,7 @@ int main(int argc, char** argv) try {
     transform2DRows();
     matteBlurRows();
     matteKeyRows();
+    recipeRows();
     colorGradeRows();
     imageChannelRows();
     widthRule();

@@ -138,15 +138,56 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
-    // Channel Set; #494 adds Grade.
-    expectations.expect(registry.definitions().size() == 149,
+    // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap.
+    expectations.expect(registry.definitions().size() == 152,
                         "startup contribution includes every built-in definition");
-    for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
-                             "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",
-                             "bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
-                             "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"})
+    for (const auto* type :
+         {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
+          "bloom.resize", "bloom.fit", "bloom.transform-2d", "bloom.gaussian-blur",
+          "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate",
+          "bloom.luma-key", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"})
         expectations.expect(registry.find(type, 1) != nullptr,
                             "each pinned image-node addition is registered");
+    // #339: the recipes are Image effects whose first input is the required Image; Glow's key and
+    // Light Wrap's background are optional Images, Glow's mask an optional Mask; every animatable
+    // value has its socket and the switches and Glow's octaves are constants.
+    for (const auto* type : {"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"}) {
+        const auto* recipe = registry.find(type, 1);
+        bool sockets = recipe != nullptr;
+        if (recipe)
+            for (const auto& parameter : recipe->parameters)
+                sockets = sockets && (parameter.supportsAnimation ==
+                                      std::ranges::any_of(recipe->inputs, [&](const auto& input) {
+                                          return input.name == parameter.role;
+                                      }));
+        expectations.expect(recipe && sockets &&
+                                recipe->lowering == runtime::NodeLoweringKind::ImageEffect &&
+                                recipe->inputs[0].name == "input" &&
+                                recipe->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+                                recipe->inputs[0].required && recipe->outputs.size() == 1 &&
+                                recipe->outputs[0].valueKind == runtime::SocketValueKind::Image,
+                            "#339: a recipe is an Image effect with a socket per animatable value");
+        if (recipe) {
+            auto changed = *recipe;
+            changed.outputs[0].valueKind = runtime::SocketValueKind::Mask;
+            runtime::NodeDefinitionRegistry scratch;
+            expectations.expect(scratch.registerDefinition(changed) ==
+                                    runtime::NodeRegistrationStatus::InvalidDefinition,
+                                "#339: a recipe of another shape is refused");
+        }
+    }
+    const auto* glow = registry.find("bloom.glow", 1);
+    expectations.expect(glow && glow->inputs[1].name == "key" &&
+                            glow->inputs[1].valueKind == runtime::SocketValueKind::Image &&
+                            !glow->inputs[1].required && glow->inputs[2].name == "mask" &&
+                            glow->inputs[2].valueKind == runtime::SocketValueKind::Mask &&
+                            !glow->inputs[2].required,
+                        "#339: Glow takes an optional key pass and an optional Mask");
+    const auto* wrap = registry.find("bloom.light-wrap", 1);
+    expectations.expect(wrap && wrap->inputs[1].name == "background" &&
+                            wrap->inputs[1].valueKind == runtime::SocketValueKind::Image &&
+                            !wrap->inputs[1].required,
+                        "#339: Light Wrap takes an optional background Image");
     // #340: Levels has five animatable Scalars per channel (RGB master, red, green, blue, alpha)
     // and Curves (#493 schema 2) nine animatable point-list curves (master, red, green, blue,
     // alpha, then the four hue curves) with no sockets, then a constant clamp; Hue/Saturation has

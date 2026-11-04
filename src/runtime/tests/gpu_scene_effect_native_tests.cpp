@@ -12,8 +12,9 @@
 // failure. An explicit --loader selects the Vulkan loader. Without the pinned tools the real arms
 // are skipped.
 
-#include "grade_curves_test_support.hpp"
+#include "compositing_recipe_test_support.hpp"
 #include "gpu_composite_native_support.hpp"
+#include "grade_curves_test_support.hpp"
 
 #include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -210,7 +211,8 @@ runScene(GpuSceneExecutor& executor,
     }
     for (std::size_t i = 0; i < actual.size(); ++i) {
         if (actual[i].alpha() != expected[i].alpha()) {
-            detail = "alpha at " + std::to_string(i);
+            detail = "alpha at " + std::to_string(i) + " got " + std::to_string(actual[i].alpha()) +
+                     " want " + std::to_string(expected[i].alpha());
             return false;
         }
         for (std::size_t c = 0; c < 3; ++c) {
@@ -1303,6 +1305,121 @@ void runLumaKeys(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
     }
 }
 
+// #339 Drop Shadow, Glow and Light Wrap: the production recipe chains on the device against the
+// CPU oracle at the 2e-6/exact-alpha gate, with the data/display windows; a warm unchanged scene
+// dispatches nothing; a changed opacity, intensity or amount re-runs only the chain after it (the
+// softened coverage, the octave blurs, the background blur stay cached): one Levels dispatch.
+void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::recipe_test::Recipe;
+    using bloom::recipe_test::RecipeValues;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const auto dispatches = [](const bloom::runtime::GpuSceneExecutorCounters& counters) {
+        return counters.solidDispatches + counters.coveredSolidDispatches +
+               counters.translationDispatches + counters.sourceOverDispatches +
+               counters.affineDispatches + counters.blendDispatches + counters.ocioEffectDispatches;
+    };
+    struct Case final {
+        Recipe recipe;
+        RecipeValues values;
+        RecipeValues changed;
+        std::uint64_t changedOcioDispatches; // the re-run neighbourhood/Levels programs
+        const char* name;
+    };
+    std::vector<Case> cases;
+    {
+        RecipeValues changed;
+        changed.opacity = 0.4;
+        cases.push_back({Recipe::DropShadow, {}, changed, 1, "drop shadow"});
+        RecipeValues only;
+        only.shadowOnly = true;
+        only.direction = 135.0;
+        only.distance = 2.5;
+        RecipeValues onlyChanged = only;
+        onlyChanged.opacity = 0.3;
+        cases.push_back({Recipe::DropShadow, only, onlyChanged, 1, "drop shadow only"});
+    }
+    {
+        // Luma Key's coverage is a function of colour: an exact-alpha device case keys a solid.
+        RecipeValues glow;
+        glow.solidInput = true;
+        RecipeValues changed = glow;
+        changed.intensity = 4.0;
+        cases.push_back({Recipe::Glow, glow, changed, 1, "glow"});
+        RecipeValues keyed;
+        keyed.key = true;
+        keyed.mask = true;
+        keyed.threshold = 0.5;
+        keyed.glowOnly = true;
+        RecipeValues keyedChanged = keyed;
+        keyedChanged.intensity = 0.5;
+        cases.push_back({Recipe::Glow, keyed, keyedChanged, 1, "glow keyed"});
+    }
+    {
+        RecipeValues changed;
+        changed.amount = 0.25;
+        cases.push_back({Recipe::LightWrap, {}, changed, 1, "light wrap"});
+        RecipeValues only;
+        only.wrapOnly = true;
+        RecipeValues onlyChanged = only;
+        onlyChanged.amount = 0.5;
+        cases.push_back({Recipe::LightWrap, only, onlyChanged, 1, "light wrap only"});
+    }
+    std::uint64_t id = 9600;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("recipe native (") + item.name + "): ";
+        const auto plan = bloom::recipe_test::recipePlan(item.recipe, item.values, id).plan;
+        const auto changedPlan = bloom::recipe_test::recipePlan(item.recipe, item.changed, id).plan;
+        id += 100;
+        const auto request = requestFor(*plan);
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(
+            cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+            name + "HDR/partial-alpha CPU parity (2e-6, exact alpha): " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(
+            warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
+                dispatches(executor.executor->counters()) == dispatches(coldCounters),
+            name + "warm RAM reuse has identical pixels and zero dispatches");
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, changed.scene);
+        expectations.expect(
+            rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail) &&
+                executor.executor->counters().ocioEffectDispatches ==
+                    coldCounters.ocioEffectDispatches + item.changedOcioDispatches,
+            name + "a changed value re-runs only the chain after it, with CPU parity: " + detail);
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
@@ -1316,6 +1433,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runLumaKeys(expectations, device, cache);
     runColorGrades(expectations, device, cache);
     runChannelSelects(expectations, device, cache);
+    runRecipes(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

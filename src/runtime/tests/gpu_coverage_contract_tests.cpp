@@ -20,7 +20,7 @@
 // independent check has passed. A missing required fixture is a structural failure that the
 // prerequisite NotRun can never absorb, and no independent fixture is ever masked by tools.
 
-#include "grade_curves_test_support.hpp"
+#include "compositing_recipe_test_support.hpp"
 #include "gpu_coverage_contract_plans.hpp"
 #include "gpu_coverage_display_support.hpp"
 #include "gpu_coverage_fixture_support.hpp"
@@ -34,6 +34,7 @@
 #include "gpu_coverage_video_support.hpp"
 #include "gpu_coverage_working_space_support.hpp"
 #include "gpu_route_proof_io.hpp"
+#include "grade_curves_test_support.hpp"
 
 #include <bloom/document/graph.hpp>
 #include <bloom/render/gpu_device.hpp>
@@ -1476,6 +1477,73 @@ displayProofRunner(const bool customView) {
                 168200,
                 "production Image to Channel Set reads: a packed layer's Pass and a lane joined "
                 "from a second packed image, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    // #339 Drop Shadow, Glow and Light Wrap: the production recipe chains (compositing_recipes.hpp)
+    // over an HDR, partial-alpha gradient (Glow: solid), each variant full frame and ROI. Their
+    // Merges carry explicit Normal, Add, Atop and In modes through the per-entry BlendV1 path.
+    const auto runRecipes = [](const bloom::recipe_test::Recipe recipe,
+                               const std::vector<bloom::recipe_test::RecipeValues>& variants,
+                               std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& values : variants) {
+            const auto plan = bloom::recipe_test::recipePlan(recipe, values, idBase).plan;
+            idBase += 100;
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roi = bloom::render::ImageWindow::create(5, 4, 9, 7);
+            request.roi = *roi.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    add(
+        "node.bloom.drop-shadow", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues shadowOnly;
+            shadowOnly.shadowOnly = true;
+            shadowOnly.direction = 135.0;
+            shadowOnly.distance = 2.5;
+            return runRecipes(bloom::recipe_test::Recipe::DropShadow, {{}, shadowOnly}, 169000,
+                              "production Drop Shadow: softened, moved, coloured coverage under "
+                              "the input and shadow only, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.glow", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues keyed;
+            keyed.key = true;
+            keyed.mask = true;
+            keyed.threshold = 0.5;
+            keyed.glowOnly = true;
+            // Luma Key's coverage is a function of colour: the exact-alpha gate keys a solid.
+            bloom::recipe_test::RecipeValues glow;
+            glow.solidInput = true;
+            return runRecipes(bloom::recipe_test::Recipe::Glow, {glow, keyed}, 169400,
+                              "production Glow: keyed octaves added to the input, and a keyed, "
+                              "masked glow only, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.light-wrap", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues wrapOnly;
+            wrapOnly.wrapOnly = true;
+            return runRecipes(bloom::recipe_test::Recipe::LightWrap, {{}, wrapOnly}, 169800,
+                              "production Light Wrap: the held-out background Atop and In the "
+                              "foreground, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     return list;

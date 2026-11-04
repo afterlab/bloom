@@ -765,6 +765,75 @@ void testLumaKeyCommands(TestContext& test) {
                                ConstantValueSource{std::int64_t{1}});
 }
 
+// #339: Drop Shadow, Glow and Light Wrap are added, wired (Glow's key pass and Mask, Light Wrap's
+// background), keyed and edited, undone and redone through the generic node commands. A Mask never
+// reaches Glow's key, and the schemas refuse values the recipes cannot render.
+void testRecipeCommands(TestContext& test) {
+    Fixture fixture;
+    const auto addRecipe = [&](const char* type) {
+        const auto added = exercise<AddNode>(test, fixture, type, Vec2d{});
+        const auto id = added.outputId<NodeId>(kAddNodeOutput);
+        if (!id)
+            throw std::logic_error("recipe exposes its node identity");
+        exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"},
+                               InputPortRef{NodeInputRef{*id, "input"}});
+        return added;
+    };
+    const auto shadow = addRecipe("bloom.drop-shadow");
+    const auto distance = shadow.outputId<ParameterId>("parameter.distance");
+    const auto opacity = shadow.outputId<ParameterId>("parameter.opacity");
+    const auto color = shadow.outputId<ParameterId>("parameter.color");
+    const auto shadowOnly = shadow.outputId<ParameterId>("parameter.shadowOnly");
+    if (!distance || !opacity || !color || !shadowOnly)
+        throw std::logic_error("Drop Shadow exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *distance, ConstantValueSource{24.0});
+    (void)exercise<SetParameterSource>(
+        test, fixture, *color, ConstantValueSource{bloom::core::Color4d{0.1, 0.0, 0.3, 0.5}});
+    (void)exercise<SetParameterSource>(test, fixture, *shadowOnly, ConstantValueSource{true});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *opacity,
+                               ConstantValueSource{1.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *distance,
+                               ConstantValueSource{-1.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *color,
+                               ConstantValueSource{bloom::core::Color4d{0.0, 0.0, 0.0, 2.0}});
+
+    const auto glow = addRecipe("bloom.glow");
+    const auto glowId = glow.outputId<NodeId>(kAddNodeOutput);
+    const auto threshold = glow.outputId<ParameterId>("parameter.threshold");
+    const auto octaves = glow.outputId<ParameterId>("parameter.octaves");
+    const auto size = glow.outputId<ParameterId>("parameter.size");
+    const auto mask =
+        apply<AddNode>(fixture, "bloom.mask", Vec2d{60, 0}).outputId<NodeId>(kAddNodeOutput);
+    if (!glowId || !threshold || !octaves || !size || !mask)
+        throw std::logic_error("Glow exposes registered control identities");
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"},
+                           InputPortRef{NodeInputRef{*glowId, "key"}});
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{*mask, "mask"},
+                           InputPortRef{NodeInputRef{*glowId, "mask"}});
+    refuse<ConnectPorts>(test, fixture, OperationIssueCode::SocketKindMismatch,
+                         OutputPortRef{*mask, "mask"}, InputPortRef{NodeInputRef{*glowId, "key"}});
+    (void)exercise<SetParameterSource>(test, fixture, *threshold, ConstantValueSource{4.5});
+    (void)exercise<SetParameterSource>(test, fixture, *octaves,
+                                       ConstantValueSource{std::int64_t{8}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *octaves,
+                               ConstantValueSource{std::int64_t{9}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *size,
+                               ConstantValueSource{300.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *threshold,
+                               ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
+
+    const auto wrap = addRecipe("bloom.light-wrap");
+    const auto wrapId = wrap.outputId<NodeId>(kAddNodeOutput);
+    const auto amount = wrap.outputId<ParameterId>("parameter.amount");
+    if (!wrapId || !amount)
+        throw std::logic_error("Light Wrap exposes registered control identities");
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"},
+                           InputPortRef{NodeInputRef{*wrapId, "background"}});
+    (void)exercise<SetParameterSource>(test, fixture, *amount, ConstantValueSource{0.25});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *amount,
+                               ConstantValueSource{1.25});
+}
+
 void testAddAndLayout(TestContext& test) {
     Fixture fixture;
     for (const auto& definition : builtInNodeDefinitions().definitions()) {
@@ -1716,6 +1785,7 @@ int main() {
         bloom::commands::test::testMatteBlurCommands(test, "bloom.matte-erode");
         bloom::commands::test::testMatteBlurCommands(test, "bloom.matte-dilate");
         bloom::commands::test::testLumaKeyCommands(test);
+        bloom::commands::test::testRecipeCommands(test);
         bloom::commands::test::testColorGradeCommands(test);
         bloom::commands::test::testImageChannelCommands(test);
         bloom::commands::test::testNewNodePlacementDoesNotMoveExistingCards(test);
