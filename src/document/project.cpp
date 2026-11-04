@@ -1,6 +1,8 @@
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/project.hpp>
 
+#include <bloom/document/merge_entries.hpp>
+
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/render_reachability.hpp>
 
@@ -366,8 +368,16 @@ Composition::LockIndex Composition::buildLockIndex(const Content& authored) {
     LockIndex index;
     std::vector<NodeId> pending;
     for (const auto& layer : authored.graph.layerOutputs())
-        if (layer.locked)
-            pending.push_back(layer.nodeId);
+        if (layer.locked) {
+            if (!layer.entryOwned()) {
+                pending.push_back(layer.nodeId);
+                continue;
+            }
+            // #502: an entry layer's upstream is its slot's content, not its whole Merge.
+            if (const auto* edge =
+                    mergeSlotImageEdge(authored.graph, layer.nodeId, *layer.entrySlot))
+                pending.push_back(edge->source.nodeId);
+        }
     if (pending.empty())
         return index;
     // One reverse BFS over node inputs from every locked boundary.
@@ -387,7 +397,11 @@ Composition::LockIndex Composition::buildLockIndex(const Content& authored) {
         if (index.nodes.contains(node.id))
             for (const auto& binding : node.parameters)
                 index.parameters.insert(binding.parameterId);
-    // ADR 0028: a layer mask's parameters follow its layer's lock.
+    // ADR 0028: a layer mask's parameters follow its layer's lock; #502 so do an entry layer's own.
+    for (const auto& layer : authored.graph.layerOutputs())
+        if (layer.locked)
+            for (const auto& binding : layer.parameters)
+                index.parameters.insert(binding.parameterId);
     for (const auto& layer : authored.graph.layerOutputs())
         if (layer.locked)
             for (const auto& mask : layer.masks)
@@ -462,6 +476,7 @@ ValidationResult Composition::validate() const {
     result.append("", validateAnimationCurveReferences(parameters(), animationCurves()));
     result.append("graph", graph().validate(parameters(), builtInNodeDefinitions(), id_));
     result.append("", validateLayerMasks(graph(), parameters()));
+    result.append("graph", validateEntryLayers(graph(), parameters()));
     result.append("", validateNodeLayout(nodeLayout(), graph()));
     result.append("", validateNodeGroups(nodeGroups(), graph()));
     return result;

@@ -566,6 +566,106 @@ void testImagePreviewSink() {
            "an Image Preview edit leaves every rendered frame unaffected");
 }
 
+// #502: an entry's layer is the Layer node up its chain or its own entry layer, whose enable, solo,
+// parent and matte relations reach exactly as a Layer node's; a reached Adjustment reaches the
+// Merge whose stack below its entry it draws.
+void testEntryLayersAndAdjustments() {
+    const auto thirdSolid = NodeId::fromRaw(9);
+    const auto inner = NodeId::fromRaw(11);
+    const auto adjustment = NodeId::fromRaw(12);
+    const auto entryLayerId = LayerId::fromRaw(32);
+    const auto innerSlot = LayerSlotId::fromRaw(42);
+    {
+        // Second Solid -> Second Layer -> Blur -> Merge: the chain Layer decides the slot.
+        Fixture fixture;
+        for (const auto& edge : fixture.graph.edges())
+            if (const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination);
+                slot != nullptr && slot->slotId == kSecondSlot) {
+                require(fixture.graph.eraseEdge(edge.id), "erase slot edge");
+                break;
+            }
+        fixture.connect({kSecondLayer, "image"}, NodeInputRef{kBlur, "input"});
+        fixture.connect(
+            {kBlur, "image"},
+            LayerStackInputRef{kStack, kSecondSlot, std::string(kLayerStackContentInputRole)});
+        auto composition = fixture.build();
+        expect(RenderReachability::compute(composition).reaches(kBlur),
+               "an enabled chain Layer's slot is consumed");
+        composition.graph().findLayer(kSecondLayerId)->enabled = false;
+        const auto disabled = RenderReachability::compute(composition);
+        expect(!disabled.reaches(kBlur) && !disabled.reaches(kSecondLayer),
+               "a disabled chain Layer leaves its entry's slot unconsumed");
+    }
+    {
+        // An unconnected Merge whose entry layer parents the Second Layer.
+        Fixture fixture;
+        require(
+            fixture.graph.addNode(
+                {thirdSolid, std::string(kSolidSourceNodeType), {}, kSolidSourceNodeSchemaVersion}),
+            "third solid");
+        require(fixture.graph.addNode(
+                    {inner, std::string(kLayerStackNodeType), {}, kLayerStackNodeSchemaVersion}),
+                "inner merge");
+        require(fixture.graph.merge(inner)->append({innerSlot, entryLayerId}), "inner slot");
+        fixture.connect(
+            {thirdSolid, "image"},
+            LayerStackInputRef{inner, innerSlot, std::string(kLayerStackContentInputRole)});
+        LayerOutputBoundary entry{inner, entryLayerId, "Entry", "image"};
+        entry.entrySlot = innerSlot;
+        entry.pivot = LayerPivot::Content;
+        require(fixture.graph.addLayerOutput(std::move(entry)), "entry layer");
+        auto composition = fixture.build();
+        auto* second = composition.graph().findLayer(kSecondLayerId);
+        second->parent = entryLayerId;
+        second->inPoint = t(6);
+        const auto reachability = RenderReachability::compute(composition);
+        expect(reachability.reaches(inner) && reachability.reaches(thirdSolid),
+               "an entry layer parent reaches its Merge and its slot content");
+        const auto parent = confine(composition, inner);
+        expect(parent.kind == RenderConfinementKind::LayerSpans && parent.spans.size() == 1 &&
+                   parent.spans.front() == RenderTimeSpan{t(6), t(10)},
+               "an edit to a Merge's entry layer reaches its children's spans");
+        composition.graph().findLayer(entryLayerId)->enabled = false;
+        expect(RenderReachability::compute(composition).reaches(thirdSolid),
+               "a disabled entry layer parent still reaches its content");
+        // As the First Layer's track matte, its own slot stays hidden while its content is reached.
+        composition.graph().findLayer(entryLayerId)->enabled = true;
+        second->parent.reset();
+        composition.graph().findLayer(kFirstLayerId)->trackMatte =
+            TrackMatte{entryLayerId, TrackMatteChannel::Alpha, false};
+        expect(RenderReachability::compute(composition).reaches(thirdSolid),
+               "an entry layer matte source reaches its content");
+    }
+    {
+        // Adjustment -> Blur -> the top of the stack.
+        Fixture fixture;
+        require(
+            fixture.graph.addNode(
+                {adjustment, std::string(kAdjustmentNodeType), {}, kAdjustmentNodeSchemaVersion}),
+            "adjustment");
+        const auto top = LayerSlotId::fromRaw(43);
+        require(fixture.graph.layerStack().append({top, {}}), "adjustment slot");
+        require(fixture.graph.layerStack().moveBefore(top, kFirstSlot), "to the top");
+        fixture.connect({adjustment, "image"}, NodeInputRef{kBlur, "input"});
+        fixture.connect({kBlur, "image"},
+                        LayerStackInputRef{kStack, top, std::string(kLayerStackContentInputRole)});
+        const auto composition = fixture.build();
+        const auto reachability = RenderReachability::compute(composition);
+        expect(reachability.reaches(adjustment) && reachability.reaches(kBlur) &&
+                   reachability.reaches(kFirstSolid) && reachability.reaches(kSecondSolid),
+               "an adjustment entry and the stack below it are reachable");
+        // A layer below is still gated by its own span: the stack below changes only there.
+        auto gated = composition;
+        gated.graph().findLayer(kSecondLayerId)->inPoint = t(4);
+        const auto below = confine(gated, kSecondSolid);
+        expect(below.kind == RenderConfinementKind::LayerSpans &&
+                   below.spans.front() == RenderTimeSpan{t(4), t(10)},
+               "a layer below an Adjustment changes output only in its own span");
+        expect(confine(composition, kBlur).kind == RenderConfinementKind::WholeComposition,
+               "an edit in an Adjustment's chain reaches output at every time");
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--benchmark") == 0)
         return runBenchmark();
@@ -579,6 +679,7 @@ int main(int argc, char** argv) {
         testNormalizationAndWork();
         testDriverSourceValidation();
         testImagePreviewSink();
+        testEntryLayersAndAdjustments();
     } catch (const std::exception& error) {
         std::cerr << "fixture failure: " << error.what() << '\n';
         return 1;

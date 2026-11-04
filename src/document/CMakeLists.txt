@@ -16,6 +16,7 @@ target_sources(
         node_layout.cpp
         layer_masks.cpp
         layer_source.cpp
+        merge_entries.cpp
         channel_nodes.cpp
         image_preview.cpp
         layer_stack.cpp
@@ -117,6 +118,12 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_document_model_test PRIVATE bloom_document)
     bloom_enable_warnings(bloom_document_model_test)
     bloom_add_test(NAME bloom.document.model COMMAND bloom_document_model_test LABELS unit)
+
+    add_executable(bloom_document_entry_layer_test tests/entry_layer_tests.cpp)
+    target_link_libraries(bloom_document_entry_layer_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_entry_layer_test)
+    bloom_add_test(NAME bloom.document.entry-layers COMMAND bloom_document_entry_layer_test
+                   LABELS unit)
 
     add_executable(bloom_document_publication_test tests/document_publication_tests.cpp)
     target_link_libraries(bloom_document_publication_test PRIVATE bloom_document)

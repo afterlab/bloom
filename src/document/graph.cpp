@@ -1,5 +1,6 @@
 #include <bloom/document/graph.hpp>
 
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/persisted_text.hpp>
 
 #include <algorithm>
@@ -327,9 +328,13 @@ bool CanonicalGraph::addLayerOutput(LayerOutputBoundary boundary) {
         return false;
     }
 
+    // A Layer node has one boundary; a Merge node may own one entry layer per slot (#502).
     const auto duplicate =
         std::find_if(layerOutputs_.begin(), layerOutputs_.end(), [&boundary](const auto& item) {
-            return item.nodeId == boundary.nodeId || item.layerId == boundary.layerId;
+            return item.layerId == boundary.layerId ||
+                   (item.nodeId == boundary.nodeId &&
+                    (!item.entryOwned() || !boundary.entryOwned() ||
+                     item.entrySlot == boundary.entrySlot));
         });
     if (duplicate != layerOutputs_.end()) {
         return false;
@@ -337,6 +342,11 @@ bool CanonicalGraph::addLayerOutput(LayerOutputBoundary boundary) {
 
     layerOutputs_.push_back(std::move(boundary));
     return true;
+}
+
+bool CanonicalGraph::eraseLayerOutput(const LayerId id) {
+    return std::erase_if(layerOutputs_,
+                         [id](const auto& boundary) { return boundary.layerId == id; }) != 0;
 }
 
 bool CanonicalGraph::eraseEdge(const EdgeId id) {
@@ -373,16 +383,27 @@ bool CanonicalGraph::eraseNode(const NodeId id) {
         }
     }
     std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
+    // #502: an entry layer leaves with its slot. Its parameters stay in the store for the
+    // command's own cleanup, as a removed node's do.
+    std::erase_if(layerOutputs_, [this](const auto& boundary) {
+        if (!boundary.entryOwned())
+            return false;
+        const auto* stack = merge(boundary.nodeId);
+        return stack == nullptr || stack->find(*boundary.entrySlot) == nullptr;
+    });
     std::erase_if(nodes_, [id](const auto& node) { return node.id == id; });
     return true;
 }
 
 void CanonicalGraph::clearTrackMattesOutsideMerge(const LayerId layer) {
-    // The same first-Merge membership validate() uses for the same-Merge rule.
+    // The same first-Merge membership validate() uses for the same-Merge rule: the Merge whose
+    // entry's layer (#502, mergeEntryLayer) is `id`.
     const auto mergeOf = [this](const LayerId id) -> std::optional<NodeId> {
         for (const auto& stack : layerStacks_)
-            if (std::ranges::any_of(stack.entries(),
-                                    [id](const auto& entry) { return entry.layerId == id; }))
+            if (std::ranges::any_of(stack.entries(), [&](const auto& entry) {
+                    const auto* layer = mergeEntryLayer(*this, stack.nodeId(), entry.slotId);
+                    return layer != nullptr && layer->layerId == id;
+                }))
                 return stack.nodeId();
         return std::nullopt;
     };
@@ -493,7 +514,7 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         validateStructuralText(boundary.outputPort, path + ".outputPort", "Layer Output port",
                                result);
         validateHumanFacingName(boundary.name, path + ".name", "Layer name", result);
-        if (!boundaryNodeIds.insert(boundary.nodeId).second ||
+        if ((!boundary.entryOwned() && !boundaryNodeIds.insert(boundary.nodeId).second) ||
             !boundariesByLayer.emplace(boundary.layerId, &boundary).second) {
             result.add(ValidationCode::DuplicateId, path,
                        "Layer Output node and layer IDs must be unique");
@@ -503,7 +524,8 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         if (node == nullptr) {
             result.add(ValidationCode::MissingReference, path + ".nodeId",
                        "Layer Output references a missing node");
-        } else if (node->typeId != kLayerOutputNodeType) {
+        } else if (node->typeId !=
+                   (boundary.entryOwned() ? kLayerStackNodeType : kLayerOutputNodeType)) {
             result.add(ValidationCode::InvalidLayerBoundary, path + ".nodeId",
                        "Layer Output boundary node has the wrong node type");
         }
@@ -541,7 +563,10 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
     std::unordered_map<LayerId, NodeId> mergeOfLayer;
     for (const auto& stack : layerStacks_)
         for (const auto& entry : stack.entries())
-            mergeOfLayer.emplace(entry.layerId, stack.nodeId());
+            // #502: the entry's layer, which may be a Layer node further up its chain.
+            if (const auto* layer =
+                    mergeEntryLayer(*this, stack.nodeId(), entry.slotId, registry))
+                mergeOfLayer.emplace(layer->layerId, stack.nodeId());
     for (const auto& boundary : layerOutputs_) {
         if (!boundary.trackMatte)
             continue;
@@ -599,8 +624,10 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
     for (const auto& boundary : layerOutputs_) {
         const auto parent =
             boundary.parent ? boundariesByLayer.find(*boundary.parent) : boundariesByLayer.end();
+        // #502: entry layers of one Merge evaluate in parent order inside that Merge.
         if (parent != boundariesByLayer.end() && indegree.contains(boundary.nodeId) &&
-            indegree.contains(parent->second->nodeId)) {
+            indegree.contains(parent->second->nodeId) &&
+            parent->second->nodeId != boundary.nodeId) {
             adjacency[parent->second->nodeId].push_back(boundary.nodeId);
             ++indegree[boundary.nodeId];
         }
@@ -767,9 +794,18 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
                 continue;
             }
             const auto boundary = boundariesByLayer.find(entry.layerId);
-            const auto sourceBoundary = std::ranges::find(layerOutputs_, matching->source.nodeId,
-                                                          &LayerOutputBoundary::nodeId);
-            if ((entry.layerId.isValid() &&
+            const auto sourceBoundary =
+                std::ranges::find_if(layerOutputs_, [&](const LayerOutputBoundary& candidate) {
+                    return !candidate.entryOwned() &&
+                           candidate.nodeId == matching->source.nodeId;
+                });
+            // #502: a slot not fed by a Layer node may name its own entry layer.
+            const bool ownLayer = boundary != boundariesByLayer.end() &&
+                                  boundary->second->entryOwned() &&
+                                  boundary->second->nodeId == stack.nodeId() &&
+                                  boundary->second->entrySlot == entry.slotId &&
+                                  sourceBoundary == layerOutputs_.end();
+            if ((entry.layerId.isValid() && !ownLayer &&
                  (boundary == boundariesByLayer.end() ||
                   boundary->second->nodeId != matching->source.nodeId ||
                   boundary->second->outputPort != matching->source.port)) ||

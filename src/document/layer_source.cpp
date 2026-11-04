@@ -37,6 +37,17 @@ constantFor(const Composition& composition, const NodeRecord& node, const std::s
     return nullptr;
 }
 
+[[nodiscard]] const NodeRecord* feedingSlot(const Composition& composition, const NodeId merge,
+                                            const LayerSlotId slot, const std::string_view role) {
+    for (const auto& edge : composition.graph().edges()) {
+        const auto* input = std::get_if<LayerStackInputRef>(&edge.destination);
+        if (input != nullptr && input->stackNodeId == merge && input->slotId == slot &&
+            input->role == role)
+            return composition.graph().findNode(edge.source.nodeId);
+    }
+    return nullptr;
+}
+
 [[nodiscard]] std::optional<LayerSource> sourceOfNode(const Composition& composition,
                                                       const NodeRecord& node) {
     if (node.typeId == kCompositionSourceNodeType) {
@@ -69,7 +80,13 @@ std::optional<LayerSource> layerSource(const Composition& composition,
     // content chain through each node's own "image" input, bounded by the node count so a malformed
     // cycle cannot spin.
     for (const auto port : {kLayerOutputContentInputPort, kLayerOutputAudioInputPort}) {
-        const auto* node = feedingNode(composition, layer.nodeId, port);
+        // #502: an entry layer's content is whatever feeds its Merge slot.
+        const auto* node = layer.entryOwned()
+                               ? feedingSlot(composition, layer.nodeId, *layer.entrySlot,
+                                             port == kLayerOutputContentInputPort
+                                                 ? kLayerStackContentInputRole
+                                                 : kLayerStackAudioInputRole)
+                               : feedingNode(composition, layer.nodeId, port);
         for (std::size_t step = 0; node != nullptr && step <= composition.graph().nodes().size();
              ++step) {
             if (auto source = sourceOfNode(composition, *node))

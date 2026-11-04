@@ -30,6 +30,9 @@ class LayerStack final {
     [[nodiscard]] bool append(LayerStackEntry entry);
     [[nodiscard]] bool erase(LayerSlotId slotId);
     [[nodiscard]] bool moveBefore(LayerSlotId slotId, std::optional<LayerSlotId> beforeSlotId);
+    // #502: re-names the layer a slot carries in place (an entry layer created, adopted or
+    // returned), keeping its position. Refused for a missing slot or a layer another slot names.
+    [[nodiscard]] bool setLayerId(LayerSlotId slotId, LayerId layerId);
 
     [[nodiscard]] ValidationResult validate() const;
 

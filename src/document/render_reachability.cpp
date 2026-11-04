@@ -1,9 +1,12 @@
 #include <bloom/document/render_reachability.hpp>
 
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/value_nodes.hpp>
 
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -34,8 +37,18 @@ class GraphView final {
         : composition_(composition), graph_(composition.graph()), registry_(registry) {
         for (const auto& node : graph_.nodes())
             nodes_.emplace(node.id, &node);
+        // #502: the image chains an entry's layer is found along, indexed once.
+        for (const auto& edge : graph_.edges()) {
+            if (const auto* input = std::get_if<NodeInputRef>(&edge.destination))
+                nodeInputs_[input->nodeId].push_back(&edge);
+            else if (const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination);
+                     slot != nullptr && slot->role == kLayerStackContentInputRole)
+                slotImages_.try_emplace(SlotKey{slot->stackNodeId, slot->slotId}, &edge);
+        }
         for (const auto& boundary : graph_.layerOutputs()) {
-            boundaries_.emplace(boundary.nodeId, &boundary);
+            // #502: a Merge entry's own layer has no node; its nodeId is its Merge's.
+            if (!boundary.entryOwned())
+                boundaries_.emplace(boundary.nodeId, &boundary);
             // First boundary per layer wins, exactly as the compiler's linear search does.
             layers_.try_emplace(boundary.layerId, &boundary);
             anySolo_ = anySolo_ || boundary.solo;
@@ -64,6 +77,45 @@ class GraphView final {
     // ADR 0028: a layer that is any layer's track matte contributes nothing to its Merge.
     [[nodiscard]] bool isMatteSource(const LayerId layer) const noexcept {
         return matteSources_.contains(layer);
+    }
+
+    [[nodiscard]] const LayerOutputBoundary* layer(const LayerId id) const noexcept {
+        const auto found = layers_.find(id);
+        return found == layers_.end() ? nullptr : found->second;
+    }
+
+    // The edge feeding a Merge slot's image content.
+    [[nodiscard]] const EdgeRecord* slotImage(const NodeId stack, const LayerSlotId slot) const {
+        const auto found = slotImages_.find(SlotKey{stack, slot});
+        return found == slotImages_.end() ? nullptr : found->second;
+    }
+
+    // #502: the entry's layer, exactly as document::mergeEntryLayer answers it -- the Layer node
+    // nearest the Merge up the slot's image chain (through image effects' first Image input and
+    // reroutes), else the entry's own layer, else the slot's layer identity -- over indexed edges.
+    [[nodiscard]] const LayerOutputBoundary* entryLayer(const NodeId stack,
+                                                        const LayerSlotId slot) const {
+        const SlotKey key{stack, slot};
+        if (const auto found = entryLayers_.find(key); found != entryLayers_.end())
+            return found->second;
+        const LayerOutputBoundary* result = nullptr;
+        if (const auto* edge = slotImage(stack, slot))
+            result = chainLayer(edge->source);
+        const auto* entry = this->slot(stack, slot);
+        if (result == nullptr && entry != nullptr && entry->layerId.isValid())
+            result = layer(entry->layerId);
+        entryLayers_.emplace(key, result);
+        return result;
+    }
+
+    // The entry's layer when it is the entry's own (no Layer node shadows it).
+    [[nodiscard]] const LayerOutputBoundary* ownedEntryLayer(const NodeId stack,
+                                                             const LayerSlotId slot) const {
+        const auto* found = entryLayer(stack, slot);
+        return found != nullptr && found->entryOwned() && found->nodeId == stack &&
+                       found->entrySlot == slot
+                   ? found
+                   : nullptr;
     }
 
     [[nodiscard]] const NodeRecord* node(const NodeId id) const noexcept {
@@ -104,15 +156,59 @@ class GraphView final {
                 return false;
         }
         if (const auto* slot = std::get_if<LayerStackInputRef>(&edge.destination)) {
-            const auto found = slots_.find(SlotKey{slot->stackNodeId, slot->slotId});
-            if (found != slots_.end() &&
-                (mutedLayer(*found->second) || isMatteSource(found->second->layerId)))
+            // #502: the entry's layer decides, wherever in its chain it sits.
+            if (const auto* layer = entryLayer(slot->stackNodeId, slot->slotId);
+                layer != nullptr && (mutedLayer(*layer) || isMatteSource(layer->layerId)))
                 return false;
         }
         return true;
     }
 
   private:
+    // The input an image chain continues through: a reroute's pass-through, or the first Image
+    // input of a node with an Image output (merge_entries.cpp's rule).
+    [[nodiscard]] std::optional<std::string_view> chainInput(const NodeRecord& node) const {
+        if (isRerouteNodeType(node.typeId))
+            return kValuePortName;
+        const auto* definition = this->definition(node);
+        if (definition == nullptr || definition->lowering == NodeLoweringKind::LayerStack ||
+            definition->lowering == NodeLoweringKind::LayerOutput ||
+            definition->lowering == NodeLoweringKind::CompositionOutput ||
+            std::ranges::none_of(definition->outputs, [](const auto& output) {
+                return output.valueKind == SocketValueKind::Image;
+            }))
+            return std::nullopt;
+        for (const auto& input : definition->inputs)
+            if (input.valueKind == SocketValueKind::Image)
+                return std::string_view(input.name);
+        return std::nullopt;
+    }
+
+    [[nodiscard]] const LayerOutputBoundary* chainLayer(OutputPortRef current) const {
+        std::unordered_set<NodeId> visited;
+        while (visited.insert(current.nodeId).second) {
+            const auto* found = node(current.nodeId);
+            if (found == nullptr)
+                return nullptr;
+            if (found->typeId == kLayerOutputNodeType)
+                return boundary(found->id);
+            const auto port = chainInput(*found);
+            if (!port)
+                return nullptr;
+            const auto inputs = nodeInputs_.find(found->id);
+            if (inputs == nodeInputs_.end())
+                return nullptr;
+            const auto edge =
+                std::ranges::find_if(inputs->second, [&](const EdgeRecord* candidate) {
+                    return std::get<NodeInputRef>(candidate->destination).port == *port;
+                });
+            if (edge == inputs->second.end())
+                return nullptr;
+            current = (*edge)->source;
+        }
+        return nullptr;
+    }
+
     [[nodiscard]] std::optional<InputPortRef> firstImageInput(const NodeRecord& node) const {
         const auto* definition = this->definition(node);
         const auto hasOutput = [definition](const SocketValueKind kind) {
@@ -141,12 +237,9 @@ class GraphView final {
         return std::nullopt;
     }
 
-    [[nodiscard]] bool mutedLayer(const LayerStackEntry& entry) const {
-        const auto found = layers_.find(entry.layerId);
-        if (found == layers_.end())
-            return false;
-        const auto& boundary = *found->second;
-        return !boundary.enabled || (anySolo_ && !boundary.solo) || isMuted(boundary.nodeId);
+    [[nodiscard]] bool mutedLayer(const LayerOutputBoundary& boundary) const {
+        return !boundary.enabled || (anySolo_ && !boundary.solo) ||
+               (!boundary.entryOwned() && isMuted(boundary.nodeId));
     }
 
     struct SlotKey final {
@@ -169,6 +262,9 @@ class GraphView final {
     std::unordered_map<NodeId, const LayerStack*> merges_;
     std::unordered_map<SlotKey, const LayerStackEntry*, SlotKeyHash> slots_;
     std::unordered_set<LayerId> matteSources_;
+    std::unordered_map<NodeId, std::vector<const EdgeRecord*>> nodeInputs_;
+    std::unordered_map<SlotKey, const EdgeRecord*, SlotKeyHash> slotImages_;
+    mutable std::unordered_map<SlotKey, const LayerOutputBoundary*, SlotKeyHash> entryLayers_;
     bool anySolo_ = false;
 };
 
@@ -243,6 +339,36 @@ RenderReachability RenderReachability::compute(const Composition& composition,
 
     bool known = true;
     std::unordered_set<NodeId> visited;
+    // #502: an entry layer is reached with its consumed slot, or as a reached layer's parent or
+    // matte source; it then reaches its Merge, its slot's image content (as a parent Layer node's
+    // content is reached, whatever the slot's state, unless the Merge is disabled), its parent and
+    // its matte source -- the snapshot compiler's reachEntryLayer().
+    std::unordered_set<LayerId> reachedEntryLayers;
+    std::function<void(const LayerOutputBoundary&)> reachEntryLayer;
+    const auto reachRelations = [&](const LayerOutputBoundary& layer) {
+        for (const auto related :
+             {layer.parent, layer.trackMatte ? std::optional(layer.trackMatte->source)
+                                             : std::optional<LayerId>{}}) {
+            const auto* other = related ? graph.findLayer(*related) : nullptr;
+            if (other == nullptr)
+                continue;
+            if (other->entryOwned())
+                reachEntryLayer(*other);
+            else
+                pending.push_back(other->nodeId);
+        }
+    };
+    reachEntryLayer = [&](const LayerOutputBoundary& layer) {
+        if (!reachedEntryLayers.insert(layer.layerId).second)
+            return;
+        pending.push_back(layer.nodeId);
+        if (const auto* stack = view.merge(layer.nodeId); stack != nullptr && stack->enabled())
+            if (const auto* edge = view.slotImage(layer.nodeId, *layer.entrySlot)) {
+                result.edges_.insert(edge->id);
+                pending.push_back(edge->source.nodeId);
+            }
+        reachRelations(layer);
+    };
     while (!pending.empty()) {
         const auto nodeId = pending.back();
         pending.pop_back();
@@ -258,16 +384,15 @@ RenderReachability RenderReachability::compute(const Composition& composition,
         result.nodes_.insert(nodeId);
         if (view.definition(*node) == nullptr)
             known = false;
-        if (const auto* boundary = view.boundary(nodeId); boundary && boundary->parent) {
-            if (const auto* parent = graph.findLayer(*boundary->parent))
-                pending.push_back(parent->nodeId);
-        }
-        // ADR 0028: a reached matte target consumes its source layer whatever the source's slot,
-        // enabled or solo state.
-        if (const auto* boundary = view.boundary(nodeId); boundary && boundary->trackMatte) {
-            if (const auto* source = graph.findLayer(boundary->trackMatte->source))
-                pending.push_back(source->nodeId);
-        }
+        // Its transform parent, and (ADR 0028) a reached matte target consumes its source layer
+        // whatever the source's slot, enabled or solo state.
+        if (const auto* boundary = view.boundary(nodeId))
+            reachRelations(*boundary);
+        // #502: a reached Adjustment reaches the Merge whose stack below its entry it draws.
+        if (node->typeId == kAdjustmentNodeType)
+            if (const auto targets = adjustmentTargets(graph, nodeId, registry);
+                targets.size() == 1)
+                pending.push_back(targets.front().merge);
         if (const auto found = incoming.find(nodeId); found != incoming.end()) {
             for (const auto* edge : found->second) {
                 ++result.work_.edgesVisited;
@@ -275,6 +400,11 @@ RenderReachability RenderReachability::compute(const Composition& composition,
                     continue;
                 result.edges_.insert(edge->id);
                 pending.push_back(edge->source.nodeId);
+                // #502: a consumed entry's own layer is reached with its slot.
+                if (const auto* slot = std::get_if<LayerStackInputRef>(&edge->destination);
+                    slot != nullptr && slot->role == kLayerStackContentInputRole)
+                    if (const auto* owned = view.ownedEntryLayer(slot->stackNodeId, slot->slotId))
+                        reachEntryLayer(*owned);
             }
         }
         view.forEachDriverSource(*node, [&](const NodeId source) { pending.push_back(source); });
@@ -352,11 +482,17 @@ RenderConfinement confineNodeChange(const Composition& composition,
     std::unordered_map<LayerId, std::vector<NodeId>> children;
     // ADR 0028: a matte source reaches output only through its targets, inside their spans.
     std::unordered_map<LayerId, std::vector<NodeId>> matteTargets;
+    // #502: a Merge's own entry layers, whose children and matte targets a change to the Merge
+    // (its entry layers' parameters are its own) reaches. An entry layer child or target is its
+    // Merge's.
+    std::unordered_map<NodeId, std::vector<LayerId>> entryLayersOf;
     for (const auto& boundary : graph.layerOutputs()) {
         if (boundary.parent && reachability.reaches(boundary.nodeId))
             children[*boundary.parent].push_back(boundary.nodeId);
         if (boundary.trackMatte && reachability.reaches(boundary.nodeId))
             matteTargets[boundary.trackMatte->source].push_back(boundary.nodeId);
+        if (boundary.entryOwned())
+            entryLayersOf[boundary.nodeId].push_back(boundary.layerId);
     }
 
     // A boundary gates its own output when every consumer is an enabled, unmuted layer-stack slot
@@ -398,6 +534,13 @@ RenderConfinement confineNodeChange(const Composition& composition,
         if (definition == nullptr || definition->lowering == NodeLoweringKind::ValueBoundsReadout)
             return {};
         bool hasSuccessor = false;
+        if (const auto found = entryLayersOf.find(id); found != entryLayersOf.end())
+            for (const auto layer : found->second)
+                for (const auto* followers : {&children, &matteTargets})
+                    if (const auto next = followers->find(layer); next != followers->end()) {
+                        hasSuccessor = true;
+                        pending.insert(pending.end(), next->second.begin(), next->second.end());
+                    }
         if (const auto* boundary = view.boundary(id)) {
             if (const auto found = children.find(boundary->layerId); found != children.end()) {
                 hasSuccessor = true;

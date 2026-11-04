@@ -381,6 +381,8 @@ template <typename Definition>
     return definition;
 }
 
+[[nodiscard]] NodeDefinition adjustmentDefinition();
+
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
@@ -533,6 +535,8 @@ template <typename Definition>
         return definition == shapeDefinition();
     case NodeLoweringKind::Mask:
         return definition == maskDefinition();
+    case NodeLoweringKind::Adjustment:
+        return definition == adjustmentDefinition();
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
                (definition.parameters.size() == 3 &&
@@ -848,6 +852,20 @@ template <typename Definition>
                                      std::string(kSolidHeightParameterSchemaKey),
                                      ParameterValueKind::Float64, true, true, 1.0});
     return definition;
+}
+
+// #502 Adjustment: no inputs and no parameters; one Image output, the stack below the Merge entry
+// its chain lands in.
+[[nodiscard]] NodeDefinition adjustmentDefinition() {
+    using namespace bloom::document;
+    return {{std::string(kAdjustmentNodeType), kAdjustmentNodeSchemaVersion},
+            NodeLoweringKind::Adjustment,
+            {},
+            {{std::string(kAdjustmentOutputPort), SocketValueKind::Image}},
+            {},
+            std::nullopt,
+            NodeCardinality::Many,
+            NodeCategory::Layers};
 }
 
 [[nodiscard]] NodeDefinition checkerDefinition() {
@@ -1468,6 +1486,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         gradientDefinition(kLinearGradientNodeType),
         gradientDefinition(kRadialGradientNodeType),
         layerOutputDefinition(),
+        adjustmentDefinition(),
         layerStackDefinition(),
         compositionOutputDefinition(),
         imagePreviewDefinition(),

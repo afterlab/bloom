@@ -42,6 +42,19 @@ bool LayerStack::erase(const LayerSlotId slotId) {
     return true;
 }
 
+bool LayerStack::setLayerId(const LayerSlotId slotId, const LayerId layerId) {
+    const auto target = std::find_if(entries_.begin(), entries_.end(),
+                                     [slotId](const auto& entry) { return entry.slotId == slotId; });
+    if (target == entries_.end())
+        return false;
+    if (layerId.isValid() && std::any_of(entries_.begin(), entries_.end(), [&](const auto& entry) {
+            return entry.slotId != slotId && entry.layerId == layerId;
+        }))
+        return false;
+    target->layerId = layerId;
+    return true;
+}
+
 bool LayerStack::moveBefore(const LayerSlotId slotId,
                             const std::optional<LayerSlotId> beforeSlotId) {
     const auto moving = std::find_if(entries_.begin(), entries_.end(), [slotId](const auto& entry) {

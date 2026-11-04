@@ -310,6 +310,8 @@ enum class NodeLoweringKind {
     LayerOutput,
     LayerStack,
     CompositionOutput,
+    // #502: an Adjustment's Image output is the stack below the Merge entry its chain lands in.
+    Adjustment,
     // The value-graph lowerings (task S7). Each compiles to a runtime::CompiledValueOperation, not
     // a CompiledOperation: these produce ONE value per frame, not pixels, and they are evaluated in
     // their own pass before any image operation reads one.
@@ -398,6 +400,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Channel:
     case NodeLoweringKind::Cryptomatte:
     case NodeLoweringKind::ImagePreview:
+    case NodeLoweringKind::Adjustment:
         return false;
     }
     return false;

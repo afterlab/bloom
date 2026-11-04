@@ -33,6 +33,11 @@ inline constexpr std::string_view kCompositionOutputNodeType = "bloom.compositio
 inline constexpr std::string_view kCompositionSourceNodeType = "bloom.composition-source";
 inline constexpr std::uint32_t kCompositionSourceNodeSchemaVersion = 1;
 inline constexpr std::string_view kAudioSourceNodeType = "bloom.audio-source";
+// #502 Adjustment: a Layers node whose Image output is the stack below the Merge entry its chain
+// lands in. It has no inputs and no parameters; that entry replaces the stack below it.
+inline constexpr std::string_view kAdjustmentNodeType = "bloom.adjustment";
+inline constexpr std::uint32_t kAdjustmentNodeSchemaVersion = 1;
+inline constexpr std::string_view kAdjustmentOutputPort = "image";
 // Bumped to 2 by the layer transform breadth slice (task S4): a Layer Output now binds anchor,
 // scale, and rotation alongside position and opacity. A version-1 node is not rejected -- Project
 // I/O upgrades it on decode by injecting the three parameters at their defaults, which reproduce
@@ -161,7 +166,15 @@ struct TrackMatte {
     friend bool operator==(const TrackMatte&, const TrackMatte&) = default;
 };
 
+// #502 (document 1.37): the point a layer's scale and rotation pivot about, before its anchor
+// offset. Content is the centre of the layer's local content bounds (every Layer node before
+// 1.37); Frame is the centre of the composition frame, so a layer at its default position is the
+// identity whatever its content's bounds -- the Fusion-style pivot every Merge entry's own layer
+// uses. The stored integers are durable.
+enum class LayerPivot : std::int64_t { Content = 0, Frame = 1 };
+
 struct LayerOutputBoundary {
+    // The Layer node, or for a Merge entry's own layer (#502) the Merge node.
     NodeId nodeId;
     LayerId layerId;
     std::string name;
@@ -189,6 +202,13 @@ struct LayerOutputBoundary {
     // the source is renamed or replaced; renaming the layer clears it. Layers made from a source
     // start with it set; layers without a source never have it.
     bool nameFollowsSource = false;
+    // #502 (document 1.37). A Merge entry's own layer: the slot of `nodeId`'s Merge it belongs to.
+    // Such a layer has no Layer node; its transform, opacity, blend mode and Time Remap are the
+    // `parameters` it owns (bound by role, like a Layer node's), and the slot's layerId names it.
+    std::optional<LayerSlotId> entrySlot{};
+    LayerPivot pivot = LayerPivot::Content;
+    std::vector<ParameterBinding> parameters{};
+    [[nodiscard]] bool entryOwned() const noexcept { return entrySlot.has_value(); }
     [[nodiscard]] core::RationalTime endPoint(core::RationalTime duration) const noexcept {
         return outPoint == core::RationalTime{} ? duration : outPoint;
     }
@@ -243,6 +263,10 @@ class CanonicalGraph final {
     [[nodiscard]] std::optional<SocketValueKind>
     rerouteKind(NodeId id, const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
     [[nodiscard]] bool addLayerOutput(LayerOutputBoundary boundary);
+    // #502: removes one boundary record (an entry layer leaving its slot, or one adopted by a
+    // Layer node). It leaves its parameters, masks and the references other layers hold to it to
+    // the caller, which owns that cleanup.
+    [[nodiscard]] bool eraseLayerOutput(LayerId id);
     [[nodiscard]] LayerOutputBoundary* findLayer(LayerId id) noexcept;
     [[nodiscard]] const LayerOutputBoundary* findLayer(LayerId id) const noexcept;
     [[nodiscard]] bool eraseNode(NodeId id);
