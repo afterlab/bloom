@@ -38,6 +38,15 @@ std::optional<ImagePreviewSource> imagePreviewSource(const CanonicalGraph& graph
     const auto* node = graph.findNode(preview);
     if (node == nullptr || !isImagePreviewNodeType(node->typeId))
         return std::nullopt;
+    return inspectedInputSource(graph, preview, kImagePreviewInputPort, registry);
+}
+
+std::optional<ImagePreviewSource> inspectedInputSource(const CanonicalGraph& graph,
+                                                       const NodeId preview,
+                                                       const std::string_view port,
+                                                       const NodeDefinitionRegistry& registry) {
+    if (graph.findNode(preview) == nullptr)
+        return std::nullopt;
     const auto edgeInto = [&](const NodeId id, const std::string_view port) -> const EdgeRecord* {
         const auto found = std::ranges::find_if(graph.edges(), [&](const auto& edge) {
             const auto* fixed = std::get_if<NodeInputRef>(&edge.destination);
@@ -45,7 +54,7 @@ std::optional<ImagePreviewSource> imagePreviewSource(const CanonicalGraph& graph
         });
         return found == graph.edges().end() ? nullptr : &*found;
     };
-    const auto* edge = edgeInto(preview, kImagePreviewInputPort);
+    const auto* edge = edgeInto(preview, port);
     std::unordered_set<std::uint64_t> seen;
     while (edge != nullptr) {
         const auto* source = graph.findNode(edge->source.nodeId);

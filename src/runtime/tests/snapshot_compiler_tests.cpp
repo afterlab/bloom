@@ -3,6 +3,7 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
+#include <bloom/document/grade_curves.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/image_preview.hpp>

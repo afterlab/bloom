@@ -51,5 +51,10 @@ struct ImagePreviewSource final {
 [[nodiscard]] std::optional<ImagePreviewSource>
 imagePreviewSource(const CanonicalGraph& graph, NodeId preview,
                    const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
+// #493: the same question for any node's input port `port` -- what a Curves node grades, whose
+// histogram the curve graph draws. Nullopt when `node` has no such connected pixel input.
+[[nodiscard]] std::optional<ImagePreviewSource>
+inspectedInputSource(const CanonicalGraph& graph, NodeId node, std::string_view port,
+                     const NodeDefinitionRegistry& registry = builtInNodeDefinitions());
 
 } // namespace bloom::document

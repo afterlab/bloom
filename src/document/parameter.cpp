@@ -1,4 +1,5 @@
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/grade_curves.hpp>
 #include <bloom/document/shape.hpp>
 
 #include <bloom/core/utf8.hpp>
@@ -311,18 +312,17 @@ constantMatchesSchema(const std::string_view schemaKey,
         schemaKey == "bloom.luma-key.invert" || schemaKey == kLevelsClampSchemaKey ||
         schemaKey == kCurvesClampSchemaKey)
         return std::holds_alternative<bool>(constant.value);
-    // #340: every Levels value, the hue and the saturation are finite within their schema domain;
-    // a Curves point is a finite (input, output) pair within +-kMaximumGradeValue.
+    // #340: every Levels value, the hue and the saturation are finite within their schema domain.
+    // #493: a Curves curve is a point list within its curve's domain (grade_curves.hpp).
     if (isLevelsValueSchemaKey(schemaKey) || schemaKey == kHueSaturationHueSchemaKey ||
         schemaKey == kHueSaturationSaturationSchemaKey) {
         const auto* value = std::get_if<double>(&constant.value);
         return value != nullptr && std::isfinite(*value) &&
                isScalarWithinSchemaDomain(schemaKey, *value);
     }
-    if (isCurvePointSchemaKey(schemaKey)) {
-        const auto* value = std::get_if<Vec2d>(&constant.value);
-        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y) &&
-               std::abs(value->x) <= kMaximumGradeValue && std::abs(value->y) <= kMaximumGradeValue;
+    if (isGradeCurveSchemaKey(schemaKey)) {
+        const auto* value = std::get_if<PathValue>(&constant.value);
+        return value != nullptr && isGradeCurveValueValid(schemaKey, *value);
     }
     if (schemaKey == "bloom.luma-key.low" || schemaKey == "bloom.luma-key.high") {
         const auto* value = std::get_if<double>(&constant.value);

@@ -1441,15 +1441,16 @@ lowerImageEffect(const document::NodeRecord& node,
         runtime::CurvesKernel kernel;
         const auto* clamp = parameterConstant<bool>(findParameterBinding(node, "clamp"));
         bool lowered = clamp != nullptr;
-        for (std::size_t channel = 0; lowered && channel < document::kGradeChannelCount;
-             ++channel)
-            for (std::size_t point = 0; lowered && point < document::kCurvePointCount; ++point) {
-                const auto parameter = compiledVec2Parameter(
-                    findParameterBinding(node, document::curvePointRole(channel, point)));
-                lowered = parameter.has_value();
-                if (parameter)
-                    kernel.points[channel][point] = *parameter;
-            }
+        // #493: each curve is a constant point list or a whole-value Path curve.
+        for (std::size_t index = 0; lowered && index < document::kGradeCurveCount; ++index) {
+            const auto* binding = findParameterBinding(
+                node, document::gradeCurveRole(document::kGradeCurves[index]));
+            const auto parameter =
+                binding ? compiledPathParameter(binding->parameterId) : std::nullopt;
+            lowered = parameter.has_value();
+            if (parameter)
+                kernel.curves[index] = *parameter;
+        }
         if (lowered) {
             kernel.clamp = *clamp;
             return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};

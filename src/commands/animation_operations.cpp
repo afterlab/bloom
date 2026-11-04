@@ -2,6 +2,7 @@
 
 #include <bloom/commands/animation_operations.hpp>
 
+#include <bloom/document/grade_curves.hpp>
 #include <bloom/document/keyframe_handles.hpp>
 #include <bloom/document/project.hpp>
 
@@ -373,7 +374,52 @@ setGroupedValueAtTime(document::Draft& draft, document::Composition& composition
 OperationResult
 setValueAtTime(document::Draft& draft, document::Composition& composition,
                const document::AnimationCurveId curveId, const core::RationalTime time,
-               const std::variant<double, document::Vec2d, document::Vec3d, core::Color4d>& value) {
+               const std::variant<double, document::Vec2d, document::Vec3d, core::Color4d,
+                                  document::PathValue>& value) {
+    if (const auto* path = std::get_if<document::PathValue>(&value)) {
+        // A whole-value Path key: the key at exactly `time` takes the value, or a Linear key is
+        // inserted there. The schema's own domain is checked when the draft is validated.
+        const auto* curve = composition.animationCurves().findPath(curveId);
+        if (curve == nullptr)
+            return composition.animationCurves().find(curveId) == nullptr
+                       ? invalidCurve(curveId)
+                       : OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                   "Animation curve has the wrong value kind");
+        if (!path->isValid())
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Path keyframe value is invalid");
+        // #493: a Curves key is a point list within its curve's domain, like its constant.
+        if (const auto* owner = curveOwner(composition, curveId);
+            owner != nullptr && document::isGradeCurveSchemaKey(owner->schemaKey) &&
+            !document::isGradeCurveValueValid(owner->schemaKey, *path))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Curve key is outside its curve's domain");
+        const auto existing =
+            std::ranges::find(curve->keyframes, time, &document::PathKeyframe::time);
+        if (existing != curve->keyframes.end()) {
+            const auto id = existing->id;
+            if (existing->value == *path)
+                return OperationResult::noChange(keyframeOutput(id));
+            auto key = *existing;
+            key.value = *path;
+            if (!composition.animationCurves().updateKeyframe(curveId, std::move(key)))
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Path keyframe could not be updated");
+            return OperationResult::applied(keyframeOutput(id));
+        }
+        const auto id = draft.ids().allocateKeyframe();
+        if (!id.has_value())
+            return exhaustedIds();
+        document::PathKeyframe key;
+        key.id = *id;
+        key.time = time;
+        key.value = *path;
+        key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
+        if (!composition.animationCurves().insertKeyframe(curveId, std::move(key)))
+            return OperationResult::rejected(OperationIssueCode::InvalidOrder,
+                                             "Path keyframe could not be inserted");
+        return OperationResult::applied(keyframeOutput(*id));
+    }
     if (const auto* scalar = std::get_if<double>(&value)) {
         return setScalarKeyframeAtTime(draft, composition.id(), curveId, time, *scalar);
     }
@@ -506,6 +552,37 @@ OperationResult CreateAnimationForParameter::apply(document::Draft& draft) const
     // seeded key is always the parameter's existing constant, so turning a parameter into an
     // animation never changes the picture at the initial time.
     std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> initialValue;
+    if (document::isPathAnimatableSchemaKey(parameter->schemaKey)) {
+        // A whole-value Path curve (ADR 0028; #493 Curves curves): one key holding the constant.
+        const auto* value = std::get_if<document::PathValue>(&constant->value);
+        if (value == nullptr || !value->isValid())
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Path constant is invalid for its schema");
+        if (component_.has_value())
+            return OperationResult::rejected(OperationIssueCode::Unsupported,
+                                             "Path parameters do not have components");
+        const auto curveId = draft.ids().allocateAnimationCurve();
+        const auto keyId = draft.ids().allocateKeyframe();
+        if (!curveId || !keyId)
+            return exhaustedIds();
+        document::PathKeyframe key;
+        key.id = *keyId;
+        key.time = initialTime_;
+        key.value = *value;
+        key.outgoingInterpolation = document::KeyframeInterpolation::Linear;
+        document::PathAnimationCurve curve;
+        curve.id = *curveId;
+        curve.keyframes.push_back(std::move(key));
+        const document::ParameterValue defaultValue = constant->value;
+        if (!composition->animationCurves().insert(std::move(curve)) ||
+            !composition->parameters().setSource(
+                parameterId_, document::AnimationCurveSource{*curveId, defaultValue}))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Animation could not be attached to the parameter");
+        return OperationResult::applied(
+            {{std::string(kAnimationCurveOutput), DurableObjectId{*curveId}},
+             {std::string(kKeyframeOutput), DurableObjectId{*keyId}}});
+    }
     if (document::isScalarAnimatableSchemaKey(parameter->schemaKey)) {
         const auto* value = std::get_if<double>(&constant->value);
         const bool withinDomain =
@@ -1268,6 +1345,14 @@ OperationResult ConvertAnimationToConstant::apply(document::Draft& draft) const 
                                              "Constant value does not match Vec3 animation");
         }
         constantValue = *vector3;
+    } else if (const auto* path = std::get_if<document::PathValue>(&value_)) {
+        if (!document::isPathAnimatableSchemaKey(parameter->schemaKey) ||
+            composition->animationCurves().findPath(source->curveId) == nullptr ||
+            !path->isValid()) {
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Constant value does not match Path animation");
+        }
+        constantValue = *path;
     } else {
         const auto color = std::get<core::Color4d>(value_);
         if (!document::isColor4AnimatableSchemaKey(parameter->schemaKey) ||

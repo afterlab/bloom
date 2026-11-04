@@ -1,3 +1,4 @@
+#include "grade_curves_test_support.hpp"
 #include "discrete_image_effect.hpp"
 #include "image_effect.hpp"
 
@@ -1134,15 +1135,24 @@ void testColorGradeEvaluation() {
         return kernel;
     };
     const auto curves = [](const double middle) {
-        runtime::CurvesKernel kernel;
-        std::uint64_t id = 430;
-        for (auto& channel : kernel.points)
-            for (std::size_t point = 0; point < channel.size(); ++point) {
-                const double x = static_cast<double>(point) / 4.0;
-                channel[point] = {document::ParameterId::fromRaw(id++), document::Vec2d{x, x}};
-            }
-        kernel.points[0][2].source = document::Vec2d{0.5, middle};
-        kernel.points[2][4].source = document::Vec2d{1.0, 1.5};
+        auto kernel = runtime::testing::identityCurvesKernel(430);
+        runtime::testing::setCurve(kernel, document::GradeCurve::Master,
+                                   runtime::testing::legacyPoints({{2, {0.5, middle}}}));
+        runtime::testing::setCurve(kernel, document::GradeCurve::Green,
+                                   runtime::testing::legacyPoints({{4, {1.0, 1.5}}}));
+        return kernel;
+    };
+    // #493: the four hue curves over the same baseline.
+    const auto hueCurves = [](const double shift) {
+        auto kernel = runtime::testing::identityCurvesKernel(440);
+        runtime::testing::setCurve(kernel, document::GradeCurve::HueVsHue,
+                                   {{0.1, shift}, {0.6, -0.1}});
+        runtime::testing::setCurve(kernel, document::GradeCurve::HueVsSaturation,
+                                   {{0.3, 1.5}, {0.8, 0.5}});
+        runtime::testing::setCurve(kernel, document::GradeCurve::HueVsLuma,
+                                   {{0.0, 0.8}, {0.5, 1.2}});
+        runtime::testing::setCurve(kernel, document::GradeCurve::LumaVsSaturation,
+                                   {{0.0, 1.2}, {1.0, 0.6}});
         return kernel;
     };
     const auto hueSaturation = [](const double hue, const double saturation) {
@@ -1166,6 +1176,7 @@ void testColorGradeEvaluation() {
         {levels(2.2, 1.5, false), levels(2.2, 1.5, true), {}},
         {levels(0.6, 3.0, false), levels(0.6, 2.0, false), {}},
         {curves(0.8), curves(0.3), {}},
+        {hueCurves(0.2), hueCurves(-0.2), {}},
         {hueSaturation(75.0, 1.4), hueSaturation(75.0, 0.4), {}},
     };
     for (const auto& item : cases) {
@@ -1176,8 +1187,15 @@ void testColorGradeEvaluation() {
             continue;
         std::vector<double> values;
         runtime::forEachColorGradeOperand(item.kernel, [&](const auto& operand) {
-            if constexpr (std::is_same_v<std::decay_t<decltype(operand)>,
-                                         runtime::CompiledVec2Parameter>) {
+            using Operand = std::decay_t<decltype(operand)>;
+            if constexpr (std::is_same_v<Operand, runtime::CompiledPathParameter>) {
+                const auto& path = std::get<document::PathValue>(operand.source);
+                values.push_back(static_cast<double>(path.anchors.size()));
+                for (const auto& anchor : path.anchors) {
+                    values.push_back(anchor.point.x);
+                    values.push_back(anchor.point.y);
+                }
+            } else if constexpr (std::is_same_v<Operand, runtime::CompiledVec2Parameter>) {
                 const auto point = std::get<document::Vec2d>(operand.source);
                 values.push_back(point.x);
                 values.push_back(point.y);
@@ -1241,7 +1259,8 @@ void testColorGradeEvaluation() {
         if (auto* l = std::get_if<runtime::LevelsKernel>(&kernel))
             l->channels[3].inputBlack.source = 0.0;
         if (auto* c = std::get_if<runtime::CurvesKernel>(&kernel))
-            c->points[2][4].source = document::Vec2d{1.0, 1.0};
+            runtime::testing::setCurve(*c, document::GradeCurve::Green,
+                                       runtime::testing::legacyPoints({}));
         const auto plan = planWith({kernel});
         expect(samePixels(original, evaluator.evaluate(plan, requestFor(*plan), {})),
                "a default grade is an exact identity");
@@ -1280,6 +1299,28 @@ void testColorGradeEvaluation() {
                    samePixels(evaluator.evaluate(animated, end, {}),
                               fresh.evaluate(endPlan, requestFor(*endPlan), {})),
                "an animated grade samples each frame without reuse");
+    }
+    // #493: a keyed curve (a whole-value Path curve) samples each frame like any operand.
+    {
+        auto kernel = curves(0.5);
+        runtime::CompiledPathCurve keyed{document::AnimationCurveId::fromRaw(196), {}};
+        keyed.keyframes.push_back({document::KeyframeId::fromRaw(196),
+                                   {},
+                                   document::gradeCurvePath(runtime::testing::legacyPoints({}))});
+        keyed.keyframes.push_back({document::KeyframeId::fromRaw(197),
+                                   *core::RationalTime::create(1, 1),
+                                   document::gradeCurvePath(runtime::testing::legacyPoints(
+                                       {{2, {0.5, 0.9}}}))});
+        kernel.curves[0].source = keyed;
+        const auto animated = planWith({kernel});
+        expect(animated->operationTimeDependent(runtime::OperationIndex::fromRaw(1)),
+               "a keyed curve is time-dependent");
+        auto middle = requestFor(*animated);
+        middle.time = *core::RationalTime::create(1, 2);
+        const auto halfway = planWith({curves(0.7)});
+        expect(samePixels(evaluator.evaluate(animated, middle, {}),
+                          fresh.evaluate(halfway, requestFor(*halfway), {})),
+               "a keyed curve interpolates its points between keys");
     }
     for (const auto& outside : {runtime::ImageEffectKernel{levels(0.0, 1.0, false)},
                                 runtime::ImageEffectKernel{hueSaturation(0.0, -1.0)}}) {

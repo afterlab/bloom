@@ -279,7 +279,7 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kGradientEndParameterSchemaKey ||
            schemaKey == kVector2ValueParameterSchemaKey ||
            schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
-           schemaKey == "bloom.transform-2d.scale" || isCurvePointSchemaKey(schemaKey);
+           schemaKey == "bloom.transform-2d.scale";
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -314,9 +314,10 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kLayerMaskOpacitySchemaKey;
 }
 
-// ADR 0028: Path parameters animate through whole-value Path curves.
+// ADR 0028: Path parameters animate through whole-value Path curves. #493: so does each Curves
+// curve, a Path used as a point list (grade_curves.hpp).
 [[nodiscard]] constexpr bool isPathAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kLayerMaskPathSchemaKey;
+    return schemaKey == kLayerMaskPathSchemaKey || isGradeCurveSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {

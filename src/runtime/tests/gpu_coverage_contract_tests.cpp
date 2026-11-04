@@ -20,6 +20,7 @@
 // independent check has passed. A missing required fixture is a structural failure that the
 // prerequisite NotRun can never absorb, and no independent fixture is ever masked by tools.
 
+#include "grade_curves_test_support.hpp"
 #include "gpu_coverage_contract_plans.hpp"
 #include "gpu_coverage_display_support.hpp"
 #include "gpu_coverage_fixture_support.hpp"
@@ -1221,19 +1222,25 @@ displayProofRunner(const bool customView) {
     };
     const auto curves = [](const double middle, const double alphaLift, const bool clamp) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {
-            bloom::runtime::CurvesKernel kernel;
-            std::uint64_t id = idBase + 60;
-            for (auto& channel : kernel.points)
-                for (std::size_t point = 0; point < channel.size(); ++point) {
-                    const double x = static_cast<double>(point) / 4.0;
-                    channel[point] = {ParameterId::fromRaw(id++), bloom::document::Vec2d{x, x}};
-                }
-            kernel.points[0][1].source = bloom::document::Vec2d{0.25, 0.1};
-            kernel.points[0][2].source = bloom::document::Vec2d{0.5, middle};
-            kernel.points[0][3].source = bloom::document::Vec2d{0.75, 0.9};
-            kernel.points[2][4].source = bloom::document::Vec2d{1.0, 1.6};
-            kernel.points[4][0].source = bloom::document::Vec2d{0.0, alphaLift};
-            kernel.clamp = clamp;
+            using bloom::document::GradeCurve;
+            using bloom::runtime::testing::legacyPoints;
+            auto kernel = bloom::runtime::testing::identityCurvesKernel(idBase + 60, clamp);
+            bloom::runtime::testing::setCurve(
+                kernel, GradeCurve::Master,
+                legacyPoints({{1, {0.25, 0.1}}, {2, {0.5, middle}}, {3, {0.75, 0.9}}}));
+            bloom::runtime::testing::setCurve(kernel, GradeCurve::Green,
+                                              legacyPoints({{4, {1.0, 1.6}}}));
+            bloom::runtime::testing::setCurve(kernel, GradeCurve::Alpha,
+                                              legacyPoints({{0, {0.0, alphaLift}}}));
+            return kernel;
+        };
+    };
+    // #493: one curve kind at a time over the identity, so each fixture claims its own axis.
+    const auto curveKind = [](const bloom::document::GradeCurve curve,
+                              const std::vector<bloom::document::Vec2d> points) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            auto kernel = bloom::runtime::testing::identityCurvesKernel(idBase + 60);
+            bloom::runtime::testing::setCurve(kernel, curve, points);
             return kernel;
         };
     };
@@ -1284,6 +1291,33 @@ displayProofRunner(const bool customView) {
                              "full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    {
+        using bloom::document::GradeCurve;
+        const std::vector<std::tuple<const char*, GradeCurve, std::vector<bloom::document::Vec2d>,
+                                     std::uint64_t>>
+            kinds{{"feature.curves.points", GradeCurve::Master,
+                   {{0.0, 0.05}, {0.1, 0.06}, {0.2, 0.2}, {0.3, 0.35}, {0.4, 0.38}, {0.5, 0.55},
+                    {0.6, 0.62}, {0.7, 0.8}, {0.8, 0.82}, {0.9, 0.95}, {1.0, 1.0}, {2.0, 1.5}},
+                   166600},
+                  {"feature.curves.hue_vs_hue", GradeCurve::HueVsHue,
+                   {{0.0, 0.1}, {0.3, -0.2}, {0.6, 0.05}}, 166800},
+                  {"feature.curves.hue_vs_saturation", GradeCurve::HueVsSaturation,
+                   {{0.1, 1.8}, {0.5, 0.3}, {0.8, 1.2}}, 167000},
+                  {"feature.curves.hue_vs_luma", GradeCurve::HueVsLuma,
+                   {{0.05, 1.5}, {0.4, 0.6}, {0.7, 1.3}}, 167200},
+                  {"feature.curves.luma_vs_saturation", GradeCurve::LumaVsSaturation,
+                   {{0.0, 1.5}, {0.5, 0.4}, {1.0, 1.0}}, 167400}};
+        for (const auto& [id, curve, points, base] : kinds)
+            add(
+                id, GpuCoverageFixtureCriterion::Prepared,
+                "src/runtime color grade image effect tests",
+                [runGrades, curveKind, curve = curve, points = points, base = base] {
+                    return runGrades({curveKind(curve, points)}, base,
+                                     "production Curves: one curve kind over an HDR, signed, "
+                                     "partial-alpha gradient, full frame and ROI");
+                },
+                {}, FixturePrerequisite::PackagedShaderTools);
+    }
     add(
         "effect.HueSaturationKernel", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime color grade image effect tests",

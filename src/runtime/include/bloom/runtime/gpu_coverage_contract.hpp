@@ -305,6 +305,15 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "precomp channel layers (file and image) at the mapped nested time",
         GpuCoverageDisposition::Required,
         "src/runtime precomp channel production scene preparation + native document parity"});
+    // #493 Curves: any number of points per curve and the four hue curves are pixel semantics of
+    // the one resident Curves program (CurvesKernel), each with CPU parity through the production
+    // routes, never a CPU frame.
+    for (const auto* id : {"feature.curves.points", "feature.curves.hue_vs_hue",
+                           "feature.curves.hue_vs_saturation", "feature.curves.hue_vs_luma",
+                           "feature.curves.luma_vs_saturation"})
+        out.push_back(GpuFeatureCoverageEntry{id, "Curves curve kind (#493)",
+                                              GpuCoverageDisposition::Required,
+                                              "src/runtime color grade image effect tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});

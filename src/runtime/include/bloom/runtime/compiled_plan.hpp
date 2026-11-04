@@ -355,9 +355,10 @@ struct LevelsKernel final {
     friend bool operator==(const LevelsKernel&, const LevelsKernel&) = default;
 };
 struct CurvesKernel final {
-    // [channel][point]: (input, output) control points of a monotone cubic through the points,
-    // extrapolated linearly along its end tangents.
-    std::array<std::array<CompiledVec2Parameter, 5>, 5> points;
+    // #493: the nine curves in document::kGradeCurves order (master, red, green, blue, alpha, Hue
+    // vs Hue, Hue vs Saturation, Hue vs Luma, Luma vs Saturation), each a point list held as a
+    // constant Path or a whole-value Path curve (bloom/runtime/grade_curve.hpp).
+    std::array<CompiledPathParameter, 9> curves;
     bool clamp = false;
     friend bool operator==(const CurvesKernel&, const CurvesKernel&) = default;
 };
@@ -400,8 +401,9 @@ using ImageEffectKernel =
 
 // #340: visits every animatable operand of a Levels, Curves or Hue/Saturation kernel in the
 // kernel's canonical order (channel-major), calling `visit(parameter)` with a
-// CompiledScalarParameter or CompiledVec2Parameter. Returns false for every other kernel. The one
-// traversal the evaluator's validation, sampling, cache key and time dependence all share.
+// CompiledScalarParameter, a CompiledVec2Parameter or (#493 Curves) a CompiledPathParameter.
+// Returns false for every other kernel. The one traversal the evaluator's validation, sampling,
+// cache key and time dependence all share.
 template <typename Visit>
 bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
     if (const auto* levels = std::get_if<LevelsKernel>(&kernel)) {
@@ -415,9 +417,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         return true;
     }
     if (const auto* curves = std::get_if<CurvesKernel>(&kernel)) {
-        for (const auto& channel : curves->points)
-            for (const auto& point : channel)
-                visit(point);
+        for (const auto& curve : curves->curves)
+            visit(curve);
         return true;
     }
     if (const auto* hueSaturation = std::get_if<HueSaturationKernel>(&kernel)) {

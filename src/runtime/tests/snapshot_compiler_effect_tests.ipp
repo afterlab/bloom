@@ -829,8 +829,8 @@ void testLumaKeyLowering(Expectations& expectations) {
 // it is previewed through is exactly the inspected node's output -- here a Gaussian Blur's image --
 // without the layer stack or any other part of the composition.
 // #340: Levels, Curves and Hue/Saturation between a Solid and its Layer lower to their kernels in
-// channel-major order with every parameter identity and value; a driven Levels value is a
-// value-graph operand; a muted grade passes its Image through.
+// channel-major order with every parameter identity and value (#493: Curves schema 2 point
+// lists); a driven Levels value is a value-graph operand; a muted grade passes its Image through.
 void testColorGradeLowering(Expectations& expectations) {
     using namespace document;
     runtime::NodeDefinitionRegistry registry;
@@ -842,7 +842,8 @@ void testColorGradeLowering(Expectations& expectations) {
             auto* composition = project.findComposition(kCompositionId);
             auto& graph = composition->graph();
             const auto effectId = NodeId::fromRaw(995);
-            const auto* definition = builtInNodeDefinitions().find(type, 1);
+            const auto* definition = builtInNodeDefinitions().find(
+                type, type == kCurvesNodeType ? kCurvesNodeSchemaVersion : 1U);
             require(definition != nullptr, "grade definition exists");
             std::vector<ParameterBinding> bindings;
             std::uint64_t next = 2000;
@@ -855,8 +856,10 @@ void testColorGradeLowering(Expectations& expectations) {
                 if (parameter.schemaKey == kLevelsClampSchemaKey ||
                     parameter.schemaKey == kCurvesClampSchemaKey)
                     value = true;
-                if (parameter.schemaKey == "bloom.curves.blue.point-3")
-                    value = Vec2d{0.5, 0.8};
+                if (parameter.schemaKey == gradeCurveSchemaKey(GradeCurve::Blue))
+                    value = gradeCurvePath({{0.0, 0.0}, {0.5, 0.8}, {1.0, 1.0}});
+                if (parameter.schemaKey == gradeCurveSchemaKey(GradeCurve::HueVsLuma))
+                    value = gradeCurvePath({{0.25, 1.5}});
                 if (parameter.schemaKey == kHueSaturationHueSchemaKey)
                     value = -45.0;
                 if (parameter.schemaKey == kHueSaturationSaturationSchemaKey)
@@ -867,7 +870,8 @@ void testColorGradeLowering(Expectations& expectations) {
                         "grade parameter is valid");
                 bindings.push_back({parameter.role, ParameterId::fromRaw(next++)});
             }
-            require(graph.addNode({effectId, std::string(type), std::move(bindings), 1}),
+            require(graph.addNode({effectId, std::string(type), std::move(bindings),
+                                   definition->key.schemaVersion}),
                     "grade node is accepted");
             require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
             require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
@@ -910,11 +914,20 @@ void testColorGradeLowering(Expectations& expectations) {
                                         *white == 0.5,
                                     "Levels lowers its values and clamp");
             } else if (const auto* curves = std::get_if<runtime::CurvesKernel>(&kernel)) {
-                const auto* point = std::get_if<Vec2d>(&curves->points[3][2].source);
-                const auto* identity = std::get_if<Vec2d>(&curves->points[0][1].source);
-                expectations.expect(curves->clamp && point && *point == Vec2d{0.5, 0.8} &&
-                                        identity && *identity == Vec2d{0.25, 0.25},
-                                    "Curves lowers its points and clamp");
+                const auto* blue = std::get_if<PathValue>(
+                    &curves->curves[gradeCurveIndex(GradeCurve::Blue)].source);
+                const auto* hueLuma = std::get_if<PathValue>(
+                    &curves->curves[gradeCurveIndex(GradeCurve::HueVsLuma)].source);
+                const auto* master = std::get_if<PathValue>(&curves->curves[0].source);
+                const auto* hueHue = std::get_if<PathValue>(
+                    &curves->curves[gradeCurveIndex(GradeCurve::HueVsHue)].source);
+                expectations.expect(
+                    curves->clamp && blue &&
+                        *blue == gradeCurvePath({{0.0, 0.0}, {0.5, 0.8}, {1.0, 1.0}}) &&
+                        hueLuma && *hueLuma == gradeCurvePath({{0.25, 1.5}}) && master &&
+                        *master == defaultGradeCurve(GradeCurve::Master) && hueHue &&
+                        hueHue->anchors.empty(),
+                    "Curves lowers its point lists, hue curves and clamp");
             } else {
                 const auto* hue = std::get_if<runtime::HueSaturationKernel>(&kernel);
                 const auto* h = hue ? std::get_if<double>(&hue->hue.source) : nullptr;

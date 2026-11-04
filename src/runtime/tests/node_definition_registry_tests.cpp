@@ -148,10 +148,11 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         expectations.expect(registry.find(type, 1) != nullptr,
                             "each pinned image-node addition is registered");
     // #340: Levels has five animatable Scalars per channel (RGB master, red, green, blue, alpha)
-    // and Curves five animatable Vector 2 points per channel, each its own socket, then a
-    // constant clamp; Hue/Saturation has an animatable hue and saturation.
+    // and Curves (#493 schema 2) nine animatable point-list curves (master, red, green, blue,
+    // alpha, then the four hue curves) with no sockets, then a constant clamp; Hue/Saturation has
+    // an animatable hue and saturation.
     const auto* levels = registry.find("bloom.levels", 1);
-    const auto* curves = registry.find("bloom.curves", 1);
+    const auto* curves = registry.find("bloom.curves", 2);
     const auto* hueSaturation = registry.find("bloom.hue-saturation", 1);
     expectations.expect(
         levels && levels->lowering == runtime::NodeLoweringKind::ImageEffect &&
@@ -173,16 +174,28 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                 std::vector<document::OutputPortDefinition>{
                     {"image", runtime::SocketValueKind::Image}},
         "#340: Levels exposes per-channel input/output black and white and gamma, clamp off");
-    expectations.expect(curves && curves->inputs.size() == 26 && curves->parameters.size() == 26 &&
-                            curves->inputs[25] ==
-                                document::InputPortDefinition{
-                                    "alphaPoint5", runtime::SocketValueKind::Vector2, false} &&
-                            curves->parameters[7].schemaKey == "bloom.curves.red.point-3" &&
-                            curves->parameters[7].defaultValue ==
-                                document::ParameterValue{document::Vec2d{0.5, 0.5}} &&
-                            curves->parameters[7].supportsAnimation &&
-                            curves->parameters[25].schemaKey == "bloom.curves.clamp",
-                        "#340: Curves exposes five identity points per channel and an unset clamp");
+    const auto pathPoints = [](const document::ParameterValue& value) {
+        std::vector<document::Vec2d> points;
+        if (const auto* path = std::get_if<document::PathValue>(&value))
+            for (const auto& anchor : path->anchors)
+                points.push_back(anchor.point);
+        return points;
+    };
+    expectations.expect(
+        curves && registry.find("bloom.curves", 1) == nullptr && curves->inputs.size() == 1 &&
+            curves->parameters.size() == 10 && curves->parameters[1].role == "red" &&
+            curves->parameters[1].schemaKey == "bloom.curves.red" &&
+            curves->parameters[1].valueKind == document::ParameterValueKind::Path &&
+            curves->parameters[1].supportsAnimation &&
+            pathPoints(curves->parameters[1].defaultValue) ==
+                std::vector<document::Vec2d>{{0.0, 0.0}, {1.0, 1.0}} &&
+            curves->parameters[5].role == "hueVsHue" &&
+            curves->parameters[5].schemaKey == "bloom.curves.hue-vs-hue" &&
+            pathPoints(curves->parameters[5].defaultValue).empty() &&
+            curves->parameters[8].schemaKey == "bloom.curves.luma-vs-saturation" &&
+            curves->parameters[9].schemaKey == "bloom.curves.clamp" &&
+            !curves->parameters[9].supportsAnimation,
+        "#493: Curves exposes identity channel curves, empty hue curves and an unset clamp");
     expectations.expect(hueSaturation && hueSaturation->inputs.size() == 3 &&
                             hueSaturation->parameters.size() == 2 &&
                             hueSaturation->parameters[0].schemaKey == "bloom.hue-saturation.hue" &&

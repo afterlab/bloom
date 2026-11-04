@@ -536,7 +536,10 @@ enum class ScalarDomain : std::uint8_t {
                                   hasValidScalarCurveReference(key->high, plan, index, failure);
                 forEachColorGradeOperand(effect.kernel, [&](const auto& operand) {
                     using Operand = std::decay_t<decltype(operand)>;
-                    if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
+                    // #493: a Curves curve is an inline constant or Path curve, like a mask path.
+                    if constexpr (std::is_same_v<Operand, CompiledPathParameter>)
+                        return;
+                    else if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
                         validKernel = validKernel &&
                                       hasValidVec2CurveReference(operand, plan, index, failure);
                     else
@@ -1259,7 +1262,9 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                         using Operand = std::decay_t<decltype(operand)>;
                         if (!gradeRegistered)
                             return;
-                        if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
+                        if constexpr (std::is_same_v<Operand, CompiledPathParameter>)
+                            return;
+                        else if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
                             gradeRegistered = registerVec2(operand, "grade", operationSubject);
                         else
                             gradeRegistered = registerScalar(
@@ -2369,7 +2374,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 }
                 std::optional<std::vector<double>> gradeValues;
                 if (isColorGradeKernel(effect->kernel))
-                    gradeValues = detail::sampleColorGradeOperands(effect->kernel, *plan, resolved);
+                    gradeValues = detail::sampleColorGradeOperands(
+                        effect->kernel, *plan, resolved,
+                        detail::timeForClock(frameResolved, request.time,
+                                             plan->operationClock(OperationIndex::fromRaw(index))));
                 std::shared_ptr<const detail::PreparedLayerMasks> layerMasks;
                 if (const auto* masks = std::get_if<LayerMaskKernel>(&effect->kernel)) {
                     const auto maskTime =
@@ -2719,7 +2727,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     key.add(levels->clamp);
                                 if (const auto* curves = std::get_if<CurvesKernel>(&step.kernel))
                                     key.add(curves->clamp);
-                                forEachColorGradeOperand(step.kernel, parameter);
+                                // #493: a curve's sampled points are in the prepared table, which
+                                // the cache identity above already carries.
+                                forEachColorGradeOperand(step.kernel, [&](const auto& operand) {
+                                    if constexpr (!std::is_same_v<std::decay_t<decltype(operand)>,
+                                                                  CompiledPathParameter>)
+                                        parameter(operand);
+                                });
                             }
                             if (const auto* transform =
                                     std::get_if<Transform2DKernel>(&step.kernel)) {

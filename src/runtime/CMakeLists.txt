@@ -125,6 +125,7 @@ target_sources(
         layer_parent_transform.hpp
         operation_key.hpp
         animation_sampling.cpp
+        grade_curve.cpp
         keyframe_easing.cpp
         cpu_composition_evaluator.cpp
         cpu_composition_resolution.hpp
@@ -147,6 +148,7 @@ target_sources(
         image_effect.cpp
         layer_mask_coverage.cpp
         luma_key_image_effect.cpp
+        color_grade_curves.cpp
         color_grade_image_effect.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp
@@ -231,6 +233,7 @@ target_sources(
         FILES
             include/bloom/runtime/operation_cache.hpp
             include/bloom/runtime/animation_sampling.hpp
+            include/bloom/runtime/grade_curve.hpp
             include/bloom/runtime/keyframe_easing.hpp
             include/bloom/runtime/audio_stream_key.hpp
             include/bloom/runtime/video_source_report.hpp

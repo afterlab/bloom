@@ -1,10 +1,13 @@
-// #340 Levels, Curves and Hue/Saturation: the CPU reference against independent double-precision
+// #340 Levels, Curves and Hue/Saturation (#493: Curves with any number of points and the four hue
+// curves): the CPU reference against independent double-precision
 // formulas over HDR, negative and partial-alpha pixels; a Raw depth pass normalised with no colour
 // transform; clamp, step, identity and domain rules; windows, budget, cancellation; and the
 // resident programs the GPU route prepares.
 
+#include "grade_curves_test_support.hpp"
 #include "image_effect.hpp"
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/runtime/grade_curve.hpp>
 #include <bloom/runtime/gpu_ocio_wrapper.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -67,29 +70,45 @@ double levelsReference(const Levels& c, const double x) {
     return c.outBlack + t * (c.outWhite - c.outBlack);
 }
 
-using Points = std::array<std::array<double, 2>, 5>;
-constexpr Points kIdentityPoints{{{0.0, 0.0}, {0.25, 0.25}, {0.5, 0.5}, {0.75, 0.75}, {1.0, 1.0}}};
+using Points = std::vector<std::array<double, 2>>;
+const Points kIdentityPoints{{0.0, 0.0}, {0.25, 0.25}, {0.5, 0.5}, {0.75, 0.75}, {1.0, 1.0}};
 runtime::CurvesKernel curvesKernel(const bool clamp) {
-    runtime::CurvesKernel kernel;
-    std::uint64_t id = 100;
-    for (auto& channel : kernel.points)
-        for (auto& point : channel)
-            point = {document::ParameterId::fromRaw(id++), document::Vec2d{}};
-    kernel.clamp = clamp;
-    return kernel;
+    return runtime::testing::identityCurvesKernel(100, clamp);
 }
-std::vector<double> curvesValues(const std::array<Points, 5>& channels) {
+// Every curve in kGradeCurves order: the five channel curves, then the four hue curves (empty
+// unless given).
+using CurveSet = std::array<Points, document::kGradeCurveCount>;
+CurveSet channelCurves(const std::array<Points, 5>& channels) {
+    CurveSet curves{};
+    std::copy(channels.begin(), channels.end(), curves.begin());
+    return curves;
+}
+std::vector<double> curvesValues(const CurveSet& curves) {
     std::vector<double> values;
-    for (const auto& points : channels)
+    for (const auto& points : curves) {
+        values.push_back(static_cast<double>(points.size()));
         for (const auto& [x, y] : points) {
             values.push_back(x);
             values.push_back(y);
         }
+    }
     return values;
 }
-// Independent reference: the Fritsch-Carlson monotone cubic in the Hermite basis, extrapolated
-// linearly along the end tangents, from points sorted by input with repeated inputs dropped.
-double curvesReference(Points points, const double value) {
+std::vector<double> curvesValues(const std::array<Points, 5>& channels) {
+    return curvesValues(channelCurves(channels));
+}
+enum class Ends { Linear, Hold, Periodic };
+// Independent reference: the Fritsch-Carlson monotone cubic in the Hermite basis from points
+// (narrowed to binary32 as the document stores them) sorted by input with repeated inputs dropped.
+// Linear ends extrapolate along the end tangents, Hold ends keep the end values, and a periodic
+// curve over 0..1 takes its tangents and its segment across the wrap from its neighbours mod 1.
+double curvesReference(Points points, const double value, const Ends ends = Ends::Linear) {
+    for (auto& p : points) {
+        p = {static_cast<double>(static_cast<float>(p[0])),
+             static_cast<double>(static_cast<float>(p[1]))};
+        if (ends == Ends::Periodic && p[0] >= 1.0)
+            p[0] = 0.0;
+    }
     std::stable_sort(points.begin(), points.end(),
                      [](const auto& a, const auto& b) { return a[0] < b[0]; });
     std::vector<double> x;
@@ -102,6 +121,38 @@ double curvesReference(Points points, const double value) {
     const std::size_t n = x.size();
     if (n == 1)
         return y[0];
+    const auto interior = [](const double h0, const double h1, const double d0, const double d1) {
+        return d0 * d1 <= 0.0 ? 0.0
+                              : (3.0 * (h0 + h1)) / ((2.0 * h1 + h0) / d0 + (h1 + 2.0 * h0) / d1);
+    };
+    const auto hermite = [](const double x0, const double h, const double y0, const double y1,
+                            const double m0, const double m1, const double at) {
+        const double t = (at - x0) / h;
+        const double t2 = t * t;
+        const double t3 = t2 * t;
+        return (2 * t3 - 3 * t2 + 1) * y0 + (t3 - 2 * t2 + t) * h * m0 + (-2 * t3 + 3 * t2) * y1 +
+               (t3 - t2) * h * m1;
+    };
+    if (ends == Ends::Periodic) {
+        const double at = value - std::floor(value);
+        std::vector<double> m(n);
+        for (std::size_t k = 0; k < n; ++k) {
+            const auto p = (k + n - 1) % n;
+            const auto q = (k + 1) % n;
+            const double h0 = k == 0 ? x[0] + 1.0 - x[n - 1] : x[k] - x[p];
+            const double h1 = k + 1 == n ? x[0] + 1.0 - x[k] : x[q] - x[k];
+            m[k] = interior(h0, h1, (y[k] - y[p]) / h0, (y[q] - y[k]) / h1);
+        }
+        const double wrap = x[0] + 1.0 - x[n - 1];
+        if (at < x[0])
+            return hermite(x[n - 1] - 1.0, wrap, y[n - 1], y[0], m[n - 1], m[0], at);
+        if (at >= x[n - 1])
+            return hermite(x[n - 1], wrap, y[n - 1], y[0], m[n - 1], m[0], at);
+        std::size_t k = 0;
+        while (at >= x[k + 1])
+            ++k;
+        return hermite(x[k], x[k + 1] - x[k], y[k], y[k + 1], m[k], m[k + 1], at);
+    }
     std::vector<double> h(n - 1);
     std::vector<double> d(n - 1);
     for (std::size_t k = 0; k + 1 < n; ++k) {
@@ -111,10 +162,7 @@ double curvesReference(Points points, const double value) {
     std::vector<double> m(n, d[0]);
     if (n > 2) {
         for (std::size_t k = 1; k + 1 < n; ++k)
-            m[k] = d[k - 1] * d[k] <= 0.0
-                       ? 0.0
-                       : (3.0 * (h[k - 1] + h[k])) /
-                             ((2.0 * h[k] + h[k - 1]) / d[k - 1] + (h[k] + 2.0 * h[k - 1]) / d[k]);
+            m[k] = interior(h[k - 1], h[k], d[k - 1], d[k]);
         const auto sign = [](const double v) { return v > 0.0 ? 1 : v < 0.0 ? -1 : 0; };
         const auto end = [&](const double h0, const double h1, const double d0, const double d1) {
             const double t = ((2.0 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
@@ -127,19 +175,118 @@ double curvesReference(Points points, const double value) {
         m[0] = end(h[0], h[1], d[0], d[1]);
         m[n - 1] = end(h[n - 2], h[n - 3], d[n - 2], d[n - 3]);
     }
+    const double slope0 = ends == Ends::Hold ? 0.0 : m[0];
+    const double slope1 = ends == Ends::Hold ? 0.0 : m[n - 1];
     if (value < x[0])
-        return y[0] + m[0] * (value - x[0]);
+        return y[0] + slope0 * (value - x[0]);
     if (value >= x[n - 1])
-        return y[n - 1] + m[n - 1] * (value - x[n - 1]);
+        return y[n - 1] + slope1 * (value - x[n - 1]);
     std::size_t k = 0;
     while (value >= x[k + 1])
         ++k;
-    const double t = (value - x[k]) / h[k];
-    const double t2 = t * t;
-    const double t3 = t2 * t;
-    return (2 * t3 - 3 * t2 + 1) * y[k] + (t3 - 2 * t2 + t) * h[k] * m[k] +
-           (-2 * t3 + 3 * t2) * y[k + 1] + (t3 - t2) * h[k] * m[k + 1];
+    return hermite(x[k], h[k], y[k], y[k + 1], m[k], m[k + 1], value);
 }
+
+// Independent double reference of the hue colour model: Filter Effects luma; the chroma plane
+// spanned by red's chroma e1 and the hueRotate sine column e2 (projected onto the plane), with
+// (a, b) the least-squares coordinates of a colour's chroma in that basis; hue the diamond angle
+// of (a, b), 0 at red, a quarter turn at +e2.
+struct HueReference final {
+    std::array<double, 3> w{0.213, 0.715, 0.072};
+    std::array<double, 3> e1{};
+    std::array<double, 3> e2{};
+    HueReference() {
+        e1 = {1.0 - w[0], -w[0], -w[0]};
+        e2 = {-0.213, 0.143, -0.787};
+        const double off = w[0] * e2[0] + w[1] * e2[1] + w[2] * e2[2];
+        for (auto& v : e2)
+            v -= off;
+    }
+    [[nodiscard]] double luma(const std::array<double, 3>& c) const {
+        return w[0] * c[0] + w[1] * c[1] + w[2] * c[2];
+    }
+    [[nodiscard]] std::array<double, 2> opponent(const std::array<double, 3>& c) const {
+        const double l = luma(c);
+        const std::array<double, 3> chroma{c[0] - l, c[1] - l, c[2] - l};
+        const auto dot = [](const std::array<double, 3>& p, const std::array<double, 3>& q) {
+            return p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+        };
+        const double g11 = dot(e1, e1);
+        const double g12 = dot(e1, e2);
+        const double g22 = dot(e2, e2);
+        const double r1 = dot(e1, chroma);
+        const double r2 = dot(e2, chroma);
+        const double det = g11 * g22 - g12 * g12;
+        return {(g22 * r1 - g12 * r2) / det, (g11 * r2 - g12 * r1) / det};
+    }
+    [[nodiscard]] static double hue(const std::array<double, 2>& ab) {
+        const double s = std::abs(ab[0]) + std::abs(ab[1]);
+        double q = 0.0;
+        if (ab[0] >= 0.0 && ab[1] >= 0.0)
+            q = ab[1] / s;
+        else if (ab[1] >= 0.0)
+            q = 1.0 - ab[0] / s;
+        else if (ab[0] < 0.0)
+            q = 2.0 - ab[1] / s;
+        else
+            q = 3.0 + ab[0] / s;
+        return q / 4.0 >= 1.0 ? 0.0 : q / 4.0;
+    }
+    [[nodiscard]] static std::array<double, 2> direction(double hue) {
+        hue -= std::floor(hue);
+        const double p = hue * 4.0;
+        const double f = p - std::floor(p);
+        switch (static_cast<int>(std::floor(p))) {
+        case 0:
+            return {1.0 - f, f};
+        case 1:
+            return {-f, 1.0 - f};
+        case 2:
+            return {f - 1.0, -f};
+        default:
+            return {f, f - 1.0};
+        }
+    }
+    // The four hue curves on straight `c`, in the documented order.
+    [[nodiscard]] std::array<double, 3> apply(const CurveSet& curves,
+                                              std::array<double, 3> c) const {
+        if (c[0] == c[1] && c[1] == c[2])
+            return c;
+        const auto at = [&](const document::GradeCurve curve, const double x, const Ends ends) {
+            const auto& points = curves[document::gradeCurveIndex(curve)];
+            const double neutral = document::neutralGradeCurveOutput(curve);
+            if (points.empty() || std::ranges::all_of(points, [&](const auto& p) {
+                    return p[1] == neutral;
+                }))
+                return neutral;
+            return curvesReference(points, x, ends);
+        };
+        const auto ab = opponent(c);
+        const double l = luma(c);
+        const double h = hue(ab);
+        const double shift = at(document::GradeCurve::HueVsHue, h, Ends::Periodic);
+        const double hueSat = at(document::GradeCurve::HueVsSaturation, h, Ends::Periodic);
+        const double hueLuma = at(document::GradeCurve::HueVsLuma, h, Ends::Periodic);
+        const double lumaSat = at(document::GradeCurve::LumaVsSaturation, l, Ends::Hold);
+        if (shift != 0.0) {
+            const auto d = direction(h + shift);
+            const double k = std::hypot(ab[0], ab[1]) / std::hypot(d[0], d[1]);
+            const double da = k * d[0] - ab[0];
+            const double db = k * d[1] - ab[1];
+            for (std::size_t j = 0; j < 3; ++j)
+                c[j] += e1[j] * da + e2[j] * db;
+        }
+        const double gain = hueSat * lumaSat;
+        const double current = luma(c);
+        for (auto& v : c)
+            v = current + gain * (v - current);
+        const double s = std::abs(ab[0]) + std::abs(ab[1]);
+        const double factor = 1.0 + (hueLuma - 1.0) * s / (s + std::abs(l));
+        for (auto& v : c)
+            v *= factor;
+        return c;
+    }
+};
 
 // Straight RGBA authoring values premultiplied into the resident representation: SDR, HDR,
 // negative, partial and zero alpha.
@@ -307,14 +454,27 @@ void levelsTests() {
 
 void curvesTests() {
     const auto input = image(kPixels);
-    // An S-curve master, a lifted and inverted red, an unsorted green with a repeated input, a
-    // non-monotone blue and an alpha curve that lifts coverage.
+    // A seven-point S-curve master, a lifted and inverted red, an unsorted three-point green with
+    // a repeated input, a non-monotone blue and an alpha curve that lifts coverage.
     const std::array<Points, 5> channels{
-        Points{{{0.0, 0.0}, {0.25, 0.15}, {0.5, 0.5}, {0.75, 0.85}, {1.0, 1.0}}},
-        Points{{{0.0, 1.0}, {0.25, 0.8}, {0.5, 0.5}, {0.75, 0.3}, {1.0, 0.1}}},
-        Points{{{1.0, 1.2}, {0.0, 0.1}, {0.5, 0.4}, {0.5, 0.9}, {0.2, 0.3}}},
-        Points{{{0.0, 0.0}, {0.3, 0.7}, {0.6, 0.2}, {0.8, 0.9}, {1.0, 1.0}}},
-        Points{{{0.0, 0.25}, {0.25, 0.4}, {0.5, 0.6}, {0.75, 0.8}, {1.0, 1.0}}}};
+        Points{{0.0, 0.0},
+               {0.1, 0.05},
+               {0.25, 0.15},
+               {0.5, 0.5},
+               {0.75, 0.85},
+               {0.9, 0.96},
+               {1.0, 1.0}},
+        Points{{0.0, 1.0}, {0.25, 0.8}, {0.5, 0.5}, {0.75, 0.3}, {1.0, 0.1}},
+        Points{{1.0, 1.2}, {0.0, 0.1}, {0.5, 0.4}, {0.5, 0.9}},
+        Points{{0.0, 0.0}, {0.3, 0.7}, {0.6, 0.2}, {0.8, 0.9}, {1.0, 1.0}},
+        Points{{0.0, 0.25}, {0.25, 0.4}, {0.5, 0.6}, {0.75, 0.8}, {1.0, 1.0}}};
+    const auto channelReference = [](const std::array<Points, 5>& curves,
+                                     const std::array<double, 3>& s) {
+        std::array<double, 3> out{};
+        for (std::size_t i = 0; i < 3; ++i)
+            out[i] = curvesReference(curves[i + 1], curvesReference(curves[0], s[i]));
+        return out;
+    };
     for (const bool clamp : {false, true}) {
         const auto grade =
             runtime::detail::prepareColorGrade(curvesKernel(clamp), curvesValues(channels));
@@ -324,17 +484,14 @@ void curvesTests() {
             *grade, input,
             [&](const std::array<double, 3>& s, const double a, const render::Rgba32f&) {
                 const double alpha = std::clamp(curvesReference(channels[4], a), 0.0, 1.0);
+                const auto rgb = channelReference(channels, s);
                 std::array<double, 4> out{};
-                for (std::size_t i = 0; i < 3; ++i) {
-                    double v = curvesReference(channels[i + 1], curvesReference(channels[0], s[i]));
-                    if (clamp)
-                        v = std::clamp(v, 0.0, 1.0);
-                    out[i] = v * alpha;
-                }
+                for (std::size_t i = 0; i < 3; ++i)
+                    out[i] = (clamp ? std::clamp(rgb[i], 0.0, 1.0) : rgb[i]) * alpha;
                 out[3] = alpha;
                 return out;
             },
-            "Curves equals the independent monotone-cubic reference");
+            "Curves equals the independent monotone-cubic reference for any number of points");
     }
     // Every point is interpolated exactly and HDR extrapolates along the end tangent.
     std::array<Points, 5> single{kIdentityPoints, kIdentityPoints, kIdentityPoints, kIdentityPoints,
@@ -352,22 +509,38 @@ void curvesTests() {
     require(runtime::detail::colorGradePixel(*grade, hdr) && hdr[0] > hdr[2] && hdr[2] > hdr[1] &&
                 hdr[1] == 1.0F && near(hdr[0], curvesReference(channels[0], 4.0)),
             "Curves extrapolates above one for HDR");
-    // An identity channel is exact, even for values a cubic would round.
+    // An identity channel is exact, even for values a cubic would round; the default (0,0),(1,1)
+    // channel, an empty one and the schema 1 five-point identity are all the identity.
     std::array<float, 4> tiny{1.0e-30F, 3.0e7F, -2.5F, 1.0F};
     const auto red = runtime::detail::prepareColorGrade(
         curvesKernel(false),
-        curvesValues({kIdentityPoints, kIdentityPoints, kIdentityPoints,
-                      Points{{{0, 0}, {0.25, 0.25}, {0.5, 0.75}, {0.75, 0.75}, {1, 1}}},
+        curvesValues(std::array<Points, 5>{kIdentityPoints, kIdentityPoints, kIdentityPoints,
+                      Points{{0, 0}, {0.25, 0.25}, {0.5, 0.75}, {0.75, 0.75}, {1, 1}},
                       kIdentityPoints}));
     require(runtime::detail::colorGradePixel(*red, tiny) && tiny[0] == 1.0e-30F &&
                 tiny[1] == 3.0e7F && tiny[2] != -2.5F,
             "an identity Curves channel passes values through exactly");
-    require(runtime::detail::prepareColorGrade(
-                curvesKernel(false), curvesValues(std::array<Points, 5>{
-                                         kIdentityPoints, kIdentityPoints, kIdentityPoints,
-                                         kIdentityPoints, kIdentityPoints}))
-                ->identity,
-            "default Curves is an identity");
+    const Points diagonal{{0.0, 0.0}, {1.0, 1.0}};
+    for (const auto& identity :
+         {std::array<Points, 5>{kIdentityPoints, kIdentityPoints, kIdentityPoints, kIdentityPoints,
+                                kIdentityPoints},
+          std::array<Points, 5>{diagonal, diagonal, diagonal, diagonal, diagonal},
+          std::array<Points, 5>{}, std::array<Points, 5>{Points{{2.0, 2.0}, {-3.0, -3.0}}}})
+        require(runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(identity))
+                    ->identity,
+                "default, empty and diagonal Curves are the identity");
+    const auto defaults = curvesKernel(false);
+    std::vector<double> defaultValues;
+    for (const auto& curve : defaults.curves) {
+        const auto& path = std::get<document::PathValue>(curve.source);
+        defaultValues.push_back(static_cast<double>(path.anchors.size()));
+        for (const auto& anchor : path.anchors) {
+            defaultValues.push_back(anchor.point.x);
+            defaultValues.push_back(anchor.point.y);
+        }
+    }
+    require(runtime::detail::prepareColorGrade(defaults, defaultValues)->identity,
+            "the document's default curves are the identity");
     // A shuffled point order is the same curve.
     auto shuffled = channels;
     std::reverse(shuffled[0].begin(), shuffled[0].end());
@@ -376,22 +549,166 @@ void curvesTests() {
             runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(channels))->data,
         "point order does not change the curve");
     // One distinct input is a constant.
-    auto flat = single;
-    flat[0] = Points{{{0.5, 0.3}, {0.5, 0.9}, {0.5, 0.1}, {0.5, 0.2}, {0.5, 0.4}}};
-    std::array<float, 4> constant{-3.0F, 0.5F, 9.0F, 1.0F};
-    require(runtime::detail::colorGradePixel(
-                *runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(flat)),
-                constant) &&
-                constant[0] == 0.3F && constant[1] == 0.3F && constant[2] == 0.3F,
-            "points sharing one input are a constant at the first of them");
+    for (const auto& flatPoints : {Points{{0.5, 0.3}, {0.5, 0.9}, {0.5, 0.1}}, Points{{0.5, 0.3}}}) {
+        auto flat = single;
+        flat[0] = flatPoints;
+        std::array<float, 4> constant{-3.0F, 0.5F, 9.0F, 1.0F};
+        require(runtime::detail::colorGradePixel(
+                    *runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(flat)),
+                    constant) &&
+                    constant[0] == 0.3F && constant[1] == 0.3F && constant[2] == 0.3F,
+                "points sharing one input are a constant at the first of them");
+    }
     auto bad = curvesValues(single);
-    bad[3] = std::numeric_limits<double>::infinity();
+    bad[2] = std::numeric_limits<double>::infinity();
     require(!runtime::detail::prepareColorGrade(curvesKernel(false), bad),
             "a non-finite point refuses");
-    bad[3] = 0.25;
-    bad[2] = bad[0] + 1.0e-44;
+    bad[2] = 0.0;
+    bad[3] = bad[1] + 1.0e-44;
     require(!runtime::detail::prepareColorGrade(curvesKernel(false), bad),
             "points too close for binary32 coefficients refuse");
+    bad = curvesValues(single);
+    bad[0] += 1.0;
+    require(!runtime::detail::prepareColorGrade(curvesKernel(false), bad) &&
+                !runtime::detail::prepareColorGrade(curvesKernel(false),
+                                                    std::vector<double>(4, 0.0)),
+            "a point count that does not match its points refuses");
+    Points many;
+    for (std::size_t point = 0; point <= document::kMaximumCurvePoints; ++point) {
+        const double x = static_cast<double>(point) / 256.0;
+        many.push_back({x, x * x});
+    }
+    auto tooMany = single;
+    tooMany[1] = many;
+    require(!runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(tooMany)),
+            "more than the maximum number of points refuses");
+    many.pop_back();
+    tooMany[1] = many;
+    require(runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(tooMany)) &&
+                runtime::detail::validCurvesTable(
+                    runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(tooMany))
+                        ->data),
+            "the maximum number of points prepares a valid table");
+}
+
+// #493: the colour model the hue curves read their hue from, against the independent reference.
+bool hueNear(const double a, const double b, const double tolerance) {
+    const double d = std::abs(a - b);
+    return std::min(d, 1.0 - d) <= tolerance;
+}
+
+void hueModelTests() {
+    const HueReference reference;
+    const auto red = runtime::gradeHue(1.0, 0.0, 0.0);
+    require(red && hueNear(*red, 0.0, 1e-12) && !runtime::gradeHue(0.4, 0.4, 0.4) &&
+                !runtime::gradeHue(-2.0, -2.0, -2.0),
+            "red is hue zero and greys have no hue");
+    for (const auto& colour :
+         {std::array<double, 3>{0.2, 0.9, 0.1}, std::array<double, 3>{0.1, 0.2, 0.9},
+          std::array<double, 3>{4.0, 3.0, 6.0}, std::array<double, 3>{-0.5, 0.2, -1.0},
+          std::array<double, 3>{0.8, 0.1, 0.9}, std::array<double, 3>{0.6, 0.4, 0.5},
+          std::array<double, 3>{1.0, 1.0, 0.0}, std::array<double, 3>{0.0, 1.0, 1.0}}) {
+        const auto hue = runtime::gradeHue(colour[0], colour[1], colour[2]);
+        require(hue && *hue >= 0.0 && *hue < 1.0 &&
+                    hueNear(*hue, HueReference::hue(reference.opponent(colour)), 1e-12),
+                "the hue is the diamond angle of the chroma-plane coordinates");
+        const auto scaled = runtime::gradeHue(colour[0] * 3.0 + 1.0, colour[1] * 3.0 + 1.0,
+                                              colour[2] * 3.0 + 1.0);
+        require(scaled && hueNear(*scaled, *hue, 1e-9),
+                "the hue ignores a neutral offset and a positive scale");
+    }
+    for (int step = 0; step < 24; ++step) {
+        const double hue = static_cast<double>(step) / 24.0;
+        const auto strip = runtime::gradeHueColor(hue);
+        const auto back = runtime::gradeHue(strip[0], strip[1], strip[2]);
+        require(back && hueNear(*back, hue, 1e-9) &&
+                    std::ranges::all_of(strip, [](const double v) { return v >= 0.0 && v <= 1.0; }),
+                "the hue strip shows each hue as a displayable colour");
+    }
+}
+
+// #493: Hue vs Hue, Hue vs Saturation, Hue vs Luma and Luma vs Saturation against the independent
+// reference over HDR, negative and partial-alpha pixels; neutrals, alpha, periodicity, identities
+// and domains.
+void hueCurvesTests() {
+    const auto input = image(kPixels);
+    std::array<Points, 5> channels{};
+    channels[0] = Points{{0.0, 0.0}, {0.5, 0.55}, {1.0, 1.0}};
+    auto curves = channelCurves(channels);
+    const auto at = [&curves](const document::GradeCurve curve) -> Points& {
+        return curves[document::gradeCurveIndex(curve)];
+    };
+    at(document::GradeCurve::HueVsHue) = {{0.05, 0.1}, {0.4, -0.15}, {0.7, 0.05}, {0.95, 0.0}};
+    at(document::GradeCurve::HueVsSaturation) = {{0.0, 1.6}, {0.33, 0.4}, {0.66, 1.2}};
+    at(document::GradeCurve::HueVsLuma) = {{0.1, 1.3}, {0.6, 0.7}};
+    at(document::GradeCurve::LumaVsSaturation) = {{0.0, 0.5}, {0.5, 1.4}, {1.0, 0.8}};
+    const HueReference reference;
+    for (const bool clamp : {false, true}) {
+        const auto grade =
+            runtime::detail::prepareColorGrade(curvesKernel(clamp), curvesValues(curves));
+        require(grade && !grade->identity &&
+                    runtime::detail::validCurvesTable(grade->data),
+                "hue curves prepare");
+        checkImage(
+            *grade, input,
+            [&](const std::array<double, 3>& s, const double a, const render::Rgba32f&) {
+                std::array<double, 3> c{};
+                for (std::size_t i = 0; i < 3; ++i)
+                    c[i] = curvesReference(channels[0], s[i]);
+                c = reference.apply(curves, c);
+                std::array<double, 4> out{0.0, 0.0, 0.0, a};
+                for (std::size_t i = 0; i < 3; ++i)
+                    out[i] = (clamp ? std::clamp(c[i], 0.0, 1.0) : c[i]) * a;
+                return out;
+            },
+            "hue curves equal the independent colour-model reference");
+    }
+    // Each curve alone: greys and alpha untouched, and a hue curve at hue one is its value at zero.
+    for (const auto curve : {document::GradeCurve::HueVsHue, document::GradeCurve::HueVsSaturation,
+                             document::GradeCurve::HueVsLuma,
+                             document::GradeCurve::LumaVsSaturation}) {
+        CurveSet alone{};
+        alone[document::gradeCurveIndex(curve)] = curves[document::gradeCurveIndex(curve)];
+        const auto grade =
+            runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(alone));
+        require(grade && !grade->identity, "one hue curve prepares");
+        std::array<float, 4> grey{2.5F, 2.5F, 2.5F, 0.5F};
+        std::array<float, 4> colour{0.9F, 0.3F, 0.2F, 0.25F};
+        require(runtime::detail::colorGradePixel(*grade, grey) && grey[0] == 2.5F &&
+                    grey[1] == 2.5F && grey[2] == 2.5F && grey[3] == 0.5F &&
+                    runtime::detail::colorGradePixel(*grade, colour) && colour[3] == 0.25F,
+                "hue curves leave greys and alpha exactly unchanged");
+        auto neutral = alone;
+        for (auto& point : neutral[document::gradeCurveIndex(curve)])
+            point[1] = document::neutralGradeCurveOutput(curve);
+        require(runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(neutral))
+                    ->identity,
+                "a hue curve at its neutral value is the identity");
+    }
+    const auto& hueSat = at(document::GradeCurve::HueVsSaturation);
+    require(near(curvesReference(hueSat, 0.0, Ends::Periodic),
+                 curvesReference(hueSat, 1.0, Ends::Periodic), 1e-12) &&
+                near(curvesReference(hueSat, 0.999999, Ends::Periodic),
+                     curvesReference(hueSat, 0.0, Ends::Periodic), 1e-4),
+            "a hue curve is periodic over the hue strip");
+    auto wrapped = curves;
+    wrapped[document::gradeCurveIndex(document::GradeCurve::HueVsSaturation)] = {
+        {1.0, 1.6}, {0.33, 0.4}, {0.66, 1.2}};
+    require(runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(wrapped))->data ==
+                runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(curves))->data,
+            "a hue point at one is the point at zero");
+    // Domains: a hue input in 0..1, a hue shift within half a turn, gains within 0..1000.
+    for (const auto& [curve, point] :
+         {std::pair{document::GradeCurve::HueVsHue, std::array<double, 2>{0.5, 0.6}},
+          std::pair{document::GradeCurve::HueVsHue, std::array<double, 2>{1.5, 0.0}},
+          std::pair{document::GradeCurve::HueVsSaturation, std::array<double, 2>{0.5, -0.1}},
+          std::pair{document::GradeCurve::HueVsLuma, std::array<double, 2>{-0.1, 1.0}},
+          std::pair{document::GradeCurve::LumaVsSaturation, std::array<double, 2>{0.5, 1001.0}}}) {
+        CurveSet outside{};
+        outside[document::gradeCurveIndex(curve)] = {point};
+        require(!runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(outside)),
+                "an out-of-domain hue curve point refuses");
+    }
 }
 
 void hueSaturationTests() {
@@ -476,7 +793,7 @@ void programTests() {
         runtime::detail::prepareColorGrade(levelsKernel(false), levelsValues(channels));
     const auto curves = runtime::detail::prepareColorGrade(
         curvesKernel(true),
-        curvesValues({Points{{{0, 0}, {0.3, 0.2}, {0.5, 0.5}, {0.7, 0.8}, {1, 1}}}, kIdentityPoints,
+        curvesValues(std::array<Points, 5>{Points{{0, 0}, {0.3, 0.2}, {0.5, 0.5}, {0.7, 0.8}, {1, 1}}, kIdentityPoints,
                       kIdentityPoints, kIdentityPoints, kIdentityPoints}));
     const auto hue = runtime::detail::prepareColorGrade(
         runtime::HueSaturationKernel{{document::ParameterId::fromRaw(1), 0.0},
@@ -521,6 +838,16 @@ void programTests() {
                      .succeeded(),
             "non-finite or mis-sized grade data refuses");
     }
+    CurveSet hueOnly{};
+    hueOnly[document::gradeCurveIndex(document::GradeCurve::HueVsLuma)] = {{0.2, 1.5}};
+    const auto hueCurves =
+        runtime::detail::prepareColorGrade(curvesKernel(false), curvesValues(hueOnly));
+    const auto hueProgram = runtime::detail::buildColorGradeProgram(hueCurves->kind,
+                                                                    hueCurves->data);
+    const auto curvesProgram = runtime::detail::buildColorGradeProgram(curves->kind, curves->data);
+    require(hueProgram.succeeded() && curvesProgram.succeeded() &&
+                hueProgram.program()->shaderText == curvesProgram.program()->shaderText,
+            "every curve set, hue curves included, runs the one fixed Curves program");
     require(levels->data != curves->data && runtime::detail::colorGradeIdentity(*levels) !=
                                                 runtime::detail::colorGradeIdentity(*curves),
             "grades have distinct cache identities");
@@ -566,6 +893,8 @@ int main() {
     try {
         levelsTests();
         curvesTests();
+        hueModelTests();
+        hueCurvesTests();
         hueSaturationTests();
         programTests();
         cancellationTest();
@@ -573,6 +902,6 @@ int main() {
         std::cerr << error.what() << '\n';
         return 1;
     }
-    std::cout << "PASS: Levels, Curves and Hue/Saturation reference, Raw depth normalisation, "
+    std::cout << "PASS: Levels, Curves (any number of points, hue curves) and Hue/Saturation reference, Raw depth normalisation, "
                  "HDR/alpha/windows, budget, resident programs and cancellation\n";
 }

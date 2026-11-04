@@ -65,8 +65,9 @@ ParameterPresentation pixels(const double minimum, const double maximum, const d
 // the 0..1 display range as its comfortable span.
 ParameterPresentation channel() { return number(kLowest, kHighest, 0.0, 1.0, 0.01, 3); }
 
-// #340: the Levels values and Curves points, generated per channel so the schema list cannot drift
-// from the definitions. Values are unbounded in practice (a Raw data pass may span any range) with
+// #340: the Levels values, generated per channel so the schema list cannot drift from the
+// definitions (#493 Curves curves are point lists drawn by the curve graph, not numbers). Values
+// are unbounded in practice (a Raw data pass may span any range) with
 // the comfortable 0..1 span; gamma is its own bounded factor.
 const std::vector<Entry>& colorGradeTable() {
     // The schema keys are owned by this static list for the life of the process.
@@ -75,8 +76,6 @@ const std::vector<Entry>& colorGradeTable() {
         for (std::size_t channel = 0; channel < kGradeChannelCount; ++channel) {
             for (std::size_t field = 0; field < kLevelsFieldCount; ++field)
                 generated.push_back(levelsSchemaKey(channel, field));
-            for (std::size_t point = 0; point < kCurvePointCount; ++point)
-                generated.push_back(curvePointSchemaKey(channel, point));
         }
         return generated;
     }();

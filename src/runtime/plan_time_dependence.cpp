@@ -92,7 +92,12 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     if (isColorGradeKernel(step.kernel)) {
                         bool animated = false;
                         forEachColorGradeOperand(step.kernel, [&](const auto& operand) {
-                            animated = animated || parameter(operand);
+                            if constexpr (std::is_same_v<std::decay_t<decltype(operand)>,
+                                                         CompiledPathParameter>)
+                                animated = animated ||
+                                           std::holds_alternative<CompiledPathCurve>(operand.source);
+                            else
+                                animated = animated || parameter(operand);
                         });
                         return animated;
                     }

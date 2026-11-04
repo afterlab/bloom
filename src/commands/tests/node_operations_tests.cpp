@@ -1,6 +1,7 @@
 #include "command_test_support.hpp"
 
 #include <bloom/document/animation.hpp>
+#include <bloom/document/grade_curves.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -651,12 +652,13 @@ void testColorGradeCommands(TestContext& test) {
     const auto clamp = levels.outputId<ParameterId>("parameter.clamp");
     const auto curves = exercise<AddNode>(test, fixture, "bloom.curves", Vec2d{40, 0});
     const auto curvesId = curves.outputId<NodeId>(kAddNodeOutput);
-    const auto point = curves.outputId<ParameterId>("parameter.alphaPoint5");
+    const auto point = curves.outputId<ParameterId>("parameter.alpha");
+    const auto hueShift = curves.outputId<ParameterId>("parameter.hueVsHue");
     const auto hue = exercise<AddNode>(test, fixture, "bloom.hue-saturation", Vec2d{80, 0});
     const auto hueId = hue.outputId<NodeId>(kAddNodeOutput);
     const auto saturation = hue.outputId<ParameterId>("parameter.saturation");
-    if (!levelsId || !inputWhite || !gamma || !clamp || !curvesId || !point || !hueId ||
-        !saturation)
+    if (!levelsId || !inputWhite || !gamma || !clamp || !curvesId || !point || !hueShift ||
+        !hueId || !saturation)
         throw std::logic_error("grades expose registered control identities");
     exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"},
                            InputPortRef{NodeInputRef{*levelsId, "input"}});
@@ -668,14 +670,54 @@ void testColorGradeCommands(TestContext& test) {
     (void)exercise<SetParameterSource>(test, fixture, *inputWhite, ConstantValueSource{1000.0});
     (void)exercise<SetParameterSource>(test, fixture, *gamma, ConstantValueSource{2.2});
     (void)exercise<SetParameterSource>(test, fixture, *clamp, ConstantValueSource{true});
-    (void)exercise<SetParameterSource>(test, fixture, *point, ConstantValueSource{Vec2d{4.0, 6.0}});
+    // #493: a curve of any number of points with an HDR point, and a hue curve.
+    (void)exercise<SetParameterSource>(
+        test, fixture, *point,
+        ConstantValueSource{gradeCurvePath({{0.0, 0.0}, {0.3, 0.5}, {0.6, 0.7}, {4.0, 6.0}})});
+    (void)exercise<SetParameterSource>(test, fixture, *hueShift,
+                                       ConstantValueSource{gradeCurvePath({{0.5, -0.25}})});
     (void)exercise<SetParameterSource>(test, fixture, *saturation, ConstantValueSource{2.5});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *gamma,
                                ConstantValueSource{0.0});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *inputWhite,
                                ConstantValueSource{std::numeric_limits<double>::infinity()});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *point,
-                               ConstantValueSource{Vec2d{2.0e6, 0.0}});
+                               ConstantValueSource{gradeCurvePath({{2.0e6, 0.0}})});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *point,
+                               ConstantValueSource{Vec2d{0.5, 0.5}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *hueShift,
+                               ConstantValueSource{gradeCurvePath({{0.5, 0.75}})});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *hueShift,
+                               ConstantValueSource{gradeCurvePath({{1.25, 0.0}})});
+    // #493: a curve is animatable as a whole value: keyed at one time, keyed again at another
+    // (each one undoable command), refused out of its domain, and returned to a constant.
+    const auto keyed =
+        exercise<CreateAnimationForParameter>(test, fixture, *hueShift, core::RationalTime{});
+    const auto pathCurve = keyed.outputId<AnimationCurveId>(kAnimationCurveOutput);
+    test.expect(pathCurve.has_value(), "a curve creates a whole-value Path curve");
+    if (pathCurve) {
+        const auto later = gradeCurvePath({{0.25, 0.125}, {0.75, -0.125}});
+        (void)exercise<SetKeyframeAtTime>(test, fixture, *pathCurve,
+                                          core::RationalTime::fromInteger(2), later);
+        const auto* stored = composition(fixture.document.snapshot())
+                                 .animationCurves()
+                                 .findPath(*pathCurve);
+        test.expect(stored && stored->keyframes.size() == 2 &&
+                        stored->keyframes.front().value == gradeCurvePath({{0.5, -0.25}}) &&
+                        stored->keyframes.back().value == later,
+                    "a curve key holds the whole point list at its time");
+        refuse<SetKeyframeAtTime>(test, fixture, OperationIssueCode::InvalidValue, *pathCurve,
+                                  core::RationalTime::fromInteger(3),
+                                  gradeCurvePath({{0.5, 0.9}}));
+        (void)exercise<ConvertAnimationToConstant>(test, fixture, *hueShift, later);
+        const auto* record = composition(fixture.document.snapshot()).parameters().find(*hueShift);
+        test.expect(record &&
+                        std::get<ConstantValueSource>(record->source).value ==
+                            ParameterValue{later} &&
+                        !composition(fixture.document.snapshot()).animationCurves().find(
+                            *pathCurve),
+                    "a keyed curve returns to a constant");
+    }
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *saturation,
                                ConstantValueSource{-0.5});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *clamp,

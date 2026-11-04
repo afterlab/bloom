@@ -9,6 +9,7 @@ target_sources(
         evaluation_inputs.cpp
         extension_records.cpp
         data_block.cpp
+        grade_curves.cpp
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp
@@ -40,6 +41,7 @@ target_sources(
             include/bloom/document/keyframe_handles.hpp
             include/bloom/document/layer_source.hpp
             include/bloom/document/channel_nodes.hpp
+            include/bloom/document/grade_curves.hpp
             include/bloom/document/image_preview.hpp
             include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp

@@ -12,6 +12,7 @@
 // failure. An explicit --loader selects the Vulkan loader. Without the pinned tools the real arms
 // are skipped.
 
+#include "grade_curves_test_support.hpp"
 #include "gpu_composite_native_support.hpp"
 
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -965,7 +966,8 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
     }
 }
 
-// #340 Levels, Curves and Hue/Saturation of signed/HDR/partial-alpha solids against the CPU oracle
+// #340 Levels, Curves and Hue/Saturation (#493: and every Curves curve kind) of
+// signed/HDR/partial-alpha solids against the CPU oracle
 // (2e-6, exact alpha), one resident dispatch, warm zero dispatch and a changed value that
 // re-dispatches with parity. Alpha transfers here are linear and cubic, never a gamma, so the
 // alpha stays bit-exact.
@@ -992,19 +994,36 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         return bloom::runtime::ImageEffectKernel{kernel};
     };
     const auto curves = [](const std::uint64_t id, const bool clamp) {
-        CurvesKernel kernel;
-        std::uint64_t next = id;
-        for (auto& channel : kernel.points)
-            for (std::size_t point = 0; point < channel.size(); ++point) {
-                const double x = static_cast<double>(point) / 4.0;
-                channel[point] = {ParameterId::fromRaw(next++), bloom::document::Vec2d{x, x}};
-            }
-        kernel.points[0][1].source = bloom::document::Vec2d{0.25, 0.15};
-        kernel.points[0][3].source = bloom::document::Vec2d{0.75, 0.85};
-        kernel.points[1][2].source = bloom::document::Vec2d{0.4, 0.7};
-        kernel.points[3][4].source = bloom::document::Vec2d{1.0, 1.75};
-        kernel.points[4][0].source = bloom::document::Vec2d{0.0, 0.2};
-        kernel.clamp = clamp;
+        using bloom::document::GradeCurve;
+        using bloom::runtime::testing::legacyPoints;
+        auto kernel = bloom::runtime::testing::identityCurvesKernel(id, clamp);
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::Master,
+                                          legacyPoints({{1, {0.25, 0.15}}, {3, {0.75, 0.85}}}));
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::Red,
+                                          legacyPoints({{2, {0.4, 0.7}}}));
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::Blue,
+                                          legacyPoints({{4, {1.0, 1.75}}}));
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::Alpha,
+                                          legacyPoints({{0, {0.0, 0.2}}}));
+        return bloom::runtime::ImageEffectKernel{kernel};
+    };
+    // #493: many points on one curve and the four hue curves together (each kind on its own in
+    // the coverage fixtures), with the periodic wrap between the last and first hue points.
+    const auto hueCurves = [](const std::uint64_t id, const bool clamp) {
+        using bloom::document::GradeCurve;
+        auto kernel = bloom::runtime::testing::identityCurvesKernel(id, clamp);
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::Green,
+                                          {{0.0, 0.0}, {0.1, 0.2}, {0.2, 0.25}, {0.35, 0.3},
+                                           {0.5, 0.6}, {0.65, 0.62}, {0.8, 0.9}, {1.0, 1.0},
+                                           {3.0, 2.0}});
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::HueVsHue,
+                                          {{0.05, 0.1}, {0.4, -0.15}, {0.9, 0.2}});
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::HueVsSaturation,
+                                          {{0.2, 1.6}, {0.6, 0.4}});
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::HueVsLuma,
+                                          {{0.0, 1.4}, {0.5, 0.7}, {0.75, 1.1}});
+        bloom::runtime::testing::setCurve(kernel, GradeCurve::LumaVsSaturation,
+                                          {{0.0, 1.3}, {0.6, 0.5}, {2.0, 1.0}});
         return bloom::runtime::ImageEffectKernel{kernel};
     };
     const auto hue = [](const std::uint64_t id, const bool oversaturate) {
@@ -1017,7 +1036,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
             l->channels[0].outputWhite.source = 1.5;
         if (auto* c = std::get_if<CurvesKernel>(&kernel))
-            c->points[0][2].source = bloom::document::Vec2d{0.5, 0.65};
+            bloom::runtime::testing::setCurve(
+                *c, bloom::document::GradeCurve::Master,
+                bloom::runtime::testing::legacyPoints({{2, {0.5, 0.65}}}));
         if (auto* h = std::get_if<HueSaturationKernel>(&kernel))
             h->hue.source = 15.0;
     };
@@ -1026,7 +1047,8 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
                              Color4d{0.3, 0.6, 0.2, 0.25}}) {
         for (const auto& kernel :
              {levels(id + 50, false), levels(id + 50, true), curves(id + 50, false),
-              curves(id + 50, true), hue(id + 50, false), hue(id + 50, true)}) {
+              curves(id + 50, true), hueCurves(id + 50, false), hueCurves(id + 50, true),
+              hue(id + 50, false), hue(id + 50, true)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

@@ -296,6 +296,10 @@ class SetKeyframeAtTime final : public Operation {
     SetKeyframeAtTime(document::CompositionId compositionId, document::AnimationCurveId curveId,
                       core::RationalTime time, core::Color4d value)
         : compositionId_(compositionId), curveId_(curveId), time_(time), value_(value) {}
+    // A whole-value Path key (ADR 0028; #493 Curves curves).
+    SetKeyframeAtTime(document::CompositionId compositionId, document::AnimationCurveId curveId,
+                      core::RationalTime time, document::PathValue value)
+        : compositionId_(compositionId), curveId_(curveId), time_(time), value_(std::move(value)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -308,7 +312,8 @@ class SetKeyframeAtTime final : public Operation {
     document::CompositionId compositionId_;
     document::AnimationCurveId curveId_;
     core::RationalTime time_;
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value_;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue>
+        value_;
 };
 
 // SetKeyframeAtTime's PARAMETER-keyed sibling (task S5, item 0). It resolves the parameter's own
@@ -340,6 +345,11 @@ class SetKeyframeAtTimeForParameter final : public Operation {
                                   document::ParameterId parameterId, core::RationalTime time,
                                   core::Color4d value)
         : compositionId_(compositionId), parameterId_(parameterId), time_(time), value_(value) {}
+    SetKeyframeAtTimeForParameter(document::CompositionId compositionId,
+                                  document::ParameterId parameterId, core::RationalTime time,
+                                  document::PathValue value)
+        : compositionId_(compositionId), parameterId_(parameterId), time_(time),
+          value_(std::move(value)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -352,7 +362,8 @@ class SetKeyframeAtTimeForParameter final : public Operation {
     document::CompositionId compositionId_;
     document::ParameterId parameterId_;
     core::RationalTime time_;
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value_;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue>
+        value_;
 };
 
 // Component-scoped authoring primitive. The value is scalar because every vector/colour component
@@ -417,6 +428,9 @@ class ConvertAnimationToConstant final : public Operation {
     ConvertAnimationToConstant(document::CompositionId compositionId,
                                document::ParameterId parameterId, core::Color4d value)
         : compositionId_(compositionId), parameterId_(parameterId), value_(value) {}
+    ConvertAnimationToConstant(document::CompositionId compositionId,
+                               document::ParameterId parameterId, document::PathValue value)
+        : compositionId_(compositionId), parameterId_(parameterId), value_(std::move(value)) {}
 
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
@@ -428,7 +442,8 @@ class ConvertAnimationToConstant final : public Operation {
   private:
     document::CompositionId compositionId_;
     document::ParameterId parameterId_;
-    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d> value_;
+    std::variant<double, document::Vec2d, document::Vec3d, core::Color4d, document::PathValue>
+        value_;
 };
 
 // Batch edits stage complete curves before publication, allowing selected keys to exchange times

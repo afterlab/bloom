@@ -588,7 +588,10 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     } else if (isColorGradeKernel(effect.kernel)) {
         // #340: the CPU reference's prepared table as the kind's one fixed program's data; an
         // identity grade aliases its input exactly, as on the CPU.
-        const auto values = sampleColorGradeOperands(effect.kernel, plan, resolved);
+        const auto values = sampleColorGradeOperands(
+            effect.kernel, plan, resolved,
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex)));
         const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
         if (!grade)
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,

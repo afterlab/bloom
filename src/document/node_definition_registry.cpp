@@ -1,5 +1,6 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/grade_curves.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 
@@ -157,11 +158,12 @@ template <typename Definition>
     return definition;
 }
 
-// #340 Curves: per channel kCurvePointCount animatable/drivable Vector 2 points (input, output) on
-// the identity line by default, each its own socket, then the constant clamp switch.
+// #493 Curves schema 2: one Image in and out; nine animatable Path parameters used as point lists
+// (the five channel curves, then the four hue curves; grade_curves.hpp), with no sockets, then the
+// constant clamp switch.
 [[nodiscard]] NodeDefinition curvesDefinition() {
     using namespace bloom::document;
-    NodeDefinition definition{{std::string(kCurvesNodeType), 1},
+    NodeDefinition definition{{std::string(kCurvesNodeType), kCurvesNodeSchemaVersion},
                               NodeLoweringKind::ImageEffect,
                               {{"input", SocketValueKind::Image}},
                               {{"image", SocketValueKind::Image}},
@@ -169,15 +171,11 @@ template <typename Definition>
                               std::nullopt,
                               NodeCardinality::Many,
                               NodeCategory::Color};
-    for (std::size_t channel = 0; channel < kGradeChannelCount; ++channel)
-        for (std::size_t point = 0; point < kCurvePointCount; ++point) {
-            const double coordinate = defaultCurvePointCoordinate(point);
-            definition.parameters.push_back(
-                {curvePointRole(channel, point), curvePointSchemaKey(channel, point),
-                 ParameterValueKind::Vec2d, true, true, Vec2d{coordinate, coordinate}});
-            definition.inputs.push_back(
-                {curvePointRole(channel, point), SocketValueKind::Vector2, false});
-        }
+    for (const auto curve : kGradeCurves)
+        definition.parameters.push_back({std::string(gradeCurveRole(curve)),
+                                         std::string(gradeCurveSchemaKey(curve)),
+                                         ParameterValueKind::Path, true, true,
+                                         defaultGradeCurve(curve)});
     definition.parameters.push_back({"clamp", std::string(kCurvesClampSchemaKey),
                                      ParameterValueKind::Boolean, true, false, false});
     return definition;

@@ -4,6 +4,7 @@
 // non-identity CST emits, including the explicit materialization of a text leaf input. It needs no
 // device and no loader; the native builder -> executor -> CPU oracle parity is a separate harness.
 
+#include "grade_curves_test_support.hpp"
 #include "gpu_scene_preparation_test_support.hpp"
 
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -592,14 +593,10 @@ void testRealColorGrades(Expectations& expectations) {
         return kernel;
     };
     const auto curves = [](const double middle) {
-        bloom::runtime::CurvesKernel kernel;
-        std::uint64_t id = 8420;
-        for (auto& channel : kernel.points)
-            for (std::size_t point = 0; point < channel.size(); ++point) {
-                const double x = static_cast<double>(point) / 4.0;
-                channel[point] = {ParameterId::fromRaw(id++), bloom::document::Vec2d{x, x}};
-            }
-        kernel.points[1][2].source = bloom::document::Vec2d{0.5, middle};
+        auto kernel = bloom::runtime::testing::identityCurvesKernel(8420);
+        bloom::runtime::testing::setCurve(kernel, bloom::document::GradeCurve::Red,
+                                          bloom::runtime::testing::legacyPoints(
+                                              {{2, bloom::document::Vec2d{0.5, middle}}}));
         return kernel;
     };
     const auto hue = [](const double degrees) {

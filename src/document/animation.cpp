@@ -1,4 +1,5 @@
 #include <bloom/document/animation.hpp>
+#include <bloom/document/grade_curves.hpp>
 #include <bloom/document/keyframe_handles.hpp>
 
 #include <algorithm>
@@ -872,6 +873,15 @@ ValidationResult validateAnimationCurveReferences(const ParameterStore& paramete
                                "Keyframe value is outside the domain its schema declares");
                 }
             }
+        } else if (const auto* path = std::get_if<PathAnimationCurve>(curve);
+                   path != nullptr && isGradeCurveSchemaKey(parameter.schemaKey)) {
+            // #493: a Curves key is a point list within its curve's domain, like a constant.
+            for (const auto& keyframe : path->keyframes)
+                if (!isGradeCurveValueValid(parameter.schemaKey, keyframe.value))
+                    result.add(ValidationCode::InvalidValue,
+                               "animationCurves[" + std::to_string(path->id.value()) +
+                                   "].keyframes[" + std::to_string(keyframe.id.value()) + "].value",
+                               "Curve key is outside the domain its schema declares");
         } else if (const auto* color = std::get_if<Color4AnimationCurve>(curve)) {
             if (const auto* alpha = color->component(AnimationComponent::Alpha)) {
                 for (const auto& keyframe : alpha->keyframes) {
