@@ -74,7 +74,8 @@ listCryptomatteLayers(const SnapshotCompiler& compiler, const document::Snapshot
     const auto sources = detail::selectChannelSetSources(
         compiled.cryptomatte->channels, time, compiled.plan->format().frameRate(), assetBase,
         cancellation, colorIntent, nullptr, MediaSourceRevisionPolicy::Revalidate,
-        std::numeric_limits<std::size_t>::max(), false);
+        std::numeric_limits<std::size_t>::max(), false, nullptr,
+        detail::ChannelSourceClock{compiled.plan.get(), nullptr});
     if (!sources.available()) {
         listing.diagnostic = sources.cancelled ? "Cancelled" : sources.warning;
         return listing;
@@ -151,7 +152,8 @@ CryptomattePick pickCryptomatte(const SnapshotCompiler& compiler,
         *compiled.cryptomatte, *nodeTime, compiled.plan->format().frameRate(), assetBase,
         cancellation,
         colorIntent, nullptr, MediaSourceRevisionPolicy::Revalidate,
-        std::numeric_limits<std::size_t>::max(), false);
+        std::numeric_limits<std::size_t>::max(), false, nullptr,
+        detail::ChannelSourceClock{compiled.plan.get(), nullptr});
     if (!selection.available) {
         pick.diagnostic = selection.cancelled ? "Cancelled" : selection.warning;
         return pick;

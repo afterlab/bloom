@@ -23,6 +23,9 @@ inline constexpr std::string_view kImageLayerParameterSchemaKey = "bloom.image.l
 // #480: a Video source's decoded frame as a channel set (R, G, B, A in the working space).
 inline constexpr std::string_view kVideoSourceNodeType = "bloom.video-source";
 inline constexpr std::string_view kVideoSourceChannelsOutputPort = "channels";
+// #480: a Composition Source's channel set: the nested composite's R, G, B and A with the nested
+// Composition Output's channel layers, so render passes survive a precomp.
+inline constexpr std::string_view kCompositionSourceChannelsOutputPort = "channels";
 
 inline constexpr std::string_view kChannelShuffleNodeType = "bloom.channel-shuffle";
 inline constexpr std::string_view kChannelCopyNodeType = "bloom.channel-copy";

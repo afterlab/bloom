@@ -96,6 +96,13 @@ struct PreflightOutcome final {
 // The time of every clock of `plan` at `request.time` (index = clock; nullopt = absent content),
 // through the same sampling and resolveLayerClocks the evaluator runs. nullopt when the clocks
 // cannot be resolved. Used by worker reads that need an operation's own time (#364 eyedropper).
+// #480: `plan`'s curve samples and (pre-image) value outputs at `time`, exactly as one of its
+// clocks resolves them, for a channel source reached through a nested composition's mapping.
+// nullopt when a curve cannot be sampled; `cancelled` is set on cancellation.
+[[nodiscard]] std::optional<ResolvedEvaluation>
+sampleParametersAt(const CompiledCompositionPlan& plan, core::RationalTime time,
+                   const CancellationToken& cancellation, bool& cancelled);
+
 [[nodiscard]] std::optional<std::vector<std::optional<core::RationalTime>>>
 resolveClockTimes(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                   const EvaluationRequest& request, const CancellationToken& cancellation);

@@ -8,6 +8,7 @@
 // constant, or zero outside its source's data window -- and applies the process-image contract.
 
 #include "channel_resolution.hpp"
+#include "channel_source_time.hpp"
 #include "image_source.hpp"
 
 #include <array>
@@ -48,6 +49,10 @@ struct ChannelShuffleSelection final {
 // The expression's sources selected like Image sources (identity-verified revisions, input colour
 // resolution) and the expression resolved against their probed parts. Shared by Shuffle and
 // Cryptomatte.
+//
+// #480: `clock` names the plan holding the expression (and the reading operation's resolution when
+// the caller has one); a source reached through a precomp is read at its mapped nested time
+// (resolveChannelSourceTimes). Without a plan such a source is reported unavailable.
 struct ChannelSetSourceSelection final {
     std::vector<ImageSourceSelection> sources;
     std::vector<const media::ImagePartInfo*> parts;
@@ -63,7 +68,8 @@ selectChannelSetSources(const CompiledChannelExpression& expression, core::Ratio
                         const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                         OperationCache* revisionCache, MediaSourceRevisionPolicy revisionPolicy,
                         std::size_t hostByteBudget, bool allowRevisionInsertion,
-                        LinearPassRetention* linearPass = nullptr);
+                        LinearPassRetention* linearPass = nullptr,
+                        const ChannelSourceClock& clock = {});
 
 [[nodiscard]] ChannelShuffleSelection
 selectChannelShuffle(const CompiledChannelShuffle& shuffle, core::RationalTime time,
@@ -71,7 +77,7 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, core::RationalTime t
                      const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                      OperationCache* revisionCache, MediaSourceRevisionPolicy revisionPolicy,
                      std::size_t hostByteBudget, bool allowRevisionInsertion,
-                     LinearPassRetention* linearPass = nullptr);
+                     LinearPassRetention* linearPass = nullptr, const ChannelSourceClock& clock = {});
 
 // The full-resolution gathered image in the anchor source's frame. With `convert` the RGB triple is
 // converted by the colour source's input processor (the CPU reference); without it the image stays

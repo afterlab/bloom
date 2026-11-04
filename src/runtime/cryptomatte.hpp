@@ -13,6 +13,7 @@
 // exactly that order in Float32, so they are bit-identical.
 
 #include "channel_resolution.hpp"
+#include "channel_source_time.hpp"
 #include "image_source.hpp"
 #include <bloom/runtime/cryptomatte_matte_list.hpp>
 
@@ -106,7 +107,7 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, core::RationalTime tim
                   const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                   OperationCache* revisionCache, MediaSourceRevisionPolicy revisionPolicy,
                   std::size_t hostByteBudget, bool allowRevisionInsertion,
-                  LinearPassRetention* linearPass = nullptr);
+                  LinearPassRetention* linearPass = nullptr, const ChannelSourceClock& clock = {});
 
 // The host decode layout of every rank pair: one image per rank on the union window of the rank
 // channels in the anchor source's frame, R = the ID's exact bits, G = coverage, B = 0, A = 1, with

@@ -411,6 +411,20 @@ enum class ScalarDomain : std::uint8_t {
     return true;
 }
 
+// #480: a precomp's channel source names a nested plan of this plan with a valid loop mode (its
+// deeper references are checked when its time is resolved).
+[[nodiscard]] bool validChannelNesting(const CompiledCompositionPlan& plan,
+                                       const CompiledChannelSource& source) {
+    if (source.nesting.empty())
+        return true;
+    const auto& outer = source.nesting.front();
+    return !source.imageBacked && outer.nestedPlanIndex < plan.nestedPlans().size() &&
+           plan.nestedPlans()[outer.nestedPlanIndex] != nullptr &&
+           std::ranges::all_of(source.nesting, [](const CompiledCompositionSource& level) {
+               return level.timeMapping.loopMode >= 0 && level.timeMapping.loopMode <= 2;
+           });
+}
+
 [[nodiscard]] bool hasExpectedInputKinds(const CompiledCompositionPlan& plan,
                                          const std::size_t index, EvaluationDiagnostic& failure) {
     const auto& operation = plan.operations()[index];
@@ -564,9 +578,10 @@ enum class ScalarDomain : std::uint8_t {
                 // #487: an empty layer is the default (the first Cryptomatte layer present).
                 return !steps.empty() &&
                        plan.operationAssetsValid(OperationIndex::fromRaw(index)) &&
-                       std::ranges::all_of(cryptomatte.channels.sources, [](const auto& source) {
+                       std::ranges::all_of(cryptomatte.channels.sources, [&plan](const auto& source) {
                            return source.loopMode >= 0 && source.loopMode <= 2 &&
-                                  source.colorSpace >= 0 && source.colorSpace <= 3;
+                                  source.colorSpace >= 0 && source.colorSpace <= 3 &&
+                                  validChannelNesting(plan, source);
                        });
             },
             [&plan, index](const CompiledChannelShuffle& shuffle) {
@@ -588,9 +603,10 @@ enum class ScalarDomain : std::uint8_t {
                        (shuffle.mode == 0 || shuffle.mode == 1 || shuffle.mode == 2) &&
                        std::isfinite(shuffle.nonFinite) &&
                        plan.operationAssetsValid(OperationIndex::fromRaw(index)) &&
-                       std::ranges::all_of(shuffle.channels.sources, [](const auto& source) {
+                       std::ranges::all_of(shuffle.channels.sources, [&plan](const auto& source) {
                            return source.loopMode >= 0 && source.loopMode <= 2 &&
-                                  source.colorSpace >= 0 && source.colorSpace <= 3;
+                                  source.colorSpace >= 0 && source.colorSpace <= 3 &&
+                                  validChannelNesting(plan, source);
                        });
             },
             [&plan, index](const CompiledVideoSource& image) {
@@ -2430,7 +2446,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass, request.linearPass.get());
+                    remainingPixelBudget(), !planBypass, request.linearPass.get(),
+                    detail::ChannelSourceClock{plan.get(), &resolved});
                 if (selectedShuffle->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedShuffle->available)
@@ -2455,7 +2472,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    remainingPixelBudget(), !planBypass, request.linearPass.get());
+                    remainingPixelBudget(), !planBypass, request.linearPass.get(),
+                    detail::ChannelSourceClock{plan.get(), &resolved});
                 if (selectedCryptomatte->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedCryptomatte->available)

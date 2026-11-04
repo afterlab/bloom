@@ -8,6 +8,7 @@
 #include <bloom/document/asset.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/render/channel_set_image.hpp>
+#include <bloom/runtime/compiled_composition_source.hpp>
 #include <bloom/runtime/operation_index.hpp>
 
 #include <array>
@@ -30,6 +31,13 @@ class CompiledCompositionPlan;
 // unconnected or empty) reads zero. Asset fields are unused. A Composition Output's channel layer
 // carries its image as `imagePlan` instead: the plan re-rooted at that image, which the export
 // evaluates through the frame's route (the operation itself is not part of the frame's plan).
+//
+// #480: a file source reached through Composition Source `channels` outputs (a precomp's channel
+// layers) lists those references in `nesting`, outermost first. Entry 0 belongs to the plan that
+// holds this expression; entry k+1 to the nested plan entry k names. The source is read at the
+// innermost nested time (each mapping applied in turn: offset, scale, loop and its animated
+// operands sampled on that plan's clock) with that nested plan's frame rate. Empty: the source is
+// read at the time of the operation that reads it.
 struct CompiledChannelSource final {
     document::NodeId sourceNodeId;
     std::optional<document::AssetRecord> asset;
@@ -42,6 +50,7 @@ struct CompiledChannelSource final {
     std::optional<OperationIndex> image{};
     std::vector<render::ChannelDescriptor> imageChannels{};
     std::shared_ptr<const CompiledCompositionPlan> imagePlan{};
+    std::vector<CompiledCompositionSource> nesting{};
     friend bool operator==(const CompiledChannelSource&, const CompiledChannelSource&) = default;
 };
 

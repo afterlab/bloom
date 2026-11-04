@@ -641,6 +641,85 @@ displayProofRunner(const bool customView) {
         "src/runtime channel shuffle production scene preparation", [runChannels] {
             return runChannels(bloom::gpu_coverage_media::ChannelFixture::Pass, 168000);
         });
+    // #480 Composition Source `channels`: a precomp's file channel layer read through the
+    // production channel gather at the mapped nested time (offset, scale and Loop), and the
+    // precomp's composite and an Image to Channel Set layer read as Channel Select / Channel
+    // Combine over nested Composition Source images -- the operations the compiler emits.
+    add("feature.channels.composition_source", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime precomp channel production scene preparation + native document parity", [] {
+            using bloom::runtime::CompiledCompositionSource;
+            using bloom::runtime::CompiledCompositionTimeMapping;
+            FixtureRun combined;
+            combined.prepared = true;
+            const auto keep = [&](FixtureRun frame) {
+                combined.prepared = combined.prepared && frame.prepared;
+                combined.evidence += frame.evidence + "; ";
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            };
+            const auto child =
+                nestedChildPlan(169000, 211, bloom::core::Color4d{0.2, 0.6, 0.9, 0.75});
+            const auto mapping = [](const std::uint64_t id, const double offset,
+                                    const double scale, const std::int64_t loop) {
+                return CompiledCompositionTimeMapping{{ParameterId::fromRaw(id), offset},
+                                                      {ParameterId::fromRaw(id + 1), scale},
+                                                      loop};
+            };
+            // File channels: a Pass of the precomp's depth layer at a mapped, looped time.
+            {
+                const bloom::runtime::CpuCompositionEvaluator evaluator;
+                auto definition =
+                    bloom::gpu_coverage_media::channelShufflePlan(
+                        bloom::gpu_coverage_media::layeredImage().asset,
+                        LayerValues{.position = {4.3, 3.1}, .opacity = 1.0}, 169100,
+                        bloom::gpu_coverage_media::ChannelFixture::Pass)
+                        ->copyDefinition();
+                auto& shuffle =
+                    std::get<bloom::runtime::CompiledChannelShuffle>(definition.operations[0]);
+                shuffle.channels.sources[0].nesting.push_back(CompiledCompositionSource{
+                    NodeId::fromRaw(169190), 0, mapping(169191, -1.5, 2.0, 1)});
+                definition.nestedPlans.push_back(child);
+                definition.duration = bloom::core::RationalTime::fromInteger(100);
+                keep(runMediaBuilder(
+                    std::make_shared<const bloom::runtime::CompiledCompositionPlan>(
+                        std::move(definition)),
+                    evaluator, bloom::gpu_coverage_media::gateDirectory()));
+            }
+            // Image channels: the composite's R, G, B with alpha 1, and the alpha of a second
+            // nested image (as an Image to Channel Set layer's plan is read) joined in, each on
+            // its own mapped time (offset, PingPong).
+            {
+                auto definition = nestedParentPlan(child, 169200, 212)->copyDefinition();
+                auto& operations = definition.operations;
+                operations.insert(
+                    operations.begin() + 1,
+                    {CompiledCompositionSource{NodeId::fromRaw(169290), 0,
+                                               mapping(169291, 0.5, 1.0, 2)},
+                     CompiledImageEffect{NodeId::fromRaw(169292), OperationIndex::fromRaw(0),
+                                         bloom::runtime::ChannelSelectKernel{
+                                             {bloom::runtime::ImageChannelSource::Red,
+                                              bloom::runtime::ImageChannelSource::Green,
+                                              bloom::runtime::ImageChannelSource::Blue,
+                                              bloom::runtime::ImageChannelSource::One},
+                                             false}},
+                     CompiledImageEffect{NodeId::fromRaw(169292), OperationIndex::fromRaw(2),
+                                         bloom::runtime::ChannelCombineKernel{
+                                             3, bloom::runtime::ImageChannelSource::Alpha, false},
+                                         false, false, OperationIndex::fromRaw(1)}});
+                // The parent's Layer Output now reads the joined image; its Merge and output
+                // move down by the three inserted operations.
+                std::get<bloom::runtime::CompiledLayerOutput>(operations[4]).input =
+                    OperationIndex::fromRaw(3);
+                std::get<bloom::runtime::CompiledMerge>(operations[5]).entries[0].input =
+                    OperationIndex::fromRaw(4);
+                std::get<bloom::runtime::CompiledCompositionOutput>(operations[6]).input =
+                    OperationIndex::fromRaw(5);
+                definition.output = OperationIndex::fromRaw(6);
+                keep(runBuilder(std::make_shared<const bloom::runtime::CompiledCompositionPlan>(
+                    std::move(definition))));
+            }
+            return combined;
+        });
     // #364: Cryptomatte through the production rank gather, stacked upload, CryptomatteCoverageV1
     // and proxy resample: names resolved through the manifest, names resolved by hash without one,
     // a raw ID, and the Image output (beauty x matte through the MultiplyAlpha combine).

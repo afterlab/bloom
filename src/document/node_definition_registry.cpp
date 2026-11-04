@@ -502,9 +502,12 @@ template <typename Definition>
                definition == imageToChannelSetDefinition();
     case NodeLoweringKind::CompositionSource:
         return hasCanonicalKey(definition, kCompositionSourceNodeType, 1) &&
-               definition.inputs.empty() && definition.outputs.size() == 2 &&
+               definition.inputs.empty() && definition.outputs.size() == 3 &&
                hasImageOutput(definition, "image") &&
                hasOutput(definition, "audio", SocketValueKind::Audio) &&
+               // #480: the nested composite and channel layers as a channel set.
+               hasOutput(definition, kCompositionSourceChannelsOutputPort,
+                         SocketValueKind::ChannelSet) &&
                definition.parameters.size() == 4 &&
                hasParameter(definition, 0, "composition", "bloom.composition-source.composition",
                             ParameterValueKind::Integer) &&
@@ -1147,7 +1150,9 @@ template <typename Definition>
     return {{std::string(kCompositionSourceNodeType), kCompositionSourceNodeSchemaVersion},
             NodeLoweringKind::CompositionSource,
             {},
-            {{"image", SocketValueKind::Image}, {"audio", SocketValueKind::Audio}},
+            {{"image", SocketValueKind::Image},
+             {"audio", SocketValueKind::Audio},
+             {std::string(kCompositionSourceChannelsOutputPort), SocketValueKind::ChannelSet}},
             {{"composition", "bloom.composition-source.composition", ParameterValueKind::Integer,
               true, false, std::int64_t{0}},
              {"timeOffset", "bloom.composition-source.time-offset", ParameterValueKind::Float64,

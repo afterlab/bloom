@@ -305,6 +305,7 @@ lower(const std::vector<document::NodeId>& order) {
     std::vector<runtime::CompiledOperation> operations;
     operations.reserve(order.size());
     std::unordered_map<document::NodeId, runtime::OperationIndex> indices;
+    loweringOperations_ = &operations;
 
     for (const auto nodeId : order) {
         if (cancelled()) {
@@ -1166,10 +1167,12 @@ lowerCompositionSource(const document::NodeRecord& node) {
                    "Choose an existing composition for this source.");
         return std::nullopt;
     }
-    auto found = std::ranges::find_if(
-        nestedPlans_, [&](const auto& plan) { return plan->compositionId() == nestedId; });
-    std::size_t index = static_cast<std::size_t>(found - nestedPlans_.begin());
-    if (found == nestedPlans_.end()) {
+    // A channel layer plan (#480) shares its composition id but is not the composition's plan.
+    std::size_t index = 0;
+    while (index < nestedPlans_.size() && (channelLayerPlans_.contains(index) ||
+                                           nestedPlans_[index]->compositionId() != nestedId))
+        ++index;
+    if (index == nestedPlans_.size()) {
         runtime::SnapshotCompileRequest nestedRequest{request_.snapshot, nestedId};
         auto nested =
             planCache_ ? planCache_->compile(runtime::SnapshotCompiler(registry_), nestedRequest,
@@ -1663,6 +1666,32 @@ lowerChannelStep(const document::OutputPortRef& output,
         imageSource(isMuted(node->id) ? std::nullopt
                                       : operationOf({node->id, std::string("image")}),
                     runtime::detail::imageChannelSetDescriptors("", rgba, true));
+    } else if (node->typeId == document::kCompositionSourceNodeType &&
+               output.port == document::kCompositionSourceChannelsOutputPort) {
+        // #480: the nested composite's R, G, B and A (Color, the Composition Source image), then
+        // the nested Composition Output's channel layers with the composite copied over their
+        // root R, G, B and A -- the channels a layered OpenEXR render of the precomp holds. Every
+        // channel is read at the precomp's mapped time. A muted source is an empty composite.
+        const auto composition = lowerCompositionSource(*node);
+        if (!composition)
+            return std::nullopt;
+        const bool muted = isMuted(node->id);
+        const std::vector<std::string> rgba{"R", "G", "B", "A"};
+        imageSource(muted ? std::nullopt : channelComposite(*node, *composition, indices),
+                    runtime::detail::imageChannelSetDescriptors("", rgba, true));
+        const auto* nested = muted ? nullptr : nestedChannelOutput(*composition);
+        if (nested != nullptr) {
+            expression.steps.push_back(step);
+            const auto composite = static_cast<std::uint32_t>(expression.steps.size() - 1);
+            const auto layers =
+                inlineNestedChannels(*node, *composition, *nested, expression, indices);
+            step = {};
+            step.nodeId = node->id;
+            step.kind = runtime::CompiledChannelStepKind::Copy;
+            step.input = layers;
+            step.from = composite;
+            step.select = "R,G,B,A";
+        }
     } else if (node->typeId == document::kImageSourceNodeType) {
         const auto* asset = parameterConstant<std::string>(findParameterBinding(*node, "asset"));
         const auto* start =
@@ -1745,6 +1774,116 @@ lowerChannelStep(const document::OutputPortRef& output,
     const auto index = static_cast<std::uint32_t>(expression.steps.size() - 1);
     memo.emplace(memoKey, index);
     return index;
+}
+
+// #480: the Composition Source image a channel expression reads as its composite R, G, B and A:
+// the source's own image operation, or one added for a source whose `image` output feeds nothing.
+// Only an expression that can read images (`indices`) has one; elsewhere it reads zero.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+channelComposite(const document::NodeRecord& node,
+                 const runtime::CompiledCompositionSource& composition,
+                 const std::unordered_map<document::NodeId, runtime::OperationIndex>* indices) {
+    if (indices == nullptr || loweringOperations_ == nullptr)
+        return std::nullopt;
+    if (const auto found = indices->find(node.id); found != indices->end())
+        return found->second;
+    if (const auto found = channelComposites_.find(node.id); found != channelComposites_.end())
+        return found->second;
+    const auto index = runtime::OperationIndex::fromRaw(loweringOperations_->size());
+    loweringOperations_->emplace_back(composition);
+    channelComposites_.emplace(node.id, index);
+    return index;
+}
+
+// #480: the nested Composition Output of a Composition Source when it writes channel layers.
+[[nodiscard]] const runtime::CompiledCompositionOutput*
+nestedChannelOutput(const runtime::CompiledCompositionSource& composition) const {
+    if (composition.nestedPlanIndex >= nestedPlans_.size())
+        return nullptr;
+    const auto& nested = *nestedPlans_[composition.nestedPlanIndex];
+    if (nested.output().value() >= nested.operations().size())
+        return nullptr;
+    const auto* output =
+        std::get_if<runtime::CompiledCompositionOutput>(&nested.operations()[nested.output().value()]);
+    return output != nullptr && output->channelLayers && !output->channelLayers->steps.empty()
+               ? output
+               : nullptr;
+}
+
+// #480: a nested channel layer's image (its CompiledChannelSource::imagePlan) as a Composition
+// Source of that plan with the precomp's time mapping, so it evaluates at the mapped nested time
+// on every route, exactly like the precomp's own image.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+channelLayerImage(const document::NodeRecord& node,
+                  const runtime::CompiledCompositionSource& composition,
+                  const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan) {
+    if (loweringOperations_ == nullptr || !plan)
+        return std::nullopt;
+    const auto key = std::pair{node.id, plan.get()};
+    if (const auto found = channelLayerImages_.find(key); found != channelLayerImages_.end())
+        return found->second;
+    std::size_t planIndex = 0;
+    while (planIndex < nestedPlans_.size() && nestedPlans_[planIndex] != plan)
+        ++planIndex;
+    if (planIndex == nestedPlans_.size()) {
+        nestedPlans_.push_back(plan);
+        channelLayerPlans_.insert(planIndex);
+    }
+    auto image = composition;
+    image.nestedPlanIndex = planIndex;
+    const auto index = runtime::OperationIndex::fromRaw(loweringOperations_->size());
+    loweringOperations_->emplace_back(image);
+    channelLayerImages_.emplace(key, index);
+    return index;
+}
+
+// #480: appends the nested Composition Output's channel expression to `expression` and returns the
+// index of its root step. File sources gain the precomp's mapping as their outermost nesting
+// entry; an image-backed layer reads its plan through channelLayerImage (zero where the
+// expression cannot read images). The nested output's Layers list, when set, keeps only those
+// layers, as its layered OpenEXR would.
+[[nodiscard]] std::uint32_t
+inlineNestedChannels(const document::NodeRecord& node,
+                     const runtime::CompiledCompositionSource& composition,
+                     const runtime::CompiledCompositionOutput& nested,
+                     runtime::CompiledChannelExpression& expression,
+                     const std::unordered_map<document::NodeId, runtime::OperationIndex>* indices) {
+    const auto& layers = *nested.channelLayers;
+    const auto sourceBase = static_cast<std::uint32_t>(expression.sources.size());
+    const auto stepBase = static_cast<std::uint32_t>(expression.steps.size());
+    for (const auto& source : layers.sources) {
+        auto copy = source;
+        if (source.imageBacked) {
+            copy.image = indices != nullptr ? channelLayerImage(node, composition, source.imagePlan)
+                                            : std::nullopt;
+            copy.imagePlan.reset();
+        } else {
+            copy.nesting.insert(copy.nesting.begin(), composition);
+        }
+        expression.sources.push_back(std::move(copy));
+    }
+    for (auto step : layers.steps) {
+        if (step.kind == runtime::CompiledChannelStepKind::Source) {
+            step.source += sourceBase;
+        } else {
+            step.input += stepBase;
+            if (step.kind == runtime::CompiledChannelStepKind::Copy)
+                step.from += stepBase;
+        }
+        expression.steps.push_back(std::move(step));
+    }
+    auto root = static_cast<std::uint32_t>(expression.steps.size() - 1);
+    if (nested.layers.find_first_not_of(" \t") != std::string::npos) {
+        runtime::CompiledChannelStep keep;
+        keep.kind = runtime::CompiledChannelStepKind::Remove;
+        keep.nodeId = node.id;
+        keep.input = root;
+        keep.select = nested.layers;
+        keep.keep = true;
+        expression.steps.push_back(std::move(keep));
+        root = static_cast<std::uint32_t>(expression.steps.size() - 1);
+    }
+    return root;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

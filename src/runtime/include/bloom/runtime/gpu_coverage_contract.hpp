@@ -297,6 +297,14 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.resample.nearest", "Nearest filtering for Resize, Fit and Transform 2D",
         GpuCoverageDisposition::Required,
         "src/runtime Resize/Fit and Transform 2D production affine preparation"});
+    // #480 Composition Source `channels`: a precomp's file channel layers through the production
+    // channel gather at the mapped nested time, and its composite and Image to Channel Set layers
+    // as Channel Select / Channel Combine over nested Composition Source images, never a CPU frame.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.channels.composition_source",
+        "precomp channel layers (file and image) at the mapped nested time",
+        GpuCoverageDisposition::Required,
+        "src/runtime precomp channel production scene preparation + native document parity"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});

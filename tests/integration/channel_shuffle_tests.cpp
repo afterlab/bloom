@@ -587,7 +587,7 @@ void imageToChannelSet() {
     fixture.set(shuffle, "green", std::string("depth.Z"));
     fixture.set(shuffle, "blue", std::string("0"));
     fixture.set(shuffle, "alpha", std::string("1"));
-    expect(fixture.frame().warned("Image to Channel Set channel pass.R"),
+    expect(fixture.frame().warned("image channel pass.R"),
            "a Shuffle mixing packed and file channels is refused");
 
     // A packed layer reaches a layered OpenEXR beside the file's own layers.

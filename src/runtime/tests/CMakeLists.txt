@@ -1702,6 +1702,32 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# #480: a Composition Source's channels on real documents: the precomp's file layers through the
+# channel gather at the mapped nested time and its composite and packed layers as Channel Select
+# over nested images. The CPU assertions always run; the production GPU scene must match the CPU
+# reference (Channel Select runs as a prepared program, so the GPU half needs the pinned shader
+# tools). Skips (exit 77) only the GPU half.
+add_executable(bloom_runtime_composition_source_channels_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/composition_source_channels_tests.cpp)
+target_include_directories(bloom_runtime_composition_source_channels_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_composition_source_channels_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands
+            OpenEXR::OpenEXR)
+if(bloom_runtime_ocio_glslang_validator AND bloom_runtime_ocio_spirv_val)
+    target_compile_definitions(bloom_runtime_composition_source_channels_test PRIVATE
+        "BLOOM_GPUSHADER_TOOLS_DIR=\"${bloom_runtime_ocio_tools_dir}\"")
+endif()
+bloom_enable_warnings(bloom_runtime_composition_source_channels_test)
+bloom_enable_strict_floating_point(bloom_runtime_composition_source_channels_test)
+bloom_add_test(
+    NAME bloom.runtime.composition_source_channels
+    COMMAND bloom_runtime_composition_source_channels_test
+    LABELS runtime native gpu render
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.composition_source_channels PROPERTIES SKIP_RETURN_CODE 77)
+
 # Real native acceptance for arbitrary resolved scene-linear working spaces (ACEScg): a mixed
 # solid + text + media + CST + non-Normal blend composition is prepared by the production builder
 # and executed, then compared against the unchanged CPU evaluator at the strict 2e-6 gate with exact

@@ -5,6 +5,7 @@
 #include <bloom/runtime/channel_inspection_listing.hpp>
 
 #include <algorithm>
+#include <array>
 
 namespace bloom::runtime::detail {
 namespace {
@@ -59,11 +60,24 @@ imageChannelSetDescriptors(const std::string_view layer, const std::span<const s
     return descriptors;
 }
 
-StaticChannel staticChannelSlot(const StaticChannelSet& set, const std::string_view slot,
+StaticChannel staticChannelSlot(const StaticChannelSet& set, std::string_view slot,
                                 const std::size_t slotIndex) {
     if (slot == "0" || slot == "1")
         return constantChannel(slot);
     std::string name(slot);
+    // #480: a root R, G and B the compiler can name (a Composition Source's composite) is the
+    // default colour layer whatever file channels the set also holds: the root layer wins.
+    const auto certain = [&](const std::string_view channel) {
+        return std::ranges::any_of(set.known, [&](const StaticChannel& item) {
+            return item.name == channel && item.kind == StaticChannelKind::Image;
+        });
+    };
+    if (slot.empty() && set.files && slotIndex < 4 && certain("R") && certain("G") &&
+        certain("B")) {
+        constexpr std::array<std::string_view, 4> kRoot{"R", "G", "B", "A"};
+        slot = kRoot[slotIndex];
+        name = std::string(slot);
+    }
     if (slot.empty()) {
         if (set.files) {
             // Only a probe knows the default colour layer. A file-only set gathers it; a set that

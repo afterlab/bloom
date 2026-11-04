@@ -75,6 +75,7 @@ target_sources(
         BASE_DIRS include
         FILES
             include/bloom/runtime/compiled_plan.hpp
+            include/bloom/runtime/compiled_composition_source.hpp
             include/bloom/runtime/channel_expression.hpp
             include/bloom/runtime/channel_inspection.hpp
             include/bloom/runtime/channel_inspection_listing.hpp
@@ -112,6 +113,7 @@ target_sources(
         image_sequence_read_ahead.cpp
         channel_resolution.cpp
         channel_shuffle.cpp
+        channel_source_time.cpp
         channel_static.cpp
         channel_inspection_listing.cpp
         cryptomatte_inspection.cpp

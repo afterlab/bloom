@@ -1,6 +1,7 @@
 #include <bloom/runtime/channel_inspection_listing.hpp>
 
 #include "channel_resolution.hpp"
+#include "channel_source_time.hpp"
 #include "image_source.hpp"
 
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -79,7 +80,20 @@ listChannelInspectionChoices(const SnapshotCompiler& compiler, const document::S
     }
     std::vector<detail::ImageSourceSelection> selections;
     std::vector<const media::ImagePartInfo*> parts;
-    for (const auto& source : shuffle->channels.sources) {
+    // #480: a precomp's channel layer is listed as probed at its mapped nested time.
+    const auto times = detail::resolveChannelSourceTimes(
+        shuffle->channels, time, compiled.plan->format().frameRate(),
+        detail::ChannelSourceClock{compiled.plan.get(), nullptr}, cancellation);
+    if (times.cancelled) {
+        listing.diagnostic = "Cancelled";
+        return listing;
+    }
+    if (!times.error.empty()) {
+        listing.diagnostic = times.error;
+        return listing;
+    }
+    for (std::size_t index = 0; index < shuffle->channels.sources.size(); ++index) {
+        const auto& source = shuffle->channels.sources[index];
         if (source.imageBacked) {
             // #480: an Image to Channel Set source names its channels statically.
             parts.push_back(nullptr);
@@ -89,8 +103,9 @@ listChannelInspectionChoices(const SnapshotCompiler& compiler, const document::S
         const CompiledImageSource image{source.sourceNodeId, source.asset,      source.startFrame,
                                         source.loopMode,     source.colorSpace, source.inputColorSpaceId,
                                         false,               source.part,       {}};
-        auto selected = detail::selectImageSource(image, time, compiled.plan->format().frameRate(),
-                                                  assetBase, cancellation, colorIntent);
+        auto selected =
+            detail::selectImageSource(image, times.times[index].time, times.times[index].rate,
+                                      assetBase, cancellation, colorIntent);
         if (selected.cancelled) {
             listing.diagnostic = "Cancelled";
             return listing;

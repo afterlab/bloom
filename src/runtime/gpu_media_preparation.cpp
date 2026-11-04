@@ -846,7 +846,8 @@ MediaUploadOutcome prepareChannelShuffleColorLeaf(
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
+        ChannelSourceClock{&plan, &resolved});
     for (const auto& source : selection.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {
@@ -992,7 +993,8 @@ prepareCryptomatteLeaf(const CompiledCryptomatte& cryptomatte, const EvaluationR
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get());
+        byteBudget(request.pixelStorageByteLimit), !planBypass, request.linearPass.get(),
+        ChannelSourceClock{&plan, &resolved});
     for (const auto& source : selection.channels.sources)
         recordSourceRevisionWork(source, statistics);
     if (selection.cancelled) {

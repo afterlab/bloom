@@ -38,9 +38,19 @@ selectChannelSetSources(const CompiledChannelExpression& expression, const core:
                         OperationCache* revisionCache,
                         const MediaSourceRevisionPolicy revisionPolicy,
                         const std::size_t hostByteBudget, const bool allowRevisionInsertion,
-                        LinearPassRetention* const linearPass) {
+                        LinearPassRetention* const linearPass, const ChannelSourceClock& clock) {
     ChannelSetSourceSelection result;
-    for (const auto& source : expression.sources) {
+    const auto times = resolveChannelSourceTimes(expression, time, rate, clock, cancel);
+    if (times.cancelled) {
+        result.cancelled = true;
+        return result;
+    }
+    if (!times.error.empty()) {
+        result.warning = times.error;
+        return result;
+    }
+    for (std::size_t index = 0; index < expression.sources.size(); ++index) {
+        const auto& source = expression.sources[index];
         if (source.imageBacked) {
             // #480: an Image to Channel Set source names its channels statically.
             result.parts.push_back(nullptr);
@@ -56,9 +66,9 @@ selectChannelSetSources(const CompiledChannelExpression& expression, const core:
                                         false,
                                         source.part,
                                         {}};
-        auto selected =
-            selectImageSource(image, time, rate, base, cancel, colorIntent, revisionCache,
-                              revisionPolicy, hostByteBudget, allowRevisionInsertion, linearPass);
+        auto selected = selectImageSource(image, times.times[index].time, times.times[index].rate,
+                                          base, cancel, colorIntent, revisionCache, revisionPolicy,
+                                          hostByteBudget, allowRevisionInsertion, linearPass);
         if (selected.cancelled) {
             result.cancelled = true;
             return result;
@@ -87,12 +97,23 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
                      const CancellationToken& cancel, const EvaluationColorIntent& colorIntent,
                      OperationCache* revisionCache, const MediaSourceRevisionPolicy revisionPolicy,
                      const std::size_t hostByteBudget, const bool allowRevisionInsertion,
-                     LinearPassRetention* const linearPass) {
+                     LinearPassRetention* const linearPass, const ChannelSourceClock& clock) {
     ChannelShuffleSelection result;
     result.associated = shuffle.associated;
     result.nonFinite = shuffle.nonFinite;
     std::vector<const media::ImagePartInfo*> parts;
-    for (const auto& source : shuffle.channels.sources) {
+    const auto times = resolveChannelSourceTimes(shuffle.channels, time, rate, clock, cancel);
+    if (times.cancelled) {
+        result.cancelled = true;
+        return result;
+    }
+    if (!times.error.empty()) {
+        result.warning = times.error;
+        result.cacheKey = "channel-shuffle-time-unavailable";
+        return result;
+    }
+    for (std::size_t index = 0; index < shuffle.channels.sources.size(); ++index) {
+        const auto& source = shuffle.channels.sources[index];
         if (source.imageBacked) {
             // #480: an Image to Channel Set source names its channels statically; a slot that
             // reads one is refused below (the compiler lowers those Shuffles to image effects).
@@ -103,9 +124,9 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
         const CompiledImageSource image{source.sourceNodeId, source.asset,     source.startFrame,
                                         source.loopMode,     source.colorSpace, source.inputColorSpaceId,
                                         false,               source.part,       {}};
-        auto selected =
-            selectImageSource(image, time, rate, base, cancel, colorIntent, revisionCache,
-                              revisionPolicy, hostByteBudget, allowRevisionInsertion, linearPass);
+        auto selected = selectImageSource(image, times.times[index].time, times.times[index].rate,
+                                          base, cancel, colorIntent, revisionCache, revisionPolicy,
+                                          hostByteBudget, allowRevisionInsertion, linearPass);
         if (selected.cancelled) {
             result.cancelled = true;
             return result;
@@ -165,7 +186,8 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
         }
         if (resolved->source && *resolved->source < shuffle.channels.sources.size() &&
             shuffle.channels.sources[*resolved->source].imageBacked) {
-            result.warning = "Shuffle reads the Image to Channel Set channel " + resolved->name +
+            // An Image to Channel Set, Video or precomp composite channel (#480).
+            result.warning = "Shuffle reads the image channel " + resolved->name +
                              " with file channels; shuffle the image's channels on their own and "
                              "join them with Combine Channels";
             result.cacheKey = key.bytes();

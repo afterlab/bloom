@@ -171,6 +171,33 @@ PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledComposit
     return PreflightOutcome::success(std::move(base));
 }
 
+std::optional<ResolvedEvaluation> sampleParametersAt(const CompiledCompositionPlan& plan,
+                                                     const core::RationalTime time,
+                                                     const CancellationToken& cancellation,
+                                                     bool& cancelled) {
+    const auto format = plan.format();
+    const auto window = render::ImageWindow::create(0, 0, format.width(), format.height());
+    if (!window)
+        return std::nullopt;
+    const auto descriptor = render::Rgba32fImageDescriptor::create(*window.value(), *window.value(),
+                                                                   format.pixelAspect());
+    if (!descriptor)
+        return std::nullopt;
+    const ResolvedEvaluation empty{.imageDescriptor = *descriptor.value(),
+                                   .horizontalScale = 1.0,
+                                   .verticalScale = 1.0,
+                                   .imageBytes = 0,
+                                   .peakPixelStorageBytes = 0,
+                                   .remainingConsumers = {},
+                                   .scalarCurveValues = {},
+                                   .vec2CurveValues = {},
+                                   .color4CurveValues = {},
+                                   .valueOutputs = {},
+                                   .clockTimes = {},
+                                   .clockResolutions = {}};
+    return sampleAt(plan, empty, time, cancellation, nullptr, nullptr, cancelled);
+}
+
 std::optional<std::vector<std::optional<core::RationalTime>>>
 resolveClockTimes(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                   const EvaluationRequest& request, const CancellationToken& cancellation) {

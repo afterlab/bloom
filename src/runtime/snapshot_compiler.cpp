@@ -1065,6 +1065,17 @@ class CompilePass final {
     runtime::CompiledPlanCache* planCache_ = nullptr;
     std::vector<std::shared_ptr<const runtime::CompiledCompositionPlan>> nestedPlans_;
     std::unordered_map<document::NodeId, runtime::CompiledCompositionSource> compositionSources_;
+    // #480 Composition Source `channels`: the operations list lower() is filling (a channel
+    // expression may add the nested composite or a nested channel layer image), the composite
+    // image added for a source whose `image` output feeds nothing, the image added per nested
+    // channel layer plan, and the nestedPlans_ entries that are channel layer plans (never a
+    // Composition Source's own nested plan).
+    std::vector<runtime::CompiledOperation>* loweringOperations_ = nullptr;
+    std::unordered_map<document::NodeId, runtime::OperationIndex> channelComposites_;
+    std::map<std::pair<document::NodeId, const runtime::CompiledCompositionPlan*>,
+             runtime::OperationIndex>
+        channelLayerImages_;
+    std::unordered_set<std::size_t> channelLayerPlans_;
     bool hasFailure_ = false;
     bool hasUnsupported_ = false;
 };

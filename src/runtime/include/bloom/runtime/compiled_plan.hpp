@@ -65,13 +65,8 @@ inline constexpr std::uint32_t kAnimationSamplingSemanticsVersion = 3;
 // not a plan-semantics change -- no existing plan value means anything different than it did, and
 // the field at this position is still "where this parameter's value comes from" -- which is the
 // same reasoning the semantics-version comment at the top of this file already states.
-struct CompiledScalarParameter final {
-    document::ParameterId id;
-    std::variant<double, ScalarCurveIndex, ValueOutputIndex> source;
-
-    friend bool operator==(const CompiledScalarParameter&,
-                           const CompiledScalarParameter&) = default;
-};
+// CompiledScalarParameter lives in compiled_composition_source.hpp (#480: a channel source carries
+// the Composition Source mappings it is reached through).
 
 struct CompiledVec2Parameter final {
     document::ParameterId id;
@@ -199,21 +194,7 @@ struct CompiledTextLayout {
 
 class CompiledCompositionPlan;
 
-struct CompiledCompositionTimeMapping final {
-    CompiledScalarParameter offset;
-    CompiledScalarParameter scale;
-    std::int64_t loopMode = 0;
-    friend bool operator==(const CompiledCompositionTimeMapping&,
-                           const CompiledCompositionTimeMapping&) = default;
-};
-
-struct CompiledCompositionSource final {
-    document::NodeId sourceNodeId;
-    std::size_t nestedPlanIndex = 0;
-    CompiledCompositionTimeMapping timeMapping;
-    friend bool operator==(const CompiledCompositionSource&,
-                           const CompiledCompositionSource&) = default;
-};
+// CompiledCompositionTimeMapping and CompiledCompositionSource: compiled_composition_source.hpp.
 
 // Image effects publish finite premultiplied RGBA32F. Pointwise colour kernels preserve windows
 // and alpha while operating on straight RGB; neighborhood kernels declare their own associated-
