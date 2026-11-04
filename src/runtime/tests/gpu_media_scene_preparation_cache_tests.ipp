@@ -260,14 +260,15 @@ void testImmutableSourceRevisionReuse(Expectations& expectations, const MediaFix
     requestA.mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Retained;
     requestB.mediaSourceRevisionPolicy = MediaSourceRevisionPolicy::Retained;
     const auto cold = builder.build(planA, requestA);
+    // ADR 0025 (amended 2026-11-04): an unchanged identity admits the bytes without a hash.
     expectations.expect(cold && cold.scene->mediaStatistics().sourceRevisionCaptures == 1 &&
-                            cold.scene->mediaStatistics().sourceRevisionBytesHashed > 0 &&
+                            cold.scene->mediaStatistics().sourceRevisionBytesHashed == 0 &&
                             cold.scene->mediaStatistics().sourceBytesRead > 0 &&
                             cold.scene->mediaStatistics().sourceIoNanoseconds > 0 &&
-                            cold.scene->mediaStatistics().sourceHashNanoseconds > 0 &&
+                            cold.scene->mediaStatistics().sourceHashNanoseconds == 0 &&
                             cold.scene->mediaStatistics().sourceProbeNanoseconds > 0 &&
                             cold.scene->mediaStatistics().imageDecodeNanoseconds > 0,
-                        "cold interactive source captures and hashes one immutable revision");
+                        "cold interactive source captures one immutable revision without a hash");
     const auto charged =
         evaluator.operationCache()->retainedBytes(OperationCacheEntryKind::DecodedMedia);
     expectations.expect(charged >= std::filesystem::file_size(fixture.path),

@@ -284,21 +284,32 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                     selected.sourceRevision = cached->sourceRevision;
                     selected.retainedRevision = true;
                 } else {
-                    // Revalidate: the retained bytes stand for the original only while a cheap
-                    // identity observation still matches the one that bracketed their capture
-                    // (ADR 0025: the identity check, no hash) and no full hash in the process
-                    // memo refutes the recorded digest.
+                    // Revalidate: the retained bytes stand for the original while no full hash
+                    // in the process memo refutes the recorded digest and either a cheap identity
+                    // observation still matches the one that bracketed their capture (ADR 0025:
+                    // the identity check, no hash) or the memo verified the file's current
+                    // identity to hold the retained bytes' digest (a renamed or touched file
+                    // whose content did not change).
                     selected.path =
                         media::resolveImagePath(locator->path, locator->relinkHint, base);
                     const auto observed = platform::observeSource(selected.path);
                     const auto& retained = *cached->sourceRevision;
+                    const auto& retainedDigest = retained.probe().contentDigest;
                     const bool refuted = observed.digest && selected.recordedDigest &&
                                          *observed.digest != *selected.recordedDigest;
-                    const bool current = !refuted && observed.identity &&
-                                         retained.sourceIdentity() &&
-                                         *observed.identity == *retained.sourceIdentity() &&
-                                         (selected.expectedStamp ||
-                                          retained.probe().contentDigest == selected.digest);
+                    const bool sameIdentity =
+                        observed.identity && retained.sourceIdentity() &&
+                        *observed.identity == *retained.sourceIdentity() &&
+                        (selected.expectedStamp || retainedDigest == selected.digest);
+                    const bool verifiedContent =
+                        observed.digest && *observed.digest == retainedDigest &&
+                        (selected.expectedStamp ? observed.identity &&
+                                                      media::ImageSourceStamp{
+                                                          observed.identity->size,
+                                                          observed.identity->modifiedNanoseconds} ==
+                                                          *selected.expectedStamp
+                                                : retainedDigest == selected.digest);
+                    const bool current = !refuted && (sameIdentity || verifiedContent);
                     if (current) {
                         selected.sourceRevision = cached->sourceRevision;
                         selected.retainedRevision = true;
