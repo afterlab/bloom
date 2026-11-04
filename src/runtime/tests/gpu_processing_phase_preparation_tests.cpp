@@ -231,9 +231,11 @@ void prepare() {
                                        .available_bytes = 0}),
             "native measured zero reported");
     auto zero = builder.build(plan, request);
-    require(!zero.scene && zero.diagnostic.code == PreparedGpuSceneDiagnosticCode::BudgetRefused &&
-                callbacks == 0,
-            "measured zero refuses before source preparation without CPU substitution");
+    // #539: a measured zero within the device waits for room; it never substitutes the CPU.
+    require(!zero.scene &&
+                zero.diagnostic.code == PreparedGpuSceneDiagnosticCode::AwaitingCapacity &&
+                zero.diagnostic.admissionRetry && callbacks == 0,
+            "measured zero waits before source preparation without CPU substitution");
     require(policy->reportDevice(101, {.source = GpuAllocationBudgetSource::MemoryBudget,
                                        .device_local_bytes = gib,
                                        .available_bytes = gib}),

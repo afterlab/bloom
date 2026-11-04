@@ -46,6 +46,8 @@ struct TaskContextState {
     // runs shutdownAndJoin() before releasing it). Null exactly when this configuration asked for
     // serial row evaluation.
     CpuRowBandExecutor* rowBands = nullptr;
+    // The task's current priority (a reprioritized task reports its new one).
+    std::function<TaskPriority()> priority;
 };
 
 struct TaskRecord {

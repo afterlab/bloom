@@ -44,6 +44,10 @@ struct GpuProcessingPhaseRequest final {
     std::uint64_t processingHostScratchBytes = 0;
     std::uint64_t requestedSourceBytes = 0;
     std::uint64_t minimumSourceBytes = 0;
+    // #472: the largest single source of minimumSourceBytes as a float frame. Preparation decodes
+    // and converts one source at a time, so its transient scratch is bounded by twice this, not by
+    // twice the whole source need. Zero when unknown: the scratch is then twice the source need.
+    std::uint64_t largestSourceBytes = 0;
     std::uint64_t deviceWorkingBytes = 0;
     std::uint64_t requestedExecutorBytes = 0;
     std::uint64_t minimumExecutorBytes = 0;
@@ -76,6 +80,10 @@ struct GpuProcessingPhaseSnapshot final {
     // within the ceiling waits for memory to be released; only a need above it is refused.
     std::optional<std::uint64_t> hostCeilingBytes;
     std::optional<std::uint64_t> deviceCapacityBytes;
+    // #539: the most device memory this root could ever be given (the device-local heap minus the
+    // VRAM headroom). A device need above the measured free capacity but within it waits for
+    // memory another program holds to come back; only a need above it is refused.
+    std::optional<std::uint64_t> deviceCeilingBytes;
     bool hostReady = false;
     bool deviceReady = false;
     std::uint64_t hostReservedBytes = 0;
@@ -131,6 +139,11 @@ struct GpuProcessingPhaseSnapshot final {
     std::uint64_t releasedPhaseDevicePeakBytes = 0;
     std::uint64_t peakPhaseDeviceNeedBytes = 0;
     std::uint64_t peakPhaseDeviceAllocationBytes = 0;
+    // #539: the most native storage recently released phases held at one time, for sizing frames
+    // in flight by measured room: the larger of the newest phase's peak and the previous value less
+    // an eighth, so it follows the current scene within a few frames instead of holding an old
+    // scene's peak forever.
+    std::uint64_t recentPhaseDevicePeakBytes = 0;
     // Phases that finished source preparation: how many, the sum of the source needs they claimed
     // (3x of which covered decode, conversion and upload overlap) and of the source bytes they
     // actually retained, and the largest need and largest retention (#472).
@@ -172,6 +185,11 @@ class GpuProcessingPhaseLease final {
     // need (3 * sourceClaimBytes) is claimed; growth beyond it is reconciled at the handoff.
     [[nodiscard]] std::uint64_t sourceByteLimit() const noexcept { return sourceCeilingBytes_; }
     [[nodiscard]] std::uint64_t sourceClaimBytes() const noexcept { return sourceBytes_; }
+    // Decode/conversion scratch claimed with the sources while they are prepared (#472).
+    [[nodiscard]] std::uint64_t sourceScratchBytes() const noexcept { return sourceScratchBytes_; }
+    // #539: the source ceiling was cut below what an otherwise empty root would give, because
+    // other admitted work held the room. A source refused for that ceiling fits a later admission.
+    [[nodiscard]] bool sourceRoomWasShort() const noexcept { return sourceRoomShort_; }
     // Logical upload occupancy ceiling; uploads acquire their actual host backing separately.
     [[nodiscard]] std::uint64_t uploadByteLimit() const noexcept { return sourceCeilingBytes_; }
     // Device ceiling: the live room at admission. The device need (working + minimum executor
@@ -179,6 +197,17 @@ class GpuProcessingPhaseLease final {
     // first native allocation until it holds none; allocations beyond the need are admitted
     // against live capacity.
     [[nodiscard]] std::uint64_t executorByteLimit() const noexcept { return executorBytes_; }
+    // #539: the executor ceiling the request asked for. A limit below it was cut to the room left
+    // at admission, so a frame refused for that limit fits once room returns: it waits, never
+    // falls back to the CPU.
+    [[nodiscard]] std::uint64_t executorByteCeiling() const noexcept {
+        return requestedExecutorBytes_;
+    }
+    // #539: the root's measured device capacity when this phase was admitted. Capacity below it
+    // later means another program took device memory meanwhile, which it can give back.
+    [[nodiscard]] std::uint64_t deviceCapacityAtAdmission() const noexcept {
+        return deviceCapacityAtAdmission_;
+    }
     [[nodiscard]] std::uint64_t deviceClaimBytes() const noexcept { return deviceClaimBytes_; }
     // The device need claimed during the device stage, and the most native storage (images and
     // buffers) this phase has held at one time so far.
@@ -192,6 +221,11 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] bool finishSourcePreparation(std::uint64_t retainedSourceBytes) noexcept;
     // Expected watermark after this lease alone releases. Independent changes remain visible.
     [[nodiscard]] std::uint64_t revisionAfterOwnRelease() const noexcept;
+    // #539: the phase's scene execution has finished. Its device claim is held only while it
+    // executes: what it has not allocated goes back to the root now, and from here on the claim
+    // covers at most its stated working allowance (display, transfer, readback). Storage it still
+    // holds (the output image) stays allocated; later allocations are admitted against live room.
+    void endDeviceExecution() noexcept;
     void markUnproven() noexcept;
     [[nodiscard]] bool isUnproven() const noexcept;
     // Only after the owning device has gone idle (every submission that could touch this phase's
@@ -207,6 +241,10 @@ class GpuProcessingPhaseLease final {
     [[nodiscard]] bool drawDeviceLocked(std::uint64_t bytes) noexcept;
     void releaseLocked() noexcept;
     void returnDeviceLocked(std::uint64_t bytes) noexcept;
+    // #539: storage this phase allocated is published (a scene cache entry, a presented frame):
+    // it stays charged to the root as retention that gives way on demand, and leaves the phase's
+    // allocation, so the phase's device stage needs (and records) only its own live set.
+    void transferToRetentionLocked(std::uint64_t bytes) noexcept;
     friend class GpuProcessingPhaseBudget;
     friend class PackedHostStorageAuthority;
     friend class NativeImageStorageToken;
@@ -229,13 +267,20 @@ class GpuProcessingPhaseLease final {
     std::uint64_t deviceBytes_ = 0;
     std::uint64_t remainingDeviceBytes_ = 0;
     std::uint64_t sourceBytes_ = 0;
+    std::uint64_t sourceScratchBytes_ = 0;
+    bool sourceRoomShort_ = false;
     std::uint64_t sourceCeilingBytes_ = 0;
     std::uint64_t executorBytes_ = 0;
+    std::uint64_t requestedExecutorBytes_ = 0;
+    std::uint64_t deviceCapacityAtAdmission_ = 0;
     // Unallocated device bytes this phase holds in totalDeviceClaimBytes, at most its admitted
     // need, and only during its device stage. Allocations beyond the need are separate live
     // claims, returned to the root on release.
     std::uint64_t deviceClaimBytes_ = 0;
     std::uint64_t deviceNeedBytes_ = 0;
+    // The most unallocated claim this phase may hold: its need while it executes, its working
+    // allowance once execution has ended (#539).
+    std::uint64_t deviceClaimCapBytes_ = 0;
     // Native storage this phase holds now, and the most it has held at one time.
     std::uint64_t allocatedDeviceBytes_ = 0;
     std::uint64_t peakAllocatedDeviceBytes_ = 0;
@@ -359,6 +404,8 @@ class GpuProcessingPhaseBudget final {
     void setDeviceCapacity(std::optional<std::uint64_t> bytes, bool ready) noexcept;
     // The host ceiling described on GpuProcessingPhaseSnapshot::hostCeilingBytes.
     void setHostCeiling(std::optional<std::uint64_t> bytes) noexcept;
+    // The device ceiling described on GpuProcessingPhaseSnapshot::deviceCeilingBytes.
+    void setDeviceCeiling(std::optional<std::uint64_t> bytes) noexcept;
     // Moves a known host capacity by a preference change (headroom), keeping readiness/expiry.
     void shiftHostCapacity(std::uint64_t add, std::uint64_t subtract) noexcept;
     // Blocks until the admission revision differs from `seen` (a release, a capacity change) or

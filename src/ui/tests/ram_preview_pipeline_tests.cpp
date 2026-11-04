@@ -99,6 +99,19 @@ void testPipelineHelperBoundAndCancellation(Expectations& expectations) {
     pipeline.cancelAllAndDetach();
     expectations.expect(pipeline.empty() && pipeline.inFlightCount() == 0,
                         "cancel-all detaches every in-flight frame");
+    // #539: an edit cancels only the frames it made stale; the rest keep running.
+    submit(4);
+    submit(5);
+    const auto cancelled = pipeline.cancelIf(
+        [](const ui::RamPreviewPipeline::InFlight& slot) { return slot.frameIndex == 4; });
+    expectations.expect(cancelled == 1 && pipeline.inFlightCount() == 1 &&
+                            !pipeline.isInFlight(ui::PreviewFrameCacheKey::forIdentity([] {
+                                runtime::PreviewRequestIdentity stale;
+                                stale.time = timeAt(4, 25);
+                                return stale;
+                            }())),
+                        "cancel-if detaches only the stale frame");
+    pipeline.cancelAllAndDetach();
     expectations.expect(waitUntil([&] { return scheduler.isQuiescent(); }),
                         "the helper fixture quiesces after cancellation");
 }

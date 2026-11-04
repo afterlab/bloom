@@ -402,7 +402,7 @@ bool residentStageIsEligible(const std::shared_ptr<PreviewDisplayServiceCore>& c
 }
 
 bool residentExecutorBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                           const PreviewDisplayStageRecord& stage, std::string& reason) noexcept {
+                           PreviewDisplayStageRecord& stage, std::string& reason) noexcept {
     if (core->residentExecutor == nullptr) {
         reason = "the resident executor is unavailable";
         return false;
@@ -413,6 +413,10 @@ bool residentExecutorBegin(const std::shared_ptr<PreviewDisplayServiceCore>& cor
             ? phase->executorByteLimit()
             : (stage.gpuByteAllowance != 0 ? stage.gpuByteAllowance : core->previewByteAllowance());
     const auto diagnostic = core->residentExecutor->begin(stage.gpuStage->scene(), budget);
+    // Its byte limit, or a native allocation the device refused (#539): residentCapacityWait
+    // decides whether room can come back.
+    stage.capacityShort = diagnostic.code == GpuSceneExecutorDiagnosticCode::OverBudget ||
+                          diagnostic.code == GpuSceneExecutorDiagnosticCode::DeviceUnavailable;
     if (diagnostic.code != GpuSceneExecutorDiagnosticCode::None) {
         reason = diagnostic.message.empty() ? std::string("the resident scene begin was refused")
                                             : diagnostic.message;

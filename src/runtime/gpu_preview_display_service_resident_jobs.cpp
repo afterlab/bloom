@@ -140,6 +140,63 @@ void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& co
     stage->gpuStage.reset();
 }
 
+// #539: whether device room a frame was short of can come back without the frame changing: the
+// device caches can give way (parked storage, then the scene cache), other admitted frames will
+// release what they hold, or another program took device memory while the frame ran (the measured
+// capacity is below what it was admitted with). A frame that was alone with all the room the
+// device could give and nothing left to evict cannot gain room by waiting.
+bool residentDeviceRoomCanReturn(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                 const render::GpuProcessingPhaseLease& phase) noexcept {
+    std::uint64_t reclaimable = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+    if (core->residentSceneCache != nullptr)
+        reclaimable += core->residentSceneCache->retainedBytes();
+    if (reclaimable != 0)
+        return true;
+    // Measure the device now rather than at the next sampling slot.
+    core->foregroundCapacitySampledAt = {};
+    refreshResidentForegroundCapacity(core);
+    const auto counters = core->options.processingPhasePolicy->snapshot().reservations;
+    return counters.admittedPhases > 1 ||
+           (counters.deviceCapacityBytes &&
+            *counters.deviceCapacityBytes < phase.deviceCapacityAtAdmission());
+}
+
+// #539: a frame the executor refused for device capacity (its byte limit, or a native allocation
+// the device refused) waits for room instead of taking the CPU path when its limit was cut to the
+// room left at admission or the room can come back (residentDeviceRoomCanReturn). It asks the
+// device caches to give way and retries when admission changes; admission holds the retry until
+// the room is there. Only a frame that already had all the room the device could give, with
+// nothing left to evict, keeps the explicit CPU fallback. Call before the phase is released: the
+// retry revision is the phase's own.
+std::optional<TaskAdmissionRetry>
+residentCapacityWait(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                     const PreviewDisplayStageRecord& stage) noexcept {
+    if (!stage.capacityShort || !core->options.processingPhasePolicy || !stage.gpuStage ||
+        !core->device || core->residentRouteTerminal || residentDeviceLost(core))
+        return std::nullopt;
+    const auto& phase = stage.gpuStage->phaseLease();
+    if (!phase)
+        return std::nullopt;
+    const bool cut = phase->executorByteLimit() < phase->executorByteCeiling();
+    if (!cut && !residentDeviceRoomCanReturn(core, *phase))
+        return std::nullopt;
+    core->deviceReclaim->request(std::max<std::uint64_t>(
+        {phase->deviceNeedBytes(), phase->executorByteLimit(), std::uint64_t{1}}));
+    core->counterCapacityWaits.fetch_add(1, std::memory_order_relaxed);
+    return TaskAdmissionRetry{phase->revisionAfterOwnRelease(), true};
+}
+
+void completeAwaitingCapacity(const std::shared_ptr<PreviewDisplayStageRecord>& stage,
+                              const TaskAdmissionRetry retry) {
+    // The shared wait code: RAM Preview, read-ahead and the Viewer treat it as a wait for
+    // capacity, never as a failed frame.
+    auto diagnostic =
+        residentJobDiagnostic("bloom.preview.gpu-scene.awaiting-capacity",
+                              "The scene is awaiting device capacity for its executor.");
+    diagnostic.admissionRetry = retry;
+    completeFailed(stage, {std::move(diagnostic)});
+}
+
 // A failure with NO unretired native submission: safe to release admission immediately.
 void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                const std::shared_ptr<PreviewDisplayStageRecord>& stage,
@@ -189,16 +246,32 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
         return (buffer && buffer->domain == render::GpuProcessingPhaseDomain::Device) ||
                (!buffer && image && image->domain == render::GpuProcessingPhaseDomain::Device);
     };
+    // A native allocation refused for live device room that can come back is a wait for every
+    // preview route (the shared code), not a failed frame (#539).
+    bool storageRoomCanReturn = false;
     if (retryableStorage && core->options.processingPhasePolicy && deviceRefusal()) {
         // The device caches give way, not the frame (#425): the retry finds the evicted room.
+        storageRoomCanReturn =
+            !residentDeviceLost(core) &&
+            residentDeviceRoomCanReturn(core, *stage->gpuStage->phaseLease());
         core->deviceReclaim->request(
             std::max<std::uint64_t>(stage->gpuStage->phaseLease()->deviceNeedBytes(), 1));
     }
+    const auto capacityWait = retryableStorage || (stage->processingPhaseTouched &&
+                                                   !stage->processingPhaseRetired)
+                                  ? std::nullopt
+                                  : residentCapacityWait(core, *stage);
     releaseProcessingPhase(core, stage,
                            !stage->processingPhaseTouched || stage->processingPhaseRetired);
     if (stage->cancellationRequested || stage->nativeDiscard ||
         core->stopping.load(std::memory_order_acquire)) {
         completeCancelled(stage);
+        return;
+    }
+    if (storageRoomCanReturn) {
+        core->counterCapacityWaits.fetch_add(1, std::memory_order_relaxed);
+        completeAwaitingCapacity(stage,
+                                 TaskAdmissionRetry{storageRefusal->revisionAfterOwnRelease, true});
         return;
     }
     if (retryableStorage) {
@@ -212,6 +285,10 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
         diagnostic.admissionRetry =
             TaskAdmissionRetry{storageRefusal->revisionAfterOwnRelease, true};
         completeFailed(stage, {std::move(diagnostic)});
+        return;
+    }
+    if (capacityWait) {
+        completeAwaitingCapacity(stage, *capacityWait);
         return;
     }
     core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
@@ -253,10 +330,16 @@ void finishResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& 
     core->residentNativeActive.reset();
     core->residentNativeInFlight = false;
     stage->residentPhase = ResidentNativePhase::Done;
+    // Retirement was proven before this point; a capacity refusal waits for room (#539).
+    const auto capacityWait = cancelled ? std::nullopt : residentCapacityWait(core, *stage);
     releaseProcessingPhase(
         core, stage, !stage->processingPhaseFailed && core->device && !residentDeviceLost(core));
     if (cancelled) {
         completeCancelled(stage);
+        return;
+    }
+    if (capacityWait) {
+        completeAwaitingCapacity(stage, *capacityWait);
         return;
     }
     core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
@@ -336,7 +419,10 @@ void advanceResidentAhead(const std::shared_ptr<PreviewDisplayServiceCore>& core
     if (core->residentExecutor->state() == GpuSceneExecutorJobState::Pending) {
         selectStagePhase(core, *core->residentAhead);
         core->residentAhead->processingPhaseTouched = true;
-        static_cast<void>(residentExecutorPoll(core));
+        // A settled stage ahead holds only its output until it becomes active (#539).
+        if (residentExecutorPoll(core) == GpuSceneExecutorPollResult::Ready &&
+            core->residentAhead->gpuStage && core->residentAhead->gpuStage->phaseLease())
+            core->residentAhead->gpuStage->phaseLease()->endDeviceExecution();
     }
 }
 
@@ -727,6 +813,15 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         if (poll != GpuSceneExecutorPollResult::Ready) {
+            // Its byte limit, or a native allocation the device refused (#539), which another
+            // program taking VRAM causes: residentCapacityWait decides whether room can return.
+            const auto failedCode = core->residentExecutor != nullptr
+                                        ? core->residentExecutor->diagnostic().code
+                                        : GpuSceneExecutorDiagnosticCode::None;
+            stage->capacityShort =
+                poll == GpuSceneExecutorPollResult::Failure &&
+                (failedCode == GpuSceneExecutorDiagnosticCode::OverBudget ||
+                 failedCode == GpuSceneExecutorDiagnosticCode::DeviceUnavailable);
             const bool expectedCancellation = cancelled &&
                                               poll == GpuSceneExecutorPollResult::Failure &&
                                               core->residentExecutor != nullptr &&
@@ -762,6 +857,10 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             beginResidentRetirement(core, stage, false);
             return;
         }
+        // The scene has executed: its unallocated device claim goes back now (#539), so a frame
+        // that displays, transfers or waits holds only the storage it actually has.
+        if (stage->gpuStage && stage->gpuStage->phaseLease())
+            stage->gpuStage->phaseLease()->endDeviceExecution();
         std::string reason;
         if (!residentDisplayBegin(core, *stage, reason)) {
             publishResidentJobDetail(

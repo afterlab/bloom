@@ -80,8 +80,9 @@ void retireResidentRoute(const std::shared_ptr<PreviewDisplayServiceCore>& core)
 
 // Owner thread native stepping primitives. Each returns false / a terminal poll result on failure
 // and sets `reason`; nothing is published on failure.
+// A refusal for the executor byte limit marks the stage capacityShort (#539).
 [[nodiscard]] bool residentExecutorBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                                         const PreviewDisplayStageRecord& stage,
+                                         PreviewDisplayStageRecord& stage,
                                          std::string& reason) noexcept;
 [[nodiscard]] GpuSceneExecutorPollResult
 residentExecutorPoll(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;

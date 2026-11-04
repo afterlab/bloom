@@ -180,8 +180,12 @@ runtime::PreviewGpuSceneStageFunction makeCompositionPreviewGpuSceneStage(
 
         // The unsupported-request screen runs inside the builder before any pixel or media work, so
         // a request the builder will not prepare falls back before anything heavy is touched.
-        const auto evaluationRequest =
+        auto evaluationRequest =
             evaluationRequestFor(desiredIdentity, *compileResult.plan, pixelStorageByteLimit);
+        // #539: a RAM Preview fill (Foreground) or playback read-ahead (Background) frame is
+        // speculative; the Viewer frame (Interactive, Visible) preempts it for device room.
+        evaluationRequest.background = context.priority() == runtime::TaskPriority::Foreground ||
+                                       context.priority() == runtime::TaskPriority::Background;
         context.reportProgress({.phase = "Preparing GPU preview scene",
                                 .subphase = "Preparing the immutable GPU scene",
                                 .completed = 0,

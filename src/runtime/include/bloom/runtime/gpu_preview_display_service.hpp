@@ -190,6 +190,12 @@ struct GpuPreviewDisplayServiceCounters final {
     std::uint64_t cpuFallbacks = 0;
     // The same requests by reason, indexed by GpuPreviewCpuFallbackReason; sums to cpuFallbacks.
     std::array<std::uint64_t, kGpuPreviewCpuFallbackReasonCount> cpuFallbacksByReason{};
+    // Resident frames the executor refused for device capacity that waited for room (and asked
+    // the device caches to give way) instead of taking the CPU path (#539).
+    std::uint64_t capacityWaits = 0;
+    // Idle trims (#539) and the device bytes they gave back (parked storage and scene cache).
+    std::uint64_t idleTrims = 0;
+    std::uint64_t idleTrimmedBytes = 0;
     // GPU parent submissions refused by the scheduler's bounded per-request admission (the derived
     // host default or an explicit configured capacity) BEFORE any stage work. Non-zero means a
     // request the display stage could have handled was forced onto the CPU by ADMISSION, not by
@@ -335,6 +341,10 @@ struct GpuPreviewDisplayServiceOptions final {
     // Bounded per-native-dispatch deadline. Expiry drains/quarantines the native pipeline on
     // the owner thread, disables GPU, and takes the same-frame CPU fallback (or cancels).
     std::chrono::milliseconds nativeDispatchDeadline{10000};
+    // #539: how long the owner stays idle (no stage, no native work) before it gives retained
+    // device memory back: parked native storage and the reusable scene cache. Finished frames and
+    // what is on screen stay; the next frame re-creates what it needs.
+    std::chrono::milliseconds idleTrimDelay{1000};
 };
 
 class GpuPreviewDisplayService final {

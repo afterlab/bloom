@@ -222,8 +222,29 @@ void RamPreviewController::rescanAfterLoss() {
 void RamPreviewController::handleDocumentEvaluationChanged() {
     Q_ASSERT(QThread::currentThread() == thread());
     // A finite edit rescans and submits only the changed interval; an edit that invalidates the
-    // whole range rescans it all. Neither ends the run.
+    // whole range rescans it all. Neither ends the run. Frames in flight that the edit changed are
+    // cancelled first (#539): they would land a stale image after spending the room and workers
+    // the current frames need.
+    cancelStaleFrames();
     handleWorkAreaChanged();
+}
+
+void RamPreviewController::cancelStaleFrames() {
+    if (!caching_ || pipeline_.empty())
+        return;
+    const auto* composition = session_.composition();
+    if (composition == nullptr)
+        return;
+    const auto mapping = mappingForComposition(*composition);
+    if (!mapping.has_value())
+        return;
+    static_cast<void>(pipeline_.cancelIf([&](const RamPreviewPipeline::InFlight& slot) {
+        const auto time = mapping->timeForFrame(firstFrameIndex_ + slot.frameIndex);
+        if (!time.hasValue())
+            return true;
+        const auto key = previewController_.cacheKeyForTime(*time.value());
+        return !key.has_value() || !(PreviewFrameCacheKey::forIdentity(slot.identity) == *key);
+    }));
 }
 
 void RamPreviewController::cancel() {
@@ -319,12 +340,12 @@ void RamPreviewController::requestFrames() {
         if (const auto* composition = session_.composition()) {
             const auto pixels = static_cast<std::uint64_t>(composition->format().width()) *
                                 composition->format().height();
-            // The width is chosen from the free capacity only when the pipeline is empty. Frames
-            // in flight have not all claimed their phases yet, so adding what still fits on top
-            // of them counts the same room twice (it grew to 70 frames). Admission itself makes a
-            // frame that does not fit wait, so the width is a target, never a safety bound.
-            if (pipeline_.empty())
-                pipeline_.setWidth(fillWidthProvider_(pixels));
+            // The width is re-measured at every frame boundary (#539): it is the total number of
+            // frames in flight that measured per-frame needs fit in usable capacity, not what fits
+            // on top of the frames already in flight, so nothing is counted twice. It shrinks when
+            // other programs take memory; admission still makes a frame that does not fit wait,
+            // so the width is a target, never a safety bound.
+            pipeline_.setWidth(fillWidthProvider_(pixels));
         }
     }
     while (caching_ && serial == runSerial_ && pipeline_.hasCapacity()) {

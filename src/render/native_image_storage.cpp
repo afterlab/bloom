@@ -156,6 +156,7 @@ bool NativeImageStorageToken::promote() noexcept {
             return true;
         if (!origin_ || origin_->unproven_)
             return false;
+        origin_->transferToRetentionLocked(bytes_);
         published_ = true;
         publishedOrigin_ = origin_;
         releasedOrigin = std::move(origin_);
@@ -176,7 +177,11 @@ bool NativeImageStorageToken::releaseFailedAttemptAfterBackingDestroyed(
         auto& counters = state_->counters;
         counters.ownedNativeImageBytes -= bytes_;
         --counters.ownedNativeImages;
-        phase->returnDeviceLocked(bytes_);
+        // Published storage already left the phase's allocation (#539).
+        if (published_)
+            counters.totalDeviceClaimBytes -= bytes_;
+        else
+            phase->returnDeviceLocked(bytes_);
         if (!identity_.deviceLocal) {
             counters.ownedNonlocalNativeHostBytes -= bytes_;
             counters.totalHostClaimBytes -= bytes_;
@@ -195,9 +200,6 @@ bool NativeImageStorageToken::releaseFailedAttemptAfterBackingDestroyed(
 void NativeImageStorageToken::reset() noexcept {
     if (!state_)
         return;
-    // Acquire the weak origin before the neutral mutex, and keep/drop that temporary alias outside
-    // it. The lease destructor takes this same mutex; published storage never holds it alive.
-    auto liveOrigin = published_ ? publishedOrigin_.lock() : nullptr;
     std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
     {
         const std::lock_guard lock(state_->mutex);
@@ -210,11 +212,9 @@ void NativeImageStorageToken::reset() noexcept {
             --counters.ownedPresentationImages;
             incrementSaturating(counters.admissionRevision);
         } else if (published_) {
-            if (liveOrigin && liveOrigin->state_ == state_ && liveOrigin->id_ == originId_) {
-                liveOrigin->returnDeviceLocked(bytes_);
-            } else {
-                counters.totalDeviceClaimBytes -= bytes_;
-            }
+            // Published storage left its phase when it was promoted (#539): it returns to the
+            // root, never to the phase's claim.
+            counters.totalDeviceClaimBytes -= bytes_;
             // An independent real release remains observable even when its existing grant is
             // replenished. Only explicit proved failed-attempt cleanup suppresses that event.
             incrementSaturating(counters.admissionRevision);
@@ -231,7 +231,6 @@ void NativeImageStorageToken::reset() noexcept {
         published_ = false;
     }
     releasedOrigin.reset();
-    liveOrigin.reset();
     publishedOrigin_.reset();
     state_.reset();
 }

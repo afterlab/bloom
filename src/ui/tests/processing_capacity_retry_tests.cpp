@@ -87,13 +87,16 @@ void preparationRefusalFeedback(Expectations& checks) {
                                  .device_local_bytes = gib,
                                  .available_bytes = 0}),
         "feedback device reports measured zero");
-    const auto refusedDevice = builder.build(compiled.plan, request);
-    checks.expect(!refusedDevice.scene &&
-                      refusedDevice.diagnostic.code ==
-                          runtime::PreparedGpuSceneDiagnosticCode::BudgetRefused &&
-                      refusedDevice.diagnostic.message ==
-                          "GPU preparation does not fit the current device-memory capacity",
-                  "fresh zero diagnoses the actual Device refusal before preparation");
+    // #539: device memory another program holds can return, so a measured zero within the
+    // device waits with a typed retry instead of being refused.
+    const auto zeroDevice = builder.build(compiled.plan, request);
+    checks.expect(!zeroDevice.scene &&
+                      zeroDevice.diagnostic.code ==
+                          runtime::PreparedGpuSceneDiagnosticCode::AwaitingCapacity &&
+                      zeroDevice.diagnostic.message ==
+                          "GPU preparation is awaiting device-memory capacity" &&
+                      zeroDevice.diagnostic.admissionRetry.has_value(),
+                  "fresh zero within the device waits for device capacity before preparation");
     checks.expect(
         policy->reportDevice(1, {.source = render::GpuAllocationBudgetSource::MemoryBudget,
                                  .device_local_bytes = gib,

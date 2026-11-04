@@ -36,6 +36,17 @@ void retireHostBackingLocked(detail::GpuProcessingPhaseBudgetState& state,
         }
     }
 }
+// #472: preparation decodes and converts one source at a time. Its transient scratch is twice the
+// largest single source (the decoded and converted copies beside the retained ones), never more
+// than twice the whole source need; an unknown largest source keeps that whole-need bound.
+std::uint64_t sourceScratchFor(const GpuProcessingPhaseRequest& request,
+                               const std::uint64_t sourceNeed) noexcept {
+    const auto largest = request.largestSourceBytes != 0
+                             ? std::min(request.largestSourceBytes, request.minimumSourceBytes)
+                             : sourceNeed;
+    const auto max = std::numeric_limits<std::uint64_t>::max();
+    return largest > max / 2 ? max : 2 * largest;
+}
 detail::PhaseEnvelopeKey envelopeKey(const GpuProcessingPhaseRequest& request) noexcept {
     return {request.deviceWorkingBytes, request.minimumExecutorBytes, request.fixedHostBytes,
             request.minimumSourceBytes};
@@ -74,6 +85,10 @@ void GpuProcessingPhaseLease::releaseLocked() noexcept {
             std::max(counters.peakPhaseDeviceNeedBytes, deviceNeedBytes_);
         counters.peakPhaseDeviceAllocationBytes =
             std::max(counters.peakPhaseDeviceAllocationBytes, peakAllocatedDeviceBytes_);
+        if (!unproven_ && peakAllocatedDeviceBytes_ != 0)
+            counters.recentPhaseDevicePeakBytes =
+                std::max(peakAllocatedDeviceBytes_, counters.recentPhaseDevicePeakBytes -
+                                                        counters.recentPhaseDevicePeakBytes / 8);
     }
     --counters.admittedPhases;
     incrementSaturating(counters.admissionRevision);
@@ -165,12 +180,13 @@ bool GpuProcessingPhaseLease::drawDeviceLocked(const std::uint64_t bytes) noexce
     // room holds it, so the rest of the stage cannot be crowded out. Without that room it claims
     // nothing up front and every allocation is admitted against live capacity, as growth is.
     // Callers have checked this draw against live capacity, so it cannot fail after the claim.
-    if (allocatedDeviceBytes_ == 0 && deviceClaimBytes_ == 0 && deviceNeedBytes_ != 0 &&
+    if (allocatedDeviceBytes_ == 0 && deviceClaimBytes_ == 0 && deviceClaimCapBytes_ != 0 &&
         counters.deviceCapacityBytes &&
-        deviceNeedBytes_ <= remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes)) {
-        deviceClaimBytes_ = deviceNeedBytes_;
-        counters.deviceReservedBytes += deviceNeedBytes_;
-        counters.totalDeviceClaimBytes += deviceNeedBytes_;
+        deviceClaimCapBytes_ <=
+            remaining(*counters.deviceCapacityBytes, counters.totalDeviceClaimBytes)) {
+        deviceClaimBytes_ = deviceClaimCapBytes_;
+        counters.deviceReservedBytes += deviceClaimCapBytes_;
+        counters.totalDeviceClaimBytes += deviceClaimCapBytes_;
         counters.peakDeviceReservedBytes =
             std::max(counters.peakDeviceReservedBytes, counters.deviceReservedBytes);
     }
@@ -205,10 +221,45 @@ void GpuProcessingPhaseLease::returnDeviceLocked(const std::uint64_t bytes) noex
         deviceClaimBytes_ = 0;
         return;
     }
-    const auto refill = std::min(bytes, deviceNeedBytes_ - deviceClaimBytes_);
+    const auto refill = std::min(
+        bytes, deviceClaimCapBytes_ - std::min(deviceClaimCapBytes_, deviceClaimBytes_));
     deviceClaimBytes_ += refill;
     counters.deviceReservedBytes += refill;
     counters.totalDeviceClaimBytes -= bytes - refill;
+}
+
+void GpuProcessingPhaseLease::endDeviceExecution() noexcept {
+    {
+        const std::lock_guard lock(state_->mutex);
+        if (id_ == 0 || unproven_)
+            return;
+        auto& counters = state_->counters;
+        deviceClaimCapBytes_ = std::min(deviceClaimCapBytes_, envelopeWorkingBytes_);
+        if (deviceClaimBytes_ <= deviceClaimCapBytes_)
+            return;
+        const auto released = deviceClaimBytes_ - deviceClaimCapBytes_;
+        deviceClaimBytes_ = deviceClaimCapBytes_;
+        counters.deviceReservedBytes -= released;
+        counters.totalDeviceClaimBytes -= released;
+        // Released room is observable: waiting work retries on it.
+        incrementSaturating(counters.admissionRevision);
+    }
+    state_->changed.notify_all();
+}
+
+void GpuProcessingPhaseLease::transferToRetentionLocked(const std::uint64_t bytes) noexcept {
+    auto& counters = state_->counters;
+    const auto moved = std::min(bytes, allocatedDeviceBytes_);
+    allocatedDeviceBytes_ -= moved;
+    remainingDeviceBytes_ += moved;
+    // The moved bytes stay in totalDeviceClaimBytes: the published storage still exists and is
+    // released to the root, not to this phase. A phase left holding no storage of its own ends its
+    // device stage as a return would.
+    if (allocatedDeviceBytes_ == 0 && !unproven_) {
+        counters.deviceReservedBytes -= deviceClaimBytes_;
+        counters.totalDeviceClaimBytes -= deviceClaimBytes_;
+        deviceClaimBytes_ = 0;
+    }
 }
 
 bool GpuProcessingPhaseLease::finishSourcePreparation(
@@ -238,7 +289,7 @@ bool GpuProcessingPhaseLease::finishSourcePreparation(
         counters.peakPhaseRetainedSourceBytes =
             std::max(counters.peakPhaseRetainedSourceBytes, retainedSourceBytes);
     };
-    const auto claimed = 3 * sourceBytes_;
+    const auto claimed = sourceBytes_ + sourceScratchBytes_;
     if (retainedSourceBytes > claimed) {
         const auto growth = retainedSourceBytes - claimed;
         record();
@@ -525,6 +576,16 @@ void GpuProcessingPhaseBudget::setHostCeiling(const std::optional<std::uint64_t>
     }
     state_->changed.notify_all();
 }
+void GpuProcessingPhaseBudget::setDeviceCeiling(const std::optional<std::uint64_t> bytes) noexcept {
+    {
+        const std::lock_guard lock(state_->mutex);
+        if (state_->counters.deviceCeilingBytes == bytes)
+            return;
+        state_->counters.deviceCeilingBytes = bytes;
+        incrementSaturating(state_->counters.admissionRevision);
+    }
+    state_->changed.notify_all();
+}
 void GpuProcessingPhaseBudget::setSampledHostCapacity(
     const std::optional<std::uint64_t> bytes, const bool ready,
     const std::chrono::steady_clock::time_point validUntil, const std::uint64_t creditBytes,
@@ -627,7 +688,10 @@ GpuProcessingPhaseBudget::hostNeedBytes(const GpuProcessingPhaseRequest& request
                            : detail::measuredNeed(state_->measuredSourceRetention,
                                                   envelopeKey(request), request.minimumSourceBytes);
     const auto max = std::numeric_limits<std::uint64_t>::max();
-    return source > (max - request.fixedHostBytes) / 3 ? max : request.fixedHostBytes + 3 * source;
+    const auto scratch = request.sourceFree ? 0 : sourceScratchFor(request, source);
+    if (scratch == max || source > max - scratch || source + scratch > max - request.fixedHostBytes)
+        return max;
+    return request.fixedHostBytes + source + scratch;
 }
 
 GpuProcessingPhaseGrant
@@ -664,8 +728,10 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         counters.hostCeilingBytes.value_or(0) == 0) {
         return refused(GpuProcessingPhaseDomain::Host);
     }
+    // The same for the device (#539): another program's VRAM can come back, so a measured zero
+    // within a non-zero ceiling waits below.
     if (request.native && counters.deviceReady && counters.deviceCapacityBytes &&
-        *counters.deviceCapacityBytes == 0) {
+        *counters.deviceCapacityBytes == 0 && counters.deviceCeilingBytes.value_or(0) == 0) {
         return refused(GpuProcessingPhaseDomain::Device);
     }
     if (!counters.hostReady || !counters.hostCapacityBytes) {
@@ -703,10 +769,13 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
             : detail::measuredNeedLocked(state_->measuredSourceRetention, envelopeKey(request),
                                          request.minimumSourceBytes);
     const auto max = std::numeric_limits<std::uint64_t>::max();
-    if (sourceNeed > (max - request.fixedHostBytes) / 3) {
+    // The sources it retains plus one source's decode/conversion scratch (#472).
+    const std::uint64_t sourceScratch = request.sourceFree ? 0 : sourceScratchFor(request, sourceNeed);
+    if (sourceScratch == max || sourceNeed > max - sourceScratch ||
+        sourceNeed + sourceScratch > max - request.fixedHostBytes) {
         return refused(GpuProcessingPhaseDomain::Host);
     }
-    const std::uint64_t hostNeed = request.fixedHostBytes + 3 * sourceNeed;
+    const std::uint64_t hostNeed = request.fixedHostBytes + sourceNeed + sourceScratch;
     const std::uint64_t hostLimit =
         std::max(*counters.hostCapacityBytes, counters.hostCeilingBytes.value_or(0));
     if (hostNeed > hostLimit) {
@@ -734,7 +803,9 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
             return refused(GpuProcessingPhaseDomain::Device);
         }
         deviceNeed = request.deviceWorkingBytes + request.minimumExecutorBytes;
-        if (deviceNeed > *counters.deviceCapacityBytes) {
+        const std::uint64_t deviceLimit =
+            std::max(*counters.deviceCapacityBytes, counters.deviceCeilingBytes.value_or(0));
+        if (deviceNeed > deviceLimit) {
             return refused(GpuProcessingPhaseDomain::Device);
         }
         // Size the need from what phases of this envelope actually allocated (#417): the stated
@@ -761,7 +832,7 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
             executorBytes =
                 std::max(executorBytes, std::min(request.requestedExecutorBytes, deviceNeed));
         if (request.requestedExecutorBytes != 0 && executorBytes == 0) {
-            return deviceNeed >= *counters.deviceCapacityBytes
+            return deviceNeed >= deviceLimit
                        ? refused(GpuProcessingPhaseDomain::Device)
                        : waiting(GpuProcessingPhaseDomain::Device);
         }
@@ -779,13 +850,20 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
     // the device or reading back hold no device claim, because they hold no device memory.
     lease->deviceClaimBytes_ = 0;
     lease->deviceNeedBytes_ = deviceNeed;
+    lease->deviceClaimCapBytes_ = deviceNeed;
     lease->envelopeWorkingBytes_ = request.deviceWorkingBytes;
     lease->envelopeMinimumExecutorBytes_ = request.minimumExecutorBytes;
     lease->envelopeFixedHostBytes_ = request.fixedHostBytes;
     lease->envelopeMinimumSourceBytes_ = request.minimumSourceBytes;
     lease->sourceBytes_ = sourceNeed;
+    lease->sourceScratchBytes_ = sourceScratch;
+    lease->sourceRoomShort_ =
+        !request.sourceFree &&
+        sourceCeiling < std::min(request.requestedSourceBytes, hostLimit - hostNeed + sourceNeed);
     lease->sourceCeilingBytes_ = sourceCeiling;
     lease->executorBytes_ = executorBytes;
+    lease->requestedExecutorBytes_ = request.native ? request.requestedExecutorBytes : 0;
+    lease->deviceCapacityAtAdmission_ = counters.deviceCapacityBytes.value_or(0);
     lease->id_ = state_->nextId;
     lease->admissionRevision_ = counters.admissionRevision;
     state_->nextId =

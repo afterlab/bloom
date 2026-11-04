@@ -513,6 +513,20 @@ void testPreparer(Expectations& expectations,
     expectations.expect(preparer.prepare(cstConfig, cst, geometry, options).hasValue(),
                         "the original cached command survives a refused stricter request");
 
+    // #539: a compiler that runs out of time says nothing about the program. It is reported as
+    // unavailable (a wait and retry), never as a failed compile that sends the frame to the CPU.
+    GpuOcioProgramPreparer hurried;
+    auto oneMillisecond = options;
+    oneMillisecond.deadline = std::chrono::milliseconds(1);
+    const auto hurriedResult =
+        hurried.prepare(cstConfig, cst, GpuOcioCommandGeometry{9, 5}, oneMillisecond);
+    expectations.expect(hurriedResult.error == GpuOcioPreparationError::CompileUnavailable &&
+                            hurriedResult.command == nullptr,
+                        "a compile that misses its deadline is unavailable, not failed");
+    expectations.expect(hurried.prepare(cstConfig, cst, GpuOcioCommandGeometry{9, 5}, options)
+                            .hasValue(),
+                        "the same program compiles when the compiler has time");
+
     // Cancellation before publication retains nothing.
     GpuOcioProgramPreparer cancelled;
     const GpuOcioCommandGeometry cancelGeometry{7, 4};

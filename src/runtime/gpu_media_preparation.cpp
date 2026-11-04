@@ -491,6 +491,9 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
             // space, so no effect command is emitted.
             return true;
         }
+        // A busy or failed compiler is a wait, not a media failure (#539).
+        if (prepared.error == GpuOcioPreparationError::CompileUnavailable)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::AwaitingCapacity;
         outcome.failure = "GPU media color preparation failed: " +
                           std::string{gpuOcioPreparationErrorName(prepared.error)};
         return false;
@@ -528,6 +531,9 @@ proxyOutputDescriptor(const render::Rgba32fImageDescriptor& source,
             outcome.cancelled = true;
             return false;
         }
+        // A busy or failed compiler is a wait, not a media failure (#539).
+        if (prepared.error == GpuOcioPreparationError::CompileUnavailable)
+            outcome.failureCode = PreparedGpuSceneDiagnosticCode::AwaitingCapacity;
         outcome.failure = "GPU footage interpretation preparation failed: " +
                           std::string{gpuOcioPreparationErrorName(prepared.error)};
         return false;

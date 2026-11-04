@@ -221,10 +221,10 @@ void BackgroundPreviewController::fillNextFrame() {
         return;
     }
     const auto format = composition->format();
-    // The read-ahead width is chosen from free capacity only when nothing is in flight: frames in
-    // flight have not all claimed their phases yet, so growing from a partly filled set would
-    // count the same room twice. Admission makes a frame that does not fit wait.
-    if (widthProvider_ && inFlight_.empty()) {
+    // The read-ahead width is re-measured at every frame boundary (#539): the total frames in
+    // flight that measured needs fit in usable capacity, so it shrinks when other programs take
+    // memory. Admission makes a frame that does not fit wait.
+    if (widthProvider_) {
         readAheadWidth_ = std::clamp<std::size_t>(
             widthProvider_(static_cast<std::uint64_t>(format.width()) * format.height()), 1,
             kMaximumReadAheadFrames);

@@ -1,5 +1,6 @@
 #include <bloom/render/gpu_processing_phase_budget.hpp>
 #include <bloom/render/native_buffer_storage.hpp>
+#include <bloom/render/native_image_storage.hpp>
 
 #include <array>
 #include <condition_variable>
@@ -483,6 +484,119 @@ void contention() {
             "all contending aliases retire exactly once");
 }
 } // namespace
+// #472: preparation decodes and converts one source at a time, so its scratch is twice the largest
+// source, not twice the whole source need. The claim then tracks what a many-layer frame holds.
+void sourceScratchFollowsLargestSource() {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(100000, true);
+    budget.setDeviceCapacity(1000, true);
+    // Twenty-five layers of 100 bytes each: the stated need sums them, the scratch is one layer's.
+    const GpuProcessingPhaseRequest layers{.fixedHostBytes = 100,
+                                           .requestedSourceBytes = 50000,
+                                           .minimumSourceBytes = 2500,
+                                           .largestSourceBytes = 100,
+                                           .deviceWorkingBytes = 10};
+    require(budget.hostNeedBytes(layers) == 100 + 2500 + 2 * 100,
+            "the need is the sources plus one source's decode and conversion scratch");
+    auto first = budget.reserve(layers);
+    require(first.lease && first.lease->sourceScratchBytes() == 200 &&
+                budget.snapshot().totalHostClaimBytes == 2800,
+            "the phase claims its sources and one source's scratch, not 3x the whole need");
+    require(first.lease->finishSourcePreparation(2500) &&
+                budget.snapshot().totalHostClaimBytes == 2600,
+            "finishing returns the scratch and keeps the retained sources");
+    first.lease.reset();
+    require(budget.hostNeedBytes(layers) == 100 + 2500 + 200,
+            "a measured retention above the stated sources stays capped at them");
+    auto unknown = layers;
+    unknown.largestSourceBytes = 0;
+    require(budget.hostNeedBytes(unknown) == 100 + 3 * 2500,
+            "an unknown largest source keeps the whole-need scratch bound");
+    auto oversized = layers;
+    oversized.largestSourceBytes = 9000;
+    require(budget.hostNeedBytes(oversized) == 100 + 2500 + 2 * 2500,
+            "one source is never larger than all of them");
+    budget.setHostCapacity(2700, true);
+    require(budget.reserve(layers).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a need above the whole capacity is still refused");
+}
+// #539: a phase's device claim follows the peak of what it holds at once, not the sum of what it
+// allocated. Storage it publishes (a cache entry) leaves its live set, and the claim is held only
+// while its scene executes.
+void deviceClaimFollowsPeakLiveSet() {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(10000, true);
+    budget.setDeviceCapacity(2000, true);
+    const GpuProcessingPhaseRequest scene{.fixedHostBytes = 10,
+                                          .deviceWorkingBytes = 50,
+                                          .requestedExecutorBytes = 900,
+                                          .minimumExecutorBytes = 250,
+                                          .sourceFree = true};
+    auto grant = budget.reserve(scene);
+    require(grant.lease && budget.snapshot().totalDeviceClaimBytes == 0,
+            "a phase preparing or waiting for the device claims no device memory");
+    // A chain of intermediates: each step's output is published to the cache as the next runs.
+    constexpr NativeImageStorageIdentity local{.allocatorGeneration = 1, .memoryType = 0, .heap = 0};
+    std::vector<NativeImageStorageToken> published;
+    for (int step = 0; step < 8; ++step) {
+        auto image = NativeImageStorageToken::reserve(grant.lease, 100, local);
+        require(image.token.has_value(), "each intermediate fits the live room");
+        require(image.token->promote(), "a finished intermediate is published to the cache");
+        published.push_back(std::move(*image.token));
+    }
+    require(grant.lease->peakDeviceAllocationBytes() == 100,
+            "published intermediates leave the phase: its peak is one live image, not the sum");
+    require(budget.snapshot().totalDeviceClaimBytes == 800,
+            "published storage stays charged to the root as retention");
+    auto output = NativeImageStorageToken::reserve(grant.lease, 120, local);
+    require(output.token.has_value(), "the output is allocated");
+    require(budget.snapshot().totalDeviceClaimBytes == 800 + 300,
+            "while executing the phase holds its whole need");
+    grant.lease->endDeviceExecution();
+    require(budget.snapshot().totalDeviceClaimBytes == 800 + 120 + 50 &&
+                budget.snapshot().deviceReservedBytes == 50,
+            "after execution the phase keeps its output and only its working allowance unallocated");
+    published.clear();
+    require(budget.snapshot().totalDeviceClaimBytes == 120 + 50,
+            "evicted cache entries return to the root, not to the phase");
+    output.token.reset();
+    grant.lease.reset();
+    require(budget.snapshot().totalDeviceClaimBytes == 0 &&
+                budget.snapshot().recentPhaseDevicePeakBytes == 120,
+            "the released phase records its own live peak for sizing frames in flight");
+}
+// #539: device memory another program holds can come back. A need above the measured free
+// capacity but within the device's ceiling waits; only a need the whole device could never hold is
+// refused.
+void deviceRoomOthersHoldIsAWait() {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(10000, true);
+    budget.setDeviceCapacity(0, true);
+    const GpuProcessingPhaseRequest frame{.fixedHostBytes = 100,
+                                          .deviceWorkingBytes = 10,
+                                          .requestedExecutorBytes = 400,
+                                          .minimumExecutorBytes = 200,
+                                          .native = true};
+    require(budget.reserve(frame).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a measured zero with no ceiling is exhaustion");
+    budget.setDeviceCeiling(1000);
+    auto zero = budget.reserve(frame);
+    require(zero.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                zero.domain == GpuProcessingPhaseDomain::Device,
+            "a measured zero within the ceiling waits for the room to come back");
+    budget.setDeviceCapacity(100, true);
+    require(budget.reserve(frame).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "a need above the free room but within the ceiling waits");
+    auto huge = frame;
+    huge.requestedExecutorBytes = 2000;
+    huge.minimumExecutorBytes = 2000;
+    require(budget.reserve(huge).status == GpuProcessingPhaseAdmission::BudgetRefused,
+            "a need above the whole device is still refused");
+    budget.setDeviceCapacity(800, true);
+    auto grant = budget.reserve(frame);
+    require(grant.lease && grant.lease->deviceCapacityAtAdmission() == 800,
+            "room that returns admits the frame, which records the capacity it was admitted with");
+}
 int main() {
     try {
         readinessAndRollback();
@@ -494,6 +608,9 @@ int main() {
         retryWatermarks();
         finishedPreparationReleasesDecodeScratch();
         sourceNeedFollowsMeasuredRetention();
+        sourceScratchFollowsLargestSource();
+        deviceClaimFollowsPeakLiveSet();
+        deviceRoomOthersHoldIsAWait();
         std::cout << "paired phase readiness/sizing/lifetime/32-way contention PASS\n";
         return 0;
     } catch (const std::exception& error) {

@@ -227,6 +227,14 @@ const CancellationToken& TaskContext::cancellation() const noexcept { return can
 
 CpuRowBandExecutor* TaskContext::rowBandExecutor() const noexcept { return state_->rowBands; }
 
+TaskPriority TaskContext::priority() const noexcept {
+    try {
+        return state_->priority ? state_->priority() : TaskPriority::Background;
+    } catch (...) {
+        return TaskPriority::Background;
+    }
+}
+
 bool TaskContext::isCancellationRequested() const noexcept {
     return cancellation_.isCancellationRequested();
 }

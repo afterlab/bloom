@@ -214,6 +214,8 @@ std::string_view gpuOcioPreparationErrorName(const GpuOcioPreparationError error
         return "command-invalid";
     case GpuOcioPreparationError::OverBudget:
         return "over-budget";
+    case GpuOcioPreparationError::CompileUnavailable:
+        return "compile-unavailable";
     }
     return "unknown";
 }
@@ -372,10 +374,21 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         std::lock_guard<std::mutex> lock(impl_->mutex);
         ++impl_->counters.compileFailures;
         std::string diagnostic = "the wrapper did not compile";
+        bool transient = false;
         if (compiled.failure.has_value()) {
             diagnostic = compiled.failure->diagnostic;
+            // A compiler that ran out of time, could not start or crashed (a loaded machine, many
+            // frames compiling at once) says nothing about the program (#539).
+            using color::GpuShaderCompileError;
+            const auto code = compiled.failure->code;
+            transient = code == GpuShaderCompileError::Timeout ||
+                        code == GpuShaderCompileError::SpawnFailure ||
+                        code == GpuShaderCompileError::IoFailure ||
+                        code == GpuShaderCompileError::ToolCrashed;
         }
-        return failure(GpuOcioPreparationError::CompileFailed, std::move(diagnostic));
+        return failure(transient ? GpuOcioPreparationError::CompileUnavailable
+                                 : GpuOcioPreparationError::CompileFailed,
+                       std::move(diagnostic));
     }
     // A cancellation observed before publication must not retain a cancelled result.
     if (cancel && cancel()) {

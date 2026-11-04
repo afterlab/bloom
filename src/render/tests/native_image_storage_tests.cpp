@@ -304,7 +304,9 @@ void turnoverRefusalWatermark() {
         auto prefix = NativeImageStorageToken::reserve(phase.lease, 80, local());
         require(prefix.token && token(prefix).promote(), "watermark own prefix retained");
         const auto atRefusal = budget.snapshot().admissionRevision;
-        const auto refused = NativeImageStorageToken::reserve(phase.lease, 21, local());
+        // Published storage left the phase's live set (#539); the next image beyond its
+        // whole device limit is refused.
+        const auto refused = NativeImageStorageToken::reserve(phase.lease, 101, local());
         require(!refused.token && refused.status == GpuProcessingPhaseAdmission::BudgetRefused &&
                     refused.revisionAfterOwnRelease == atRefusal + 1 &&
                     refused.revisionAfterOwnRelease > phase.lease->revisionAfterOwnRelease(),

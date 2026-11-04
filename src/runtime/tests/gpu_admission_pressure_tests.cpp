@@ -169,7 +169,7 @@ void exhaustionIsRefusedWithReadableCounters() {
     large.pixels = 16384ULL * 16384;
     large.minimumSourceBytes = large.pixels * 16;
     large.minimumExecutorBytes = large.pixels * 16;
-    // The Profiler's pressure counters (process-wide): one wait, then two refusals.
+    // The Profiler's pressure counters (process-wide): two waits and two refusals.
     const auto countedBefore = bloom::core::telemetry::admissionTotals();
     const auto waits = policy.reserve(large);
     require(waits.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
@@ -184,13 +184,18 @@ void exhaustionIsRefusedWithReadableCounters() {
     require(refused.status == GpuProcessingPhaseAdmission::BudgetRefused &&
                 refused.domain == GpuProcessingPhaseDomain::Host && !refused.lease,
             "a frame larger than the host ceiling is refused");
-    auto deviceHuge = frame(2 * kGiB);
-    const auto deviceRefused = policy.reserve(deviceHuge);
+    // The device ceiling is the 24 GiB device-local heap minus headroom (#539): a device need above
+    // the usable 1 GiB waits for the VRAM other programs hold; one above the heap is refused.
+    const auto deviceWaits = policy.reserve(frame(2 * kGiB));
+    require(deviceWaits.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                deviceWaits.domain == GpuProcessingPhaseDomain::Device,
+            "a device need above the usable room but within the device waits");
+    const auto deviceRefused = policy.reserve(frame(23 * kGiB));
     require(deviceRefused.status == GpuProcessingPhaseAdmission::BudgetRefused &&
                 deviceRefused.domain == GpuProcessingPhaseDomain::Device,
-            "a device need larger than the whole usable device capacity is refused");
+            "a device need larger than the whole device is refused");
     const auto counted = bloom::core::telemetry::admissionTotals();
-    require(counted.waits == countedBefore.waits + 1 &&
+    require(counted.waits == countedBefore.waits + 2 &&
                 counted.refusals == countedBefore.refusals + 2,
             "each wait and each refusal is counted for the Profiler");
     {
@@ -632,10 +637,15 @@ void deviceClaimsFollowDeviceStages() {
     auto restarted = NativeImageStorageToken::reserve(grants[0].lease, 100 * kMiB, local, now);
     require(restarted.token && policy.usableCapacity().deviceClaimBytes == 2 * need + room / 2,
             "a later stage of the same phase claims its need again");
+    // #539: a need above the usable room but within the 24 GiB device waits for room other
+    // programs hold; only a need above the whole device is refused.
     auto whole = envelope;
     whole.deviceWorkingBytes = 3 * need;
+    require(policy.reserve(whole).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "a need larger than the usable room but within the device waits");
+    whole.deviceWorkingBytes = 25 * kGiB;
     require(policy.reserve(whole).status == GpuProcessingPhaseAdmission::BudgetRefused,
-            "a need larger than the whole usable device is refused");
+            "a need larger than the whole device is refused");
     restarted.token.reset();
     second.token.reset();
     third.token.reset();
@@ -802,8 +812,8 @@ void previewWidthIsBounded() {
     require(previewFramesThatFit(policy, pixels, 512 * kMiB) == 1,
             "one frame still runs when only one fits");
     deliverHost(policy, perFrameHost / 2, 4);
-    require(previewFramesThatFit(policy, pixels, 512 * kMiB) == 0,
-            "nothing runs when not even one frame fits");
+    require(previewFramesThatFit(policy, pixels, 512 * kMiB) == 1,
+            "one frame waits for room other programs hold when none fits now (#539)");
 }
 
 // #411: claims whose backing is allocated are already in measured usage. Reusable pools were held
@@ -835,6 +845,100 @@ void pendingClaimsExcludeAllocatedBacking() {
     require(policy.usableCapacity().hostPendingClaimBytes == 0, "released claims are not pending");
 }
 
+// #472: preparation decodes and converts one source at a time. A 1080p stack of 25 distinct
+// layers claims its sources plus one layer's scratch while it prepares, not three times every
+// layer, so eight frames fit where the 3x overlap claimed more than all usable RAM; the claim
+// stays within one layer's scratch of what a frame actually holds.
+void hostClaimsTrackOneSourcesScratch() {
+    GpuProcessingPhasePolicy policy(32);
+    policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    deliverHost(policy, 17 * kGiB, 1);
+    reportDevice(policy, 1, 22 * kGiB);
+    const std::uint64_t pixels = 1920ULL * 1080;
+    const std::uint64_t frameBytes = pixels * 16;
+    constexpr std::uint64_t layers = 25;
+    GpuProcessingPhaseEnvelope envelope{.output = GpuProcessingPhaseOutput::PackedPreview,
+                                        .pixels = pixels,
+                                        .metadataBytes = 64 * kMiB,
+                                        .requestedSourceBytes = 64 * kGiB,
+                                        .minimumSourceBytes = layers * frameBytes,
+                                        .largestSourceBytes = frameBytes,
+                                        .requestedExecutorBytes = 64 * kGiB,
+                                        .minimumExecutorBytes = frameBytes,
+                                        .deviceWorkingBytes = 832 * kMiB};
+    auto wholeNeed = envelope;
+    wholeNeed.largestSourceBytes = 0;
+    std::vector<GpuProcessingPhaseGrant> grants;
+    for (int index = 0; index < 8; ++index) {
+        grants.push_back(policy.reserve(wholeNeed));
+        if (!grants.back().lease)
+            break;
+    }
+    require(grants.size() < 8, "with 3x the whole source need eight frames do not fit 17 GiB");
+    grants.clear();
+    for (int index = 0; index < 8; ++index) {
+        grants.push_back(policy.reserve(envelope));
+        require(grants.back().lease && grants.back().lease->sourceScratchBytes() == 2 * frameBytes,
+                "with one source's scratch eight preparing frames fit");
+    }
+    const auto fixed = grants.front().lease->hostBytes() - (layers + 2) * frameBytes;
+    const auto preparing = policy.usableCapacity();
+    require(preparing.hostClaimBytes == 8 * (fixed + (layers + 2) * frameBytes),
+            "each preparing frame claims its sources plus one source's scratch");
+    // Claim against measured use: a frame retains its 25 layers and holds one layer's decoded and
+    // converted copies while preparing, so its claim is what it holds, not 3x its sources.
+    for (auto& grant : grants)
+        require(grant.lease->finishSourcePreparation(layers * frameBytes),
+                "each frame finishes preparation with its sources");
+    require(policy.usableCapacity().hostClaimBytes == 8 * (fixed + layers * frameBytes),
+            "prepared frames claim exactly what they retain");
+    grants.clear();
+    require(policy.usableCapacity().hostClaimBytes == 0, "every claim returns");
+}
+
+// #539: frames in flight follow measured per-frame needs and the usable capacity measured now.
+// Once frames have run, their measured host claim and device peak size the width; when another
+// program takes VRAM the width shrinks at the next frame boundary, and nothing is a fixed cap.
+void previewWidthFollowsMeasuredRoom() {
+    const std::uint64_t pixels = 2048ULL * 858;
+    GpuProcessingPhasePolicy policy(32);
+    policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    deliverHost(policy, 60 * kGiB, 1);
+    reportDevice(policy, 1, 22 * kGiB);
+    auto envelope = frame(0);
+    envelope.pixels = pixels;
+    auto grant = policy.reserve(envelope);
+    require(grant.lease != nullptr, "a frame is admitted");
+    // The frame's scene held 2 GiB of native storage at its peak.
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    auto image = NativeImageStorageToken::reserve(grant.lease, 2 * kGiB, local,
+                                                  std::chrono::steady_clock::now());
+    require(image.token.has_value(), "the scene allocates its live set");
+    image.token.reset();
+    grant.lease.reset();
+    require(policy.snapshot().reservations.recentPhaseDevicePeakBytes == 2 * kGiB,
+            "a released frame records its measured device peak");
+    const auto threads = std::max(1U, std::thread::hardware_concurrency());
+    require(previewFramesThatFit(policy, pixels, 0) == std::min<std::size_t>(threads, 11),
+            "22 GiB of usable VRAM holds eleven 2 GiB frames");
+    reportDevice(policy, 1, 7 * kGiB);
+    require(previewFramesThatFit(policy, pixels, 0) == std::min<std::size_t>(threads, 3),
+            "another program taking VRAM shrinks the width at the next boundary");
+    reportDevice(policy, 1, kGiB);
+    require(previewFramesThatFit(policy, pixels, 0) == 1,
+            "one frame waits when another program holds the room it needs");
+    reportDevice(policy, 1, 0);
+    require(previewFramesThatFit(policy, pixels, 0) == 1,
+            "a device another program has filled still keeps one frame waiting");
+    auto now = frame(0);
+    now.pixels = pixels;
+    require(policy.reserve(now).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "admission makes it wait rather than refusing it");
+    reportDevice(policy, 1, 22 * kGiB);
+    require(policy.reserve(now).status == GpuProcessingPhaseAdmission::Accepted,
+            "it runs once the room comes back");
+}
+
 int main() {
     try {
         headroomIsTheOnlyMargin();
@@ -852,6 +956,8 @@ int main() {
         deviceClaimsFollowDeviceStages();
         deviceNeedFollowsMeasuredPeaks();
         hostClaimsFollowRetainedSources();
+        hostClaimsTrackOneSourcesScratch();
+        previewWidthFollowsMeasuredRoom();
         pendingClaimsExcludeAllocatedBacking();
     } catch (const std::exception& error) {
         std::cerr << "admission pressure: " << error.what() << '\n';

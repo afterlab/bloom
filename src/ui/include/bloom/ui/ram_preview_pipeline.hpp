@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace bloom::ui {
@@ -76,6 +77,11 @@ class RamPreviewPipeline final {
     // invalidation that ends a run, and the bounded budget stop; after it returns, no frame this
     // pipeline owned can still be running.
     void cancelAllAndDetach() noexcept;
+
+    // #539: cancels and detaches only the in-flight frames `stale` selects (an edit changed what
+    // they would render), so the work they would still do yields to current frames. Returns how
+    // many were cancelled.
+    std::size_t cancelIf(const std::function<bool(const InFlight&)>& stale);
 
   private:
     std::size_t width_ = kMaxInFlight;

@@ -390,6 +390,9 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         return outcome;
     }
 
+    // The scene has executed: the phase keeps a claim only for its readback allowance (#539).
+    if (phase.lease)
+        phase.lease->endDeviceExecution();
     // 4. Take the resident output image (still GPU-resident).
     auto image = executor->takeImage();
     if (image == nullptr) {

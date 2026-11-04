@@ -31,6 +31,8 @@ struct GpuProcessingPhaseEnvelope final {
     std::uint64_t retainedCoverageByteLimit = 0;
     std::uint64_t requestedSourceBytes = 0;
     std::uint64_t minimumSourceBytes = 0;
+    // The largest single source within minimumSourceBytes (#472); zero when unknown.
+    std::uint64_t largestSourceBytes = 0;
     // Omitted rooted-view requests derive this ceiling per attempt from the selected request.
     // Explicit zero/finite values retain their exact meaning; no-view omission stays legacy zero.
     std::optional<std::uint64_t> requestedExecutorBytes = {};
@@ -210,14 +212,13 @@ class GpuProcessingPhasePolicy final {
     void applyDeviceReportsLocked() noexcept;
 };
 
-// Preview frames (Viewer, RAM fill, playback) of `framePixels` that fit the free capacity now: a
-// packed output, one float source and preparation overlap per frame on the host; the preview
-// working set plus one float frame on the device, counted once because frames run their device
-// stages one at a time. Capped at one per hardware thread (each frame's decode and scene
-// preparation run serially on one CPU worker, so that is the width that keeps every core busy) and
-// at what fits a quarter of the free host capacity (at least one frame when one fits); zero when
-// even one frame does not fit. Frames in flight follow concurrency, never free memory alone.
-// Playback read-ahead further caps itself at BackgroundPreviewController::kMaximumReadAheadFrames.
+// Preview frames (Viewer, RAM fill, playback) of `framePixels` to keep in flight (#539): as many
+// as fit the usable capacity measured now, with the most native storage recently released phases
+// held at one time (plus the preview working set) as each frame's device need, and a packed output,
+// one float source and its decode scratch as its host need. Callers re-measure at every frame
+// boundary, so the count shrinks when other programs take memory. Capped at one per hardware
+// thread (each frame's decode and scene preparation run serially on one CPU worker) and at a
+// quarter of usable RAM (at least one frame when one fits); zero when one frame does not fit.
 [[nodiscard]] std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy&,
                                                std::uint64_t framePixels,
                                                std::uint64_t deviceWorkingBytes) noexcept;

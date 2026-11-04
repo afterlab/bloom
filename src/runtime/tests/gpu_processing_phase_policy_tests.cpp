@@ -769,8 +769,12 @@ void deviceReportRecoversAfterPressure() {
                                    .device_local_bytes = 8 * gib,
                                    .available_bytes = 0};
     require(policy.reportDevice(90, zero), "zero free device capacity is reported");
-    require(policy.reserve(preview(), now).status == GpuProcessingPhaseAdmission::BudgetRefused,
-            "a startup zero cannot admit a native phase");
+    // #539: a measured zero within the 8 GiB device waits for the room to return; it is not
+    // refused, and it admits nothing until then.
+    const auto startup = policy.reserve(preview(), now);
+    require(startup.status == GpuProcessingPhaseAdmission::AwaitingCapacity &&
+                startup.domain == GpuProcessingPhaseDomain::Device && !startup.lease,
+            "a startup zero cannot admit a native phase; it waits");
     auto free = zero;
     free.available_bytes = gib;
     require(policy.reportDevice(90, free), "same owner refreshes its live free capacity");
@@ -778,7 +782,8 @@ void deviceReportRecoversAfterPressure() {
     require(active.lease != nullptr, "native phase recovers after a zero startup sample");
     free.available_bytes = 64 * 1024 * 1024;
     require(policy.reportDevice(90, free), "pressure refresh preserves the owner report slot");
-    require(policy.reserve(preview(), now).status == GpuProcessingPhaseAdmission::BudgetRefused,
+    require(policy.reserve(preview(), now).status ==
+                GpuProcessingPhaseAdmission::AwaitingCapacity,
             "live free bytes do not credit held phase claims to new work");
     active.lease.reset();
     free.available_bytes = gib;

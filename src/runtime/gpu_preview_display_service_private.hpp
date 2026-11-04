@@ -119,6 +119,10 @@ struct PreviewDisplayStageRecord final {
     bool processingPhaseFailed = false;
     // Native retirement is independent of whether the completed product can be published.
     bool processingPhaseRetired = false;
+    // #539: the executor refused the frame for device capacity (its byte limit or a native
+    // allocation). Such a frame waits for room (and asks the device caches to give way) instead of
+    // falling back to the CPU, unless it already had all the room the device could give.
+    bool capacityShort = false;
     std::chrono::steady_clock::time_point nativeStartedAt{};
     std::chrono::steady_clock::time_point packedTransferStartedAt{};
 
@@ -264,6 +268,9 @@ struct PreviewDisplayServiceCore final {
     // Owner-thread-only sampling cadence for the rooted live GPU foreground allowance. Native
     // stage polling may run at 2 ms; heap-budget queries need no such cadence.
     std::chrono::steady_clock::time_point foregroundCapacitySampledAt{};
+    // #539 idle trim: when the owner last had preview work, and whether this idle spell trimmed.
+    std::chrono::steady_clock::time_point residentBusyAt{};
+    bool idleTrimmed = true;
     // Bounded cached counters, owner-written atomics and read locklessly/under lock by status().
     std::atomic<std::uint64_t> counterResidentGraphJobs{0};
     std::atomic<std::uint64_t> counterNativeDispatches{0};
@@ -287,6 +294,9 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterPackedTransferredBytes{0};
     std::atomic<std::uint64_t> counterPackedPeakBytes{0};
     std::atomic<std::uint64_t> counterResidentFailures{0};
+    std::atomic<std::uint64_t> counterCapacityWaits{0};
+    std::atomic<std::uint64_t> counterIdleTrims{0};
+    std::atomic<std::uint64_t> counterIdleTrimmedBytes{0};
     std::atomic<std::uint64_t> counterGpuCacheHits{0};
     std::atomic<std::uint64_t> counterGpuCacheMisses{0};
     std::atomic<std::uint64_t> counterCpuFallbacks{0};

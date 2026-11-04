@@ -51,6 +51,9 @@ class TaskContext final {
     // serial row evaluation, which every consumer must handle by running its bands itself -- the
     // pool makes a frame faster, never correct, and the pixels must not depend on it.
     [[nodiscard]] CpuRowBandExecutor* rowBandExecutor() const noexcept;
+    // The running task's current priority, so speculative work can say what it is to the
+    // resources it asks for (#539: a Background frame yields device room to Viewer work).
+    [[nodiscard]] TaskPriority priority() const noexcept;
 
     void reportProgress(TaskProgress progress);
     void addDiagnostic(TaskDiagnostic diagnostic);

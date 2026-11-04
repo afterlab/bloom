@@ -299,7 +299,9 @@ void downstreamRefusal(GpuDevice& device) {
         destroyResidentBuffer(*state, buffer);
     }
     for (bool externalHolder : {false, true}) {
-        auto admitted = phase(budget, 64ULL * 64ULL * sizeof(Rgba32f) + workingBytes);
+        // The published input leaves the phase's live set (#539), so the phase is sized to hold
+        // the input while it is produced, then the display's buffers, but not its output image.
+        auto admitted = phase(budget, workingBytes + 4096);
         require(device.retainProcessingPhase(admitted), "display refusal phase retained");
         auto impl = std::make_unique<GpuImageImpl>();
         impl->state = state;

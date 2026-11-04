@@ -127,6 +127,10 @@ struct EvaluationRequest final {
     // normal allocation path; only the completed process image is copied into this rooted phase
     // before publication. It affects storage ownership, never pixel or cache identity.
     std::shared_ptr<render::GpuProcessingPhaseLease> finalOutputPhase = nullptr;
+    // #539: speculative background work (a RAM Preview fill or playback read-ahead frame), not
+    // the frame the artist is looking at. It is admitted in the Background class, so Viewer work
+    // preempts it at the next frame boundary. Never affects pixels or cache identity.
+    bool background = false;
 };
 
 // This deliberately retains the complete immutable plan. Exact deep equality is the conservative

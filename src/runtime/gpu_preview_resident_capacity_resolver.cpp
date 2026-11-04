@@ -76,6 +76,35 @@ void resolveResidentCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& c
     core->notify();
 }
 
+// #539: idle means small. Once the owner has had no preview work for the idle trim delay, parked
+// native storage and the reusable scene cache go back to the device, leaving the resident working
+// set (what is on screen and the finished frames the UI holds). Owner thread only.
+static void trimIdleDeviceRetention(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                    const std::chrono::steady_clock::time_point now) noexcept {
+    const bool busy = !core->stages.empty() || !core->residentNativeReady.empty() ||
+                      core->residentNativeInFlight || core->residentAhead != nullptr ||
+                      !core->nativeReady.empty() || core->nativeInFlight;
+    if (busy) {
+        core->residentBusyAt = now;
+        core->idleTrimmed = false;
+        return;
+    }
+    if (core->idleTrimmed || now - core->residentBusyAt < core->options.idleTrimDelay)
+        return;
+    core->idleTrimmed = true;
+    std::uint64_t released = 0;
+    if (core->residentSceneCache != nullptr)
+        released += core->residentSceneCache->reclaim(core->residentSceneCache->retainedBytes());
+    // What the cache let go of is parked first; all parked storage is freed.
+    const auto parked = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+    const auto freed = parked != 0 ? core->device->releaseReusableNativeStorage(parked, true) : 0;
+    released = std::max(released, freed);
+    core->counterIdleTrims.fetch_add(1, std::memory_order_relaxed);
+    core->counterIdleTrimmedBytes.fetch_add(released, std::memory_order_relaxed);
+    // The next device report sees the returned room.
+    core->foregroundCapacitySampledAt = {};
+}
+
 void refreshResidentForegroundCapacity(
     const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
     if (core == nullptr || core->device == nullptr || !core->device->isOwnerThread() ||
@@ -83,6 +112,7 @@ void refreshResidentForegroundCapacity(
         return;
     }
     const auto now = std::chrono::steady_clock::now();
+    trimIdleDeviceRetention(core, now);
     // Parked host-visible storage (#477) goes back as soon as work waits for host memory.
     if (core->hostStorageReclaim->pending())
         static_cast<void>(

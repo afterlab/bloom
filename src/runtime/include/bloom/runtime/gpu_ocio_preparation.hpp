@@ -147,6 +147,9 @@ enum class GpuOcioPreparationError : std::uint8_t {
     CompileCancelled,
     CommandInvalid,
     OverBudget,
+    // #539: the compiler timed out, could not start or crashed. Nothing is wrong with the program;
+    // a retry compiles it (or finds it cached), so the frame waits instead of leaving the GPU.
+    CompileUnavailable,
 };
 
 [[nodiscard]] std::string_view gpuOcioPreparationErrorName(GpuOcioPreparationError error) noexcept;

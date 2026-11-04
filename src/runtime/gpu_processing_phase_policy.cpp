@@ -130,6 +130,7 @@ processingPhaseRequest(const GpuProcessingPhaseEnvelope& envelope) noexcept {
                                              .processingHostScratchBytes = scratchBytes,
                                              .requestedSourceBytes = envelope.requestedSourceBytes,
                                              .minimumSourceBytes = envelope.minimumSourceBytes,
+                                             .largestSourceBytes = envelope.largestSourceBytes,
                                              .deviceWorkingBytes = envelope.deviceWorkingBytes,
                                              .requestedExecutorBytes =
                                                  envelope.requestedExecutorBytes.value_or(0),
@@ -366,6 +367,7 @@ bool GpuProcessingPhasePolicy::retireDeviceReport(const std::uint64_t ownershipE
 }
 void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
     std::optional<std::uint64_t> minimum;
+    std::optional<std::uint64_t> ceiling;
     bool ready = deviceCount_ != 0;
     // With one reported device, the root's exact LOCAL native allocations belong to that owner.
     // A live VMA free-space report has already subtracted their backing, while totalDeviceClaim
@@ -417,7 +419,14 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         }
         available = subtractSaturating(available, headroom_.vramBytes);
         minimum = minimum ? std::min(*minimum, available) : available;
+        // The most this device could ever give the root (#539): what other programs hold now
+        // can come back, so a need within it waits instead of being refused.
+        const auto whole = subtractSaturating(std::max(current.device_local_bytes,
+                                                       current.available_bytes),
+                                              headroom_.vramBytes);
+        ceiling = ceiling ? std::min(*ceiling, whole) : whole;
     }
+    budget_.setDeviceCeiling(ceiling);
     budget_.setDeviceCapacity(minimum, ready || (minimum && *minimum == 0));
 }
 render::GpuProcessingPhaseGrant
@@ -664,23 +673,40 @@ std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy& policy,
     if (framePixels == 0 ||
         framePixels > (std::numeric_limits<std::uint64_t>::max() - metadata) / 64)
         return 0;
+    // Frames in flight are as many as per-frame needs fit in the usable capacity (#539),
+    // re-measured at every frame boundary, never a fixed count. On the device the need is what one
+    // frame's scene held at its peak, measured from recently released phases (one float frame
+    // before any is measured). On the host it is the output and one float source with its decode
+    // scratch: a fill's measured host claims include its many layers' retained sources, and sizing
+    // the width from them would idle the CPU workers the fill needs, while admission still makes a
+    // frame that does not fit wait.
+    const auto measured = policy.snapshot().reservations;
     const auto host = framePixels * (8 + 3 * 16) + metadata;
-    const auto device = addSaturating(deviceWorkingBytes, framePixels * 16);
-    // Frames in flight are bounded by what concurrency gains, never by how much memory is free.
-    // Each frame decodes and prepares its footage on one CPU worker (a PNG or EXR member is one
-    // serial decode), so fill throughput is frames in flight over that per-frame time: one frame
-    // per hardware thread keeps every core busy, while the device runs one scene at a time and
-    // the GPU owner stays idle about half the time (#477). One run also sizes itself to at most a
-    // quarter of the free capacity at its start, so it can never take most of the machine.
-    // Device stages run one at a time and a phase claims device memory only during its own
-    // stage, so the device need decides whether a frame fits at all, not how many are in flight.
-    const auto threads = std::max(1U, std::thread::hardware_concurrency());
-    if (policy.framesThatFit(0, device) == 0)
+    const auto device = measured.recentPhaseDevicePeakBytes != 0
+                            ? addSaturating(deviceWorkingBytes, measured.recentPhaseDevicePeakBytes)
+                            : addSaturating(deviceWorkingBytes, framePixels * 16);
+    // Usable capacity is the live measurement minus the headroom preferences: it falls when other
+    // programs take RAM or VRAM, and Bloom's own frames then shrink to fit. Claims are not
+    // subtracted: frames already in flight are part of the count, not competitors for it.
+    const auto capacity = policy.usableCapacity();
+    if (!capacity.hostReady || !capacity.deviceReady)
         return 0;
-    const auto withinQuarter = policy.framesThatFit(addSaturating(host, host * 3), 0);
-    const auto fits = policy.framesThatFit(host, 0);
-    const auto frames = std::max<std::size_t>(withinQuarter, std::min<std::size_t>(fits, 1));
-    return std::min<std::size_t>(frames, threads);
+    if (capacity.hostUsableBytes < host || capacity.deviceUsableBytes < device) {
+        // One frame that fits what the machine could ever give waits for the room other programs
+        // hold now (admission makes it wait, and it re-drives the run when room returns); only a
+        // frame that never fits runs nothing.
+        const bool everFits = measured.hostCeilingBytes.value_or(0) >= host &&
+                              measured.deviceCeilingBytes.value_or(0) >= device;
+        return everFits ? 1 : 0;
+    }
+    // Each frame decodes and prepares its footage on one CPU worker, so one per hardware thread
+    // keeps every core busy. A run takes at most a quarter of usable RAM, so it can never take
+    // most of the machine; at least one frame always runs when one fits.
+    const auto threads = std::max(1U, std::thread::hardware_concurrency());
+    const auto hostFrames = capacity.hostUsableBytes / addSaturating(host, host * 3);
+    const auto deviceFrames = capacity.deviceUsableBytes / std::max<std::uint64_t>(device, 1);
+    const auto frames = std::max<std::uint64_t>(std::min(hostFrames, deviceFrames), 1);
+    return static_cast<std::size_t>(std::min<std::uint64_t>(frames, threads));
 }
 
 render::GpuProcessingPhaseGrant

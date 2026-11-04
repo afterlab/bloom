@@ -230,6 +230,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::uint64_t coverageAllowance = request.pixelStorageByteLimit;
     if (phase_.policy && !phaseLease) {
         auto envelope = phase_.envelope;
+        // #539: speculative frames yield to the Viewer's (ADR 0033 section 9 classes).
+        if (request.background && envelope.admissionClass == GpuAdmissionClass::Viewer)
+            envelope.admissionClass = GpuAdmissionClass::Background;
         bool derivedCeiling = false;
         if (envelope.native && !envelope.requestedExecutorBytes && phase_.policy->budgetView()) {
             const auto delivered = phase_.policy->budgetView()->load();
@@ -284,6 +287,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         // compositions, unprobed media). The caller's limit stays an unclaimed ceiling.
         if (!envelope.sourceFree) {
             std::uint64_t sourceNeed = 0;
+            std::uint64_t largestSource = 0;
             bool unknownExtent = false;
             // Nested compositions contribute their own media sources; only a source without a
             // recorded extent (or a channel/cryptomatte read) falls back to the preflight peak.
@@ -325,8 +329,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         unknownExtent = true;
                         continue;
                     }
-                    sourceNeed += static_cast<std::uint64_t>(asset->width) * asset->height *
-                                  sizeof(render::Rgba32f);
+                    const auto bytes = static_cast<std::uint64_t>(asset->width) * asset->height *
+                                       sizeof(render::Rgba32f);
+                    sourceNeed += bytes;
+                    largestSource = std::max(largestSource, bytes);
                 }
             }
             if (unknownExtent)
@@ -334,6 +340,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     std::max<std::uint64_t>(sourceNeed, frameResolved.peakPixelStorageBytes);
             envelope.minimumSourceBytes = std::min(
                 envelope.requestedSourceBytes, std::max(envelope.minimumSourceBytes, sourceNeed));
+            // Sources are decoded and converted one at a time (#472): their scratch follows the
+            // largest one. An unknown extent keeps the whole-need scratch bound.
+            envelope.largestSourceBytes = unknownExtent ? 0 : largestSource;
         }
         if (cancellation.isCancellationRequested()) {
             return fail(PreparedGpuSceneDiagnosticCode::Cancelled, "Preparation was cancelled");
@@ -624,13 +633,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             const auto remainingSource =
                 sourceAllowance > consumedSource ? sourceAllowance - consumedSource : 0;
             // S caps retained uploads. The existing decoder accepts a working-set ceiling (final
-            // image plus band/row scratch), so admit its work from the already reserved3*S phase
-            // envelope while enforcing the returned upload against S through chargeRetained.
-            // Prior retained sources plus3*remainingSource cannot exceed the reserved3*S.
+            // image plus band/row scratch), so admit its work from the phase's reserved source
+            // scratch (#472: one source's decode/conversion copies, S + scratch in all) while
+            // enforcing the returned upload against S through chargeRetained.
             const auto remainingBudget =
-                phaseLease
-                    ? std::min<std::uint64_t>(request.pixelStorageByteLimit, 3 * remainingSource)
-                    : remainingSource;
+                phaseLease ? std::min<std::uint64_t>(
+                                 request.pixelStorageByteLimit,
+                                 remainingSource > std::numeric_limits<std::uint64_t>::max() -
+                                                       phaseLease->sourceScratchBytes()
+                                     ? std::numeric_limits<std::uint64_t>::max()
+                                     : remainingSource + phaseLease->sourceScratchBytes())
+                           : remainingSource;
             detail::GpuSceneUploadLeafResult leaf;
             const auto error = detail::buildAndEmitMediaLeaf(
                 operation, operationIndex, clockRequest, *plan, resolved, media, ocioContext_,
@@ -640,19 +653,19 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 keyOf[index], leaf);
             if (error) {
                 // PixelStorageBudgetExceeded names the request's own byte budget. When the
-                // admitted phase source envelope, not the request, bounded this leaf, the refusal
-                // stays MediaUnavailable: the request could not have been raised to admit it.
-                const auto envelopeBytes =
-                    remainingSource > std::numeric_limits<std::uint64_t>::max() / 3
-                        ? std::numeric_limits<std::uint64_t>::max()
-                        : 3 * remainingSource;
+                // admitted phase source envelope, not the request, bounded this leaf, the request
+                // could not have been raised to admit it. If the envelope was cut to the room left
+                // at admission, a later admission with more room fits it: the frame waits for
+                // capacity instead of taking the CPU path (#539). Otherwise it stays
+                // MediaUnavailable.
                 const bool requestBound =
-                    !phaseLease || request.pixelStorageByteLimit <= envelopeBytes;
-                const auto code =
-                    error->code == PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded &&
-                            !requestBound
-                        ? PreparedGpuSceneDiagnosticCode::MediaUnavailable
-                        : error->code;
+                    !phaseLease || request.pixelStorageByteLimit <= remainingBudget;
+                auto code = error->code;
+                if (code == PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded &&
+                    !requestBound)
+                    code = phaseLease->sourceRoomWasShort()
+                               ? PreparedGpuSceneDiagnosticCode::AwaitingCapacity
+                               : PreparedGpuSceneDiagnosticCode::MediaUnavailable;
                 return fail(code, error->message, mediaStatistics);
             }
             bounds[index] = leaf.bounds;

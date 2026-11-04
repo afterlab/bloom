@@ -273,6 +273,10 @@ std::shared_ptr<TaskContextState>
 SchedulerState::makeContextState(const std::shared_ptr<TaskRecord>& record) {
     auto context = std::make_shared<TaskContextState>();
     context->rowBands = rowBandExecutor();
+    context->priority = [record] {
+        std::lock_guard lock(record->mutex);
+        return record->snapshot.priority;
+    };
     context->taskCancellation = record->cancellation;
     context->groupCancellation = record->groupCancellation;
     context->reportProgress = [record](TaskProgress progress) {

@@ -36,6 +36,20 @@ std::vector<RamPreviewPipeline::Ready> RamPreviewPipeline::takeReady() {
     return ready;
 }
 
+std::size_t RamPreviewPipeline::cancelIf(const std::function<bool(const InFlight&)>& stale) {
+    std::size_t cancelled = 0;
+    for (auto it = slots_.begin(); it != slots_.end();) {
+        if (stale(*it)) {
+            it->handle.cancel();
+            it = slots_.erase(it);
+            ++cancelled;
+        } else {
+            ++it;
+        }
+    }
+    return cancelled;
+}
+
 void RamPreviewPipeline::cancelAllAndDetach() noexcept {
     for (auto& slot : slots_) {
         slot.handle.cancel();

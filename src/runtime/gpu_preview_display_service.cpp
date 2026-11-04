@@ -662,6 +662,10 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     for (std::size_t reason = 0; reason < kGpuPreviewCpuFallbackReasonCount; ++reason)
         result.counters.cpuFallbacksByReason[reason] =
             core.counterCpuFallbacksByReason[reason].load(std::memory_order_relaxed);
+    result.counters.capacityWaits = core.counterCapacityWaits.load(std::memory_order_relaxed);
+    result.counters.idleTrims = core.counterIdleTrims.load(std::memory_order_relaxed);
+    result.counters.idleTrimmedBytes =
+        core.counterIdleTrimmedBytes.load(std::memory_order_relaxed);
     result.counters.gpuAdmissionRefusals =
         core.counterGpuAdmissionRefusals.load(std::memory_order_relaxed);
     result.counters.fullFrameReadbacks =

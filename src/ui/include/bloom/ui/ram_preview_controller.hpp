@@ -208,6 +208,8 @@ class RamPreviewController final : public QObject {
     // cancel and let a later run start clean) or only a time interval (adapt and rescan, submitting
     // only the changed frames).
     void handleDocumentEvaluationChanged();
+    // #539: cancels in-flight frames an edit made stale, so they stop holding memory and workers.
+    void cancelStaleFrames();
     // Recomputed from the live work area: first frame index, total count, and the counters the
     // progress readout and budget gate use. Cached frames inside the new range are skipped.
     void rebaseRange();

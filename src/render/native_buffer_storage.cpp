@@ -222,6 +222,7 @@ bool NativeBufferStorageToken::promote() noexcept {
             return true;
         if (!origin_ || origin_->unproven_)
             return false;
+        origin_->transferToRetentionLocked(bytes_);
         published_ = true;
         publishedOrigin_ = origin_;
         releasedOrigin = std::move(origin_);
@@ -243,7 +244,11 @@ bool NativeBufferStorageToken::releaseFailedAttemptAfterBackingDestroyed(
         auto& counters = state_->counters;
         counters.ownedNativeBufferBytes -= bytes_;
         --counters.ownedNativeBuffers;
-        phase->returnDeviceLocked(bytes_);
+        // Published storage already left the phase's allocation (#539).
+        if (published_)
+            counters.totalDeviceClaimBytes -= bytes_;
+        else
+            phase->returnDeviceLocked(bytes_);
         if (!identity_.deviceLocal) {
             counters.ownedNonlocalNativeBufferHostBytes -= bytes_;
             counters.totalHostClaimBytes -= bytes_;
@@ -262,7 +267,6 @@ bool NativeBufferStorageToken::releaseFailedAttemptAfterBackingDestroyed(
 void NativeBufferStorageToken::reset() noexcept {
     if (!state_)
         return;
-    auto liveOrigin = published_ ? publishedOrigin_.lock() : nullptr;
     std::shared_ptr<GpuProcessingPhaseLease> releasedOrigin;
     {
         const std::lock_guard lock(state_->mutex);
@@ -275,11 +279,9 @@ void NativeBufferStorageToken::reset() noexcept {
             --counters.ownedPresentationBuffers;
             incrementSaturating(counters.admissionRevision);
         } else if (published_) {
-            if (liveOrigin && liveOrigin->state_ == state_ && liveOrigin->id_ == originId_) {
-                liveOrigin->returnDeviceLocked(bytes_);
-            } else {
-                counters.totalDeviceClaimBytes -= bytes_;
-            }
+            // Published storage left its phase when it was promoted (#539): it returns to the
+            // root, never to the phase's claim.
+            counters.totalDeviceClaimBytes -= bytes_;
             incrementSaturating(counters.admissionRevision);
         } else {
             if (upload_)

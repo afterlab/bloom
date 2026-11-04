@@ -803,6 +803,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 return fail(PreparedGpuSceneDiagnosticCode::Cancelled,
                             "GPU image-effect preparation was cancelled");
             }
+            // A compiler that was busy, slow or could not start is not an unsupported operation:
+            // the frame waits and retries on the GPU (#539).
+            if (prepared.error == GpuOcioPreparationError::CompileUnavailable)
+                return fail(PreparedGpuSceneDiagnosticCode::AwaitingCapacity,
+                            "GPU image-effect program compile is unavailable; the frame waits");
             // Never substitute identity for a valid transform whose GPU program could not be built.
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         "GPU image-effect preparation failed: " +
