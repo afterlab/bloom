@@ -141,8 +141,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
-    // Association; #502 adds Adjustment.
-    expectations.expect(registry.definitions().size() == 154,
+    // Association; #502 adds Adjustment; #504 adds Colorize.
+    expectations.expect(registry.definitions().size() == 155,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -239,8 +239,35 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                                 "#500: " + std::string(type) + " is listed in its category");
     };
     expectCategory({"bloom.grade", "bloom.levels", "bloom.curves", "bloom.hue-saturation",
-                    "bloom.exposure", "bloom.offset", "bloom.multiply", "bloom.invert"},
+                    "bloom.exposure", "bloom.offset", "bloom.multiply", "bloom.invert",
+                    "bloom.colorize"},
                    document::NodeCategory::Grade);
+    // #504 Colorize: an Image in and out; constant mode (Tint by default), source and cycle with no
+    // socket; every colour and scalar animatable with its own socket in parameter order.
+    const auto* colorize = registry.find("bloom.colorize", 1);
+    const auto socketsMatch = [&] {
+        std::size_t socket = 1;
+        for (const auto& parameter : colorize->parameters) {
+            if (!parameter.supportsAnimation)
+                continue;
+            if (socket >= colorize->inputs.size() || colorize->inputs[socket].name != parameter.role ||
+                colorize->inputs[socket].required)
+                return false;
+            ++socket;
+        }
+        return socket == colorize->inputs.size();
+    };
+    expectations.expect(
+        colorize && colorize->inputs.size() == 15 && colorize->parameters.size() == 17 &&
+            colorize->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            colorize->parameters[0].role == "mode" && !colorize->parameters[0].supportsAnimation &&
+            colorize->parameters[0].defaultValue == document::ParameterValue{std::int64_t{1}} &&
+            colorize->parameters[7].role == "source" &&
+            !colorize->parameters[7].supportsAnimation &&
+            colorize->parameters[8].role == "cycle" && !colorize->parameters[8].supportsAnimation &&
+            socketsMatch() && colorize->outputs.size() == 1 &&
+            colorize->outputs[0].valueKind == runtime::SocketValueKind::Image,
+        "#504: Colorize has its constant choices and an animatable socket per value");
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",

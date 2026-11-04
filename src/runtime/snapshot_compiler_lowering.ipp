@@ -1575,6 +1575,71 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Alpha Association parameters could not be lowered.");
         return std::nullopt;
     }
+    // #504 Colorize: the constant mode, source and cycle, and the operands the mode reads; every
+    // other operand keeps the kernel's constant default without an identity, so an unused (even
+    // animated) value neither claims nor invalidates anything.
+    if (node.typeId == document::kColorizeNodeType) {
+        const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+        const auto* source = parameterConstant<std::int64_t>(findParameterBinding(node, "source"));
+        const auto* cycle = parameterConstant<std::int64_t>(findParameterBinding(node, "cycle"));
+        const auto inRange = [](const std::int64_t* value, const std::string_view schemaKey) {
+            const auto domain = document::colorizeIntegerDomain(schemaKey);
+            return value && *value >= domain->minimum && *value <= domain->maximum;
+        };
+        bool lowered = inRange(mode, document::kColorizeModeSchemaKey) &&
+                       inRange(source, document::kColorizeSourceSchemaKey) &&
+                       inRange(cycle, document::kColorizeCycleSchemaKey);
+        runtime::ColorizeKernel kernel;
+        if (lowered) {
+            kernel.mode = static_cast<runtime::ColorizeMode>(*mode);
+            using Mode = runtime::ColorizeMode;
+            const bool ramp = kernel.mode == Mode::Tritone || kernel.mode == Mode::GradientMap;
+            const bool map = kernel.mode == Mode::GradientMap;
+            if (map) {
+                kernel.source = static_cast<runtime::ColorizeSource>(*source);
+                kernel.cycle = static_cast<runtime::ColorizeCycle>(*cycle);
+            }
+            const auto scalar = [&](const std::string_view role,
+                                    runtime::CompiledScalarParameter& target) {
+                const auto parameter = compiledScalarParameter(findParameterBinding(node, role));
+                lowered = lowered && parameter.has_value();
+                if (parameter)
+                    target = *parameter;
+            };
+            const auto color = [&](const std::string_view role,
+                                   runtime::CompiledColorParameter& target) {
+                const auto parameter = compiledColorParameter(findParameterBinding(node, role));
+                lowered = lowered && parameter.has_value();
+                if (parameter)
+                    target = *parameter;
+            };
+            scalar("amount", kernel.amount);
+            if (kernel.mode == Mode::Fill)
+                color("fillColor", kernel.color);
+            if (kernel.mode == Mode::Tint || ramp) {
+                color("shadows", kernel.shadows);
+                color("highlights", kernel.highlights);
+            }
+            if (ramp) {
+                color("midtones", kernel.midtones);
+                scalar("midpoint", kernel.midpoint);
+            }
+            if (map) {
+                scalar("repetitions", kernel.repetitions);
+                scalar("phase", kernel.phase);
+            }
+            if (kernel.mode == Mode::BlackAndWhite) {
+                const std::array<std::string_view, 6> roles{"reds",  "yellows", "greens",
+                                                            "cyans", "blues",   "magentas"};
+                for (std::size_t index = 0; index < roles.size(); ++index)
+                    scalar(roles[index], kernel.weights[index]);
+            }
+        }
+        if (lowered)
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        addTopologyFailure(node.id, "Colorize parameters could not be lowered.");
+        return std::nullopt;
+    }
     if (node.typeId == document::kHueSaturationNodeType) {
         const auto hue = compiledScalarParameter(findParameterBinding(node, "hue"));
         const auto saturation = compiledScalarParameter(findParameterBinding(node, "saturation"));

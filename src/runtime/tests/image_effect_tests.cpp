@@ -1165,6 +1165,16 @@ void testColorGradeEvaluation() {
         return runtime::AlphaAssociationKernel{
             mode, white, {document::ParameterId::fromRaw(470), background}};
     };
+    // #504 Colorize.
+    const auto colorize = [](const runtime::ColorizeMode mode, const double amount) {
+        runtime::ColorizeKernel kernel;
+        kernel.mode = mode;
+        kernel.amount = {document::ParameterId::fromRaw(480), amount};
+        kernel.shadows = {document::ParameterId::fromRaw(481), core::Color4d{0.1, 0.0, 0.3, 1.0}};
+        kernel.highlights = {document::ParameterId::fromRaw(482),
+                             core::Color4d{1.2, 0.8, 0.2, 1.0}};
+        return kernel;
+    };
     runtime::CpuCompositionEvaluator evaluator;
     runtime::CpuCompositionEvaluator fresh;
     const auto baseline = planWith({});
@@ -1189,6 +1199,10 @@ void testColorGradeEvaluation() {
          {}},
         {association(runtime::AlphaAssociationMode::Unpremultiply, false, {}),
          association(runtime::AlphaAssociationMode::Premultiply, false, {}),
+         {}},
+        {colorize(runtime::ColorizeMode::Tint, 1.0), colorize(runtime::ColorizeMode::Tint, 0.5), {}},
+        {colorize(runtime::ColorizeMode::BlackAndWhite, 0.8),
+         colorize(runtime::ColorizeMode::Tritone, 0.8),
          {}},
         {association(runtime::AlphaAssociationMode::RemoveMatting, false, {0.2, 0.4, 0.8, 1.0}),
          association(runtime::AlphaAssociationMode::RemoveMatting, false, {0.6, 0.4, 0.8, 1.0}),

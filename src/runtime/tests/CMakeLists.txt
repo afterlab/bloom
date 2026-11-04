@@ -396,6 +396,14 @@ bloom_enable_warnings(bloom_runtime_alpha_association_test)
 bloom_enable_strict_floating_point(bloom_runtime_alpha_association_test)
 bloom_add_test(NAME bloom.runtime.alpha-association COMMAND bloom_runtime_alpha_association_test LABELS unit runtime render)
 
+# #504 Colorize: every mode against its formula, the promises, program, budget and cancellation.
+add_executable(bloom_runtime_colorize_test colorize_tests.cpp)
+target_include_directories(bloom_runtime_colorize_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_colorize_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_colorize_test)
+bloom_enable_strict_floating_point(bloom_runtime_colorize_test)
+bloom_add_test(NAME bloom.runtime.colorize COMMAND bloom_runtime_colorize_test LABELS unit runtime render)
+
 add_executable(bloom_runtime_color_grade_image_effect_test color_grade_image_effect_tests.cpp)
 target_include_directories(bloom_runtime_color_grade_image_effect_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_color_grade_image_effect_test PRIVATE bloom_runtime_evaluator)

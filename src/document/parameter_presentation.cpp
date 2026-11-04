@@ -1,5 +1,6 @@
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
@@ -274,6 +275,24 @@ const std::vector<Entry>& table() {
         // #503 Alpha Association.
         {kAlphaAssociationModeSchemaKey, choice()},
         {kAlphaAssociationBackgroundSchemaKey, channel()},
+        // #504 Colorize: the weights read as percentages, like the amount's blend.
+        {kColorizeModeSchemaKey, choice()},
+        {kColorizeAmountSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {kColorizeColorSchemaKey, channel()},
+        {kColorizeShadowsSchemaKey, channel()},
+        {kColorizeMidtonesSchemaKey, channel()},
+        {kColorizeHighlightsSchemaKey, channel()},
+        {kColorizeMidpointSchemaKey, number(0.01, 0.99, 0.01, 0.99, 0.001, 3)},
+        {kColorizeSourceSchemaKey, choice()},
+        {kColorizeCycleSchemaKey, choice()},
+        {kColorizeRepetitionsSchemaKey, number(0.0, 100.0, 0.0, 8.0, 0.01, 2, kTimes)},
+        {kColorizePhaseSchemaKey, number(-1000.0, 1000.0, 0.0, 1.0, 0.01, 3)},
+        {kColorizeRedsSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
+        {kColorizeYellowsSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
+        {kColorizeGreensSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
+        {kColorizeCyansSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
+        {kColorizeBluesSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
+        {kColorizeMagentasSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
         {"bloom.set-alpha.channel", choice()},
         // #479 Combine Channels.
         {"bloom.combine-channels.source", choice()},

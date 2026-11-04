@@ -9,6 +9,7 @@
 
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/evaluation_inputs.hpp>

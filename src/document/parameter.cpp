@@ -347,6 +347,24 @@ constantMatchesSchema(const std::string_view schemaKey,
                std::abs(color->green) <= kMaximumAlphaAssociationBackground &&
                std::abs(color->blue) <= kMaximumAlphaAssociationBackground;
     }
+    // #504 Colorize: finite scalars within their domains, finite straight colours whose RGB stays
+    // within +-1e6 (their alpha is unused) and the closed mode, source and cycle.
+    if (isColorizeScalarSchemaKey(schemaKey)) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               isScalarWithinSchemaDomain(schemaKey, *value);
+    }
+    if (isColorizeColorSchemaKey(schemaKey)) {
+        const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
+        return color != nullptr && color->isValid() &&
+               std::abs(color->red) <= kMaximumColorizeColor &&
+               std::abs(color->green) <= kMaximumColorizeColor &&
+               std::abs(color->blue) <= kMaximumColorizeColor;
+    }
+    if (const auto domain = colorizeIntegerDomain(schemaKey)) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= domain->minimum && *value <= domain->maximum;
+    }
     // #339 Drop Shadow, Glow and Light Wrap.
     if (isRecipeScalarSchemaKey(schemaKey)) {
         const auto* value = std::get_if<double>(&constant.value);
@@ -501,6 +519,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isRecipeIntegerSchemaKey(schemaKey) ||
          schemaKey == bloom::document::kAlphaAssociationModeSchemaKey ||
          schemaKey == bloom::document::kAlphaAssociationWhiteSchemaKey ||
+         bloom::document::isColorizeIntegerSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;

@@ -1394,6 +1394,67 @@ displayProofRunner(const bool customView) {
                              "signed HDR matte colour, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #504 Colorize: Fill, Tint, a partial Tritone, a mirrored and a repeating Gradient Map from
+    // a channel and luma, and a custom Black & White mix.
+    const auto colorize = [](const int variant) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            using bloom::runtime::ColorizeCycle;
+            using bloom::runtime::ColorizeMode;
+            using bloom::runtime::ColorizeSource;
+            bloom::runtime::ColorizeKernel kernel;
+            const std::array<ColorizeMode, 6> modes{
+                ColorizeMode::Fill,        ColorizeMode::Tint,        ColorizeMode::Tritone,
+                ColorizeMode::GradientMap, ColorizeMode::GradientMap, ColorizeMode::BlackAndWhite};
+            kernel.mode = modes[static_cast<std::size_t>(variant)];
+            kernel.amount = {ParameterId::fromRaw(idBase + 60), variant == 2 ? 0.6 : 1.0};
+            kernel.color = {ParameterId::fromRaw(idBase + 61),
+                            bloom::core::Color4d{0.9, 0.3, 1.5, 1.0}};
+            kernel.shadows = {ParameterId::fromRaw(idBase + 62),
+                              bloom::core::Color4d{0.05, -0.02, 0.2, 1.0}};
+            kernel.midtones = {ParameterId::fromRaw(idBase + 63),
+                               bloom::core::Color4d{0.6, 0.2, -0.1, 1.0}};
+            kernel.highlights = {ParameterId::fromRaw(idBase + 64),
+                                 bloom::core::Color4d{2.0, 0.9, 0.4, 1.0}};
+            kernel.midpoint = {ParameterId::fromRaw(idBase + 65), 0.3};
+            if (variant == 3) {
+                kernel.source = ColorizeSource::Green;
+                kernel.cycle = ColorizeCycle::Mirror;
+                kernel.repetitions = {ParameterId::fromRaw(idBase + 66), 2.5};
+                kernel.phase = {ParameterId::fromRaw(idBase + 67), -0.3};
+            }
+            if (variant == 4) {
+                kernel.cycle = ColorizeCycle::Repeat;
+                kernel.repetitions = {ParameterId::fromRaw(idBase + 66), 3.0};
+                kernel.phase = {ParameterId::fromRaw(idBase + 67), 0.125};
+            }
+            const std::array<double, 6> weights{-1.5, 2.5, 0.1, 3.0, -2.0, 1.2};
+            if (variant == 5)
+                for (std::size_t i = 0; i < weights.size(); ++i)
+                    kernel.weights[i] = {ParameterId::fromRaw(idBase + 68 + i), weights[i]};
+            return ImageEffectKernel{kernel};
+        };
+    };
+    add(
+        "effect.ColorizeKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime colorize tests",
+        [runGrades, colorize] {
+            return runGrades({colorize(0), colorize(1), colorize(2), colorize(3), colorize(4),
+                              colorize(5)},
+                             504000,
+                             "production Colorize: Fill, Tint, Tritone, Gradient Map (mirrored "
+                             "and repeating) and Black & White over HDR and signed values, full "
+                             "frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.colorize", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime colorize tests",
+        [runGrades, colorize] {
+            return runGrades({colorize(3), colorize(5)}, 504600,
+                             "production Colorize node: a channel Gradient Map and a Black & "
+                             "White mix, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #494 Grade: the wheels and primaries through the production builder's resident program.
     const auto grade = [](const std::array<double, 22> values) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {

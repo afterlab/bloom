@@ -129,6 +129,8 @@ BLOOM_GPU_REQUIRED_EFFECT(HighlightRollOffKernel,
 BLOOM_GPU_REQUIRED_EFFECT(AlphaAssociationKernel,
                           "Alpha Association: Unmult, Premultiply, Unpremultiply and Remove Color "
                           "Matting (#503)");
+BLOOM_GPU_REQUIRED_EFFECT(ColorizeKernel,
+                          "Colorize: Fill, Tint, Tritone, Gradient Map and Black & White (#504)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

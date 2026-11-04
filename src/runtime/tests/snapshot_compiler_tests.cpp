@@ -1,7 +1,9 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <map>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -1938,6 +1940,7 @@ int main() {
         testRecipeMute(expectations);
         testColorGradeLowering(expectations);
         testAlphaAssociationLowering(expectations);
+        testColorizeLowering(expectations);
         testImageChannelLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);

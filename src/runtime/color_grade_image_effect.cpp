@@ -9,6 +9,7 @@
 
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 
 #include <algorithm>
@@ -30,6 +31,8 @@ constexpr std::size_t kHueSaturationFloats = 12;
 constexpr std::size_t kGradeFloats = 20;
 constexpr std::size_t kRollOffFloats = 4;
 constexpr std::size_t kAlphaAssociationFloats = 8;
+constexpr std::size_t kColorizeFloats = 40;
+constexpr std::size_t kColorizeOperands = 26;
 static_assert(kLevelsChannelFloats % 4 == 0);
 static_assert(std::tuple_size_v<decltype(GradeKernel::values)> == document::kGradeParameterCount);
 
@@ -305,6 +308,169 @@ prepareAlphaAssociation(const AlphaAssociationKernel& kernel,
     return std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2]);
 }
 
+// #504 Colorize. The operands are amount, the colour, shadows, midtones and highlights (each
+// r, g, b, a), midpoint, repetitions, phase and the six weights (ColorizeKernel order). Each is
+// checked against its document domain; only what the mode reads is written, so an unused value
+// never changes the table or the cache identity. Tritone is the ramp over luma, clamped, once.
+[[nodiscard]] std::optional<PreparedColorGrade>
+prepareColorize(const ColorizeKernel& kernel, const std::span<const double> values) {
+    if (values.size() != kColorizeOperands ||
+        static_cast<std::uint8_t>(kernel.mode) >
+            static_cast<std::uint8_t>(ColorizeMode::BlackAndWhite) ||
+        static_cast<std::uint8_t>(kernel.source) >
+            static_cast<std::uint8_t>(ColorizeSource::Alpha) ||
+        static_cast<std::uint8_t>(kernel.cycle) > static_cast<std::uint8_t>(ColorizeCycle::Mirror))
+        return std::nullopt;
+    const auto within = [&](const std::size_t index, const std::string_view schemaKey) {
+        const auto domain = document::colorizeScalarDomain(schemaKey);
+        return std::isfinite(values[index]) && values[index] >= domain->minimum &&
+               values[index] <= domain->maximum;
+    };
+    if (!within(0, document::kColorizeAmountSchemaKey) ||
+        !within(17, document::kColorizeMidpointSchemaKey) ||
+        !within(18, document::kColorizeRepetitionsSchemaKey) ||
+        !within(19, document::kColorizePhaseSchemaKey) ||
+        !within(20, document::kColorizeRedsSchemaKey) ||
+        !within(21, document::kColorizeYellowsSchemaKey) ||
+        !within(22, document::kColorizeGreensSchemaKey) ||
+        !within(23, document::kColorizeCyansSchemaKey) ||
+        !within(24, document::kColorizeBluesSchemaKey) ||
+        !within(25, document::kColorizeMagentasSchemaKey))
+        return std::nullopt;
+    for (std::size_t colour = 0; colour < 4; ++colour)
+        for (std::size_t i = 0; i < 3; ++i) {
+            const double value = values[1 + 4 * colour + i];
+            if (!std::isfinite(value) || std::abs(value) > document::kMaximumColorizeColor)
+                return std::nullopt;
+        }
+    const auto rgb = [&](const std::size_t colour, const std::size_t i) {
+        return values[1 + 4 * colour + i];
+    };
+    PreparedColorGrade grade{ColorGradeKind::Colorize, std::vector<float>(kColorizeFloats, 0.0F),
+                             false};
+    auto& d = grade.data;
+    d[1] = static_cast<float>(values[0]);
+    d[12] = 0.2126F;
+    d[13] = 0.7152F;
+    d[14] = 0.0722F;
+    const auto store = [&](const std::size_t vec, const std::size_t i, const double value) {
+        d[4 * vec + i] = static_cast<float>(value);
+    };
+    switch (kernel.mode) {
+    case ColorizeMode::Fill:
+        d[0] = 0.0F;
+        for (std::size_t i = 0; i < 3; ++i)
+            store(4, i, rgb(0, i));
+        break;
+    case ColorizeMode::Tint:
+        d[0] = 1.0F;
+        for (std::size_t i = 0; i < 3; ++i) {
+            store(4, i, rgb(1, i));
+            store(5, i, rgb(3, i) - rgb(1, i));
+        }
+        break;
+    case ColorizeMode::Tritone:
+    case ColorizeMode::GradientMap: {
+        const bool map = kernel.mode == ColorizeMode::GradientMap;
+        const double midpoint = values[17];
+        d[0] = 2.0F;
+        d[2] = map ? static_cast<float>(kernel.source) : 0.0F;
+        d[3] = map ? static_cast<float>(kernel.cycle) : 0.0F;
+        d[4] = map ? static_cast<float>(values[18]) : 1.0F;
+        d[5] = map ? static_cast<float>(values[19]) : 0.0F;
+        d[6] = static_cast<float>(midpoint);
+        d[8] = static_cast<float>(1.0 / midpoint);
+        d[9] = static_cast<float>(1.0 / (1.0 - midpoint));
+        for (std::size_t i = 0; i < 3; ++i) {
+            store(4, i, rgb(1, i));
+            store(5, i, rgb(2, i) - rgb(1, i));
+            store(6, i, rgb(2, i));
+            store(7, i, rgb(3, i) - rgb(2, i));
+        }
+        break;
+    }
+    case ColorizeMode::BlackAndWhite:
+        d[0] = 3.0F;
+        // Primary weights by the largest channel, secondary by the smallest.
+        store(8, 0, values[20]);
+        store(8, 1, values[22]);
+        store(8, 2, values[24]);
+        store(9, 0, values[23]);
+        store(9, 1, values[25]);
+        store(9, 2, values[21]);
+        break;
+    }
+    // A zero amount keeps the original colour everywhere.
+    grade.identity = d[1] == 0.0F;
+    return grade;
+}
+
+// One premultiplied pixel: its straight colour is colorized and mixed back by the amount, the
+// alpha kept. Alpha 0 has no colour and passes unchanged.
+[[nodiscard]] bool colorizePixel(const std::vector<float>& k, std::array<float, 4>& pixel) noexcept {
+    const auto finite = [](const float x) { return std::isfinite(x); };
+    const float a = pixel[3];
+    if (a == 0.0F)
+        return true;
+    std::array<float, 3> s{};
+    for (std::size_t i = 0; i < 3; ++i) {
+        s[i] = pixel[i] / a;
+        if (!finite(s[i]))
+            return false;
+    }
+    const float luma = std::fma(k[14], s[2], std::fma(k[13], s[1], k[12] * s[0]));
+    const auto mode = static_cast<int>(k[0]);
+    std::array<float, 3> c{};
+    if (mode == 0) {
+        c = {k[16], k[17], k[18]};
+    } else if (mode == 1) {
+        for (std::size_t i = 0; i < 3; ++i)
+            c[i] = std::fma(luma, k[20 + i], k[16 + i]);
+    } else if (mode == 2) {
+        const auto source = static_cast<int>(k[2]);
+        const float x = source == 0   ? luma
+                        : source == 4 ? a
+                                      : s[static_cast<std::size_t>(source - 1)];
+        float t = std::fma(x, k[4], k[5]);
+        if (!finite(t))
+            return false;
+        const auto cycle = static_cast<int>(k[3]);
+        if (cycle == 0) {
+            t = std::min(std::max(t, 0.0F), 1.0F);
+        } else if (cycle == 1) {
+            t = t - std::floor(t);
+        } else {
+            const float u = t - 2.0F * std::floor(t * 0.5F);
+            t = u > 1.0F ? 2.0F - u : u;
+        }
+        if (t <= k[6]) {
+            const float u = t * k[8];
+            for (std::size_t i = 0; i < 3; ++i)
+                c[i] = std::fma(u, k[20 + i], k[16 + i]);
+        } else {
+            const float u = (t - k[6]) * k[9];
+            for (std::size_t i = 0; i < 3; ++i)
+                c[i] = std::fma(u, k[28 + i], k[24 + i]);
+        }
+    } else {
+        const std::size_t largest = s[0] >= s[1] && s[0] >= s[2] ? 0 : s[1] >= s[2] ? 1 : 2;
+        const std::size_t smallest = s[0] <= s[1] && s[0] <= s[2] ? 0 : s[1] <= s[2] ? 1 : 2;
+        const float high = s[largest];
+        const float low = s[smallest];
+        const float middle = std::max(std::min(s[0], s[1]), std::min(std::max(s[0], s[1]), s[2]));
+        const float grey =
+            std::fma(high - middle, k[32 + largest], std::fma(middle - low, k[36 + smallest], low));
+        c = {grey, grey, grey};
+    }
+    if (k[1] != 1.0F)
+        for (std::size_t i = 0; i < 3; ++i)
+            c[i] = std::fma(k[1], c[i] - s[i], s[i]);
+    if (!finite(c[0]) || !finite(c[1]) || !finite(c[2]))
+        return false;
+    pixel = {c[0] * a, c[1] * a, c[2] * a, a};
+    return finite(pixel[0]) && finite(pixel[1]) && finite(pixel[2]);
+}
+
 [[nodiscard]] bool gradePixel(const std::vector<float>& d, std::array<float, 4>& pixel) noexcept {
     const auto finite = [](const float x) { return std::isfinite(x); };
     const float a = pixel[3];
@@ -331,6 +497,15 @@ prepareAlphaAssociation(const AlphaAssociationKernel& kernel,
     pixel = {y[0] * a, y[1] * a, y[2] * a, a};
     return finite(y[0]) && finite(y[1]) && finite(y[2]) && finite(pixel[0]) && finite(pixel[1]) &&
            finite(pixel[2]);
+}
+
+// The table's closed fields are whole numbers in range and the ramp's midpoint is inside (0, 1).
+[[nodiscard]] bool validColorizeTable(const std::vector<float>& d) noexcept {
+    const auto closed = [](const float value, const float maximum) {
+        return value >= 0.0F && value <= maximum && value == std::floor(value);
+    };
+    return d.size() == kColorizeFloats && closed(d[0], 3.0F) && closed(d[2], 4.0F) &&
+           closed(d[3], 2.0F) && (d[0] != 2.0F || (d[6] > 0.0F && d[6] < 1.0F));
 }
 
 [[nodiscard]] std::string glslProgramText(const ColorGradeKind kind) {
@@ -490,6 +665,93 @@ prepareAlphaAssociation(const AlphaAssociationKernel& kernel,
             "}\n";
         return text;
     }
+    case ColorGradeKind::Colorize: {
+        // The same binary32 operations as colorizePixel: the wrapper's correctly rounded division
+        // and premultiply, precise fused multiply-adds, exact min/max/floor and the same
+        // channel-order ties. A non-finite colour or position is refused like the CPU's.
+        static const std::string text =
+            "layout(set = 0, binding = 0, std430) readonly buffer BloomColorizeData { vec4 "
+            "values[]; } bloom_colorize_data;\n" +
+            straight + finite +
+            "vec4 bloom_colorize(ivec2 c) {\n"
+            " vec4 p = imageLoad(bloom_ocio_input, c);\n"
+            " float a = p.a;\n"
+            " if (a == 0.0) { return p; }\n"
+            " vec4 k = bloom_colorize_data.values[0];\n"
+            " vec4 ramp = bloom_colorize_data.values[1];\n"
+            " vec4 inv = bloom_colorize_data.values[2];\n"
+            " vec4 w = bloom_colorize_data.values[3];\n"
+            " vec4 c0 = bloom_colorize_data.values[4];\n"
+            " vec4 c1 = bloom_colorize_data.values[5];\n"
+            " vec4 c2 = bloom_colorize_data.values[6];\n"
+            " vec4 c3 = bloom_colorize_data.values[7];\n"
+            " vec4 wp = bloom_colorize_data.values[8];\n"
+            " vec4 ws = bloom_colorize_data.values[9];\n"
+            " vec3 s = vec3(bloom_ocio_cpu_div(p.r, a), bloom_ocio_cpu_div(p.g, a), "
+            "bloom_ocio_cpu_div(p.b, a));\n"
+            " for (int i = 0; i < 3; ++i) {\n"
+            "  if (!bloom_grade_finite(s[i])) {" +
+            failure +
+            "  }\n"
+            " }\n"
+            " precise float luma = fma(w.z, s.z, fma(w.y, s.y, w.x * s.x));\n"
+            " int mode = int(k.x);\n"
+            " vec3 o = vec3(0.0);\n"
+            " if (mode == 0) {\n"
+            "  o = c0.rgb;\n"
+            " } else if (mode == 1) {\n"
+            "  precise vec3 r = vec3(fma(luma, c1.x, c0.x), fma(luma, c1.y, c0.y), "
+            "fma(luma, c1.z, c0.z));\n"
+            "  o = r;\n"
+            " } else if (mode == 2) {\n"
+            "  int source = int(k.z);\n"
+            "  float x = source == 0 ? luma : (source == 4 ? a : s[source - 1]);\n"
+            "  precise float t = fma(x, ramp.x, ramp.y);\n"
+            "  if (!bloom_grade_finite(t)) {" +
+            failure +
+            "  }\n"
+            "  int cycle = int(k.w);\n"
+            "  if (cycle == 0) {\n"
+            "   t = min(max(t, 0.0), 1.0);\n"
+            "  } else if (cycle == 1) {\n"
+            "   precise float f = t - floor(t);\n"
+            "   t = f;\n"
+            "  } else {\n"
+            "   precise float u = t - 2.0 * floor(t * 0.5);\n"
+            "   t = u > 1.0 ? 2.0 - u : u;\n"
+            "  }\n"
+            "  if (t <= ramp.z) {\n"
+            "   precise float u = t * inv.x;\n"
+            "   precise vec3 r = vec3(fma(u, c1.x, c0.x), fma(u, c1.y, c0.y), fma(u, c1.z, "
+            "c0.z));\n"
+            "   o = r;\n"
+            "  } else {\n"
+            "   precise float u = (t - ramp.z) * inv.y;\n"
+            "   precise vec3 r = vec3(fma(u, c3.x, c2.x), fma(u, c3.y, c2.y), fma(u, c3.z, "
+            "c2.z));\n"
+            "   o = r;\n"
+            "  }\n"
+            " } else {\n"
+            "  int hi = (s.x >= s.y && s.x >= s.z) ? 0 : (s.y >= s.z ? 1 : 2);\n"
+            "  int lo = (s.x <= s.y && s.x <= s.z) ? 0 : (s.y <= s.z ? 1 : 2);\n"
+            "  float mid = max(min(s.x, s.y), min(max(s.x, s.y), s.z));\n"
+            "  precise float g = fma(s[hi] - mid, wp[hi], fma(mid - s[lo], ws[lo], s[lo]));\n"
+            "  o = vec3(g);\n"
+            " }\n"
+            " if (k.y != 1.0) {\n"
+            "  precise vec3 r = vec3(fma(k.y, o.x - s.x, s.x), fma(k.y, o.y - s.y, s.y), "
+            "fma(k.y, o.z - s.z, s.z));\n"
+            "  o = r;\n"
+            " }\n"
+            " for (int i = 0; i < 3; ++i) {\n"
+            "  if (!bloom_grade_finite(o[i])) {" +
+            failure +
+            "  }\n"
+            " }\n"
+            " return vec4(bloom_ocio_cpu_premul(o, a), a);\n"
+            "}\n";
+        return text;
+    }
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -575,6 +837,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareRollOff(values);
     if (const auto* association = std::get_if<AlphaAssociationKernel>(&kernel))
         return prepareAlphaAssociation(*association, values);
+    if (const auto* colorize = std::get_if<ColorizeKernel>(&kernel))
+        return prepareColorize(*colorize, values);
     return std::nullopt;
 }
 
@@ -599,6 +863,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         return rollOffPixel(grade.data, pixel);
     if (grade.kind == ColorGradeKind::AlphaAssociation)
         return alphaAssociationPixel(grade.data, pixel);
+    if (grade.kind == ColorGradeKind::Colorize)
+        return colorizePixel(grade.data, pixel);
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
     };
@@ -697,9 +963,9 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::AlphaAssociation
                             ? data.size() == kAlphaAssociationFloats && data[0] >= 0.0F &&
                                   data[0] <= 4.0F && data[0] == std::floor(data[0])
-                            : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) >
-            static_cast<std::uint8_t>(ColorGradeKind::AlphaAssociation) ||
+                        : kind == ColorGradeKind::Colorize ? validColorizeTable(data)
+                                                           : data.size() == kHueSaturationFloats;
+    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Colorize) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -735,6 +1001,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_alpha_association";
         program.resourcePrefix = "bloom_alpha_association_";
         program.semanticsId = "bloom.render.alpha-association.v1";
+        break;
+    case ColorGradeKind::Colorize:
+        program.functionName = "bloom_colorize";
+        program.resourcePrefix = "bloom_colorize_";
+        program.semanticsId = "bloom.render.colorize.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);

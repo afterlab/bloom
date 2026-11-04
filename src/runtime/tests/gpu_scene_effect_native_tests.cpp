@@ -1069,7 +1069,7 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
 }
 
 // #340 Levels, Curves and Hue/Saturation (#493: and every Curves curve kind; #494 Grade; #503
-// every Alpha Association mode) of
+// every Alpha Association mode; #504 every Colorize mode) of
 // signed/HDR/partial-alpha solids against the CPU oracle
 // (2e-6, exact alpha), one resident dispatch, warm zero dispatch and a changed value that
 // re-dispatches with parity. Alpha transfers here are linear and cubic, never a gamma, so the
@@ -1175,6 +1175,31 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             {ParameterId::fromRaw(id),
              variant == 4 ? Color4d{0.25, 0.5, 1.5, 1.0} : Color4d{0.0, 0.0, 0.0, 1.0}}}};
     };
+    // #504: every Colorize mode, a partial amount, both cycles and a channel source.
+    const auto colorize = [](const std::uint64_t id, const int variant) {
+        using bloom::runtime::ColorizeCycle;
+        using bloom::runtime::ColorizeMode;
+        bloom::runtime::ColorizeKernel kernel;
+        const std::array<ColorizeMode, 6> modes{ColorizeMode::Fill,        ColorizeMode::Tint,
+                                                ColorizeMode::Tritone,     ColorizeMode::GradientMap,
+                                                ColorizeMode::GradientMap, ColorizeMode::BlackAndWhite};
+        kernel.mode = modes[static_cast<std::size_t>(variant)];
+        kernel.amount = {ParameterId::fromRaw(id), variant == 2 ? 0.6 : 1.0};
+        kernel.color = {ParameterId::fromRaw(id + 1), Color4d{0.9, 0.3, 1.5, 1.0}};
+        kernel.shadows = {ParameterId::fromRaw(id + 2), Color4d{0.05, -0.02, 0.2, 1.0}};
+        kernel.midtones = {ParameterId::fromRaw(id + 3), Color4d{0.6, 0.2, -0.1, 1.0}};
+        kernel.highlights = {ParameterId::fromRaw(id + 4), Color4d{2.0, 0.9, 0.4, 1.0}};
+        kernel.midpoint = {ParameterId::fromRaw(id + 5), 0.3};
+        kernel.repetitions = {ParameterId::fromRaw(id + 6), 2.5};
+        kernel.phase = {ParameterId::fromRaw(id + 7), -0.3};
+        kernel.source = variant == 3 ? bloom::runtime::ColorizeSource::Red
+                                     : bloom::runtime::ColorizeSource::Luma;
+        kernel.cycle = variant == 3 ? ColorizeCycle::Mirror : ColorizeCycle::Repeat;
+        const std::array<double, 6> weights{-1.5, 2.5, 0.1, 3.0, -2.0, 1.2};
+        for (std::size_t i = 0; i < weights.size(); ++i)
+            kernel.weights[i] = {ParameterId::fromRaw(id + 8 + i), weights[i]};
+        return bloom::runtime::ImageEffectKernel{kernel};
+    };
     // Changes one value of each kernel to prove invalidation re-dispatches.
     const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
@@ -1188,6 +1213,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         if (auto* g = std::get_if<bloom::runtime::GradeKernel>(&kernel))
             g->values[8].source = 1.25;
         // #503: a changed matte colour, or a different mode, changes the program's data.
+        // #504: a changed amount changes the program's data in every mode.
+        if (auto* c = std::get_if<bloom::runtime::ColorizeKernel>(&kernel))
+            c->amount.source = 0.4;
         if (auto* a = std::get_if<bloom::runtime::AlphaAssociationKernel>(&kernel)) {
             if (a->mode == bloom::runtime::AlphaAssociationMode::RemoveMatting)
                 a->background.source = Color4d{0.75, 0.1, 0.3, 1.0};
@@ -1207,7 +1235,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
               curves(id + 50, true), hueCurves(id + 50, false), hueCurves(id + 50, true),
               hue(id + 50, false), hue(id + 50, true), grade(id + 50, false), grade(id + 50, true),
               association(id + 50, 0), association(id + 50, 1), association(id + 50, 2),
-              association(id + 50, 3), association(id + 50, 4)}) {
+              association(id + 50, 3), association(id + 50, 4), colorize(id + 50, 0),
+              colorize(id + 50, 1), colorize(id + 50, 2), colorize(id + 50, 3),
+              colorize(id + 50, 4), colorize(id + 50, 5)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

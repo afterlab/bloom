@@ -438,16 +438,47 @@ struct AlphaAssociationKernel final {
     CompiledColorParameter background{{}, core::Color4d{0.0, 0.0, 0.0, 1.0}};
     friend bool operator==(const AlphaAssociationKernel&, const AlphaAssociationKernel&) = default;
 };
+// #504 Colorize over the straight colour of premultiplied (process) RGBA, alpha unchanged: Fill
+// replaces the colour with `color`; Tint maps Rec. 709 luma L linearly from `shadows` to
+// `highlights` (unclamped, so HDR extends the line); Tritone and Gradient Map take a position t (L,
+// or with Gradient Map the `source` channel, times `repetitions` plus `phase`, clamped, repeated or
+// mirrored into [0, 1]) through the ramp shadows, midtones at `midpoint`, highlights; Black & White
+// gives min + (mid - min) * secondary weight + (max - mid) * primary weight. `amount` mixes the
+// result with the input's straight colour. The compiler lowers only the operands the mode reads;
+// the others are constants without an identity. A grade kind (color_grade_image_effect.hpp);
+// docs/architecture/image-filters.md, "Colorize", has the formulas.
+enum class ColorizeMode : std::uint8_t { Fill, Tint, Tritone, GradientMap, BlackAndWhite };
+enum class ColorizeSource : std::uint8_t { Luma, Red, Green, Blue, Alpha };
+enum class ColorizeCycle : std::uint8_t { Clamp, Repeat, Mirror };
+struct ColorizeKernel final {
+    ColorizeMode mode = ColorizeMode::Tint;
+    ColorizeSource source = ColorizeSource::Luma;
+    ColorizeCycle cycle = ColorizeCycle::Clamp;
+    CompiledScalarParameter amount{{}, 1.0};
+    CompiledColorParameter color{{}, core::Color4d{1.0, 1.0, 1.0, 1.0}};
+    CompiledColorParameter shadows{{}, core::Color4d{0.0, 0.0, 0.0, 1.0}};
+    CompiledColorParameter midtones{{}, core::Color4d{0.24, 0.17, 0.1, 1.0}};
+    CompiledColorParameter highlights{{}, core::Color4d{1.0, 1.0, 1.0, 1.0}};
+    CompiledScalarParameter midpoint{{}, 0.18};
+    CompiledScalarParameter repetitions{{}, 1.0};
+    CompiledScalarParameter phase{{}, 0.0};
+    // Reds, yellows, greens, cyans, blues, magentas.
+    std::array<CompiledScalarParameter, 6> weights{
+        CompiledScalarParameter{{}, 0.4}, CompiledScalarParameter{{}, 0.6},
+        CompiledScalarParameter{{}, 0.4}, CompiledScalarParameter{{}, 0.6},
+        CompiledScalarParameter{{}, 0.2}, CompiledScalarParameter{{}, 0.8}};
+    friend bool operator==(const ColorizeKernel&, const ColorizeKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
                  SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
                  ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
-                 AlphaAssociationKernel>;
+                 AlphaAssociationKernel, ColorizeKernel>;
 
 // #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade;
-// #506: or Highlight Roll-off; #503: or Alpha Association) kernel in the kernel's canonical order
+// #506: or Highlight Roll-off; #503: or Alpha Association; #504: or Colorize) kernel in the kernel's canonical order
 // (channel-major), calling `visit(parameter)` with a CompiledScalarParameter, a
 // CompiledVec2Parameter, (#493 Curves) a CompiledPathParameter or (#503 Alpha Association) a
 // CompiledColorParameter. Returns false for every other kernel. The one traversal the evaluator's
@@ -488,6 +519,20 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         visit(association->background);
         return true;
     }
+    // #504: amount, the four colours, midpoint, repetitions, phase, then the six weights.
+    if (const auto* colorize = std::get_if<ColorizeKernel>(&kernel)) {
+        visit(colorize->amount);
+        visit(colorize->color);
+        visit(colorize->shadows);
+        visit(colorize->midtones);
+        visit(colorize->highlights);
+        visit(colorize->midpoint);
+        visit(colorize->repetitions);
+        visit(colorize->phase);
+        for (const auto& weight : colorize->weights)
+            visit(weight);
+        return true;
+    }
     return false;
 }
 
@@ -497,7 +542,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<HueSaturationKernel>(kernel) ||
            std::holds_alternative<GradeKernel>(kernel) ||
            std::holds_alternative<HighlightRollOffKernel>(kernel) ||
-           std::holds_alternative<AlphaAssociationKernel>(kernel);
+           std::holds_alternative<AlphaAssociationKernel>(kernel) ||
+           std::holds_alternative<ColorizeKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

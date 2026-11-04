@@ -250,7 +250,7 @@ void everyNodeCategoryIsNamed() {
                    std::string(type) + " reports category " + std::string(category));
     };
     pinned({"bloom.grade", "bloom.levels", "bloom.curves", "bloom.hue-saturation", "bloom.exposure",
-            "bloom.offset", "bloom.multiply", "bloom.invert"},
+            "bloom.offset", "bloom.multiply", "bloom.invert", "bloom.colorize"},
            "grade");
     pinned({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"}, "color");
     pinned({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",

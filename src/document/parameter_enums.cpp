@@ -2,6 +2,7 @@
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
@@ -131,6 +132,23 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
                 {"Premultiply", kAlphaAssociationPremultiply},
                 {"Unpremultiply", kAlphaAssociationUnpremultiply},
                 {"Remove Color Matting", kAlphaAssociationRemoveMatting}};
+    // #504 Colorize.
+    if (schemaKey == kColorizeModeSchemaKey)
+        return {{"Fill", kColorizeFill},
+                {"Tint", kColorizeTint},
+                {"Tritone", kColorizeTritone},
+                {"Gradient Map", kColorizeGradientMap},
+                {"Black & White", kColorizeBlackAndWhite}};
+    if (schemaKey == kColorizeSourceSchemaKey)
+        return {{"Luma", kColorizeSourceLuma},
+                {"Red", kColorizeSourceRed},
+                {"Green", kColorizeSourceGreen},
+                {"Blue", kColorizeSourceBlue},
+                {"Alpha", kColorizeSourceAlpha}};
+    if (schemaKey == kColorizeCycleSchemaKey)
+        return {{"Clamp", kColorizeCycleClamp},
+                {"Repeat", kColorizeCycleRepeat},
+                {"Mirror", kColorizeCycleMirror}};
     if (schemaKey == kGlowModeSchemaKey)
         return {{"Classic", kGlowModeClassic},
                 {"Physical", kGlowModePhysical},

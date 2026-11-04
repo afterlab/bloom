@@ -176,7 +176,7 @@ void blurNodeReopen() {
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-          "bloom.alpha-association"}) {
+          "bloom.alpha-association", "bloom.colorize"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -236,6 +236,19 @@ void blurNodeReopen() {
                     ? document::ParameterValue{core::Color4d{1.5, -0.25, 0.5, 1.0}}
                 : parameter.schemaKey == "bloom.alpha-association.mode"
                     ? document::ParameterValue{std::int64_t{3}}
+                // #504 Colorize: Gradient Map from blue, mirrored, with set values and an HDR,
+                // signed colour.
+                : parameter.schemaKey == "bloom.colorize.mode"
+                    ? document::ParameterValue{std::int64_t{3}}
+                : parameter.schemaKey == "bloom.colorize.source"
+                    ? document::ParameterValue{std::int64_t{3}}
+                : parameter.schemaKey == "bloom.colorize.cycle"
+                    ? document::ParameterValue{std::int64_t{2}}
+                : parameter.schemaKey.starts_with("bloom.colorize.") &&
+                        parameter.valueKind == document::ParameterValueKind::Color4d
+                    ? document::ParameterValue{core::Color4d{1.5, -0.25, 0.5, 1.0}}
+                : parameter.schemaKey.starts_with("bloom.colorize.")
+                    ? document::ParameterValue{0.5}
                 // #479 Combine Channels: a Luma alpha source and the Straight alpha mode.
                 : parameter.role == "alphaSource" ? document::ParameterValue{std::int64_t{4}}
                                                   : document::ParameterValue{std::int64_t{1}};

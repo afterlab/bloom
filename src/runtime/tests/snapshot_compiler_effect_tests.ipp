@@ -1340,3 +1340,104 @@ void testAlphaAssociationLowering(Expectations& expectations) {
         }
     }
 }
+
+// #504 Colorize lowers to one colorize kernel with its constant mode. Each mode keeps the
+// identities of only the operands it reads (Gradient Map also its source and cycle); every other
+// operand stays the kernel's constant default without an identity, so animating it neither claims
+// nor invalidates anything. A muted node passes its Image through.
+void testColorizeLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto effectId = NodeId::fromRaw(997);
+    const auto* definition = builtInNodeDefinitions().find(kColorizeNodeType, 1);
+    require(definition != nullptr, "the colorize definition exists");
+    for (const auto mode : {kColorizeFill, kColorizeTint, kColorizeTritone, kColorizeGradientMap,
+                            kColorizeBlackAndWhite}) {
+        for (const bool muted : {false, true}) {
+            auto project = makeProject(singleLayerOptions());
+            auto* composition = project.findComposition(kCompositionId);
+            auto& graph = composition->graph();
+            std::vector<ParameterBinding> bindings;
+            std::map<std::string, ParameterId> ids;
+            std::uint64_t next = 2700;
+            for (const auto& parameter : definition->parameters) {
+                auto value = parameter.defaultValue;
+                if (parameter.role == "mode")
+                    value = mode;
+                if (parameter.role == "source")
+                    value = kColorizeSourceGreen;
+                if (parameter.role == "cycle")
+                    value = kColorizeCycleMirror;
+                if (parameter.role == "amount")
+                    value = 0.75;
+                const auto id = ParameterId::fromRaw(next++);
+                require(composition->parameters().insert(
+                            {id, parameter.schemaKey, ConstantValueSource{value}}),
+                        "colorize parameter is valid");
+                ids[parameter.role] = id;
+                bindings.push_back({parameter.role, id});
+            }
+            require(graph.addNode({effectId, std::string(kColorizeNodeType), std::move(bindings),
+                                   1}),
+                    "colorize node is accepted");
+            require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+            require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                                   NodeInputRef{effectId, "input"}}),
+                    "source feeds the colorize");
+            require(graph.addEdge({EdgeId::fromRaw(997), {effectId, "image"},
+                                   NodeInputRef{kFirstLayerNode,
+                                                std::string(kLayerOutputContentInputPort)}}),
+                    "colorize feeds Layer");
+            if (muted)
+                composition->nodeLayout()[effectId].muted = true;
+            expectations.expect(project.validate().ok(), "colorize graph is valid document truth");
+            const auto result = compile(std::move(project), registry);
+            expectations.expect(result.plan != nullptr, "colorize graph compiles");
+            if (!result.plan)
+                continue;
+            const auto effect = std::ranges::find_if(result.plan->operations(), [&](const auto& op) {
+                const auto* item = std::get_if<runtime::CompiledImageEffect>(&op);
+                return item && item->sourceNodeId == effectId;
+            });
+            if (muted) {
+                expectations.expect(effect == result.plan->operations().end(),
+                                    "a muted colorize passes its Image through");
+                continue;
+            }
+            require(effect != result.plan->operations().end(),
+                    "colorize lowers to an image effect");
+            const auto* kernel = std::get_if<runtime::ColorizeKernel>(
+                &std::get<runtime::CompiledImageEffect>(*effect).kernel);
+            require(kernel != nullptr, "colorize lowers to a colorize kernel");
+            const bool ramp = mode == kColorizeTritone || mode == kColorizeGradientMap;
+            const bool map = mode == kColorizeGradientMap;
+            const auto owns = [&](const ParameterId id, const char* role, const bool used) {
+                return used ? id == ids.at(role) : !id.isValid();
+            };
+            bool weights = true;
+            const std::array<const char*, 6> roles{"reds",  "yellows", "greens",
+                                                   "cyans", "blues",   "magentas"};
+            for (std::size_t index = 0; index < roles.size(); ++index)
+                weights = weights && owns(kernel->weights[index].id, roles[index],
+                                          mode == kColorizeBlackAndWhite);
+            expectations.expect(
+                static_cast<std::int64_t>(kernel->mode) == mode &&
+                    kernel->source == (map ? runtime::ColorizeSource::Green
+                                           : runtime::ColorizeSource::Luma) &&
+                    kernel->cycle ==
+                        (map ? runtime::ColorizeCycle::Mirror : runtime::ColorizeCycle::Clamp) &&
+                    owns(kernel->amount.id, "amount", true) &&
+                    std::get<double>(kernel->amount.source) == 0.75 &&
+                    owns(kernel->color.id, "fillColor", mode == kColorizeFill) &&
+                    owns(kernel->shadows.id, "shadows", mode == kColorizeTint || ramp) &&
+                    owns(kernel->highlights.id, "highlights", mode == kColorizeTint || ramp) &&
+                    owns(kernel->midtones.id, "midtones", ramp) &&
+                    owns(kernel->midpoint.id, "midpoint", ramp) &&
+                    owns(kernel->repetitions.id, "repetitions", map) &&
+                    owns(kernel->phase.id, "phase", map) && weights,
+                "colorize lowers its mode and only the operands that mode reads");
+        }
+    }
+}

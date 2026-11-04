@@ -4,6 +4,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
@@ -313,7 +314,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.luma-key.high" || isLevelsValueSchemaKey(schemaKey) ||
            schemaKey == kHueSaturationHueSchemaKey ||
            schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
-           isRecipeScalarSchemaKey(schemaKey) || schemaKey == kLayerMaskFeatherSchemaKey ||
+           isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
+           schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
 
@@ -346,7 +348,8 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kGradientStartColorParameterSchemaKey ||
            schemaKey == kGradientEndColorParameterSchemaKey ||
            schemaKey == kTextColorParameterSchemaKey ||
-           schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey);
+           schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
+           isColorizeColorSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -395,6 +398,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #339 Drop Shadow, Glow and Light Wrap (compositing_recipe_nodes.hpp).
     if (const auto recipe = recipeScalarDomain(schemaKey))
         return value >= recipe->minimum && value <= recipe->maximum;
+    // #504 Colorize (colorize_nodes.hpp).
+    if (const auto colorize = colorizeScalarDomain(schemaKey))
+        return value >= colorize->minimum && value <= colorize->maximum;
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

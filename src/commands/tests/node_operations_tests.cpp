@@ -874,6 +874,31 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{std::int64_t{1}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *background,
                                ConstantValueSource{bloom::core::Color4d{2e6, 0.0, 0.0, 1.0}});
+
+    // #504 Colorize: the closed mode, a colour, a weight and the midpoint edit within their
+    // domains and refuse outside them.
+    const auto colorize = addRecipe("bloom.colorize");
+    const auto colorizeMode = colorize.outputId<ParameterId>("parameter.mode");
+    const auto highlights = colorize.outputId<ParameterId>("parameter.highlights");
+    const auto reds = colorize.outputId<ParameterId>("parameter.reds");
+    const auto midpoint = colorize.outputId<ParameterId>("parameter.midpoint");
+    if (!colorizeMode || !highlights || !reds || !midpoint)
+        throw std::logic_error("Colorize exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *colorizeMode,
+                                       ConstantValueSource{std::int64_t{4}});
+    (void)exercise<SetParameterSource>(
+        test, fixture, *highlights,
+        ConstantValueSource{bloom::core::Color4d{3.5, -0.5, 0.25, 1.0}});
+    (void)exercise<SetParameterSource>(test, fixture, *reds, ConstantValueSource{-1.5});
+    (void)exercise<SetParameterSource>(test, fixture, *midpoint, ConstantValueSource{0.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *colorizeMode,
+                               ConstantValueSource{std::int64_t{5}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *highlights,
+                               ConstantValueSource{bloom::core::Color4d{2e6, 0.0, 0.0, 1.0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *reds,
+                               ConstantValueSource{3.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *midpoint,
+                               ConstantValueSource{1.0});
 }
 
 void testAddAndLayout(TestContext& test) {

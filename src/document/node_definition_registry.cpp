@@ -1,6 +1,7 @@
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -201,6 +202,57 @@ template <typename Definition>
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Compositing};
+}
+
+// #504 Colorize: an Image in and out; the constant mode, source and cycle (they choose the
+// arithmetic, so they have no socket), then one socket per animatable/drivable value in parameter
+// order.
+[[nodiscard]] NodeDefinition colorizeDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{{std::string(kColorizeNodeType), 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Grade};
+    const auto scalar = [&](std::string role, const std::string_view schemaKey) {
+        definition.parameters.push_back({role, std::string(schemaKey), ParameterValueKind::Float64,
+                                         true, true,
+                                         colorizeScalarDomain(schemaKey)->defaultValue});
+        definition.inputs.push_back({std::move(role), SocketValueKind::Scalar, false});
+    };
+    const auto color = [&](std::string role, const std::string_view schemaKey,
+                           const bloom::core::Color4d value) {
+        definition.parameters.push_back(
+            {role, std::string(schemaKey), ParameterValueKind::Color4d, true, true, value});
+        definition.inputs.push_back({std::move(role), SocketValueKind::Color, false});
+    };
+    const auto integer = [&](std::string role, const std::string_view schemaKey) {
+        definition.parameters.push_back({std::move(role), std::string(schemaKey),
+                                         ParameterValueKind::Integer, true, false,
+                                         colorizeIntegerDomain(schemaKey)->defaultValue});
+    };
+    integer("mode", kColorizeModeSchemaKey);
+    scalar("amount", kColorizeAmountSchemaKey);
+    color("fillColor", kColorizeColorSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
+    color("shadows", kColorizeShadowsSchemaKey, bloom::core::Color4d{0.0, 0.0, 0.0, 1.0});
+    // A warm brown whose Rec. 709 luma is mid grey (0.18), as the ramp's middle stop.
+    color("midtones", kColorizeMidtonesSchemaKey, bloom::core::Color4d{0.24, 0.17, 0.1, 1.0});
+    color("highlights", kColorizeHighlightsSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
+    scalar("midpoint", kColorizeMidpointSchemaKey);
+    integer("source", kColorizeSourceSchemaKey);
+    integer("cycle", kColorizeCycleSchemaKey);
+    scalar("repetitions", kColorizeRepetitionsSchemaKey);
+    scalar("phase", kColorizePhaseSchemaKey);
+    scalar("reds", kColorizeRedsSchemaKey);
+    scalar("yellows", kColorizeYellowsSchemaKey);
+    scalar("greens", kColorizeGreensSchemaKey);
+    scalar("cyans", kColorizeCyansSchemaKey);
+    scalar("blues", kColorizeBluesSchemaKey);
+    scalar("magentas", kColorizeMagentasSchemaKey);
+    return definition;
 }
 
 // #340 Hue/Saturation: animatable/drivable hue rotation (degrees) and saturation factor.
@@ -449,6 +501,8 @@ template <typename Definition>
             return definition == hueSaturationDefinition();
         if (definition.key.typeId == kAlphaAssociationNodeType)
             return definition == alphaAssociationDefinition();
+        if (definition.key.typeId == kColorizeNodeType)
+            return definition == colorizeDefinition();
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1519,6 +1573,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         curvesDefinition(),
         hueSaturationDefinition(),
         gradeDefinition(),
+        colorizeDefinition(),
         separateChannelsDefinition(),
         combineChannelsDefinition(),
         recipeDefinition(kDropShadowNodeType),
