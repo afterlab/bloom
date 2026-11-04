@@ -120,7 +120,7 @@ Depends on #334, #337.
 
 ### 8. [#339: Drop Shadow, Glow and Light Wrap recipes](https://github.com/kinetik-gg/bloom/issues/339)
 
-Compose existing matte/threshold/filter/offset/composite primitives. Separate Light Wrap until foreground reconstruction semantics are ready; do not clone blur code. Implemented: each node lowers to a chain of the existing primitives (the separable blurs, Transform 2D, Luma Key, Set Alpha, Multiply Alpha, Image Mix, Levels and a Merge entry with an explicit blend mode) with derived values in the value graph; Glow has a threshold above 1 with a knee, an optional key pass and Mask and multi-octave falloff; Light Wrap takes a background input; all three are premultiplication-correct and HDR-safe.
+Compose existing matte/threshold/filter/offset/composite primitives. Separate Light Wrap until foreground reconstruction semantics are ready; do not clone blur code. Implemented: each node lowers to a chain of the existing primitives (the separable blurs, Transform 2D, Luma Key, Set Alpha, Multiply Alpha, Image Mix, Levels and a Merge entry with an explicit blend mode) with derived values in the value graph; Glow has a threshold above 1 with a knee, an optional key pass and Mask and multi-octave falloff; Light Wrap takes a background input; all three are premultiplication-correct and HDR-safe. #506 adds Glow's Physical (energy-conserving inverse-power octaves) and Streak (N-point star and anamorphic streaks of chained Directional Blur rays) modes and its shared per-channel radius, gradient, lens-dirt and highlight roll-off controls on the same node (see [image filters](../architecture/image-filters.md#glow-modes)).
 
 Depends on #337, #338.
 

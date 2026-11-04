@@ -605,7 +605,8 @@ coverage with the straight colour's output white at `color` and the alpha's at
 `opacity * color.alpha`; then a plain Merge of the input over the shadow. Shadow Only publishes the
 shadow alone.
 
-Glow parameters and defaults: `threshold` 1.0 (so only over-white HDR values glow by default),
+Glow parameters and defaults (Classic, the default mode; #506 adds the other modes and the shared
+controls, see "Glow modes" below): `threshold` 1.0 (so only over-white HDR values glow by default),
 `knee` 0.5 centred on the threshold, `intensity` 1 in `[0, 1000]`, `size` 64 pixels in `[0, 256]`,
 `falloff` 0.6 in `[0, 1]`, `tint` (white; its alpha is ignored), the constant integer `octaves` 5 in
 `[1, 8]` and the constant switch `glowOnly` (off). The optional `key` Image input (a render pass
@@ -658,3 +659,108 @@ registry, model, command, Properties and archive tests cover the definitions, wi
 refusals, undo/redo and reopen. The scene-preparation test checks the Add, Atop and In blend
 commands, and the native image-effect harness runs all three recipes against the CPU oracle at the
 2e-6/exact-alpha gate with warm zero-dispatch and changed-value runs.
+
+### Glow modes
+
+`bloom.glow` has one node and three modes (#506), chosen by the constant `mode` dropdown: Classic
+(0, the default and the glow described above), Physical (1) and Streak (2). The modes and the
+shared controls below are optional parameters of the same schema-1 node: a Glow saved before them
+binds none, lowers with their defaults and therefore renders exactly the Classic chain it always
+did (the compiler test proves the plan identical). A new node binds them all, so its Properties
+rows show them; an older node shows only its Classic rows. Every chain is still a recipe of
+primitives with derived values in the value graph, so each value animates or is driven as usual.
+
+**Physical** is a multi-scale, energy-conserving glow with an inverse-power falloff. Its point-spread
+function (PSF) is modelled on physically based glare: Spencer, Shirley, Zimmerman and Greenberg,
+"Physically-Based Glare Effects for Digital Images" (SIGGRAPH 1995), fit the eye's scatter with a
+Gaussian core plus terms falling off as the inverse square and inverse cube of the angle. A PSF
+`r^-p` is built as a Gaussian scale mixture: integrating Gaussians of width `s` against a weight
+`s^(2-p)` per unit `log s` gives `integral s^(-p-1) exp(-r^2 / 2s^2) ds`, which is proportional
+to `r^-p`. Discretized on the octave radii (each twice the last, as in the bloom pyramids of
+Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare", SIGGRAPH 2014, and
+Unreal Engine's bloom, which sums Gaussians of increasing size), octave `j` weighs `2^(j (2-p))`
+relative to the tightest, so Physical reuses Classic's octave fold with the per-octave ratio
+`2^(2 - exponent)`: `exponent` 2 (the default) weighs every octave equally, the inverse square; 3
+halves each wider octave, the inverse cube. The weights are normalized, so the PSF integrates to one.
+Physical keys the light energy: Channel Select makes the premultiplied colour opaque, Luma Key ramps
+its Rec. 709 luma (the light a partly covered pixel emits) over the threshold and knee, a
+connected mask multiplies the ramp, and Multiply Alpha takes `B = source * ramp`. Energy
+conservation follows the normalized-kernel model of Unreal Engine's convolution bloom and the
+"physically based bloom" write-ups (for example LearnOpenGL's), which redistribute light rather
+than add it: Image Mix, under the ramp as its mask, moves the input's colour towards zero by
+`min(intensity, 1)` with alpha untouched, and the glow carries `intensity * PSF(B)` (times the
+tint). With a white tint and `intensity` up to 1 the frame's total light is unchanged (the energy
+test checks it); above 1 the excess is added light. A connected `key` is a separate light source,
+so nothing is removed from the input.
+
+**Streak** makes `points` rays (constant, `[1, 16]`, default 4: a four-point star; 2 is an
+anamorphic streak) at `angle + 360 k / points` degrees, measured clockwise from screen right
+(default 0), each `length` pixels long (`[0, 1024]`, default 128). It keys like Classic. A ray is
+Kawase's iterated streak filter ("Frame Buffer Postprocessing Effects in DOUBLE-S.T.E.A.L
+(Wreckless)", GDC 2003): five chained Directional Blur passes of four taps, pass `p` spaced
+`length * 4^p / 1023` with tap ratio `0.01^(4^p / 1023)`, so the product is one ray of 1024 taps
+along `[0, length]` with the exponential weight `0.01^(t / length)` (the last tap weighs 1% of the
+first), at a cost of twenty bilinear taps per pixel. Each ray carries `1 / points` of the light
+(Levels on its alpha) and an Add Merge sums the rays, so the star's alpha is the union of the rays'
+scaled coverage. `chromatic` (`[0, 1]`, default 0) disperses the rays: green reaches
+`1 - chromatic / 3` and blue `1 - 2 chromatic / 3` of red's length, so a ray whitens at its source
+and reddens towards its tip. Streak ignores `size`, `falloff`, `octaves`, `exponent` and the
+gradient.
+
+The new primitive, **Directional Blur** (`DirectionalBlurKernel`, Required in the GPU coverage
+contract), is one pass over associated RGBA: tap `i` of 0..3 reads the input at
+`c - i * spacing * (cos a, sin a)` (scaled to the evaluation resolution and snapped to 2^-20
+pixel) with weight `decay^i / sum(decay^j)`. The host splits each tap into its four bilinear
+texels, so a pass is sixteen weighted integer taps folded `sum = fma(texel, w, sum)` in order,
+transparent outside the input, alpha limited to `[0, 1]`, on the CPU reference and in one fixed
+resident program whose storage buffer holds the taps (a keyed angle or length never recompiles).
+The data window grows to every pixel a nonzero tap reaches, only in the ray's direction; spacing 0
+aliases its input. Spacing is bounded to `[0, 1024]` pixels and the decay to `(0, 1]`.
+
+**Shared controls**, in every mode:
+
+- `threshold` and `knee`, as in Classic.
+- `radiusRed`, `radiusGreen`, `radiusBlue` (`[0, 1]`, default 1): each channel's glow uses that
+  fraction of `size` (Streak: of `length`). When any differs from 1 (or `chromatic` is not 0 in
+  Streak) the glow is built once per channel; Levels keeps each channel's colour while scaling its
+  alpha to a third, Channel Select keeps that channel and an Add Merge sums the three, so every
+  channel's colour is exact and the alpha is the union of the thirds.
+- `tint`, and the colour gradient: with `gradient` on (default off), octave `j` of `n` is tinted
+  `tint + (outerTint - tint) * j / (n - 1)` before the fold (the tightest octave takes `tint`, the
+  widest `outerTint`, default (1, 0.5, 0.25)), and the final Levels scales by `intensity` alone.
+  Streak uses `tint`.
+- Lens dirt: an optional `dirt` Image input adds the glow times the dirt's Rec. 709 luma coverage
+  (Multiply Alpha, Luma), its colour scaled by `dirtAmount` (`[0, 1000]`, default 1), as Unreal
+  Engine's bloom dirt mask does.
+- `rollOff` (`[0, 100]`, default 0, off): a highlight roll-off of the whole glow layer (after the
+  dirt), the new **Highlight Roll-off** grade (`HighlightRollOffKernel`, Required): associated
+  colour `c` becomes `c / (1 + rollOff * max(L, 0))`, `L` its Rec. 709 luma, alpha unchanged. It is
+  Reinhard's luminance operator (Reinhard et al., "Photographic Tone Reproduction for Digital
+  Images", SIGGRAPH 2002) applied hue-preservingly: dim glow is nearly unchanged and bright glow
+  approaches a luma of `1 / rollOff`. It is one fixed grade program whose amount is data, dividing
+  with the wrapper's correctly rounded division so the device matches the CPU.
+
+Defaults chosen for #506: mode Classic; exponent 2 (inverse square); points 4; angle 0; length
+128 pixels; chromatic 0; per-channel radius 1; gradient off with outer tint (1, 0.5, 0.25);
+dirt amount 1; roll-off 0.
+
+Cache identity, cancellation, ROI and budget are the primitives': a changed intensity re-runs the
+gains Levels and the Merge (Physical's removal only when `min(intensity, 1)` changes), a changed
+roll-off only the roll-off, a changed length or angle the rays from their first pass. Directional
+Blur needs its full input support under an ROI, like the other neighbourhood filters. The modes are
+covered by the Required `feature.glow.physical`, `feature.glow.streak` and
+`feature.glow.shared_controls` fixtures and the primitives by `effect.DirectionalBlurKernel` and
+`effect.HighlightRollOffKernel`; there is no exception. Preview, still and sequence export, video
+export and headless render all take the same resident commands.
+
+Tests: the glow primitive test compares Directional Blur with a direct bilinear ray sum at several
+angles, spacings and decays (window growth, identity, domains, program data, cancellation, budget)
+and Highlight Roll-off with its formula. The recipe test compares Physical (with and without a key
+and Mask, a partial scatter, the inverse cube), Streak (four-point star, chromatic anamorphic
+streak, an odd star) and the shared controls in all three modes with an independent
+double-precision reference; checks Physical's energy balance at intensities 0.4, 1 and 2.5; and
+covers Streak's warm reuse, invalidation, ROI, cancellation and budget refusal. Compiler tests prove
+a pre-#506 Glow lowers exactly as a default Classic one and check the Physical, Streak and shared
+control chains. The native image-effect harness runs each mode and the shared controls on the
+device against the CPU oracle at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value
+runs.
