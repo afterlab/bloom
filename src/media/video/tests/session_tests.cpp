@@ -246,7 +246,7 @@ void retainedRouting(const std::filesystem::path& directory) {
         check(frameLuma(std::get<Frame>(results[i])) == 16 + (20 + i * 5) * 3,
               "queued request returns its own frame");
     }
-    // Hardware is preview-only and never silent: either a discovered VA-API decoder returns the
+    // Hardware is never silent: either the host's hardware decoder (VA-API or NVDEC) returns the
     // software-identical frame, or the session reports an explicit typed software fallback.
     const auto reference =
         std::get<Frame>(session.frame(probe, 0, 26, 0, nullptr, {}, {}, {}, {}, preview));
@@ -257,26 +257,62 @@ void retainedRouting(const std::filesystem::path& directory) {
     check(std::holds_alternative<Frame>(routed), "hardware preference always yields a frame");
     check(*std::get<Frame>(routed) == *reference,
           "hardware and software decoded pixels are identical");
+    const auto route = video::VideoDecodeSession::hardwareDecodeRoute();
+    const std::string routeName =
+        route == video::VideoDecodeSession::HardwareRoute::Nvdec ? "nvdec" : "vaapi";
     if (provenance.implementation == provider::Implementation::Hardware)
-        check(provenance.description == "vaapi" && !provenance.fallback, "VA-API provenance");
+        check(provenance.description == routeName && !provenance.fallback &&
+                  provenance.provider == "ffmpeg-" + routeName,
+              "hardware provenance names its route");
     else if (video::VideoDecodeSession::hardwareDecodePossible())
         check(provenance.fallback && provenance.description.starts_with("software (fallback: ") &&
                   provenance.description.size() > 21,
               "hardware refusal is an explicit typed software fallback");
     else
         check(provenance.description == "software" && !provenance.fallback,
-              "no render node: software without a hardware attempt");
+              "no hardware route: software without a hardware attempt");
     std::cout << "hardware route on this host: " << provenance.description << '\n';
-    // Final rendering (revalidated revisions) never takes the hardware route.
-    video::FrameDecodeProvenance final;
-    const auto rendered =
-        accelerated.frame(probe, 0, 26, 0, nullptr, {}, {}, {}, {}, {}, {true, &final});
-    check(std::holds_alternative<Frame>(rendered) &&
-              final.implementation == provider::Implementation::Software,
-          "final decode stays on the software reference");
-    // The revalidated request is a one-shot worker whose frame crosses the pipe; the retained
-    // reference crossed the arena. The bytes are the same.
-    check(std::holds_alternative<Frame>(rendered) && *std::get<Frame>(rendered) == *reference,
+    // ADR 0027 (amended 2026-11-04): final rendering (revalidated revisions) takes the hardware
+    // route too, on a source whose first frame proved identical; its frames equal the software
+    // reference byte for byte, frame after frame.
+    // Both Linux routes where the host has them: the host's own (NVDEC on NVIDIA) and VA-API.
+    for (const char* mode : {"1", "vaapi"}) {
+        ::setenv("BLOOM_VIDEO_HARDWARE_DECODE", mode, 1);
+        const bool hasRoute = video::VideoDecodeSession::hardwareDecodePossible();
+        video::VideoDecodeSession finalSession(directory / "numbered-h264.mp4");
+        video::VideoDecodeSession softwareSession(directory / "numbered-h264.mp4");
+        for (const std::uint64_t index :
+             {std::uint64_t{0}, std::uint64_t{1}, std::uint64_t{2}, std::uint64_t{26},
+              std::uint64_t{27}, std::uint64_t{40}}) {
+            video::FrameDecodeProvenance final;
+            video::FrameDecodeProvenance software;
+            const auto rendered =
+                finalSession.frame(probe, 0, index, 0, nullptr, {}, {}, {}, {}, {}, {true, &final});
+            const auto oracle = softwareSession.frame(probe, 0, index, 0, nullptr, {}, {}, {}, {},
+                                                      {}, {false, &software});
+            check(std::holds_alternative<Frame>(rendered) &&
+                      std::holds_alternative<Frame>(oracle) &&
+                      *std::get<Frame>(rendered) == *std::get<Frame>(oracle),
+                  "a final-route hardware frame equals the software reference byte for byte");
+            check(software.implementation == provider::Implementation::Software,
+                  "without a preference the final route decodes in software");
+            if (final.implementation == provider::Implementation::Hardware) {
+                check(hasRoute && !final.fallback,
+                      "final rendering keeps the hardware route on a proven source");
+                if (index == 40)
+                    std::cout << "final route " << mode << ": " << final.description << '\n';
+            } else
+                check(!hasRoute || final.fallback,
+                      "final rendering decodes in software only without a route or after an "
+                      "explicit typed fallback");
+        }
+    }
+    ::setenv("BLOOM_VIDEO_HARDWARE_DECODE", "1", 1);
+    // The revalidated software request is a one-shot worker whose frame crosses the pipe; the
+    // retained reference crossed the arena. The bytes are the same.
+    const auto piped =
+        accelerated.frame(probe, 0, 26, 0, nullptr, {}, {}, {}, {}, {}, {false, nullptr});
+    check(std::holds_alternative<Frame>(piped) && *std::get<Frame>(piped) == *reference,
           "a frame crossing the arena equals the frame crossing the pipe");
     // ProRes has no hardware declaration, so a preference is not a fallback.
     video::VideoDecodeSession prores(directory / "numbered-prores.mov");
@@ -339,8 +375,8 @@ void decodeAhead(const std::filesystem::path& directory) {
     const auto probe = std::get<provider::ProbeResult>(session.probe());
     // #474: after any forward step (playback that falls behind, a 50p source in a 25p
     // composition, a forward jump) the next frame is decoded ahead.
-    for (const auto n : {40U, 41U, 42U, 43U, 3U, 4U, 5U, 30U, 31U, 44U, 45U, 46U, 47U, 2U, 3U, 5U,
-                         7U, 9U, 12U, 15U, 16U, 20U, 29U, 30U, 32U, 47U}) {
+    for (const auto n : {40U, 41U, 42U, 43U, 3U, 4U,  5U,  30U, 31U, 44U, 45U, 46U, 47U,
+                         2U,  3U,  5U,  7U,  9U, 12U, 15U, 16U, 20U, 29U, 30U, 32U, 47U}) {
         const auto result = session.frame(probe, 0, n, 0, nullptr, {}, {}, {}, {}, preview);
         check(std::holds_alternative<Frame>(result), "decode-ahead request decodes");
         check(frameLuma(std::get<Frame>(result)) == 16 + n * 3,
@@ -745,8 +781,9 @@ bool identicalImages(const bloom::render::Rgba32fImage& a, const bloom::render::
     }
     return true;
 }
-std::size_t nativeSampleParity(const std::shared_ptr<const bloom::media::provider::FrameProduct>& frame,
-                               const std::string& label) {
+std::size_t
+nativeSampleParity(const std::shared_ptr<const bloom::media::provider::FrameProduct>& frame,
+                   const std::string& label) {
     using namespace bloom::media;
     const auto window =
         bloom::render::ImageWindow::create(0, 0, frame->planes[0].width, frame->planes[0].height);
@@ -834,7 +871,8 @@ void nativeSamples(const std::filesystem::path& directory) {
                                                                frame->planes[0].height);
         const auto descriptor = bloom::render::Rgba32fImageDescriptor::create(
             *window.value(), *window.value(), bloom::core::PixelAspectRatio::square());
-        const auto samples = video::videoNativeSamples(frame, 0, "space", *descriptor.value(), false);
+        const auto samples =
+            video::videoNativeSamples(frame, 0, "space", *descriptor.value(), false);
         const auto* native =
             std::get_if<std::shared_ptr<const bloom::render::NativeSampleImage>>(&samples);
         check(native != nullptr && (*native)->conversion().layout == layout,

@@ -1,4 +1,5 @@
 #pragma once
+#include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/provider/protocol.hpp>
 #include <memory>
 namespace bloom::media::ffmpeg {
@@ -6,7 +7,8 @@ namespace bloom::media::ffmpeg {
 // lifetime, request count and cancellation with ProcessSupervisor.
 class DecodeSession final {
   public:
-    explicit DecodeSession(bool hardware = false);
+    explicit DecodeSession(bool hardware = false, provider::HardwareDecodeDevice device =
+                                                      provider::HardwareDecodeDevice::Vaapi);
     ~DecodeSession();
     [[nodiscard]] provider::Payload call(const provider::CallRequest& request);
     // Called after a reply is written, before the next request is read. When software video

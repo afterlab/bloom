@@ -147,7 +147,8 @@ WorkerReply execute(const WorkerPoolOptions& options, const CallRequest& request
     auto processOptions = options.process;
     processOptions.inputSnapshot = snapshot;
     processOptions.addressSpaceBytes = std::max(
-        options.process.addressSpaceBytes, workerAddressSpaceBytes(request.width, request.height));
+        {options.process.addressSpaceBytes, workerAddressSpaceBytes(request.width, request.height),
+         options.addressSpaceFloor});
     auto launched = platform::ProcessSupervisor::launch(processOptions);
     auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
     if (!process)
@@ -333,20 +334,20 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         const auto now = Clock::now();
         // A retained worker launched for a smaller stream (or a probe) is relaunched with the
         // address space this stream needs.
-        const auto addressSpace =
-            std::max(state_->options.process.addressSpaceBytes,
-                     workerAddressSpaceBytes(request.width, request.height));
+        const auto addressSpace = std::max({state_->options.process.addressSpaceBytes,
+                                            workerAddressSpaceBytes(request.width, request.height),
+                                            state_->options.addressSpaceFloor});
         // Only a frame larger than the held arena relaunches the worker for a larger one.
         const auto arenaBytes = state_->arenaUnavailable ? 0U : frameArenaBytes(request);
         const auto arenaHeld = [&] {
             return state_->retained->arena ? state_->retained->arena->size() : 0U;
         };
-        if (state_->retained && (state_->retained->snapshot != snapshot ||
-                                 state_->retained->addressSpace < addressSpace ||
-                                 arenaHeld() < arenaBytes ||
-                                 now - state_->retained->started >= std::chrono::minutes(5) ||
-                                 now - state_->retained->lastUsed >= std::chrono::seconds(30) ||
-                                 state_->retained->calls >= kRetainedCallLimit))
+        if (state_->retained &&
+            (state_->retained->snapshot != snapshot ||
+             state_->retained->addressSpace < addressSpace || arenaHeld() < arenaBytes ||
+             now - state_->retained->started >= std::chrono::minutes(5) ||
+             now - state_->retained->lastUsed >= std::chrono::seconds(30) ||
+             state_->retained->calls >= kRetainedCallLimit))
             state_->retained.reset();
         if (!state_->retained) {
             auto options = state_->options.process;
@@ -410,9 +411,10 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         }
         if (const auto* placed = std::get_if<ArenaFrameV1>(&message.payload)) {
             // Copied out now, before the next request lets the worker write the arena again.
-            auto taken = retained.arena ? takeArenaFrame(*placed, retained.arena->bytes())
-                                        : Result<FrameProduct>{Unavailable{
-                                              Error::UnexpectedMessage, "No frame arena"}};
+            auto taken =
+                retained.arena
+                    ? takeArenaFrame(*placed, retained.arena->bytes())
+                    : Result<FrameProduct>{Unavailable{Error::UnexpectedMessage, "No frame arena"}};
             if (const auto* error = std::get_if<Unavailable>(&taken)) {
                 state_->retained.reset();
                 return *error;

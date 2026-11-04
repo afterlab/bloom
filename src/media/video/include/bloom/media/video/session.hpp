@@ -65,21 +65,25 @@ struct FrameKey {
 [[nodiscard]] std::uint64_t sourceSnapshotQuotaBytes(std::uint64_t available) noexcept;
 // The same for the default spool directory (the user cache), measured now.
 [[nodiscard]] std::uint64_t defaultSourceSnapshotQuotaBytes();
-// Which decoder produced a frame. Software is the reference; hardware is preview-only.
+// Which decoder produced a frame. Software is the reference; hardware serves preview and final
+// rendering once its first frame proved byte-identical to it (ADR 0027, amended 2026-11-04).
 struct FrameDecodeProvenance final {
     provider::Implementation implementation = provider::Implementation::Software;
     // True when hardware was requested and this frame came from the software fallback.
     bool fallback = false;
-    // "software", "vaapi", or "software (fallback: <typed reason>)".
+    // "software", "vaapi", "nvdec", or "software (fallback: <typed reason>)".
     std::string description = "software";
-    // The serving provider (ADR 0035): "ffmpeg", "ffmpeg-vaapi" or the platform framework's id.
+    // The serving provider (ADR 0035): "ffmpeg", "ffmpeg-vaapi", "ffmpeg-nvdec" or the platform
+    // framework's id.
     // When the platform framework was retired for this source, `nativeFallback` names why.
     std::string provider = "ffmpeg";
     std::string nativeFallback;
 };
 struct FrameDecodeRoute final {
-    // Interactive preview may use a discovered VA-API decoder for H.264/HEVC. The request is
-    // honoured only for retained preview revisions; final rendering always decodes in software.
+    // Preview and final rendering may use the host's hardware decoder (VA-API or NVDEC) for
+    // H.264, HEVC and AV1 (ADR 0027, amended 2026-11-04). The worker proves its first hardware
+    // frame byte-identical to the software reference; any refusal falls back to software for the
+    // source permanently. Decoded-cache keys keep the route.
     bool preferHardware = false;
     FrameDecodeProvenance* provenance = nullptr;
 };
@@ -186,10 +190,17 @@ class VideoDecodeSession final {
     // occupancy().
     [[nodiscard]] DecoderReach reach(std::uint32_t stream, std::uint64_t frame);
     [[nodiscard]] static std::string defaultWorker();
-    // Host-side capability screen and preference. A VA-API decode worker is attempted only when
-    // the platform exposes a DRM render node and either BLOOM_VIDEO_HARDWARE_DECODE is "1" or,
-    // automatically, the host has at most kHardwareDecodeMaximumThreads hardware threads (where
-    // threaded software decode stops winning). "0" disables the route.
+    // The host's hardware decode route (Linux): NVDEC through FFmpeg's CUDA hwaccel when the
+    // NVIDIA kernel driver is loaded, else VA-API when a DRM render node exists, else None.
+    // BLOOM_VIDEO_HARDWARE_DECODE "vaapi" or "nvdec" names the route explicitly. macOS keeps its
+    // VideoToolbox provider and Windows has no hardware decode route yet (both None).
+    enum class HardwareRoute : std::uint8_t { None, Vaapi, Nvdec };
+    [[nodiscard]] static HardwareRoute hardwareDecodeRoute();
+    // Host-side capability screen and preference. A hardware decode worker is attempted only when
+    // a route exists and BLOOM_VIDEO_HARDWARE_DECODE is "1" (or names the route), or
+    // automatically: always for NVDEC, which measured faster than threaded software decode, and
+    // for VA-API only when the host has at most kHardwareDecodeMaximumThreads hardware threads
+    // (where threaded software decode stops winning). "0" disables hardware decode.
     [[nodiscard]] static bool hardwareDecodePossible();
     static constexpr unsigned kHardwareDecodeMaximumThreads = 4;
 

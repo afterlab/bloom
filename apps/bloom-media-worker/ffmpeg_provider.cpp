@@ -333,12 +333,16 @@ DemuxIndex index(Input& input) {
     require(status == AVERROR_EOF, "Malformed demux input");
     return result;
 }
-// Prefer the VA-API surface when the hwaccel offers it. When hwaccel initialisation refuses the
-// stream, FFmpeg asks again without it; answer with software so the caller can observe the miss
-// on the first frame instead of failing inside the decoder.
+// A device surface (VA-API or CUDA/NVDEC), never a software layout.
+bool hardwareSurface(const int format) {
+    return format == AV_PIX_FMT_VAAPI || format == AV_PIX_FMT_CUDA;
+}
+// Prefer the device surface (VA-API or CUDA) when the hwaccel offers it. When hwaccel
+// initialisation refuses the stream, FFmpeg asks again without it; answer with software so the
+// caller can observe the miss on the first frame instead of failing inside the decoder.
 AVPixelFormat hardwareFormat(AVCodecContext*, const AVPixelFormat* formats) {
     for (const auto* p = formats; *p != AV_PIX_FMT_NONE; ++p)
-        if (*p == AV_PIX_FMT_VAAPI)
+        if (hardwareSurface(*p))
             return *p;
     for (const auto* p = formats; *p != AV_PIX_FMT_NONE; ++p) {
         const auto* desc = av_pix_fmt_desc_get(*p);
@@ -389,7 +393,12 @@ void configureThreads(AVCodecContext& codec, const AVCodecParameters& p) {
 // A null device selects the software reference decoder.
 void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
     requireDecoder(*stream.codecpar);
-    const auto* codec = avcodec_find_decoder(stream.codecpar->codec_id);
+    // Software AV1 is dav1d (preferred by FFmpeg's registry); hardware AV1 uses FFmpeg's native
+    // AV1 decoder, which decodes through a hwaccel only.
+    const auto* codec = device && stream.codecpar->codec_id == AV_CODEC_ID_AV1
+                            ? avcodec_find_decoder_by_name("av1")
+                            : avcodec_find_decoder(stream.codecpar->codec_id);
+    require(codec != nullptr, "Hardware decoder unavailable in this build", Error::Unavailable);
     input.codec = avcodec_alloc_context3(codec);
     require(input.codec != nullptr, "Decoder allocation failed", Error::Oversized);
     require(avcodec_parameters_to_context(input.codec, stream.codecpar) >= 0,
@@ -407,7 +416,7 @@ void decoder(Input& input, const AVStream& stream, AVBufferRef* device) {
     if (device) {
         input.codec->thread_count = 1;
         input.codec->hw_device_ctx = av_buffer_ref(device);
-        require(input.codec->hw_device_ctx != nullptr, "VA-API device reference failed",
+        require(input.codec->hw_device_ctx != nullptr, "Hardware device reference failed",
                 Error::Oversized);
         input.codec->get_format = hardwareFormat;
     } else
@@ -562,7 +571,7 @@ FrameHandle bwdif(const AVStream& stream, const FrameHandle& previous, const Fra
     }
 }
 FrameProduct frame(Input& input, const AVStream& stream, AVFrame* decoded) {
-    if (decoded->format == AV_PIX_FMT_VAAPI) {
+    if (hardwareSurface(decoded->format)) {
         av_frame_unref(input.transfer);
         require(av_hwframe_transfer_data(input.transfer, decoded, 0) >= 0,
                 "Hardware download failed");
@@ -923,7 +932,7 @@ FrameProduct video(Input& input, const CallRequest& request, AVBufferRef* device
         while (pull()) {
             const auto pts = input.frame->best_effort_timestamp;
             require(pts != AV_NOPTS_VALUE, "Frame timestamp unavailable", Error::Unavailable);
-            if (device && input.frame->format != AV_PIX_FMT_VAAPI)
+            if (device && !hardwareSurface(input.frame->format))
                 throw HardwareMiss{};
             const bool firstAfterSeek = seeked;
             seeked = false;

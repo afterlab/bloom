@@ -16,6 +16,10 @@ struct WorkerPoolOptions {
     // it serves probe, index, video and sequential audio blocks. Other providers keep the
     // existing one-call worker lifecycle.
     bool retainedVideo = false;
+    // Minimum address-space limit of a launched worker, above the frame-sized media-v1 limit. The
+    // NVIDIA driver maps several GiB of virtual address space when it opens CUDA, so the NVDEC
+    // generation uses kNvencAddressSpaceFloor (as NVENC does). Zero keeps the media-v1 limit.
+    std::uint64_t addressSpaceFloor = 0;
     // Optional process-lifecycle telemetry, invoked on the BlockingIo task.
     std::function<void(std::int64_t)> launched;
 };

@@ -10,9 +10,14 @@ namespace bloom::media::provider {
 // h264_nvenc/hevc_nvenc, with the driver loaded at run time. Hardware execution key, no
 // determinism claim; every export still passes the reopen check.
 [[nodiscard]] Handshake ffmpegNvencHandshake();
-// Preview-only VA-API decode for H.264/HEVC with run-time render-node discovery and a
-// per-worker software parity gate. Software decode remains the reference and fallback.
-[[nodiscard]] Handshake ffmpegHardwareDecodeHandshake();
+// Hardware decode generations for H.264, HEVC and AV1 (ADR 0027, amended 2026-11-04): VA-API
+// with run-time render-node discovery (`--vaapi-decode`), or NVIDIA NVDEC through FFmpeg's CUDA
+// hwaccel (`--nvdec-decode`). Each worker generation proves its first hardware frame byte-identical
+// to the software reference; the host keeps the explicit, permanent per-source software fallback.
+// Software decode remains the reference. Preview and final rendering may both use a proven source.
+enum class HardwareDecodeDevice : std::uint8_t { Vaapi, Nvdec };
+[[nodiscard]] Handshake
+ffmpegHardwareDecodeHandshake(HardwareDecodeDevice device = HardwareDecodeDevice::Vaapi);
 [[nodiscard]] PipelineQualificationV1 ffmpegPipeline(const ProviderDeclaration& declaration);
 // Presentation notes for a ProRes deliverable, by the implementation that served it. On macOS
 // ProRes is the operating system's own codec through AVFoundation/VideoToolbox -- the native,

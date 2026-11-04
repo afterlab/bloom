@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
 #else
     bool hardware = false;
     bool hardwareDecode = false;
+    auto decodeDevice = provider::HardwareDecodeDevice::Vaapi;
     bool nvenc = false;
     bool frameArena = false;
     int stagedOutput = -1;
@@ -73,9 +74,12 @@ int main(int argc, char** argv) {
             hardware = true;
         else if (argument == "--nvenc")
             nvenc = true;
-        else if (argument == "--vaapi-decode")
+        else if (argument == "--vaapi-decode" && !hardwareDecode)
             hardwareDecode = true;
-        else if (argument == "--retained-video")
+        else if (argument == "--nvdec-decode" && !hardwareDecode) {
+            hardwareDecode = true;
+            decodeDevice = provider::HardwareDecodeDevice::Nvdec;
+        } else if (argument == "--retained-video")
             retainedVideo = true;
         else if (argument == "--frame-arena")
             frameArena = true;
@@ -85,7 +89,7 @@ int main(int argc, char** argv) {
             return 2;
     }
     if (hardwareDecode && (hardware || !retainedVideo))
-        return 2; // Preview hardware decode is a retained, decode-only worker generation.
+        return 2; // Hardware decode is a retained, decode-only worker generation.
     if (frameArena && !retainedVideo)
         return 2; // The arena carries a retained decoder's frames only.
     if (frameArena) {
@@ -101,9 +105,10 @@ int main(int argc, char** argv) {
     // Without a working NVIDIA driver the generation answers with the software handshake, which
     // the host does not expect, so the encode chain moves on to its next provider.
     nvenc = nvenc && ffmpeg::nvencEncodeAvailable();
-    // The decode-only VA-API handshake is device-neutral: the worker discovers the render node
-    // when it opens the stream, and reports a typed refusal when none decodes it.
-    const auto handshake = hardwareDecode ? provider::ffmpegHardwareDecodeHandshake()
+    // The decode-only hardware handshake is device-neutral: the worker discovers the VA-API render
+    // node or CUDA device when it opens the stream, and reports a typed refusal when none decodes
+    // it.
+    const auto handshake = hardwareDecode ? provider::ffmpegHardwareDecodeHandshake(decodeDevice)
                            : nvenc        ? provider::ffmpegNvencHandshake()
                                           : provider::ffmpegHandshake(hardware);
 #if defined(_WIN32)
@@ -118,7 +123,7 @@ int main(int argc, char** argv) {
     ffmpeg::Encoder encoder(hardware, stagedOutput, nvenc);
     std::unique_ptr<ffmpeg::DecodeSession> decoder;
     if (retainedVideo)
-        decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode);
+        decoder = std::make_unique<ffmpeg::DecodeSession>(hardwareDecode, decodeDevice);
 #endif
     try {
         std::uint64_t session = 0, sequence = 0;
@@ -199,8 +204,8 @@ int main(int argc, char** argv) {
             if (!worker::write({kind, session, sequence, std::move(payload)}))
                 return 9;
 #if !defined(BLOOM_FAKE_WORKER) && !defined(BLOOM_VIDEOTOOLBOX_WORKER)
-            if (decoder && (kind == provider::MessageKind::Frame ||
-                            kind == provider::MessageKind::ArenaFrame))
+            if (decoder &&
+                (kind == provider::MessageKind::Frame || kind == provider::MessageKind::ArenaFrame))
                 decoder->decodeAhead();
 #endif
         }

@@ -180,25 +180,31 @@ Handshake ffmpegNvencHandshake() {
     h.declarations = std::move(declarations);
     return h;
 }
-Handshake ffmpegHardwareDecodeHandshake() {
-    // Preview-only VA-API decode. The worker discovers the render node at run time, so the
-    // execution key names the discovery policy rather than one device path. Every worker
-    // generation re-proves its first hardware frame against the software reference before any
-    // hardware frame is returned, and the host never routes final rendering here.
+Handshake ffmpegHardwareDecodeHandshake(const HardwareDecodeDevice device) {
+    // Hardware decode (ADR 0027, amended 2026-11-04). The worker discovers its device at run time
+    // (VA-API render nodes in order, or the CUDA device NVDEC decodes on), so the execution key
+    // names the discovery policy rather than one device path. Every worker generation re-proves
+    // its first hardware frame byte for byte against the software reference before any hardware
+    // frame is returned; the host may then use it for preview and final rendering alike. H.264,
+    // HEVC and AV1 decoding is bit-exact by specification, which the proof checks per source.
     auto h = ffmpegHandshake();
     auto& e = h.execution;
-    e.driver = "vaapi-libva";
-    e.device = "vaapi-render-node-discovered";
+    const bool nvdec = device == HardwareDecodeDevice::Nvdec;
+    e.driver = nvdec ? "nvdec-cuda" : "vaapi-libva";
+    e.device = nvdec ? "cuda-device-discovered" : "vaapi-render-node-discovered";
     e.implementation = Implementation::Hardware;
-    e.entitlement = "apple_authorized=false;delivery_qualified=false;preview_only=true";
+    e.entitlement =
+        "apple_authorized=false;delivery_qualified=false;software_parity_proven_per_source=true";
     std::vector<ProviderDeclaration> declarations;
     for (auto declaration : h.declarations) {
         if (declaration.capability.role != Role::VideoDecode ||
-            (declaration.capability.codec != "h264" && declaration.capability.codec != "hevc"))
+            (declaration.capability.codec != "h264" && declaration.capability.codec != "hevc" &&
+             declaration.capability.codec != "av1"))
             continue;
         declaration.execution = e;
-        declaration.capability.surfaceSemantics = "cpu-planes-v2-vaapi-download";
-        declaration.evidence.reviewDate = "2026-10-23";
+        declaration.capability.surfaceSemantics =
+            nvdec ? "cpu-planes-v2-nvdec-download" : "cpu-planes-v2-vaapi-download";
+        declaration.evidence.reviewDate = "2026-11-04";
         declaration.evidence.qualification = Qualification::PreviewQualified;
         declaration.evidence.result = QcResult::Pass;
         declarations.push_back(std::move(declaration));

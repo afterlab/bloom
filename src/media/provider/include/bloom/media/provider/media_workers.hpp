@@ -17,6 +17,7 @@ inline constexpr std::string_view kMediaFoundationProviderId = "media-foundation
 inline constexpr std::string_view kVideoToolboxProviderId = "videotoolbox";
 inline constexpr std::string_view kFfmpegNvencProviderId = "ffmpeg-nvenc";
 inline constexpr std::string_view kFfmpegVaapiProviderId = "ffmpeg-vaapi";
+inline constexpr std::string_view kFfmpegNvdecProviderId = "ffmpeg-nvdec";
 inline constexpr std::string_view kFfmpegProviderId = "ffmpeg";
 
 // Worker generation directories.

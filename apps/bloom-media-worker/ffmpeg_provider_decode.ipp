@@ -7,26 +7,33 @@ struct Device final {
     Device(const Device&) = delete;
     Device& operator=(const Device&) = delete;
     ~Device() { av_buffer_unref(&context); }
-    // Opens the first discovered render node at or after `start`; returns the node index used.
-    std::optional<std::size_t> open(const std::vector<std::string>& nodes, std::size_t start) {
+    // Opens the first discovered device at or after `start`; returns the index used. VA-API
+    // walks the render nodes; NVDEC opens the CUDA device (one entry, the driver's default).
+    std::optional<std::size_t> open(const std::vector<std::string>& nodes, std::size_t start,
+                                    const provider::HardwareDecodeDevice kind) {
         av_buffer_unref(&context);
+        const bool nvdec = kind == provider::HardwareDecodeDevice::Nvdec;
         for (auto node = start; node < nodes.size(); ++node)
-            if (av_hwdevice_ctx_create(&context, AV_HWDEVICE_TYPE_VAAPI, nodes[node].c_str(),
-                                       nullptr, 0) >= 0)
+            if (av_hwdevice_ctx_create(&context,
+                                       nvdec ? AV_HWDEVICE_TYPE_CUDA : AV_HWDEVICE_TYPE_VAAPI,
+                                       nvdec ? nullptr : nodes[node].c_str(), nullptr, 0) >= 0)
                 return node;
         return {};
     }
 };
 // The same request for another frame of the same stream.
-[[nodiscard]] bool sameVideoRequest(const provider::CallRequest& a, const provider::CallRequest& b) {
+[[nodiscard]] bool sameVideoRequest(const provider::CallRequest& a,
+                                    const provider::CallRequest& b) {
     return a.capability == b.capability && a.source == b.source && a.width == b.width &&
            a.height == b.height && a.stream == b.stream && a.samples == b.samples &&
            a.sourceDigest == b.sourceDigest && a.snapshotBytes == b.snapshotBytes;
 }
 } // namespace
 struct DecodeSession::State final {
-    explicit State(bool hardwareValue) : hardware(hardwareValue) {}
+    State(bool hardwareValue, provider::HardwareDecodeDevice deviceValue)
+        : hardware(hardwareValue), kind(deviceValue) {}
     bool hardware = false;
+    provider::HardwareDecodeDevice kind = provider::HardwareDecodeDevice::Vaapi;
     provider::Digest digest;
     std::uint64_t bytes = 0;
     std::unique_ptr<Input> input;
@@ -55,13 +62,14 @@ struct DecodeSession::State final {
         audio = {};
     }
 };
-DecodeSession::DecodeSession(bool hardware) : state_(std::make_unique<State>(hardware)) {}
+DecodeSession::DecodeSession(bool hardware, provider::HardwareDecodeDevice device)
+    : state_(std::make_unique<State>(hardware, device)) {}
 DecodeSession::~DecodeSession() = default;
 provider::Payload DecodeSession::call(const provider::CallRequest& request) {
     auto& state = *state_;
     try {
         av_log_set_level(AV_LOG_ERROR);
-        const auto handshake = state.hardware ? provider::ffmpegHardwareDecodeHandshake()
+        const auto handshake = state.hardware ? provider::ffmpegHardwareDecodeHandshake(state.kind)
                                               : provider::ffmpegHandshake();
         require(std::ranges::any_of(handshake.declarations,
                                     [&](const auto& declaration) {
@@ -136,14 +144,16 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
         // Hardware mode: walk the discovered render nodes until one decodes this stream on the
         // GPU. A node whose driver lacks the profile makes FFmpeg fall back to software frames;
         // that is a miss here, never a silently relabelled software frame.
+        const bool nvdec = state.kind == provider::HardwareDecodeDevice::Nvdec;
         if (!state.nodes)
-            state.nodes = renderNodes();
+            state.nodes = nvdec ? std::vector<std::string>{"cuda"} : renderNodes();
         while (true) {
             if (!state.device.context) {
-                const auto opened = state.device.open(*state.nodes, state.node);
+                const auto opened = state.device.open(*state.nodes, state.node, state.kind);
                 require(opened.has_value(),
-                        "No discovered VA-API render node decodes this stream; software decode "
-                        "required",
+                        nvdec ? "NVDEC does not decode this stream; software decode required"
+                              : "No discovered VA-API render node decodes this stream; software "
+                                "decode required",
                         provider::Error::Unavailable);
                 state.node = *opened;
                 state.parityProven = false;
@@ -156,8 +166,10 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
                     // reference decoder on an independent reader of the same immutable input.
                     auto reference = openInput(request);
                     require(video(*reference, request, nullptr) == result,
-                            "VA-API decode differs from the software reference; software decode "
-                            "required",
+                            nvdec ? "NVDEC decode differs from the software reference; software "
+                                    "decode required"
+                                  : "VA-API decode differs from the software reference; software "
+                                    "decode required",
                             provider::Error::IdentityMismatch);
                     state.parityProven = true;
                 }
@@ -228,8 +240,9 @@ provider::Payload call(const provider::CallRequest& request, bool hardware) {
             if (request.capability.role == provider::Role::VideoDecode) {
                 Device device;
                 if (hardware)
-                    require(device.open(renderNodes(), 0).has_value(), "VA-API device unavailable",
-                            provider::Error::Unavailable);
+                    require(device.open(renderNodes(), 0, provider::HardwareDecodeDevice::Vaapi)
+                                .has_value(),
+                            "VA-API device unavailable", provider::Error::Unavailable);
                 try {
                     result = video(*input, request, device.context);
                 } catch (const HardwareMiss&) {

@@ -104,15 +104,14 @@ void run(const std::filesystem::path& directory) {
     };
     const auto hevcMain = softwareHevc("main");
     const auto hevcMain10 = softwareHevc("main10");
-    test::check(hevcMain != software.declarations.end() && hevcMain->capability.bitDepth == 8 &&
-                    hevcMain->capability.chroma == "yuv420p" &&
-                    hevcMain10 != software.declarations.end() &&
-                    hevcMain10->capability.bitDepth == 10 &&
-                    hevcMain10->capability.chroma == "yuv420p10" &&
-                    hevcMain10->capability.range == "limited" &&
-                    mediaCodecFamilyV1("libkvazaar10") == "hevc" &&
-                    mediaCodecFamilyV1("libkvazaar") == "hevc",
-                "the software handshake declares HEVC Main and Main 10 from the bundled Kvazaar");
+    test::check(
+        hevcMain != software.declarations.end() && hevcMain->capability.bitDepth == 8 &&
+            hevcMain->capability.chroma == "yuv420p" && hevcMain10 != software.declarations.end() &&
+            hevcMain10->capability.bitDepth == 10 && hevcMain10->capability.chroma == "yuv420p10" &&
+            hevcMain10->capability.range == "limited" &&
+            mediaCodecFamilyV1("libkvazaar10") == "hevc" &&
+            mediaCodecFamilyV1("libkvazaar") == "hevc",
+        "the software handshake declares HEVC Main and Main 10 from the bundled Kvazaar");
     for (const auto& handshake : {software, ffmpegHandshake(true)})
         test::check(std::ranges::count_if(handshake.declarations,
                                           [](const auto& declaration) {
@@ -132,10 +131,17 @@ void run(const std::filesystem::path& directory) {
                         pipeline.determinism == MediaDeterminismV1::NoDeterminismClaim,
                     "VA-API never inherits software qualification or determinism");
     }
-    // Preview VA-API decode: discovered device, H.264/HEVC decode only, admitted for preview
+    // Hardware decode (VA-API and NVDEC): discovered device, H.264/HEVC/AV1 decode only, admitted
     // through its own hardware execution key and never claiming determinism.
+    const auto decodeNvdec = ffmpegHardwareDecodeHandshake(HardwareDecodeDevice::Nvdec);
+    test::check(decodeNvdec.declarations.size() == 3 &&
+                    decodeNvdec.execution.device == "cuda-device-discovered" &&
+                    decodeNvdec.execution.driver == "nvdec-cuda" &&
+                    decodeNvdec.execution != ffmpegHardwareDecodeHandshake().execution &&
+                    decodeNvdec.execution.implementation == Implementation::Hardware,
+                "NVDEC decode has its own hardware execution key");
     const auto decodeHardware = ffmpegHardwareDecodeHandshake();
-    test::check(decodeHardware.declarations.size() == 2 &&
+    test::check(decodeHardware.declarations.size() == 3 &&
                     decodeHardware.execution.device == "vaapi-render-node-discovered" &&
                     decodeHardware.execution.implementation == Implementation::Hardware,
                 "hardware decode handshake names discovery, not a fixed render node");
@@ -144,9 +150,10 @@ void run(const std::filesystem::path& directory) {
         test::check(declaration.capability.role == Role::VideoDecode &&
                         declaration.capability.purpose == Purpose::Preview &&
                         (declaration.capability.codec == "h264" ||
-                         declaration.capability.codec == "hevc") &&
+                         declaration.capability.codec == "hevc" ||
+                         declaration.capability.codec == "av1") &&
                         declaration.execution == decodeHardware.execution,
-                    "hardware decode is preview H.264/HEVC only");
+                    "hardware decode is H.264/HEVC/AV1 decode only");
         const auto pipeline = ffmpegPipeline(declaration);
         test::check(pipeline.determinism == MediaDeterminismV1::NoDeterminismClaim,
                     "hardware decode makes no determinism claim");

@@ -11,15 +11,15 @@
 #include <bloom/platform/cache_directory.hpp>
 #include <cctype>
 #include <condition_variable>
-#include <deque>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <new>
 #include <optional>
 #include <thread>
-#include <type_traits>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 namespace bloom::media::video {
 bool isVideoExtension(const std::filesystem::path& path) {
@@ -60,18 +60,11 @@ std::uint64_t defaultSourceSnapshotQuotaBytes() {
     }
     return sourceSnapshotQuotaBytes(available);
 }
-bool VideoDecodeSession::hardwareDecodePossible() {
+VideoDecodeSession::HardwareRoute VideoDecodeSession::hardwareDecodeRoute() {
 #if defined(__linux__)
     const auto* value = std::getenv("BLOOM_VIDEO_HARDWARE_DECODE");
     const std::string_view mode = value ? value : "";
-    if (mode == "0")
-        return false;
-    // Automatic preference: with SIMD and threads, software decode was faster than VA-API on a
-    // 16-thread host and VA-API only won with four or fewer threads
-    // (docs/architecture/media-io.md).
-    if (mode != "1" && std::thread::hardware_concurrency() > kHardwareDecodeMaximumThreads)
-        return false;
-    // Render nodes are enumerated once per process; the worker discovers the usable one.
+    // Devices are enumerated once per process; the worker discovers the usable one.
     static const bool renderNode = [] {
         std::error_code error;
         for (std::filesystem::directory_iterator it("/dev/dri", error), end; !error && it != end;
@@ -80,10 +73,34 @@ bool VideoDecodeSession::hardwareDecodePossible() {
                 return true;
         return false;
     }();
-    return renderNode;
+    static const bool nvidia = [] {
+        std::error_code error;
+        return std::filesystem::exists("/proc/driver/nvidia/version", error) && !error;
+    }();
+    if (mode == "0")
+        return HardwareRoute::None;
+    if (mode == "vaapi")
+        return renderNode ? HardwareRoute::Vaapi : HardwareRoute::None;
+    if (mode == "nvdec")
+        return nvidia ? HardwareRoute::Nvdec : HardwareRoute::None;
+    return nvidia ? HardwareRoute::Nvdec : renderNode ? HardwareRoute::Vaapi : HardwareRoute::None;
 #else
-    return false;
+    return HardwareRoute::None;
 #endif
+}
+bool VideoDecodeSession::hardwareDecodePossible() {
+    const auto route = hardwareDecodeRoute();
+    if (route == HardwareRoute::None)
+        return false;
+    const auto* value = std::getenv("BLOOM_VIDEO_HARDWARE_DECODE");
+    const std::string_view mode = value ? value : "";
+    if (!mode.empty())
+        return true; // "1", "vaapi" or "nvdec": an explicit request ("0" has no route above)
+    // Automatic preference (docs/architecture/media-io.md): NVDEC measured faster than threaded
+    // software decode on a 16-thread host; VA-API (an integrated GPU) was slower there and only
+    // won with four or fewer threads.
+    return route == HardwareRoute::Nvdec ||
+           std::thread::hardware_concurrency() <= kHardwareDecodeMaximumThreads;
 }
 
 namespace {
@@ -136,8 +153,9 @@ struct VideoDecodeSession::State {
     std::unique_ptr<MediaWorkerPool> nativePool;
     std::atomic<bool> nativeRetired{false};
     std::string nativeFallback;
-    // Preview-only VA-API decode generation (Linux). Created on first eligible request and
-    // permanently retired for this session after its first typed hardware refusal.
+    // Hardware decode generation (Linux: VA-API or NVDEC, ADR 0027). Created on first eligible
+    // request and permanently retired for this session after its first typed hardware refusal.
+    HardwareRoute hardwareRoute = HardwareRoute::None;
     Handshake hardwareHello;
     std::string workerExecutable;
     std::function<void(std::int64_t)> workerLaunched;
@@ -220,7 +238,10 @@ struct VideoDecodeSession::State {
             nativePool = std::make_unique<MediaWorkerPool>(std::move(o));
         }
 #if defined(__linux__)
-        hardwareHello = ffmpegHardwareDecodeHandshake();
+        hardwareRoute = hardwareDecodeRoute();
+        hardwareHello = ffmpegHardwareDecodeHandshake(hardwareRoute == HardwareRoute::Nvdec
+                                                          ? HardwareDecodeDevice::Nvdec
+                                                          : HardwareDecodeDevice::Vaapi);
         for (const auto& declaration : hardwareHello.declarations) {
             (void)registry.registerProvider(declaration);
             (void)registry.qualifyPipeline(providerPipeline(declaration));
@@ -232,7 +253,10 @@ struct VideoDecodeSession::State {
         if (!hardwarePool && !hardwareRetired.load()) {
             auto o = options(workerExecutable, workerLaunched);
             o.expected = hardwareHello;
-            o.process.arguments.emplace_back("--vaapi-decode");
+            o.process.arguments.emplace_back(
+                hardwareRoute == HardwareRoute::Nvdec ? "--nvdec-decode" : "--vaapi-decode");
+            if (hardwareRoute == HardwareRoute::Nvdec)
+                o.addressSpaceFloor = kNvencAddressSpaceFloor;
             hardwarePool = std::make_unique<MediaWorkerPool>(std::move(o));
         }
         return hardwarePool.get();
@@ -666,19 +690,23 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
 #endif
     const bool retainWorker =
         revisionAccess.policy == SourceRevisionPolicy::Retained && revisionAccess.allowRetention;
-    // Hardware is a capability-screened preview accelerator: only retained preview revisions of
-    // a codec the hardware generation declares, and never after this session's first refusal.
+    // Hardware is a capability-screened accelerator for preview and final rendering alike (ADR
+    // 0027, amended 2026-11-04): a codec the hardware generation declares, decoded from this
+    // session's immutable snapshot by a retained worker that proved its first frame against the
+    // software reference, and never after this session's first refusal.
     const bool hardware =
-        route.preferHardware && retainWorker && stream < source.streams.size() &&
-        !state_->hardwareRetired.load() && hardwareDecodePossible() &&
+        route.preferHardware && snapshot != nullptr && revisionAccess.allowRetention &&
+        stream < source.streams.size() && !state_->hardwareRetired.load() &&
+        hardwareDecodePossible() &&
         std::ranges::any_of(
             state_->hardwareHello.declarations,
             [&](const auto& d) { return d.capability.codec == source.streams[stream].codec; });
+    const bool nvdec = state_->hardwareRoute == HardwareRoute::Nvdec;
     const auto describe = [&](const bool usedHardware) {
         FrameDecodeProvenance provenance;
         if (usedHardware) {
             provenance.implementation = Implementation::Hardware;
-            provenance.description = "vaapi";
+            provenance.description = nvdec ? "nvdec" : "vaapi";
         } else if (route.preferHardware && state_->hardwareRetired.load()) {
             provenance.fallback = true;
             provenance.description =
@@ -689,9 +717,10 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
             stream < source.streams.size() &&
             declaresMediaOperationV1(state_->nativeHello,
                                      {MediaDirectionV1::Decode, source.streams[stream].codec, {}});
-        provenance.provider = usedHardware ? std::string(kFfmpegVaapiProviderId)
-                              : native     ? std::string(nativeMediaProviderId())
-                                           : std::string(kFfmpegProviderId);
+        provenance.provider =
+            usedHardware ? std::string(nvdec ? kFfmpegNvdecProviderId : kFfmpegVaapiProviderId)
+            : native     ? std::string(nativeMediaProviderId())
+                         : std::string(kFfmpegProviderId);
         if (state_->nativeRetired.load())
             provenance.nativeFallback = state_->nativeFallbackReason();
         return provenance;
@@ -782,8 +811,11 @@ Result<std::shared_ptr<const FrameProduct>> VideoDecodeSession::frame(
         bool usedHardware = hardware;
         // The Profiler's decode stage: the worker round trip that produces the frame (#423).
         core::telemetry::StageTimer decodeTime(core::telemetry::Stage::Decode);
-        auto decoded = product<FrameProduct>(call(Role::VideoDecode, &source, stream, index, 1,
-                                                  cancel, snapshot, retainWorker, hardware));
+        // A hardware generation is always retained: it proves its first frame once and then
+        // continues forward, on the final route as in preview.
+        auto decoded =
+            product<FrameProduct>(call(Role::VideoDecode, &source, stream, index, 1, cancel,
+                                       snapshot, retainWorker || hardware, hardware));
         if (const auto* error = std::get_if<Unavailable>(&decoded);
             hardware && error && error->reason != Error::Cancelled &&
             error->reason != Error::Shutdown && error->reason != Error::SourceChanged) {

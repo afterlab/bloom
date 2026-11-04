@@ -423,8 +423,10 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
         selection.cancelled = true;
         return selection;
     }
-    // Retained revisions serve interactive preview, which may use the discovered VA-API decoder;
-    // revalidated (final/export) requests always decode through the software reference.
+    // Preview and final (revalidated) requests alike may use the host's hardware decoder (ADR
+    // 0027, amended 2026-11-04): its first frame is proven byte-identical to the software
+    // reference per source, a refusal falls back to software permanently, and the route stays in
+    // every cache key below.
     media::video::FrameDecodeProvenance decodeProvenance;
     const auto product =
         session->frame(runtime::video::probeMetadata(asset), stream->id, index,
@@ -439,7 +441,7 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
                         &selection.retainedRevision,
                         {},
                         hostByteBudget},
-                       {revisionPolicy == MediaSourceRevisionPolicy::Retained, &decodeProvenance});
+                       {true, &decodeProvenance});
     if (const auto* error = std::get_if<media::provider::Unavailable>(&product)) {
         selection.warning = error->detail;
         selection.cancelled = error->reason == media::provider::Error::Cancelled;
@@ -473,6 +475,7 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     const bool hardwareDecoded =
         decodeProvenance.implementation == media::provider::Implementation::Hardware;
     key.add(hardwareDecoded);
+    key.add(hardwareDecoded ? decodeProvenance.description : std::string{});
     // #381: a video's alpha reads as straight unless Interpret Footage says premultiplied.
     selection.footagePass = footagePassFor(asset, asset.interpretation.alphaMode ==
                                                           document::AssetAlphaMode::Premultiplied
@@ -495,9 +498,10 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     decodeKey.add(std::string(digest.begin(), digest.end()));
     decodeKey.add(stream->id);
     decodeKey.add(index);
-    // A hardware-decoded preview frame is a distinct preparation from the software reference.
+    // A hardware-decoded frame is a distinct preparation from the software reference; the route
+    // ("vaapi" or "nvdec") is part of its identity.
     if (hardwareDecoded)
-        decodeKey.add(std::string{"vaapi"});
+        decodeKey.add(decodeProvenance.description);
     if (selection.footagePass)
         decodeKey.add(std::string{"stored-samples-v1"});
     selection.decodeKey = decodeKey.digest();
