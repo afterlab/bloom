@@ -923,7 +923,10 @@ nearest frame. Cached entries
 in that set are reused and protected by the cache's LRU order. The pass then stops, avoiding an endless
 cycle that evicts its own frames. An evaluation-snapshot, work-area, resolution, playhead, or
 memory-budget change restarts selection; a layout-only edit moves none of those and leaves the pass
-running. A work-area edit re-anchors on the playhead and skips cached in-range frames, so it fills
+running. While playback runs, a playhead or memory-budget change only re-plans the next ask: the
+frames already in flight stay and land (#474). The memory ledger re-balances the cache budgets
+during playback, and cancelling the read-ahead window at each re-balance discarded decoded frames
+that a long-GOP video then had to decode again. A work-area edit re-anchors on the playhead and skips cached in-range frames, so it fills
 only what the new range adds. Old evaluation-snapshot entries evict through the existing cache
 policy. Background caching visits
 only frame times inside the session's resolved work area, including when choosing nearby frames

@@ -85,8 +85,19 @@ BackgroundPreviewController::BackgroundPreviewController(
             exhausted_ = false;
         }
     });
-    connect(&previewController_.frameCache(), &PreviewFrameCache::byteBudgetChanged, this,
-            &BackgroundPreviewController::restart);
+    // A budget change re-sizes the pass. While playing, the frames in flight stay useful (a smaller
+    // budget evicts the farthest frames, not the ones landing next), so only the next ask is
+    // re-planned: cancelling them each time the memory ledger re-balanced the caches threw away a
+    // whole window of decoded frames, and a long-GOP video then decoded its way back (#474).
+    connect(&previewController_.frameCache(), &PreviewFrameCache::byteBudgetChanged, this, [this] {
+        if (playing_) {
+            cursor_ = 0;
+            considered_ = 0;
+            exhausted_ = false;
+            return;
+        }
+        restart();
+    });
     connect(&previewController_, &CompositionPreviewController::previewCachePurged, this,
             &BackgroundPreviewController::suspendForCachePurge);
     // The fill timer runs only while playback (or an explicitly enabled idle fill) wants frames.

@@ -893,6 +893,55 @@ void testPlaybackTicksKeepReadAhead(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// #474: the memory ledger re-balances the cache budgets while playback runs. A budget change then
+// re-plans the next ask; it never cancels the frames in flight, which a long-GOP video would have
+// to decode again.
+void testBudgetChangeKeepsReadAhead(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Read-ahead survives budget changes", time(6, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    fixture.frameCache->clear();
+    std::mutex mutex;
+    std::vector<core::RationalTime> order;
+    WorkerGate gate;
+    auto prepare = [&](const document::Snapshot& snapshot,
+                       const runtime::PreviewRequestIdentity& identity, std::size_t limit,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
+                       runtime::TaskContext& context) {
+        bool first = false;
+        {
+            std::lock_guard lock(mutex);
+            order.push_back(identity.time);
+            first = order.size() == 1;
+        }
+        if (first)
+            gate.enterAndWait();
+        return fixture.pipelineFixture.pipeline(snapshot, identity, limit, override, context);
+    };
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge, prepare);
+    fixture.controller.setPlaybackActive(true);
+    expectations.expect(waitUntil([&] { return gate.entered(); }),
+                        "the first read-ahead frame is in flight");
+    const auto budget = fixture.frameCache->byteBudget();
+    for (const auto bytes : {budget / 2, budget}) {
+        fixture.frameCache->setByteBudget(bytes);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    gate.release();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 6; }),
+                        "the read-ahead fills the range across budget changes");
+    {
+        std::lock_guard lock(mutex);
+        const auto first = order.front();
+        expectations.expect(std::count(order.begin(), order.end(), first) == 1 && order.size() == 6,
+                            "the frame in flight across the budget changes landed: no frame was "
+                            "cancelled and prepared again");
+    }
+    fixture.controller.setPlaybackActive(false);
+    background.beginShutdown();
+    finishFixture(fixture, expectations);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -902,6 +951,7 @@ int main(int argc, char** argv) {
     try {
         testIdleCausesNoFillAndPlayDrivesReadAhead(expectations);
         testPlaybackTicksKeepReadAhead(expectations);
+        testBudgetChangeKeepsReadAhead(expectations);
         testPointerPressCancelsBeforePreviewChanges(expectations);
         testHalfCachedPlaybackAdmitsIdleMissesAndBackpressures(expectations);
         testVisibleAdmissionAndSupersession(expectations);
