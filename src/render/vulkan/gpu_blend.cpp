@@ -304,13 +304,22 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     }
     if (parameters.imageCombine &&
         (static_cast<std::uint8_t>(parameters.imageCombine->kind) >
-             static_cast<std::uint8_t>(GpuImageCombineKind::MultiplyAlpha) ||
+             static_cast<std::uint8_t>(GpuImageCombineKind::SetChannel) ||
          static_cast<std::uint8_t>(parameters.imageCombine->channel) >
              static_cast<std::uint8_t>(ImageCoverageChannel::Luma) ||
          !std::isfinite(parameters.imageCombine->factor) ||
          parameters.imageCombine->factor < 0.0F || parameters.imageCombine->factor > 1.0F)) {
         return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                               "the image combine kind, channel or factor is invalid");
+    }
+    // #479: only Set Channel writes a slot or premultiplies, and it never inverts or masks.
+    if (parameters.imageCombine &&
+        (parameters.imageCombine->kind == GpuImageCombineKind::SetChannel
+             ? parameters.imageCombine->slot > 3 || parameters.imageCombine->invert ||
+                   parameters.imageCombine->mask != GpuImageCombineParameters::Mask::None
+             : parameters.imageCombine->slot != 0 || parameters.imageCombine->premultiply)) {
+        return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
+                              "the image combine slot does not match its mode");
     }
     const bool maskPresent = parameters.imageCombine &&
                              parameters.imageCombine->mask == GpuImageCombineParameters::Mask::Present;
@@ -551,12 +560,16 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
                              ? 8U + static_cast<std::uint32_t>(parameters.imageCombine->kind)
                              : static_cast<std::uint32_t>(storedMode)};
     if (parameters.imageCombine) {
-        // Bit 3 of the channel word selects the inverted coverage; bits 0-2 select the channel.
+        // Bits 0-2 of the channel word select the channel and bit 3 the inverted coverage; Set
+        // Channel (#479) adds its slot in bits 4-5 and its premultiply in bit 6.
         const ImageCombinePush combined{
             push,
             parameters.imageCombine->factor,
             static_cast<std::uint32_t>(parameters.imageCombine->channel) |
-                (parameters.imageCombine->invert ? kImageCombineInvertBit : 0U),
+                (parameters.imageCombine->invert ? kImageCombineInvertBit : 0U) |
+                (static_cast<std::uint32_t>(parameters.imageCombine->slot)
+                 << kImageCombineSlotShift) |
+                (parameters.imageCombine->premultiply ? kImageCombinePremultiplyBit : 0U),
             maskWidth,
             maskHeight,
             maskOffsetX,

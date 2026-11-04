@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "759d3d1763b72c1e6d5fc53381f3ecce487cbd83564df1170fc7328bd5f23079",
-    "spirvSha256": "0b1361b53967859307fe37b46760e6d5b47565728b2787a1e00b1043c04cc5c6",
+    "sha256": "aa6cbef78f98cce50352dcee1f6c0998feb0262655e56c985648dcad7163bd6a",
+    "spirvSha256": "ddb69fcd3bd9deb15472a0181c6af326131c243086533ed261201ac5c6f0d42b",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -28,8 +28,8 @@
     "alignment": "Second input sampled at the base image's global integer pixel coordinate; outside its data window is transparent black",
     "alpha": "finite premultiplied RGBA32F; matte R, G and B channel extraction uses straight scene-linear colour, Luma uses premultiplied scene-linear Rec. 709 luma, and zero alpha gives zero coverage",
     "nonFinitePolicy": "input non-finite/subnormal or non-finite result sets a status flag; never publish a flagged image",
-    "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha",
-    "channel": "bits 0-2 select A, R, G, B or premultiplied scene-linear luma; bit 3 inverts the unit coverage",
+    "modes": "8 Image Mix; 9 Set Alpha; 10 Multiply Alpha; 11 Set Channel (the base with one slot set to the second image's stored channel, alpha limited to [0, 1], optional RGB premultiply)",
+    "channel": "bits 0-2 select A, R, G, B or premultiplied scene-linear luma; bit 3 inverts the unit coverage; Set Channel reads the stored channel unclamped and carries its slot (R, G, B, A) in bits 4-5 and premultiply in bit 6",
     "absentMatte": "an empty source extent makes every tap transparent black (zero coverage)",
     "mask": "Image Mix only: maskMode 1 scales the factor by the mask alpha at the base pixel's global coordinate (zero outside its data window); 2 is an absent mask (zero); 0 ignores binding 4"
   }

@@ -3,7 +3,9 @@
 #include <bloom/render/image_types.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -69,6 +71,49 @@ matteSelectionFromStoredValue(const std::int64_t value) noexcept {
                                          const MatteSelection selection) noexcept {
     const float coverage = imageCoverage(pixel, selection.channel);
     return selection.invert ? 1.0F - coverage : coverage;
+}
+
+// #479 Separate Channels and Combine Channels: the STORED value of one channel, exactly as the
+// premultiplied pixel holds it -- never divided by alpha, never clamped, with no colour
+// conversion -- so a Raw data pass (depth, normals, motion vectors, IDs) and an HDR or signed value
+// move between channels unchanged. Luma is the Rec. 709 luma of the stored (premultiplied) colour,
+// the same Float64 products as the Luma matte selector before its clamp, rounded once.
+[[nodiscard]] inline float storedImageChannel(const Rgba32f pixel,
+                                              const ImageCoverageChannel channel) noexcept {
+    switch (channel) {
+    case ImageCoverageChannel::Alpha:
+        return pixel.alpha();
+    case ImageCoverageChannel::Red:
+        return pixel.red();
+    case ImageCoverageChannel::Green:
+        return pixel.green();
+    case ImageCoverageChannel::Blue:
+        return pixel.blue();
+    case ImageCoverageChannel::Luma:
+        return static_cast<float>(0.2126 * static_cast<double>(pixel.red()) +
+                                  0.7152 * static_cast<double>(pixel.green()) +
+                                  0.0722 * static_cast<double>(pixel.blue()));
+    }
+    return 0.0F;
+}
+
+// #479 Combine Channels: `base` with its component `slot` (0 red, 1 green, 2 blue, 3 alpha) set to
+// `value`. Alpha is limited to [0, 1] like every Rgba32f; red, green and blue are unbounded.
+// `premultiply` then multiplies red, green and blue by the alpha (a Straight declaration). A zero
+// alpha is transparent black, as Rgba32f::fromPremultiplied publishes it.
+[[nodiscard]] inline ImageResult<Rgba32f> setImageChannel(const Rgba32f base, const float value,
+                                                          const std::uint8_t slot,
+                                                          const bool premultiply) noexcept {
+    if (slot > 3 || !std::isfinite(value))
+        return ImageResult<Rgba32f>::failure(
+            ImageError::codeOnly(ImageErrorCode::InvalidParameter));
+    std::array<float, 4> components{base.red(), base.green(), base.blue(), base.alpha()};
+    components[slot] = value;
+    components[3] = std::min(std::max(components[3], 0.0F), 1.0F);
+    if (premultiply)
+        for (std::size_t index = 0; index < 3; ++index)
+            components[index] = components[index] * components[3];
+    return Rgba32f::fromPremultiplied(components[0], components[1], components[2], components[3]);
 }
 
 // All operations use exact composition-space integer pixel centres. A matte tap outside its

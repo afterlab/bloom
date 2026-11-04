@@ -16,9 +16,10 @@ layout(push_constant) uniform BloomImageCombinePush {
     uint sourceHeight;
     int sourceOffsetX;
     int sourceOffsetY;
-    uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha
+    uint mode;              // 8=Image Mix, 9=Set Alpha, 10=Multiply Alpha, 11=Set Channel
     float factor;           // finite unit factor, validated by host
-    uint channel;           // bits 0-2: 0=A, 1=R, 2=G, 3=B, 4=premultiplied luma; bit 3: invert
+    uint channel;           // bits 0-2: 0=A, 1=R, 2=G, 3=B, 4=premultiplied luma; bit 3: invert;
+                            // Set Channel: bits 4-5 the written slot (R, G, B, A), bit 6 premultiply
     uint maskWidth;
     uint maskHeight;
     int maskOffsetX;
@@ -92,6 +93,16 @@ float coverage(vec4 matte) {
     return (bloom_push.channel & 8u) != 0u ? 1.0 - value : value;
 }
 
+// #479 Set Channel reads the second image's STORED channel: no division by alpha, no clamp.
+float storedChannel(vec4 second) {
+    uint channel = bloom_push.channel & 7u;
+    if (channel == 0u) return second.a;
+    if (channel == 1u) return second.r;
+    if (channel == 2u) return second.g;
+    if (channel == 3u) return second.b;
+    return luma(second.rgb);
+}
+
 // Shift alpha by 24 bits so half the least subnormal is a normal Float32.
 // A nonzero subnormal CPU alpha cannot be reproduced on flush-to-zero devices;
 // reject that numerical case through the existing status/CPU fallback boundary.
@@ -152,6 +163,27 @@ void main() {
         }
         float amount = clamp(matteCoverage * bloom_push.factor, 0.0, 1.0);
         result = a * amount;
+    } else if (bloom_push.mode == 11u) {
+        // The base with one slot set; alpha limited to [0, 1]; Straight premultiplies RGB.
+        uint slot = (bloom_push.channel >> 4) & 3u;
+        float value = storedChannel(b);
+        result = a;
+        if (slot == 0u) result.r = value;
+        else if (slot == 1u) result.g = value;
+        else if (slot == 2u) result.b = value;
+        else result.a = value;
+        result.a = clamp(result.a, 0.0, 1.0);
+        if ((bloom_push.channel & 64u) != 0u) {
+            precise vec3 premultiplied = result.rgb * result.a;
+            result.rgb = premultiplied;
+        }
+        // A nonzero subnormal result cannot be reproduced on flush-to-zero devices; refuse it
+        // through the status/CPU fallback boundary rather than publish a flushed value.
+        if ((pixelErrors(result) & 4u) != 0u) {
+            atomicOr(bloom_error.flags[0], 4u);
+            imageStore(bloom_output, destination, a);
+            return;
+        }
     } else {
         atomicOr(bloom_error.flags[0], 2u);
         imageStore(bloom_output, destination, a);

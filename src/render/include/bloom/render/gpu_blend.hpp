@@ -64,7 +64,9 @@ struct GpuBlendDiagnostic final {
 // Validated inputs for BlendV1. `source` is the foreground; `destination` the backdrop. Both are
 // shared immutable ownership retained for the job's lifetime and never mutated. `mode` is the
 // durable core::BlendMode value; an unknown stored integer cannot reach this type.
-enum class GpuImageCombineKind : std::uint8_t { Mix, SetAlpha, MultiplyAlpha };
+// SetChannel (#479 Combine Channels) replaces one component of the base with the stored value of
+// the second image's selected channel (render::storedImageChannel, render::setImageChannel).
+enum class GpuImageCombineKind : std::uint8_t { Mix, SetAlpha, MultiplyAlpha, SetChannel };
 
 struct GpuImageCombineParameters final {
     GpuImageCombineKind kind = GpuImageCombineKind::Mix;
@@ -80,6 +82,10 @@ struct GpuImageCombineParameters final {
     // GpuBlendParameters::mask; Absent is a zero mask (an input that produced no image).
     enum class Mask : std::uint8_t { None, Present, Absent };
     Mask mask = Mask::None;
+    // SetChannel only: the base component written (0 red, 1 green, 2 blue, 3 alpha) and whether
+    // red, green and blue are then multiplied by the alpha. Zero and false for every other kind.
+    std::uint8_t slot = 0;
+    bool premultiply = false;
 };
 
 struct GpuBlendParameters final {

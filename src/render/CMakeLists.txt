@@ -974,9 +974,9 @@ set(BLOOM_IMAGE_COMBINE_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/image_c
 set(BLOOM_IMAGE_COMBINE_MANIFEST
     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/image_combine.manifest")
 set(BLOOM_IMAGE_COMBINE_COMP_SHA256
-    "759d3d1763b72c1e6d5fc53381f3ecce487cbd83564df1170fc7328bd5f23079")
+    "aa6cbef78f98cce50352dcee1f6c0998feb0262655e56c985648dcad7163bd6a")
 set(BLOOM_IMAGE_COMBINE_SPV_SHA256
-    "0b1361b53967859307fe37b46760e6d5b47565728b2787a1e00b1043c04cc5c6")
+    "ddb69fcd3bd9deb15472a0181c6af326131c243086533ed261201ac5c6f0d42b")
 file(SHA256 "${BLOOM_IMAGE_COMBINE_COMP}" bloom_image_combine_comp_sha256)
 if(NOT bloom_image_combine_comp_sha256 STREQUAL BLOOM_IMAGE_COMBINE_COMP_SHA256)
     message(FATAL_ERROR "image_combine.comp differs from its pinned source digest")

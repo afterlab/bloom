@@ -63,6 +63,9 @@ struct ImageCombinePush final {
 };
 static_assert(sizeof(ImageCombinePush) == kImageCombinePushBytes);
 inline constexpr std::uint32_t kImageCombineInvertBit = 8U;
+// #479 Set Channel: bits 4-5 of the channel word carry the written slot, bit 6 the premultiply.
+inline constexpr std::uint32_t kImageCombineSlotShift = 4U;
+inline constexpr std::uint32_t kImageCombinePremultiplyBit = 64U;
 
 [[nodiscard]] inline GpuBlendDiagnostic blendDiagnostic(const GpuBlendDiagnosticCode code,
                                                         std::string message) {
