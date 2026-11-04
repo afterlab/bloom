@@ -167,8 +167,10 @@ layouts. Tables with sortable columns (Assets, Jobs) use the kit theme's item-vi
 styling at the `ListRow` pitch, with no per-row widgets.
 
 Painting outside the kit is limited to viewer canvas, node scene items, timeline
-ruler, lanes, graph editor, work area and navigator, and the Curves graph (`CurveGraphCanvas`, a
-value-over-input graph like the graph editor). Other surfaces compose kit widgets.
+ruler, lanes, graph editor, work area and navigator, the Curves graph (`CurveGraphCanvas`, a
+value-over-input graph like the graph editor), and the graphical grade controls a node card and
+Properties share (`NodeCardWidget`): the Grade colour wheel (`GradeWheelCanvas`) and the Levels
+histogram with its handles (`LevelsGraphCanvas`). Other surfaces compose kit widgets.
 
 ## Export panel
 
@@ -593,6 +595,19 @@ prepared image. The RGBA view draws it over the Viewer checkerboard. A pending i
 placeholder line is muted UiSmall (Warn for a failure), and a "CPU" chip marks pixels that did not come
 from the GPU route. The node editor background draws the same image in viewport space, behind every
 card and over the dot grid.
+
+A graphically edited node (#494: Grade and Levels) carries a card widget (`NodeCardWidget`, made
+by `makeNodeCardWidget`) between its transport rows and its parameter rows, inset by the card
+padding at the card's width. The same widget is the first thing in its Properties section, so
+every edit works on the card without Properties: each drag is one session value edit and one
+command on release, and a double-click on a wheel or a handle resets it. The widget decides which
+parameter rows show: the numbers stay behind it (Alt-click it, or its caret Values button) for
+exact entry, keys and links, and are hidden otherwise, with their sockets. A row whose input is
+linked always shows, so every link keeps its socket. Grade draws its four wheels two by two, each
+with its name, its master slider, a Reset button and a Values caret, then the primaries bar (two
+columns of named value fields). Levels draws a channel tab bar (RGB, R, G, B, A) with a Values
+caret, then the histogram plot with its black, gamma and white handles and the output bar with
+its two handles; its Clamp row always shows.
 
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
 resize remains authoritative above that minimum. `Arrange All` reads the graph like the layer

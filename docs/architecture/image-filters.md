@@ -316,6 +316,22 @@ within the 2e-6 gate rather than bit-exactly.
 
 None of the three has a mask input yet: the shared mask input for image effects belongs to #383.
 
+Levels is edited graphically (#494) on its node card and in Properties by the same widget
+(`bloom/ui/levels_graph.hpp`, a `NodeCardWidget`): a tab per channel (RGB, R, G, B, A) over the
+node input's luminance histogram (the Curves histogram below, requested only while the plot
+paints), with handles for the channel's input black, gamma and input white under the plot and
+for its output black and white under an output bar. The parameters are the numeric ones above,
+unchanged, so existing output and identities are unchanged. The gamma handle sits at
+`inputBlack + (inputWhite - inputBlack) * 0.5^gamma`, where the output is half way between output
+black and white; dragging it maps back through `gamma = log(t) / log(0.5)`, limited to the gamma
+domain. The plot spans `0..1` and grows to hold a black or white point outside it, plus 10%
+headroom; a drag keeps the range it started with. Each drag is one session value edit and one
+command on release; a press that moves nothing commits nothing; Escape, the right button, losing
+focus or hiding cancels; a double-click resets a handle to its default as one command. The card
+shows the widget and the Clamp row instead of the 25 value rows; Alt-click the plot, or its Values
+caret, to show the current channel's five rows (with their sockets) for exact entry, keys and
+links. A linked value's row always shows.
+
 The curves are edited in a graph (`bloom/ui/curve_graph.hpp`), two of them in Properties (the
 channel curves, tabs RGB/R/G/B/A, and the hue curves, tabs Hue/Hue, Hue/Sat, Hue/Luma, Luma/Sat),
 and the node card draws the channel curves read-only. A click adds a point and the drag that
@@ -348,6 +364,83 @@ lowering, mute pass-through, the definitions, add, wiring, undo/redo, refusals a
 preparation checks one command per grade, that a changed value reuses the compiled shader, and
 identity aliasing; the native image-effect harness runs every kind over signed/HDR/partial-alpha
 solids at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value runs.
+
+## Grade
+
+`bloom.grade`, schema 1 (#494), is an Image-in, Image-out primary grade listed under Color, in the
+manner of DaVinci Resolve's primaries and the ASC CDL. It lowers to the `GradeKernel` alternative
+and shares the grade machinery above (`color_grade_image_effect.hpp`): one host-prepared binary32
+table, the CPU reference that applies it, and one fixed resident GPU program
+(`bloom.render.grade.v1`) that reads it from its storage buffer.
+
+Its 22 parameters are animatable, drivable Scalars, each its own socket, in this order (roles,
+schema keys `bloom.grade.<wheel>.<component>` and `bloom.grade.<primary>`):
+
+| Group | Roles | Default | Domain |
+| --- | --- | --- | --- |
+| Lift wheel | `liftMaster`, `liftRed`, `liftGreen`, `liftBlue` | 0 | `[-1000, 1000]` |
+| Gamma wheel | `gammaMaster`, `gammaRed`, `gammaGreen`, `gammaBlue` | 0 | `[-8, 8]` |
+| Gain wheel | `gainMaster`, `gainRed`, `gainGreen`, `gainBlue` | 1 | `[-1000, 1000]` |
+| Offset wheel | `offsetMaster`, `offsetRed`, `offsetGreen`, `offsetBlue` | 0 | `[-1000, 1000]` |
+| Temperature, Tint | `temperature`, `tint` | 0 | `[-1000, 1000]` (bar `-100..100`) |
+| Contrast, Pivot | `contrast`, `pivot` | 1, 0.18 | `[0, 10]`, `[0.001, 1000]` |
+| Saturation | `saturation` | 1 | `[0, 1000]` |
+| Exposure | `exposure` (stops) | 0 | `[-32, 32]` |
+
+The node works on scene-linear values exactly as stored: no colour conversion, no clamp, and alpha
+unchanged. Each RGB value is divided by alpha (straight colour), graded, and multiplied by the same
+alpha; a pixel with zero alpha passes unchanged. For channel `c` (red, green, blue), with
+`L = liftMaster + liftC`, `G = gammaMaster + gammaC`, `K = gainMaster * gainC`,
+`O = offsetMaster + offsetC`, in order:
+
+1. Exposure and white balance: `x = s * 2^exposure * b_c`, with the gains in stops
+   `b_r = 2^(T/200 + N/400)`, `b_g = 2^(-N/200)`, `b_b = 2^(-T/200 + N/400)` for Temperature `T`
+   and Tint `N` (positive is warmer, positive tint is magenta; the product of the three gains is
+   one, so a grey keeps its geometric mean).
+2. Lift and gain: `y = K * (x + L * (1 - x))`, Resolve's convention, which raises black to `K * L`
+   and keeps white at `K`.
+3. Offset: `y = y + O`.
+4. Gamma: `y = y^(2^-G)` for `y > 0`; zero and negative values pass, so a positive gamma
+   brightens the middle and a negative value never produces NaN.
+5. Contrast about the pivot: `y = pivot * (y / pivot)^contrast` for `y > 0`, so the pivot stays
+   put and black stays at zero; zero and negative values pass.
+6. Saturation: `y = Y + saturation * (y - Y)` with the Filter Effects luma
+   `Y = 0.213 r + 0.715 g + 0.072 b` (the weights Hue/Saturation and the Curves hue curves use);
+   zero is the luma on every channel.
+
+Steps 1 to 4 are the ASC CDL form per channel: slope `2^exposure * b_c * K * (1 - L)`, offset
+`K * L + O` and power `2^-G`, which is how the host folds them. The prepared table is
+`[slope r, g, b, 0] [offset r, g, b, 0] [power r, g, b, 0] [contrast, pivot^(1 - contrast),
+saturation, 0] [luma weights, 0]`; the pixel is `t = fma(s, slope, offset)`, then
+`pow(t, power)` and `scale * pow(t, contrast)` for a positive `t` when they are not one, then
+`fma(t - Y, saturation, Y)` when saturation is not one, so a neutral step is skipped exactly. A
+grade whose table is the identity (the defaults, or e.g. +1 stop with a 0.5 gain) aliases its
+input. A value outside its domain, or a folded slope, offset, power or contrast scale outside
+binary32, fails the frame with a diagnostic; a non-finite result is a diagnosed failure, never a
+published pixel. The cache identity, operation key, time dependence, ROI, budget, cancellation and
+progress follow the grades above. The GPU uses the device `pow`, so gamma and contrast match the
+CPU within the 2e-6 gate rather than bit-exactly.
+
+The kernel is classified Required as `effect.GradeKernel` and covered by the Required
+`effect.GradeKernel` (the four wheels) and `node.bloom.grade` (the primaries, then every control
+together) fixtures over the HDR, signed, partial-alpha gradient, full frame and ROI, through the
+production builder; the native harness runs both over signed/HDR/partial-alpha solids at the
+2e-6/exact-alpha gate with warm zero-dispatch and a changed-value rerun. There is no exception.
+
+The node card and Properties draw the same widget (`bloom/ui/grade_wheels.hpp`, a
+`NodeCardWidget`): the Lift, Gamma, Gain and Offset wheels two by two, then the primaries bar.
+A wheel's puck shows the part of its red, green and blue that is not grey, in the chroma plane
+perpendicular to grey with red at the vectorscope's 103 degrees (then yellow, green, cyan, blue
+and magenta anticlockwise); the rim is a chroma length of 0.25 (Lift), 0.5 (Gamma, Gain) or 0.1
+(Offset). Dragging the puck moves it with the pointer (Shift for a tenth of the speed, stopped at
+the rim) and writes the three values that put it there while keeping their mean, as one session
+value edit over the three parameters and one command on release (a key at the playhead on an
+animated value). Under each wheel a slider drags its master (one command per drag), a button
+resets the wheel, and a caret shows its four value rows; a double-click on the wheel resets its
+master and colour as one command, and Alt-click toggles its value rows. The primaries bar is six
+named value fields in two columns (one command per scrub or entry) with a caret for their rows.
+On the card the 22 value rows, with their sockets, stay hidden until a caret or Alt-click shows a
+group; a linked value's row always shows.
 
 ## Separate Channels and Combine Channels
 

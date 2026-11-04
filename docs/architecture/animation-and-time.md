@@ -1298,6 +1298,14 @@ whole value. Animated values keep their curves and author at the captured exact 
 cancelled, stale, time-switched and composition-switched edits create no history. Driven and locked
 parameters refuse live authoring. Discrete enum choices remain one immediate command per choice.
 
+One gesture can move several parameters (#494: a Grade wheel's puck moves its red, green and blue).
+`beginValueEdits(parameters, label)` captures each base like `beginValueEdit` and refuses when any
+of them is driven, locked or repeated; `updateValueEdits(values)` validates every value before it
+takes any and publishes them all through the same overrides; the commit writes every changed value
+in one labelled transaction (a key at the captured time on an animated one), and a cancel restores
+them all. `setParameterValues(values, label)` writes several values as one command (a wheel's
+reset).
+
 Value and viewer-transform overrides share the existing Full/Half/Quarter/Auto resolution policy.
 Auto follows the fitted viewer scale, using the same proxy mapping as viewer manipulation.
 Completed live frames can be presented while newer input is coalesced, so continuous motion does

@@ -1,13 +1,54 @@
-# Levels, Curves and Hue/Saturation
+# Grade, Levels, Curves and Hue/Saturation
 
-Levels, Curves and Hue/Saturation adjust an image channel by channel. They work on render passes
-as well as on colour: none of them converts colour, so a depth, mist, normal or position pass is
-adjusted exactly as it was rendered. All three are in the **Color** section of the Add menu and
+Grade, Levels, Curves and Hue/Saturation adjust an image's colour. They work on render passes as
+well as on colour: none of them converts colour, so a depth, mist, normal or position pass is
+adjusted exactly as it was rendered. All four are in the **Color** section of the Add menu and
 the Tab search. Each takes an image on **Input** and returns the adjusted image on **Image**.
 
 Every control can be animated, and every change can be undone and is saved with the project.
-Levels and Hue/Saturation controls can also be linked from another node. A node left at its
+Grade, Levels and Hue/Saturation controls can also be linked from another node. A node left at its
 defaults changes nothing.
+
+## Grade
+
+Grade is a primary colour correction with colour wheels, like the primaries in DaVinci Resolve or
+Lumetri's colour wheels. Edit it right on its node card, or in Properties, which shows the same
+controls.
+
+### Wheels
+
+| Wheel | Changes |
+| --- | --- |
+| **Lift** | The shadows: raises or lowers black while white stays put. |
+| **Gamma** | The midtones: above zero brightens them, below darkens. Black and white stay put. |
+| **Gain** | The highlights: scales the image, 1 is unchanged. Black stays put. |
+| **Offset** | Everything: adds the same amount to every value. |
+
+- **Drag the puck** in a wheel to push that range toward a colour: toward red adds red, toward the
+  opposite side adds cyan. Hold **Shift** to move it slowly. The puck stops at the rim.
+- **Drag the slider** under a wheel to change its master: how much the wheel lifts, bends, scales
+  or offsets all three channels.
+- **Double-click** a wheel, or press its **Reset** button, to set it back to neutral.
+- **Alt-click** a wheel, or press the arrow next to Reset, to show its numbers: the master and the
+  red, green and blue values. Type exact values there, key them, or link them from another node.
+
+Each drag is one step to undo. The wheels go round like a vectorscope: red at the top left, then
+yellow, green, cyan, blue and magenta. Moving the puck keeps the brightness of the three values the
+same and only changes their balance.
+
+### Primaries
+
+The bar under the wheels has **Temperature** (positive is warmer), **Tint** (positive is more
+magenta), **Contrast** and its **Pivot** (the value contrast turns around; 0.18 is middle grey),
+**Saturation** (1 is unchanged, 0 is grey) and **Exposure** in stops. Drag a field or type a value.
+The arrow next to **Primaries** shows their rows, to key or link them.
+
+### How it works
+
+Grade works on the image's linear values, with no limit on bright or negative values, and never
+changes alpha. In order, it applies exposure and white balance, then lift and gain, offset, gamma,
+contrast and finally saturation. Gamma and contrast leave values at or below zero as they are.
+[Image filters](../architecture/image-filters.md#grade) has the exact formulas.
 
 ## Channels
 
@@ -27,6 +68,18 @@ inside the image's area.
 1 (HDR) and below 0 pass through with the adjustment applied.
 
 ## Levels
+
+Levels draws the input's brightness histogram with handles you drag, on its node card and in
+Properties. Choose a channel with the tabs (**RGB**, **R**, **G**, **B**, **A**), then:
+
+- Drag the **black** and **white** handles under the histogram to set Input Black and Input White.
+- Drag the **grey** handle between them for Gamma: left brightens the middle, right darkens it.
+- Drag the two handles under the output bar for Output Black and Output White.
+- **Double-click** a handle to reset it. **Escape** or the right mouse button cancels a drag.
+- **Alt-click** the graph, or press the arrow next to the tabs, to show that channel's numbers.
+
+Each drag is one step to undo. The graph grows to show a black or white point outside 0 to 1. The
+histogram is only worked out while the graph is on screen.
 
 Each channel has **Input Black**, **Input White**, **Gamma**, **Output Black** and **Output White**.
 Input Black and Input White pick the range that maps to Output Black and Output White. Gamma bends
