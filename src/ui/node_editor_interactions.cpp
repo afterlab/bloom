@@ -201,6 +201,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
             }
         }
         gesture.linkKind = socket->kind;
+        gesture.linkAcceptsPixelKinds = gesture.input.has_value() && socket->acceptsPixelKinds();
         gesture.line =
             addPath({}, linePen(kit::color(socketColorToken(gesture.linkKind)), kit::kNodeLinkWidth));
         gesture.line->setZValue(10);
@@ -360,11 +361,8 @@ void NodeGraphicsScene::mouseMoveEvent(QGraphicsSceneMouseEvent* event) {
         // what keeps the red wire an honest preview of the refusal rather than a separate opinion.
         const bool orientationWrong = target != nullptr && ((gesture.output && !target->input) ||
                                                             (gesture.input && !target->output));
-        const bool kindWrong =
-            target != nullptr && !orientationWrong && !target->acceptsAnyKind() &&
-            !(gesture.output
-                  ? document::isAcceptedSocketConnection(gesture.linkKind, target->kind)
-                  : document::isAcceptedSocketConnection(target->kind, gesture.linkKind));
+        const bool kindWrong = target != nullptr && !orientationWrong &&
+                               !target->acceptsAnyKind() && !linkKindAccepted(gesture, *target);
         const bool incompatible =
             target != nullptr && (!target->draggable() || orientationWrong || kindWrong);
         gesture.line->setPen(
@@ -497,8 +495,7 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
                     // whichever one the dragged output's kind actually feeds, not just the first
                     // multi-input pill the card happens to list.
                     if (socket->multiInput() &&
-                        (socket->acceptsAnyKind() ||
-                         document::isAcceptedSocketConnection(gesture.linkKind, socket->kind))) {
+                        (socket->acceptsAnyKind() || linkKindAccepted(gesture, *socket))) {
                         target = socket;
                         bodyDrop = true;
                         break;
@@ -508,11 +505,8 @@ void NodeGraphicsScene::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
         // landed on, so dropping an Audio output on the content pill (or an Image output on the
         // audio pill) committed a ConnectPorts transaction that graph.addEdge could only reject
         // with a generic message. Refuse it HERE, before a doomed transaction is even built.
-        const bool kindWrong =
-            target != nullptr && target->multiInput() && !target->acceptsAnyKind() &&
-            !(gesture.output
-                  ? document::isAcceptedSocketConnection(gesture.linkKind, target->kind)
-                  : document::isAcceptedSocketConnection(target->kind, gesture.linkKind));
+        const bool kindWrong = target != nullptr && target->multiInput() &&
+                               !target->acceptsAnyKind() && !linkKindAccepted(gesture, *target);
         if (kindWrong) {
             Q_EMIT session_->commandRejected(
                 target->kind == document::SocketValueKind::Audio

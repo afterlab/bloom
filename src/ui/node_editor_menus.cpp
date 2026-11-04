@@ -3,12 +3,12 @@
 #include <QActionGroup>
 #include <QCursor>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
-#include <QIcon>
-#include <QPixmap>
 #include <QPalette>
+#include <QPixmap>
 #include <QResizeEvent>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -16,6 +16,7 @@
 #include <QToolButton>
 #include <algorithm>
 #include <array>
+#include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -671,6 +672,24 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
             }))
             action(tr("Ungroup"), QStringLiteral("nodeUngroupAction"),
                    [this] { ungroupSelection(); });
+        // #490: one Image Preview at a time is drawn behind the graph (session state, not an
+        // edit: nothing enters the undo history or the saved project).
+        if (auto* previews = session_.imagePreviews(); previews != nullptr && nodes.size() == 1) {
+            const auto id = *nodes.begin();
+            const auto* record = graphComposition.graph().findNode(id);
+            if (record != nullptr && document::isImagePreviewNodeType(record->typeId)) {
+                menu->addSeparator();
+                auto* background = action(
+                    tr("Show as Node Editor Background"),
+                    QStringLiteral("nodeBackgroundToggleAction"), [id, previews] {
+                        previews->setBackgroundNode(previews->backgroundNode() == id
+                                                        ? std::nullopt
+                                                        : std::optional<document::NodeId>(id));
+                    });
+                background->setCheckable(true);
+                background->setChecked(previews->backgroundNode() == id);
+            }
+        }
         if (commands::canRemoveNodes(graphComposition, nodes))
             action(tr("Delete"), QStringLiteral("nodeDeleteAction"),
                    [this] { removeSelectedNodes(); });
@@ -1018,6 +1037,33 @@ void NodeGraphEditor::buildHeaderMenus() {
         linkStyleGroup->addAction(item);
         linkStyleActions_[i] = item;
     }
+    // #490: the Image Preview background's own view, independent of the graph's.
+    headerViewMenu_->addSeparator();
+    auto* backgroundMenu = headerViewMenu_->addMenu(tr("Background"));
+    backgroundMenu->setObjectName(QStringLiteral("nodeBackgroundMenu"));
+    backgroundShowAction_ = action(
+        backgroundMenu, tr("Show Background"), QStringLiteral("nodeBackgroundShowAction"), [this] {
+            if (auto* previews = session_.imagePreviews())
+                previews->setBackgroundVisible(!previews->backgroundVisible());
+        });
+    backgroundShowAction_->setCheckable(true);
+    backgroundMenu->addSeparator();
+    action(backgroundMenu, tr("Fit Background"), QStringLiteral("nodeBackgroundFitAction"),
+           [this] { view_->fitBackground(); });
+    action(backgroundMenu, tr("Background Actual Size"),
+           QStringLiteral("nodeBackgroundActualSizeAction"),
+           [this] { view_->backgroundActualSize(); });
+    action(backgroundMenu, tr("Zoom Background In"), QStringLiteral("nodeBackgroundZoomInAction"),
+           [this] { view_->zoomBackgroundStep(1); });
+    action(backgroundMenu, tr("Zoom Background Out"), QStringLiteral("nodeBackgroundZoomOutAction"),
+           [this] { view_->zoomBackgroundStep(-1); });
+    backgroundMenu->addSeparator();
+    action(backgroundMenu, tr("Clear Background"), QStringLiteral("nodeBackgroundClearAction"),
+           [this] {
+               if (auto* previews = session_.imagePreviews())
+                   previews->setBackgroundNode(std::nullopt);
+           });
+    backgroundMenu_ = backgroundMenu;
     connect(headerViewMenu_, &QMenu::aboutToShow, this, &NodeGraphEditor::refreshViewMenuState);
 
     // --- Select ---
@@ -1093,6 +1139,18 @@ void NodeGraphEditor::refreshViewMenuState() {
                                             !session_.selectedNodes().empty());
     if (gridSnapAction_ != nullptr) {
         gridSnapAction_->setChecked(scene_->gridSnapEnabled());
+    }
+    if (backgroundMenu_ != nullptr) {
+        auto* previews = session_.imagePreviews();
+        const bool hasBackground = previews != nullptr && previews->backgroundNode().has_value();
+        for (auto* item : backgroundMenu_->actions())
+            item->setEnabled(hasBackground);
+        backgroundMenu_->setToolTip(hasBackground
+                                        ? QString{}
+                                        : tr("Choose an Image Preview node's Show as Node "
+                                             "Editor Background first"));
+        if (backgroundShowAction_ != nullptr)
+            backgroundShowAction_->setChecked(hasBackground && previews->backgroundVisible());
     }
     const auto style = scene_->linkStyle();
     for (std::size_t i = 0; i < linkStyleActions_.size(); ++i) {

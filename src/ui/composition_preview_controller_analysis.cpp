@@ -15,6 +15,13 @@ CompositionPreviewController::submitViewerDisplay(const runtime::PreviewRequestI
     return submitViewerPreparation(identity, true);
 }
 
+runtime::TaskSubmission<PreviewPreparationResultHandle>
+CompositionPreviewController::submitNodePreview(const runtime::PreviewRequestIdentity& identity,
+                                                const bool processFrame) {
+    return submitViewerPreparation(identity, !processFrame, runtime::TaskPriority::Background,
+                                   "Prepare image preview");
+}
+
 runtime::TaskSubmission<ViewerChannelDisplayHandle>
 CompositionPreviewController::submitViewerChannelDisplay(PreparedPreviewFrameHandle frame,
                                                          const ViewerChannel channel,
@@ -76,7 +83,8 @@ CompositionPreviewController::submitChannelListing(const document::NodeId node, 
 
 runtime::TaskSubmission<PreviewPreparationResultHandle>
 CompositionPreviewController::submitViewerPreparation(
-    const runtime::PreviewRequestIdentity& identity, const bool displayRoute) {
+    const runtime::PreviewRequestIdentity& identity, const bool displayRoute,
+    const runtime::TaskPriority priority, const char* const taskName) {
     if (shuttingDown_ || !liveSessionMatches(identity))
         return {};
 
@@ -111,10 +119,10 @@ CompositionPreviewController::submitViewerPreparation(
     const document::Snapshot snapshot = liveProvenance ? live : evaluation;
 
     runtime::TaskRequest request(
-        "Prepare viewer analysis",
+        taskName,
         {.kind = runtime::TaskOwnerKind::Composition,
          .id = runtime::TaskOwnerId::fromRaw(identity.compositionId.value())},
-        runtime::TaskPriority::Visible);
+        priority);
     request.sourceVersion = {.documentRevision = identity.sourceRevision.value(),
                              .requestGeneration = identity.requestGeneration};
     const auto budget = effectivePixelStorageByteLimit();

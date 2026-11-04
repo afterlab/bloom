@@ -213,11 +213,8 @@ void markSocketAffinity(SocketItem& socket, const NodeInteraction& gesture,
     // The shared promotion whitelist, not kind equality: a socket an Integer output can widen
     // into is a socket the drag can land on, so the affinity an artist SEES is the rule
     // ConnectPorts will actually apply.
-    const bool compatible =
-        socket.draggable() && opposite &&
-        (socket.acceptsAnyKind() ||
-         (fromOutput ? document::isAcceptedSocketConnection(gesture.linkKind, socket.kind)
-                     : document::isAcceptedSocketConnection(socket.kind, gesture.linkKind)));
+    const bool compatible = socket.draggable() && opposite &&
+                            (socket.acceptsAnyKind() || linkKindAccepted(gesture, socket));
     socket.setDragAffinity(compatible ? SocketItem::DragAffinity::Compatible
                                       : SocketItem::DragAffinity::Incompatible,
                            compatible ? QString{} : refusalFor(gesture, socket, opposite));

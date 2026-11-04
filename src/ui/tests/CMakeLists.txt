@@ -2328,6 +2328,14 @@ set_tests_properties(bloom.ui.layer-drop-window PROPERTIES
     FIXTURES_REQUIRED media3
     LABELS "ui;media;integration" TIMEOUT 180)
 
+# #490: the Image Preview node's thumbnail and node editor background.
+add_executable(bloom_ui_image_preview_test image_preview_tests.cpp)
+target_link_libraries(bloom_ui_image_preview_test PRIVATE bloom_ui)
+target_include_directories(bloom_ui_image_preview_test PRIVATE ..)
+bloom_enable_warnings(bloom_ui_image_preview_test)
+bloom_add_test(NAME bloom.ui.image-preview COMMAND bloom_ui_image_preview_test
+    LABELS ui integration TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+
 # #380: the Assets header's composition frames, prepared on a worker and kept per revision.
 add_executable(bloom_ui_composition_thumbnail_test composition_thumbnail_tests.cpp)
 target_link_libraries(bloom_ui_composition_thumbnail_test PRIVATE bloom_ui)

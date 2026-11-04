@@ -2,6 +2,7 @@
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/channel_set_controller.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
+#include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/node_editor.hpp>
 
 #include <bloom/ui/composition_editors.hpp>
@@ -160,6 +161,29 @@ NodeGraphEditor::NodeGraphEditor(CompositionSession& session, QWidget* parent)
     if (auto* channels = session_.channelSetController())
         connect(channels, &ChannelSetController::changed, scene_,
                 &NodeGraphicsScene::refreshValues);
+    // #490: an Image Preview card repaints when its prepared image arrives or what it shows
+    // moves; the background repaints with it. Painting only reads what is prepared.
+    if (auto* previews = session_.imagePreviews()) {
+        view_->setImagePreviews(previews);
+        connect(previews, &ImagePreviewController::changed, this, [this] {
+            if (!isVisible())
+                return;
+            for (auto* item : scene_->nodeItems())
+                if (item->isImagePreview())
+                    item->update();
+            if (!view_->backgroundRect().isEmpty())
+                view_->viewport()->update();
+        });
+        // A newly chosen background starts fitted; hiding or showing it keeps its view.
+        connect(previews, &ImagePreviewController::backgroundChanged, this,
+                [this, previews, shown = std::optional<document::NodeId>{}]() mutable {
+                    if (previews->backgroundNode() != shown) {
+                        shown = previews->backgroundNode();
+                        view_->fitBackground();
+                    }
+                    view_->viewport()->update();
+                });
+    }
     layout->addWidget(view_);
 
     connect(&session_, &CompositionSession::snapshotChanged, this, &NodeGraphEditor::rebuild);

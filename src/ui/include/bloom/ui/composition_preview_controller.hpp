@@ -252,6 +252,12 @@ class CompositionPreviewController final : public QObject {
     submitViewerAnalysis(const runtime::PreviewRequestIdentity& identity);
     [[nodiscard]] runtime::TaskSubmission<PreviewPreparationResultHandle>
     submitViewerDisplay(const runtime::PreviewRequestIdentity& identity);
+    // #490: an Image Preview's frame, at Background priority so it never competes with the
+    // Viewer. `processFrame` false takes the Viewer's display route (the GPU preview service when
+    // one is installed, with its own labelled CPU fallback); true takes the analysis route, whose
+    // CPU reference frame keeps the scene-linear pixels a Normalized view reads.
+    [[nodiscard]] runtime::TaskSubmission<PreviewPreparationResultHandle>
+    submitNodePreview(const runtime::PreviewRequestIdentity& identity, bool processFrame);
     [[nodiscard]] runtime::TaskSubmission<ViewerChannelDisplayHandle>
     submitViewerChannelDisplay(PreparedPreviewFrameHandle frame, ViewerChannel channel,
                                std::size_t retainedDisplayBytes);
@@ -318,7 +324,9 @@ class CompositionPreviewController final : public QObject {
     // Narrow read-only deadline proof; no test callback or alternate production clock.
     friend struct CompositionPreviewDeadlineTestAccess;
     runtime::TaskSubmission<PreviewPreparationResultHandle>
-    submitViewerPreparation(const runtime::PreviewRequestIdentity& identity, bool displayRoute);
+    submitViewerPreparation(const runtime::PreviewRequestIdentity& identity, bool displayRoute,
+                            runtime::TaskPriority priority = runtime::TaskPriority::Visible,
+                            const char* taskName = "Prepare viewer analysis");
     std::shared_ptr<PreviewFrameTrace> trace_;
     struct ActiveRequest final {
         runtime::TaskHandle<PreviewPreparationResultHandle> handle;

@@ -8,6 +8,7 @@
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/preferences_aware.hpp>
+#include <bloom/ui/viewer_editor.hpp>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -47,6 +48,7 @@ class KSwitch;
 namespace bloom::ui {
 
 class CompositionSession;
+class ImagePreviewController;
 struct NodeInteraction;
 namespace node_editor {
 class NodeGroupItem;
@@ -118,6 +120,7 @@ class NodeGraphicsScene final : public QGraphicsScene {
     // pure read-only projection with no editable rows at all -- the shape
     // kinetik_baseline_tests.cpp constructs directly to assert the canvas background token.
     void setSession(CompositionSession* session);
+    [[nodiscard]] CompositionSession* session() const noexcept { return session_; }
 
     // Reconciles the scene against `snapshot`'s composition IN PLACE: node cards are matched by
     // their stable NodeId and updated, never dropped and rebuilt, so an in-node kit field keeps its
@@ -257,6 +260,21 @@ class NodeGraphicsView final : public QGraphicsView {
     // following the whole graph".
     void frameRect(QRectF bounds);
 
+    // #490: the Image Preview the node editor draws behind the graph (Blender's backdrop). The
+    // background has its own Fit / 100% / zoom / pan, independent of the graph's: the Viewer's
+    // ViewTransform over the viewport, so its 100% is the Viewer's 100%. Null `previews` draws
+    // none. Alt + wheel zooms it about the pointer and Alt + middle drag pans it.
+    void setImagePreviews(ImagePreviewController* previews);
+    void fitBackground();
+    void backgroundActualSize();
+    void zoomBackgroundStep(int notches);
+    void zoomBackgroundAbout(QPointF viewportPoint, double factor);
+    [[nodiscard]] const ViewTransform& backgroundTransform() const noexcept {
+        return backgroundTransform_;
+    }
+    // Where the background is drawn, in viewport coordinates; empty when none is shown.
+    [[nodiscard]] QRectF backgroundRect() const;
+
   Q_SIGNALS:
     // Emitted instead of QGraphicsView's default "forward a context menu event into the scene"
     // behavior, which no item here consumes. `viewportPosition` is in viewport coordinates, so it
@@ -278,9 +296,13 @@ class NodeGraphicsView final : public QGraphicsView {
     void keyPressEvent(QKeyEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void drawBackground(QPainter* painter, const QRectF& rect) override;
 
   private:
     void updatePanCursor();
+    // The background's effective zoom, materializing Fit into an explicit zoom before a step or a
+    // pan (the Viewer's own rule).
+    void materializeBackgroundZoom();
     [[nodiscard]] QRectF graphBounds() const;
     // False when there is nothing to frame -- an empty `bounds`, or a viewport with no area --
     // in which case the caller must not latch any "the artist moved the view" state.
@@ -294,6 +316,11 @@ class NodeGraphicsView final : public QGraphicsView {
     QTransform panBaseTransform_;
     bool viewAdjusted_ = false;
     bool framedOnce_ = false;
+    ImagePreviewController* previews_ = nullptr;
+    ViewTransform backgroundTransform_{};
+    bool backgroundPanActive_ = false;
+    QPointF backgroundPanOrigin_;
+    QPointF backgroundPanBase_;
 };
 
 // Task NODES-1: the node editor is the first to offer BOTH the header menus and the footer, on the
@@ -467,6 +494,9 @@ class NodeGraphEditor final : public QWidget, public EditorChromeProvider, publi
     QAction* deleteAction_ = nullptr;
     QAction* arrangeAllAction_ = nullptr;
     QAction* arrangeSelectionAction_ = nullptr;
+    // #490: View > Background, enabled while an Image Preview is the background.
+    QMenu* backgroundMenu_ = nullptr;
+    QAction* backgroundShowAction_ = nullptr;
     // Recorded by populateAddMenu() when it builds headerAddMenu_, so refreshAddMenuState() can
     // update enabled/tooltip state per item without rebuilding the (structurally static, since the
     // node definition registry is frozen at startup) category tree.

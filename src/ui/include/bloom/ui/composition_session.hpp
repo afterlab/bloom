@@ -57,6 +57,7 @@ class CryptomatteController;
 class ChannelSetController;
 class ToolController;
 class CompositionThumbnailController;
+class ImagePreviewController;
 
 // A selected keyframe (issue #84; docs/architecture/animation-and-time.md: "Keyframe selection
 // stores the stable KeyframeId; row index and screen position are presentation details"). curveId
@@ -236,6 +237,11 @@ class CompositionSession final : public QObject {
     [[nodiscard]] CompositionThumbnailController* compositionThumbnails() const noexcept {
         return compositionThumbnails_;
     }
+    // #490: the Image Preview node's thumbnails and node editor background.
+    void setImagePreviews(ImagePreviewController* controller) noexcept {
+        imagePreviews_ = controller;
+    }
+    [[nodiscard]] ImagePreviewController* imagePreviews() const noexcept { return imagePreviews_; }
 
     CompositionSession(document::Document& document, commands::CommandStack& commandStack,
                        document::CompositionId compositionId, QObject* parent = nullptr);
@@ -796,6 +802,7 @@ class CompositionSession final : public QObject {
     CryptomatteController* cryptomatteController_ = nullptr;
     ChannelSetController* channelSetController_ = nullptr;
     CompositionThumbnailController* compositionThumbnails_ = nullptr;
+    ImagePreviewController* imagePreviews_ = nullptr;
     ToolController* tools_ = nullptr;
 
     void attachCommandObserver();

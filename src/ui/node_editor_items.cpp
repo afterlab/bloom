@@ -513,6 +513,11 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
             badge);
         badgeRight -= side + kCardPadding;
     };
+    // #490: drawn before any early return below, so a muted card still shows what reaches it.
+    const auto drawPreview = [&] {
+        if (imagePreview_ && !previewRect_.isEmpty())
+            paintImagePreview(*painter, previewRect_, session_, id_);
+    };
     if (layout_.muted)
         drawBadge(
             kit::iconPixmap(kit::IconId::Hidden, kit::Size::IconSmall, kit::Color::Foreground));
@@ -523,6 +528,7 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
         return;
     }
     painter->setOpacity(layout_.muted ? 0.5 : 1.0);
+    drawPreview();
 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
@@ -871,6 +877,7 @@ struct SocketSpec final {
     std::vector<document::InputPortRef> ordered;
     bool anyKind = false;
     bool linked = false;
+    bool pixelKinds = false;
 };
 // The fields a SocketItem fixes at construction. Everything else a spec carries is updated on the
 // kept item in place.
@@ -916,8 +923,15 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                     : links.edgeInto(input);
             if (linked)
                 linkedInputs_.insert(QString::fromStdString(port.name));
-            specs.push_back({QString::fromStdString(port.name), rerouteKind.value_or(port.valueKind),
-                             std::move(input), std::nullopt, false, {}, kindless, linked});
+            specs.push_back({QString::fromStdString(port.name),
+                             rerouteKind.value_or(port.valueKind),
+                             std::move(input),
+                             std::nullopt,
+                             false,
+                             {},
+                             kindless,
+                             linked,
+                             port.acceptsPixelKinds});
         }
         const auto* merge = composition.graph().merge(node.id);
         if (definition->layerSlotInput && merge) {
@@ -979,6 +993,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
             socket = new SocketItem(node.id, spec.name, spec.kind, spec.input, spec.output, this);
         }
         socket->setAcceptsAnyKind(spec.anyKind);
+        socket->setAcceptsPixelKinds(spec.pixelKinds);
         socket->linked = spec.linked;
         if (spec.pill && (!socket->multiInput() || socket->orderedInputs() != spec.ordered))
             socket->setOrderedInputs(std::move(spec.ordered));

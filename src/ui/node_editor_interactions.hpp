@@ -29,10 +29,24 @@ struct NodeInteraction final {
     // The transport kind the link being dragged carries (task S1, item 6): what every other
     // socket's compatibility is judged against, and what inks the preview wire.
     document::SocketValueKind linkKind = document::SocketValueKind::Image;
+    // #490: the drag started on an inspection input that also takes a Mask or a ChannelSet.
+    bool linkAcceptsPixelKinds = false;
     QGraphicsPathItem* line = nullptr;
     QGraphicsRectItem* box = nullptr;
     node_editor::NodeEdgeItem* insertEdge = nullptr;
     // The Merge pills a link drag is showing its slot caret on: the only ones a move has to clear.
     std::vector<node_editor::SocketItem*> indicated;
 };
+
+// Whether the link `gesture` drags may land on `target` by KIND: the shared
+// isAcceptedSocketConnection() rule, plus the pixel kinds an inspection input takes (#490). The
+// orientation and reroute questions stay with the callers.
+[[nodiscard]] inline bool linkKindAccepted(const NodeInteraction& gesture,
+                                           const node_editor::SocketItem& target) {
+    if (gesture.output.has_value())
+        return document::isAcceptedSocketConnection(gesture.linkKind, target.kind) ||
+               (target.acceptsPixelKinds() && document::isPixelSocketKind(gesture.linkKind));
+    return document::isAcceptedSocketConnection(target.kind, gesture.linkKind) ||
+           (gesture.linkAcceptsPixelKinds && document::isPixelSocketKind(target.kind));
+}
 } // namespace bloom::ui

@@ -6,6 +6,7 @@
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/image_preview.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #pragma once
@@ -159,6 +160,10 @@ inline host::FontCatalogueCache& nodeFontCatalogueCache() {
 class NodeEdgeItem;
 class NodeItem;
 class NodeGroupItem;
+// #490: an Image Preview card's thumbnail, painted into `rect` (card coordinates) from the
+// session's ImagePreviewController at the size the painter draws it.
+void paintImagePreview(QPainter& painter, const QRectF& rect, CompositionSession* session,
+                       document::NodeId node);
 QString displayTypeName(std::string_view typeId);
 // The artist-facing name of a node TYPE (task S1, item 7). Four built-ins are named rather than
 // spelled out of their type id -- Solid, Layer, Merge, Output -- and everything else falls back to
@@ -285,6 +290,9 @@ class SocketItem final : public QGraphicsItem {
     // it is a landing site for every kind rather than for the placeholder its definition declares.
     void setAcceptsAnyKind(const bool any) { acceptsAnyKind_ = any; }
     [[nodiscard]] bool acceptsAnyKind() const noexcept { return acceptsAnyKind_; }
+    // #490: an inspection input (the Image Preview's) also lands a Mask or a ChannelSet.
+    void setAcceptsPixelKinds(const bool pixels) { acceptsPixelKinds_ = pixels; }
+    [[nodiscard]] bool acceptsPixelKinds() const noexcept { return acceptsPixelKinds_; }
     void setAuthoringEnabled(bool enabled);
 
     // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
@@ -317,6 +325,7 @@ class SocketItem final : public QGraphicsItem {
     QString description_;
     bool hovered_ = false;
     bool acceptsAnyKind_ = false;
+    bool acceptsPixelKinds_ = false;
     DragAffinity affinity_ = DragAffinity::Idle;
     std::vector<document::InputPortRef> orderedInputs_;
     bool stackPill_ = false;
@@ -415,6 +424,15 @@ class NodeItem final : public QGraphicsObject {
         imageSequence_ = imageRecord && (imageRecord->kind == document::AssetKind::Sequence ||
                                          imageRecord->kind == document::AssetKind::Video);
         reroute_ = document::isRerouteNodeType(node.typeId);
+        // #490: an Image Preview card draws its input below its rows, at the composition's
+        // aspect.
+        imagePreview_ = document::isImagePreviewNodeType(node.typeId);
+        if (imagePreview_) {
+            const auto& format = composition.format();
+            previewAspect_ = format.width() > 0 ? static_cast<qreal>(format.height()) /
+                                                      static_cast<qreal>(format.width())
+                                                : 9.0 / 16.0;
+        }
         setData(kNodeMutedRole, layout.muted);
         setData(kNodeCollapsedRole, layout.collapsed);
         title_ = nodeDisplayName(composition, node);
@@ -626,6 +644,10 @@ class NodeItem final : public QGraphicsObject {
     [[nodiscard]] QRectF cardRect() const { return {0.0, 0.0, width_, height_}; }
     // True for the one node type that is a point on a link rather than a card (task FIX1, item I).
     [[nodiscard]] bool isReroute() const noexcept { return reroute_; }
+    // #490: an Image Preview card, and where its thumbnail is drawn (card coordinates; empty
+    // while collapsed).
+    [[nodiscard]] bool isImagePreview() const noexcept { return imagePreview_; }
+    [[nodiscard]] QRectF previewRect() const noexcept { return previewRect_; }
 
     [[nodiscard]] QRectF boundingRect() const override {
         const qreal overhang = kSocketDiameter / 2.0 + kit::kHairlineWidth;
@@ -2203,13 +2225,20 @@ class NodeItem final : public QGraphicsObject {
         };
         // A card with no parameter rows is exactly its header: no empty body lip below it, which
         // would read as a clipped row rather than as a node that simply has nothing to edit.
+        // #490: an Image Preview's thumbnail spans the card below its rows, at the composition's
+        // aspect, capped so a tall format does not make a tower of a card.
+        const qreal previewWidth =
+            std::max(0.0, std::max(layout_.width, minimumWidth_) - (kCardPadding + kCardPadding));
+        const qreal previewHeight =
+            imagePreview_ ? std::min(previewWidth * previewAspect_, previewWidth * 2.0) : 0.0;
         const qreal height =
             layout_.collapsed
                 ? std::max({kCardHeaderHeight, collapsedExtent(true), collapsedExtent(false)})
                 : kCardHeaderHeight + socketHeight + outputHeight +
                       (rowCount > 0.0
                            ? rowCount * (rowHeight + kCardRowGap) - kCardRowGap + kCardPadding
-                           : 0.0);
+                           : 0.0) +
+                      (imagePreview_ ? previewHeight + kCardPadding : 0.0);
 
         if (!qFuzzyCompare(width, width_) || !qFuzzyCompare(height, height_)) {
             prepareGeometryChange();
@@ -2250,6 +2279,10 @@ class NodeItem final : public QGraphicsObject {
             placeRow(label, y);
             y += rowHeight + kCardRowGap;
         }
+        previewRect_ = imagePreview_ && !layout_.collapsed
+                           ? QRectF(kCardPadding, height_ - kCardPadding - previewHeight,
+                                    previewWidth, previewHeight)
+                           : QRectF{};
         qreal inputY = kCardHeaderHeight, outputY = y;
         // Collapsed: each edge's linked sockets are centred as one column on the card's height.
         qreal collapsedInputY = (height_ - collapsedExtent(true)) / 2.0 + collapsedPitch;
@@ -2302,6 +2335,9 @@ class NodeItem final : public QGraphicsObject {
     qreal minimumWidth_ = kCardMinimumWidth;
     document::NodeLayoutRecord layout_;
     bool reroute_ = false;
+    bool imagePreview_ = false;
+    qreal previewAspect_ = 9.0 / 16.0;
+    QRectF previewRect_;
     bool shapeSource_ = false;
     document::ShapeKind shapeKind_ = document::ShapeKind::Rectangle;
     bool imageSource_ = false;

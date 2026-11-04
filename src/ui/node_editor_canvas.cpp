@@ -190,6 +190,16 @@ void NodeGraphicsView::wheelEvent(QWheelEvent* event) {
     // happened to hold focus would make the canvas feel broken in exactly the places it is densest.
     // The field loses nothing it needs: its own steppers, and Up/Down/PageUp/PageDown while
     // focused (kit/value_field.cpp), still step it.
+    // #490: Alt + wheel zooms the Image Preview background instead, about the pointer. Some
+    // platforms report an Alt wheel on the horizontal axis.
+    if (event->modifiers().testFlag(Qt::AltModifier) && !backgroundRect().isEmpty()) {
+        const auto delta = event->angleDelta();
+        const int altNotches = (delta.y() != 0 ? delta.y() : delta.x()) / kWheelDetent;
+        if (altNotches != 0)
+            zoomBackgroundAbout(event->position(), std::pow(kZoomStepFactor, altNotches));
+        event->accept();
+        return;
+    }
     const int notches = event->angleDelta().y() / kWheelDetent;
     if (notches == 0) {
         QGraphicsView::wheelEvent(event);
@@ -200,6 +210,17 @@ void NodeGraphicsView::wheelEvent(QWheelEvent* event) {
 }
 
 void NodeGraphicsView::mousePressEvent(QMouseEvent* event) {
+    // #490: Alt + middle drag pans the Image Preview background, not the graph.
+    if (!panActive_ && !backgroundPanActive_ && event->button() == Qt::MiddleButton &&
+        event->modifiers().testFlag(Qt::AltModifier) && !backgroundRect().isEmpty()) {
+        materializeBackgroundZoom();
+        backgroundPanActive_ = true;
+        backgroundPanOrigin_ = event->position();
+        backgroundPanBase_ = backgroundTransform_.pan;
+        setFocus(Qt::MouseFocusReason);
+        event->accept();
+        return;
+    }
     if (!panActive_ && (event->button() == Qt::MiddleButton)) {
         panActive_ = true;
         panButton_ = event->button();
@@ -215,6 +236,12 @@ void NodeGraphicsView::mousePressEvent(QMouseEvent* event) {
 }
 
 void NodeGraphicsView::mouseMoveEvent(QMouseEvent* event) {
+    if (backgroundPanActive_) {
+        backgroundTransform_.pan = backgroundPanBase_ + (event->position() - backgroundPanOrigin_);
+        viewport()->update();
+        event->accept();
+        return;
+    }
     if (!panActive_) {
         QGraphicsView::mouseMoveEvent(event);
         if (const auto* graph = qobject_cast<NodeGraphicsScene*>(scene());
@@ -232,6 +259,11 @@ void NodeGraphicsView::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void NodeGraphicsView::mouseReleaseEvent(QMouseEvent* event) {
+    if (backgroundPanActive_ && event->button() == Qt::MiddleButton) {
+        backgroundPanActive_ = false;
+        event->accept();
+        return;
+    }
     if (panActive_ && event->button() == panButton_) {
         panActive_ = false;
         panButton_ = Qt::NoButton;
