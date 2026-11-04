@@ -23,6 +23,9 @@ constexpr std::string_view kPercent = "%";
 constexpr std::string_view kDegrees = "\xc2\xb0";
 constexpr std::string_view kSeconds = "s";
 constexpr std::string_view kFrames = "f";
+// #501: stops of exposure (or of a power), and a multiplier.
+constexpr std::string_view kStops = "st";
+constexpr std::string_view kTimes = "\xc3\x97";
 
 struct Entry {
     std::string_view schemaKey;
@@ -104,16 +107,18 @@ const std::vector<Entry>& colorGradeTable() {
             {kHueSaturationHueSchemaKey,
              number(-kMaximumGradeValue, kMaximumGradeValue, -180.0, 180.0, 1.0, 1, kDegrees)});
         generated.push_back({kHueSaturationSaturationSchemaKey,
-                             number(0.0, kMaximumGradeSaturation, 0.0, 2.0, 0.01, 3)});
+                             number(0.0, kMaximumGradeSaturation, 0.0, 2.0, 0.01, 2, kTimes)});
         // #494 Grade: the hard range is the schema domain; the soft span is the comfortable one.
         for (std::size_t index = 0; index < gradeWheelKeys.size(); ++index) {
             const auto wheel = kGradeWheels[index / kGradeWheelComponentCount];
             const auto domain = gradeWheelDomain(wheel);
+            // #501: a gain is a multiplier, a gamma is in stops of its power, lift and offset add
+            // signal units.
             const auto presentation =
                 wheel == GradeWheel::Gain
-                    ? number(domain.minimum, domain.maximum, 0.0, 2.0, 0.01, 3)
+                    ? number(domain.minimum, domain.maximum, 0.0, 2.0, 0.01, 2, kTimes)
                 : wheel == GradeWheel::Gamma
-                    ? number(domain.minimum, domain.maximum, -1.0, 1.0, 0.01, 3)
+                    ? number(domain.minimum, domain.maximum, -1.0, 1.0, 0.01, 2, kStops)
                     : number(domain.minimum, domain.maximum, -0.5, 0.5, 0.001, 3);
             generated.push_back({gradeWheelKeys[index], presentation});
         }
@@ -128,13 +133,13 @@ const std::vector<Entry>& colorGradeTable() {
                 break;
             case GradePrimary::Contrast:
             case GradePrimary::Saturation:
-                presentation = number(domain.minimum, domain.maximum, 0.0, 2.0, 0.01, 3);
+                presentation = number(domain.minimum, domain.maximum, 0.0, 2.0, 0.01, 2, kTimes);
                 break;
             case GradePrimary::Pivot:
                 presentation = number(domain.minimum, domain.maximum, 0.01, 1.0, 0.001, 3);
                 break;
             case GradePrimary::Exposure:
-                presentation = number(domain.minimum, domain.maximum, -4.0, 4.0, 0.1, 2);
+                presentation = number(domain.minimum, domain.maximum, -4.0, 4.0, 0.1, 2, kStops);
                 break;
             }
             generated.push_back({gradePrimaryKeys[index], presentation});
@@ -242,9 +247,9 @@ const std::vector<Entry>& table() {
                static_cast<double>(kMinimumGlowOctaves), static_cast<double>(kMaximumGlowOctaves))},
         {kLightWrapRadiusSchemaKey, pixels(0.0, kMaximumBlurRadiusPixels, 64.0)},
         {kLightWrapAmountSchemaKey, factor()},
-        {"bloom.exposure.stops", number(kLowest, kHighest, -4.0, 4.0, 0.1, 2)},
+        {"bloom.exposure.stops", number(kLowest, kHighest, -4.0, 4.0, 0.1, 2, kStops)},
         {"bloom.offset.amount", number(kLowest, kHighest, -1.0, 1.0, 0.01, 3)},
-        {"bloom.multiply.factor", number(kLowest, kHighest, 0.0, 2.0, 0.01, 3)},
+        {"bloom.multiply.factor", number(kLowest, kHighest, 0.0, 2.0, 0.01, 2, kTimes)},
         {"bloom.image-mix.factor", factor()},
         {"bloom.multiply-alpha.factor", factor()},
         {"bloom.multiply-alpha.channel", choice()},
