@@ -1,6 +1,7 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/parameter.hpp>
@@ -124,6 +125,10 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == kCombineChannelsAlphaModeSchemaKey)
         return {{"Premultiplied", kCombineChannelsPremultiplied},
                 {"Straight", kCombineChannelsStraight}};
+    if (schemaKey == kGlowModeSchemaKey)
+        return {{"Classic", kGlowModeClassic},
+                {"Physical", kGlowModePhysical},
+                {"Streak", kGlowModeStreak}};
     if (schemaKey == "bloom.resize-fit.filter")
         return sequential({"Bilinear", "Nearest"});
     if (schemaKey == "bloom.resize-fit.policy")

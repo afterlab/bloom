@@ -982,7 +982,10 @@ void recipeRows() {
                    {"color", "opacity", "direction", "distance", "softness"},
                    "shadowOnly"},
           Expected{"bloom.glow",
-                   {"threshold", "knee", "intensity", "size", "falloff", "tint", "octaves"},
+                   {"threshold", "knee", "intensity", "size", "falloff", "tint", "octaves",
+                    // #506
+                    "mode", "exponent", "outerTint", "radiusRed", "radiusGreen", "radiusBlue",
+                    "points", "angle", "length", "chromatic", "dirtAmount", "rollOff"},
                    "glowOnly"},
           Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"}}) {
         const auto node = addNode(session, type);

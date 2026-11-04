@@ -1,8 +1,8 @@
 #pragma once
 
-// #340 Levels, Curves and Hue/Saturation, and #494 Grade: the one CPU reference of the grades,
-// shared by the CPU evaluator and the resident GPU program generator. The host prepares one packed
-// binary32 table per grade; the CPU applies it here and the GPU program reads the identical table
+// #340 Levels, Curves and Hue/Saturation, #494 Grade and #506 Glow's Highlight Roll-off: the one
+// CPU reference of the grades, shared by the CPU evaluator and the resident GPU program generator.
+// The host prepares one packed binary32 table per grade; the CPU applies it here and the GPU program reads the identical table
 // from its storage buffer and runs the same binary32 operations, so a keyed value changes only
 // data, never the shader. No grade performs a colour transform: a Raw data pass is graded as
 // stored.
@@ -24,7 +24,7 @@ namespace bloom::runtime::detail {
 
 struct ResolvedEvaluation;
 
-enum class ColorGradeKind : std::uint8_t { Levels, Curves, HueSaturation, Grade };
+enum class ColorGradeKind : std::uint8_t { Levels, Curves, HueSaturation, Grade, RollOff };
 
 // The packed table, always a whole number of vec4s:
 //   Levels:  [clamp, 0, 0, 0], then per channel (master, red, green, blue, alpha)
@@ -33,6 +33,8 @@ enum class ColorGradeKind : std::uint8_t { Levels, Curves, HueSaturation, Grade 
 //   Hue/Saturation: the three rows of the RGB matrix [m0, m1, m2, 0]
 //   Grade (#494): [slope r, g, b, 0] [offset r, g, b, 0] [power r, g, b, 0]
 //            [contrast, contrast scale, saturation, 0] [luma weights r, g, b, 0]
+//   Highlight Roll-off (#506): [amount, luma weights r, g, b]; associated colour c becomes
+//            c / fma(amount, max(L, 0), 1) with L = fma(b, wb, fma(g, wg, wr * r)), alpha unchanged
 // A Levels channel maps x to t = (x - pivot) * scale (or the step x >= pivot when the input range
 // is empty), raises a positive t to the inverse gamma, and returns fma(t, range, black). A Grade
 // channel maps the straight value x to t = fma(x, slope, offset), raises a positive t to its power,

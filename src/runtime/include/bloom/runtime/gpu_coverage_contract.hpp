@@ -122,6 +122,10 @@ BLOOM_GPU_REQUIRED_EFFECT(ChannelSelectKernel, "stored-channel select of one ima
 BLOOM_GPU_REQUIRED_EFFECT(ChannelCombineKernel,
                           "stored-channel set from a second image (#479 Combine Channels)");
 BLOOM_GPU_REQUIRED_EFFECT(GradeKernel, "Grade wheels and primaries straight-colour grade (#494)");
+BLOOM_GPU_REQUIRED_EFFECT(DirectionalBlurKernel,
+                          "directional ray blur pass of Glow's Streak mode (#506)");
+BLOOM_GPU_REQUIRED_EFFECT(HighlightRollOffKernel,
+                          "Glow highlight roll-off over associated colour (#506)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
@@ -315,6 +319,15 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         out.push_back(GpuFeatureCoverageEntry{id, "Curves curve kind (#493)",
                                               GpuCoverageDisposition::Required,
                                               "src/runtime color grade image effect tests"});
+    // #506 Glow modes: the Physical (energy-conserving inverse-power octaves) and Streak (chained
+    // Directional Blur rays) chains and the shared controls (per-channel radius, gradient,
+    // lens dirt, roll-off) are pixel semantics of the production recipe, each with CPU parity
+    // through the resident commands, never a CPU frame.
+    for (const auto* id :
+         {"feature.glow.physical", "feature.glow.streak", "feature.glow.shared_controls"})
+        out.push_back(GpuFeatureCoverageEntry{id, "Glow mode (#506)",
+                                              GpuCoverageDisposition::Required,
+                                              "src/runtime compositing recipe tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});

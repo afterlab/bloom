@@ -89,6 +89,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         return parameter(blur->radius);
                     if (const auto* key = std::get_if<LumaKeyKernel>(&step.kernel))
                         return parameter(key->low) || parameter(key->high);
+                    if (const auto* directional = std::get_if<DirectionalBlurKernel>(&step.kernel))
+                        return parameter(directional->angle) || parameter(directional->spacing);
                     if (isColorGradeKernel(step.kernel)) {
                         bool animated = false;
                         forEachColorGradeOperand(step.kernel, [&](const auto& operand) {

@@ -400,16 +400,37 @@ struct ChannelCombineKernel final {
     bool premultiply = false;
     friend bool operator==(const ChannelCombineKernel&, const ChannelCombineKernel&) = default;
 };
+// #506 Glow Streak: one pass of a directional (ray) blur over associated RGBA. Output pixel c is
+// the normalized sum of four taps along the ray, tap i read at c - i * spacing * (cos a, sin a)
+// (a = `angle`, degrees clockwise from screen right on the y-down canvas) with weight decay^i, each
+// tap a bilinear sample of the input (transparent outside its data window), so light streaks away
+// from its source along +a. The data window grows by the reach in that direction. Chained passes
+// with spacings 4^p multiply into one long exponential streak (directional_blur_image_effect.hpp).
+struct DirectionalBlurKernel final {
+    CompiledScalarParameter angle;
+    CompiledScalarParameter spacing; // full-resolution pixels between taps, [0, 1024]
+    double decay = 1.0;              // each tap's weight over the one before it, (0, 1]
+    friend bool operator==(const DirectionalBlurKernel&, const DirectionalBlurKernel&) = default;
+};
+// #506 Glow highlight roll-off: associated colour c becomes c / (1 + amount * max(L, 0)), L its
+// Rec. 709 luma, alpha unchanged: one hue-preserving curve that compresses bright glow towards
+// 1 / amount and leaves dim glow nearly unchanged. Amount 0 is the identity. A grade kind
+// (color_grade_image_effect.hpp).
+struct HighlightRollOffKernel final {
+    CompiledScalarParameter amount;
+    friend bool operator==(const HighlightRollOffKernel&, const HighlightRollOffKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
                  SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
-                 ChannelCombineKernel, GradeKernel>;
+                 ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel>;
 
-// #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade)
-// kernel in the kernel's canonical order (channel-major), calling `visit(parameter)` with a
-// CompiledScalarParameter, a CompiledVec2Parameter or (#493 Curves) a CompiledPathParameter.
+// #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade;
+// #506: or Highlight Roll-off) kernel in the kernel's canonical order (channel-major), calling
+// `visit(parameter)` with a CompiledScalarParameter, a CompiledVec2Parameter or (#493 Curves) a
+// CompiledPathParameter.
 // Returns false for every other kernel. The one traversal the evaluator's validation, sampling,
 // cache key and time dependence all share.
 template <typename Visit>
@@ -439,6 +460,10 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
             visit(value);
         return true;
     }
+    if (const auto* rollOff = std::get_if<HighlightRollOffKernel>(&kernel)) {
+        visit(rollOff->amount);
+        return true;
+    }
     return false;
 }
 
@@ -446,7 +471,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
     return std::holds_alternative<LevelsKernel>(kernel) ||
            std::holds_alternative<CurvesKernel>(kernel) ||
            std::holds_alternative<HueSaturationKernel>(kernel) ||
-           std::holds_alternative<GradeKernel>(kernel);
+           std::holds_alternative<GradeKernel>(kernel) ||
+           std::holds_alternative<HighlightRollOffKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

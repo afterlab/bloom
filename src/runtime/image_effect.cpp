@@ -163,7 +163,8 @@ PreparedImageEffect ImageEffectContext::prepare(
     std::shared_ptr<const PreparedLayerMasks> layerMasks,
     const std::optional<Transform2DValues> transform2D,
     const std::optional<std::array<double, 2>> lumaKeyRange,
-    const std::optional<std::vector<double>> gradeValues) {
+    const std::optional<std::vector<double>> gradeValues,
+    const std::optional<std::array<double, 2>> directionalValues) {
     if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
@@ -329,6 +330,23 @@ PreparedImageEffect ImageEffectContext::prepare(
         prepared.channelCombine = std::move(channel);
         return prepared;
     }
+    // #506: the sampled angle and spacing. A zero spacing aliases its input exactly.
+    if (const auto* directional = std::get_if<DirectionalBlurKernel>(&effect.kernel)) {
+        auto blur = prepareDirectionalBlur(
+            *directional, directionalValues ? std::optional{(*directionalValues)[0]} : std::nullopt,
+            directionalValues ? std::optional{(*directionalValues)[1]} : std::nullopt,
+            horizontalScale, verticalScale);
+        if (!blur) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Directional blur angle or spacing is out of domain");
+            return prepared;
+        }
+        if (blur->identity)
+            return {};
+        prepared.cacheIdentity = directionalBlurIdentity(*blur);
+        prepared.directionalBlur = std::move(blur);
+        return prepared;
+    }
     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
         prepared.blur =
             prepareSeparableBlur(*blur, sampledAmount, horizontalScale, verticalScale);
@@ -462,6 +480,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.blur)
         return applySeparableBlur(*effect.blur, input, pixelBudget, cancellation, operation,
                                   progress);
+    if (effect.directionalBlur)
+        return applyDirectionalBlur(*effect.directionalBlur, input, pixelBudget, cancellation,
+                                    operation, progress);
     if (effect.lumaKey)
         return applyLumaKey(*effect.lumaKey, input, pixelBudget, cancellation, operation,
                             progress);

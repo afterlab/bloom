@@ -229,8 +229,8 @@ template <typename Definition>
 
 // #339 Drop Shadow, Glow and Light Wrap: compositing recipes over the existing image primitives.
 // Their leading Image inputs come first, then one socket per animatable value in parameter order,
-// so a value-graph driver can feed any of them; the switches (and Glow's octave count) are
-// constants without a socket.
+// so a value-graph driver can feed any of them; the switches (and Glow's octave count, mode and
+// ray count) are constants without a socket.
 [[nodiscard]] NodeDefinition recipeDefinition(const std::string_view typeId) {
     using namespace bloom::document;
     NodeDefinition definition{{std::string(typeId), 1},
@@ -242,26 +242,39 @@ template <typename Definition>
                               NodeCardinality::Many,
                               NodeCategory::Compositing};
     if (typeId == kGlowNodeType) {
-        // An optional key pass glows instead of the input; an optional Mask limits the glow.
+        // An optional key pass glows instead of the input; an optional Mask limits the glow; an
+        // optional lens-dirt image (#506) adds the glow modulated by its luma.
         definition.inputs.push_back({"key", SocketValueKind::Image, false});
         definition.inputs.push_back({"mask", SocketValueKind::Mask, false});
+        definition.inputs.push_back({"dirt", SocketValueKind::Image, false});
     } else if (typeId == kLightWrapNodeType) {
         definition.inputs.push_back({"background", SocketValueKind::Image, false});
     }
-    const auto scalar = [&](std::string role, const std::string_view schemaKey) {
+    // #506: Glow's mode and shared controls are optional (`required` false), so a Glow saved
+    // before them stays valid and lowers as Classic with their defaults.
+    const auto scalar = [&](std::string role, const std::string_view schemaKey,
+                            const bool required = true) {
         definition.parameters.push_back({role, std::string(schemaKey), ParameterValueKind::Float64,
-                                         true, true, recipeScalarDomain(schemaKey)->defaultValue});
+                                         required, true,
+                                         recipeScalarDomain(schemaKey)->defaultValue});
         definition.inputs.push_back({std::move(role), SocketValueKind::Scalar, false});
     };
     const auto color = [&](std::string role, const std::string_view schemaKey,
-                           const bloom::core::Color4d value) {
+                           const bloom::core::Color4d value, const bool required = true) {
         definition.parameters.push_back(
-            {role, std::string(schemaKey), ParameterValueKind::Color4d, true, true, value});
+            {role, std::string(schemaKey), ParameterValueKind::Color4d, required, true, value});
         definition.inputs.push_back({std::move(role), SocketValueKind::Color, false});
     };
-    const auto flag = [&](std::string role, const std::string_view schemaKey) {
+    const auto flag = [&](std::string role, const std::string_view schemaKey,
+                          const bool required = true) {
         definition.parameters.push_back({std::move(role), std::string(schemaKey),
-                                         ParameterValueKind::Boolean, true, false, false});
+                                         ParameterValueKind::Boolean, required, false, false});
+    };
+    const auto integer = [&](std::string role, const std::string_view schemaKey,
+                             const bool required = true) {
+        definition.parameters.push_back({std::move(role), std::string(schemaKey),
+                                         ParameterValueKind::Integer, required, false,
+                                         recipeIntegerDomain(schemaKey)->defaultValue});
     };
     if (typeId == kDropShadowNodeType) {
         color("color", kDropShadowColorSchemaKey, bloom::core::Color4d{0.0, 0.0, 0.0, 1.0});
@@ -271,15 +284,27 @@ template <typename Definition>
         scalar("softness", kDropShadowSoftnessSchemaKey);
         flag("shadowOnly", kDropShadowShadowOnlySchemaKey);
     } else if (typeId == kGlowNodeType) {
+        integer("mode", kGlowModeSchemaKey, false);
         scalar("threshold", kGlowThresholdSchemaKey);
         scalar("knee", kGlowKneeSchemaKey);
         scalar("intensity", kGlowIntensitySchemaKey);
         scalar("size", kGlowSizeSchemaKey);
         scalar("falloff", kGlowFalloffSchemaKey);
+        scalar("exponent", kGlowExponentSchemaKey, false);
         color("tint", kGlowTintSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
-        definition.parameters.push_back({"octaves", std::string(kGlowOctavesSchemaKey),
-                                         ParameterValueKind::Integer, true, false,
-                                         kDefaultGlowOctaves});
+        flag("gradient", kGlowGradientSchemaKey, false);
+        color("outerTint", kGlowOuterTintSchemaKey, bloom::core::Color4d{1.0, 0.5, 0.25, 1.0},
+              false);
+        scalar("radiusRed", kGlowRadiusRedSchemaKey, false);
+        scalar("radiusGreen", kGlowRadiusGreenSchemaKey, false);
+        scalar("radiusBlue", kGlowRadiusBlueSchemaKey, false);
+        integer("octaves", kGlowOctavesSchemaKey);
+        integer("points", kGlowPointsSchemaKey, false);
+        scalar("angle", kGlowAngleSchemaKey, false);
+        scalar("length", kGlowLengthSchemaKey, false);
+        scalar("chromatic", kGlowChromaticSchemaKey, false);
+        scalar("dirtAmount", kGlowDirtAmountSchemaKey, false);
+        scalar("rollOff", kGlowRollOffSchemaKey, false);
         flag("glowOnly", kGlowGlowOnlySchemaKey);
     } else {
         scalar("radius", kLightWrapRadiusSchemaKey);

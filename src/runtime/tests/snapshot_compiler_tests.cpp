@@ -1932,6 +1932,7 @@ int main() {
         testLumaKeyLowering(expectations);
         testDropShadowLowering(expectations);
         testGlowLowering(expectations);
+        testGlowModeLowering(expectations);
         testLightWrapLowering(expectations);
         testRecipeMute(expectations);
         testColorGradeLowering(expectations);

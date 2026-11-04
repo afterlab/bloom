@@ -538,6 +538,12 @@ enum class ScalarDomain : std::uint8_t {
                 if (const auto* key = std::get_if<LumaKeyKernel>(&effect.kernel))
                     validKernel = hasValidScalarCurveReference(key->low, plan, index, failure) &&
                                   hasValidScalarCurveReference(key->high, plan, index, failure);
+                if (const auto* directional = std::get_if<DirectionalBlurKernel>(&effect.kernel))
+                    validKernel =
+                        std::isfinite(directional->decay) && directional->decay > 0.0 &&
+                        directional->decay <= 1.0 &&
+                        hasValidScalarCurveReference(directional->angle, plan, index, failure) &&
+                        hasValidScalarCurveReference(directional->spacing, plan, index, failure);
                 forEachColorGradeOperand(effect.kernel, [&](const auto& operand) {
                     using Operand = std::decay_t<decltype(operand)>;
                     // #493: a Curves curve is an inline constant or Path curve, like a mask path.
@@ -1271,6 +1277,15 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                            operationSubject) &&
                             registerScalar(key->high, "high", ScalarDomain::LumaKeyThreshold,
                                            operationSubject));
+                    // #506: the spacing's domain is checked when the pass is prepared.
+                    if (const auto* directional =
+                            std::get_if<DirectionalBlurKernel>(&effect.kernel))
+                        static_cast<void>(registerScalar(directional->angle, "angle",
+                                                         ScalarDomain::Unbounded,
+                                                         operationSubject) &&
+                                          registerScalar(directional->spacing, "spacing",
+                                                         ScalarDomain::Unbounded,
+                                                         operationSubject));
                     // #340: the grades' domains are checked when they are prepared (every value
                     // must also be finite), so each operand registers as an ordinary claim.
                     bool gradeRegistered = true;
@@ -2171,7 +2186,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     effect && (std::holds_alternative<DiscreteImageKernel>(effect->kernel) ||
                                std::holds_alternative<ResizeFitKernel>(effect->kernel) ||
                                std::holds_alternative<Transform2DKernel>(effect->kernel) ||
-                               std::holds_alternative<SeparableBlurKernel>(effect->kernel)))
+                               std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
+                               std::holds_alternative<DirectionalBlurKernel>(effect->kernel)))
                     fullSupport[effect->input.value()] = true;
             }
             for (std::size_t i = fullSupport.size(); i-- > 0;)
@@ -2388,6 +2404,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     if (low && high)
                         lumaKeyRange = std::array{low->value, high->value};
                 }
+                std::optional<std::array<double, 2>> directionalValues;
+                if (const auto* directional =
+                        std::get_if<DirectionalBlurKernel>(&effect->kernel)) {
+                    const auto angle =
+                        detail::resolveParameter(directional->angle, *plan, resolved);
+                    const auto spacing =
+                        detail::resolveParameter(directional->spacing, *plan, resolved);
+                    if (angle && spacing)
+                        directionalValues = std::array{angle->value, spacing->value};
+                }
                 std::optional<std::vector<double>> gradeValues;
                 if (isColorGradeKernel(effect->kernel))
                     gradeValues = detail::sampleColorGradeOperands(
@@ -2410,13 +2436,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                               *effect, request.colorIntent, mediaBase, cancellation,
                               pointwiseAmount, canvasMargins, resolved.horizontalScale,
                               resolved.verticalScale, sampledChannel, std::move(layerMasks),
-                              transform2D, lumaKeyRange, std::move(gradeValues));
+                              transform2D, lumaKeyRange, std::move(gradeValues),
+                              directionalValues);
                 if (preparedEffect->cancelled)
                     return EvaluationResult::cancelled();
                 if (preparedEffect->diagnostic &&
                     (std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
                      std::holds_alternative<Transform2DKernel>(effect->kernel) ||
                      std::holds_alternative<LumaKeyKernel>(effect->kernel) ||
+                     std::holds_alternative<DirectionalBlurKernel>(effect->kernel) ||
                      isColorGradeKernel(effect->kernel) ||
                      std::holds_alternative<ChannelSelectKernel>(effect->kernel) ||
                      std::holds_alternative<ChannelCombineKernel>(effect->kernel))) {
@@ -2736,6 +2764,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(luma->invert);
                                 parameter(luma->low);
                                 parameter(luma->high);
+                            }
+                            if (const auto* directional =
+                                    std::get_if<DirectionalBlurKernel>(&step.kernel)) {
+                                key.add(std::string{"directional-blur-v1"});
+                                key.add(directional->decay);
+                                parameter(directional->angle);
+                                parameter(directional->spacing);
                             }
                             if (isColorGradeKernel(step.kernel)) {
                                 key.add(std::string{"color-grade-v1"});
@@ -3302,6 +3337,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                             effect.kernel) ||
                                         preparedEffect->resizeFit || preparedEffect->blur ||
                                         preparedEffect->transform2D || preparedEffect->lumaKey ||
+                                        preparedEffect->directionalBlur ||
                                         preparedEffect->colorGrade ||
                                         preparedEffect->channelSelect ||
                                         preparedEffect->channelCombine) {

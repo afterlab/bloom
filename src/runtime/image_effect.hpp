@@ -3,6 +3,7 @@
 #include "canvas_image_effect.hpp"
 #include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
+#include "directional_blur_image_effect.hpp"
 #include "layer_mask_coverage.hpp"
 #include "luma_key_image_effect.hpp"
 #include "pointwise_image_effect.hpp"
@@ -37,6 +38,8 @@ struct PreparedImageEffect final {
     // #479 Separate Channels and Combine Channels (absent for an identity Channel Select).
     std::optional<PreparedChannelSelect> channelSelect;
     std::optional<PreparedChannelCombine> channelCombine;
+    // #506 Directional Blur (absent for a zero spacing, which aliases its input).
+    std::optional<PreparedDirectionalBlur> directionalBlur;
     // ADR 0028: prepared layer-mask geometry (null for every other kernel).
     std::shared_ptr<const PreparedLayerMasks> masks;
     std::shared_ptr<const color::CpuColorSpaceProcessor> processor;
@@ -46,7 +49,8 @@ struct PreparedImageEffect final {
     std::string cacheIdentity;
     bool cancelled = false;
     [[nodiscard]] bool identity() const noexcept {
-        if (resizeFit || lumaKey || colorGrade || channelSelect || channelCombine)
+        if (resizeFit || lumaKey || colorGrade || channelSelect || channelCombine ||
+            directionalBlur)
             return false;
         return !diagnostic && !cancelled
                    ? (!combine || (combine->mode == ImageCombineMode::Mix &&
@@ -75,7 +79,8 @@ class ImageEffectContext final {
             std::shared_ptr<const PreparedLayerMasks> layerMasks = {},
             std::optional<Transform2DValues> transform2D = {},
             std::optional<std::array<double, 2>> lumaKeyRange = {},
-            std::optional<std::vector<double>> gradeValues = {});
+            std::optional<std::vector<double>> gradeValues = {},
+            std::optional<std::array<double, 2>> directionalValues = {});
 
   private:
     std::mutex mutex_;

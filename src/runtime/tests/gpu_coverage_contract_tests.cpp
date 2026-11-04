@@ -1546,6 +1546,93 @@ displayProofRunner(const bool customView) {
                               "foreground, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #506 Glow modes and their two primitives. The primitives run over the HDR, signed,
+    // partial-alpha gradient (full frame and ROI); the modes run the production recipe chains.
+    add(
+        "effect.DirectionalBlurKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime glow primitive tests",
+        [runGrades] {
+            return runGrades(
+                {[](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DirectionalBlurKernel{
+                         {ParameterId::fromRaw(idBase + 60), 30.0},
+                         {ParameterId::fromRaw(idBase + 61), 1.7},
+                         0.8};
+                 },
+                 [](const std::uint64_t idBase) -> ImageEffectKernel {
+                     return bloom::runtime::DirectionalBlurKernel{
+                         {ParameterId::fromRaw(idBase + 60), 200.0},
+                         {ParameterId::fromRaw(idBase + 61), 3.0},
+                         0.5};
+                 }},
+                170000,
+                "production Directional Blur: bilinear ray taps growing the window along the ray, "
+                "full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "effect.HighlightRollOffKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime glow primitive tests",
+        [runGrades] {
+            return runGrades({[](const std::uint64_t idBase) -> ImageEffectKernel {
+                                 return bloom::runtime::HighlightRollOffKernel{
+                                     {ParameterId::fromRaw(idBase + 60), 0.6}};
+                             }},
+                             170400,
+                             "production Highlight Roll-off: associated colour over HDR and "
+                             "signed values, alpha kept, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "feature.glow.physical", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues physical;
+            physical.solidInput = true;
+            physical.mode = bloom::runtime::detail::GlowMode::Physical;
+            auto keyed = physical;
+            keyed.key = true;
+            keyed.mask = true;
+            keyed.threshold = 0.5;
+            keyed.glowOnly = true;
+            return runRecipes(bloom::recipe_test::Recipe::Glow, {physical, keyed}, 170600,
+                              "production Physical Glow: energy-keyed inverse-power octaves with "
+                              "the scattered light removed under the key, and a keyed, masked "
+                              "glow only, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "feature.glow.streak", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues star;
+            star.solidInput = true;
+            star.mode = bloom::runtime::detail::GlowMode::Streak;
+            auto anamorphic = star;
+            anamorphic.points = 2;
+            anamorphic.angle = 0.0;
+            anamorphic.chromatic = 0.6;
+            return runRecipes(bloom::recipe_test::Recipe::Glow, {star, anamorphic}, 171000,
+                              "production Streak Glow: a four-point star and a chromatic "
+                              "anamorphic streak of chained Directional Blur rays, full frame and "
+                              "ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "feature.glow.shared_controls", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime compositing recipe tests",
+        [runRecipes] {
+            bloom::recipe_test::RecipeValues shared;
+            shared.solidInput = true;
+            shared.channelRadius = {1.0, 0.5, 0.25};
+            shared.gradient = true;
+            shared.dirt = true;
+            shared.rollOff = 0.5;
+            return runRecipes(bloom::recipe_test::Recipe::Glow, {shared}, 171400,
+                              "production Glow shared controls: per-channel radius, octave "
+                              "gradient, lens dirt and highlight roll-off, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 

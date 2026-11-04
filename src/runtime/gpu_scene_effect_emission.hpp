@@ -22,6 +22,7 @@
 #include "canvas_image_effect.hpp"
 #include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
+#include "directional_blur_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_preparation_common.hpp"
@@ -475,10 +476,13 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* masksKernel = std::get_if<LayerMaskKernel>(&effect.kernel);
     const auto* lumaKeyKernel = std::get_if<LumaKeyKernel>(&effect.kernel);
     const auto* selectKernel = std::get_if<ChannelSelectKernel>(&effect.kernel);
+    const auto* directionalKernel = std::get_if<DirectionalBlurKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
+    std::optional<PreparedDirectionalBlur> directional;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
         blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr &&
-        selectKernel == nullptr && !isColorGradeKernel(effect.kernel)) {
+        selectKernel == nullptr && directionalKernel == nullptr &&
+        !isColorGradeKernel(effect.kernel)) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
     }
@@ -585,6 +589,23 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             leg.blurKind = static_cast<std::uint8_t>(blur->kind);
             legs.push_back(std::move(leg));
         }
+    } else if (directionalKernel != nullptr) {
+        // #506: the CPU reference's prepared taps as the one fixed program's data, over the input
+        // padded to the grown window (below). A zero spacing aliases its input, as on the CPU.
+        const auto angle = resolveParameter(directionalKernel->angle, plan, resolved);
+        const auto spacing = resolveParameter(directionalKernel->spacing, plan, resolved);
+        directional = prepareDirectionalBlur(
+            *directionalKernel, angle ? std::optional{angle->value} : std::nullopt,
+            spacing ? std::optional{spacing->value} : std::nullopt, ctx.hScale, ctx.vScale);
+        if (!directional)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Directional blur angle or spacing is out of domain");
+        if (directional->identity)
+            return identity();
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::DirectionalBlur;
+        leg.directionalBlur = directionalBlurProgramData(*directional);
+        legs.push_back(std::move(leg));
     } else if (isColorGradeKernel(effect.kernel)) {
         // #340: the CPU reference's prepared table as the kind's one fixed program's data; an
         // identity grade aliases its input exactly, as on the CPU.
@@ -762,7 +783,10 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "The OCIO configuration for the image effect is unavailable");
     }
-    const auto filterWindow = blur ? blurOutputWindow(*blur, *inputWindow) : inputWindow;
+    const auto filterWindow = blur          ? blurOutputWindow(*blur, *inputWindow)
+                              : directional ? directionalBlurOutputWindow(*directional, *inputWindow)
+                                            : inputWindow;
+    const bool grows = blur || directional;
     if (!filterWindow)
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation, "Blur halo overflows");
     const GpuOcioCommandGeometry geometry{
@@ -827,8 +851,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "The image effect input descriptor is not derivable");
     }
-    const auto outputWindow = blur ? *filterWindow : descriptor->data;
-    if (blur && outputWindow != descriptor->data) {
+    const auto outputWindow = grows ? *filterWindow : descriptor->data;
+    if (grows && outputWindow != descriptor->data) {
         if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
                                       sizeof(render::Rgba32f)))
             return error;
@@ -883,7 +907,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     // A grade can lift transparent pixels inside the data window (an alpha transfer), so its
     // content bounds are that whole window, as on the CPU reference.
     // A Channel Select (#479) makes every pixel of the window opaque or reads alpha from colour.
-    result.local = blur || isColorGradeKernel(effect.kernel) || selectKernel != nullptr
+    result.local = grows || isColorGradeKernel(effect.kernel) || selectKernel != nullptr
                        ? boundsForWindow(outputWindow, ctx.hScale, ctx.vScale)
                        : bounds[inputValue].output;
     result.output = result.local;

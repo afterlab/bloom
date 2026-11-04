@@ -3,7 +3,11 @@
 // formula over an HDR, partial-alpha gradient: an explicit two-dimensional Gaussian, the straight
 // luma ramp, the normalized octave sum and the Porter-Duff composite, written here without the
 // primitives. Then the chain's cache identity (a cold and a warm frame, a changed opacity reusing
-// the softened coverage), ROI, animation, cancellation and budget refusal.
+// the softened coverage), ROI, animation, cancellation and budget refusal. #506 adds Glow's
+// Physical and Streak modes and shared controls against the same independent reference (premultiplied
+// luma keying, the inverse-power octave weights, bilinear ray passes written directly, per-channel
+// radius, gradient, lens dirt and roll-off), Physical's energy balance, and the Streak chain's
+// cache, ROI, cancellation and budget behaviour.
 
 #include "compositing_recipe_test_support.hpp"
 
@@ -17,8 +21,10 @@
 #include <cstdint>
 #include <future>
 #include <iostream>
+#include <numbers>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -222,51 +228,200 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
     return values.shadowOnly ? shadow : composite(input, shadow, Composite::Over);
 }
 
-[[nodiscard]] Image glowReference(const Image& input, const Image& source, const Image* mask,
-                                  const RecipeValues& values) {
+[[nodiscard]] double premultipliedLuma(const Pixel& pixel) {
+    return 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
+}
+
+// The coverage a pixel's luma ramp gives: Classic and Streak ramp the straight luma and keep the
+// straight colour (premultiplied colour and alpha times the ramp); Physical (#506) ramps the
+// premultiplied luma, the light a pixel emits.
+[[nodiscard]] double glowRamp(const double luma, const RecipeValues& values) {
     const double low = values.threshold - values.knee / 2.0;
     const double high = values.threshold + values.knee / 2.0;
-    auto bright = source;
-    for (auto y = bright.y0; y < bright.y0 + bright.height; ++y)
-        for (auto x = bright.x0; x < bright.x0 + bright.width; ++x) {
-            auto& pixel = bright(x, y);
-            const double luma = straightLuma(pixel);
-            double ramp = high > low ? std::clamp((luma - low) / (high - low), 0.0, 1.0)
-                                     : (luma >= low ? 1.0 : 0.0);
-            if (mask != nullptr)
-                ramp *= mask->at(x, y)[3];
-            for (auto& component : pixel)
-                component *= ramp;
+    return high > low ? std::clamp((luma - low) / (high - low), 0.0, 1.0)
+                      : (luma >= low ? 1.0 : 0.0);
+}
+
+[[nodiscard]] Image scaled(Image image, const double colour, const double alpha) {
+    for (auto& pixel : image.pixels) {
+        for (std::size_t c = 0; c < 3; ++c)
+            pixel[c] *= colour;
+        pixel[3] *= alpha;
+    }
+    return image;
+}
+
+// A bilinear sample at a real position (pixel centres at integers), transparent outside.
+[[nodiscard]] Pixel bilinear(const Image& image, const double x, const double y) {
+    const double x0 = std::floor(x);
+    const double y0 = std::floor(y);
+    const double tx = x - x0;
+    const double ty = y - y0;
+    const auto ix = static_cast<std::int64_t>(x0);
+    const auto iy = static_cast<std::int64_t>(y0);
+    Pixel out{};
+    const std::array<std::tuple<std::int64_t, std::int64_t, double>, 4> taps{
+        {{ix, iy, (1.0 - tx) * (1.0 - ty)},
+         {ix + 1, iy, tx * (1.0 - ty)},
+         {ix, iy + 1, (1.0 - tx) * ty},
+         {ix + 1, iy + 1, tx * ty}}};
+    for (const auto& [px, py, weight] : taps) {
+        const auto value = image.at(px, py);
+        for (std::size_t c = 0; c < 4; ++c)
+            out[c] += weight * value[c];
+    }
+    return out;
+}
+
+// One ray pass written directly: four taps i * spacing back along the angle, weights decay^i.
+[[nodiscard]] Image rayPass(const Image& source, const double angle, const double spacing,
+                            const double decay) {
+    const double radians = angle * std::numbers::pi / 180.0;
+    const double dx = spacing * std::cos(radians);
+    const double dy = spacing * std::sin(radians);
+    const auto grow = static_cast<std::int64_t>(std::ceil(3.0 * spacing)) + 1;
+    auto out = Image::blank(source.x0 - grow, source.y0 - grow, source.width + 2 * grow,
+                            source.height + 2 * grow);
+    double total = 0.0;
+    for (int i = 0; i < 4; ++i)
+        total += std::pow(decay, i);
+    for (auto y = out.y0; y < out.y0 + out.height; ++y)
+        for (auto x = out.x0; x < out.x0 + out.width; ++x) {
+            Pixel sum{};
+            for (int i = 0; i < 4; ++i) {
+                const auto tap = bilinear(source, static_cast<double>(x) - i * dx,
+                                          static_cast<double>(y) - i * dy);
+                for (std::size_t c = 0; c < 4; ++c)
+                    sum[c] += std::pow(decay, i) / total * tap[c];
+            }
+            out(x, y) = sum;
         }
+    return out;
+}
+
+// The glow before its gains: the octave fold (Classic falloff, Physical 2^(2 - exponent)), with
+// the gradient's per-octave colour, or the Streak rays, at `scale` times the size or length.
+[[nodiscard]] Image spread(const Image& bright, const RecipeValues& values, const double scale) {
+    using runtime::detail::GlowMode;
+    if (values.mode == GlowMode::Streak) {
+        Image sum;
+        for (std::int64_t ray = 0; ray < values.points; ++ray) {
+            auto image = bright;
+            for (int pass = 0; pass < 5; ++pass) {
+                const double reach = std::ldexp(1.0, 2 * pass) / 1023.0;
+                image = rayPass(image,
+                                values.angle + 360.0 * static_cast<double>(ray) /
+                                                   static_cast<double>(values.points),
+                                values.length * scale * reach, std::pow(0.01, reach));
+            }
+            if (values.points > 1)
+                image = scaled(image, 1.0 / static_cast<double>(values.points),
+                               1.0 / static_cast<double>(values.points));
+            sum = sum.pixels.empty() ? image : composite(image, sum, Composite::Add);
+        }
+        return sum;
+    }
+    const double ratio = values.mode == GlowMode::Physical ? std::exp2(2.0 - values.exponent)
+                                                           : values.falloff;
     const auto octaves = values.octaves;
     Image sum;
     double total = 0.0;
     for (std::int64_t octave = octaves - 1; octave >= 0; --octave) {
-        const double weight = std::pow(values.falloff, static_cast<double>(octave));
-        const auto blurred =
-            blur(bright, values.size * std::ldexp(1.0, static_cast<int>(octave - (octaves - 1))),
-                 false, false);
-        if (sum.pixels.empty()) {
+        const double weight = std::pow(ratio, static_cast<double>(octave));
+        const auto blurred = blur(
+            bright, values.size * scale * std::ldexp(1.0, static_cast<int>(octave - (octaves - 1))),
+            false, false);
+        if (sum.pixels.empty())
             sum = Image::blank(blurred.x0, blurred.y0, blurred.width, blurred.height);
-        }
+        const double t = octaves > 1 ? static_cast<double>(octave) / static_cast<double>(octaves - 1) : 0.0;
+        const std::array<double, 3> colour{
+            values.tint.red + (values.outerTint.red - values.tint.red) * t,
+            values.tint.green + (values.outerTint.green - values.tint.green) * t,
+            values.tint.blue + (values.outerTint.blue - values.tint.blue) * t};
         for (auto y = sum.y0; y < sum.y0 + sum.height; ++y)
             for (auto x = sum.x0; x < sum.x0 + sum.width; ++x) {
                 const auto tap = blurred.at(x, y);
                 for (std::size_t c = 0; c < 4; ++c)
-                    sum(x, y)[c] += weight * tap[c];
+                    sum(x, y)[c] +=
+                        weight * tap[c] * (values.gradient && c < 3 ? colour[c] : 1.0);
             }
         total += weight;
     }
-    const std::array<double, 3> gains{values.tint.red * values.intensity,
-                                      values.tint.green * values.intensity,
-                                      values.tint.blue * values.intensity};
-    for (auto& pixel : sum.pixels) {
-        for (std::size_t c = 0; c < 4; ++c)
-            pixel[c] /= total;
-        for (std::size_t c = 0; c < 3; ++c)
-            pixel[c] *= gains[c];
+    for (auto& pixel : sum.pixels)
+        for (auto& component : pixel)
+            component /= total;
+    return sum;
+}
+
+[[nodiscard]] Image glowReference(const Image& input, const Image& source, const Image* mask,
+                                  const Image* dirt, const RecipeValues& values) {
+    using runtime::detail::GlowMode;
+    const bool physical = values.mode == GlowMode::Physical;
+    auto bright = source;
+    auto coverage = Image::blank(source.x0, source.y0, source.width, source.height);
+    for (auto y = bright.y0; y < bright.y0 + bright.height; ++y)
+        for (auto x = bright.x0; x < bright.x0 + bright.width; ++x) {
+            auto& pixel = bright(x, y);
+            double ramp = glowRamp(physical ? premultipliedLuma(pixel) : straightLuma(pixel),
+                                   values);
+            if (mask != nullptr)
+                ramp *= mask->at(x, y)[3];
+            coverage(x, y) = {ramp, ramp, ramp, ramp};
+            for (auto& component : pixel)
+                component *= ramp;
+        }
+    Image glow;
+    const bool chromatic = values.mode == GlowMode::Streak && values.chromatic != 0.0;
+    if (!chromatic && values.channelRadius == std::array<double, 3>{1.0, 1.0, 1.0}) {
+        glow = spread(bright, values, 1.0);
+    } else {
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            double scale = values.channelRadius[channel];
+            if (chromatic)
+                scale *= 1.0 - values.chromatic * static_cast<double>(channel) / 3.0;
+            auto image = scaled(spread(bright, values, scale), 1.0, 1.0 / 3.0);
+            for (auto& pixel : image.pixels)
+                for (std::size_t c = 0; c < 3; ++c)
+                    if (c != channel)
+                        pixel[c] = 0.0;
+            glow = glow.pixels.empty() ? image : composite(image, glow, Composite::Add);
+        }
     }
-    return values.glowOnly ? sum : composite(sum, input, Composite::Add);
+    const bool tinted = !values.gradient || values.mode == GlowMode::Streak;
+    for (auto& pixel : glow.pixels) {
+        pixel[0] *= values.intensity * (tinted ? values.tint.red : 1.0);
+        pixel[1] *= values.intensity * (tinted ? values.tint.green : 1.0);
+        pixel[2] *= values.intensity * (tinted ? values.tint.blue : 1.0);
+    }
+    if (dirt != nullptr) {
+        auto dirty = glow;
+        for (auto y = dirty.y0; y < dirty.y0 + dirty.height; ++y)
+            for (auto x = dirty.x0; x < dirty.x0 + dirty.width; ++x) {
+                const auto d = dirt->at(x, y);
+                const double luma = d[3] > 0.0 ? std::clamp(premultipliedLuma(d), 0.0, 1.0) : 0.0;
+                auto& pixel = dirty(x, y);
+                for (std::size_t c = 0; c < 4; ++c)
+                    pixel[c] *= luma * (c < 3 ? values.dirtAmount : 1.0);
+            }
+        glow = composite(dirty, glow, Composite::Add);
+    }
+    if (values.rollOff != 0.0)
+        for (auto& pixel : glow.pixels) {
+            const double divisor = 1.0 + values.rollOff * std::max(premultipliedLuma(pixel), 0.0);
+            for (std::size_t c = 0; c < 3; ++c)
+                pixel[c] /= divisor;
+        }
+    if (values.glowOnly)
+        return glow;
+    auto base = input;
+    if (physical && !values.key) {
+        const double scatter = std::min(values.intensity, 1.0);
+        for (auto y = base.y0; y < base.y0 + base.height; ++y)
+            for (auto x = base.x0; x < base.x0 + base.width; ++x)
+                for (std::size_t c = 0; c < 3; ++c)
+                    base(x, y)[c] *= 1.0 - scatter * coverage.at(x, y)[3];
+    }
+    return composite(glow, base, Composite::Add);
 }
 
 [[nodiscard]] Image lightWrapReference(const Image& input, const Image& background,
@@ -294,7 +449,8 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
         const auto source =
             values.key ? evaluated(evaluator, recipe, values, Published::Background) : input;
         const auto mask = evaluated(evaluator, recipe, values, Published::Mask);
-        return glowReference(input, source, values.mask ? &mask : nullptr, values);
+        return glowReference(input, source, values.mask ? &mask : nullptr,
+                             values.dirt ? &mask : nullptr, values);
     }
     case Recipe::LightWrap:
         return lightWrapReference(
@@ -423,6 +579,152 @@ void testCancellationAndBudget() {
            "a recipe beyond the pixel budget is refused, never partially published");
 }
 
+// #506 Physical conserves light: with a white tint and intensity <= 1 the glow carries exactly
+// the light it removes from the keyed pixels, so the frame's total colour is unchanged (the input
+// is centred, so no scattered pixel leaves the composition window); above 1 the excess is added.
+void testPhysicalEnergy() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    RecipeValues values;
+    values.mode = runtime::detail::GlowMode::Physical;
+    values.centred = true;
+    values.tint = {1.0, 1.0, 1.0, 1.0};
+    values.threshold = 0.5;
+    values.size = 3.0;
+    const auto total = [&](const RecipeValues& item, const recipe_test::Published published) {
+        const auto image = evaluated(evaluator, Recipe::Glow, item, published);
+        std::array<double, 3> sum{};
+        for (const auto& pixel : image.pixels)
+            for (std::size_t c = 0; c < 3; ++c)
+                sum[c] += pixel[c];
+        return sum;
+    };
+    const auto before = total(values, recipe_test::Published::Input);
+    for (const double intensity : {0.4, 1.0, 2.5}) {
+        values.intensity = intensity;
+        const auto after = total(values, recipe_test::Published::Recipe);
+        auto glowOnly = values;
+        glowOnly.glowOnly = true;
+        const auto scattered = total(glowOnly, recipe_test::Published::Recipe);
+        bool conserved = true;
+        for (std::size_t c = 0; c < 3; ++c) {
+            // The light that leaves the keyed pixels is min(intensity, 1) / intensity of the glow.
+            const double expected =
+                before[c] + scattered[c] * (1.0 - std::min(intensity, 1.0) / intensity);
+            conserved = conserved && std::abs(after[c] - expected) <= 1e-4 * before[c];
+        }
+        expect(conserved && scattered[0] > 0.0,
+               "Physical Glow conserves the frame's light up to intensity 1 and adds the excess "
+               "above it (intensity " +
+                   std::to_string(intensity) + ")");
+    }
+}
+
+// #506: the mode-specific variants against the independent reference.
+void testModes() {
+    using runtime::detail::GlowMode;
+    RecipeValues values;
+    values.mode = GlowMode::Physical;
+    testReference(Recipe::Glow, values, "Glow Physical");
+    values.exponent = 3.0;
+    values.intensity = 0.5;
+    testReference(Recipe::Glow, values, "Glow Physical (inverse cube, partial scatter)");
+    values = {};
+    values.mode = GlowMode::Physical;
+    values.key = true;
+    values.mask = true;
+    values.threshold = 0.5;
+    testReference(Recipe::Glow, values, "Glow Physical (key pass and Mask, nothing removed)");
+    values.glowOnly = true;
+    testReference(Recipe::Glow, values, "Glow Physical (key pass and Mask, glow only)");
+    values = {};
+    values.mode = GlowMode::Streak;
+    testReference(Recipe::Glow, values, "Glow Streak (four-point star)");
+    values.points = 2;
+    values.angle = 0.0;
+    values.chromatic = 0.6;
+    testReference(Recipe::Glow, values, "Glow Streak (chromatic anamorphic streak)");
+    values.points = 5;
+    values.angle = -17.0;
+    values.chromatic = 0.0;
+    values.glowOnly = true;
+    testReference(Recipe::Glow, values, "Glow Streak (odd star, glow only)");
+    values = {};
+    values.channelRadius = {1.0, 0.5, 0.25};
+    values.gradient = true;
+    values.dirt = true;
+    values.rollOff = 0.5;
+    testReference(Recipe::Glow, values,
+                  "Glow Classic (per-channel radius, gradient, lens dirt, roll-off)");
+    values.mode = GlowMode::Physical;
+    testReference(Recipe::Glow, values,
+                  "Glow Physical (per-channel radius, gradient, lens dirt, roll-off)");
+    values.mode = GlowMode::Streak;
+    values.channelRadius = {0.5, 1.0, 0.75};
+    values.points = 3;
+    testReference(Recipe::Glow, values, "Glow Streak (per-channel length, lens dirt, roll-off)");
+}
+
+// #506: the Streak rays' cache identity: a warm frame reuses every pass; a changed length
+// re-runs the rays; an ROI equals the full frame; cancellation inside a ray stops the frame.
+void testStreakCacheRoiAndCancellation() {
+    const runtime::CpuCompositionEvaluator evaluator;
+    RecipeValues values;
+    values.mode = runtime::detail::GlowMode::Streak;
+    const auto plan = recipe_test::recipePlan(Recipe::Glow, values);
+    const auto cold = evaluator.evaluate(plan.plan, request(plan.plan->output()), {});
+    const auto warm = evaluator.evaluate(plan.plan, request(plan.plan->output()), {});
+    expect(cold.frame() && warm.frame() &&
+               std::ranges::equal(cold.frame()->processImage().pixels(),
+                                  warm.frame()->processImage().pixels()) &&
+               warm.frame()->operationCacheStatistics().misses == 0,
+           "a warm Streak frame reuses every ray pass with identical pixels");
+    values.intensity = 3.0;
+    const auto brighter = recipe_test::recipePlan(Recipe::Glow, values);
+    const auto rerun = evaluator.evaluate(brighter.plan, request(brighter.plan->output()), {});
+    // Levels, the recipe's Merge, the output's Merge and Composition Output.
+    expect(rerun.frame() && rerun.frame()->operationCacheStatistics().misses == 4,
+           "a changed Streak intensity reuses every ray and re-runs only the gains on");
+    auto roiRequest = request(plan.plan->output());
+    const auto roiWindow = render::ImageWindow::create(5, 4, 9, 7);
+    roiRequest.roi = *roiWindow.value();
+    const auto roi = evaluator.evaluate(plan.plan, roiRequest, {});
+    bool same = cold.frame() && roi.frame();
+    if (same)
+        for (std::int64_t y = 4; y < 11; ++y)
+            for (std::int64_t x = 5; x < 14; ++x) {
+                const auto a = roi.frame()->processImage().read(x, y);
+                const auto b = cold.frame()->processImage().read(x, y);
+                same = same && a && b && *a.value() == *b.value();
+            }
+    expect(same, "Streak ROI pixels equal the full frame's");
+    runtime::TaskScheduler scheduler;
+    const runtime::TaskOwner owner{runtime::TaskOwnerKind::PanelRequest,
+                                   runtime::TaskOwnerId::fromRaw(5060)};
+    std::promise<bool> outcome;
+    auto future = outcome.get_future();
+    const auto task = scheduler.submit<void>(
+        runtime::TaskRequest("Streak cancellation", owner), [&](runtime::TaskContext& context) {
+            std::atomic_bool cancelled{false};
+            const auto result = evaluator.evaluate(
+                plan.plan, request(plan.plan->output()), context.cancellation(),
+                [&](const runtime::EvaluationProgress& progress) {
+                    // Inside the first ray's passes.
+                    if (progress.operation && progress.operation->value() > plan.input.value() + 4 &&
+                        !cancelled.exchange(true))
+                        static_cast<void>(scheduler.cancelOwner(owner));
+                });
+            outcome.set_value(result.status() == runtime::EvaluationStatus::Cancelled &&
+                              !result.frame());
+            return runtime::TaskResult<void>::cancelled();
+        });
+    expect(task.accepted() && future.get(), "cancellation inside a Streak ray publishes no frame");
+    auto small = request(plan.plan->output());
+    small.pixelStorageByteLimit = 4096;
+    const auto refused = evaluator.evaluate(plan.plan, small, {});
+    expect(!refused.frame() && refused.status() != runtime::EvaluationStatus::Cancelled,
+           "a Streak beyond the pixel budget is refused, never partially published");
+}
+
 } // namespace
 
 int main() {
@@ -449,9 +751,12 @@ int main() {
         testReference(Recipe::LightWrap, values, "Light Wrap");
         values.wrapOnly = true;
         testReference(Recipe::LightWrap, values, "Light Wrap (wrap only)");
+        testModes();
+        testPhysicalEnergy();
         testCacheAndRoi();
         testAnimation();
         testCancellationAndBudget();
+        testStreakCacheRoiAndCancellation();
     } catch (const std::exception& error) {
         std::cerr << "compositing recipe tests threw: " << error.what() << '\n';
         return 1;

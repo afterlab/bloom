@@ -8,6 +8,7 @@
 #include <bloom/runtime/grade_curve.hpp>
 
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/compositing_recipe_nodes.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,7 @@ constexpr std::size_t kLevelsChannelFloats = 8;
 constexpr std::size_t kLevelsFloats = 4 + kGradeChannelCount * kLevelsChannelFloats;
 constexpr std::size_t kHueSaturationFloats = 12;
 constexpr std::size_t kGradeFloats = 20;
+constexpr std::size_t kRollOffFloats = 4;
 static_assert(kLevelsChannelFloats % 4 == 0);
 static_assert(std::tuple_size_v<decltype(GradeKernel::values)> == document::kGradeParameterCount);
 
@@ -195,6 +197,30 @@ prepareHueSaturation(const std::span<const double> values) {
     return grade;
 }
 
+// #506 Highlight Roll-off: [amount, luma red, luma green, luma blue], the Rec. 709 weights of the
+// track-matte Luma (render::imageCoverage) and Luma Key.
+[[nodiscard]] std::optional<PreparedColorGrade>
+prepareRollOff(const std::span<const double> values) {
+    if (values.size() != 1 || !std::isfinite(values[0]) || values[0] < 0.0 ||
+        values[0] > document::kMaximumGlowRollOff)
+        return std::nullopt;
+    PreparedColorGrade grade{ColorGradeKind::RollOff, std::vector<float>(kRollOffFloats, 0.0F),
+                             values[0] == 0.0};
+    grade.data = {static_cast<float>(values[0]), 0.2126F, 0.7152F, 0.0722F};
+    grade.identity = grade.data[0] == 0.0F;
+    return grade;
+}
+
+// c / (1 + amount * max(L, 0)) on associated colour; the divisor is at least one, so the result is
+// finite and never larger in magnitude than the input. Alpha is unchanged.
+[[nodiscard]] bool rollOffPixel(const std::vector<float>& d, std::array<float, 4>& pixel) noexcept {
+    const float luma = std::fma(d[3], pixel[2], std::fma(d[2], pixel[1], d[1] * pixel[0]));
+    const float divisor = std::fma(d[0], std::max(luma, 0.0F), 1.0F);
+    for (std::size_t i = 0; i < 3; ++i)
+        pixel[i] = pixel[i] / divisor;
+    return std::isfinite(pixel[0]) && std::isfinite(pixel[1]) && std::isfinite(pixel[2]);
+}
+
 [[nodiscard]] bool gradePixel(const std::vector<float>& d, std::array<float, 4>& pixel) noexcept {
     const auto finite = [](const float x) { return std::isfinite(x); };
     const float a = pixel[3];
@@ -326,6 +352,22 @@ prepareHueSaturation(const std::span<const double> values) {
             "}\n";
         return text;
     }
+    case ColorGradeKind::RollOff: {
+        // The divisor is at least one; the wrapper's correctly rounded division matches the CPU's.
+        static const std::string text =
+            "layout(set = 0, binding = 0, std430) readonly buffer BloomRollOffData { vec4 "
+            "values[]; } bloom_roll_off_data;\n" +
+            straight +
+            "vec4 bloom_roll_off(ivec2 c) {\n"
+            " vec4 p = imageLoad(bloom_ocio_input, c);\n"
+            " vec4 k = bloom_roll_off_data.values[0];\n"
+            " precise float luma = fma(k.w, p.b, fma(k.z, p.g, k.y * p.r));\n"
+            " precise float d = fma(k.x, max(luma, 0.0), 1.0);\n"
+            " return vec4(bloom_ocio_cpu_div(p.r, d), bloom_ocio_cpu_div(p.g, d), "
+            "bloom_ocio_cpu_div(p.b, d), p.a);\n"
+            "}\n";
+        return text;
+    }
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -401,6 +443,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareHueSaturation(values);
     if (std::holds_alternative<GradeKernel>(kernel))
         return prepareGrade(values);
+    if (std::holds_alternative<HighlightRollOffKernel>(kernel))
+        return prepareRollOff(values);
     return std::nullopt;
 }
 
@@ -421,6 +465,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         return curvesGradePixel(grade.data, pixel);
     if (grade.kind == ColorGradeKind::Grade)
         return gradePixel(grade.data, pixel);
+    if (grade.kind == ColorGradeKind::RollOff)
+        return rollOffPixel(grade.data, pixel);
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
     };
@@ -514,8 +560,10 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
     const bool shaped = kind == ColorGradeKind::Levels   ? data.size() == kLevelsFloats
                         : kind == ColorGradeKind::Curves ? validCurvesTable(data)
                         : kind == ColorGradeKind::Grade  ? data.size() == kGradeFloats
-                                                         : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Grade) ||
+                        : kind == ColorGradeKind::RollOff
+                            ? data.size() == kRollOffFloats && data[0] >= 0.0F
+                            : data.size() == kHueSaturationFloats;
+    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::RollOff) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -541,6 +589,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_grade";
         program.resourcePrefix = "bloom_grade_";
         program.semanticsId = "bloom.render.grade.v1";
+        break;
+    case ColorGradeKind::RollOff:
+        program.functionName = "bloom_roll_off";
+        program.resourcePrefix = "bloom_roll_off_";
+        program.semanticsId = "bloom.render.highlight-roll-off.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);

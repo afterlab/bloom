@@ -745,6 +745,20 @@ void testRealRecipes(Expectations& expectations) {
     const auto [shadow, shadowMerges] = modesOf(Recipe::DropShadow, {});
     expectations.expect(shadowMerges >= 2 && !has(shadow, bloom::core::BlendMode::Add),
                         "Drop Shadow's Normal Merge stays on the source-over chain");
+    // #506: Streak's rays and Highlight Roll-off reach their resident programs; nothing in the
+    // chain is left for a CPU frame.
+    RecipeValues streak;
+    streak.mode = bloom::runtime::detail::GlowMode::Streak;
+    streak.rollOff = 0.5;
+    const auto streakPlan = bloom::recipe_test::recipePlan(Recipe::Glow, streak).plan;
+    const auto streakPrepared = builder.build(streakPlan, requestFor(*streakPlan));
+    std::size_t effects = 0;
+    if (streakPrepared)
+        for (const auto& command : streakPrepared.scene->commands())
+            effects += std::holds_alternative<bloom::runtime::GpuSceneOcioEffectCommand>(command);
+    // Four rays of five passes, each ray's 1/4 Levels, the gains, the roll-off and the key.
+    expectations.expect(static_cast<bool>(streakPrepared) && effects >= 4 * 5 + 4 + 3,
+                        "a Streak Glow with roll-off prepares every ray pass on the GPU route");
     static_cast<void>(glowMerges);
     static_cast<void>(wrapMerges);
     static_cast<void>(onlyMerges);

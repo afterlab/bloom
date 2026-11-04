@@ -1305,8 +1305,9 @@ void runLumaKeys(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
     }
 }
 
-// #339 Drop Shadow, Glow and Light Wrap: the production recipe chains on the device against the
-// CPU oracle at the 2e-6/exact-alpha gate, with the data/display windows; a warm unchanged scene
+// #339 Drop Shadow, Glow and Light Wrap (#506: and Glow's Physical and Streak modes and shared
+// controls): the production recipe chains on the device against the CPU oracle at the
+// 2e-6/exact-alpha gate, with the data/display windows; a warm unchanged scene
 // dispatches nothing; a changed opacity, intensity or amount re-runs only the chain after it (the
 // softened coverage, the octave blurs, the background blur stay cached): one Levels dispatch.
 void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
@@ -1354,6 +1355,48 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         RecipeValues keyedChanged = keyed;
         keyedChanged.intensity = 0.5;
         cases.push_back({Recipe::Glow, keyed, keyedChanged, 1, "glow keyed"});
+    }
+    {
+        // #506 modes on the exact-alpha solid: a changed intensity re-runs only the gains (the
+        // Physical removal's min(intensity, 1) stays 1), a changed roll-off only the roll-off.
+        using bloom::runtime::detail::GlowMode;
+        RecipeValues physical;
+        physical.solidInput = true;
+        physical.mode = GlowMode::Physical;
+        RecipeValues physicalChanged = physical;
+        physicalChanged.intensity = 4.0;
+        cases.push_back({Recipe::Glow, physical, physicalChanged, 1, "glow physical"});
+        RecipeValues keyed = physical;
+        keyed.key = true;
+        keyed.mask = true;
+        keyed.threshold = 0.5;
+        keyed.glowOnly = true;
+        RecipeValues keyedChanged = keyed;
+        keyedChanged.intensity = 0.5;
+        cases.push_back({Recipe::Glow, keyed, keyedChanged, 1, "glow physical keyed"});
+        RecipeValues star;
+        star.solidInput = true;
+        star.mode = GlowMode::Streak;
+        RecipeValues starChanged = star;
+        starChanged.intensity = 3.0;
+        cases.push_back({Recipe::Glow, star, starChanged, 1, "glow streak star"});
+        RecipeValues anamorphic = star;
+        anamorphic.points = 2;
+        anamorphic.angle = 0.0;
+        anamorphic.chromatic = 0.6;
+        RecipeValues anamorphicChanged = anamorphic;
+        anamorphicChanged.intensity = 3.0;
+        cases.push_back(
+            {Recipe::Glow, anamorphic, anamorphicChanged, 1, "glow streak chromatic anamorphic"});
+        RecipeValues shared;
+        shared.solidInput = true;
+        shared.channelRadius = {1.0, 0.5, 0.25};
+        shared.gradient = true;
+        shared.dirt = true;
+        shared.rollOff = 0.5;
+        RecipeValues sharedChanged = shared;
+        sharedChanged.rollOff = 1.0;
+        cases.push_back({Recipe::Glow, shared, sharedChanged, 1, "glow shared controls"});
     }
     {
         RecipeValues changed;

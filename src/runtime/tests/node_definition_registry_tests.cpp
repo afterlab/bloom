@@ -185,6 +185,37 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             glow->inputs[2].valueKind == runtime::SocketValueKind::Mask &&
                             !glow->inputs[2].required,
                         "#339: Glow takes an optional key pass and an optional Mask");
+    // #506: an optional lens-dirt Image, and the mode and shared controls as optional parameters
+    // (a Glow saved before them stays valid); the mode and ray count are constants.
+    const auto glowParameter =
+        [&](const std::string_view role) -> const runtime::ParameterDefinition* {
+        if (!glow)
+            return nullptr;
+        for (const auto& parameter : glow->parameters)
+            if (parameter.role == role)
+                return &parameter;
+        return nullptr;
+    };
+    bool optional = glow != nullptr;
+    for (const auto* role : {"mode", "exponent", "radiusRed", "radiusGreen", "radiusBlue",
+                             "gradient", "outerTint", "points", "angle", "length", "chromatic",
+                             "dirtAmount", "rollOff"}) {
+        const auto* parameter = glowParameter(role);
+        optional = optional && parameter != nullptr && !parameter->required;
+    }
+    for (const auto* role : {"threshold", "knee", "intensity", "size", "falloff", "tint",
+                             "octaves", "glowOnly"})
+        optional = optional && glowParameter(role) != nullptr && glowParameter(role)->required;
+    const auto* mode = glowParameter("mode");
+    const auto* points = glowParameter("points");
+    expectations.expect(optional && glow->inputs[3].name == "dirt" &&
+                            glow->inputs[3].valueKind == runtime::SocketValueKind::Image &&
+                            !glow->inputs[3].required && mode && !mode->supportsAnimation &&
+                            mode->defaultValue == document::ParameterValue{std::int64_t{0}} && points &&
+                            !points->supportsAnimation &&
+                            points->defaultValue == document::ParameterValue{std::int64_t{4}},
+                        "#506: Glow's modes and shared controls are optional, Classic by default, "
+                        "with an optional lens-dirt Image");
     const auto* wrap = registry.find("bloom.light-wrap", 1);
     expectations.expect(wrap && wrap->inputs[1].name == "background" &&
                             wrap->inputs[1].valueKind == runtime::SocketValueKind::Image &&

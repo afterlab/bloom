@@ -74,6 +74,7 @@ lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOpera
     if (node.typeId == document::kGlowNodeType) {
         const auto key = recipeOptionalInput(node.id, "key", operations, indices);
         const auto mask = recipeOptionalInput(node.id, "mask", operations, indices);
+        const auto dirt = recipeOptionalInput(node.id, "dirt", operations, indices);
         auto threshold = scalar("threshold");
         auto knee = scalar("knee");
         auto intensity = scalar("intensity");
@@ -82,14 +83,66 @@ lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOpera
         auto tint = color("tint");
         const auto* octaves = parameterConstant<std::int64_t>(findParameterBinding(node, "octaves"));
         const auto* glowOnly = flag("glowOnly");
-        if (key && mask && threshold && knee && intensity && size && falloff && tint && octaves &&
-            *octaves >= document::kMinimumGlowOctaves &&
-            *octaves <= document::kMaximumGlowOctaves && glowOnly)
-            return runtime::detail::appendGlow(
-                emitter, *input, *key, *mask,
-                {*threshold, *knee, *intensity, *size, *falloff, *tint, *octaves, *glowOnly});
-        addTopologyFailure(node.id, "Glow inputs or parameters could not be lowered.");
-        return std::nullopt;
+        if (!key || !mask || !dirt || !threshold || !knee || !intensity || !size || !falloff ||
+            !tint || !octaves || *octaves < document::kMinimumGlowOctaves ||
+            *octaves > document::kMaximumGlowOctaves || !glowOnly) {
+            addTopologyFailure(node.id, "Glow inputs or parameters could not be lowered.");
+            return std::nullopt;
+        }
+        runtime::detail::GlowOperands operands{*threshold, *knee,  *intensity, *size,
+                                               *falloff,   *tint, *octaves,   *glowOnly};
+        // #506: the modes and shared controls are optional; a Glow saved before them binds none
+        // and keeps every default, which is exactly the Classic chain. A bound one must lower.
+        bool lowered = true;
+        const auto optionalScalar = [&](const std::string_view role,
+                                        runtime::CompiledScalarParameter& target) {
+            if (const auto* binding = findParameterBinding(node, role)) {
+                const auto value = compiledScalarParameter(binding);
+                lowered = lowered && value.has_value();
+                if (value)
+                    target = *value;
+            }
+        };
+        const auto optionalInteger = [&](const std::string_view role, std::int64_t& target) {
+            if (const auto* binding = findParameterBinding(node, role)) {
+                const auto* value = parameterConstant<std::int64_t>(binding);
+                lowered = lowered && value != nullptr;
+                if (value)
+                    target = *value;
+            }
+        };
+        std::int64_t mode = document::kGlowModeClassic;
+        optionalInteger("mode", mode);
+        optionalInteger("points", operands.points);
+        optionalScalar("exponent", operands.exponent);
+        optionalScalar("radiusRed", operands.radius[0]);
+        optionalScalar("radiusGreen", operands.radius[1]);
+        optionalScalar("radiusBlue", operands.radius[2]);
+        optionalScalar("angle", operands.angle);
+        optionalScalar("length", operands.length);
+        optionalScalar("chromatic", operands.chromatic);
+        optionalScalar("dirtAmount", operands.dirtAmount);
+        optionalScalar("rollOff", operands.rollOff);
+        if (findParameterBinding(node, "gradient") != nullptr) {
+            const auto* gradient = flag("gradient");
+            lowered = lowered && gradient != nullptr;
+            if (gradient)
+                operands.gradient = *gradient;
+        }
+        if (findParameterBinding(node, "outerTint") != nullptr) {
+            auto outerTint = color("outerTint");
+            lowered = lowered && outerTint.has_value();
+            if (outerTint)
+                operands.outerTint = *outerTint;
+        }
+        if (!lowered || mode < document::kGlowModeClassic || mode > document::kGlowModeStreak ||
+            operands.points < document::kMinimumGlowPoints ||
+            operands.points > document::kMaximumGlowPoints) {
+            addTopologyFailure(node.id, "Glow mode or parameters could not be lowered.");
+            return std::nullopt;
+        }
+        operands.mode = static_cast<runtime::detail::GlowMode>(mode);
+        return runtime::detail::appendGlow(emitter, *input, *key, *mask, operands, *dirt);
     }
     const auto background = recipeOptionalInput(node.id, "background", operations, indices);
     auto radius = scalar("radius");

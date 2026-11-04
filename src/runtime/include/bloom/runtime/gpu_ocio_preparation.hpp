@@ -69,6 +69,10 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // #479 Separate Channels / Combine Channels: the one fixed Channel Select neighbourhood
     // program; `channelSelect` (detail::channelSelectProgramData) is its storage-buffer data.
     ChannelSelect = 12,
+    // #506 Directional Blur: the one fixed neighbourhood program over the input padded to the grown
+    // window; `directionalBlur` (detail::directionalBlurProgramData, sixteen weighted integer taps)
+    // is its storage-buffer data, part of the prepare key and the command identity.
+    DirectionalBlur = 13,
 };
 
 struct GpuOcioTransformSpec final {
@@ -96,6 +100,8 @@ struct GpuOcioTransformSpec final {
     std::vector<float> gradeData;
     // ChannelSelect only: detail::channelSelectProgramData.
     std::array<float, 8> channelSelect{};
+    // DirectionalBlur only: detail::directionalBlurProgramData.
+    std::vector<float> directionalBlur;
     // LayerMask only.
     std::vector<std::byte> maskData;
     // FootageInterpretation only.

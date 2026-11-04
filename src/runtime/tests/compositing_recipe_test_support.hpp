@@ -2,14 +2,15 @@
 #define BLOOM_RUNTIME_TESTS_COMPOSITING_RECIPE_TEST_SUPPORT_HPP
 
 // #339: plans that run Drop Shadow, Glow and Light Wrap through the PRODUCTION recipe chains
-// (compositing_recipes.hpp, the functions the snapshot compiler lowers with) over an HDR,
-// partial-alpha gradient, so the CPU reference tests, the GPU coverage fixtures and the native
+// (compositing_recipes.hpp, the functions the snapshot compiler lowers with; #506 adds the Glow
+// modes and shared controls) over an HDR, partial-alpha gradient, so the CPU reference tests, the GPU coverage fixtures and the native
 // parity harness all exercise exactly what an authored node evaluates.
 
 #include "compositing_recipes.hpp"
 
 #include <bloom/runtime/compiled_plan.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -49,6 +50,22 @@ struct RecipeValues final {
     bool glowOnly = false;
     bool key = false;
     bool mask = false;
+    // #506 Glow modes and shared controls (the defaults are Classic).
+    runtime::detail::GlowMode mode = runtime::detail::GlowMode::Classic;
+    double exponent = 2.0;
+    std::array<double, 3> channelRadius{1.0, 1.0, 1.0};
+    bool gradient = false;
+    core::Color4d outerTint{0.25, 0.5, 1.5, 1.0};
+    std::int64_t points = 4;
+    double angle = 30.0;
+    double length = 6.0;
+    double chromatic = 0.0;
+    bool dirt = false; // the Mask transport below doubles as the lens-dirt image
+    double dirtAmount = 1.5;
+    double rollOff = 0.0;
+    // The input moved by (6, 5), so a glow of a few pixels stays inside the composition window
+    // (an energy balance needs every scattered pixel).
+    bool centred = false;
     // Light Wrap
     double radius = 3.0;
     double amount = 0.75;
@@ -112,7 +129,8 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                                  (recipePublished && (recipe == Recipe::LightWrap ||
                                                       (recipe == Recipe::Glow && values.key)));
     const bool needsMask =
-        published == Published::Mask || (recipePublished && recipe == Recipe::Glow && values.mask);
+        published == Published::Mask ||
+        (recipePublished && recipe == Recipe::Glow && (values.mask || values.dirt));
     if (needsInput) {
         result.input = OperationIndex::fromRaw(operations.size());
         if (values.solidInput)
@@ -123,6 +141,17 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                 scalar(idBase + 4, 10.0)});
         else
             operations.emplace_back(std::move(gradient));
+        if (values.centred) {
+            const auto source = result.input;
+            result.input = OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(CompiledImageEffect{
+                NodeId::fromRaw(idBase + 15), source,
+                Transform2DKernel{CompiledVec2Parameter{ParameterId::fromRaw(idBase + 16),
+                                                        Vec2d{6.0, 5.0}},
+                                  CompiledVec2Parameter{{}, Vec2d{}},
+                                  CompiledVec2Parameter{{}, Vec2d{1.0, 1.0}}, scalar(idBase + 17, 0.0),
+                                  Transform2DExtent::Transformed, kResampleFilterBilinear}});
+        }
     }
     if (needsBackground) {
         result.background = OperationIndex::fromRaw(operations.size());
@@ -162,16 +191,35 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                  animatedScalar(idBase + 24, values.distance), scalar(idBase + 26, values.softness),
                  values.shadowOnly});
             break;
-        case Recipe::Glow:
+        case Recipe::Glow: {
+            detail::GlowOperands operands{
+                scalar(idBase + 31, values.threshold),
+                scalar(idBase + 32, values.knee),
+                animatedScalar(idBase + 33, values.intensity),
+                scalar(idBase + 35, values.size),
+                scalar(idBase + 36, values.falloff),
+                CompiledColorParameter{ParameterId::fromRaw(idBase + 37), values.tint},
+                values.octaves,
+                values.glowOnly};
+            operands.mode = values.mode;
+            operands.exponent = scalar(idBase + 60, values.exponent);
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                operands.radius[channel] = scalar(idBase + 61 + channel, values.channelRadius[channel]);
+            operands.gradient = values.gradient;
+            operands.outerTint =
+                CompiledColorParameter{ParameterId::fromRaw(idBase + 64), values.outerTint};
+            operands.points = values.points;
+            operands.angle = scalar(idBase + 65, values.angle);
+            operands.length = scalar(idBase + 66, values.length);
+            operands.chromatic = scalar(idBase + 67, values.chromatic);
+            operands.dirtAmount = scalar(idBase + 68, values.dirtAmount);
+            operands.rollOff = scalar(idBase + 69, values.rollOff);
             result.recipe = detail::appendGlow(
                 emitter, result.input, values.key ? std::optional(result.background) : std::nullopt,
-                values.mask ? std::optional(result.mask) : std::nullopt,
-                {scalar(idBase + 31, values.threshold), scalar(idBase + 32, values.knee),
-                 animatedScalar(idBase + 33, values.intensity), scalar(idBase + 35, values.size),
-                 scalar(idBase + 36, values.falloff),
-                 CompiledColorParameter{ParameterId::fromRaw(idBase + 37), values.tint},
-                 values.octaves, values.glowOnly});
+                values.mask ? std::optional(result.mask) : std::nullopt, operands,
+                values.dirt ? std::optional(result.mask) : std::nullopt);
             break;
+        }
         case Recipe::LightWrap:
             result.recipe =
                 detail::appendLightWrap(emitter, result.input, result.background,

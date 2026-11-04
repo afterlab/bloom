@@ -292,6 +292,165 @@ void testGlowLowering(Expectations& expectations) {
     }
 }
 
+// #506: a Glow saved before the modes binds none of their parameters and lowers to exactly the
+// operations a new node with every default does (Classic). Physical keys the premultiplied luma of
+// the opaque colour, weighs the octaves 2^(2 - exponent) and Mixes the input's colour away under
+// the key; Streak chains five Directional Blur passes per ray; per-channel radius builds the glow
+// per channel; lens dirt and roll-off finish the glow layer.
+void testGlowModeLowering(Expectations& expectations) {
+    using namespace document;
+    using runtime::ImageChannelSource;
+    {
+        const std::unordered_map<std::string, ParameterValue> values{
+            {"threshold", 2.0}, {"intensity", 3.0}, {"octaves", std::int64_t{3}}};
+        auto current = recipeFixture(kGlowNodeType, values);
+        auto legacy = recipeFixture(kGlowNodeType, values);
+        auto* composition = legacy.project.findComposition(kCompositionId);
+        auto* node = composition->graph().findNode(legacy.node);
+        const std::vector<std::string> classic{"threshold", "knee",    "intensity", "size",
+                                               "falloff",   "tint",    "octaves",   "glowOnly"};
+        std::erase_if(node->parameters, [&](const ParameterBinding& binding) {
+            if (std::ranges::find(classic, binding.role) != classic.end())
+                return false;
+            require(composition->parameters().erase(binding.parameterId),
+                    "an unbound #506 parameter is removed");
+            return true;
+        });
+        const auto currentResult = compileRecipe(std::move(current.project));
+        const auto legacyResult = compileRecipe(std::move(legacy.project));
+        expectations.expect(currentResult.plan && legacyResult.plan &&
+                                std::ranges::equal(currentResult.plan->operations(),
+                                                   legacyResult.plan->operations()) &&
+                                std::ranges::equal(currentResult.plan->valueOperations(),
+                                                   legacyResult.plan->valueOperations()),
+                            "a Glow saved before the modes lowers exactly as a default Classic "
+                            "Glow");
+    }
+    {
+        auto fixture = recipeFixture(kGlowNodeType, {{"mode", kGlowModePhysical},
+                                                     {"intensity", 2.0},
+                                                     {"exponent", 3.0},
+                                                     {"octaves", std::int64_t{3}}});
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Physical Glow compiles");
+        if (result.plan) {
+            const auto& plan = *result.plan;
+            const auto ops = recipeOperations(plan, node);
+            // select, key, multiply alpha, 3 blurs, 2 mixes, levels, unlit, removal mix, merge
+            require(ops.size() == 12, "Physical Glow with three octaves lowers to twelve");
+            const auto* opaque = recipeKernel<runtime::ChannelSelectKernel>(plan, ops[0]);
+            const auto* bright = recipeKernel<runtime::ImageCombineKernel>(plan, ops[2]);
+            expectations.expect(
+                opaque && opaque->sources[3] == ImageChannelSource::One &&
+                    recipeKernel<runtime::LumaKeyKernel>(plan, ops[1]) && bright &&
+                    bright->mode == runtime::ImageCombineMode::MultiplyAlpha,
+                "Physical keys the premultiplied luma and multiplies the source by it");
+            std::vector<double> factors;
+            for (std::size_t i = 3; i < 8; ++i)
+                if (const auto* mix = recipeKernel<runtime::ImageCombineKernel>(plan, ops[i]);
+                    mix && mix->mode == runtime::ImageCombineMode::Mix && mix->factor)
+                    if (const auto* value = std::get_if<double>(&mix->factor->source))
+                        factors.push_back(*value);
+            expectations.expect(factors.size() == 2 && std::abs(factors[0] - 1.0 / 1.5) < 1e-15 &&
+                                    std::abs(factors[1] - 1.0 / 1.75) < 1e-15,
+                                "exponent 3 weighs each wider octave half the one inside it");
+            const auto* removal = std::get_if<runtime::CompiledImageEffect>(&plan.operations()[ops[10]]);
+            const auto* removalMix = recipeKernel<runtime::ImageCombineKernel>(plan, ops[10]);
+            const auto* scatter =
+                removalMix && removalMix->factor
+                    ? std::get_if<double>(&removalMix->factor->source)
+                    : nullptr;
+            expectations.expect(removal && removalMix &&
+                                    removalMix->mode == runtime::ImageCombineMode::Mix &&
+                                    scatter && *scatter == 1.0 && removal->maskInput &&
+                                    removal->maskInput->value() == ops[1] &&
+                                    removal->secondaryInput &&
+                                    removal->secondaryInput->value() == ops[9],
+                                "the scattered light leaves the input under the key, at most all "
+                                "of it");
+            const auto* merge = recipeMerge(plan, ops[11]);
+            expectations.expect(merge && merge->entries[1].input.value() == ops[10],
+                                "the glow is added to the input it left");
+        }
+    }
+    {
+        auto fixture = recipeFixture(kGlowNodeType, {{"mode", kGlowModeStreak},
+                                                     {"points", std::int64_t{3}},
+                                                     {"angle", 10.0},
+                                                     {"length", 102.3}});
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Streak Glow compiles");
+        if (result.plan) {
+            const auto& plan = *result.plan;
+            const auto ops = recipeOperations(plan, node);
+            std::vector<std::array<double, 3>> passes;
+            std::size_t thirds = 0;
+            for (const auto index : ops) {
+                if (const auto* pass = recipeKernel<runtime::DirectionalBlurKernel>(plan, index)) {
+                    const auto* angle = std::get_if<double>(&pass->angle.source);
+                    const auto* spacing = std::get_if<double>(&pass->spacing.source);
+                    if (angle && spacing)
+                        passes.push_back({*angle, *spacing, pass->decay});
+                }
+                if (const auto* levels = recipeKernel<runtime::LevelsKernel>(plan, index))
+                    if (const auto* alpha =
+                            std::get_if<double>(&levels->channels[4].outputWhite.source);
+                        alpha && std::abs(*alpha - 1.0 / 3.0) < 1e-15)
+                        ++thirds;
+            }
+            bool chained = passes.size() == 15;
+            for (std::size_t i = 0; chained && i < passes.size(); ++i) {
+                const double reach = std::ldexp(1.0, static_cast<int>(2 * (i % 5))) / 1023.0;
+                chained = std::abs(passes[i][0] - (10.0 + 120.0 * static_cast<double>(i / 5))) <
+                              1e-12 &&
+                          std::abs(passes[i][1] - 102.3 * reach) < 1e-12 &&
+                          std::abs(passes[i][2] - std::pow(0.01, reach)) < 1e-15;
+            }
+            expectations.expect(chained && thirds == 3,
+                                "three rays of five chained passes, 120 degrees apart, each "
+                                "carrying a third of the light");
+        }
+    }
+    {
+        auto fixture = recipeFixture(kGlowNodeType,
+                                     {{"radiusGreen", 0.5},
+                                      {"rollOff", 0.5},
+                                      {"dirtAmount", 2.0},
+                                      {"octaves", std::int64_t{2}}},
+                                     {"dirt"});
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Glow with shared controls compiles");
+        if (result.plan) {
+            const auto& plan = *result.plan;
+            const auto ops = recipeOperations(plan, node);
+            std::size_t selects = 0;
+            std::size_t blurs = 0;
+            const runtime::CompiledImageEffect* dirty = nullptr;
+            for (const auto index : ops) {
+                selects += recipeKernel<runtime::ChannelSelectKernel>(plan, index) != nullptr;
+                blurs += recipeKernel<runtime::SeparableBlurKernel>(plan, index) != nullptr;
+                if (const auto* combine = recipeKernel<runtime::ImageCombineKernel>(plan, index);
+                    combine && combine->channel == render::ImageCoverageChannel::Luma)
+                    dirty = std::get_if<runtime::CompiledImageEffect>(&plan.operations()[index]);
+            }
+            const auto* rollOff = recipeKernel<runtime::HighlightRollOffKernel>(plan, ops.back() - 1);
+            expectations.expect(selects == 3 && blurs == 6,
+                                "a per-channel radius builds the glow once per channel");
+            const auto* dirtSource =
+                dirty && dirty->secondaryInput
+                    ? std::get_if<runtime::CompiledSolid>(
+                          &plan.operations()[dirty->secondaryInput->value()])
+                    : nullptr;
+            expectations.expect(dirtSource && dirtSource->sourceNodeId == kSecondSolidNode,
+                                "the lens dirt modulates the glow by its luma");
+            expectations.expect(rollOff != nullptr, "the roll-off finishes the glow layer");
+        }
+    }
+}
+
 // Light Wrap: Rgba Clamp blur of the background, Coverage blur of the foreground, Multiply Alpha
 // by the inverted coverage, Levels scaling the alpha by the amount, then an Atop (wrap only: In)
 // Merge over the foreground.

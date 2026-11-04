@@ -2,9 +2,10 @@
 #define BLOOM_RUNTIME_COMPOSITING_RECIPES_HPP
 
 // Private to src/runtime. #339 Drop Shadow, Glow and Light Wrap are recipes: each lowers to a
-// fixed chain of the existing image primitives (the separable blurs, Transform 2D, Luma Key, Set
-// Alpha, Multiply Alpha, Image Mix, Levels and an explicitly blended Merge) with no pixel kernel of
-// its own. Every operation of the chain therefore keeps its primitive's CPU reference, resident GPU
+// fixed chain of the image primitives (the separable blurs, Transform 2D, Luma Key, Set Alpha,
+// Multiply Alpha, Image Mix, Levels, Channel Select and an explicitly blended Merge; #506 Glow's
+// Streak rays and roll-off add the Directional Blur and Highlight Roll-off primitives) with no
+// pixel kernel of its own. Every operation of the chain therefore keeps its primitive's CPU reference, resident GPU
 // command, cache identity, ROI, budget, cancellation and retirement unchanged; the recipe only
 // decides which primitives run and in what order.
 //
@@ -42,11 +43,15 @@ class RecipeEmitter final {
                   ValueSink values)
         : node_(node), operations_(operations), values_(std::move(values)) {}
 
+    // `mask` is Image Mix's optional Mask (ADR 0028).
     [[nodiscard]] OperationIndex effect(OperationIndex input, ImageEffectKernel kernel,
-                                        std::optional<OperationIndex> secondary = {});
+                                        std::optional<OperationIndex> secondary = {},
+                                        std::optional<OperationIndex> mask = {});
     // `entries` are top first (the Merge's own order); each is a plain image with an explicit mode.
     [[nodiscard]] OperationIndex
     merge(std::initializer_list<std::pair<OperationIndex, core::BlendMode>> entries);
+    [[nodiscard]] OperationIndex
+    merge(const std::vector<std::pair<OperationIndex, core::BlendMode>>& entries);
 
     // A derived value names no document parameter (ADR 0028's synthesized operand): every value
     // below has an invalid identity, so it claims none and an authored parameter keeps the one
@@ -80,6 +85,18 @@ struct DropShadowOperands final {
     bool shadowOnly = false;
 };
 
+// #506: Classic is the #339 glow; Physical and Streak are docs/architecture/image-filters.md,
+// "Glow modes".
+enum class GlowMode : std::uint8_t { Classic, Physical, Streak };
+
+// Streak rays are kStreakPasses chained Directional Blur passes of four taps, so tap t of
+// 0..kStreakTaps - 1 lies t * length / (kStreakTaps - 1) along the ray with weight proportional to
+// kStreakEndWeight^(t / (kStreakTaps - 1)): an exponential streak whose last tap weighs 1% of its
+// first.
+inline constexpr std::int64_t kStreakPasses = 5;
+inline constexpr std::int64_t kStreakTaps = 1024; // 4^kStreakPasses
+inline constexpr double kStreakEndWeight = 0.01;
+
 struct GlowOperands final {
     CompiledScalarParameter threshold;
     CompiledScalarParameter knee;
@@ -89,6 +106,20 @@ struct GlowOperands final {
     CompiledColorParameter tint;
     std::int64_t octaves = 5;
     bool glowOnly = false;
+    // #506 modes and shared controls; these defaults are the Classic glow of #339.
+    GlowMode mode = GlowMode::Classic;
+    CompiledScalarParameter exponent = RecipeEmitter::constant(2.0); // Physical: PSF ~ r^-exponent
+    // Per-channel fractions of `size` (Streak: of `length`).
+    std::array<CompiledScalarParameter, 3> radius{
+        RecipeEmitter::constant(1.0), RecipeEmitter::constant(1.0), RecipeEmitter::constant(1.0)};
+    bool gradient = false;
+    CompiledColorParameter outerTint{{}, core::Color4d{1.0, 0.5, 0.25, 1.0}};
+    std::int64_t points = 4;                                          // Streak rays
+    CompiledScalarParameter angle = RecipeEmitter::constant(0.0);     // degrees clockwise from right
+    CompiledScalarParameter length = RecipeEmitter::constant(128.0);  // Streak ray length, pixels
+    CompiledScalarParameter chromatic = RecipeEmitter::constant(0.0); // Streak dispersion
+    CompiledScalarParameter dirtAmount = RecipeEmitter::constant(1.0);
+    CompiledScalarParameter rollOff = RecipeEmitter::constant(0.0);
 };
 
 struct LightWrapOperands final {
@@ -100,11 +131,13 @@ struct LightWrapOperands final {
 // Each returns the operation that publishes the node's image.
 [[nodiscard]] OperationIndex appendDropShadow(RecipeEmitter& emitter, OperationIndex input,
                                               const DropShadowOperands& operands);
-// `key` replaces the input as the image that glows; `mask` (an ADR 0028 Mask) limits it.
+// `key` replaces the input as the image that glows; `mask` (an ADR 0028 Mask) limits it; `dirt`
+// (#506) adds the glow modulated by its luma.
 [[nodiscard]] OperationIndex appendGlow(RecipeEmitter& emitter, OperationIndex input,
                                         std::optional<OperationIndex> key,
                                         std::optional<OperationIndex> mask,
-                                        const GlowOperands& operands);
+                                        const GlowOperands& operands,
+                                        std::optional<OperationIndex> dirt = {});
 [[nodiscard]] OperationIndex appendLightWrap(RecipeEmitter& emitter, OperationIndex input,
                                              OperationIndex background,
                                              const LightWrapOperands& operands);

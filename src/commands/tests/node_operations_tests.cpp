@@ -821,6 +821,28 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{300.0});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *threshold,
                                ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
+    // #506: the mode, ray count and shared controls edit and refuse within their domains, and
+    // the lens-dirt input takes an Image but never a Mask.
+    const auto mode = glow.outputId<ParameterId>("parameter.mode");
+    const auto points = glow.outputId<ParameterId>("parameter.points");
+    const auto radiusRed = glow.outputId<ParameterId>("parameter.radiusRed");
+    const auto rollOff = glow.outputId<ParameterId>("parameter.rollOff");
+    if (!mode || !points || !radiusRed || !rollOff)
+        throw std::logic_error("Glow exposes its mode and shared control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *mode, ConstantValueSource{std::int64_t{2}});
+    (void)exercise<SetParameterSource>(test, fixture, *points,
+                                       ConstantValueSource{std::int64_t{16}});
+    (void)exercise<SetParameterSource>(test, fixture, *rollOff, ConstantValueSource{2.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *mode,
+                               ConstantValueSource{std::int64_t{3}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *points,
+                               ConstantValueSource{std::int64_t{0}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *radiusRed,
+                               ConstantValueSource{1.5});
+    exercise<ConnectPorts>(test, fixture, OutputPortRef{addSource(fixture), "image"},
+                           InputPortRef{NodeInputRef{*glowId, "dirt"}});
+    refuse<ConnectPorts>(test, fixture, OperationIssueCode::SocketKindMismatch,
+                         OutputPortRef{*mask, "mask"}, InputPortRef{NodeInputRef{*glowId, "dirt"}});
 
     const auto wrap = addRecipe("bloom.light-wrap");
     const auto wrapId = wrap.outputId<NodeId>(kAddNodeOutput);
