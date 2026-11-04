@@ -883,6 +883,8 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
     for (const auto* candidate : ordered) {
         const auto& definition = *candidate;
         QString keywords = QString::fromStdString(definition.key.typeId);
+        if (const auto extra = nodeSearchKeywords(definition.key.typeId); !extra.isEmpty())
+            keywords += ' ' + extra;
         for (const auto& port : definition.inputs)
             keywords += ' ' + socketKindName(port.valueKind);
         for (const auto& port : definition.outputs)

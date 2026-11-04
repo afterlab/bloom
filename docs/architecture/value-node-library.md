@@ -176,7 +176,7 @@ carries no socket.
 | Boolean To Integer | `value` Boolean | `result` Integer | The same mapping |
 | Scalar To Boolean | `value` Scalar | `result` Boolean | Nonzero is true. NaN is FALSE and negative zero is FALSE -- `value != 0` would call a number that is not a number set |
 | Integer To Boolean | `value` Integer | `result` Boolean | Nonzero is true |
-| Color To Vector 3 | `color` Color | `result` Vector3 | RGB only. Alpha has nowhere to go in a Vector 3; Separate RGBA is how a graph reads alpha as a number |
+| Color To Vector 3 | `color` Color | `result` Vector3 | RGB only. Alpha has nowhere to go in a Vector 3; Separate Color (Value) is how a graph reads alpha as a number |
 | Vector 3 To Color | `vector` Vector3, `alpha` Scalar (1) | `result` Color | Straight authoring values, no gamut or OCIO step implied |
 | Vector 2 To Vector 3 | `vector` Vector2, `z` Scalar (0) | `result` Vector3 | Supplies Z |
 | Vector 3 To Vector 2 | `vector` Vector3 | `result` Vector2 | DROPS Z. Not a projection: a perspective divide is a different operation with a camera behind it |
@@ -311,10 +311,10 @@ conversions and the logic stayed in `Utilities`, because a predicate and a wire 
 | Rotate 2D | `vector` Vector2, `degrees` Scalar, `pivot` Vector2 | `result` Vector2 | Counter-clockwise in a Y-up frame, about the authored pivot |
 | Polar To Cartesian | `radius` Scalar (1), `degrees` Scalar | `result` Vector2 | |
 | Cartesian To Polar | `vector` Vector2 | `radius` Scalar, `angle` Scalar | Angle in degrees over (-180, 180]. The ORIGIN answers 0, because it has no direction |
-| Separate HSV | `color` Color | `hue`, `saturation`, `value`, `alpha` Scalars | Hue in degrees over [0, 360). A gray has no hue and answers 0 |
-| Combine HSV | `hue`, `saturation`, `value` (1), `alpha` (1) Scalars | `result` Color | Hue WRAPS; saturation is clamped into [0, 1] |
-| Hue Shift | `color` Color, `degrees` Scalar | `result` Color | Hue is periodic, so the shift wraps rather than clamping |
-| Luminance | `color` Color | `result` Scalar | Rec.709 weights through `bloom/core/color.hpp`, never retyped in a kernel. Alpha takes no part |
+| Separate HSV (Value) | `color` Color | `hue`, `saturation`, `value`, `alpha` Scalars | Hue in degrees over [0, 360). A gray has no hue and answers 0 |
+| Combine HSV (Value) | `hue`, `saturation`, `value` (1), `alpha` (1) Scalars | `result` Color | Hue WRAPS; saturation is clamped into [0, 1] |
+| Hue Shift (Value) | `color` Color, `degrees` Scalar | `result` Color | Hue is periodic, so the shift wraps rather than clamping |
+| Luminance (Value) | `color` Color | `result` Scalar | Rec.709 weights through `bloom/core/color.hpp`, never retyped in a kernel. Alpha takes no part |
 
 ### Sine, Cosine and Power
 

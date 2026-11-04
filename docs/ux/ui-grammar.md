@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-11-01
+Updated: 2026-11-04
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -1011,11 +1011,13 @@ section menu. KSection headers carry only the chevron, title, and Reset.
 
 Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Color, Values,
 Math, Convert, String, Logic, Time, Color Values, Vector, Utilities, Output. Transform holds geometric image
-operations (Resize, Fit, Transform 2D, Crop, Pad, Flip, Rotate 90); Filters holds the blurs (Gaussian, Box, Matte) and Matte Erode/Dilate; Luma Key is under Compositing; Color holds Levels, Curves and Hue/Saturation. The UI category projection owns normalization;
+operations (Resize, Fit, Transform 2D, Crop, Pad, Flip, Rotate 90); Filters holds the blurs (Gaussian, Box, Matte) and Matte Erode/Dilate; Luma Key is under Compositing; Color holds Levels, Curves, Hue/Saturation and the image Separate/Combine Channels. The UI category projection owns normalization;
 the Color image-effect section projects `NodeCategory::Color`, while Color Values holds the color value nodes.
 Categories are not persisted, so no migration is needed. Utilities contains only reroute and
-Separate/Combine plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
-time conversions; composition readouts and literals remain Values. HSV operations belong to Color Values.
+Separate/Combine XY and XYZ plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
+time conversions; composition readouts and literals remain Values. HSV operations and Separate/Combine Color belong to Color Values; the Color value nodes are
+named with a "(Value)" suffix (Separate Color (Value), Hue Shift (Value)) so an image search such as
+"Separate RGB" lists Separate Channels first.
 Kit menus with `columnFlow` use real action-backed controls in additional columns, capped at
 `kMenuWindowHeightShare` (0.5) of the owner window and positioned within that window. Empty-canvas
 double-click opens Add search at the cursor. Footer count is hidden at zero; snap and link style

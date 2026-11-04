@@ -5,6 +5,7 @@
 #include <QShortcut>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <memory>
@@ -77,9 +78,12 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
         type == document::kSecondsToTimecodeNodeType ||
         type == document::kTimecodeToSecondsNodeType)
         return QStringLiteral("Time");
+    // #479: Separate/Combine Color (Value) join the other Color value nodes, apart from the image
+    // Separate/Combine Channels under Color.
     if (type == document::kSeparateHsvNodeType || type == document::kCombineHsvNodeType ||
         type == document::kHueShiftNodeType || type == document::kLuminanceNodeType ||
-        type == document::kColorMixNodeType)
+        type == document::kColorMixNodeType || type == document::kSeparateRgbaNodeType ||
+        type == document::kCombineRgbaNodeType)
         return QStringLiteral("Color Values");
     if (definition.category == document::NodeCategory::Values)
         return QStringLiteral("Values");
@@ -312,8 +316,10 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kCombineXyNodeType, "Combine XY"},
         LibraryName{document::kSeparateXyzNodeType, "Separate XYZ"},
         LibraryName{document::kCombineXyzNodeType, "Combine XYZ"},
-        LibraryName{document::kSeparateRgbaNodeType, "Separate RGBA"},
-        LibraryName{document::kCombineRgbaNodeType, "Combine RGBA"},
+        // #479: the Color VALUE nodes say so, so the image Separate/Combine Channels nodes are
+        // the ones an image search finds first.
+        LibraryName{document::kSeparateRgbaNodeType, "Separate Color (Value)"},
+        LibraryName{document::kCombineRgbaNodeType, "Combine Color (Value)"},
         LibraryName{document::kRandomNodeType, "Random"},
         LibraryName{document::kLayerBoundsNodeType, "Layer Bounds"},
         LibraryName{document::kRerouteNodeType, "Reroute"},
@@ -327,6 +333,13 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QString::fromUtf8(descriptor->displayName.data(),
                                  static_cast<qsizetype>(descriptor->displayName.size()));
     return displayTypeName(typeId);
+}
+
+QString nodeSearchKeywords(const std::string_view typeId) {
+    if (typeId == document::kSeparateChannelsNodeType ||
+        typeId == document::kCombineChannelsNodeType)
+        return QStringLiteral("RGB RGBA channel split pass");
+    return {};
 }
 
 // A layer boundary node's display name is the layer's own durable name (the exact string the

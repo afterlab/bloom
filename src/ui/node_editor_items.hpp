@@ -169,6 +169,9 @@ QString displayTypeName(std::string_view typeId);
 // spelled out of their type id -- Solid, Layer, Merge, Output -- and everything else falls back to
 // displayTypeName(). Type ids themselves are unchanged; this is vocabulary, not identity.
 QString nodeTypeDisplayName(std::string_view typeId);
+// Extra words the Add search finds a node TYPE by, beside its name, type id and socket kinds
+// (#479: "Separate RGB" finds the image Separate Channels node). Empty for most types.
+QString nodeSearchKeywords(std::string_view typeId);
 // The small label above a card's own name, or empty. A layer boundary card is named after its
 // layer, so the eyebrow is what still says the node is a Layer.
 QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node);
