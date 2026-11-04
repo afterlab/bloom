@@ -87,8 +87,11 @@ interleaved): exporting 2160p and 1080p 16-bit PNG sequences to ProRes 422 HQ to
 EXR shot stayed decode-bound at the same frame rate within noise (2.83 against 2.98 frames/s over
 eight runs each, about 75 CPU-seconds in each six-second window): its hash cost about 50 ms of one
 core per 95 MB frame, under 1% of the decode work. Its first motion came later, 2.35 s against
-1.96 s, consistently across the runs, most likely because the read-ahead now issues its captures
-without a hash between them and they compete with the playhead frame for the cold reads.
+1.96 s, consistently across the runs. Measured again on 2026-11-04 after playback waits for frames
+(#497), six interleaved runs each: with the image-sequence read-ahead's captures turned off, first
+motion came at 1.01 s instead of 1.97 s, confirming that the captures, issued without a hash
+between them, competed with the frames' own cold reads. Since frames' own reads go first (#477,
+see media-io) it comes at 1.22 s, at the same cold frame rate (6.1 frames/s).
 
 Residual risk, accepted with the decision: until the background pass reaches it, a file whose
 content changed between sessions without a recorded identity (a project saved before 1.36, or a

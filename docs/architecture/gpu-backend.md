@@ -392,9 +392,9 @@ failed stage drops the unused storage with its record.
 
 The preview device reuses a frame's transient native storage for the frames after it (#477). Each
 frame's processing images, upload staging, display image and packed-readback staging used to be
-created and destroyed per frame, and each creation was a driver allocation and mapping: about 34
-device-memory allocations and frees per 2160p PNG16 frame, roughly 5 s of owner kernel time over a
-240-frame fill. With reuse enabled (the rooted preview route enables it once its resident route
+created and destroyed per frame, and each creation was a driver allocation and mapping: 17.3
+device-memory allocations and as many frees per 2160p PNG16 frame, 12.0 per 1080p EXR half frame.
+With reuse enabled (the rooted preview route enables it once its resident route
 qualifies), an image or buffer the device allocator issued is parked instead of freed when its
 owner releases it, which owners do only after its submission is proven retired. The next
 allocation with the identical create info and allocator flags takes it back under a fresh storage
@@ -421,6 +421,15 @@ is done, where its result (Ready, failure or cancellation) takes the existing pa
 is ahead the executor is that stage's: the active stage's retirement cancels and waits for only its
 display and transfer, and a terminal route teardown sends the stage ahead to the CPU path with a
 conservatively unproven phase, as it does the active one. The service counts `scenesAhead`.
+
+Measured on 2026-11-04 (16 threads, RTX 4090, cold page cache, Full resolution; the same base with
+and without the change, runs interleaved, no other GPU work): with reuse and the overlap a cold B
+fill of 240 frames made 0.15 device-memory allocations per frame at 2160p PNG16 and 0.41 at 1080p
+EXR half (the first frames' storage), against 17.3 and 12.0. The 2160p PNG16 fill went from 20.5 to
+27.6 frames/s, the preview owner busy for 52% of it instead of 64% and the GPU busy 29% of the time
+instead of 79%; the 1080p EXR half fill went from 71.7 to 112.8 frames/s, the owner busy 63%
+instead of 47% and the GPU 17% instead of 58%. The frames' pixels are identical with and without
+reuse and the overlap.
 
 Private Linux strict core/synchronization checks qualify WSI-disabled Neutral/general Full, Half,
 ROI and adjusted output against CPU pixels with zero CPU fallback. Full 1920×1080 measured source

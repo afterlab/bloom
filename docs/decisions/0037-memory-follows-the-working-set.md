@@ -111,8 +111,9 @@ frames than with eight. The playback preroll window stays at most eight frames.
 ### Reused native storage holds no content (amendment, 2026-11-04)
 
 The preview device parks a frame's released native images and staging buffers and gives them to the
-next allocation of the same shape instead of allocating again (#477): a 2160p PNG16 frame made about
-34 device-memory allocations and frees, each a driver call. This keeps storage, not data: nothing
+next allocation of the same shape instead of allocating again (#477): a 2160p PNG16 frame made 17.3
+device-memory allocations and as many frees, each a driver call, and makes 0.15 with reuse. This
+keeps storage, not data: nothing
 reads what a parked object held, so rule 1 stands (no host copy of data the GPU holds is kept), and
 the upload staging still leaves the live staging line when its upload completes. Parked storage has
 no fixed size or count; it is freed least recently parked first whenever work waits for device or

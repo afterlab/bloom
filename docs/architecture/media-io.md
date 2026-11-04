@@ -842,7 +842,10 @@ capture is withdrawn and the frame reads the file itself, and a capture in fligh
 frame's read neither queues behind nor competes with a second read of the same file. Frames read
 first: while any frame is reading its own source file, the workers start no capture (a capture
 already reading finishes), so the read-ahead uses the storage the frames being prepared leave idle,
-for example while they decode.
+for example while they decode. Measured on 2026-11-04 (cold 2160p multilayer EXR playback, 95 MB
+frames on local NVMe, six interleaved runs each), first motion came at 1.22 s instead of 1.97 s.
+Captures still cost that shot cold frame rate on local storage: 6.1 frames/s against 7.0 with
+captures off.
 Destroying the evaluator cancels outstanding captures and joins the workers. Export frames do not
 read ahead (see the linear-pass retention below).
 
