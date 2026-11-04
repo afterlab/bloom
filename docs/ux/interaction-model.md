@@ -437,6 +437,14 @@ as the Viewer's Custom Safe Areas dialog (0.1–100 %, one decimal).
 | `Ctrl` + right drag | Cut every wire crossed |
 | `Shift` + right drag | Add a reroute on the wire crossed |
 | Right-click a card, a group frame, a link, or the canvas | Context menu |
+| `Alt` + wheel | Zoom the Image Preview background about the pointer (#490) |
+| `Alt` + middle drag | Pan the Image Preview background (#490) |
+
+An Image Preview card's context menu toggles **Show as Node Editor Background** (#490): one Image
+Preview at a time is drawn behind the graph, in viewport space, with its own Fit / 100% / zoom /
+pan (the Viewer's `ViewTransform`) and View ▸ Background for Fit, Actual Size, Zoom In/Out, Show and
+Clear. Which node is the background and whether it is shown are session state, never saved or
+undoable; a newly chosen background starts fitted.
 
 Mute, collapse, and dissolve are context-menu commands in this editor and bind no key; collapse is
 also the caret at the head of every card's title. The footer's Arrange button runs Arrange All. A group's own

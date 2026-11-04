@@ -73,6 +73,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Workspace presets](user-guide/workspace-presets.md) — the Workspace picker, your own layouts and how the Export panel opens.
 - [The status bar](user-guide/status-bar.md) — the labelled groups along the bottom of the window.
 - [The Viewer](user-guide/viewer.md) — moving layers directly, including the Shift axis lock.
+- [The Image Preview node](user-guide/image-preview.md) — a node-card thumbnail of any point in the
+  graph, its display choices, and showing it as the node editor background.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard
   easing curves, Easy Ease, shy layers and layer names that follow their source.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.

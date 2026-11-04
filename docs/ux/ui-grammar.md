@@ -586,6 +586,13 @@ ports have separate rows. Vector components share the first component's socket. 
 parameters retain the existing hidden-editor/driver behavior. Ordered multi-input ports retain
 their segmented pill and insertion semantics; reroutes remain dots.
 
+An Image Preview card (#490) adds a thumbnail below its rows, inset by the card padding, at the
+composition's aspect (at most twice as tall as it is wide). Over a `Background` plate it draws the
+prepared image. The RGBA view draws it over the Viewer checkerboard. A pending image is dimmed, a
+placeholder line is muted UiSmall (Warn for a failure), and a "CPU" chip marks pixels that did not come
+from the GPU route. The node editor background draws the same image in viewport space, behind every
+card and over the dot grid.
+
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
 resize remains authoritative above that minimum. `Arrange All` reads the graph like the layer
 stack: Composition Output is the rightmost column, and each node sits further left the further

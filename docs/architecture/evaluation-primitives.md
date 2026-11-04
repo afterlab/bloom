@@ -1405,3 +1405,45 @@ no existing plan evaluates differently.
   the source publishes no command (counted in `GpuSceneMediaStatistics::imageNoColourLayerSources`)
   and the rest of the frame stays on the device, so a data-only selection never sends the frame to
   the CPU reference. Cryptomatte rank layers are never classified as color layers.
+
+## Image Preview
+
+Issue #490 adds `bloom.image-preview` (node schema 1, category Output), an inspection sink for
+checking the image at any point in a graph:
+
+- One optional input, `image`. Its declaration sets `InputPortDefinition::acceptsPixelKinds`, so
+  besides an Image it also takes a Mask or a ChannelSet (`isAcceptedInputConnection()`; every
+  connect and validation path asks it, through `CanonicalGraph::acceptsConnection()` where it has
+  the destination). No other input sets the flag. It declares no output, so nothing connects from
+  it.
+- One inline selector, `display` (`bloom.image-preview.display`, Integer, constant only, not
+  animatable): 0 RGBA, 1 RGB, 2 Alpha, 3 Red, 4 Green, 5 Blue, 6 Normalized. It chooses how the
+  interface draws the preview and never reaches evaluation.
+- Lowering `NodeLoweringKind::ImagePreview` lowers to nothing. The compiler reaches nodes only from
+  the Composition Output (and value readouts), and a node with no output is never reached, so the
+  composition's plan, its identity, RAM Preview frames, exports and headless renders are exactly
+  those of the same graph without the node. `RenderReachability` never reaches it either, so an edit
+  to it confines to `Unaffected` and invalidates no retained frame.
+- The interface previews the input through a Viewer-only inspection plan
+  (`runtime::ChannelInspection`): with no channels it shows the named node's Image or Mask output
+  as the plan's output. A Cryptomatte's Mask inspection still reads only its channel set. For any
+  other node the inspected node keeps every input, so its output is evaluated exactly as the
+  composition evaluates it. A ChannelSet is shown by the ADR 0026 raw inspection of its default
+  color layer (`defaultShuffleSlotChannel()`), or its alpha channel for the Alpha view. The source
+  is the output the input connects to, followed through reroutes (`imagePreviewSource()`).
+- `ui::ImagePreviewController` requests that plan through `CompositionPreviewController` at
+  Background priority, as a proxy extent of the composition format sized to the drawn thumbnail
+  or background (whole divisors, never above full resolution). The Viewer's display route is used
+  for every view but Normalized: the GPU preview service when one is installed, with its own
+  labelled CPU fallback. The RGB, Alpha and single-channel views are the Viewer's channel
+  presentation of the packed display pixels. Normalized needs scene-linear values, so it takes the
+  Viewer's analysis route (the CPU reference frame the pixel probe reads) and stretches the finite
+  RGB minimum..maximum of the visible image to black..white. The interface labels any preview
+  whose pixels did not come from the GPU route "CPU". Requests run on workers, one in flight per
+  node. A change of input, time, size or display cancels the one in flight, and the newest identity
+  is submitted once it ends. Images are kept (48 at most) by the inspected output, revision,
+  time, extent, display and view, and are never inserted into the RAM Preview cache.
+- GPU coverage: the lowering is classified `scope.inspection`, not a pixel operation. The node
+  produces no pixels of its own, and what it shows is its upstream operations, each covered by its
+  own Required entry, prepared by the Viewer's production GPU preview route. It therefore has no
+  `node.bloom.image-preview` fixture.
