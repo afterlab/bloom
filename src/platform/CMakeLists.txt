@@ -137,7 +137,8 @@ endif()
 # Process supervision has no font catalogue or filesystem publication dependency. Workers link
 # this narrow target so codec trust domains do not inherit unused platform-library closures.
 add_library(bloom_platform_process STATIC file_snapshot.cpp private_temporary_directory.cpp
-                                          shared_frame_arena.cpp source_identity.cpp)
+                                          shared_frame_arena.cpp source_identity.cpp
+                                          thread_priority.cpp)
 target_link_libraries(bloom_platform_process PUBLIC bloom_core)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
@@ -155,7 +156,8 @@ target_sources(bloom_platform_process PUBLIC FILE_SET HEADERS BASE_DIRS include
                FILES include/bloom/platform/process_supervisor.hpp include/bloom/platform/file_snapshot.hpp
                      include/bloom/platform/private_temporary_directory.hpp
                      include/bloom/platform/shared_frame_arena.hpp
-                     include/bloom/platform/source_identity.hpp)
+                     include/bloom/platform/source_identity.hpp
+                     include/bloom/platform/thread_priority.hpp)
 target_compile_features(bloom_platform_process PUBLIC cxx_std_20)
 bloom_enable_warnings(bloom_platform_process)
 
@@ -166,6 +168,12 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_platform_private_temporary_directory_test)
     bloom_add_test(NAME bloom.platform.private-temporary-directory
                    COMMAND bloom_platform_private_temporary_directory_test LABELS unit platform)
+    # #495: the idle-priority scope compiles everywhere; its observable effect is checked on Linux.
+    add_executable(bloom_platform_thread_priority_test tests/thread_priority_tests.cpp)
+    target_link_libraries(bloom_platform_thread_priority_test PRIVATE bloom_platform_process)
+    bloom_enable_warnings(bloom_platform_thread_priority_test)
+    bloom_add_test(NAME bloom.platform.thread-priority
+                   COMMAND bloom_platform_thread_priority_test LABELS unit platform)
 endif()
 
 if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
