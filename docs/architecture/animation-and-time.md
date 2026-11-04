@@ -1017,11 +1017,12 @@ Each due tick advances the exact session time and asks for its frame:
   terminal-drain barriers. Pause queues one normal Visible replacement unless a live Current frame
   already matches; shutdown closes admission before pause recovery can enqueue work.
 
-Ordinary playback targets total elapsed steady time or authoritative audio position independently
-of cache membership. A delayed 200 ms tick at 25 fps requests frame five for both warm and cold
-ranges; repeating the same clock sample does not advance time. Cache hits affect delivery, not the
-transport clock. Explicit RAM Preview still waits for complete retention before starting playback;
-it does not introduce a slower one-frame-per-callback transport mode.
+Ordinary playback targets total elapsed steady time or authoritative audio position. A delayed
+200 ms tick at 25 fps over cached frames requests frame five; repeating the same clock sample does
+not advance time. The application's transport also waits for frames that are not ready yet
+([Waiting For Frames](#waiting-for-frames)): over a cold range the playhead holds instead of moving
+past them, so the elapsed target applies to ready frames. Explicit RAM Preview still waits for
+complete retention before starting playback.
 
 Wall and audio origins select the nearest valid work-area frame-grid sample, with exact halfway
 ties choosing the greater index. Play preserves the immediate stored session time when it is inside
@@ -1100,6 +1101,60 @@ and on each cache insertion. The composition root enables it with
 before. The packed viewer benchmark records each run's outcome, hold and window
 ([Benchmarks](../development/benchmarks.md)).
 
+### Waiting For Frames
+
+Uncached playback used to advance the playhead in real time whether or not the next frame was
+ready. The read-ahead rendered whatever lay ahead of the playhead when a worker came free, so the
+cache filled at scattered positions and the artist saw skipped frames (#497). The transport now
+waits for frames, as a layer-based compositor previews (owner decision, 2026-11-04):
+
+- **The playhead never moves past a frame that is not ready.** Each wake goes as far as the clock
+  asks through ready frames and stops before the first pending one. When the very next frame is
+  pending, the playhead **holds** on the frame it shows. The run stays `Playing` (the button shows
+  Pause); it is not stopped.
+- **When the frame is ready it shows at once.** The clock restarts from that frame, so the frames
+  after it keep real time from there instead of rushing to catch up the wait. A held playhead is
+  checked on every cache insertion and every 16 ms wake.
+- **Cached frames play at the composition's real-time rate**, exactly as before: a late wake still
+  skips to the frame elapsed time asks for, and those skipped frames still count as dropped.
+  Waiting counts nothing as dropped.
+- **The cache fills contiguously from the playhead.** The read-ahead asks for the frames right after
+  the playhead first, with no latency lead (a waiting playhead is never ahead of its frames). Each
+  move of the playhead restarts its pass from there.
+- **Audio mutes while playback waits** (owner default). The first hold stops audio and the wall
+  clock drives the run. Real-time playback resumes when the frames from the playhead through the
+  preroll window are ready: audio then restarts at the frame on screen and takes over the clock as
+  at Play, so pictures and sound stay in step after the wait. A preroll that reaches its 0.5 s
+  maximum starts the run waiting, with audio muted.
+- **The status bar says so.** From the first hold until real-time playback resumes,
+  `CompositionPreviewController::playbackWaiting()` is set and the activity segment reads "Playback
+  waiting for frames" with a busy bar.
+- **Frames nothing will cache do not wait.**
+  `BackgroundPreviewController::playbackFrameAvailability()` answers Ready (in the preview frame cache), Pending (the read-ahead is preparing it) or
+  Unavailable: no cache key, a frame the read-ahead failed or could not retain (diagnostics, no
+  cacheable product), a blocked read-ahead (a gesture, a purge, a RAM preview run, a held mouse
+  button), or a pass that stopped with nothing in flight (a budget too small for the window). An
+  Unavailable frame plays through the ordinary playback request and real-time rules, as before.
+- **Pause, seeks, scrubs, work-area changes and the loop wrap** behave as they always have. Pause
+  and Stop end the wait and cancel the read-ahead's work. A seek or scrub pauses. A work-area or
+  frame-rate change re-anchors the run, which holds again if its next frame is pending. The loop
+  wrap waits for the work area's first frame like any other, and a non-looping run still stops on
+  its last frame.
+
+`PlaybackController::setFrameAvailabilityProvider()` enables the wait; the composition root wires
+it to the playback read-ahead and sets `BackgroundPreviewController::setTransportWaitsForFrames()`.
+A transport without a provider never waits, as before.
+
+Measured in the packed viewer harness (cold 2160p B projects, 10 s of playback, offscreen, two
+fresh processes per cell interleaved with the transport's wait turned off in the same binary):
+before, the transport asked for 228 frames, the Viewer showed 128-205 of them and 23-100 were
+dropped, and many of the first 24 frames were skipped on the first pass: cached only when the
+loop came round again 9 s later, or never (PNG16: 13-14 of the 24 never cached). After, every frame the transport asked for was
+shown and none was dropped, the first 24 frames were all cached in order from the start (only
+frames landing together within one read-ahead window swap places), and frames shown per second
+rose from 19.5 to 22.3 (EXR half PIZ), 12.8-13.4 to 18.6-18.9 (PNG16) and 19.3-20.5 to
+21.6-21.9 (H.264).
+
 ### Audio Clock Master
 
 When audio is enabled, a revision-valid `AudioMixDescription` has been published, and the audio
@@ -1149,9 +1204,9 @@ non-looping run ends on the range's last frame, the frame just submitted is kept
 cancels it nor counts it dropped, and it publishes as the Current product without a second render.
 
 The clock's start arms and resets counting: `play()`, or the end of a preroll hold (a hold counts
-nothing). `pause()` disarms it and retains the last total. Outside a run the
-footer says nothing; during one it reports zero explicitly. Ordinary scrubbing while stopped does
-not affect the count.
+nothing). A playhead waiting for frames counts nothing either. `pause()` disarms it and retains
+the last total. Outside a run the footer says nothing; during one it reports zero explicitly.
+Ordinary scrubbing while stopped does not affect the count.
 
 ## Direct Manipulation And Preview Overrides
 
