@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/ui/composition_preview_controller.hpp>
+#include <bloom/ui/playback_controller.hpp>
 
 #include <QObject>
 #include <QTimer>
@@ -55,6 +56,16 @@ class BackgroundPreviewController final : public QObject {
     // capped at kMaximumPrerollFrames. Asked at Play, before the read-ahead claims capacity.
     static constexpr std::size_t kMaximumPrerollFrames = 8;
     [[nodiscard]] std::size_t prerollFrameCount() const;
+    // #497: whether the frame at `time` can be shown now, for a transport that waits for frames.
+    // Ready when the preview frame cache holds it; Unavailable when the read-ahead will not cache
+    // it (no cache key, a refused or failed frame, a blocked read-ahead, or a pass that stopped
+    // with nothing in flight, such as a budget too small for one frame); otherwise Pending.
+    [[nodiscard]] PlaybackFrameAvailability
+    playbackFrameAvailability(core::RationalTime time) const;
+    // #497: the transport waits for the frames this read-ahead caches, so the playhead only moves
+    // onto cached frames and the read-ahead asks for the frames from the playhead forward, with no
+    // latency lead.
+    void setTransportWaitsForFrames(bool waits) { transportWaitsForFrames_ = waits; }
 
   public slots:
     void restart();
@@ -103,10 +114,14 @@ class BackgroundPreviewController final : public QObject {
     };
     FrameCost frameCost_;
     void learnFrameCost(const runtime::PreparedPreviewFrame& frame);
+    void noteRefused(const runtime::PreviewRequestIdentity& identity);
     std::uint64_t passAnchor_ = 0;
     std::uint64_t generation_ = 0;
     std::uint64_t cursor_ = 0;
     std::uint64_t considered_ = 0;
+    // #497: frames this pass prepared but could not cache. Cleared when the pass restarts.
+    std::vector<PreviewFrameCacheKey> refused_;
+    bool transportWaitsForFrames_ = false;
     bool playing_ = false;
     bool idleFill_ = false;
     bool exhausted_ = false;

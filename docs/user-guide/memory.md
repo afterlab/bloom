@@ -199,7 +199,8 @@ RAM Preview counts frames that are currently retained, including frames already 
 run. Its tooltip separates frames prepared this run from retained frames and the longest cached
 span. RAM Preview never stops because of memory. If the range outgrows memory, it keeps filling while the
 cache evicts its oldest frames, ends with a partial result, and plays from the range start: Play
-renders the frames no longer cached just ahead of the playhead, so a long range never stalls (frames
-may drop if rendering is slower than real time). Purging or later eviction removes live coverage
+renders the frames no longer cached just ahead of the playhead. Where rendering is slower than real
+time the playhead waits on each frame that is not ready yet, still playing, and plays on as soon as
+it is. Purging or later eviction removes live coverage
 without erasing the history of work already prepared. Half resolution reduces the display image
 extent and retained image bytes; actual device capacity and finite resource limits still apply.

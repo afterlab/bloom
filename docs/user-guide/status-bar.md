@@ -7,7 +7,7 @@ and gives the detailed counts.
 | Group | Shows |
 | --- | --- |
 | Viewer | **Render** (GPU or CPU produced the frame you see), **Exposure**, **Channel**, **Dropped** (frames playback skipped; a dash when playback is not being measured), and **Decode** when the composition reads video |
-| Activity | What is happening now: a save, an import, an export, the RAM preview filling, or a problem with the preview (with **Details** when the composition cannot render). **Idle** when nothing is |
+| Activity | What is happening now: a save, an import, an export, the RAM preview filling, playback preparing or waiting for frames, or a problem with the preview (with **Details** when the composition cannot render). **Idle** when nothing is |
 | Pixel | The color under the pointer in the Viewer, while it is over the frame |
 | RAM | What the caches hold against what they may use, and **Cache**, the frames held for preview. Hover for hits and misses |
 | Disk cache | How often the on-disk frame cache had what was asked for, and how much it stores |

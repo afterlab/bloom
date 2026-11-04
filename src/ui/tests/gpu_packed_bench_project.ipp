@@ -682,6 +682,13 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
                           composition->format().height()),
             1, ui::BackgroundPreviewController::kMaximumPrerollFrames);
     });
+    // The application's transport waits for the read-ahead's frames (#497).
+    if (background) {
+        background->setTransportWaitsForFrames(true);
+        playback.setFrameAvailabilityProvider([&background](const core::RationalTime time) {
+            return background->playbackFrameAvailability(time);
+        });
+    }
     const auto firstStarted = std::chrono::steady_clock::now();
     std::optional<ui::ViewerEditor> ownViewer;
     std::optional<ui::AssetController> assets;

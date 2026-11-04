@@ -127,6 +127,7 @@ void BackgroundPreviewController::restart() {
     cursor_ = 0;
     considered_ = 0;
     exhausted_ = false;
+    refused_.clear();
 }
 
 void BackgroundPreviewController::suspendForCachePurge() {
@@ -163,6 +164,22 @@ std::size_t BackgroundPreviewController::prerollFrameCount() const {
     const auto format = composition->format();
     const auto width = widthProvider_(static_cast<std::uint64_t>(format.width()) * format.height());
     return std::clamp<std::size_t>(width, 1, kMaximumPrerollFrames);
+}
+
+PlaybackFrameAvailability
+BackgroundPreviewController::playbackFrameAvailability(const core::RationalTime time) const {
+    const auto key = previewController_.cacheKeyForTime(time);
+    if (!key)
+        return PlaybackFrameAvailability::Unavailable;
+    if (previewController_.frameCache().contains(*key))
+        return PlaybackFrameAvailability::Ready;
+    // A blocked read-ahead (a gesture, a purge, a RAM preview run, a held mouse button) prepares
+    // nothing, so the transport plays through its own playback request rather than wait on it.
+    if (shuttingDown_ || !previewController_.playbackReadAheadAllowed() ||
+        QApplication::mouseButtons() != Qt::NoButton ||
+        std::ranges::find(refused_, *key) != refused_.end() || (exhausted_ && inFlight_.empty()))
+        return PlaybackFrameAvailability::Unavailable;
+    return PlaybackFrameAvailability::Pending;
 }
 
 void BackgroundPreviewController::setIdleFill(const bool enabled) {
@@ -245,9 +262,12 @@ void BackgroundPreviewController::fillNextFrame() {
     // playhead has moved on. Start the read-ahead that many frames ahead of the playhead, so the
     // frames it caches are still ahead of the playhead when they land.
     // A preroll hold (#404) keeps the playhead still until the frames from it are cached, so it
-    // asks for exactly those: no lead.
+    // asks for exactly those: no lead. So does a transport that waits for frames (#497): its
+    // playhead never passes a frame that is not cached, so the frames right after it come first
+    // and the cache fills contiguously from the playhead.
     std::uint64_t lead = 0;
-    if (playing_ && !previewController_.playbackPreparing() && landedLatency_.count() > 0) {
+    if (playing_ && !transportWaitsForFrames_ && !previewController_.playbackPreparing() &&
+        landedLatency_.count() > 0) {
         const auto seconds = std::chrono::duration<double>(landedLatency_).count();
         const auto perSecond =
             static_cast<double>(rate.numerator()) / static_cast<double>(rate.denominator());
@@ -386,6 +406,13 @@ void BackgroundPreviewController::learnFrameCost(const runtime::PreparedPreviewF
         frameCost_.bytes = std::max<std::uint64_t>(frameCost_.bytes, bytes);
 }
 
+void BackgroundPreviewController::noteRefused(const runtime::PreviewRequestIdentity& identity) {
+    // Bounded: a pass refuses at most the frames it had in flight before it stopped.
+    if (refused_.size() >= 2 * kMaximumReadAheadFrames)
+        refused_.erase(refused_.begin());
+    refused_.push_back(PreviewFrameCacheKey::forIdentity(identity));
+}
+
 void BackgroundPreviewController::consumeReadyResult() {
     bool landed = false;
     for (auto slot = inFlight_.begin(); slot != inFlight_.end();) {
@@ -429,12 +456,14 @@ void BackgroundPreviewController::consumeReadyResult() {
             // Unsupported/failed work is not retried indefinitely while the app is idle. Its task
             // retains the pipeline's diagnostics; the next revision/resolution/playhead restarts.
             exhausted_ = true;
+            noteRefused(identity);
             continue;
         }
         previewController_.recordPreparationDuration(identity, std::chrono::steady_clock::now() -
                                                                    submittedAt);
         if (!(*value)->cacheFrame()) {
             exhausted_ = true;
+            noteRefused(identity);
             continue;
         }
         learnFrameCost(*(*value)->cacheFrame());

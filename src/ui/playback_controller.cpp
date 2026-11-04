@@ -142,7 +142,7 @@ PlaybackController::PlaybackController(CompositionSession& session,
     connect(
         &previewController_.frameCache(), &PreviewFrameCache::entryRetained, this,
         [this] {
-            if (preroll_.holding())
+            if (preroll_.holding() || holdingForFrame_)
                 tick();
         },
         Qt::QueuedConnection);
@@ -248,8 +248,9 @@ void PlaybackController::setAudioMix(runtime::AudioMixDescription description,
             audioStartPending_ = false;
             useWallClock();
         } else if (!hadClips && state_ == PlaybackState::Playing && audioEnabled_ &&
-                   !preroll_.holding()) {
-            // During a preroll hold the audio starts with the released clock instead.
+                   !preroll_.holding() && !waitingForFrames_) {
+            // During a preroll hold the audio starts with the released clock instead, and while
+            // the playhead waits for frames it starts when real-time playback resumes.
             audioAlignmentRetried_ = false;
             audioStartPending_ = true;
             expectedAudioGeneration_ = audioControl_->requestSeek(session_.currentTime());
@@ -374,8 +375,14 @@ void PlaybackController::startRunClock(const core::FrameTimeMapping& mapping) {
     appliedOffset_ = 0;
     completedPassFrames_ = 0;
     lastAppliedFrameIndex_ = startFrameIndex_;
+    holdingForFrame_ = false;
+    // #497: a run whose frames ahead are not ready starts waiting for them, with audio muted
+    // until they are (a preroll that reached its maximum, or a Play without a preroll).
+    const auto frames = workAreaFrames(mapping, session_.workArea());
+    const bool wait = availabilityProvider_ && frames &&
+                      !framesAheadReady(mapping, startFrameIndex_, frames->first, frames->last);
     // Audio starts with the clock, never at a Play that is still holding.
-    if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
+    if (!wait && audioEnabled_ && audioControl_ && audioClipsAvailable_) {
         if (const auto anchor = mapping.timeForFrame(startFrameIndex_); anchor) {
             // Match the established nearest-grid wall origin while preserving immediate session
             // time.
@@ -386,7 +393,97 @@ void PlaybackController::startRunClock(const core::FrameTimeMapping& mapping) {
     }
     previewController_.setPlaybackActive(true);
     previewController_.beginDroppedFrameCounting();
+    if (wait && !waitingForFrames_) {
+        waitingForFrames_ = true;
+        previewController_.setPlaybackWaiting(true);
+    }
     timer_.start();
+}
+
+void PlaybackController::setFrameAvailabilityProvider(FrameAvailability provider) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    availabilityProvider_ = std::move(provider);
+}
+
+std::optional<std::uint64_t>
+PlaybackController::followingFrame(const std::uint64_t index, const std::uint64_t first,
+                                   const std::uint64_t last) const noexcept {
+    if (index < last)
+        return index + 1;
+    if (looping_)
+        return first;
+    return std::nullopt;
+}
+
+PlaybackFrameAvailability
+PlaybackController::frameAvailability(const core::FrameTimeMapping& mapping,
+                                      const std::uint64_t index) const {
+    if (!availabilityProvider_)
+        return PlaybackFrameAvailability::Ready;
+    const auto time = mapping.timeForFrame(index);
+    if (!time)
+        return PlaybackFrameAvailability::Unavailable;
+    return availabilityProvider_(*time.value());
+}
+
+bool PlaybackController::framesAheadReady(const core::FrameTimeMapping& mapping,
+                                          const std::uint64_t index, const std::uint64_t first,
+                                          const std::uint64_t last) const {
+    // The same window a preroll waits for, counted from the frame on screen: real-time playback
+    // resumes with that many frames in hand.
+    const auto window = std::max<std::size_t>(1, prerollFrames_);
+    auto current = index;
+    for (std::size_t ahead = 1; ahead < window; ++ahead) {
+        const auto next = followingFrame(current, first, last);
+        if (!next || *next == index)
+            return true; // the end of a non-looping range, or the whole looping range
+        if (frameAvailability(mapping, *next) == PlaybackFrameAvailability::Pending)
+            return false;
+        current = *next;
+    }
+    return true;
+}
+
+void PlaybackController::beginFrameHold() {
+    holdingForFrame_ = true;
+    if (waitingForFrames_)
+        return;
+    waitingForFrames_ = true;
+    // Audio would run on ahead of a held picture: it is muted until real-time playback resumes.
+    if (audioControl_ &&
+        (audioClockActive_ || audioStartPending_ || (audioEnabled_ && audioClipsAvailable_)))
+        expectedAudioGeneration_ = audioControl_->requestStop();
+    audioStartPending_ = false;
+    audioClockActive_ = false;
+    previewController_.setPlaybackWaiting(true);
+}
+
+void PlaybackController::endWaitingForFrames(const bool resumeAudio) {
+    holdingForFrame_ = false;
+    if (!waitingForFrames_)
+        return;
+    waitingForFrames_ = false;
+    previewController_.setPlaybackWaiting(false);
+    if (resumeAudio && state_ == PlaybackState::Playing && audioEnabled_ && audioControl_ &&
+        audioClipsAvailable_) {
+        // In sync at the frame just shown; the completion hands the clock to audio as at Play.
+        audioAlignmentRetried_ = false;
+        audioStartPending_ = true;
+        expectedAudioGeneration_ = audioControl_->requestSeek(session_.currentTime());
+    }
+}
+
+void PlaybackController::applyFrame(const core::FrameTimeMapping& mapping,
+                                    const std::uint64_t index,
+                                    const std::chrono::nanoseconds budget) {
+    const auto time = mapping.timeForFrame(index);
+    if (!time.hasValue())
+        return;
+    lastAppliedFrameIndex_ = index;
+    applyingOwnTimeChange_ = true;
+    (void)session_.setCurrentTime(*time.value());
+    applyingOwnTimeChange_ = false;
+    previewController_.presentPlaybackFrame(budget);
 }
 
 void PlaybackController::setPrerollFrameCountProvider(PrerollFrameCount provider) {
@@ -467,6 +564,7 @@ void PlaybackController::stop(const bool keepCurrentFrame) {
     state_ = PlaybackState::Stopped;
     audioStartPending_ = false;
     timer_.stop();
+    endWaitingForFrames(false);
     if (preroll_.holding()) {
         // Stop during the hold cancels it: the clock, the audio and the count never started.
         preroll_.cancel(clock_());
@@ -526,6 +624,57 @@ void PlaybackController::tick() {
     }
     // Every early refusal still rearms a bounded positive wake; no timer spin or missed restart.
     scheduleTick(wakeCap_);
+    const auto range = session_.workArea();
+    const auto firstIndex = firstFrameAtOrAfter(*mapping, range.start);
+    if (!firstIndex) {
+        pause();
+        return;
+    }
+    const auto first = *firstIndex;
+    const auto rate = composition->format().frameRate();
+    const auto endMapping =
+        core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
+    if (!endMapping)
+        return;
+    const auto last = endMapping.value()->maximumFrameIndex();
+    if (last < first || last - first == std::numeric_limits<std::uint64_t>::max() ||
+        startFrameIndex_ < first || startFrameIndex_ > last) {
+        handleWorkAreaChanged();
+        return;
+    }
+    const auto frameCount = last - first + 1;
+
+    if (holdingForFrame_) {
+        // #497: the playhead holds on the frame it shows until the next one is ready. The run
+        // stays Playing; the 16 ms wake and every cache insertion check again.
+        const auto shown =
+            std::clamp(lastAppliedFrameIndex_.value_or(startFrameIndex_), first, last);
+        const auto next = followingFrame(shown, first, last);
+        if (!next) {
+            stop(true);
+            return;
+        }
+        if (frameAvailability(*mapping, *next) == PlaybackFrameAvailability::Pending)
+            return;
+        const auto period = mapping->nanosecondsUntilNextFrame(core::RationalTime{});
+        if (!period ||
+            *period > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+            return;
+        const auto budget = std::chrono::nanoseconds{static_cast<std::int64_t>(*period)};
+        // Show it now and restart the clock from it: the frames after it keep real time from here
+        // rather than catching up the time spent waiting.
+        holdingForFrame_ = false;
+        startClock_ = clock_();
+        startFrameIndex_ = *next;
+        appliedOffset_ = 0;
+        completedPassFrames_ = 0;
+        applyFrame(*mapping, *next, budget);
+        if (waitingForFrames_ && framesAheadReady(*mapping, *next, first, last))
+            endWaitingForFrames(true);
+        scheduleTick(budget);
+        return;
+    }
+
     std::optional<std::uint64_t> frameOffset;
     std::optional<std::uint64_t> untilNextFrame;
     if (audioClockActive_ && audioControl_) {
@@ -561,35 +710,45 @@ void PlaybackController::tick() {
         return;
     }
 
-    const auto range = session_.workArea();
-    const auto firstIndex = firstFrameAtOrAfter(*mapping, range.start);
-    if (!firstIndex) {
-        pause();
-        return;
-    }
-    const auto first = *firstIndex;
-    const auto rate = composition->format().frameRate();
-    const auto endMapping =
-        core::FrameTimeMapping::create(range.end, rate.numerator(), rate.denominator());
-    if (!endMapping)
-        return;
-    const auto last = endMapping.value()->maximumFrameIndex();
-    if (last < first || last - first == std::numeric_limits<std::uint64_t>::max() ||
-        startFrameIndex_ < first || startFrameIndex_ > last) {
-        handleWorkAreaChanged();
-        return;
-    }
-    const auto frameCount = last - first + 1;
     const auto frameBudget = std::chrono::nanoseconds{static_cast<std::int64_t>(*untilNextFrame)};
     scheduleTick(frameBudget);
     if (*frameOffset <= appliedOffset_) {
         // The frame this run is already showing is still the one elapsed time asks for.
         return;
     }
-    const auto nextOffset = *frameOffset;
+    auto nextOffset = *frameOffset;
     if (nextOffset > std::numeric_limits<std::uint64_t>::max() - startFrameIndex_) {
         // Same checked-overflow discipline applied to the addition below.
         return;
+    }
+    // #497: with a frame availability provider the playhead never moves past a frame that is
+    // still being prepared. It goes as far as the clock asks through ready frames and holds on the
+    // last one before a pending frame; a frame nothing will cache plays as it always has.
+    bool holdAfter = false;
+    if (availabilityProvider_) {
+        constexpr std::uint64_t kMaximumChecks = 256; // bounds one tick after a very late wake
+        auto reachable = appliedOffset_;
+        for (auto offset = appliedOffset_ + 1; offset <= nextOffset; ++offset) {
+            const auto run = startFrameIndex_ - first + offset;
+            const auto raw = run >= completedPassFrames_ ? run - completedPassFrames_ : 0;
+            if (!looping_ && raw >= frameCount) {
+                reachable = nextOffset; // past the end: the end rule below applies
+                break;
+            }
+            const auto index = looping_ ? first + raw % frameCount : first + raw;
+            if (frameAvailability(*mapping, index) == PlaybackFrameAvailability::Pending) {
+                holdAfter = true;
+                break;
+            }
+            reachable = offset;
+            if (offset - appliedOffset_ >= kMaximumChecks)
+                break;
+        }
+        if (reachable == appliedOffset_) {
+            beginFrameHold();
+            return;
+        }
+        nextOffset = reachable;
     }
     // Looping (design decision 2): wraps within [0, duration) via exact modulo of the frame count.
     // The offset is exact in either master clock, so repeated wraps
@@ -621,22 +780,21 @@ void PlaybackController::tick() {
         return;
     }
 
-    const auto targetTime = mapping->timeForFrame(targetFrameIndex);
-    if (!targetTime.hasValue()) {
+    if (!mapping->timeForFrame(targetFrameIndex).hasValue()) {
         return;
     }
-
-    lastAppliedFrameIndex_ = targetFrameIndex;
-    applyingOwnTimeChange_ = true;
-    (void)session_.setCurrentTime(*targetTime.value());
-    applyingOwnTimeChange_ = false;
-    previewController_.presentPlaybackFrame(frameBudget);
+    applyFrame(*mapping, targetFrameIndex, frameBudget);
     if (pastEnd) {
         // After the frame is applied and presented, so the artist is left looking at the last
         // frame of the range rather than at whatever the run showed one tick earlier. The frame
         // just submitted is the one to keep, so stopping neither cancels nor recounts it.
         stop(true);
+        return;
     }
+    if (holdAfter)
+        beginFrameHold();
+    else if (waitingForFrames_ && framesAheadReady(*mapping, targetFrameIndex, first, last))
+        endWaitingForFrames(true);
 }
 
 void PlaybackController::scheduleTick(const std::chrono::nanoseconds untilNextFrame) {
@@ -698,6 +856,8 @@ void PlaybackController::handleWorkAreaChanged() {
     appliedOffset_ = 0;
     completedPassFrames_ = 0;
     lastAppliedFrameIndex_ = index;
+    // A hold re-checks the next frame of the relocated run on the next tick.
+    holdingForFrame_ = false;
     const bool moved = session_.currentTime() != *anchor.value();
     applyingOwnTimeChange_ = true;
     (void)session_.setCurrentTime(*anchor.value());
@@ -705,7 +865,7 @@ void PlaybackController::handleWorkAreaChanged() {
     // The loop goes ahead of the seek so the restarted mix wraps at the new range. The seek itself
     // is needed: this relocates the run (new anchor, new grid), it is not a wrap.
     publishAudioLoop();
-    if (audioEnabled_ && audioControl_ && audioClipsAvailable_) {
+    if (audioEnabled_ && audioControl_ && audioClipsAvailable_ && !waitingForFrames_) {
         useWallClock();
         audioAlignmentRetried_ = false;
         audioStartPending_ = true;

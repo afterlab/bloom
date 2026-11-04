@@ -55,6 +55,13 @@ void CompositionPreviewController::setPlaybackPreparing(const bool preparing) {
     emit playbackPreparingChanged(preparing);
 }
 
+void CompositionPreviewController::setPlaybackWaiting(const bool waiting) {
+    if (playbackWaiting_ == waiting)
+        return;
+    playbackWaiting_ = waiting;
+    emit playbackWaitingChanged(waiting);
+}
+
 void CompositionPreviewController::presentPlaybackFrame(
     const std::chrono::nanoseconds untilNextFrame) {
     if (shuttingDown_) {

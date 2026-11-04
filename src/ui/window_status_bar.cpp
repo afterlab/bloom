@@ -106,6 +106,8 @@ WindowStatusBar::WindowStatusBar(CompositionSession& session,
                 &WindowStatusBar::refreshPreviewCells);
         connect(previewController_, &CompositionPreviewController::playbackPreparingChanged, this,
                 &WindowStatusBar::refreshActivity);
+        connect(previewController_, &CompositionPreviewController::playbackWaitingChanged, this,
+                &WindowStatusBar::refreshActivity);
         connect(&previewController_->frameCache(), &PreviewFrameCache::contentsChanged, this,
                 &WindowStatusBar::refreshPreviewCells);
         connect(&previewController_->frameCache(), &PreviewFrameCache::byteBudgetChanged, this,
@@ -540,8 +542,9 @@ void WindowStatusBar::refreshActivity() {
     QString text = transientMessage_.isEmpty() ? persistentMessage_ : transientMessage_;
     auto tone = kit::Color::Foreground;
     bool progress = false;
-    QString tip = tr("What Bloom is doing now: a saved or exported file, an import, a RAM preview "
-                     "run, playback preparing its first frames, or a problem with the preview.");
+    QString tip =
+        tr("What Bloom is doing now: a saved or exported file, an import, a RAM preview "
+           "run, playback preparing or waiting for frames, or a problem with the preview.");
     if (text.isEmpty() && previewController_ != nullptr) {
         if (const auto& run = previewController_->ramPreviewProgress(); run.has_value()) {
             text = tr("Caching frames for RAM preview · %1 of %2")
@@ -553,6 +556,12 @@ void WindowStatusBar::refreshActivity() {
         } else if (previewController_->playbackPreparing()) {
             // #404: Play holds the clock (at most half a second) until its first frames are ready.
             text = tr("Preparing playback");
+            activityProgress_->setBusy();
+            progress = true;
+            tone = kit::Color::Accent;
+        } else if (previewController_->playbackWaiting()) {
+            // #497: the playhead holds until the next frame is ready, then plays on.
+            text = tr("Playback waiting for frames");
             activityProgress_->setBusy();
             progress = true;
             tone = kit::Color::Accent;

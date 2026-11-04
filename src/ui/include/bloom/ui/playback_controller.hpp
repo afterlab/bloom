@@ -34,8 +34,21 @@ enum class PlaybackState : std::uint8_t {
     Playing,
 };
 
-// Real-time transport uses total elapsed time or the existing audio master clock. Cache
-// membership affects preparation only; it never selects a slower clock or accumulates tick debt.
+// Whether the frame at a time can be shown now (#497). Ready: the preview frame cache holds it.
+// Pending: the read-ahead is still preparing it, so a transport that waits for frames holds the
+// playhead. Unavailable: nothing will cache it (the read-ahead failed it, cannot retain it, or has
+// stopped), so the transport plays it through the ordinary playback request instead of waiting.
+enum class PlaybackFrameAvailability : std::uint8_t {
+    Ready,
+    Pending,
+    Unavailable,
+};
+
+// Real-time transport uses total elapsed time or the existing audio master clock, and never
+// accumulates tick debt. With a frame availability provider (#497) the playhead also waits: it
+// never moves past a frame that is still being prepared, holds on the frame it shows (still
+// Playing) until the next one is ready, then restarts the clock from there. Cached frames play at
+// the composition's real-time rate exactly as without a provider.
 // A run anchors both clocks to the nearest valid grid frame (halfway ties greater). Ordinary
 // nearest rounding aligns audio by at most half a frame; clamping to the valid grid in the work
 // area can require larger alignment, including at off-grid authored endpoints after rate edits.
@@ -88,6 +101,19 @@ class PlaybackController final : public QObject {
     // Frames the current or last hold waited for.
     [[nodiscard]] std::size_t prerollFrames() const noexcept { return prerollFrames_; }
 
+    // Waiting for frames (#497, docs/architecture/animation-and-time.md, "Waiting For Frames").
+    // The provider answers whether the frame at a time can be shown now; the composition root wires
+    // the playback read-ahead. While the next frame is Pending the playhead holds on the frame it
+    // shows and the run stays Playing; audio is muted from the first hold until the frames from
+    // the playhead through the preroll window are ready again, then resumes in sync at the
+    // playhead. Without a provider the transport never waits.
+    using FrameAvailability = std::function<PlaybackFrameAvailability(core::RationalTime)>;
+    void setFrameAvailabilityProvider(FrameAvailability provider);
+    // True while the playhead holds on a frame because the next one is not ready yet.
+    [[nodiscard]] bool isHoldingForFrame() const noexcept { return holdingForFrame_; }
+    // True from the first hold until real-time playback resumes: audio is muted meanwhile.
+    [[nodiscard]] bool isWaitingForFrames() const noexcept { return waitingForFrames_; }
+
   public slots:
     // No-op (guarded) if already playing, if no composition is available, or if the composition's
     // duration/frame rate cannot form a valid bloom::core::FrameTimeMapping (covers the
@@ -133,6 +159,21 @@ class PlaybackController final : public QObject {
     // A seek, scrub or work-area change during the hold: hold again at the new position.
     void restartPreroll();
     void useWallClock();
+    // #497: the frame a run shows after `index` (nullopt past the end of a non-looping range).
+    [[nodiscard]] std::optional<std::uint64_t>
+    followingFrame(std::uint64_t index, std::uint64_t first, std::uint64_t last) const noexcept;
+    [[nodiscard]] PlaybackFrameAvailability frameAvailability(const core::FrameTimeMapping& mapping,
+                                                              std::uint64_t index) const;
+    // Whether the frames after `index`, through the preroll window, are all ready to play.
+    [[nodiscard]] bool framesAheadReady(const core::FrameTimeMapping& mapping, std::uint64_t index,
+                                        std::uint64_t first, std::uint64_t last) const;
+    // The playhead holds on its frame: mutes audio and reports waiting on the first hold.
+    void beginFrameHold();
+    // Leaves the waiting state after a hold; `resumeAudio` restarts audio at the playhead.
+    void endWaitingForFrames(bool resumeAudio);
+    // Shows `index` now and restarts the clock from it.
+    void applyFrame(const core::FrameTimeMapping& mapping, std::uint64_t index,
+                    std::chrono::nanoseconds budget);
     // Hands the mixer the work area's frame-grid loop (or no loop) so audio wraps with the video.
     void publishAudioLoop();
     void scheduleTick(std::chrono::nanoseconds untilNextFrame);
@@ -172,6 +213,9 @@ class PlaybackController final : public QObject {
     PlaybackPreroll preroll_;
     PrerollFrameCount prerollProvider_;
     std::size_t prerollFrames_ = 0;
+    FrameAvailability availabilityProvider_;
+    bool holdingForFrame_ = false;
+    bool waitingForFrames_ = false;
 };
 
 } // namespace bloom::ui

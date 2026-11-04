@@ -739,6 +739,15 @@ int main(int argc, char* argv[]) try {
              &backgroundPreviewController)]() -> std::size_t {
             return background ? background->prerollFrameCount() : 1;
         });
+    // #497: the playhead waits for the read-ahead's frames instead of advancing past them, so an
+    // uncached range plays frame by frame and fills the cache in order from the playhead.
+    backgroundPreviewController.setTransportWaitsForFrames(true);
+    playback.setFrameAvailabilityProvider(
+        [background = QPointer<bloom::ui::BackgroundPreviewController>(
+             &backgroundPreviewController)](const bloom::core::RationalTime time) {
+            return background ? background->playbackFrameAvailability(time)
+                              : bloom::ui::PlaybackFrameAvailability::Unavailable;
+        });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &audioPlaybackSession, &bloom::ui::AudioPlaybackSession::beginShutdown);

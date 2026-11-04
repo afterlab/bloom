@@ -208,7 +208,9 @@ Every measurement is a fresh process.
   transport advanced, unwrapped across loop restarts, over wall time: 1.0 means playback held real
   time by dropping frames rather than slowing down.
 - **Playback** (`kind: playback`): a cold start with background read-ahead and no RAM fill;
-  `playbackFps` = distinct frames shown / seconds, next to the frames the transport asked for.
+  `playbackFps` = distinct frames shown / seconds, next to the frames the transport asked for. The
+  transport waits for the read-ahead's frames as the application's does (#497), so the two counts
+  match unless frames the read-ahead cannot cache play through the ordinary playback request.
 - **Scrub** (`kind: scrub`, `--scrub N`): after the first frame the harness jumps to N frames
   spread over the work area, alternating between its two halves so no target is near the last one
   or inside the read-ahead window, and times each from `setCurrentTime` until the Viewer shows it
