@@ -374,6 +374,13 @@ if(BUILD_TESTING)
     bloom_enable_warnings(bloom_project_layer_mask_test)
     bloom_add_test(NAME bloom.project.layer-masks COMMAND bloom_project_layer_mask_test LABELS unit persistence)
 
+    # #502: built from commands, so it lives under tests/integration.
+    add_executable(bloom_project_entry_layer_test
+        ${PROJECT_SOURCE_DIR}/tests/integration/entry_layer_persistence_tests.cpp)
+    target_link_libraries(bloom_project_entry_layer_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_entry_layer_test)
+    bloom_add_test(NAME bloom.project.entry-layers COMMAND bloom_project_entry_layer_test LABELS unit persistence)
+
     add_executable(bloom_project_channel_set_test
         ${PROJECT_SOURCE_DIR}/tests/integration/channel_set_persistence_tests.cpp)
     target_link_libraries(bloom_project_channel_set_test PRIVATE bloom_project bloom_commands ZLIB::ZLIB)

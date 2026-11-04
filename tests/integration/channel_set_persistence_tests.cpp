@@ -146,7 +146,7 @@ void roundTrip() {
     const auto snapshot = fixture.document.snapshot();
     expect(snapshot.project().validate().ok(), "the channel project validates");
     const auto text = encode(fixture.document);
-    expect(text.find("\"minor\": 36") != std::string::npos, "the document is written at 1.30");
+    expect(text.find("\"minor\": 37") != std::string::npos, "the document is written at 1.30");
     expect(text.find("\"bloom.channel-shuffle\"") != std::string::npos &&
                text.find("\"bloom.image.part\"") != std::string::npos,
            "the channel nodes and the image part parameter are written");
@@ -196,7 +196,7 @@ void imageSourceV1Migrates() {
     Fixture fixture;
     auto text = encode(fixture.document);
     // A 1.24 Image source is v1. The migrated node keeps every binding and edge.
-    replaceOnce(text, "\"minor\": 36", "\"minor\": 24");
+    replaceOnce(text, "\"minor\": 37", "\"minor\": 24");
     stripExportQueueV1_29(text);
     replaceOnce(text, "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 2",
                 "\"typeId\": \"bloom.image-source\",\n              \"schemaVersion\": 1");

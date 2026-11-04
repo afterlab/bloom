@@ -281,7 +281,7 @@ std::string withMinor(const std::string& text, const int from, const int to) {
 
 // Document 1.35: a project saved while only some members have digests reopens to the same asset,
 // and its stamped members read as before; a document claiming 1.34 cannot carry a stamp, and 1.34
-// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests).
+// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests, 1.37 entry layers).
 void partialDigestsReopen() {
     Folder folder("bloom-lazy-sequence-reopen");
     for (int frame = 1; frame <= 3; ++frame)
@@ -311,10 +311,10 @@ void partialDigestsReopen() {
                "the reopened stamped members read");
         expect(encode(draft.project()) == text, "the canonical text is stable");
     }
-    expect(!decode(withMinor(text, 36, 34)), "a document claiming 1.34 cannot carry a stamp");
+    expect(!decode(withMinor(text, 37, 34)), "a document claiming 1.34 cannot carry a stamp");
 
     const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 36, 34);
+    const auto older = withMinor(plain, 37, 34);
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
     expect(static_cast<bool>(parsed), "the 1.34 document parses");
@@ -323,15 +323,15 @@ void partialDigestsReopen() {
             parsed.document()->root(), {1, 34}, project::kCanonicalDocumentSchemaVersionV1,
             project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 2 && migrated.migratedRoot() != nullptr &&
+                   migrated.stepsApplied() == 3 && migrated.migratedRoot() != nullptr &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.34 reaches the current minor through two version-only steps");
+               "1.34 reaches the current minor through three version-only steps");
     }
 }
 
 // Document 1.36 (#495): a member may carry its stamp and the digest a full hash verified for the
 // bytes that carried it. The three forms round-trip; recording a digest beside a stamp keeps the
-// member's identity; a document claiming 1.35 cannot carry both; 1.35 reaches 1.36 by version.
+// member's identity; a document claiming 1.35 cannot carry both; 1.35 reaches the current minor by version.
 void verifiedDigestsRoundTrip() {
     Folder folder("bloom-lazy-sequence-verified");
     for (int frame = 1; frame <= 3; ++frame)
@@ -368,13 +368,13 @@ void verifiedDigestsRoundTrip() {
     expect(reopened && reopened->size() == 1 && reopened->front() == asset,
            "verified, legacy and pending members reopen exactly");
     expect(encode(verified) == text, "the canonical text is stable");
-    expect(!decode(withMinor(text, 36, 35)),
+    expect(!decode(withMinor(text, 37, 35)),
            "a document claiming 1.35 cannot carry both a digest and a stamp");
-    expect(!decode(withMinor(text, 36, 34)),
+    expect(!decode(withMinor(text, 37, 34)),
            "a document claiming 1.34 cannot carry both a digest and a stamp");
 
     const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 36, 35);
+    const auto older = withMinor(plain, 37, 35);
     expect(static_cast<bool>(decode(older)), "a 1.35 document with one form per member decodes");
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
@@ -383,9 +383,9 @@ void verifiedDigestsRoundTrip() {
             parsed.document()->root(), {1, 35}, project::kCanonicalDocumentSchemaVersionV1,
             project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 1 && migrated.migratedRoot() != nullptr &&
+                   migrated.stepsApplied() == 2 && migrated.migratedRoot() != nullptr &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.35 -> 1.36 is one version-only step");
+               "1.35 reaches the current minor through two version-only steps");
     } else {
         expect(false, "the 1.35 document parses");
     }

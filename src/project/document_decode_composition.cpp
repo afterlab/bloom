@@ -1685,6 +1685,8 @@ template <typename Keyframe, typename DecodeOne>
 // Document 1.30 declares the layer `shy` and `nameFollowsSource` flags. A document older than that
 // has neither; reconstruction infers nameFollowsSource for it (see document_reconstruct.cpp).
 inline constexpr std::uint32_t kLayerPresentationFlagsMinor = 30;
+// Document 1.37 (#502) declares a Merge entry's own layer (`slotId`, `parameters`) and `pivot`.
+inline constexpr std::uint32_t kEntryLayersMinor = 37;
 
 [[nodiscard]] bool decodeLayerOutputBoundary(const JsonValue& node, DecodeState& state,
                                              const std::string& path, LayerOutputBoundary& out) {
@@ -1708,6 +1710,17 @@ inline constexpr std::uint32_t kLayerPresentationFlagsMinor = 30;
         for (const auto* key : {"shy", "nameFollowsSource"})
             if (node.findMember(key))
                 keys.push_back(key);
+    // Document 1.37 (#502): a Merge entry's own layer, and the Frame pivot. A document claiming
+    // 1.36 or older never carries them.
+    for (const auto* key : {"slotId", "pivot", "parameters"}) {
+        if (node.findMember(key) == nullptr)
+            continue;
+        if (state.documentMinor < kEntryLayersMinor) {
+            state.fail(DocumentDecodeError::UnknownMember, joinPath(path, key));
+            return false;
+        }
+        keys.push_back(key);
+    }
     std::vector<const JsonValue*> members;
     std::vector<RetainedJsonMember> trailing;
     if (!matchOrderedMembers(node, keys, true, state, path, members, trailing)) {
@@ -1795,6 +1808,32 @@ inline constexpr std::uint32_t kLayerPresentationFlagsMinor = 30;
             auto& time = std::string_view(key) == "inPoint" ? out.inPoint : out.outPoint;
             if (!decodeRationalTimeValue(*value, state, joinPath(path, key), time))
                 return false;
+        }
+    }
+    if (const auto* value = node.findMember("slotId")) {
+        LayerSlotId slot;
+        if (!decodeObjectId(*value, state, joinPath(path, "slotId"), slot))
+            return false;
+        out.entrySlot = slot;
+    }
+    if (const auto* value = node.findMember("pivot")) {
+        std::string_view pivot;
+        if (!decodeStringMember(*value, state, joinPath(path, "pivot"), pivot))
+            return false;
+        // Content is the default and is never written; only Frame is.
+        if (pivot != "frame") {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "pivot"));
+            return false;
+        }
+        out.pivot = document::LayerPivot::Frame;
+    }
+    if (const auto* value = node.findMember("parameters")) {
+        const AttachmentScope parametersScope(state, "parameters");
+        if (!decodeBindings(*value, state, joinPath(path, "parameters"), out.parameters))
+            return false;
+        if (out.parameters.empty()) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "parameters"));
+            return false;
         }
     }
     return (state.documentMinor < 23 || decodeLayerTiming(node, state, path, out.timing)) &&

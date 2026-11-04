@@ -1,8 +1,10 @@
 # Bloom Project Format
 
-The current document schema is 1.36. It lets a stamped image-sequence member also carry the content
-digest a full hash verified for the bytes that carried its stamp (see "Verified Member Digests In
-Document 1.36"). Document 1.35 let an image-sequence member carry the file stamp import listed
+The current document schema is 1.37. It lets a Merge entry own its layer controls -- a layer output
+record that names its slot and binds its own parameters -- adds the layer `pivot`, and adds the
+Adjustment node type (see "Entry Layers In Document 1.37"). Document 1.36 let a stamped image-sequence
+member also carry the content digest a full hash verified for the bytes that carried its stamp (see
+"Verified Member Digests In Document 1.36"). Document 1.35 let an image-sequence member carry the file stamp import listed
 instead of its content digest (see "Sequence Member Stamps In Document 1.35"). Document 1.34
 added the optional Interpret Footage members of an asset's
 interpretation, a sequence's imported frame range and a video stream's coded pixel aspect ratio (see "Interpret Footage In Document
@@ -1438,9 +1440,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.36`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.37`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.36.schema.json` and `manifest-1.36.schema.json`; the
+The current artifacts are `document-1.37.schema.json` and `manifest-1.37.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1674,6 +1676,43 @@ digest of the file chosen.
 The `1.34` -> `1.35` DOM step `migrateSequenceMemberStampsV1_34` only advances the version: every
 older member has its digest. The schema artifacts add `assetMember-1.35` and `assetManifest-1.35`;
 the schema check restores the 1.34 artifact from them exactly.
+
+## Entry Layers In Document 1.37
+
+Every Merge entry is a layer (issue #502; see [the layer and graph model](layer-graph-model.md),
+"Merge"). An entry without a Layer node keeps its layer controls on its own **entry layer**: a
+`layerOutputs` record whose `nodeId` is the Merge and which appends, after `nameFollowsSource` and
+before retained unknown members, in this order:
+
+- `slotId`: the canonical decimal-string `LayerSlotId` of the Merge slot it belongs to. That slot's
+  `layerId` names the record, and the slot is not fed directly by a Layer node.
+- `pivot`: `"frame"`, written only when the layer's scale and rotation pivot about the composition
+  frame's centre plus its anchor. Absence is the `content` pivot every layer had before 1.37 (the
+  centre of its local content bounds). Every entry layer is created with the Frame pivot; a Layer
+  node that adopted an entry's values carries it too, so it is written on any record. Any other
+  value is refused.
+- `parameters`: the entry layer's own parameter bindings, `{role, parameterId}` sorted by UTF-8 role
+  then numeric id exactly as a node's are: `anchor`, `blendMode`, `opacity`, `position`, `rotation`,
+  `scale`, and `timeRemap` only while Time Remap is enabled. Each parameter has the Layer node's
+  schema key for its role, belongs to no node or other layer, and is a constant or an animation
+  curve; never a driver. Only an entry layer writes it, never empty.
+
+Layer-output records still sort by `layerId` then `nodeId`; the layer id is unique, so a Merge's
+several entry layers stay canonical. A Merge may own one entry layer per slot; a Layer node still has
+exactly one record. Validation (`document::validateEntryLayers`) refuses an entry layer whose slot is
+missing or does not name it, two for one slot, a missing or repeated role, a parameter of the wrong
+schema, a shared parameter and a driven one. A plain entry with no record behaves as an entry layer
+at its defaults (the identity), so no older document is migrated.
+
+`bloom.adjustment` (schema 1) is the Adjustment node: no inputs, no parameters, one Image output
+`image`, whose value is the stack below the Merge entry its chain lands in. Like every registered
+node type it is admitted by the registry, not by the document minor.
+
+The `1.36` -> `1.37` DOM step `migrateEntryLayersV1_36` only advances the version. A document
+claiming 1.36 or older that carries `slotId`, `pivot` or `parameters` on a layer output is refused
+with `UnknownMember` at that member. The schema artifacts add `layerOutput-1.37` (the 1.0 record with
+the three members) and point `graph-1.0`'s `layerOutputs` at it; the schema check restores the 1.36
+artifact from them exactly.
 
 ## Verified Member Digests In Document 1.36
 

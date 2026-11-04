@@ -79,6 +79,8 @@ struct SortWindows final {
         for (const auto& node : composition.graph().nodes()) {
             plan.window2 = maximumOf(plan.window2, node.parameters.size());
         }
+        for (const auto& layer : composition.graph().layerOutputs())
+            plan.window2 = maximumOf(plan.window2, layer.parameters.size());
         for (const auto& record : composition.animationCurves().records()) {
             if (const auto* scalar = std::get_if<bloom::document::ScalarAnimationCurve>(&record)) {
                 plan.window2 = maximumOf(plan.window2, scalar->keyframes.size());
@@ -1535,6 +1537,43 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
         if (boundary.nameFollowsSource && (!state.ok(writer.memberName("nameFollowsSource")) ||
                                            !state.ok(writer.booleanValue(true))))
             return false;
+        // Document 1.37 (#502): a Merge entry's own layer names its slot and binds its own
+        // parameters; the Frame pivot is written only when set, so every other layer keeps its
+        // pre-1.37 bytes.
+        if (boundary.entrySlot && !emitNamedId(state, "slotId", boundary.entrySlot->value()))
+            return false;
+        if (boundary.pivot == bloom::document::LayerPivot::Frame &&
+            (!state.ok(writer.memberName("pivot")) || !state.ok(writer.stringValue("frame"))))
+            return false;
+        if (!boundary.parameters.empty()) {
+            const PathScope parametersScope(state, "parameters");
+            if (!state.ok(writer.memberName("parameters")) || !state.ok(writer.beginArray()))
+                return false;
+            std::span<const std::size_t> bindingOrder;
+            if (!makeOrder(
+                    boundary.parameters,
+                    [](const ParameterBinding& binding) noexcept
+                        -> std::pair<std::string_view, std::uint64_t> {
+                        return {binding.role, binding.parameterId.value()};
+                    },
+                    state.sort.window2, bindingOrder, state.walk.error)) {
+                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                compositionIndex);
+                return false;
+            }
+            for (const auto bindingIndex : bindingOrder) {
+                const auto& binding = boundary.parameters[bindingIndex];
+                const PathScope bindingScope(state, RoundTripCollectionKind::ParameterBinding,
+                                             std::string_view(binding.role));
+                if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("role")) ||
+                    !state.ok(writer.stringValue(binding.role)) ||
+                    !emitNamedId(state, "parameterId", binding.parameterId.value()) ||
+                    !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+                    return false;
+            }
+            if (!state.ok(writer.endArray()))
+                return false;
+        }
         if (!emitRetainedTrailing(state)) {
             return false;
         }

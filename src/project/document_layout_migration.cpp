@@ -159,7 +159,8 @@ enum class Step {
     WebmExportFormats,
     FootageInterpretation,
     SequenceMemberStamps,
-    VerifiedMemberDigests
+    VerifiedMemberDigests,
+    EntryLayers
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -209,6 +210,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
     // Verified member digests (1.35 -> 1.36, #495) are version-only: a member carries both its
     // stamp and its digest only in a document written at 1.36; every older member keeps one.
     if (step == Step::VerifiedMemberDigests)
+        return false;
+    // Entry layers (1.36 -> 1.37, #502) are version-only: an older document has no entry layer,
+    // no Frame pivot and no Adjustment entry, and opens unchanged.
+    if (step == Step::EntryLayers)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -398,6 +403,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::FootageInterpretation ? "{\"major\":1,\"minor\":34}"
                            : step == Step::SequenceMemberStamps  ? "{\"major\":1,\"minor\":35}"
                            : step == Step::VerifiedMemberDigests ? "{\"major\":1,\"minor\":36}"
+                           : step == Step::EntryLayers           ? "{\"major\":1,\"minor\":37}"
                                                                  : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -977,6 +983,12 @@ MigrationStepOutcome migrateVerifiedMemberDigestsV1_35(const JsonValue& root,
                                                        std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "35") ||
         !transform(root, Scope::Root, Step::VerifiedMemberDigests, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateEntryLayersV1_36(const JsonValue& root, std::pmr::memory_resource*,
+                                             Buffer& output) {
+    if (!sourceVersionIs(root, "36") || !transform(root, Scope::Root, Step::EntryLayers, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

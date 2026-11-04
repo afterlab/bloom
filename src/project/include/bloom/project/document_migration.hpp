@@ -274,6 +274,12 @@ migrateSequenceMemberStampsV1_34(const JsonValue& root, std::pmr::memory_resourc
 [[nodiscard]] MigrationStepOutcome
 migrateVerifiedMemberDigestsV1_35(const JsonValue& root, std::pmr::memory_resource* resource,
                                   std::pmr::vector<char>& output);
+// Entry layers, document 1.36 -> 1.37 (#502): version-only. A Merge entry may own its layer
+// (a Layer Output record with `slotId`, `parameters` and the `frame` pivot) and the Adjustment
+// node type exists; no older document carries either, so it opens unchanged.
+[[nodiscard]] MigrationStepOutcome
+migrateEntryLayersV1_36(const JsonValue& root, std::pmr::memory_resource* resource,
+                        std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -310,7 +316,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 32}, {1, 33}, migrateWebmExportFormatsV1_32},
     MigrationStepDescriptor{{1, 33}, {1, 34}, migrateFootageInterpretationV1_33},
     MigrationStepDescriptor{{1, 34}, {1, 35}, migrateSequenceMemberStampsV1_34},
-    MigrationStepDescriptor{{1, 35}, {1, 36}, migrateVerifiedMemberDigestsV1_35}};
+    MigrationStepDescriptor{{1, 35}, {1, 36}, migrateVerifiedMemberDigestsV1_35},
+    MigrationStepDescriptor{{1, 36}, {1, 37}, migrateEntryLayersV1_36}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

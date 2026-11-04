@@ -19,6 +19,7 @@ add_library(
     footage_schema_checks.cpp
     sequence_stamp_schema_checks.cpp
     verified_digest_schema_checks.cpp
+    entry_layer_schema_checks.cpp
     video_schema_checks.cpp
     node_layout_schema_checks.cpp
     schema_check_helpers.cpp

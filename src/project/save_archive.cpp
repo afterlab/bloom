@@ -102,6 +102,8 @@ measureScratch(const bloom::document::Snapshot& snapshot) noexcept {
         for (const auto& node : composition.graph().nodes()) {
             thirdWindow = std::max(thirdWindow, node.parameters.size());
         }
+        for (const auto& layer : composition.graph().layerOutputs())
+            thirdWindow = std::max(thirdWindow, layer.parameters.size());
         for (const auto& curve : composition.animationCurves().records()) {
             if (const auto* scalar = std::get_if<bloom::document::ScalarAnimationCurve>(&curve)) {
                 thirdWindow = std::max(thirdWindow, scalar->keyframes.size());
