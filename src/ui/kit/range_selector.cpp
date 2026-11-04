@@ -56,7 +56,7 @@ double KRangeSelector::upperValue() const noexcept { return upper_; }
 void KRangeSelector::setLowerValue(const double value) {
     // Clamped to the upper handle, never swapped past it: a swap would silently change which
     // handle the artist believes they are holding.
-    const double clamped = std::clamp(value, minimum_, upper_);
+    const double clamped = std::clamp(value, minimum_, cross_ ? maximum_ : upper_);
     if (clamped == lower_) {
         return;
     }
@@ -66,7 +66,7 @@ void KRangeSelector::setLowerValue(const double value) {
 }
 
 void KRangeSelector::setUpperValue(const double value) {
-    const double clamped = std::clamp(value, lower_, maximum_);
+    const double clamped = std::clamp(value, cross_ ? minimum_ : lower_, maximum_);
     if (clamped == upper_) {
         return;
     }
@@ -77,7 +77,8 @@ void KRangeSelector::setUpperValue(const double value) {
 
 void KRangeSelector::setValues(const double lower, const double upper) {
     const double newLower = std::clamp(lower, minimum_, maximum_);
-    const double newUpper = std::clamp(std::max(upper, newLower), minimum_, maximum_);
+    const double newUpper =
+        std::clamp(cross_ ? upper : std::max(upper, newLower), minimum_, maximum_);
     if (newLower != lower_) {
         lower_ = newLower;
         Q_EMIT lowerValueChanged(lower_);
@@ -86,6 +87,11 @@ void KRangeSelector::setValues(const double lower, const double upper) {
         upper_ = newUpper;
         Q_EMIT upperValueChanged(upper_);
     }
+    update();
+}
+
+void KRangeSelector::setHandlesMayCross(const bool cross) {
+    cross_ = cross;
     update();
 }
 
@@ -101,8 +107,8 @@ QRectF KRangeSelector::trackRect() const {
 
 QRectF KRangeSelector::spanRect() const {
     const QRectF track = trackRect();
-    const qreal left = track.left() + track.width() * normalized(lower_);
-    const qreal right = track.left() + track.width() * normalized(upper_);
+    const qreal left = track.left() + track.width() * normalized(std::min(lower_, upper_));
+    const qreal right = track.left() + track.width() * normalized(std::max(lower_, upper_));
     return {left, track.top(), std::max(0.0, right - left), track.height()};
 }
 

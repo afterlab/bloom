@@ -46,6 +46,11 @@ class KRangeSelector final : public QWidget {
     void setLowerValue(double value);
     void setUpperValue(double value);
     void setValues(double lower, double upper);
+    // #541: two independent ends that may pass each other -- a remap's from/to pair or a
+    // smoothstep's edges, where a reversed pair is meaningful. The span is filled between them
+    // whichever is greater. Off by default: a work area or a trim keeps its order.
+    void setHandlesMayCross(bool cross);
+    [[nodiscard]] bool handlesMayCross() const noexcept { return cross_; }
 
     [[nodiscard]] QRectF trackRect() const;
     [[nodiscard]] QRectF spanRect() const;
@@ -105,6 +110,7 @@ class KRangeSelector final : public QWidget {
     bool interactionActive_ = false;
     double lowerBase_ = 0.0;
     double upperBase_ = 0.0;
+    bool cross_ = false;
 };
 
 } // namespace bloom::ui::kit

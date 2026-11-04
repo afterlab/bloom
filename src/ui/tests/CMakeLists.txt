@@ -64,6 +64,9 @@ add_executable(bloom_frameless_window_support_test
 add_executable(bloom_kit_range_test
     kit_range_tests.cpp
 )
+add_executable(bloom_kit_interactive_controls_test
+    kit_interactive_controls_tests.cpp
+)
 add_executable(bloom_kit_value_field_test
     kit_value_field_tests.cpp
 )
@@ -226,6 +229,7 @@ target_link_libraries(bloom_third_party_license_catalog_test PRIVATE bloom_ui)
 target_link_libraries(bloom_main_window_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_frameless_window_support_test PRIVATE bloom_ui)
 target_link_libraries(bloom_kit_range_test PRIVATE bloom_ui_kit Qt6::Test)
+target_link_libraries(bloom_kit_interactive_controls_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_value_field_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_value_field_input_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_edit_session_test PRIVATE bloom_ui_kit Qt6::Test)
@@ -405,6 +409,7 @@ bloom_enable_warnings(bloom_third_party_license_catalog_test)
 bloom_enable_warnings(bloom_main_window_chrome_test)
 bloom_enable_warnings(bloom_frameless_window_support_test)
 bloom_enable_warnings(bloom_kit_range_test)
+bloom_enable_warnings(bloom_kit_interactive_controls_test)
 bloom_enable_warnings(bloom_kit_value_field_test)
 bloom_enable_warnings(bloom_kit_value_field_input_test)
 bloom_enable_warnings(bloom_kit_edit_session_test)
@@ -635,6 +640,14 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.kit_range
     COMMAND bloom_kit_range_test
+    LABELS ui unit kit
+    TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.kit_interactive_controls
+    COMMAND bloom_kit_interactive_controls_test
     LABELS ui unit kit
     TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

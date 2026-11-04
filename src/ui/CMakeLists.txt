@@ -45,6 +45,9 @@ target_sources(
         kit/progress_bar.cpp
         kit/radio_group.cpp
         kit/range_selector.cpp
+        kit/angle_dial.cpp
+        kit/gradient_editor.cpp
+        kit/point_pad.cpp
         kit/readout.cpp
         kit/slider.cpp
         kit/split_handle.cpp
@@ -98,6 +101,9 @@ target_sources(
             include/bloom/ui/kit/progress_bar.hpp
             include/bloom/ui/kit/radio_group.hpp
             include/bloom/ui/kit/range_selector.hpp
+            include/bloom/ui/kit/angle_dial.hpp
+            include/bloom/ui/kit/gradient_editor.hpp
+            include/bloom/ui/kit/point_pad.hpp
             include/bloom/ui/kit/readout.hpp
             include/bloom/ui/kit/slider.hpp
             include/bloom/ui/kit/split_handle.hpp
