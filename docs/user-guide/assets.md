@@ -230,5 +230,12 @@ not read yet by its size and modification time, so copying the footage somewhere
 modification times also needs a Reload Footage. A frame that is not a readable image is reported
 the first time it is needed and treated like a missing frame.
 
+Bloom shows footage as soon as it is imported and checks its bytes afterwards, in the background:
+**Verify footage** in **Jobs** reads each image and each frame not yet checked once, at the lowest
+priority, and steps aside while you save or import. Saving keeps what it has checked, so a reopened
+project does not read those files again. Footage whose bytes no longer match what was imported is
+listed on that job ("plate frame 12 changed since it was imported") and its cached frames are
+purged; relink or reload it in Assets.
+
 A ProRes asset's tooltip states: “Decoded by FFmpeg; not an Apple-authorized ProRes implementation”.
 This preview workflow carries no Apple authorization or ProRes delivery qualification.

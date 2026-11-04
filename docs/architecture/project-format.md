@@ -1,7 +1,9 @@
 # Bloom Project Format
 
-The current document schema is 1.35. It lets an image-sequence member carry the file stamp import
-listed instead of its content digest (see "Sequence Member Stamps In Document 1.35"). Document 1.34
+The current document schema is 1.36. It lets a stamped image-sequence member also carry the content
+digest a full hash verified for the bytes that carried its stamp (see "Verified Member Digests In
+Document 1.36"). Document 1.35 let an image-sequence member carry the file stamp import listed
+instead of its content digest (see "Sequence Member Stamps In Document 1.35"). Document 1.34
 added the optional Interpret Footage members of an asset's
 interpretation, a sequence's imported frame range and a video stream's coded pixel aspect ratio (see "Interpret Footage In Document
 1.34"). Document 1.33 added the export formats `vp9-webm`, `av1-webm` and `av1-mp4` and their codec
@@ -1356,7 +1358,8 @@ encodes UTF-8 bytes, a local drive as `file:///C:/...`, and a UNC share as
 `file://server/share/...`. Invalid escapes, NUL, non-file schemes and relative paths are rejected.
 The digest is lowercase SHA-256 of image bytes; a sequence digest hashes ordered decimal frame
 numbers plus `:` and each member's lowercase digest (from 1.35, a stamped member's provisional
-identity; see "Sequence Member Stamps In Document 1.35"). Interpretation holds integer `colorSpace`
+identity, which a verified digest recorded beside the stamp from 1.36 does not change; see
+"Sequence Member Stamps In Document 1.35" and "Verified Member Digests In Document 1.36"). Interpretation holds integer `colorSpace`
 (0 Auto, 1 sRGB, 2 Linear, 3 Raw), string `inputColorSpaceId`, and `alphaAssociation` (0 Straight,
 1 Premultiplied). The string is written after the legacy integer and before `alphaAssociation`; an
 empty string means Auto. A non-empty value is an exact non-data color-space id in the project's
@@ -1365,7 +1368,8 @@ chromaticities remain automatic; the enum is retained for compatibility and dete
 of older documents.
 
 The manifest contains `pattern`, `padding`, decimal-string `first` and `last`, sorted `members`
-(frame, locator, and a digest or, from 1.35, a file stamp), and explicit decimal-string `gaps`. A still carries an empty manifest.
+(frame, locator, and a digest or, from 1.35, a file stamp, or from 1.36 both), and explicit
+decimal-string `gaps`. A still carries an empty manifest.
 Sequence ranges and gaps must agree with their members. Dimensions and locator lengths are
 validated before publication. Missing files do not invalidate the document or remove its assets.
 `RemoveAsset` preserves referencing nodes so they can warn; Relink retains the stable asset ID.
@@ -1422,9 +1426,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.35`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.36`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.35.schema.json` and `manifest-1.35.schema.json`; the
+The current artifacts are `document-1.36.schema.json` and `manifest-1.36.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1619,10 +1623,11 @@ digested only when it is first needed (viewer, RAM Preview, export, thumbnails),
 A sequence `members` element is either `{frame, locator, contentDigest}`, unchanged, or, from 1.35,
 `{frame, locator, stamp}` with `stamp` = `{size, modified}`: `size` an unsigned decimal string (the
 byte length) and `modified` a signed decimal string (nanoseconds since the Unix epoch, as
-`platform::observeFileIdentity` reports it on every platform). Exactly one of the two is present;
-validation refuses neither or both. A document claiming 1.34 or older cannot carry a stamp. A
-project saved while only some members have been read keeps the stamps of the others and reopens to
-the same asset; nothing a first read learns is written back to the document.
+`platform::observeFileIdentity` reports it on every platform). In a 1.35 document exactly one of
+the two is present. A document claiming 1.34 or older cannot carry a stamp. A project saved while
+only some members have been read keeps the stamps of the others and reopens to the same asset.
+From 1.36 a save also records a digest the process memo verified beside a member's stamp (see
+"Verified Member Digests In Document 1.36").
 
 A stamped member's identity is provisional: `document::sequenceMemberIdentity` is SHA-256 over
 `BloomSequenceMemberStamp`, NUL, the locator `path`, NUL, the `relinkHint`, NUL, the decimal size,
@@ -1635,10 +1640,11 @@ are known and changes when the stamp does.
 A stamped member's file is admitted only while it still carries its stamp. The first read observes
 the file before and after reading it, refuses bytes whose stamp differs ("Frame 12 changed since it
 was imported; reload the footage in Assets"; a missing file reads "Frame 12 is missing"), and
-records the digest it computed in the process memo of
-[ADR 0025](../decisions/0025-identity-verified-media-sources.md), so a later use costs one `stat`.
-A revision retained in memory is reused only while the file still carries the stamp and the memo
-still vouches for the retained bytes. Changed content is therefore never served stale. The
+admits the bytes by their stamp without hashing them, so a later use costs one `stat`. The digest
+is computed afterwards by the background Verify footage pass, which records it in the process memo
+of [ADR 0025](../decisions/0025-identity-verified-media-sources.md) (see "Verified Member Digests
+In Document 1.36"). A revision retained in memory is reused only while the file still carries the
+stamp and the memo still vouches for the retained bytes. Changed content is therefore never served stale. The
 residual risk of ADR 0025 applies with one addition: a stamped member rewritten in place with the
 same length and modification time is not detected, including across sessions, until Reload
 Footage reads the sequence again. Copying media without preserving modification times makes
@@ -1656,6 +1662,66 @@ digest of the file chosen.
 The `1.34` -> `1.35` DOM step `migrateSequenceMemberStampsV1_34` only advances the version: every
 older member has its digest. The schema artifacts add `assetMember-1.35` and `assetManifest-1.35`;
 the schema check restores the 1.34 artifact from them exactly.
+
+## Verified Member Digests In Document 1.36
+
+A first use no longer hashes a still or a sequence member: the file identity check authorises
+preview and export from first use, and the digest is computed in the background (issue #495). A
+sequence `members` element takes one of three forms. `{frame, locator, contentDigest}` is a
+**legacy** member (every member imported before 1.35, and the member import read).
+`{frame, locator, stamp}` is a **pending** member whose bytes no full hash has proved yet.
+`{frame, locator, contentDigest, stamp}`, in that order, is a **verified** member: the digest a full
+hash proved for the bytes that carried that stamp. Validation refuses a member with neither; a
+document claiming 1.35 or older cannot carry both.
+
+A member's identity does not move when its digest is recorded. `document::sequenceMemberIdentity`
+is the stamp-derived identity of "Sequence Member Stamps In Document 1.35" for every member with a
+stamp, digest or not, and the digest itself for a legacy member, so every 1.35 document keeps
+exactly the cache identity it had. A legacy member that gains a stamp in a saved file is keyed by
+its stamp once that file is reopened; within the session nothing changes.
+
+**Save records, never waits.** Every publication of the document (Save, Save As, and the recovery
+writer, which share `host::executeSessionSaveMiddle`) completes the captured snapshot on the save
+worker, before serialization, through `host::snapshotWithVerifiedSequenceDigests`. For each image
+sequence member lacking one of the two, it resolves the member's file the way the runtime does (the
+locator under the project's folder, else its relink hint) and observes it once
+(`platform::observeSource`: one `stat` and a lookup in the process memo of
+[ADR 0025](../decisions/0025-identity-verified-media-sources.md)). A pending member gains the memo
+digest when the file still carries the member's stamp; a legacy member gains the observed stamp when
+the memo digest equals its digest; a different memo digest (the content changed) leaves it as it
+is, as does a verified member, a missing file and any member the memo does not know. Nothing is
+hashed and nothing waits: a member without a digest saves as pending. Only the published bytes
+change; the live document, its revision, dirty state and undo history are not touched, and a failure
+to complete the snapshot publishes the captured one. Save Copy republishes the retained archive
+byte for byte and records nothing.
+
+**Verify footage.** The Assets controller runs one background job per project, "Verify footage"
+in **Jobs** (owner Project, `Background` priority, the blocking-I/O executor; phase "Verifying
+footage", completed and total files; cancellable). It starts when a project is installed or opened
+and after an import, Relink or Reload Footage commits; a newer request supersedes the running pass,
+and project replacement and shutdown cancel it. It never queues ahead of an import, a save or an
+open on the one blocking-I/O worker: one that starts meanwhile stops the pass at once (mid-file),
+and the pass starts again when they finish, skipping what it already read. While it hashes, the
+worker thread runs at the operating system's idle priority (`platform::IdleThreadPriorityScope`:
+Linux idle I/O class, plus `SCHED_IDLE` where `RLIMIT_NICE` lets the thread return from it; the
+Darwin background state on macOS; Windows background mode) and is restored afterwards.
+
+The pass hashes every still image (`platform::hashSourceFile`, which records the memo when the
+file's identity holds still across the read), every pending member whose file still carries its
+stamp, every legacy member, and a verified member whose file no longer carries its stamp. It skips
+a verified member that still carries its stamp, any file the memo already knows for its current
+identity, a missing file, and every video (a video's decode snapshot still hashes at capture) and
+other asset kind. A hash that differs from the recorded digest adds a Warning naming the asset and
+frame ("plate frame 12 changed since it was imported", "Relink or reload the footage in Assets.")
+and purges the decoded media and finished-frame caches through the media purge of Edit | Purge, so
+nothing rendered from the changed bytes stays cached; the memo then holds the actual digest, so a
+later decode reports the relink diagnostic. The next save records every digest the pass proved.
+There is no preference and no setting.
+
+The `1.35` -> `1.36` DOM step `migrateVerifiedMemberDigestsV1_35` only advances the version: every
+older member carries exactly one of the two. The schema artifacts add `assetMember-1.36` (the 1.35
+member with `anyOf` in place of `oneOf`) and `assetManifest-1.36`; the schema check restores the
+1.35 artifact from them exactly.
 
 ## Interpret Footage In Document 1.34
 
