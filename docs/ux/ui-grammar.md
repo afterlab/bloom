@@ -673,13 +673,14 @@ document vocabulary, so the two cannot drift:
 | OCIO color space (Color Transform from/to, OCIO File process space, image and video input color space) | searchable `KDropdown` filled by `populateColorSpaceSelector`, refreshed by `refreshColorSpaceSelector` |
 | LUT, image, video, audio asset; font; Image part and layer; Cryptomatte layer | `KDropdown` (`refreshLutSelector` and the asset and probe refreshers) |
 | Shuffle R, G, B, A slots | searchable `KDropdown` of the input channel set's channels plus `0` and `1` (`refreshShuffleSlotSelector`, read through `ChannelSetController`, the Viewer channel menu's listing) |
+| Pass `pass` (#480) | searchable `KDropdown` of the input channel set's layers ("<layer> (layer)") and channels, with "First data layer" for the empty default (the same listing) |
 | Channel Copy and Select Channels `select`, Composition Output Channel Layers | `ChannelChecklistField`: a summary that opens a checklist of the input's layers (and root channels), with the comma-separated pattern behind its advanced-pattern toggle |
 | Data reader block (Data Sample, Ramp Sample, Table Lookup, Point Set) | `KDropdown` of the project's data blocks of the reader's kind (`refreshDataBlockSelector`) |
 | Video audio stream | `KDropdown` of the asset's audio streams (`refreshAudioStreamSelector`) |
 | Bool | `KSwitch` |
 | Color | `KColorChip` (compact on the card) with channel cells |
 | Integer, float, vector | `KValueField` configured from `ParameterPresentation` |
-| String | `KLineEdit`, only for open values (Text content, string operands, the Shuffle output layer name) |
+| String | `KLineEdit`, only for open values (Text content, string operands, the Shuffle output layer name, the Image to Channel Set layer and channel names) |
 
 A value with a closed or discoverable set is never a text or number field on either surface, and it
 always shows a meaningful default: an empty Shuffle slot shows the default color layer's channel it
@@ -700,7 +701,7 @@ with a closed set (an enum, a choice presentation, the audio stream) must never 
 | Text source | Vertical alignment (Top, Middle, Bottom) | enum (int) | value field | dropdown |
 | Text source | Anchor mode (Left, Center, Right) | enum (int) | value field | dropdown |
 | Text source | Overflow (Clip, Grow) | enum (int) | value field | dropdown |
-| Channel Shuffle | Mode (Color, Raw) | enum (int) | value field | dropdown |
+| Channel Shuffle | Mode (Auto, Color, Raw; #480 adds Auto) | enum (int) | value field | dropdown |
 
 Every other parameter already used the Properties control (enums as dropdowns, bools as switches,
 colors as chips, numbers as value fields, free text as text fields).

@@ -246,6 +246,64 @@ open to owner review; none changes a rendered or exported pixel the decision def
 - **Rank layers are data.** Cryptomatte `<type>NN` layers are never color layers, and a data-only
   source's absent Image output is information, not a failure, in preview and render (Q1).
 
+## Amendment: data-safe passes (#480, owner 2026-11-03)
+
+Status: accepted (owner request in issue #480). Bloom composites 3D renders, VFX and motion
+graphics, so render passes (mist, Z-depth, normals, motion vectors, IDs) must be usable as images and
+written back out without colour conversion. This amendment changes §1 ("no implicit conversion
+between `ChannelSet` and `Image`") and §4 as follows; everything else in this record stands.
+
+1. **Image → ChannelSet.** `bloom.image-to-channel-set` (shown as "Image to Channel Set") packs an
+   image's stored red, green, blue and alpha as the channels `<layer>.<name>` of one layer. The
+   conversion is explicit, never implicit. Parameters: `layer` (default `pass`), `channels` (one to
+   four comma-separated names given to red, green, blue and alpha in order, default `R,G,B,A`, for
+   example `Z` for depth or `X,Y,Z` for normals) and `encoding`:
+   - **Data** (default): a name keeps its data role (`depth.Z` is Depth, `N.X` is NormalX) and every
+     colour role becomes Data, so the channels are raw numbers;
+   - **Color**: the red, green and blue channels are colour (in the working space) and the fourth
+     is alpha.
+   The values are the image's stored samples: working-space, premultiplied by the image's alpha.
+   A muted or unconnected node's layer reads zero.
+2. **Static image channels.** An Image to Channel Set layer is known when the graph compiles, so a
+   Shuffle or Pass whose slots read only its channels and constants compiles into the #479 Channel
+   Select and Channel Combine effects (exact stored-channel gathers on the GPU and the CPU) instead of
+   the file gather. A Shuffle may not mix file channels and Image to Channel Set channels (shuffle each
+   and join them with Combine Channels), and a Channel Copy may not let file channels replace an
+   Image to Channel Set channel a slot reads; both are refused with a diagnostic. The first image a
+   slot reads owns the result's windows; another image reads zero outside its own data window.
+3. **Layered output.** The Composition Output's channel layers may hold Image to Channel Set layers.
+   Each such source image is evaluated through the same production route as the frame (GPU when the
+   frame is, else the CPU reference) and its pixels are read once at the codec boundary beside the
+   composited image; an absent image writes zeros.
+4. **Raw by default for data.** Shuffle (and Pass) gain the mode **Auto**, the default of a new node:
+   Raw when a mapped red, green or blue channel is a data channel (any role other than colour and
+   alpha, or Data encoding), else Color. **Color on a data channel is refused** with the diagnostic
+   "Shuffle Color mode would color-convert the data channel …" instead of running the input colour
+   processor over it. A project saved with an explicit Color mode on a data channel therefore opens
+   with that diagnostic and no image; it never silently changes pixels. Projects store the mode, so
+   no migration is needed and colour Shuffles evaluate unchanged.
+5. **Non-finite and zero-alpha data.** A Shuffle or Pass replaces every non-finite (NaN or infinite)
+   mapped sample with its **Non-finite value** (`nonFinite`, default 0, the value Bloom always used),
+   for example a far depth, before any colour conversion; each replaced pixel is counted in the
+   repair warning. The process image stays premultiplied: with **Associated** off the colour is
+   multiplied by the mapped alpha, and wherever the alpha is 0 the result is transparent black.
+   A data pass should therefore map its alpha to `1` (the Pass node always does).
+6. **Pass.** `bloom.channel-pass` ("Pass") picks one pass from a channel set by a dropdown: a channel
+   gives a grey image, a layer its colour or vector channels (R/G/B, X/Y/Z or U/V/W) as RGB, with
+   alpha 1 and Associated off, in the Auto, Color or Raw mode. Empty reads the first data layer.
+7. **Point-sampled transforms.** Resize, Fit and Transform 2D gain a **Nearest** filter, so a data
+   or ID image can be resized or moved after a Shuffle or Pass without blending values (§4 "a later
+   record may add point-sampled transforms for data").
+8. **Video sources** gain a `channels` output: the decoded video frame's stored R, G, B and A, as
+   Color channels in the working space (an Image to Channel Set of the video image), so a Shuffle,
+   Channel Copy or the layered output treats footage like any other channel set.
+
+Cache identity: a Shuffle or Pass key adds the effective mode and the non-finite value; Image to
+Channel Set channels are keyed through the Channel Select and Channel Combine operations over their
+image operations. Because an existing plan with Color mode on a data channel is now refused
+instead of colour-converted, CPU evaluator semantics advances 13 -> 14; compiled-plan semantics is
+unchanged (every other existing plan compiles and evaluates the same).
+
 ## Related
 
 - [`../architecture/evaluation-primitives.md`](../architecture/evaluation-primitives.md)

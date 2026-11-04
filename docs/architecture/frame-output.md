@@ -823,6 +823,13 @@ through the writer's float-to-half rounding) and appends the SHA-256 of the reop
 sample kinds and decoded bits) to the kind-2 semantic identity; a file without layers keeps the
 unchanged flat identity.
 
+An Image to Channel Set layer (#480, ADR 0026 amendment) is written the same way, but its samples
+are an evaluated image's stored red, green, blue and alpha: the attempt evaluates the plan re-rooted
+at that image operation through the same route as the frame (the GPU scene executor when the frame
+ran there, else the CPU reference), reads the result back once at this codec boundary, and places
+its samples on the final data window (zero outside the image's data window) as `FLOAT` channels.
+A layer whose image cannot be evaluated fails the export with a typed diagnostic.
+
 Verification reopens the staged EXR and checks part count/type, channel names/types/sampling,
 data/display windows, pixel aspect, compression, line order, `colorInteropID`, chromaticities, and
 the exact header allowlist before streaming and comparing all channel samples.

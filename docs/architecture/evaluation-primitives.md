@@ -1327,8 +1327,17 @@ plans evaluate unchanged; only their version-bearing identities change.
   the named channels of each contributing source into one RGBA image in the anchor source's frame
   (the first slot reading a source): the data window is the union of the contributing channels'
   windows, and a sample outside a channel's own window is an explicit zero. The process contract
-  then applies as for OpenEXR ingest: non-finite components become 0, alpha is clamped, zero-alpha
-  emission is dropped, and every repaired pixel is counted.
+  then applies as for OpenEXR ingest: non-finite components become the node's `nonFinite` value
+  (#480; 0 by default, for example a far depth), alpha is clamped, zero-alpha emission is dropped
+  (the process image is premultiplied, so a straight slot under alpha 0 is transparent black), and
+  every repaired pixel is counted.
+- *Auto (#480).* The default mode of a new Shuffle or Pass. It is `Raw` when a mapped red, green or
+  blue channel is a data channel (any role but colour, luminance, alpha and coverage, or a channel
+  with Data encoding), else `Colour`. An explicit `Colour` mode over a data channel is refused with
+  the warning "Shuffle Color mode would color-convert the data channel <name>; choose Raw or Auto"
+  and no image, so a saved project with that mapping opens with the diagnostic instead of
+  colour-converted data. CPU evaluator semantics advances to **14**. Keys add the effective mode and
+  the non-finite value.
 - *Color and Raw.* `Raw` places the mapped values in working-space RGB unchanged. `Colour` converts
   the RGB triple from the input color space of the red slot's source (resolved like an Image
   source, including Auto from the part's chromaticities) to the working space. `associated` says
@@ -1343,6 +1352,31 @@ plans evaluate unchanged; only their version-bearing identities change.
 - *Viewer inspection.* A Viewer inspection compiles a viewer-only plan that reaches only the
   inspected ChannelSet and outputs a Raw, associated, alpha-1 Shuffle of one channel (gray) or three
   (RGB). It never enters the composition's own plan, cache entries or any render or export.
+- *Pass (#480).* `bloom.channel-pass` is a Shuffle whose slots follow its `pass` parameter: a
+  channel name maps `{c, c, c, 1}`; a layer maps its `R`/`G`/`B`, `X`/`Y`/`Z` or `U`/`V`/`W` (at
+  least two present; else its first three non-alpha channels) with `0` for a missing slot and `1`
+  for alpha; empty reads the first layer holding a Data-encoded channel, else the first layer.
+  `associated` is off. Over file channels the mapping is derived at evaluation, after resolution
+  (`CompiledChannelShuffle::pass`); a pass the set lacks is the warning "The pass is not in the
+  channel set: <name>".
+- *Image to Channel Set (#480).* `bloom.image-to-channel-set` adds an image-backed
+  `CompiledChannelSource` (`imageBacked`, the image operation, and the static descriptors
+  `<layer>.<name>` for its stored red, green, blue and alpha lanes; Data encoding keeps a name's data
+  role and makes colour roles Data, Color encoding gives the lanes colour and alpha roles). The
+  compiler knows these channels without a probe (`detail::staticChannelSet`), so a Shuffle or Pass
+  whose slots read only them and constants lowers to a `ChannelSelectKernel` over the first image a
+  slot reads, then one `ChannelCombineKernel` per slot read from another image, with `premultiply`
+  set for a straight mapping: exact stored-channel gathers with existing GPU coverage. A slot that
+  mixes image and file channels, or that a Channel Copy of unknown file channels may replace, stays
+  the file gather and is refused at evaluation with a diagnostic. A Video source's `channels`
+  output is the same image-backed source over its decoded frame (`R`, `G`, `B`, `A`, colour in the
+  working space). Cryptomatte refuses image-backed rank channels. After time scoping the compiler
+  gives each image-backed source of the Composition Output's channel layers its own plan
+  (`CompiledChannelSource::imagePlan`: the plan re-rooted at that image through a Merge, then
+  pruned), and drops operations nothing reaches from the output any more (an image read only by
+  such a layer, or by a Shuffle leaf that names its channels statically); a plan where every
+  operation is reached compiles exactly as before. The export evaluates each layer plan on the
+  frame's own route and reads it once at the codec boundary (`frame-output.md`).
 
 ## Cryptomatte
 
