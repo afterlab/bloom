@@ -38,6 +38,18 @@ tag (or records the absent-metadata scene-linear assumption in the probe). Deep,
 subsampled, malformed, and truncated files return typed diagnostics and never become project truth.
 EXR decode runs on a worker and uses the same disk-cache key and thumbnail path as PNG/JPEG.
 
+A colour layer's half samples (the GPU route's native upload) are read in bands of whole chunks on
+several threads, each through its own reader over the same immutable revision bytes (issue #474).
+Every decode reads only the selected layer's channels, and a Shuffle or channel-set read only the
+channels it names, but OpenEXR compresses each chunk (a run of scanlines, or a tile) on its own
+across every channel of the part, so a ZIP, PIZ or DWA chunk is decompressed whole whatever subset
+is read; the chunks are independent, which is what the bands use. A part of at least eight chunks
+uses up to eight bands of at least four chunks. The extra threads in flight across the process
+never exceed the hardware concurrency: when many frames decode at once each gets fewer, and always
+at least its own thread. Only the calling thread consults the cancellation callback; it stops the
+other bands between reads. The decoded samples and the repair count are the same for any number of
+bands.
+
 **Multi-channel images (ADR 0026, #363).**
 
 - *Probe.* `ImageProbe::parts` lists every part: name, view, scanline or tiled, data and display

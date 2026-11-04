@@ -24,6 +24,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 #include <zlib.h>
 
@@ -100,14 +101,18 @@ struct ExrSpec final {
     const char* association = "premultiplied";
     // Plant NaN, infinities, out-of-range alpha and a zero-alpha emission for the repair policy.
     bool repairs = false;
+    // #474: a taller ZIP image has enough chunks to decode in bands on several threads.
+    int height = 11;
+    Imf::Compression compression = Imf::ZIP_COMPRESSION;
 };
 
 void writeExr(const std::filesystem::path& path, const ExrSpec& spec) {
     constexpr int width = 37;
-    constexpr int height = 11;
-    const Imath::Box2i display(Imath::V2i(-3, 1), Imath::V2i(40, 14));
+    const int height = spec.height;
+    const Imath::Box2i display(Imath::V2i(-3, 1), Imath::V2i(40, 3 + height));
     const Imath::Box2i data(Imath::V2i(-1, 2), Imath::V2i(-1 + width - 1, 2 + height - 1));
     Imf::Header header(display, data);
+    header.compression() = spec.compression;
     if (spec.tiled)
         header.setTileDescription(Imf::TileDescription(8, 4, Imf::ONE_LEVEL));
     if (spec.association != nullptr)
@@ -121,7 +126,7 @@ void writeExr(const std::filesystem::path& path, const ExrSpec& spec) {
         names.push_back("A");
     for (const auto* name : names)
         header.channels().insert(name, Imf::Channel(spec.type));
-    constexpr auto count = static_cast<std::size_t>(width) * height;
+    const auto count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     std::vector<std::vector<Imath::half>> halves(names.size(), std::vector<Imath::half>(count));
     std::vector<std::vector<float>> floats(names.size(), std::vector<float>(count));
     std::uint32_t state = 0x1234567U;
@@ -292,9 +297,41 @@ int main() {
         writeExr(path, ExrSpec{.association = "straight", .repairs = true});
         expectParity(check, path, render::NativeSampleLayout::RgbaHalf, "exr-repairs-straight");
     }
-    // 8 PNG kinds, one JPEG and 8 half OpenEXR kinds, each under three associations, raw and
+    // #474: 300 rows are 19 ZIP chunks (four bands) and 75 tile rows (eight bands), which decode
+    // concurrently; the samples and repair counts still equal the single-threaded float decode.
+    const std::array<std::pair<const char*, ExrSpec>, 3> bandedCases{{
+        {"exr-banded-zip", ExrSpec{.repairs = true, .height = 300}},
+        {"exr-banded-piz", ExrSpec{.height = 300, .compression = Imf::PIZ_COMPRESSION}},
+        {"exr-banded-tiled", ExrSpec{.tiled = true, .repairs = true, .height = 300}},
+    }};
+    for (const auto& [name, spec] : bandedCases) {
+        const auto path = scratch.file(std::string(name) + ".exr");
+        writeExr(path, spec);
+        expectParity(check, path, render::NativeSampleLayout::RgbaHalf, name);
+    }
+    {
+        // Only the calling thread consults the cancellation callback, and it stops every band.
+        const auto revision = media::captureImageSourceRevision(
+            scratch.file("exr-banded-zip.exr"), media::kMaxImageStorageBytes);
+        check.expect(revision.value.has_value(), "capture the banded OpenEXR image");
+        if (revision.value) {
+            media::ImageInterpretation raw;
+            raw.colorSpace = media::ImageColorSpace::Raw;
+            const auto caller = std::this_thread::get_id();
+            int polls = 0;
+            bool foreign = false;
+            const auto cancelled = media::decodeImageSamples(**revision.value, raw, [&] {
+                foreign = foreign || std::this_thread::get_id() != caller;
+                return ++polls > 2;
+            });
+            check.expect(!cancelled.value && cancelled.cancelled,
+                         "a banded decode cancelled part way publishes nothing");
+            check.expect(!foreign, "only the calling thread polls the cancellation callback");
+        }
+    }
+    // 8 PNG kinds, one JPEG and 11 half OpenEXR kinds, each under three associations, raw and
     // stored.
-    check.expect(comparedVariants == (8 + 1 + 8) * 6, "every native-sample variant was compared");
+    check.expect(comparedVariants == (8 + 1 + 11) * 6, "every native-sample variant was compared");
     // No native form: a FLOAT layer and any converted interpretation decode to float instead.
     {
         const auto path = scratch.file("exr-float.exr");

@@ -8,6 +8,7 @@
 #include <ImfChannelList.h>
 #include <ImfChromaticities.h>
 #include <ImfChromaticitiesAttribute.h>
+#include <ImfCompression.h>
 #include <ImfFrameBuffer.h>
 #include <ImfHeader.h>
 #include <ImfIO.h>
@@ -27,17 +28,22 @@
 #include <algorithm>
 #include <cctype>
 #include <array>
+#include <atomic>
 #include <bit>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace bloom::media::detail {
@@ -774,12 +780,40 @@ decodeExrParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interp
                           pixelBudget);
 }
 
+// #474: OpenEXR compresses each chunk (a run of scanlines or a tile) on its own, across every
+// channel of the part, so reading only the selected channels cannot skip decompression; the chunks
+// are independent, though, so bands of whole chunks decode concurrently, each through its own
+// reader over the same immutable bytes. The extra threads in flight across the process are bounded
+// by the hardware concurrency: when many frames decode at once each gets fewer, never fewer than
+// its own thread.
+constexpr std::uint64_t kMinimumChunksPerExrBand = 4;
+constexpr unsigned kMaximumExrBands = 8;
+std::atomic<unsigned> exrBandThreadsInFlight{0};
+
+[[nodiscard]] unsigned reserveExrBandThreads(const unsigned wanted) noexcept {
+    const unsigned limit = std::max(1U, std::thread::hardware_concurrency());
+    auto current = exrBandThreadsInFlight.load(std::memory_order_relaxed);
+    while (true) {
+        const auto take = std::min(wanted, current < limit ? limit - current : 0U);
+        if (take == 0)
+            return 0;
+        if (exrBandThreadsInFlight.compare_exchange_weak(current, current + take,
+                                                         std::memory_order_relaxed))
+            return take;
+    }
+}
+
+void releaseExrBandThreads(const unsigned count) noexcept {
+    exrBandThreadsInFlight.fetch_sub(count, std::memory_order_relaxed);
+}
+
 // #422: the selected colour layer's binary16 samples interleaved as R, G, B, A (Y in lane 0 for a
 // luminance layer), read by OpenEXR without any conversion. The ingest repairs the float decode
 // would make are counted from the bits; SampleConvertV1 applies them on the device.
 static ImageResult<ExrHalfSamples>
-decodeExrHalfParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interpretation,
-                   const CancelImageWork& cancel, const std::size_t pixelBudget) {
+decodeExrHalfParts(Imf::MultiPartInputFile& input, const std::span<const std::byte> bytes,
+                   const ImageInterpretation& interpretation, const CancelImageWork& cancel,
+                   const std::size_t pixelBudget) {
     using Decoded = ExrHalfSamples;
     if (const auto error = validateVersion(static_cast<std::uint32_t>(input.version())))
         return failure<Decoded>(*error, "OpenEXR version or flags are unsupported");
@@ -814,13 +848,13 @@ decodeExrHalfParts(Imf::MultiPartInputFile& input, const ImageInterpretation& in
     }
     const auto width = layout->width;
     const auto height = layout->height;
-    std::uint64_t bytes = 0;
-    if (!detail::checkedSizeProduct(width, height, bytes) ||
-        !detail::checkedSizeProduct(bytes, 8U, bytes) || bytes > pixelBudget)
+    std::uint64_t byteCount = 0;
+    if (!detail::checkedSizeProduct(width, height, byteCount) ||
+        !detail::checkedSizeProduct(byteCount, 8U, byteCount) || byteCount > pixelBudget)
         return failure<Decoded>(ImageDiagnosticCode::PixelBudgetExceeded,
                                 "Decoded samples exceed the pixel storage budget");
     if (cancelled(cancel))
-        return failure<Decoded>(ImageDiagnosticCode::Cancelled, "Image decode cancelled");
+        return {{}, "Image decode cancelled", true, ImageDiagnosticCode::Cancelled};
     Decoded decoded;
     decoded.layout.dataX = layout->dataWindow.min.x;
     decoded.layout.dataY = layout->dataWindow.min.y;
@@ -836,14 +870,17 @@ decodeExrHalfParts(Imf::MultiPartInputFile& input, const ImageInterpretation& in
         (interpretation.alphaAssociation == ImageAlphaAssociation::Auto
              ? layout->alphaAssociation
              : interpretation.alphaAssociation) == ImageAlphaAssociation::Premultiplied;
-    auto storage = std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(bytes));
+    auto storage = std::make_shared<std::vector<std::byte>>(static_cast<std::size_t>(byteCount));
     const auto rowStride = static_cast<std::size_t>(width) * 8U;
+    // Reads are whole chunks: a tile row, or the compression's scanlines per chunk.
+    const auto chunkHeight = static_cast<std::uint64_t>(
+        layout->tiled ? std::max<std::uint32_t>(1U, layout->tileHeight)
+                      : static_cast<std::uint32_t>(
+                            std::max(1, Imf::getCompressionNumScanlines(header.compression()))));
     constexpr std::uint64_t kBandTargetBytes = std::uint64_t{1024} * 1024U;
-    std::uint64_t chunkRows = layout->tiled
-                                  ? std::max<std::uint64_t>(1U, layout->tileHeight)
-                                  : std::max<std::uint64_t>(1U, kBandTargetBytes / rowStride);
-    chunkRows = std::min(chunkRows, height);
-    Imf::InputPart part(input, *index);
+    const std::uint64_t chunkRows = std::min(
+        height, std::max<std::uint64_t>(1U, kBandTargetBytes / rowStride / chunkHeight) *
+                    chunkHeight);
     Imf::FrameBuffer frameBuffer;
     // Slices address absolute data-window coordinates; the buffer starts at the data window.
     auto* const base = reinterpret_cast<char*>(storage->data());
@@ -861,22 +898,120 @@ decodeExrHalfParts(Imf::MultiPartInputFile& input, const ImageInterpretation& in
     }
     if (layout->hasAlpha)
         insert(layout->colourNames[3], 3);
-    part.setFrameBuffer(frameBuffer);
-    std::uint64_t completed = 0;
-    while (completed < height) {
-        if (cancelled(cancel))
-            return failure<Decoded>(ImageDiagnosticCode::Cancelled, "Image decode cancelled");
-        const auto first = layout->tiled ? (completed / chunkRows) * chunkRows : completed;
-        const auto count = std::min(chunkRows, height - first);
-        const auto firstY = static_cast<std::int64_t>(layout->dataWindow.min.y) +
-                            static_cast<std::int64_t>(first);
-        part.readPixels(static_cast<int>(firstY),
-                        static_cast<int>(firstY + static_cast<std::int64_t>(count) - 1));
-        completed = first + count;
+    // Rows [first, first + count) of the data window through `part`, then their repair count.
+    // `stop` is polled between reads; false means the band stopped before its end.
+    const auto readBand = [&](Imf::InputPart& part, const std::uint64_t first,
+                              const std::uint64_t count, const auto& stop,
+                              std::uint64_t& repaired) {
+        part.setFrameBuffer(frameBuffer);
+        for (std::uint64_t done = 0; done < count;) {
+            if (stop())
+                return false;
+            const auto rows = std::min(chunkRows, count - done);
+            const auto firstY = static_cast<std::int64_t>(layout->dataWindow.min.y) +
+                                static_cast<std::int64_t>(first + done);
+            part.readPixels(static_cast<int>(firstY),
+                            static_cast<int>(firstY + static_cast<std::int64_t>(rows) - 1));
+            done += rows;
+        }
+        auto bandLayout = decoded.layout;
+        bandLayout.height = count;
+        repaired = countExrHalfRepairs(
+            std::span<const std::byte>(*storage).subspan(static_cast<std::size_t>(first) * rowStride,
+                                                         static_cast<std::size_t>(count) *
+                                                             rowStride),
+            bandLayout, interpretation.storedSamples);
+        return true;
+    };
+    Imf::InputPart part(input, *index);
+    const auto chunks = (height + chunkHeight - 1) / chunkHeight;
+    const auto wanted = static_cast<unsigned>(std::min<std::uint64_t>(
+        kMaximumExrBands, std::max<std::uint64_t>(1U, chunks / kMinimumChunksPerExrBand)));
+    const auto extra = wanted > 1 ? reserveExrBandThreads(wanted - 1) : 0U;
+    struct Reservation final {
+        unsigned count;
+        ~Reservation() { releaseExrBandThreads(count); }
+    } reservation{extra};
+    const auto bands = static_cast<std::uint64_t>(extra) + 1U;
+    // Whole chunks per band, the remainder spread over the first bands.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> ranges;
+    for (std::uint64_t band = 0, chunk = 0; band < bands; ++band) {
+        const auto take = chunks / bands + (band < chunks % bands ? 1U : 0U);
+        const auto first = chunk * chunkHeight;
+        const auto last = std::min(height, (chunk + take) * chunkHeight);
+        ranges.emplace_back(first, last - first);
+        chunk += take;
     }
+    std::atomic<bool> stopBands{false};
+    std::mutex bandMutex;
+    std::condition_variable bandDone;
+    std::size_t bandsRunning = ranges.size() - 1U;
+    std::vector<std::optional<ImageDiagnosticCode>> bandErrors(ranges.size());
+    std::vector<std::uint64_t> bandRepairs(ranges.size(), 0U);
+    std::vector<std::jthread> workers;
+    workers.reserve(ranges.size() - 1U);
+    const auto stopRequested = [&stopBands] { return stopBands.load(std::memory_order_relaxed); };
+    for (std::size_t band = 1; band < ranges.size(); ++band)
+        workers.emplace_back([&, band] {
+            try {
+                RevisionStream stream(bytes);
+                Imf::MultiPartInputFile file(stream, 1);
+                Imf::InputPart own(file, *index);
+                if (!readBand(own, ranges[band].first, ranges[band].second, stopRequested,
+                              bandRepairs[band]))
+                    bandErrors[band] = ImageDiagnosticCode::Cancelled;
+            } catch (const std::bad_alloc&) {
+                bandErrors[band] = ImageDiagnosticCode::AllocationFailure;
+            } catch (...) {
+                bandErrors[band] = ImageDiagnosticCode::Truncated;
+            }
+            if (bandErrors[band])
+                stopBands.store(true, std::memory_order_relaxed);
+            const std::lock_guard lock(bandMutex);
+            --bandsRunning;
+            bandDone.notify_all();
+        });
+    // This thread reads the first band and alone consults the caller's cancellation callback.
+    const auto stopFirst = [&] {
+        if (cancelled(cancel))
+            stopBands.store(true, std::memory_order_relaxed);
+        return stopRequested();
+    };
+    std::optional<ImageDiagnosticCode> firstError;
+    try {
+        if (!readBand(part, ranges[0].first, ranges[0].second, stopFirst, bandRepairs[0]))
+            firstError = ImageDiagnosticCode::Cancelled;
+    } catch (...) {
+        stopBands.store(true, std::memory_order_relaxed);
+        std::unique_lock lock(bandMutex);
+        bandDone.wait(lock, [&] { return bandsRunning == 0; });
+        throw;
+    }
+    {
+        std::unique_lock lock(bandMutex);
+        while (!bandDone.wait_for(lock, std::chrono::milliseconds(5),
+                                  [&] { return bandsRunning == 0; }))
+            if (cancelled(cancel))
+                stopBands.store(true, std::memory_order_relaxed);
+    }
+    workers.clear();
+    if (cancelled(cancel))
+        return {{}, "Image decode cancelled", true, ImageDiagnosticCode::Cancelled};
+    for (const auto& bandError : bandErrors)
+        if (bandError && *bandError != ImageDiagnosticCode::Cancelled)
+            firstError = bandError;
+    if (firstError == ImageDiagnosticCode::AllocationFailure)
+        return failure<Decoded>(ImageDiagnosticCode::AllocationFailure,
+                                "OpenEXR decode allocation failed");
+    if (firstError == ImageDiagnosticCode::Truncated)
+        return failure<Decoded>(ImageDiagnosticCode::Truncated,
+                                "OpenEXR revision pixel data could not be decoded");
+    if (firstError)
+        return {{}, "Image decode cancelled", true, ImageDiagnosticCode::Cancelled};
     if (!part.isComplete())
         return failure<Decoded>(ImageDiagnosticCode::Truncated, "OpenEXR pixel data is truncated");
-    decoded.repairedPixels = countExrHalfRepairs(*storage, decoded.layout, interpretation.storedSamples);
+    for (const auto repaired : bandRepairs)
+        decoded.repairedPixels += repaired;
     decoded.bytes = std::move(storage);
     return {std::move(decoded), {}};
 }
@@ -888,7 +1023,7 @@ ImageResult<ExrHalfSamples> decodeExrHalfSamples(const std::span<const std::byte
     try {
         RevisionStream stream(bytes);
         Imf::MultiPartInputFile input(stream, 1);
-        return decodeExrHalfParts(input, interpretation, cancel, budget);
+        return decodeExrHalfParts(input, bytes, interpretation, cancel, budget);
     } catch (const std::bad_alloc&) {
         return failure<ExrHalfSamples>(ImageDiagnosticCode::AllocationFailure,
                                        "OpenEXR decode allocation failed");
