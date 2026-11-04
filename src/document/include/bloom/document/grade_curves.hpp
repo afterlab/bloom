@@ -19,6 +19,8 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/parameter.hpp>
 
+#include <array>
+#include <cstdint>
 #include <initializer_list>
 #include <span>
 
@@ -41,5 +43,30 @@ struct GradeCurveRange final {
 };
 [[nodiscard]] GradeCurveRange gradeCurveOutputDomain(GradeCurve curve) noexcept;
 [[nodiscard]] GradeCurveRange gradeCurveInputDomain(GradeCurve curve) noexcept;
+
+// #498: the curve presets, in menu order. Each is a point list over 0..1 in the usual photo and
+// grading convention; past the end points a channel curve extends in a straight line, as any
+// curve does. A channel curve offers all of them; a hue or Luma vs Saturation curve offers only
+// Linear, as Reset, which is its empty default.
+enum class GradeCurvePreset : std::uint8_t {
+    Linear,
+    MediumContrast,
+    StrongContrast,
+    LowContrast,
+    Lighten,
+    Darken,
+    Fade,
+    CrushBlacks,
+    Invert,
+};
+inline constexpr std::array<GradeCurvePreset, 9> kGradeCurvePresets{
+    GradeCurvePreset::Linear,         GradeCurvePreset::MediumContrast,
+    GradeCurvePreset::StrongContrast, GradeCurvePreset::LowContrast,
+    GradeCurvePreset::Lighten,        GradeCurvePreset::Darken,
+    GradeCurvePreset::Fade,           GradeCurvePreset::CrushBlacks,
+    GradeCurvePreset::Invert};
+// `preset` as `curve`'s points; a curve that is not a channel curve takes its default for every
+// preset.
+[[nodiscard]] PathValue gradeCurvePreset(GradeCurve curve, GradeCurvePreset preset);
 
 } // namespace bloom::document

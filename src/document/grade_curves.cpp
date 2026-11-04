@@ -19,6 +19,32 @@ PathValue gradeCurvePath(const std::span<const Vec2d> points) {
     return path;
 }
 
+PathValue gradeCurvePreset(const GradeCurve curve, const GradeCurvePreset preset) {
+    if (!isChannelGradeCurve(curve))
+        return defaultGradeCurve(curve);
+    switch (preset) {
+    case GradeCurvePreset::Linear:
+        break;
+    case GradeCurvePreset::MediumContrast:
+        return gradeCurvePath({{0.0, 0.0}, {0.25, 0.18}, {0.75, 0.82}, {1.0, 1.0}});
+    case GradeCurvePreset::StrongContrast:
+        return gradeCurvePath({{0.0, 0.0}, {0.25, 0.12}, {0.75, 0.88}, {1.0, 1.0}});
+    case GradeCurvePreset::LowContrast:
+        return gradeCurvePath({{0.0, 0.0}, {0.25, 0.31}, {0.75, 0.69}, {1.0, 1.0}});
+    case GradeCurvePreset::Lighten:
+        return gradeCurvePath({{0.0, 0.0}, {0.5, 0.62}, {1.0, 1.0}});
+    case GradeCurvePreset::Darken:
+        return gradeCurvePath({{0.0, 0.0}, {0.5, 0.38}, {1.0, 1.0}});
+    case GradeCurvePreset::Fade:
+        return gradeCurvePath({{0.0, 0.1}, {0.5, 0.52}, {1.0, 0.92}});
+    case GradeCurvePreset::CrushBlacks:
+        return gradeCurvePath({{0.0, 0.0}, {0.12, 0.0}, {1.0, 1.0}});
+    case GradeCurvePreset::Invert:
+        return gradeCurvePath({{0.0, 1.0}, {1.0, 0.0}});
+    }
+    return defaultGradeCurve(curve);
+}
+
 GradeCurveRange gradeCurveInputDomain(const GradeCurve curve) noexcept {
     if (isHueGradeCurve(curve))
         return {0.0, 1.0};
