@@ -568,8 +568,10 @@ enum class ScalarDomain : std::uint8_t {
                         hasValidScalarCurveReference(directional->spacing, plan, index, failure);
                 forEachColorGradeOperand(effect.kernel, [&](const auto& operand) {
                     using Operand = std::decay_t<decltype(operand)>;
-                    // #493: a Curves curve is an inline constant or Path curve, like a mask path.
-                    if constexpr (std::is_same_v<Operand, CompiledPathParameter>)
+                    // #493: a Curves curve is an inline constant or Path curve, like a mask path;
+                    // #541: so is a Colorize gradient (an inline constant or Gradient curve).
+                    if constexpr (std::is_same_v<Operand, CompiledPathParameter> ||
+                                  std::is_same_v<Operand, CompiledGradientParameter>)
                         return;
                     else if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
                         validKernel = validKernel &&
@@ -1318,7 +1320,8 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                         using Operand = std::decay_t<decltype(operand)>;
                         if (!gradeRegistered)
                             return;
-                        if constexpr (std::is_same_v<Operand, CompiledPathParameter>)
+                        if constexpr (std::is_same_v<Operand, CompiledPathParameter> ||
+                                      std::is_same_v<Operand, CompiledGradientParameter>)
                             return;
                         else if constexpr (std::is_same_v<Operand, CompiledVec2Parameter>)
                             gradeRegistered = registerVec2(operand, "grade", operationSubject);
@@ -2833,8 +2836,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 // #493: a curve's sampled points are in the prepared table, which
                                 // the cache identity above already carries.
                                 forEachColorGradeOperand(step.kernel, [&](const auto& operand) {
-                                    if constexpr (!std::is_same_v<std::decay_t<decltype(operand)>,
-                                                                  CompiledPathParameter>)
+                                    using Operand = std::decay_t<decltype(operand)>;
+                                    if constexpr (!std::is_same_v<Operand, CompiledPathParameter> &&
+                                                  !std::is_same_v<Operand,
+                                                                  CompiledGradientParameter>)
                                         parameter(operand);
                                 });
                             }

@@ -94,7 +94,23 @@ std::vector<double> operands(const ColorizeKernel& item) {
     values.push_back(scalar(item.phase));
     for (const auto& weight : item.weights)
         values.push_back(scalar(weight));
+    // #541: a bound gradient trails the fixed operands as its stop count, then each stop.
+    if (item.gradient) {
+        const auto& gradient = std::get<document::GradientValue>(item.gradient->source);
+        values.push_back(static_cast<double>(gradient.stops.size()));
+        for (const auto& stop : gradient.stops)
+            values.insert(values.end(), {stop.position, stop.color.red, stop.color.green,
+                                         stop.color.blue, stop.color.alpha});
+    }
     return values;
+}
+
+// A Gradient Map bound to `stops`, as the compiler lowers a node with its gradient.
+ColorizeKernel gradientMap(std::vector<document::GradientStop> stops) {
+    auto item = kernel(ColorizeMode::GradientMap);
+    item.gradient = runtime::CompiledGradientParameter{document::ParameterId::fromRaw(30),
+                                                       document::GradientValue{std::move(stops)}};
+    return item;
 }
 
 std::optional<runtime::detail::PreparedColorGrade> prepare(const ColorizeKernel& item) {
@@ -145,6 +161,28 @@ std::array<double, 4> reference(const ColorizeKernel& item, const std::array<flo
         else {
             const double u = t - 2.0 * std::floor(t / 2.0);
             t = u > 1.0 ? 2.0 - u : u;
+        }
+        if (map && item.gradient) {
+            // The stops by position, ties in stored order; the last stop at or before t blends
+            // towards the next, and the ends hold.
+            auto stops = std::get<document::GradientValue>(item.gradient->source).stops;
+            std::ranges::stable_sort(stops, {}, &document::GradientStop::position);
+            const auto colour = [](const document::GradientStop& stop) {
+                return std::array<double, 3>{stop.color.red, stop.color.green, stop.color.blue};
+            };
+            if (t <= stops.front().position) {
+                c = colour(stops.front());
+            } else if (t >= stops.back().position) {
+                c = colour(stops.back());
+            } else {
+                std::size_t i = 0;
+                while (i + 2 < stops.size() && stops[i + 1].position <= t)
+                    ++i;
+                const double span = stops[i + 1].position - stops[i].position;
+                c = mix(colour(stops[i]), colour(stops[i + 1]),
+                        span > 0.0 ? (t - stops[i].position) / span : 0.0);
+            }
+            break;
         }
         const double m = scalar(item.midpoint);
         c = t <= m ? mix(rgb(item.shadows), rgb(item.midtones), t / m)
@@ -231,6 +269,21 @@ std::vector<std::pair<ColorizeKernel, std::string>> cases() {
         list.emplace_back(item, cycle == ColorizeCycle::Repeat ? "repeating Gradient Map"
                                                                : "mirrored Gradient Map");
     }
+    // #541: a bound gradient, its stops unsorted, with a hard edge at 0.5 and an HDR stop.
+    const std::vector<document::GradientStop> stops{{0.8, Color{1.2, 0.9, 0.1, 1.0}},
+                                                    {0.0, Color{0.0, 0.05, 0.3, 1.0}},
+                                                    {0.5, Color{0.1, 0.6, 0.2, 1.0}},
+                                                    {0.5, Color{0.9, 0.1, -0.2, 1.0}},
+                                                    {1.0, Color{3.0, 2.0, 1.5, 1.0}}};
+    list.emplace_back(gradientMap(stops), "Gradient Map through five stops");
+    auto cycling = gradientMap(stops);
+    cycling.cycle = ColorizeCycle::Repeat;
+    cycling.repetitions.source = 1.7;
+    cycling.phase.source = 0.25;
+    cycling.source = ColorizeSource::Green;
+    list.emplace_back(cycling, "repeating Gradient Map through five stops");
+    list.emplace_back(gradientMap({{0.3, Color{0.4, 0.5, 0.6, 1.0}}}),
+                      "Gradient Map through one stop");
     auto partial = kernel(ColorizeMode::Tritone);
     partial.amount.source = 0.35;
     list.emplace_back(partial, "Tritone at 35%");
@@ -381,6 +434,37 @@ void testDomainsProgramAndIdentity() {
                !runtime::detail::buildColorGradeProgram(grade->kind, badMode).succeeded() &&
                !runtime::detail::buildColorGradeProgram(grade->kind, badMidpoint).succeeded(),
            "a malformed colorize table is refused");
+    // #541: a bound gradient's table: the stops in position order, at most 64, and a malformed one
+    // is refused by the program builder.
+    auto many = std::vector<document::GradientStop>(document::kMaximumGradientStops,
+                                                    {0.5, Color{0.5, 0.5, 0.5, 1.0}});
+    expect(prepare(gradientMap(many)).has_value(), "a 64-stop gradient prepares");
+    auto tooMany = gradientMap(many);
+    std::get<document::GradientValue>(tooMany.gradient->source)
+        .stops.push_back({0.5, Color{0.5, 0.5, 0.5, 1.0}});
+    auto outside = gradientMap({{1.5, Color{0.5, 0.5, 0.5, 1.0}}});
+    expect(refused(tooMany) && refused(outside) && refused(gradientMap({})),
+           "a gradient with no stops, more than 64 or a stop outside [0, 1] is refused");
+    const auto stopped = prepare(gradientMap({{0.0, Color{0.0, 0.0, 0.0, 1.0}},
+                                              {1.0, Color{1.0, 1.0, 1.0, 1.0}}}));
+    expect(stopped && stopped->data[0] == 4.0F && stopped->data[7] == 2.0F &&
+               runtime::detail::buildColorGradeProgram(stopped->kind, stopped->data).succeeded(),
+           "a bound gradient is table mode 4 with its stop count");
+    if (stopped) {
+        auto shortTable = stopped->data;
+        shortTable.pop_back();
+        auto countMismatch = stopped->data;
+        countMismatch[7] = 3.0F;
+        expect(!runtime::detail::buildColorGradeProgram(stopped->kind, shortTable).succeeded() &&
+                   !runtime::detail::buildColorGradeProgram(stopped->kind, countMismatch)
+                        .succeeded(),
+               "a gradient table whose size and stop count disagree is refused");
+    }
+    expect(prepare(gradientMap({{0.0, Color{0.05, 0.0, 0.2, 1.0}},
+                                {0.18, Color{0.6, 0.2, -0.1, 1.0}},
+                                {1.0, Color{1.0, 0.9, 0.4, 1.0}}}))
+                   ->data != prepare(kernel(ColorizeMode::GradientMap))->data,
+           "a bound gradient has its own table and cache identity");
     // A position beyond binary32 is refused rather than published.
     auto huge = kernel(ColorizeMode::GradientMap);
     huge.source = ColorizeSource::Red;

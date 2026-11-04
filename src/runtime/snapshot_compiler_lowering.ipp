@@ -251,9 +251,11 @@ void entryDependencies(const document::NodeId merge, const document::LayerStackE
                 node ? findParameterBinding(*node, document::kTimeRemapParameterRole) : nullptr)
             addParameterCurve(binding->parameterId);
     }
-    // Path curves are compiled inline into the mask kernel that samples them (ADR 0028).
+    // Path curves are compiled inline into the mask kernel that samples them (ADR 0028), and
+    // Gradient curves into the Colorize kernel that samples them (#541).
     std::erase_if(reachableCurveIds, [&](const document::AnimationCurveId id) {
-        return composition_->animationCurves().findPath(id) != nullptr;
+        return composition_->animationCurves().findPath(id) != nullptr ||
+               composition_->animationCurves().findGradient(id) != nullptr;
     });
 
     CompiledCurveTables tables;
@@ -305,8 +307,10 @@ void entryDependencies(const document::NodeId merge, const document::LayerStackE
                                 tables.vec3.back().defaultValue = *value;
                         }
                     }
-                } else if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
-                    // Unreachable: Path curves were removed from the reachable set above.
+                } else if constexpr (std::is_same_v<Curve, document::PathAnimationCurve> ||
+                                     std::is_same_v<Curve, document::GradientAnimationCurve>) {
+                    // Unreachable: Path and Gradient curves were removed from the reachable set
+                    // above.
                 } else {
                     color4CurveIndices_.emplace(
                         curve.id, runtime::Color4CurveIndex::fromRaw(tables.color4.size()));
@@ -1613,14 +1617,20 @@ lowerImageEffect(const document::NodeRecord& node,
                 if (parameter)
                     target = *parameter;
             };
+            // #541: a Gradient Map whose node binds a gradient maps through it; one made before
+            // the gradient existed keeps its shadows, midtones, highlights ramp.
+            const auto* gradient = map ? findParameterBinding(node, "gradient") : nullptr;
             scalar("amount", kernel.amount);
             if (kernel.mode == Mode::Fill)
                 color("fillColor", kernel.color);
-            if (kernel.mode == Mode::Tint || ramp) {
+            if ((kernel.mode == Mode::Tint || ramp) && gradient == nullptr) {
                 color("shadows", kernel.shadows);
                 color("highlights", kernel.highlights);
             }
-            if (ramp) {
+            if (gradient != nullptr) {
+                kernel.gradient = compiledGradientParameter(gradient->parameterId);
+                lowered = lowered && kernel.gradient.has_value();
+            } else if (ramp) {
                 color("midtones", kernel.midtones);
                 scalar("midpoint", kernel.midpoint);
             }
@@ -2688,6 +2698,24 @@ compiledPathParameter(const document::ParameterId id) {
     if (const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source)) {
         if (const auto* curve = composition_->animationCurves().findPath(source->curveId))
             return runtime::CompiledPathParameter{id, runtime::compileAnimationCurve(*curve)};
+    }
+    return std::nullopt;
+}
+
+// #541: a gradient is a constant GradientValue or an inline compiled Gradient curve.
+[[nodiscard]] std::optional<runtime::CompiledGradientParameter>
+compiledGradientParameter(const document::ParameterId id) {
+    const auto* parameter = findParameter(id);
+    if (parameter == nullptr)
+        return std::nullopt;
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
+        const auto* value = std::get_if<document::GradientValue>(&constant->value);
+        return value == nullptr ? std::nullopt
+                                : std::optional(runtime::CompiledGradientParameter{id, *value});
+    }
+    if (const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+        if (const auto* curve = composition_->animationCurves().findGradient(source->curveId))
+            return runtime::CompiledGradientParameter{id, runtime::compileAnimationCurve(*curve)};
     }
     return std::nullopt;
 }

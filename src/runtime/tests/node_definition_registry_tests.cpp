@@ -243,12 +243,14 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                     "bloom.colorize"},
                    document::NodeCategory::Grade);
     // #504 Colorize: an Image in and out; constant mode (Tint by default), source and cycle with no
-    // socket; every colour and scalar animatable with its own socket in parameter order.
+    // socket; every colour and scalar animatable with its own socket in parameter order. #541: the
+    // optional gradient last, animatable as a whole value with no socket.
     const auto* colorize = registry.find("bloom.colorize", 1);
     const auto socketsMatch = [&] {
         std::size_t socket = 1;
         for (const auto& parameter : colorize->parameters) {
-            if (!parameter.supportsAnimation)
+            if (!parameter.supportsAnimation ||
+                parameter.valueKind == document::ParameterValueKind::Gradient)
                 continue;
             if (socket >= colorize->inputs.size() || colorize->inputs[socket].name != parameter.role ||
                 colorize->inputs[socket].required)
@@ -258,7 +260,12 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         return socket == colorize->inputs.size();
     };
     expectations.expect(
-        colorize && colorize->inputs.size() == 15 && colorize->parameters.size() == 17 &&
+        colorize && colorize->inputs.size() == 15 && colorize->parameters.size() == 18 &&
+            colorize->parameters[17].role == "gradient" &&
+            colorize->parameters[17].valueKind == document::ParameterValueKind::Gradient &&
+            !colorize->parameters[17].required && colorize->parameters[17].supportsAnimation &&
+            colorize->parameters[17].defaultValue ==
+                document::ParameterValue{document::defaultColorizeGradient()} &&
             colorize->inputs[0].valueKind == runtime::SocketValueKind::Image &&
             colorize->parameters[0].role == "mode" && !colorize->parameters[0].supportsAnimation &&
             colorize->parameters[0].defaultValue == document::ParameterValue{std::int64_t{1}} &&

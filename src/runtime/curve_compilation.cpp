@@ -101,4 +101,16 @@ CompiledPathCurve compileAnimationCurve(const document::PathAnimationCurve& curv
     return result;
 }
 
+CompiledGradientCurve compileAnimationCurve(const document::GradientAnimationCurve& curve) {
+    CompiledGradientCurve result;
+    result.id = curve.id;
+    result.keyframes.reserve(curve.keyframes.size());
+    for (const auto& keyframe : curve.keyframes)
+        result.keyframes.push_back({keyframe.id, keyframe.time, keyframe.value,
+                                    compiledInterpolation(keyframe.outgoingInterpolation),
+                                    keyframe.outgoingHandle, keyframe.incomingHandle,
+                                    keyframe.easing});
+    return result;
+}
+
 } // namespace bloom::runtime

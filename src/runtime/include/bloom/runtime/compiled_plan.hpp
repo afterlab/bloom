@@ -308,6 +308,13 @@ struct CompiledPathParameter final {
     std::variant<document::PathValue, CompiledPathCurve> source;
     friend bool operator==(const CompiledPathParameter&, const CompiledPathParameter&) = default;
 };
+// #541: a gradient parameter is a constant or an inline Gradient curve.
+struct CompiledGradientParameter final {
+    document::ParameterId id;
+    std::variant<document::GradientValue, CompiledGradientCurve> source;
+    friend bool operator==(const CompiledGradientParameter&,
+                           const CompiledGradientParameter&) = default;
+};
 struct CompiledLayerMask final {
     document::LayerMaskId id;
     document::LayerMaskMode mode = document::LayerMaskMode::Add;
@@ -467,6 +474,9 @@ struct ColorizeKernel final {
         CompiledScalarParameter{{}, 0.4}, CompiledScalarParameter{{}, 0.6},
         CompiledScalarParameter{{}, 0.4}, CompiledScalarParameter{{}, 0.6},
         CompiledScalarParameter{{}, 0.2}, CompiledScalarParameter{{}, 0.8}};
+    // #541: Gradient Map's gradient. Lowered only for a Gradient Map whose node binds one; a node
+    // made before the gradient existed maps through the shadows, midtones, highlights ramp.
+    std::optional<CompiledGradientParameter> gradient;
     friend bool operator==(const ColorizeKernel&, const ColorizeKernel&) = default;
 };
 using ImageEffectKernel =
@@ -480,8 +490,8 @@ using ImageEffectKernel =
 // #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade;
 // #506: or Highlight Roll-off; #503: or Alpha Association; #504: or Colorize) kernel in the kernel's canonical order
 // (channel-major), calling `visit(parameter)` with a CompiledScalarParameter, a
-// CompiledVec2Parameter, (#493 Curves) a CompiledPathParameter or (#503 Alpha Association) a
-// CompiledColorParameter. Returns false for every other kernel. The one traversal the evaluator's
+// CompiledVec2Parameter, (#493 Curves) a CompiledPathParameter, (#503 Alpha Association) a
+// CompiledColorParameter or (#541 Colorize's gradient) a CompiledGradientParameter. Returns false for every other kernel. The one traversal the evaluator's
 // validation, sampling, cache key and time dependence all share.
 template <typename Visit>
 bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
@@ -531,6 +541,9 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         visit(colorize->phase);
         for (const auto& weight : colorize->weights)
             visit(weight);
+        // #541: then the gradient, when lowered.
+        if (colorize->gradient)
+            visit(*colorize->gradient);
         return true;
     }
     return false;

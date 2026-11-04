@@ -33,6 +33,8 @@ constexpr std::size_t kRollOffFloats = 4;
 constexpr std::size_t kAlphaAssociationFloats = 8;
 constexpr std::size_t kColorizeFloats = 40;
 constexpr std::size_t kColorizeOperands = 26;
+// #541: a Gradient Map's stops follow the fixed table, two vec4s each.
+constexpr std::size_t kColorizeStopFloats = 8;
 static_assert(kLevelsChannelFloats % 4 == 0);
 static_assert(std::tuple_size_v<decltype(GradeKernel::values)> == document::kGradeParameterCount);
 
@@ -314,7 +316,34 @@ prepareAlphaAssociation(const AlphaAssociationKernel& kernel,
 // never changes the table or the cache identity. Tritone is the ramp over luma, clamped, once.
 [[nodiscard]] std::optional<PreparedColorGrade>
 prepareColorize(const ColorizeKernel& kernel, const std::span<const double> values) {
-    if (values.size() != kColorizeOperands ||
+    // #541: a lowered gradient follows the fixed operands as its stop count, then (position, r,
+    // g, b, a) per stop.
+    std::vector<document::GradientStop> stops;
+    if (kernel.gradient) {
+        if (values.size() <= kColorizeOperands)
+            return std::nullopt;
+        const double count = values[kColorizeOperands];
+        if (!(count >= 1.0 && count <= static_cast<double>(document::kMaximumGradientStops)) ||
+            count != std::floor(count) ||
+            values.size() != kColorizeOperands + 1 + 5 * static_cast<std::size_t>(count))
+            return std::nullopt;
+        document::GradientValue gradient;
+        for (std::size_t stop = 0; stop < static_cast<std::size_t>(count); ++stop) {
+            const auto* v = &values[kColorizeOperands + 1 + 5 * stop];
+            gradient.stops.push_back({v[0], core::Color4d{v[1], v[2], v[3], v[4]}});
+        }
+        if (!gradient.isValid() ||
+            !std::ranges::all_of(gradient.stops, [](const document::GradientStop& stop) {
+                return std::abs(stop.color.red) <= document::kMaximumColorizeColor &&
+                       std::abs(stop.color.green) <= document::kMaximumColorizeColor &&
+                       std::abs(stop.color.blue) <= document::kMaximumColorizeColor;
+            }))
+            return std::nullopt;
+        stops = document::sortedGradientStops(gradient);
+    } else if (values.size() != kColorizeOperands) {
+        return std::nullopt;
+    }
+    if (values.size() < kColorizeOperands ||
         static_cast<std::uint8_t>(kernel.mode) >
             static_cast<std::uint8_t>(ColorizeMode::BlackAndWhite) ||
         static_cast<std::uint8_t>(kernel.source) >
@@ -369,8 +398,43 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             store(5, i, rgb(3, i) - rgb(1, i));
         }
         break;
-    case ColorizeMode::Tritone:
-    case ColorizeMode::GradientMap: {
+    case ColorizeMode::GradientMap:
+        if (!stops.empty()) {
+            // #541: table mode 4, the stops by position: [position, r, g, b] then
+            // [1 / (next position - position) or 0, next colour - colour], each in binary32.
+            d[0] = 4.0F;
+            d[2] = static_cast<float>(kernel.source);
+            d[3] = static_cast<float>(kernel.cycle);
+            d[4] = static_cast<float>(values[18]);
+            d[5] = static_cast<float>(values[19]);
+            d[7] = static_cast<float>(stops.size());
+            for (std::size_t index = 0; index < stops.size(); ++index) {
+                const auto& stop = stops[index];
+                const float position = static_cast<float>(stop.position);
+                const std::array colour{static_cast<float>(stop.color.red),
+                                        static_cast<float>(stop.color.green),
+                                        static_cast<float>(stop.color.blue)};
+                d.push_back(position);
+                d.insert(d.end(), colour.begin(), colour.end());
+                float inverse = 0.0F;
+                std::array<float, 3> change{};
+                if (index + 1 < stops.size()) {
+                    const auto& next = stops[index + 1];
+                    const float span = static_cast<float>(next.position) - position;
+                    inverse = span > 0.0F ? 1.0F / span : 0.0F;
+                    if (!std::isfinite(inverse))
+                        inverse = 0.0F;
+                    change = {static_cast<float>(next.color.red) - colour[0],
+                              static_cast<float>(next.color.green) - colour[1],
+                              static_cast<float>(next.color.blue) - colour[2]};
+                }
+                d.push_back(inverse);
+                d.insert(d.end(), change.begin(), change.end());
+            }
+            break;
+        }
+        [[fallthrough]];
+    case ColorizeMode::Tritone: {
         const bool map = kernel.mode == ColorizeMode::GradientMap;
         const double midpoint = values[17];
         d[0] = 2.0F;
@@ -426,7 +490,7 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
     } else if (mode == 1) {
         for (std::size_t i = 0; i < 3; ++i)
             c[i] = std::fma(luma, k[20 + i], k[16 + i]);
-    } else if (mode == 2) {
+    } else if (mode == 2 || mode == 4) {
         const auto source = static_cast<int>(k[2]);
         const float x = source == 0   ? luma
                         : source == 4 ? a
@@ -443,7 +507,26 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             const float u = t - 2.0F * std::floor(t * 0.5F);
             t = u > 1.0F ? 2.0F - u : u;
         }
-        if (t <= k[6]) {
+        if (mode == 4) {
+            // #541: the last stop at or before t, interpolated towards the next one.
+            const auto n = static_cast<std::size_t>(k[7]);
+            const auto stop = [&](const std::size_t index) {
+                return &k[kColorizeFloats + kColorizeStopFloats * index];
+            };
+            if (!(t > stop(0)[0])) {
+                c = {stop(0)[1], stop(0)[2], stop(0)[3]};
+            } else if (t >= stop(n - 1)[0]) {
+                c = {stop(n - 1)[1], stop(n - 1)[2], stop(n - 1)[3]};
+            } else {
+                std::size_t index = 0;
+                while (index + 2 < n && stop(index + 1)[0] <= t)
+                    ++index;
+                const float* from = stop(index);
+                const float u = (t - from[0]) * from[4];
+                for (std::size_t i = 0; i < 3; ++i)
+                    c[i] = std::fma(u, from[5 + i], from[1 + i]);
+            }
+        } else if (t <= k[6]) {
             const float u = t * k[8];
             for (std::size_t i = 0; i < 3; ++i)
                 c[i] = std::fma(u, k[20 + i], k[16 + i]);
@@ -504,8 +587,14 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
     const auto closed = [](const float value, const float maximum) {
         return value >= 0.0F && value <= maximum && value == std::floor(value);
     };
-    return d.size() == kColorizeFloats && closed(d[0], 3.0F) && closed(d[2], 4.0F) &&
-           closed(d[3], 2.0F) && (d[0] != 2.0F || (d[6] > 0.0F && d[6] < 1.0F));
+    if (d.size() < kColorizeFloats || !closed(d[0], 4.0F) || !closed(d[2], 4.0F) ||
+        !closed(d[3], 2.0F))
+        return false;
+    // #541: table mode 4 carries one to 64 stops after the fixed table.
+    if (d[0] == 4.0F)
+        return closed(d[7], static_cast<float>(document::kMaximumGradientStops)) && d[7] >= 1.0F &&
+               d.size() == kColorizeFloats + kColorizeStopFloats * static_cast<std::size_t>(d[7]);
+    return d.size() == kColorizeFloats && (d[0] != 2.0F || (d[6] > 0.0F && d[6] < 1.0F));
 }
 
 [[nodiscard]] std::string glslProgramText(const ColorGradeKind kind) {
@@ -703,7 +792,7 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             "  precise vec3 r = vec3(fma(luma, c1.x, c0.x), fma(luma, c1.y, c0.y), "
             "fma(luma, c1.z, c0.z));\n"
             "  o = r;\n"
-            " } else if (mode == 2) {\n"
+            " } else if (mode == 2 || mode == 4) {\n"
             "  int source = int(k.z);\n"
             "  float x = source == 0 ? luma : (source == 4 ? a : s[source - 1]);\n"
             "  precise float t = fma(x, ramp.x, ramp.y);\n"
@@ -720,7 +809,30 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             "   precise float u = t - 2.0 * floor(t * 0.5);\n"
             "   t = u > 1.0 ? 2.0 - u : u;\n"
             "  }\n"
-            "  if (t <= ramp.z) {\n"
+            "  if (mode == 4) {\n"
+            "   int n = int(ramp.w);\n"
+            "   vec4 first = bloom_colorize_data.values[10];\n"
+            "   vec4 last = bloom_colorize_data.values[10 + 2 * (n - 1)];\n"
+            "   if (!(t > first.x)) {\n"
+            "    o = first.yzw;\n"
+            "   } else if (t >= last.x) {\n"
+            "    o = last.yzw;\n"
+            "   } else {\n"
+            "    int i = 0;\n"
+            "    for (int j = 0; j < 64; ++j) {\n"
+            "     if (i + 2 >= n || !(bloom_colorize_data.values[10 + 2 * (i + 1)].x <= t)) {\n"
+            "      break;\n"
+            "     }\n"
+            "     ++i;\n"
+            "    }\n"
+            "    vec4 a0 = bloom_colorize_data.values[10 + 2 * i];\n"
+            "    vec4 a1 = bloom_colorize_data.values[11 + 2 * i];\n"
+            "    precise float u = (t - a0.x) * a1.x;\n"
+            "    precise vec3 r = vec3(fma(u, a1.y, a0.y), fma(u, a1.z, a0.z), fma(u, a1.w, "
+            "a0.w));\n"
+            "    o = r;\n"
+            "   }\n"
+            "  } else if (t <= ramp.z) {\n"
             "   precise float u = t * inv.x;\n"
             "   precise vec3 r = vec3(fma(u, c1.x, c0.x), fma(u, c1.y, c0.y), fma(u, c1.z, "
             "c0.z));\n"
@@ -796,6 +908,26 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
             for (const auto& anchor : sampled->anchors) {
                 values.push_back(anchor.point.x);
                 values.push_back(anchor.point.y);
+            }
+        } else if constexpr (std::is_same_v<Parameter, CompiledGradientParameter>) {
+            // #541: a gradient's stop count, then each stop's position and straight colour.
+            std::optional<document::GradientValue> sampled;
+            if (const auto* constant = std::get_if<document::GradientValue>(&parameter.source))
+                sampled = *constant;
+            else if (time)
+                sampled =
+                    sampleGradientCurve(std::get<CompiledGradientCurve>(parameter.source), *time);
+            if (!sampled) {
+                evaluable = false;
+                return;
+            }
+            values.push_back(static_cast<double>(sampled->stops.size()));
+            for (const auto& stop : sampled->stops) {
+                values.push_back(stop.position);
+                values.push_back(stop.color.red);
+                values.push_back(stop.color.green);
+                values.push_back(stop.color.blue);
+                values.push_back(stop.color.alpha);
             }
         } else {
             const auto sampled = resolveParameter(parameter, plan, resolved);

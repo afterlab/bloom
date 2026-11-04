@@ -1231,6 +1231,12 @@ void testColorGradeEvaluation() {
             } else if constexpr (std::is_same_v<Operand, runtime::CompiledColorParameter>) {
                 const auto color = std::get<core::Color4d>(operand.source);
                 values.insert(values.end(), {color.red, color.green, color.blue, color.alpha});
+            } else if constexpr (std::is_same_v<Operand, runtime::CompiledGradientParameter>) {
+                const auto& gradient = std::get<document::GradientValue>(operand.source);
+                values.push_back(static_cast<double>(gradient.stops.size()));
+                for (const auto& stop : gradient.stops)
+                    values.insert(values.end(), {stop.position, stop.color.red, stop.color.green,
+                                                 stop.color.blue, stop.color.alpha});
             } else {
                 values.push_back(std::get<double>(operand.source));
             }

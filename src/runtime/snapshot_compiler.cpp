@@ -1032,7 +1032,11 @@ class CompilePass final {
                  // #498: a keyed Path parameter (a Curves curve) is a whole-value Path curve,
                  // compiled inline where it is sampled (compiledPathParameter()).
                  (definition.valueKind == runtime::ParameterValueKind::Path &&
-                  std::holds_alternative<document::PathAnimationCurve>(*curve)));
+                  std::holds_alternative<document::PathAnimationCurve>(*curve)) ||
+                 // #541: a keyed Gradient (a Colorize Gradient Map), compiled inline into the
+                 // Colorize kernel (compiledGradientParameter()).
+                 (definition.valueKind == runtime::ParameterValueKind::Gradient &&
+                  std::holds_alternative<document::GradientAnimationCurve>(*curve)));
             if (!kindMatches) {
                 auto diagnosticSubject = subject(node.id, "parameter." + definition.role);
                 diagnosticSubject.parameterId = parameter->id;

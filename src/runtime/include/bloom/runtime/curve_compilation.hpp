@@ -28,5 +28,7 @@ compileAnimationCurve(const document::ScalarAnimationCurve& curve);
 compileAnimationCurve(const document::Color4AnimationCurve& curve);
 // ADR 0028: a whole-value Path curve, compiled inline into the operation that samples it.
 [[nodiscard]] CompiledPathCurve compileAnimationCurve(const document::PathAnimationCurve& curve);
+[[nodiscard]] CompiledGradientCurve
+compileAnimationCurve(const document::GradientAnimationCurve& curve);
 
 } // namespace bloom::runtime

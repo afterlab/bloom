@@ -129,7 +129,9 @@ compiledValueFrom(const document::ParameterValue& value) {
     return std::visit(
         [](const auto& held) -> std::optional<runtime::CompiledValue> {
             using Held = std::decay_t<decltype(held)>;
-            if constexpr (std::is_same_v<Held, core::RationalTime> || std::is_same_v<Held, document::PathValue>) {
+            if constexpr (std::is_same_v<Held, core::RationalTime> ||
+                          std::is_same_v<Held, document::PathValue> ||
+                          std::is_same_v<Held, document::GradientValue>) {
                 return std::nullopt;
             } else {
                 return runtime::CompiledValue{held};

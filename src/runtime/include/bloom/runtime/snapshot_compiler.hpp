@@ -82,7 +82,7 @@ struct SnapshotParameterOverride final {
     document::Revision sourceRevision;
     document::ParameterId parameterId;
     std::variant<double, document::Vec2d, core::Color4d, std::int64_t, std::string, document::Vec3d,
-                 bool, document::PathValue>
+                 bool, document::PathValue, document::GradientValue>
         value;
 
     friend bool operator==(const SnapshotParameterOverride&,

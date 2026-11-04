@@ -1395,16 +1395,18 @@ displayProofRunner(const bool customView) {
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     // #504 Colorize: Fill, Tint, a partial Tritone, a mirrored and a repeating Gradient Map from
-    // a channel and luma, and a custom Black & White mix.
+    // a channel and luma, and a custom Black & White mix; #541 a repeating Gradient Map through a
+    // bound multi-stop gradient (unsorted stops, a hard edge, HDR and signed colours).
     const auto colorize = [](const int variant) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {
             using bloom::runtime::ColorizeCycle;
             using bloom::runtime::ColorizeMode;
             using bloom::runtime::ColorizeSource;
             bloom::runtime::ColorizeKernel kernel;
-            const std::array<ColorizeMode, 6> modes{
-                ColorizeMode::Fill,        ColorizeMode::Tint,        ColorizeMode::Tritone,
-                ColorizeMode::GradientMap, ColorizeMode::GradientMap, ColorizeMode::BlackAndWhite};
+            const std::array<ColorizeMode, 7> modes{
+                ColorizeMode::Fill,        ColorizeMode::Tint,          ColorizeMode::Tritone,
+                ColorizeMode::GradientMap, ColorizeMode::GradientMap,   ColorizeMode::BlackAndWhite,
+                ColorizeMode::GradientMap};
             kernel.mode = modes[static_cast<std::size_t>(variant)];
             kernel.amount = {ParameterId::fromRaw(idBase + 60), variant == 2 ? 0.6 : 1.0};
             kernel.color = {ParameterId::fromRaw(idBase + 61),
@@ -1422,11 +1424,20 @@ displayProofRunner(const bool customView) {
                 kernel.repetitions = {ParameterId::fromRaw(idBase + 66), 2.5};
                 kernel.phase = {ParameterId::fromRaw(idBase + 67), -0.3};
             }
-            if (variant == 4) {
+            if (variant == 4 || variant == 6) {
                 kernel.cycle = ColorizeCycle::Repeat;
                 kernel.repetitions = {ParameterId::fromRaw(idBase + 66), 3.0};
                 kernel.phase = {ParameterId::fromRaw(idBase + 67), 0.125};
             }
+            if (variant == 6)
+                kernel.gradient = bloom::runtime::CompiledGradientParameter{
+                    ParameterId::fromRaw(idBase + 75),
+                    bloom::document::GradientValue{
+                        {{0.8, bloom::core::Color4d{1.2, 0.9, 0.1, 1.0}},
+                         {0.0, bloom::core::Color4d{0.0, -0.05, 0.3, 1.0}},
+                         {0.5, bloom::core::Color4d{0.1, 0.6, 0.2, 1.0}},
+                         {0.5, bloom::core::Color4d{0.9, 0.1, -0.2, 1.0}},
+                         {1.0, bloom::core::Color4d{3.0, 2.0, 1.5, 1.0}}}}};
             const std::array<double, 6> weights{-1.5, 2.5, 0.1, 3.0, -2.0, 1.2};
             if (variant == 5)
                 for (std::size_t i = 0; i < weights.size(); ++i)
@@ -1439,20 +1450,20 @@ displayProofRunner(const bool customView) {
         "src/runtime colorize tests",
         [runGrades, colorize] {
             return runGrades({colorize(0), colorize(1), colorize(2), colorize(3), colorize(4),
-                              colorize(5)},
+                              colorize(5), colorize(6)},
                              504000,
-                             "production Colorize: Fill, Tint, Tritone, Gradient Map (mirrored "
-                             "and repeating) and Black & White over HDR and signed values, full "
-                             "frame and ROI");
+                             "production Colorize: Fill, Tint, Tritone, Gradient Map (mirrored, "
+                             "repeating and through a multi-stop gradient) and Black & White over "
+                             "HDR and signed values, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     add(
         "node.bloom.colorize", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime colorize tests",
         [runGrades, colorize] {
-            return runGrades({colorize(3), colorize(5)}, 504600,
-                             "production Colorize node: a channel Gradient Map and a Black & "
-                             "White mix, full frame and ROI");
+            return runGrades({colorize(3), colorize(5), colorize(6)}, 504600,
+                             "production Colorize node: a channel Gradient Map, a Black & White "
+                             "mix and a multi-stop Gradient Map, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     // #494 Grade: the wheels and primaries through the production builder's resident program.

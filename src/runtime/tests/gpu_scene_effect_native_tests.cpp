@@ -1175,14 +1175,16 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             {ParameterId::fromRaw(id),
              variant == 4 ? Color4d{0.25, 0.5, 1.5, 1.0} : Color4d{0.0, 0.0, 0.0, 1.0}}}};
     };
-    // #504: every Colorize mode, a partial amount, both cycles and a channel source.
+    // #504: every Colorize mode, a partial amount, both cycles and a channel source; #541 a
+    // Gradient Map through a bound multi-stop gradient with a hard edge.
     const auto colorize = [](const std::uint64_t id, const int variant) {
         using bloom::runtime::ColorizeCycle;
         using bloom::runtime::ColorizeMode;
         bloom::runtime::ColorizeKernel kernel;
-        const std::array<ColorizeMode, 6> modes{ColorizeMode::Fill,        ColorizeMode::Tint,
-                                                ColorizeMode::Tritone,     ColorizeMode::GradientMap,
-                                                ColorizeMode::GradientMap, ColorizeMode::BlackAndWhite};
+        const std::array<ColorizeMode, 7> modes{
+            ColorizeMode::Fill,        ColorizeMode::Tint,          ColorizeMode::Tritone,
+            ColorizeMode::GradientMap, ColorizeMode::GradientMap,   ColorizeMode::BlackAndWhite,
+            ColorizeMode::GradientMap};
         kernel.mode = modes[static_cast<std::size_t>(variant)];
         kernel.amount = {ParameterId::fromRaw(id), variant == 2 ? 0.6 : 1.0};
         kernel.color = {ParameterId::fromRaw(id + 1), Color4d{0.9, 0.3, 1.5, 1.0}};
@@ -1198,6 +1200,14 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         const std::array<double, 6> weights{-1.5, 2.5, 0.1, 3.0, -2.0, 1.2};
         for (std::size_t i = 0; i < weights.size(); ++i)
             kernel.weights[i] = {ParameterId::fromRaw(id + 8 + i), weights[i]};
+        if (variant == 6)
+            kernel.gradient = bloom::runtime::CompiledGradientParameter{
+                ParameterId::fromRaw(id + 20),
+                bloom::document::GradientValue{{{0.8, Color4d{1.2, 0.9, 0.1, 1.0}},
+                                                {0.0, Color4d{0.0, -0.05, 0.3, 1.0}},
+                                                {0.5, Color4d{0.1, 0.6, 0.2, 1.0}},
+                                                {0.5, Color4d{0.9, 0.1, -0.2, 1.0}},
+                                                {1.0, Color4d{3.0, 2.0, 1.5, 1.0}}}}};
         return bloom::runtime::ImageEffectKernel{kernel};
     };
     // Changes one value of each kernel to prove invalidation re-dispatches.
@@ -1237,7 +1247,7 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
               association(id + 50, 0), association(id + 50, 1), association(id + 50, 2),
               association(id + 50, 3), association(id + 50, 4), colorize(id + 50, 0),
               colorize(id + 50, 1), colorize(id + 50, 2), colorize(id + 50, 3),
-              colorize(id + 50, 4), colorize(id + 50, 5)}) {
+              colorize(id + 50, 4), colorize(id + 50, 5), colorize(id + 50, 6)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

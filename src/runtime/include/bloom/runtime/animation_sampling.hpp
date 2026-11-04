@@ -98,5 +98,10 @@ sampleAnimationCurve(const document::Color4AnimationCurve& curve, core::Rational
 // count or closed flag differ hold the earlier key. A missing handle counts as its point.
 [[nodiscard]] std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curve,
                                                                  core::RationalTime time);
+// #541: a whole-value Gradient curve at `time`, exactly as a Path curve: the end keys hold, and
+// inside a segment each stop's position and straight colour interpolate by the eased factor when
+// both keys have the same stop count; otherwise the earlier key holds.
+[[nodiscard]] std::optional<document::GradientValue>
+sampleGradientCurve(const CompiledGradientCurve& curve, core::RationalTime time);
 
 } // namespace bloom::runtime

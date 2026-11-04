@@ -569,4 +569,47 @@ std::optional<document::PathValue> samplePathCurve(const CompiledPathCurve& curv
     return result;
 }
 
+std::optional<document::GradientValue> sampleGradientCurve(const CompiledGradientCurve& curve,
+                                                           const core::RationalTime time) {
+    const auto& keys = curve.keyframes;
+    if (keys.empty())
+        return std::nullopt;
+    if (time <= keys.front().time)
+        return keys.front().value;
+    if (time >= keys.back().time)
+        return keys.back().value;
+    std::size_t index = 0;
+    while (index + 1 < keys.size() && !(time < keys[index + 1].time))
+        ++index;
+    const auto& from = keys[index];
+    const auto& to = keys[index + 1];
+    if (from.outgoingInterpolation == CompiledKeyframeInterpolation::Hold ||
+        from.value.stops.size() != to.value.stops.size())
+        return from.value;
+    const CompiledScalarCurve progress{curve.id,
+                                       {{from.id, from.time, 0.0, from.outgoingInterpolation,
+                                         from.outgoingHandle, from.incomingHandle, from.easing},
+                                        {to.id, to.time, 1.0, CompiledKeyframeInterpolation::Linear,
+                                         to.outgoingHandle, to.incomingHandle, to.easing}}};
+    const auto sampled = sampleAnimationCurve(progress, time);
+    if (!sampled || !sampled.value)
+        return std::nullopt;
+    const double u = *sampled.value;
+    const auto mix = [u](const double a, const double b) { return a + (b - a) * u; };
+    document::GradientValue result;
+    result.stops.reserve(from.value.stops.size());
+    for (std::size_t stop = 0; stop < from.value.stops.size(); ++stop) {
+        const auto& a = from.value.stops[stop];
+        const auto& b = to.value.stops[stop];
+        // An overshooting ease (Back, Elastic) keeps each position inside the gradient and each
+        // alpha inside [0, 1], so a sampled gradient is always a valid one.
+        result.stops.push_back(
+            {std::clamp(mix(a.position, b.position), 0.0, 1.0),
+             core::Color4d{mix(a.color.red, b.color.red), mix(a.color.green, b.color.green),
+                           mix(a.color.blue, b.color.blue),
+                           std::clamp(mix(a.color.alpha, b.color.alpha), 0.0, 1.0)}});
+    }
+    return result;
+}
+
 } // namespace bloom::runtime

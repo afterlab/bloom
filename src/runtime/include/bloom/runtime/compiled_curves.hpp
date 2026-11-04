@@ -114,6 +114,28 @@ struct CompiledPathCurve final {
     friend bool operator==(const CompiledPathCurve&, const CompiledPathCurve&) = default;
 };
 
+// #541: a whole-value Gradient curve, kept inline in the operation that samples it like a Path
+// curve.
+struct CompiledGradientKeyframe final {
+    document::KeyframeId id;
+    core::RationalTime time;
+    document::GradientValue value;
+    CompiledKeyframeInterpolation outgoingInterpolation = CompiledKeyframeInterpolation::Linear;
+    document::KeyframeHandle outgoingHandle{};
+    document::KeyframeHandle incomingHandle{};
+    document::KeyframeEasingParameters easing{};
+
+    friend bool operator==(const CompiledGradientKeyframe&,
+                           const CompiledGradientKeyframe&) = default;
+};
+
+struct CompiledGradientCurve final {
+    document::AnimationCurveId id;
+    std::vector<CompiledGradientKeyframe> keyframes;
+
+    friend bool operator==(const CompiledGradientCurve&, const CompiledGradientCurve&) = default;
+};
+
 class ScalarCurveIndex final {
   public:
     [[nodiscard]] static constexpr ScalarCurveIndex fromRaw(const std::size_t value) noexcept {

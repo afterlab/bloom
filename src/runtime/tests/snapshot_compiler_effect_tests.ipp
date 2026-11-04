@@ -1344,7 +1344,9 @@ void testAlphaAssociationLowering(Expectations& expectations) {
 // #504 Colorize lowers to one colorize kernel with its constant mode. Each mode keeps the
 // identities of only the operands it reads (Gradient Map also its source and cycle); every other
 // operand stays the kernel's constant default without an identity, so animating it neither claims
-// nor invalidates anything. A muted node passes its Image through.
+// nor invalidates anything. A muted node passes its Image through. #541: a Gradient Map with its
+// gradient bound lowers the gradient (one inline operand) instead of the three-colour ramp; one
+// saved without it keeps the ramp.
 void testColorizeLowering(Expectations& expectations) {
     using namespace document;
     runtime::NodeDefinitionRegistry registry;
@@ -1355,6 +1357,9 @@ void testColorizeLowering(Expectations& expectations) {
     require(definition != nullptr, "the colorize definition exists");
     for (const auto mode : {kColorizeFill, kColorizeTint, kColorizeTritone, kColorizeGradientMap,
                             kColorizeBlackAndWhite}) {
+      for (const bool withGradient : {true, false}) {
+        if (!withGradient && mode != kColorizeGradientMap)
+            continue;
         for (const bool muted : {false, true}) {
             auto project = makeProject(singleLayerOptions());
             auto* composition = project.findComposition(kCompositionId);
@@ -1363,6 +1368,8 @@ void testColorizeLowering(Expectations& expectations) {
             std::map<std::string, ParameterId> ids;
             std::uint64_t next = 2700;
             for (const auto& parameter : definition->parameters) {
+                if (parameter.role == "gradient" && !withGradient)
+                    continue;
                 auto value = parameter.defaultValue;
                 if (parameter.role == "mode")
                     value = mode;
@@ -1411,8 +1418,9 @@ void testColorizeLowering(Expectations& expectations) {
             const auto* kernel = std::get_if<runtime::ColorizeKernel>(
                 &std::get<runtime::CompiledImageEffect>(*effect).kernel);
             require(kernel != nullptr, "colorize lowers to a colorize kernel");
-            const bool ramp = mode == kColorizeTritone || mode == kColorizeGradientMap;
             const bool map = mode == kColorizeGradientMap;
+            const bool stops = map && withGradient;
+            const bool ramp = mode == kColorizeTritone || (map && !withGradient);
             const auto owns = [&](const ParameterId id, const char* role, const bool used) {
                 return used ? id == ids.at(role) : !id.isValid();
             };
@@ -1431,6 +1439,10 @@ void testColorizeLowering(Expectations& expectations) {
                     owns(kernel->amount.id, "amount", true) &&
                     std::get<double>(kernel->amount.source) == 0.75 &&
                     owns(kernel->color.id, "fillColor", mode == kColorizeFill) &&
+                    kernel->gradient.has_value() == stops &&
+                    (!stops || (kernel->gradient->id == ids.at("gradient") &&
+                                std::get<GradientValue>(kernel->gradient->source) ==
+                                    defaultColorizeGradient())) &&
                     owns(kernel->shadows.id, "shadows", mode == kColorizeTint || ramp) &&
                     owns(kernel->highlights.id, "highlights", mode == kColorizeTint || ramp) &&
                     owns(kernel->midtones.id, "midtones", ramp) &&
@@ -1439,5 +1451,6 @@ void testColorizeLowering(Expectations& expectations) {
                     owns(kernel->phase.id, "phase", map) && weights,
                 "colorize lowers its mode and only the operands that mode reads");
         }
+      }
     }
 }
