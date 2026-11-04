@@ -464,6 +464,12 @@ class [[nodiscard]] DocumentDecodeResult final {
 // by the open path only, never by save verification, which must reproduce the saved values.
 void migrateLegacySourceColorSpaces(DecodedDocumentEnvelope& envelope);
 
+// #493: opening a project migrates each Curves node of schema 1 (five Vector 2 points per channel)
+// to schema 2: each channel's points become its point-list curve (exactly, when constant) and the
+// hue curves start empty, reusing the old records' ids. A point that was animated keeps its value
+// where its keys begin and a driven point its default; their curves and drivers are removed.
+void migrateLegacyCurvesNodes(DecodedDocumentEnvelope& envelope);
+
 // Decodes `root` (the document.json root value from a parsed StrictJsonDomDocument) into a
 // DecodedDocumentEnvelope. `root` must outlive the call; nothing is retained past return. See the
 // file-level comment above for exact scope. May throw std::bad_alloc; never throws otherwise.

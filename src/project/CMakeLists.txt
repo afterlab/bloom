@@ -26,6 +26,7 @@ target_sources(
         document_decode_composition.cpp
         document_decode_internal.hpp
         document_components_migration.cpp
+        document_curves_migration.cpp
         document_migration.cpp
         document_layout_migration.cpp
         document_decode_layout.cpp
@@ -353,6 +354,11 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_project_node_layout_test PRIVATE bloom_project ZLIB::ZLIB)
     bloom_enable_warnings(bloom_project_node_layout_test)
     bloom_add_test(NAME bloom.project.node-layout COMMAND bloom_project_node_layout_test LABELS unit persistence)
+
+    add_executable(bloom_project_curves_migration_test tests/curves_migration_tests.cpp)
+    target_link_libraries(bloom_project_curves_migration_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_curves_migration_test)
+    bloom_add_test(NAME bloom.project.curves-migration COMMAND bloom_project_curves_migration_test LABELS unit persistence)
 
     add_executable(bloom_project_layer_time_test tests/layer_time_persistence_tests.cpp)
     target_link_libraries(bloom_project_layer_time_test PRIVATE bloom_project ZLIB::ZLIB)

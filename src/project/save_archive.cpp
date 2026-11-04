@@ -491,8 +491,10 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         // Document 1.30: a layer of an older document follows its source exactly when its name
         // already is the source's name.
         auto envelope = *decodedDocument.value();
-        if (!capturedInputVersion.has_value())
+        if (!capturedInputVersion.has_value()) {
             migrateLegacySourceColorSpaces(envelope);
+            migrateLegacyCurvesNodes(envelope);
+        }
         auto reconstructed = reconstructDocument(
             std::move(envelope),
             decodedDocumentVersion.has_value() &&

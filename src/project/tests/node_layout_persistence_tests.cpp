@@ -1,6 +1,7 @@
 #include "zip_container_test_support.hpp"
 
 #include <bloom/document/document.hpp>
+#include <bloom/document/grade_curves.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/project/canonical_document.hpp>
@@ -178,7 +179,10 @@ void blurNodeReopen() {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
-        const auto* definition = document::builtInNodeDefinitions().find(type, 1);
+        const auto version = std::string_view(type) == document::kCurvesNodeType
+                                 ? document::kCurvesNodeSchemaVersion
+                                 : 1U;
+        const auto* definition = document::builtInNodeDefinitions().find(type, version);
         if (!definition)
             throw std::logic_error("blur definition");
         std::vector<document::ParameterBinding> bindings;
@@ -187,15 +191,22 @@ void blurNodeReopen() {
             if (!id)
                 throw std::logic_error("blur parameter identity");
             // #338 Luma Key: animatable thresholds (an HDR high) and a set invert.
-            // #340 grades: a Raw-range Levels value, an HDR Curves point, a set clamp, a hue
-            // and a saturation.
+            // #340 grades: a Raw-range Levels value, an HDR Curves point (#493: in a curve of
+            // any number of points, and a hue curve), a set clamp, a hue and a saturation.
             const document::ParameterValue value =
                 document::isLevelsGammaSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{1.5}
                 : document::isLevelsValueSchemaKey(parameter.schemaKey)
                     ? document::ParameterValue{-250.5}
-                : document::isCurvePointSchemaKey(parameter.schemaKey)
-                    ? document::ParameterValue{document::Vec2d{0.375, 4.25}}
+                : document::isHueGradeCurve(document::gradeCurveFromSchemaKey(parameter.schemaKey)
+                                                .value_or(document::GradeCurve::Master))
+                    ? document::ParameterValue{document::gradeCurvePath({{0.125, 0.375},
+                                                                         {0.625, 0.25},
+                                                                         {0.875, 0.5}})}
+                : document::isGradeCurveSchemaKey(parameter.schemaKey)
+                    ? document::ParameterValue{document::gradeCurvePath(
+                          {{0.0, 0.0}, {0.375, 4.25}, {0.5, 0.5}, {0.75, 0.6}, {0.9, 0.95},
+                           {1.0, 1.0}})}
                 : parameter.role == "clamp"      ? document::ParameterValue{true}
                 : parameter.role == "hue"        ? document::ParameterValue{-30.0}
                 : parameter.role == "saturation" ? document::ParameterValue{1.75}
@@ -211,7 +222,7 @@ void blurNodeReopen() {
                 throw std::logic_error("blur parameter inserts");
             bindings.push_back({parameter.role, *id});
         }
-        if (!composition->graph().addNode({*node, type, std::move(bindings), 1}))
+        if (!composition->graph().addNode({*node, type, std::move(bindings), version}))
             throw std::logic_error("blur node inserts");
         nodes.push_back(*node);
     }

@@ -1,5 +1,7 @@
 #include <bloom/project/document_decode.hpp>
 
+#include <bloom/document/color_grade_nodes.hpp>
+
 #include "document_decode_internal.hpp"
 
 #include <bloom/core/sha256.hpp>
@@ -2333,7 +2335,10 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
                         // Layer Output schema 4 predates Time Remap (document 1.23); the
                         // node decoder upgrades them to the current schema, as the migration does.
                         !(schemaVersion.minor < 23 && *kind->asString() == "bloom.layer-output" &&
-                          parsedVersion == 4)) {
+                          parsedVersion == 4) &&
+                        // #493: Curves schema 1 opens as schema 2 (migrateLegacyCurvesNodes).
+                        !(*kind->asString() == document::kCurvesNodeType &&
+                          parsedVersion == document::kLegacyCurvesNodeSchemaVersion)) {
                         return DocumentDecodeResult::failure(
                             DocumentDecodeError::UnsupportedNodeVersion,
                             "/project/compositions/" + std::to_string(compositionIndex) +
