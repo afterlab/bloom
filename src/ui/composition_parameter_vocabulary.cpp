@@ -295,8 +295,33 @@ bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const Composition
 
 bool isShuffleSlotSchema(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.channel-shuffle.red" || schemaKey == "bloom.channel-shuffle.green" ||
-           schemaKey == "bloom.channel-shuffle.blue" || schemaKey == "bloom.channel-shuffle.alpha";
+           schemaKey == "bloom.channel-shuffle.blue" || schemaKey == "bloom.channel-shuffle.alpha" ||
+           schemaKey == document::kChannelPassParameterSchemaKey;
 }
+
+namespace {
+// #480: the Pass picker offers the input's layers and channels; empty reads the first data layer.
+bool refreshPassSelector(kit::KDropdown& selector, const CompositionSession& session,
+                         const document::NodeRecord& node,
+                         const runtime::ChannelInspectionListing* listing) {
+    QList<std::pair<QString, QString>> items{{QObject::tr("First data layer"), QString{}}};
+    if (listing != nullptr) {
+        for (const auto& layer : listing->layers)
+            if (!layer.empty())
+                items.push_back({QObject::tr("%1 (layer)").arg(QString::fromStdString(layer)),
+                                 QString::fromStdString(layer)});
+        for (const auto& channel : listing->channels)
+            items.push_back({QString::fromStdString(channel), QString::fromStdString(channel)});
+    }
+    const bool listed =
+        fillProbeSelector(selector, items,
+                          boundNodeText(session, node, document::kChannelPassParameterRole),
+                          listing != nullptr, QObject::tr("First data layer"));
+    if (listing != nullptr && listing->channels.empty() && !listing->diagnostic.empty())
+        selector.setToolTip(QString::fromStdString(listing->diagnostic));
+    return listed;
+}
+} // namespace
 
 bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
                                 const document::NodeRecord& node,
@@ -307,6 +332,8 @@ bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSessi
     if (controller != nullptr && !controller->listingCurrent(node.id))
         controller->request(node.id);
     const auto* listing = controller != nullptr ? controller->listing(node.id) : nullptr;
+    if (schemaKey == document::kChannelPassParameterSchemaKey)
+        return refreshPassSelector(selector, session, node, listing);
     QList<std::pair<QString, QString>> items;
     if (listing != nullptr)
         for (const auto& channel : listing->channels)

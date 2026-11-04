@@ -486,14 +486,21 @@ struct CompiledImageSource {
 
 // ADR 0026: a Shuffle's image output. The channel expression is resolved against the probed
 // sources; the four slots name resolved channels or the constants "0" and "1". Colour mode converts
-// the RGB triple from the red slot's source input colour space; Raw places the values unchanged.
-// `associated` says the mapped RGB is already premultiplied by the mapped alpha.
+// the RGB triple from the red slot's source input colour space; Raw places the values unchanged;
+// Auto (#480) is Raw when a mapped RGB channel is a data channel and Colour otherwise, and Colour on
+// a data channel is refused. `associated` says the mapped RGB is already premultiplied by the mapped
+// alpha. A non-finite mapped sample becomes `nonFinite` (#480). With `pass` (#480 Pass) the slots
+// are derived at evaluation from the resolved set (runtime::detail::passMapping) and `mapping` is
+// unused. Slots that read Image to Channel Set channels never reach this operation: the compiler
+// lowers them to Channel Select and Channel Combine effects.
 struct CompiledChannelShuffle {
     document::NodeId sourceNodeId;
     CompiledChannelExpression channels;
     std::array<std::string, 4> mapping{};
     std::int64_t mode = 0;
     bool associated = true;
+    float nonFinite = 0.0F;
+    std::optional<std::string> pass{};
     friend bool operator==(const CompiledChannelShuffle&, const CompiledChannelShuffle&) = default;
 };
 

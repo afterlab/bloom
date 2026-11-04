@@ -107,6 +107,12 @@ const std::vector<Entry>& table() {
         {kOpacityParameterSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
         {kTimeRemapParameterSchemaKey, number(kLowest, kHighest, 0.0, 10.0, 0.01, 3, kSeconds)},
         {kBlendModeParameterSchemaKey, choice()},
+        // #480: the finite value a Shuffle or Pass writes for a NaN or infinite sample (a far
+        // depth, for one), within the Float32 range a gathered sample holds.
+        {"bloom.channel-shuffle.non-finite",
+         number(-3.4028234663852886e38, 3.4028234663852886e38, 0.0, 1000.0, 1.0, 3)},
+        {"bloom.channel-pass.non-finite",
+         number(-3.4028234663852886e38, 3.4028234663852886e38, 0.0, 1000.0, 1.0, 3)},
         // Sources.
         {kSolidColorParameterSchemaKey, channel()},
         {kSolidWidthParameterSchemaKey, pixels(1.0, kHighest, 4096.0)},
@@ -208,6 +214,8 @@ const std::vector<Entry>& table() {
 constexpr std::array kChoiceSchemas{
     std::string_view("bloom.boolean.operation"),
     std::string_view("bloom.channel-shuffle.mode"),
+    std::string_view("bloom.channel-pass.mode"),
+    std::string_view("bloom.image-to-channel-set.encoding"),
     std::string_view("bloom.image-preview.display"),
     std::string_view("bloom.compare.operation"),
     std::string_view("bloom.convert.rounding-mode"),

@@ -256,6 +256,10 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
     // "Select Channels" (a menu item never claims a remove operation it is not).
     if (typeId == document::kChannelShuffleNodeType)
         return QCoreApplication::translate("node_editor", "Shuffle");
+    if (typeId == document::kChannelPassNodeType)
+        return QCoreApplication::translate("node_editor", "Pass");
+    if (typeId == document::kImageToChannelSetNodeType)
+        return QCoreApplication::translate("node_editor", "Image to Channel Set");
     if (typeId == document::kChannelCopyNodeType)
         return QCoreApplication::translate("node_editor", "Channel Copy");
     if (typeId == document::kChannelRemoveNodeType)

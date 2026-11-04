@@ -395,6 +395,9 @@ enum class ChannelFixture : std::uint8_t {
     Remove,
     // Source -> Remove keep "A" -> Copy depth.Z from the source -> slots depth.Z x3 and "1", Raw.
     Copy,
+    // #480 Pass "depth" over the source: the gather derives grey depth.Z with alpha 1, Auto (Raw
+    // on the data channel), associated off, NaN to the far-depth substitute.
+    Pass,
 };
 
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
@@ -446,6 +449,12 @@ channelShufflePlan(const bloom::document::AssetRecord& asset, const LayerValues 
         shuffle.mode = 1;
         break;
     }
+    case ChannelFixture::Pass:
+        shuffle.pass = "depth";
+        shuffle.mode = 2;
+        shuffle.associated = false;
+        shuffle.nonFinite = 1000.0F;
+        break;
     }
     std::vector<CompiledOperation> operations;
     operations.emplace_back(std::move(shuffle));

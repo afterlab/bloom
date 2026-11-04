@@ -449,7 +449,9 @@ template <typename Definition>
         return hasCanonicalKey(definition, "bloom.video-source", 1) &&
                hasOutput(definition, "image", SocketValueKind::Image) &&
                hasOutput(definition, "audio", SocketValueKind::Audio) &&
-               definition.outputs.size() == 2 && definition.parameters.size() == 6 &&
+               // #480: the decoded frame's R, G, B and A as a channel set.
+               hasOutput(definition, kVideoSourceChannelsOutputPort, SocketValueKind::ChannelSet) &&
+               definition.outputs.size() == 3 && definition.parameters.size() == 6 &&
                definition.inputs.empty() &&
                hasParameter(definition, 0, "asset", "bloom.video.asset",
                             ParameterValueKind::String) &&
@@ -495,7 +497,9 @@ template <typename Definition>
         return definition == imagePreviewDefinition();
     case NodeLoweringKind::Channel:
         return definition == channelShuffleDefinition() ||
-               definition == channelCopyDefinition() || definition == channelRemoveDefinition();
+               definition == channelCopyDefinition() || definition == channelRemoveDefinition() ||
+               definition == channelPassDefinition() ||
+               definition == imageToChannelSetDefinition();
     case NodeLoweringKind::CompositionSource:
         return hasCanonicalKey(definition, kCompositionSourceNodeType, 1) &&
                definition.inputs.empty() && definition.outputs.size() == 2 &&
@@ -854,7 +858,9 @@ template <typename Definition>
     return {{"bloom.video-source", 1},
             NodeLoweringKind::VideoSource,
             {},
-            {{"image", SocketValueKind::Image}, {"audio", SocketValueKind::Audio}},
+            {{"image", SocketValueKind::Image},
+             {"audio", SocketValueKind::Audio},
+             {std::string(kVideoSourceChannelsOutputPort), SocketValueKind::ChannelSet}},
             {{"asset", "bloom.video.asset", ParameterValueKind::String, true, false, std::string{}},
              {"startFrame", "bloom.video.start-frame", ParameterValueKind::Integer, true, false,
               std::int64_t{0}},
@@ -1354,6 +1360,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         channelShuffleDefinition(),
         channelCopyDefinition(),
         channelRemoveDefinition(),
+        channelPassDefinition(),
+        imageToChannelSetDefinition(),
         cryptomatteDefinition()};
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the

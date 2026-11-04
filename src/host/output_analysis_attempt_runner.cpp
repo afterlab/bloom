@@ -446,6 +446,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 output::OutputAnalysisAttemptGpuMediaDisplayV1 gpuMediaDisplay;
                 std::shared_ptr<render::GpuProcessingPhaseLease> hostPhase;
                 std::shared_ptr<const runtime::ProcessFrame> evaluatedFrame;
+                bool frameOnGpu = false;
                 const auto admissionFailure =
                     [](const runtime::GpuProcessFrameDiagnosticCode code) {
                         return runtime::TaskResult<BuildOutcomeV1>::succeeded(
@@ -527,6 +528,7 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                         gpuProvenance.outputCommandIdentity = gpuOutcome.outputCommandIdentity;
                         if (gpuOutcome.status == runtime::GpuProcessFrameStatus::Evaluated) {
                             evaluatedFrame = gpuOutcome.frame;
+                            frameOnGpu = evaluatedFrame != nullptr;
                             // Retain the verified display payload, bound to the exact process
                             // geometry and the SAME canonical display identity the attempt retains.
                             const auto* descriptor =
@@ -745,10 +747,64 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 std::shared_ptr<const render::ChannelSetImage> channelLayers;
                 if (preset == output::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1 && plan) {
                     const auto* descriptor = evaluatedFrame->processImage().descriptor();
+                    // #480: an Image to Channel Set layer evaluates its image through the frame's
+                    // own route (the GPU scene executor when the frame ran there, else the CPU
+                    // reference) and reads it back once at this codec boundary.
+                    const auto layerImage =
+                        [&](const std::shared_ptr<const runtime::CompiledCompositionPlan>&
+                                layerPlan) {
+                        runtime::ChannelLayerImage layer;
+                        if (layerPlan == nullptr) {
+                            layer.failed = true;
+                            return layer;
+                        }
+                        std::shared_ptr<const runtime::ProcessFrame> frame;
+                        if (frameOnGpu && gpuProvider != nullptr) {
+                            const auto evaluator = gpuProvider->evaluator();
+                            if (evaluator == nullptr) {
+                                layer.failed = true;
+                                return layer;
+                            }
+                            auto outcome = evaluator->evaluate(layerPlan, evaluation,
+                                                               context.cancellation(), {}, nullptr,
+                                                               assetBaseDirectory);
+                            if (outcome.status == runtime::GpuProcessFrameStatus::Cancelled) {
+                                layer.cancelled = true;
+                                return layer;
+                            }
+                            if (outcome.status == runtime::GpuProcessFrameStatus::Evaluated)
+                                frame = std::move(outcome.frame);
+                        } else {
+                            const auto evaluatorOwner =
+                                fallbackEvaluator
+                                    ? fallbackEvaluator
+                                    : std::make_shared<const runtime::CpuCompositionEvaluator>();
+                            evaluatorOwner->setAssetBaseDirectory(assetBaseDirectory);
+                            auto cpuEvaluation = evaluation;
+                            cpuEvaluation.mediaSourceRevisionPolicy =
+                                runtime::MediaSourceRevisionPolicy::Revalidate;
+                            cpuEvaluation.requireVerifiedMediaSources = true;
+                            auto evaluated = evaluatorOwner->evaluate(layerPlan, cpuEvaluation,
+                                                                      context.cancellation());
+                            if (evaluated.status() == runtime::EvaluationStatus::Cancelled) {
+                                layer.cancelled = true;
+                                return layer;
+                            }
+                            if (evaluated.status() == runtime::EvaluationStatus::Evaluated)
+                                frame = evaluated.frame();
+                        }
+                        if (frame == nullptr) {
+                            layer.failed = true;
+                            return layer;
+                        }
+                        layer.image = std::shared_ptr<const render::Rgba32fImage>(
+                            frame, &frame->processImage());
+                        return layer;
+                    };
                     auto assembled = runtime::assembleOutputChannelLayers(
                         *plan, evaluation.time, assetBaseDirectory, evaluation.colorIntent,
                         descriptor->dataWindow(), descriptor->displayWindow(),
-                        evaluation.pixelStorageByteLimit, context.cancellation());
+                        evaluation.pixelStorageByteLimit, context.cancellation(), layerImage);
                     if (assembled.cancelled)
                         return runtime::TaskResult<BuildOutcomeV1>::cancelled();
                     if (!assembled.diagnostic.empty())

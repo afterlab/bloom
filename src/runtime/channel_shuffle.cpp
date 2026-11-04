@@ -1,5 +1,6 @@
 #include "channel_shuffle.hpp"
 
+#include "channel_static.hpp"
 #include "operation_key.hpp"
 
 #include <algorithm>
@@ -11,6 +12,9 @@ namespace bloom::runtime::detail {
 namespace {
 
 constexpr std::int64_t kColourMode = 0;
+constexpr std::int64_t kRawMode = 1;
+constexpr std::int64_t kAutoMode = 2;
+
 
 struct SlotSource final {
     const float* plane = nullptr;
@@ -37,6 +41,12 @@ selectChannelSetSources(const CompiledChannelExpression& expression, const core:
                         LinearPassRetention* const linearPass) {
     ChannelSetSourceSelection result;
     for (const auto& source : expression.sources) {
+        if (source.imageBacked) {
+            // #480: an Image to Channel Set source names its channels statically.
+            result.parts.push_back(nullptr);
+            result.sources.emplace_back();
+            continue;
+        }
         const CompiledImageSource image{source.sourceNodeId,
                                         source.asset,
                                         source.startFrame,
@@ -80,8 +90,16 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
                      LinearPassRetention* const linearPass) {
     ChannelShuffleSelection result;
     result.associated = shuffle.associated;
+    result.nonFinite = shuffle.nonFinite;
     std::vector<const media::ImagePartInfo*> parts;
     for (const auto& source : shuffle.channels.sources) {
+        if (source.imageBacked) {
+            // #480: an Image to Channel Set source names its channels statically; a slot that
+            // reads one is refused below (the compiler lowers those Shuffles to image effects).
+            parts.push_back(nullptr);
+            result.sources.emplace_back();
+            continue;
+        }
         const CompiledImageSource image{source.sourceNodeId, source.asset,     source.startFrame,
                                         source.loopMode,     source.colorSpace, source.inputColorSpaceId,
                                         false,               source.part,       {}};
@@ -116,14 +134,40 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
         result.cacheKey = key.bytes();
         return result;
     }
+    auto mapping = shuffle.mapping;
+    if (shuffle.pass) {
+        // #480 Pass: the slots of the chosen channel or layer.
+        std::vector<PassCandidate> candidates;
+        candidates.reserve(resolution.channels.size());
+        for (const auto& channel : resolution.channels)
+            candidates.push_back({channel.name, channel.descriptor});
+        const auto derived = passMapping(candidates, *shuffle.pass);
+        if (!derived) {
+            result.warning = shuffle.pass->empty()
+                                 ? std::string("The channel set has no pass")
+                                 : "The pass is not in the channel set: " + *shuffle.pass;
+            result.cacheKey = key.bytes();
+            return result;
+        }
+        mapping = *derived;
+    }
     bool anchored = false;
+    std::optional<std::string> dataChannel;
     for (std::size_t slot = 0; slot < 4; ++slot) {
-        auto resolved = resolveChannelSlot(resolution.channels, shuffle.mapping[slot], slot);
+        auto resolved = resolveChannelSlot(resolution.channels, mapping[slot], slot);
         if (!resolved) {
             result.warning =
-                shuffle.mapping[slot].empty()
+                mapping[slot].empty()
                     ? "Shuffle input has no color layer for its default slots"
-                    : "Shuffle names a channel that is not in its input: " + shuffle.mapping[slot];
+                    : "Shuffle names a channel that is not in its input: " + mapping[slot];
+            result.cacheKey = key.bytes();
+            return result;
+        }
+        if (resolved->source && *resolved->source < shuffle.channels.sources.size() &&
+            shuffle.channels.sources[*resolved->source].imageBacked) {
+            result.warning = "Shuffle reads the Image to Channel Set channel " + resolved->name +
+                             " with file channels; shuffle the image's channels on their own and "
+                             "join them with Combine Channels";
             result.cacheKey = key.bytes();
             return result;
         }
@@ -131,13 +175,32 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
             result.anchor = *resolved->source;
             anchored = true;
         }
-        if (resolved->source && slot < 3 && shuffle.mode == kColourMode &&
-            !result.colourSource)
-            result.colourSource = *resolved->source;
+        if (resolved->source && slot < 3 && !dataChannel && isDataChannelRole(resolved->descriptor.role))
+            dataChannel = resolved->name;
         result.mapping[slot] = std::move(*resolved);
     }
-    if (!anchored)
-        result.anchor = 0; // every slot is a constant: the output uses the first source's frame
+    // #480: Auto reads data raw; Colour never converts a data channel.
+    const auto mode = shuffle.mode == kAutoMode ? (dataChannel ? kRawMode : kColourMode)
+                                                : shuffle.mode;
+    if (mode == kColourMode && dataChannel) {
+        result.warning = "Shuffle Color mode would color-convert the data channel " +
+                         *dataChannel + "; choose Raw or Auto";
+        result.cacheKey = key.bytes();
+        return result;
+    }
+    if (mode == kColourMode)
+        for (std::size_t slot = 0; slot < 3; ++slot)
+            if (result.mapping[slot].source) {
+                result.colourSource = *result.mapping[slot].source;
+                break;
+            }
+    if (!anchored) {
+        // Every slot is a constant: the output uses the first file source's frame.
+        result.anchor = 0;
+        while (result.anchor < shuffle.channels.sources.size() &&
+               shuffle.channels.sources[result.anchor].imageBacked)
+            ++result.anchor;
+    }
     if (result.anchor >= result.sources.size()) {
         result.warning = "The channel set has no source";
         result.cacheKey = key.bytes();
@@ -157,8 +220,11 @@ selectChannelShuffle(const CompiledChannelShuffle& shuffle, const core::Rational
         }
     }
     decodeKey.add(shuffle.associated);
+    decodeKey.add(static_cast<double>(shuffle.nonFinite));
     key.add(shuffle.associated);
     key.add(shuffle.mode);
+    key.add(mode);
+    key.add(static_cast<double>(shuffle.nonFinite));
     key.add(result.colourSource.has_value());
     key.add(result.colourSource.value_or(0U));
     result.cacheKey = key.bytes();
@@ -263,6 +329,7 @@ gatherChannelShuffle(const ChannelShuffleSelection& selection, const bool conver
             ? selection.sources[*selection.colourSource].inputProcessor.get()
             : nullptr;
     const bool associated = selection.associated;
+    const float nonFinite = std::isfinite(selection.nonFinite) ? selection.nonFinite : 0.0F;
     const auto width = static_cast<std::size_t>(dataWindow.extent().width());
     std::vector<std::array<float, 4>> row(width);
     std::vector<bool> repairedRow(width);
@@ -286,12 +353,13 @@ gatherChannelShuffle(const ChannelShuffleSelection& selection, const bool conver
                     target[slot] = 0.0F;
                 }
             }
-            // The OpenEXR ingest policy (media-io.md): non-finite components become zero and
-            // alpha is clamped to [0, 1] before any colour conversion.
+            // The OpenEXR ingest policy (media-io.md): non-finite components become the
+            // Shuffle's non-finite value (#480; 0 by default) and alpha is clamped to [0, 1]
+            // before any colour conversion.
             bool repaired = false;
             for (auto& component : target)
                 if (!std::isfinite(component)) {
-                    component = 0.0F;
+                    component = nonFinite;
                     repaired = true;
                 }
             if (target[3] < 0.0F || target[3] > 1.0F) {

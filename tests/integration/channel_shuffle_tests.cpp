@@ -434,6 +434,242 @@ void outputChannelLayers() {
            "channel layers never change the composited image");
 }
 
+
+// #480: Auto reads data raw, Colour on a data channel is refused, non-finite samples take the
+// node's substitute, and zero alpha follows the premultiplied image.
+void dataSafeShuffle() {
+    Fixture fixture("data-safe");
+    const auto shuffle = fixture.add(document::kChannelShuffleNodeType);
+    fixture.connect(fixture.source, document::kImageSourceChannelsOutputPort, shuffle,
+                    document::kChannelSetPort);
+    fixture.connect(shuffle, document::kChannelShuffleImagePort, fixture.layer,
+                    document::kLayerOutputContentInputPort);
+    for (const auto* slot : {"red", "green", "blue"})
+        fixture.set(shuffle, slot, std::string("depth.Z"));
+    fixture.set(shuffle, "alpha", std::string("1"));
+    const auto automatic = fixture.frame();
+    expect(near(automatic.pixels[0].red(), -0.5F) && near(automatic.pixels[4].green(), 0.5F) &&
+               near(automatic.pixels[0].alpha(), 1.0F) && !automatic.warned("color-convert"),
+           "a new Shuffle defaults to Auto and reads a data channel raw");
+    expect(near(automatic.pixels[5].red(), 0.0F) && automatic.warned("repaired"),
+           "a NaN data sample becomes the default non-finite value 0 and is reported");
+
+    fixture.run<commands::SetNodeParameterValue>(
+        fixture.composition, shuffle, std::string(document::kChannelNonFiniteParameterRole),
+        document::ParameterValue{1000.0});
+    const auto far = fixture.frame();
+    expect(near(far.pixels[5].red(), 1000.0F) && near(far.pixels[5].blue(), 1000.0F) &&
+               near(far.pixels[0].red(), -0.5F) && far.warned("repaired"),
+           "a NaN data sample takes the node's finite substitute (a far depth)");
+
+    // A project whose Shuffle stores Color mode over a data channel opens with a diagnostic and
+    // never colour-converts the data.
+    fixture.set(shuffle, "mode", document::kChannelShuffleColourMode);
+    const auto refused = fixture.frame();
+    expect(refused.warned("Shuffle Color mode would color-convert the data channel depth.Z") &&
+               near(refused.pixels[0].red(), 0.0F) && near(refused.pixels[0].alpha(), 0.0F),
+           "Color mode on a data channel is refused with a diagnostic");
+    fixture.set(shuffle, "mode", document::kChannelShuffleAutoMode);
+    fixture.set(shuffle, "red", std::string("diffuse.R"));
+    fixture.set(shuffle, "green", std::string("diffuse.G"));
+    fixture.set(shuffle, "blue", std::string("diffuse.B"));
+    const auto colour = fixture.frame();
+    expect(near(colour.pixels[3].red(), 0.3F) && near(colour.pixels[3].blue(), 2.0F) &&
+               !colour.warned("color-convert"),
+           "Auto reads a colour layer in Color mode");
+
+    // Zero alpha: the image is premultiplied, so a straight slot at alpha 0 stores no colour.
+    for (const auto* slot : {"red", "green", "blue"})
+        fixture.set(shuffle, slot, std::string("depth.Z"));
+    fixture.set(shuffle, "alpha", std::string("0"));
+    fixture.set(shuffle, "associated", false);
+    const auto transparent = fixture.frame();
+    expect(near(transparent.pixels[4].red(), 0.0F) && near(transparent.pixels[4].alpha(), 0.0F),
+           "a data slot under zero alpha is zero in the premultiplied result");
+    fixture.set(shuffle, "associated", true);
+    const auto associated = fixture.frame();
+    expect(near(associated.pixels[4].red(), 0.0F) && associated.warned("repaired"),
+           "associated data under zero alpha is dropped and reported");
+}
+
+// #480 Pass: a picked layer or channel as a grey or three-channel image, alpha 1, associated off.
+void passPicker() {
+    Fixture fixture("pass");
+    const auto pass = fixture.add(document::kChannelPassNodeType);
+    fixture.connect(fixture.source, document::kImageSourceChannelsOutputPort, pass,
+                    document::kChannelSetPort);
+    fixture.connect(pass, document::kChannelPassImagePort, fixture.layer,
+                    document::kLayerOutputContentInputPort);
+    const auto first = fixture.frame();
+    expect(near(first.pixels[0].red(), -0.5F) && near(first.pixels[0].blue(), -0.5F) &&
+               near(first.pixels[0].alpha(), 1.0F) && near(first.pixels[5].red(), 0.0F),
+           "an empty pass reads the first data layer as grey, alpha 1");
+    fixture.set(pass, document::kChannelPassParameterRole, std::string("diffuse"));
+    const auto diffuse = fixture.frame();
+    expect(near(diffuse.pixels[3].red(), 0.3F) && near(diffuse.pixels[3].green(), 0.5F) &&
+               near(diffuse.pixels[3].blue(), 2.0F) && near(diffuse.pixels[3].alpha(), 1.0F),
+           "a layer pass reads its R, G and B");
+    fixture.set(pass, document::kChannelPassParameterRole, std::string("depth.Z"));
+    fixture.set(pass, document::kChannelNonFiniteParameterRole, 1.0e4);
+    const auto depth = fixture.frame();
+    expect(near(depth.pixels[1].green(), -0.25F) && near(depth.pixels[5].red(), 1.0e4F),
+           "a channel pass is grey, with its non-finite substitute");
+    fixture.set(pass, document::kChannelPassParameterRole, std::string("motion"));
+    const auto missing = fixture.frame();
+    expect(missing.warned("The pass is not in the channel set: motion") &&
+               near(missing.pixels[0].alpha(), 0.0F),
+           "a pass the set lacks is reported");
+    fixture.set(pass, document::kChannelPassParameterRole, std::string("depth"));
+    fixture.set(pass, "mode", document::kChannelShuffleColourMode);
+    expect(fixture.frame().warned("would color-convert the data channel depth.Z"),
+           "a Pass in Color mode refuses a data pass");
+}
+
+// #480 Image to Channel Set: an image packed as a named layer, read back exactly by a Pass, joined
+// with file channels only through image effects, and written as a layered OpenEXR layer.
+void imageToChannelSet() {
+    Fixture fixture("image-set");
+    const auto pack = fixture.add(document::kImageToChannelSetNodeType);
+    const auto pass = fixture.add(document::kChannelPassNodeType);
+    fixture.connect(fixture.source, document::kImageSourceImageOutputPort, pack,
+                    document::kImageToChannelSetImagePort);
+    fixture.connect(pack, document::kChannelSetPort, pass, document::kChannelSetPort);
+    fixture.connect(pass, document::kChannelPassImagePort, fixture.layer,
+                    document::kLayerOutputContentInputPort);
+    fixture.set(pass, document::kChannelPassParameterRole, std::string("pass"));
+    const auto plan = fixture.compile();
+    expect(std::ranges::none_of(plan->operations(),
+                                [](const auto& operation) {
+                                    return std::holds_alternative<runtime::CompiledChannelShuffle>(
+                                        operation);
+                                }) &&
+               std::ranges::any_of(plan->operations(),
+                                   [](const auto& operation) {
+                                       const auto* effect =
+                                           std::get_if<runtime::CompiledImageEffect>(&operation);
+                                       return effect != nullptr &&
+                                              std::holds_alternative<runtime::ChannelSelectKernel>(
+                                                  effect->kernel);
+                                   }),
+           "a Pass over a packed image compiles to a Channel Select, not a file gather");
+    const auto packed = fixture.frame();
+    expect(near(packed.pixels[0].red(), 0.25F) && near(packed.pixels[0].green(), 0.125F) &&
+               near(packed.pixels[0].alpha(), 1.0F),
+           "a packed layer reads back the image's stored channels");
+    fixture.set(pass, document::kChannelPassParameterRole, std::string("pass.A"));
+    expect(near(fixture.frame().pixels[2].red(), 0.5F), "a packed channel reads as grey");
+
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto listing = runtime::listChannelInspectionChoices(
+        compiler, fixture.document.snapshot(), fixture.composition, pack,
+        std::string(document::kChannelSetPort), fixture.folder, {},
+        runtime::EvaluationColorIntent::LinearRec709Scene, {});
+    expect(listing.diagnostic.empty() &&
+               listing.channels ==
+                   std::vector<std::string>{"pass.R", "pass.G", "pass.B", "pass.A"} &&
+               listing.layers == std::vector<std::string>{"pass"},
+           "the pickers list a packed layer's channels");
+    const auto inspected = fixture.frame(runtime::ChannelInspection{
+        pack, std::string(document::kChannelSetPort), {"pass.G"}});
+    expect(near(inspected.pixels[0].red(), 0.125F), "the Viewer inspects a packed channel");
+
+    // Mixing packed and file channels in one gather is refused with a diagnostic.
+    const auto copy = fixture.add(document::kChannelCopyNodeType);
+    fixture.connect(fixture.source, document::kImageSourceChannelsOutputPort, copy,
+                    document::kChannelSetPort);
+    fixture.connect(pack, document::kChannelSetPort, copy, document::kChannelCopyFromPort);
+    fixture.set(copy, "select", std::string("pass"));
+    const auto shuffle = fixture.add(document::kChannelShuffleNodeType);
+    fixture.connect(copy, document::kChannelSetPort, shuffle, document::kChannelSetPort);
+    fixture.connect(shuffle, document::kChannelShuffleImagePort, fixture.layer,
+                    document::kLayerOutputContentInputPort);
+    fixture.set(shuffle, "red", std::string("pass.R"));
+    fixture.set(shuffle, "green", std::string("depth.Z"));
+    fixture.set(shuffle, "blue", std::string("0"));
+    fixture.set(shuffle, "alpha", std::string("1"));
+    expect(fixture.frame().warned("Image to Channel Set channel pass.R"),
+           "a Shuffle mixing packed and file channels is refused");
+
+    // A packed layer reaches a layered OpenEXR beside the file's own layers.
+    const auto& graph =
+        fixture.document.snapshot().project().findComposition(fixture.composition)->graph();
+    const auto output = graph.compositionOutput()->nodeId;
+    fixture.connect(copy, document::kChannelSetPort, output,
+                    document::kCompositionOutputChannelsInputPort);
+    fixture.run<commands::SetNodeParameterValue>(
+        fixture.composition, output, std::string(document::kCompositionOutputLayersParameterRole),
+        document::ParameterValue{std::string("pass, depth")});
+    const auto layered = fixture.compile();
+    const auto created = render::ImageWindow::create(0, 0, kWidth, kHeight);
+    const auto window = *created.value();
+    const auto unrouted = runtime::assembleOutputChannelLayers(
+        *layered, {}, fixture.folder, runtime::EvaluationColorIntent::LinearRec709Scene, window,
+        window, 1U << 24U, {});
+    expect(!unrouted.ok() && !unrouted.diagnostic.empty(),
+           "a packed layer without an evaluation route is refused, never written as zeros");
+    runtime::CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(fixture.folder);
+    const auto images = [&](const std::shared_ptr<const runtime::CompiledCompositionPlan>& layerPlan) {
+        runtime::ChannelLayerImage layer;
+        if (!layerPlan) {
+            layer.failed = true;
+            return layer;
+        }
+        const auto result = evaluator.evaluate(
+            layerPlan,
+            {{}, layerPlan->output(), runtime::CompositionFormatResolution{},
+             runtime::EvaluationQuality::Reference,
+             runtime::EvaluationColorIntent::LinearRec709Scene, 1U << 24U},
+            {});
+        if (!result.frame()) {
+            layer.failed = true;
+            return layer;
+        }
+        layer.image = std::shared_ptr<const render::Rgba32fImage>(result.frame(),
+                                                                  &result.frame()->processImage());
+        return layer;
+    };
+    const auto assembled = runtime::assembleOutputChannelLayers(
+        *layered, {}, fixture.folder, runtime::EvaluationColorIntent::LinearRec709Scene, window,
+        window, 1U << 24U, {}, images);
+    const auto red = assembled.layers ? assembled.layers->find("pass.R") : std::nullopt;
+    const auto alpha = assembled.layers ? assembled.layers->find("pass.A") : std::nullopt;
+    const auto depth = assembled.layers ? assembled.layers->find("depth.Z") : std::nullopt;
+    expect(assembled.ok() && red && alpha && depth &&
+               near(assembled.layers->plane(*red)[0], 0.25F) &&
+               near(assembled.layers->plane(*alpha)[3], 0.5F) &&
+               near(assembled.layers->plane(*depth)[0], -0.5F),
+           "a packed layer is written beside the file's layers in a layered OpenEXR");
+}
+
+// #480: a Video source's channels output is its decoded frame's R, G, B and A, read exactly.
+void videoChannels() {
+    Fixture fixture("video");
+    const auto video = fixture.add(document::kVideoSourceNodeType);
+    const auto pass = fixture.add(document::kChannelPassNodeType);
+    fixture.connect(video, document::kVideoSourceChannelsOutputPort, pass,
+                    document::kChannelSetPort);
+    fixture.connect(pass, document::kChannelPassImagePort, fixture.layer,
+                    document::kLayerOutputContentInputPort);
+    fixture.set(pass, document::kChannelPassParameterRole, std::string("B"));
+    const auto plan = fixture.compile();
+    const auto& operations = plan->operations();
+    const auto select = std::ranges::find_if(operations, [](const auto& operation) {
+        const auto* effect = std::get_if<runtime::CompiledImageEffect>(&operation);
+        return effect != nullptr && std::holds_alternative<runtime::ChannelSelectKernel>(effect->kernel);
+    });
+    const auto* effect = select != operations.end()
+                             ? std::get_if<runtime::CompiledImageEffect>(&*select)
+                             : nullptr;
+    const auto* kernel =
+        effect != nullptr ? std::get_if<runtime::ChannelSelectKernel>(&effect->kernel) : nullptr;
+    expect(kernel != nullptr &&
+               std::holds_alternative<runtime::CompiledVideoSource>(
+                   operations[effect->input.value()]) &&
+               kernel->sources[0] == runtime::ImageChannelSource::Blue &&
+               kernel->sources[3] == runtime::ImageChannelSource::One,
+           "a Pass over a Video source's channels selects the frame's stored channel");
+}
 } // namespace
 
 int main() {
@@ -443,6 +679,10 @@ int main() {
         defaultSlots();
         viewerInspection();
         outputChannelLayers();
+        dataSafeShuffle();
+        passPicker();
+        imageToChannelSet();
+        videoChannels();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

@@ -29,6 +29,8 @@ struct ChannelShuffleSelection final {
     // reads a source channel); nullopt for Raw or an all-constant RGB triple.
     std::optional<std::uint32_t> colourSource;
     bool associated = true;
+    // #480: the finite value a non-finite mapped sample becomes.
+    float nonFinite = 0.0F;
     std::string cacheKey;
     // Raw-gather identity (no colour interpretation): the GPU upload cache key.
     std::string decodeKey;

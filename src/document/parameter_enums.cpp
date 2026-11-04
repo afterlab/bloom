@@ -152,8 +152,13 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return sequential({"Clip", "Grow"});
     if (schemaKey == kImagePreviewDisplayParameterSchemaKey)
         return sequential({"RGBA", "RGB", "Alpha", "Red", "Green", "Blue", "Normalized"});
-    if (schemaKey == "bloom.channel-shuffle.mode")
-        return {{"Color", kChannelShuffleColourMode}, {"Raw", kChannelShuffleRawMode}};
+    if (schemaKey == "bloom.channel-shuffle.mode" || schemaKey == "bloom.channel-pass.mode")
+        return {{"Auto", kChannelShuffleAutoMode},
+                {"Color", kChannelShuffleColourMode},
+                {"Raw", kChannelShuffleRawMode}};
+    if (schemaKey == "bloom.image-to-channel-set.encoding")
+        return {{"Data", kImageToChannelSetDataEncoding},
+                {"Color", kImageToChannelSetColourEncoding}};
     if (schemaKey == kScalarOperationParameterSchemaKey) {
         Options options;
         for (const auto operation : kScalarOperations) {

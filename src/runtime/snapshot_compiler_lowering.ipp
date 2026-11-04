@@ -338,14 +338,18 @@ lower(const std::vector<document::NodeId>& order) {
         // Channel algebra (Remove, Channel Copy, a Shuffle's channel output) touches no pixels and
         // compiles into the expression of the Shuffle whose image output reads it.
         if (definition->second->lowering == runtime::NodeLoweringKind::Channel) {
-            if (node->typeId != document::kChannelShuffleNodeType ||
-                !hasReachableOutput(nodeId, document::kChannelShuffleImagePort))
+            // #480: a Pass is a Shuffle whose slots follow its picked pass.
+            const bool shuffleImage =
+                node->typeId == document::kChannelShuffleNodeType &&
+                hasReachableOutput(nodeId, document::kChannelShuffleImagePort);
+            const bool passImage = node->typeId == document::kChannelPassNodeType &&
+                                   hasReachableOutput(nodeId, document::kChannelPassImagePort);
+            if (!shuffleImage && !passImage)
                 continue;
-            auto shuffle = lowerChannelShuffle(*node);
-            if (!shuffle)
+            const auto shuffled = lowerChannelShuffle(*node, operations, indices);
+            if (!shuffled)
                 return {};
-            indices.emplace(nodeId, runtime::OperationIndex::fromRaw(operations.size()));
-            operations.emplace_back(std::move(*shuffle));
+            indices.emplace(nodeId, *shuffled);
             continue;
         }
         // #364 Cryptomatte: the matte (Mask) and, with an input image, the image multiplied by
@@ -716,8 +720,9 @@ lower(const std::vector<document::NodeId>& order) {
         runtime::CompiledChannelShuffle shuffle;
         shuffle.sourceNodeId = inspection.node;
         std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
-        const auto root = lowerChannelStep(
-            document::OutputPortRef{inspection.node, inspection.port}, shuffle.channels, memo, 0);
+        const auto root =
+            lowerChannelStep(document::OutputPortRef{inspection.node, inspection.port},
+                             shuffle.channels, memo, 0, &indices);
         if (!root)
             return {};
         if (*root + 1 != shuffle.channels.steps.size()) {
@@ -729,8 +734,10 @@ lower(const std::vector<document::NodeId>& order) {
                            names.size() == 3 ? names[2] : names[0], "1"};
         shuffle.mode = document::kChannelShuffleRawMode;
         shuffle.associated = true;
-        const auto shuffleIndex = runtime::OperationIndex::fromRaw(operations.size());
-        operations.emplace_back(std::move(shuffle));
+        // #480: Image to Channel Set channels are inspected through the same image effects.
+        const auto mapping = shuffle.mapping;
+        const auto shuffleIndex =
+            emitChannelShuffle(std::move(shuffle), mapping, inspection.node, operations);
         // The Composition Output reads a Merge, as for any directly connected image.
         const auto mergeIndex = runtime::OperationIndex::fromRaw(operations.size());
         operations.emplace_back(runtime::CompiledMerge{outputNodeId, {{{}, {}, shuffleIndex}}});
@@ -762,6 +769,8 @@ lower(const std::vector<document::NodeId>& order) {
                    failure->summary, "Reduce the number of retimed layers sharing upstream nodes.");
         return {};
     }
+    // #480: Image to Channel Set layers written beside RGBA evaluate as plans of their own.
+    runtime::detail::separateChannelLayerImages(definition);
     return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
 }
 
@@ -1577,12 +1586,15 @@ lowerImageEffect(const document::NodeRecord& node,
 }
 
 // Appends the steps that produce the ChannelSet on `output` and returns the index of its step.
-// `memo` shares a step between consumers of the same output.
+// `memo` shares a step between consumers of the same output. `indices` (the operations lowered so
+// far) gives an Image to Channel Set or Video source its image operation (#480).
 [[nodiscard]] std::optional<std::uint32_t>
 lowerChannelStep(const document::OutputPortRef& output,
                  runtime::CompiledChannelExpression& expression,
                  std::map<std::pair<document::NodeId, std::string>, std::uint32_t>& memo,
-                 const std::size_t depth) {
+                 const std::size_t depth,
+                 const std::unordered_map<document::NodeId, runtime::OperationIndex>* indices =
+                     nullptr) {
     if (depth > 256) {
         addTopologyFailure(output.nodeId, "Channel graph is too deep.");
         return std::nullopt;
@@ -1601,11 +1613,57 @@ lowerChannelStep(const document::OutputPortRef& output,
             addTopologyFailure(node->id, "Channel node input is not connected.");
             return std::nullopt;
         }
-        return lowerChannelStep(edge->source, expression, memo, depth + 1);
+        return lowerChannelStep(edge->source, expression, memo, depth + 1, indices);
     };
     runtime::CompiledChannelStep step;
     step.nodeId = node->id;
-    if (node->typeId == document::kImageSourceNodeType) {
+    // #480: an image packed as named channels, known statically.
+    const auto imageSource = [&](std::optional<runtime::OperationIndex> image,
+                                 std::vector<render::ChannelDescriptor> channels) {
+        runtime::CompiledChannelSource source;
+        source.sourceNodeId = node->id;
+        source.imageBacked = true;
+        source.image = image;
+        source.imageChannels = std::move(channels);
+        expression.sources.push_back(std::move(source));
+        step.kind = runtime::CompiledChannelStepKind::Source;
+        step.source = static_cast<std::uint32_t>(expression.sources.size() - 1);
+    };
+    const auto operationOf = [&](const document::OutputPortRef& port)
+        -> std::optional<runtime::OperationIndex> {
+        if (indices == nullptr || !indices->contains(port.nodeId))
+            return std::nullopt; // an empty image reads zero
+        return sourceOperation(port, *indices);
+    };
+    if (node->typeId == document::kImageToChannelSetNodeType) {
+        const auto* layer =
+            channelText(*node, document::kImageToChannelSetLayerParameterRole);
+        const auto* names =
+            channelText(*node, document::kImageToChannelSetChannelsParameterRole);
+        const auto* encoding = parameterConstant<std::int64_t>(
+            findParameterBinding(*node, document::kImageToChannelSetEncodingParameterRole));
+        const auto split =
+            names != nullptr ? document::splitImageToChannelSetNames(*names) : std::nullopt;
+        if (layer == nullptr || !split || encoding == nullptr ||
+            (*encoding != document::kImageToChannelSetDataEncoding &&
+             *encoding != document::kImageToChannelSetColourEncoding)) {
+            addTopologyFailure(node->id, "Image to Channel Set parameters could not be lowered.");
+            return std::nullopt;
+        }
+        const auto* edge = fixedInputEdge(node->id, document::kImageToChannelSetImagePort);
+        imageSource(edge != nullptr && !isMuted(node->id) ? operationOf(edge->source)
+                                                          : std::nullopt,
+                    runtime::detail::imageChannelSetDescriptors(
+                        *layer, *split,
+                        *encoding == document::kImageToChannelSetColourEncoding));
+    } else if (node->typeId == document::kVideoSourceNodeType &&
+               output.port == document::kVideoSourceChannelsOutputPort) {
+        // The decoded frame's stored R, G, B and A, colour in the working space.
+        const std::vector<std::string> rgba{"R", "G", "B", "A"};
+        imageSource(isMuted(node->id) ? std::nullopt
+                                      : operationOf({node->id, std::string("image")}),
+                    runtime::detail::imageChannelSetDescriptors("", rgba, true));
+    } else if (node->typeId == document::kImageSourceNodeType) {
         const auto* asset = parameterConstant<std::string>(findParameterBinding(*node, "asset"));
         const auto* start =
             parameterConstant<std::int64_t>(findParameterBinding(*node, "startFrame"));
@@ -1715,17 +1773,24 @@ lowerCryptomatte(const document::NodeRecord& node) {
     return runtime::CompiledOperation{std::move(cryptomatte)};
 }
 
-[[nodiscard]] std::optional<runtime::CompiledOperation>
-lowerChannelShuffle(const document::NodeRecord& node) {
+// A Shuffle's or Pass's image output (#480 for Pass and the image path). Slots that read only
+// Image to Channel Set channels and constants become exact Channel Select / Channel Combine effects
+// over the image operations; every other mapping is the evaluation-time gather, which also reports
+// the refusals (Color on a data channel, image channels mixed with file channels).
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerChannelShuffle(const document::NodeRecord& node,
+                    std::vector<runtime::CompiledOperation>& operations,
+                    const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const bool pass = node.typeId == document::kChannelPassNodeType;
     runtime::CompiledChannelShuffle shuffle;
     shuffle.sourceNodeId = node.id;
     const auto* edge = fixedInputEdge(node.id, document::kChannelSetPort);
     if (edge == nullptr) {
-        addTopologyFailure(node.id, "Shuffle has no channel set.");
+        addTopologyFailure(node.id, pass ? "Pass has no channel set." : "Shuffle has no channel set.");
         return std::nullopt;
     }
     std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
-    const auto root = lowerChannelStep(edge->source, shuffle.channels, memo, 0);
+    const auto root = lowerChannelStep(edge->source, shuffle.channels, memo, 0, &indices);
     if (!root)
         return std::nullopt;
     // Steps are emitted in dependency order, so the root is the last step appended.
@@ -1733,22 +1798,147 @@ lowerChannelShuffle(const document::NodeRecord& node) {
         auto copy = shuffle.channels.steps[*root];
         shuffle.channels.steps.push_back(std::move(copy));
     }
-    constexpr std::array<std::string_view, 4> kSlots{"red", "green", "blue", "alpha"};
-    for (std::size_t slot = 0; slot < 4; ++slot) {
-        const auto* value = channelText(node, kSlots[slot]);
-        if (!value)
-            return std::nullopt;
-        shuffle.mapping[slot] = *value;
-    }
     const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
-    const auto* associated = parameterConstant<bool>(findParameterBinding(node, "associated"));
-    if (!mode || !associated) {
+    const auto* nonFiniteBinding =
+        findParameterBinding(node, document::kChannelNonFiniteParameterRole);
+    const auto* nonFinite =
+        nonFiniteBinding != nullptr ? parameterConstant<double>(nonFiniteBinding) : nullptr;
+    if (!mode || (nonFiniteBinding != nullptr && !nonFinite)) {
         addTopologyFailure(node.id, "Shuffle parameters could not be lowered.");
         return std::nullopt;
     }
     shuffle.mode = *mode;
-    shuffle.associated = *associated;
-    return runtime::CompiledOperation{std::move(shuffle)};
+    shuffle.nonFinite = nonFinite != nullptr ? static_cast<float>(*nonFinite) : 0.0F;
+    const auto set = runtime::detail::staticChannelSet(shuffle.channels);
+    std::optional<std::array<std::string, 4>> mapping;
+    if (pass) {
+        const auto* picked = channelText(node, document::kChannelPassParameterRole);
+        if (!picked)
+            return std::nullopt;
+        shuffle.pass = *picked;
+        shuffle.associated = false;
+        // A static set (or a pass that names a static image channel or layer) maps here.
+        std::vector<runtime::detail::PassCandidate> candidates;
+        bool named = false;
+        for (const auto& channel : set.known) {
+            candidates.push_back({channel.name, channel.descriptor});
+            named = named || (!picked->empty() && channel.kind == runtime::detail::StaticChannelKind::Image &&
+                              (channel.name == *picked || channel.descriptor.layer == *picked));
+        }
+        if (!set.files || named)
+            mapping = runtime::detail::passMapping(candidates, *picked);
+    } else {
+        constexpr std::array<std::string_view, 4> kSlots{"red", "green", "blue", "alpha"};
+        mapping.emplace();
+        for (std::size_t slot = 0; slot < 4; ++slot) {
+            const auto* value = channelText(node, kSlots[slot]);
+            if (!value)
+                return std::nullopt;
+            (*mapping)[slot] = *value;
+        }
+        shuffle.mapping = *mapping;
+        const auto* associated = parameterConstant<bool>(findParameterBinding(node, "associated"));
+        if (!associated) {
+            addTopologyFailure(node.id, "Shuffle parameters could not be lowered.");
+            return std::nullopt;
+        }
+        shuffle.associated = *associated;
+    }
+    return emitChannelShuffle(std::move(shuffle), mapping, node.id, operations);
+}
+
+// #480: emits a Shuffle's image (see lowerChannelShuffle). `mapping` is the static slot list, or
+// nullopt when only evaluation can derive it (a Pass over file channels).
+[[nodiscard]] runtime::OperationIndex
+emitChannelShuffle(runtime::CompiledChannelShuffle shuffle,
+                   const std::optional<std::array<std::string, 4>>& mapping,
+                   const document::NodeId nodeId,
+                   std::vector<runtime::CompiledOperation>& operations) {
+    const auto gather = [&] {
+        const auto index = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(std::move(shuffle));
+        return index;
+    };
+    if (!mapping)
+        return gather();
+    const auto set = runtime::detail::staticChannelSet(shuffle.channels);
+    // Classify the slots statically.
+    std::array<runtime::detail::StaticChannel, 4> slots;
+    bool anyImage = false;
+    bool everyStatic = true;
+    std::optional<std::string> dataChannel;
+    for (std::size_t slot = 0; slot < 4; ++slot) {
+        slots[slot] = runtime::detail::staticChannelSlot(set, (*mapping)[slot], slot);
+        const auto kind = slots[slot].kind;
+        anyImage = anyImage || kind == runtime::detail::StaticChannelKind::Image;
+        everyStatic = everyStatic && (kind == runtime::detail::StaticChannelKind::Image ||
+                                      kind == runtime::detail::StaticChannelKind::Constant);
+        if (slot < 3 && kind == runtime::detail::StaticChannelKind::Image && !dataChannel &&
+            runtime::detail::isDataChannelRole(slots[slot].descriptor.role))
+            dataChannel = slots[slot].name;
+    }
+    // The first image a slot reads owns the result. A mapping of constants alone stays the gather
+    // (its frame is a file source's), as does Color on a data lane, a slot mixing image and file
+    // channels, and one the compiler cannot decide: the gather reports each refusal.
+    std::optional<std::uint32_t> baseSource;
+    for (const auto& slot : slots)
+        if (slot.kind == runtime::detail::StaticChannelKind::Image) {
+            baseSource = slot.source;
+            break;
+        }
+    if (!anyImage || !everyStatic || !baseSource ||
+        (shuffle.mode == document::kChannelShuffleColourMode && dataChannel))
+        return gather();
+    // Image channels are already working-space samples: Color and Raw read them unchanged, and
+    // `associated` off premultiplies by the mapped alpha.
+    const bool premultiply = !shuffle.associated;
+    const auto baseImage = shuffle.channels.sources[*baseSource].image;
+    if (!baseImage) {
+        const auto empty = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledMerge{nodeId, {}});
+        return empty;
+    }
+    const auto laneSource = [](const std::uint8_t lane) {
+        constexpr std::array kLanes{runtime::ImageChannelSource::Red, runtime::ImageChannelSource::Green,
+                                    runtime::ImageChannelSource::Blue,
+                                    runtime::ImageChannelSource::Alpha};
+        return kLanes[lane < 4 ? lane : 0];
+    };
+    runtime::ChannelSelectKernel select;
+    std::vector<std::size_t> pending;
+    for (std::size_t slot = 0; slot < 4; ++slot) {
+        const auto& item = slots[slot];
+        const bool alpha = slot == 3;
+        const auto constant = [&](const float value) {
+            return value == 1.0F ? runtime::ImageChannelSource::One
+                                 : runtime::ImageChannelSource::Zero;
+        };
+        if (item.kind == runtime::detail::StaticChannelKind::Constant) {
+            select.sources[slot] = constant(item.constant);
+        } else if (item.source == *baseSource) {
+            select.sources[slot] = laneSource(item.lane);
+        } else if (!shuffle.channels.sources[item.source].image) {
+            select.sources[slot] = runtime::ImageChannelSource::Zero; // an absent image reads 0
+        } else {
+            // A slot a later operation sets keeps a nonzero alpha meanwhile.
+            select.sources[slot] =
+                alpha ? runtime::ImageChannelSource::One : runtime::ImageChannelSource::Zero;
+            pending.push_back(slot);
+        }
+    }
+    select.premultiply = premultiply && pending.empty();
+    auto current = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(runtime::CompiledImageEffect{nodeId, *baseImage, select});
+    for (const auto slot : pending) {
+        const auto& item = slots[slot];
+        runtime::ChannelCombineKernel kernel{static_cast<std::uint8_t>(slot), laneSource(item.lane),
+                                             premultiply && slot == pending.back()};
+        const auto next = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(runtime::CompiledImageEffect{
+            nodeId, current, kernel, false, false, *shuffle.channels.sources[item.source].image});
+        current = next;
+    }
+    return current;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -2228,7 +2418,7 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
     if (const auto* edge = fixedInputEdge(node.id, document::kCompositionOutputChannelsInputPort)) {
         runtime::CompiledChannelExpression expression;
         std::map<std::pair<document::NodeId, std::string>, std::uint32_t> memo;
-        const auto root = lowerChannelStep(edge->source, expression, memo, 0);
+        const auto root = lowerChannelStep(edge->source, expression, memo, 0, &indices);
         if (!root)
             return std::nullopt;
         if (*root + 1 != expression.steps.size()) {

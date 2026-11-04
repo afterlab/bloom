@@ -80,6 +80,12 @@ listChannelInspectionChoices(const SnapshotCompiler& compiler, const document::S
     std::vector<detail::ImageSourceSelection> selections;
     std::vector<const media::ImagePartInfo*> parts;
     for (const auto& source : shuffle->channels.sources) {
+        if (source.imageBacked) {
+            // #480: an Image to Channel Set source names its channels statically.
+            parts.push_back(nullptr);
+            selections.emplace_back();
+            continue;
+        }
         const CompiledImageSource image{source.sourceNodeId, source.asset,      source.startFrame,
                                         source.loopMode,     source.colorSpace, source.inputColorSpaceId,
                                         false,               source.part,       {}};

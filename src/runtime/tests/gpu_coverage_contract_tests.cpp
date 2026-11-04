@@ -636,6 +636,11 @@ displayProofRunner(const bool customView) {
         "src/runtime channel shuffle production scene preparation", [runChannels] {
             return runChannels(bloom::gpu_coverage_media::ChannelFixture::Copy, 113600);
         });
+    // #480: a Pass over file channels is the production channel gather with a derived mapping.
+    add("node.bloom.channel-pass", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime channel shuffle production scene preparation", [runChannels] {
+            return runChannels(bloom::gpu_coverage_media::ChannelFixture::Pass, 168000);
+        });
     // #364: Cryptomatte through the production rank gather, stacked upload, CryptomatteCoverageV1
     // and proxy resample: names resolved through the manifest, names resolved by hash without one,
     // a raw ID, and the Image output (beauty x matte through the MultiplyAlpha combine).
@@ -1304,6 +1309,23 @@ displayProofRunner(const bool customView) {
                 167600,
                 "production Combine Channels: base select, a Luma slot and a Straight alpha, "
                 "full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    // #480: an Image to Channel Set layer read by a Shuffle or Pass lowers to these effects over the
+    // image operation: a Pass over the packed layer (its stored R, G, B, alpha 1, associated off)
+    // and a Shuffle joining a second packed image's lane into the first.
+    add(
+        "node.bloom.image-to-channel-set", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime snapshot compiler Image to Channel Set lowering",
+        [runImageChannels] {
+            return runImageChannels(
+                {ChannelSelectKernel{{ImageChannelSource::Red, ImageChannelSource::Green,
+                                      ImageChannelSource::Blue, ImageChannelSource::One},
+                                     true},
+                 ChannelCombineKernel{1, ImageChannelSource::Alpha, true}},
+                168200,
+                "production Image to Channel Set reads: a packed layer's Pass and a lane joined "
+                "from a second packed image, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     return list;

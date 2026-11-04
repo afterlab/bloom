@@ -2,6 +2,8 @@
 
 #include <bloom/core/utf8.hpp>
 
+#include <cmath>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -65,14 +67,81 @@ NodeDefinition channelShuffleDefinition() {
     node.parameters.push_back(text(type, "blue", ""));
     node.parameters.push_back(text(type, "alpha", "1"));
     node.parameters.push_back({"mode", std::string(type) + ".mode", ParameterValueKind::Integer,
-                               true, false, kChannelShuffleColourMode});
+                               true, false, kChannelShuffleAutoMode});
     // Whether the mapped RGB is already associated (premultiplied) with the mapped alpha, as
     // OpenEXR stores it; straight sources such as PNG set it off.
     node.parameters.push_back({"associated", std::string(type) + ".associated",
                                ParameterValueKind::Boolean, true, false, true});
     // The layer the `channels` output names its R, G, B and A in; empty is the root layer.
     node.parameters.push_back(text(type, "layer", ""));
+    node.parameters.push_back({std::string(kChannelNonFiniteParameterRole),
+                               std::string(type) + ".non-finite", ParameterValueKind::Float64,
+                               false, false, 0.0});
     return node;
+}
+
+NodeDefinition channelPassDefinition() {
+    const auto type = kChannelPassNodeType;
+    NodeDefinition node{{std::string(type), kChannelNodeSchemaVersion},
+                        NodeLoweringKind::Channel,
+                        {{std::string(kChannelSetPort), SocketValueKind::ChannelSet, true}},
+                        {{std::string(kChannelPassImagePort), SocketValueKind::Image}},
+                        {},
+                        std::nullopt,
+                        NodeCardinality::Many,
+                        NodeCategory::Compositing};
+    node.parameters.push_back(text(type, std::string(kChannelPassParameterRole), ""));
+    node.parameters.push_back({"mode", std::string(type) + ".mode", ParameterValueKind::Integer,
+                               true, false, kChannelShuffleAutoMode});
+    node.parameters.push_back({std::string(kChannelNonFiniteParameterRole),
+                               std::string(type) + ".non-finite", ParameterValueKind::Float64,
+                               true, false, 0.0});
+    return node;
+}
+
+NodeDefinition imageToChannelSetDefinition() {
+    const auto type = kImageToChannelSetNodeType;
+    NodeDefinition node{{std::string(type), kChannelNodeSchemaVersion},
+                        NodeLoweringKind::Channel,
+                        {{std::string(kImageToChannelSetImagePort), SocketValueKind::Image, true}},
+                        {{std::string(kChannelSetPort), SocketValueKind::ChannelSet}},
+                        {},
+                        std::nullopt,
+                        NodeCardinality::Many,
+                        NodeCategory::Compositing};
+    node.parameters.push_back(text(type, std::string(kImageToChannelSetLayerParameterRole), "pass"));
+    node.parameters.push_back(
+        text(type, std::string(kImageToChannelSetChannelsParameterRole), "R,G,B,A"));
+    node.parameters.push_back({std::string(kImageToChannelSetEncodingParameterRole),
+                               std::string(type) + ".encoding", ParameterValueKind::Integer, true,
+                               false, kImageToChannelSetDataEncoding});
+    return node;
+}
+
+std::optional<std::vector<std::string>> splitImageToChannelSetNames(const std::string_view list) {
+    std::vector<std::string> names;
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const auto comma = list.find(',', start);
+        auto token = list.substr(start, comma == std::string_view::npos ? std::string_view::npos
+                                                                         : comma - start);
+        while (!token.empty() && (token.front() == ' ' || token.front() == '\t'))
+            token.remove_prefix(1);
+        while (!token.empty() && (token.back() == ' ' || token.back() == '\t'))
+            token.remove_suffix(1);
+        if (token.empty() || token.find('.') != std::string_view::npos || names.size() == 4)
+            return std::nullopt;
+        for (const auto& existing : names)
+            if (existing == token)
+                return std::nullopt;
+        names.emplace_back(token);
+        if (comma == std::string_view::npos)
+            break;
+        start = comma + 1;
+    }
+    if (names.empty())
+        return std::nullopt;
+    return names;
 }
 
 NodeDefinition channelCopyDefinition() {
@@ -116,7 +185,9 @@ bool isChannelParameterSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == "bloom.channel-copy.select" || schemaKey == "bloom.channel-remove.select" ||
            schemaKey == "bloom.channel-remove.keep" ||
            schemaKey == kCryptomatteLayerParameterSchemaKey ||
-           schemaKey == kCryptomatteMattesParameterSchemaKey;
+           schemaKey == kCryptomatteMattesParameterSchemaKey ||
+           schemaKey.starts_with("bloom.channel-pass.") ||
+           schemaKey.starts_with("bloom.image-to-channel-set.");
 }
 
 bool isChannelParameterValueValid(const std::string_view schemaKey,
@@ -127,10 +198,31 @@ bool isChannelParameterValueValid(const std::string_view schemaKey,
         schemaKey == "bloom.channel-shuffle.blue" || schemaKey == "bloom.channel-shuffle.alpha" ||
         schemaKey == "bloom.channel-shuffle.layer")
         return boundedText(value, kMaximumChannelNameBytes);
-    if (schemaKey == "bloom.channel-shuffle.mode") {
+    if (schemaKey == "bloom.channel-shuffle.mode" || schemaKey == "bloom.channel-pass.mode") {
         const auto* mode = std::get_if<std::int64_t>(&value);
-        return mode != nullptr &&
-               (*mode == kChannelShuffleColourMode || *mode == kChannelShuffleRawMode);
+        return mode != nullptr && (*mode == kChannelShuffleColourMode ||
+                                   *mode == kChannelShuffleRawMode ||
+                                   *mode == kChannelShuffleAutoMode);
+    }
+    if (schemaKey == "bloom.channel-shuffle.non-finite" ||
+        schemaKey == "bloom.channel-pass.non-finite") {
+        const auto* number = std::get_if<double>(&value);
+        // A Float32 sample: finite, and finite once rounded to Float32.
+        return number != nullptr && std::isfinite(*number) &&
+               std::abs(*number) <= static_cast<double>(std::numeric_limits<float>::max());
+    }
+    if (schemaKey == kChannelPassParameterSchemaKey ||
+        schemaKey == "bloom.image-to-channel-set.layer")
+        return boundedText(value, kMaximumChannelNameBytes);
+    if (schemaKey == "bloom.image-to-channel-set.channels") {
+        const auto* text = std::get_if<std::string>(&value);
+        return boundedText(value, kMaximumChannelNameBytes) && text != nullptr &&
+               splitImageToChannelSetNames(*text).has_value();
+    }
+    if (schemaKey == "bloom.image-to-channel-set.encoding") {
+        const auto* encoding = std::get_if<std::int64_t>(&value);
+        return encoding != nullptr && (*encoding == kImageToChannelSetDataEncoding ||
+                                       *encoding == kImageToChannelSetColourEncoding);
     }
     if (schemaKey == "bloom.channel-shuffle.associated" || schemaKey == "bloom.channel-remove.keep")
         return std::holds_alternative<bool>(value);

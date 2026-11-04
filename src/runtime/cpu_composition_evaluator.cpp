@@ -584,7 +584,9 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     return true;
                 }();
-                return stepsValid && (shuffle.mode == 0 || shuffle.mode == 1) &&
+                return stepsValid &&
+                       (shuffle.mode == 0 || shuffle.mode == 1 || shuffle.mode == 2) &&
+                       std::isfinite(shuffle.nonFinite) &&
                        plan.operationAssetsValid(OperationIndex::fromRaw(index)) &&
                        std::ranges::all_of(shuffle.channels.sources, [](const auto& source) {
                            return source.loopMode >= 0 && source.loopMode <= 2 &&
@@ -3420,8 +3422,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      operationSubject,
                                      std::to_string(image.repairedPixels) +
                                          " shuffled pixels were repaired by the ingest policy "
-                                         "(NaN/Inf to 0, alpha clamped to [0, 1], zero-alpha "
-                                         "emission dropped)",
+                                         "(NaN/Inf to the non-finite value, alpha clamped to "
+                                         "[0, 1], zero-alpha emission dropped)",
                                      {}});
                             bounds[index].local =
                                 detail::channelShuffleFrameBounds(*selectedShuffle)

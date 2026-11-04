@@ -55,7 +55,8 @@ bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const Composition
                                      const document::NodeRecord& node);
 // #487: the Shuffle R/G/B/A slots offer the channels of the node's input channel set (the Viewer
 // channel menu's listing, read on a worker through ChannelSetController) plus the constants 0 and
-// 1; an empty (default) slot shows the default colour layer's channel it reads.
+// 1; an empty (default) slot shows the default colour layer's channel it reads. #480: the Pass node's
+// pass picker shares the listing and offers its layers and channels.
 [[nodiscard]] bool isShuffleSlotSchema(std::string_view schemaKey) noexcept;
 bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
                                 const document::NodeRecord& node, std::string_view schemaKey);

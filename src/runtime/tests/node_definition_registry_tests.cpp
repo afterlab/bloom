@@ -137,8 +137,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove; #364 adds Cryptomatte.
     // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
-    // Hue/Saturation; #479 adds Separate Channels and Combine Channels.
-    expectations.expect(registry.definitions().size() == 146,
+    // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
+    // Channel Set.
+    expectations.expect(registry.definitions().size() == 148,
                         "startup contribution includes every built-in definition");
     for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
                              "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",

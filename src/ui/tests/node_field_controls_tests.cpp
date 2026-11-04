@@ -55,12 +55,15 @@ bool isPickList(const document::ParameterDefinition& p) {
 }
 
 // #487: the String parameters whose value is open (the artist types it): text content, string
-// operands and values, and the Shuffle output layer name (it names a new layer). Every other String
-// has a closed or discoverable set and must be a dropdown or checklist. Adding a free-text String
-// means adding it here, deliberately.
+// operands and values, the Shuffle output layer name (it names a new layer), and the Image to
+// Channel Set layer and channel names (#480: they name the layer an image becomes). Every other
+// String has a closed or discoverable set and must be a dropdown or checklist. Adding a free-text
+// String means adding it here, deliberately.
 bool isOpenText(const std::string_view schemaKey) {
     return schemaKey == document::kTextParameterSchemaKey || schemaKey == "bloom.operand.string" ||
-           schemaKey == "bloom.value.string" || schemaKey == "bloom.channel-shuffle.layer";
+           schemaKey == "bloom.value.string" || schemaKey == "bloom.channel-shuffle.layer" ||
+           schemaKey == "bloom.image-to-channel-set.layer" ||
+           schemaKey == "bloom.image-to-channel-set.channels";
 }
 
 // #487: an Integer whose value is one of a closed or discoverable set (an enum, a choice such as a

@@ -42,7 +42,8 @@ assembleOutputChannelLayers(const CompiledCompositionPlan& plan, const core::Rat
                             const EvaluationColorIntent& colorIntent,
                             const render::ImageWindow dataWindow,
                             const render::ImageWindow displayWindow, const std::size_t byteBudget,
-                            const CancellationToken& cancellation) {
+                            const CancellationToken& cancellation,
+                            const ChannelLayerImageSource& images) {
     ChannelLayerAssembly result;
     const auto* output = std::get_if<CompiledCompositionOutput>(
         &plan.operations()[plan.output().value()]);
@@ -52,6 +53,12 @@ assembleOutputChannelLayers(const CompiledCompositionPlan& plan, const core::Rat
     std::vector<detail::ImageSourceSelection> selections;
     std::vector<const media::ImagePartInfo*> parts;
     for (const auto& source : expression.sources) {
+        if (source.imageBacked) {
+            // #480: an Image to Channel Set layer names its channels statically.
+            parts.push_back(nullptr);
+            selections.emplace_back();
+            continue;
+        }
         const CompiledImageSource image{source.sourceNodeId, source.asset,      source.startFrame,
                                         source.loopMode,     source.colorSpace, source.inputColorSpaceId,
                                         false,               source.part,       {}};
@@ -95,10 +102,31 @@ assembleOutputChannelLayers(const CompiledCompositionPlan& plan, const core::Rat
         if (channel.source && std::ranges::find(names[*channel.source], channel.sourceChannel) ==
                                   names[*channel.source].end())
             names[*channel.source].push_back(channel.sourceChannel);
+    // #480: the evaluated images of the written Image to Channel Set layers, once per source.
+    std::vector<std::shared_ptr<const render::Rgba32fImage>> imageLayers(selections.size());
+    for (std::size_t index = 0; index < selections.size(); ++index) {
+        const auto& source = expression.sources[index];
+        if (!source.imageBacked || names[index].empty() || !source.imagePlan)
+            continue;
+        if (!images) {
+            result.diagnostic = "The output cannot evaluate its Image to Channel Set layers";
+            return result;
+        }
+        auto evaluated = images(source.imagePlan);
+        if (evaluated.cancelled || cancellation.isCancellationRequested()) {
+            result.cancelled = true;
+            return result;
+        }
+        if (evaluated.failed) {
+            result.diagnostic = "An Image to Channel Set layer could not be evaluated";
+            return result;
+        }
+        imageLayers[index] = std::move(evaluated.image);
+    }
     std::vector<std::shared_ptr<const render::ChannelSetImage>> sets(selections.size());
     std::size_t remaining = byteBudget;
     for (std::size_t index = 0; index < selections.size(); ++index) {
-        if (names[index].empty())
+        if (names[index].empty() || expression.sources[index].imageBacked)
             continue;
         media::ImageChannelSelection request;
         request.part = selections[index].interpretation.part;
@@ -125,7 +153,36 @@ assembleOutputChannelLayers(const CompiledCompositionPlan& plan, const core::Rat
             return result;
         }
         std::vector<float> plane(width * height, channel.constant);
-        if (channel.source) {
+        if (channel.source && expression.sources[*channel.source].imageBacked) {
+            // #480: the stored lane of the layer's image at the same global pixel.
+            const auto& source = expression.sources[*channel.source];
+            const auto lane = static_cast<std::size_t>(
+                std::ranges::find_if(source.imageChannels,
+                                     [&](const render::ChannelDescriptor& item) {
+                                         return item.name == channel.sourceChannel;
+                                     }) -
+                source.imageChannels.begin());
+            const auto& image = imageLayers[*channel.source];
+            if (image && lane < 4) {
+                const auto window = image->descriptor()->dataWindow();
+                const auto pixels = image->pixels();
+                for (std::size_t row = 0; row < height; ++row) {
+                    const auto y = dataWindow.originY() + static_cast<std::int64_t>(row);
+                    for (std::size_t column = 0; column < width; ++column) {
+                        const auto x = dataWindow.originX() + static_cast<std::int64_t>(column);
+                        plane[row * width + column] =
+                            window.contains(x, y)
+                                ? pixels[static_cast<std::size_t>(y - window.originY()) *
+                                             window.extent().width() +
+                                         static_cast<std::size_t>(x - window.originX())]
+                                      .components()[lane]
+                                : 0.0F;
+                    }
+                }
+            } else {
+                std::ranges::fill(plane, 0.0F);
+            }
+        } else if (channel.source) {
             const auto& set = sets[*channel.source];
             const auto found = set->find(channel.sourceChannel);
             if (!found) {

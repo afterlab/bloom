@@ -34,7 +34,8 @@ void ChannelSetController::cancel() {
 std::optional<std::string_view> ChannelSetController::inputPort(const std::string_view typeId) {
     if (typeId == document::kChannelCopyNodeType)
         return document::kChannelCopyFromPort;
-    if (typeId == document::kChannelShuffleNodeType || typeId == document::kChannelRemoveNodeType)
+    if (typeId == document::kChannelShuffleNodeType || typeId == document::kChannelRemoveNodeType ||
+        typeId == document::kChannelPassNodeType)
         return document::kChannelSetPort;
     if (typeId == document::kCompositionOutputNodeType)
         return document::kCompositionOutputChannelsInputPort;

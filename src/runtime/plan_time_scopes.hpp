@@ -30,4 +30,13 @@ struct TimeScopeFailure final {
 [[nodiscard]] std::optional<TimeScopeFailure>
 scopeLayerTime(CompiledCompositionPlanDefinition& definition);
 
+// #480: run after scopeLayerTime. Each Image to Channel Set layer of the Composition Output's
+// channel layers gets its own plan (the definition re-rooted at its image operation through a
+// Merge, as the output places any image) in CompiledChannelSource::imagePlan, and its operation
+// index is cleared. Operations nothing then reaches from the output (or a bounds readout) are
+// dropped -- such as an image read only by an Image to Channel Set layer, or by a Shuffle leaf
+// that names its channels statically (its reference is cleared). A plan in which every operation
+// is reached is left exactly as it was.
+void separateChannelLayerImages(CompiledCompositionPlanDefinition& definition);
+
 } // namespace bloom::runtime::detail

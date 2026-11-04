@@ -359,6 +359,14 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
     for (const auto& rank : result.ranks) {
         for (const auto* name : {&rank.id, &rank.coverage}) {
             const auto channel = find(*name);
+            // #480: ID hashes are float bit patterns that only a file keeps exact.
+            if (channel->source && *channel->source < cryptomatte.channels.sources.size() &&
+                cryptomatte.channels.sources[*channel->source].imageBacked) {
+                result.warning = "Cryptomatte reads its ID ranks from file channels, not from the "
+                                 "Image to Channel Set channel " +
+                                 channel->name;
+                return result;
+            }
             result.rankChannels.push_back(*channel);
             gatherKey.add(channel->source.has_value());
             gatherKey.add(channel->source.value_or(0U));

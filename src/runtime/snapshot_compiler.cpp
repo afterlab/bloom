@@ -1,6 +1,7 @@
 #include <bloom/runtime/compiled_plan_cache.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 
+#include "channel_static.hpp"
 #include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"
 #include <bloom/runtime/layer_time_projection.hpp>
@@ -350,12 +351,14 @@ class CompilePass final {
                     if (!consumesEdge(*node, *edge))
                         continue;
                     // A Viewer inspection plan needs only the inspected node's channel sets.
-                    // The Cryptomatte preview also shows the node's input image, and a pixel
-                    // output inspection (#490 Image Preview) needs every input of its node.
+                    // The Cryptomatte preview also shows the node's input image, a pixel output
+                    // inspection (#490 Image Preview) needs every input of its node, and an
+                    // Image to Channel Set's channels are its input image's (#480).
                     if (request_.channelInspection && nodeId == request_.channelInspection->node &&
                         request_.channelInspection->port !=
                             document::kCryptomattePreviewInspectionPort &&
-                        !inspectsPixelOutput(*node) && !isChannelSetInput(*node, *edge))
+                        !inspectsPixelOutput(*node) && !isChannelSetInput(*node, *edge) &&
+                        node->typeId != document::kImageToChannelSetNodeType)
                         continue;
                     reachableEdges.emplace(edge->id, edge);
                     pending.push_back(edge->source.nodeId);

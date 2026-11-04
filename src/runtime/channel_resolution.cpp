@@ -151,6 +151,18 @@ ChannelResolution resolveChannelExpression(const CompiledChannelExpression& expr
                 result.error = "A channel source is missing";
                 return result;
             }
+            if (const auto& source = expression.sources[step.source]; source.imageBacked) {
+                // #480: an image packed as channels names them statically.
+                for (const auto& channel : source.imageChannels) {
+                    ResolvedChannel resolved;
+                    resolved.name = channel.name;
+                    resolved.descriptor = channel;
+                    resolved.source = step.source;
+                    resolved.sourceChannel = channel.name;
+                    value.push_back(std::move(resolved));
+                }
+                break;
+            }
             const auto* part = parts[step.source];
             if (part == nullptr) {
                 result.error = "A channel source is unavailable";

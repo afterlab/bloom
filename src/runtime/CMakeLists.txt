@@ -112,6 +112,7 @@ target_sources(
         image_sequence_read_ahead.cpp
         channel_resolution.cpp
         channel_shuffle.cpp
+        channel_static.cpp
         channel_inspection_listing.cpp
         cryptomatte_inspection.cpp
         channel_layers.cpp

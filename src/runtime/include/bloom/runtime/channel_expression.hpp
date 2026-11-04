@@ -7,16 +7,29 @@
 
 #include <bloom/document/asset.hpp>
 #include <bloom/document/ids.hpp>
+#include <bloom/render/channel_set_image.hpp>
+#include <bloom/runtime/operation_index.hpp>
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace bloom::runtime {
 
+class CompiledCompositionPlan;
+
 // One Image source's `channels` output: every channel of the selected part.
+//
+// #480: or, with `imageBacked`, an image packed as named channels -- an Image to Channel Set node
+// or a Video source's `channels` output. Its channels are `imageChannels` (lane i is the image's
+// stored red, green, blue or alpha) and are known when the graph compiles; their pixels are the
+// stored samples of operation `image` (working-space, premultiplied). An absent `image` (muted,
+// unconnected or empty) reads zero. Asset fields are unused. A Composition Output's channel layer
+// carries its image as `imagePlan` instead: the plan re-rooted at that image, which the export
+// evaluates through the frame's route (the operation itself is not part of the frame's plan).
 struct CompiledChannelSource final {
     document::NodeId sourceNodeId;
     std::optional<document::AssetRecord> asset;
@@ -25,6 +38,10 @@ struct CompiledChannelSource final {
     std::int64_t colorSpace = 0;
     std::string inputColorSpaceId{};
     std::string part{};
+    bool imageBacked = false;
+    std::optional<OperationIndex> image{};
+    std::vector<render::ChannelDescriptor> imageChannels{};
+    std::shared_ptr<const CompiledCompositionPlan> imagePlan{};
     friend bool operator==(const CompiledChannelSource&, const CompiledChannelSource&) = default;
 };
 

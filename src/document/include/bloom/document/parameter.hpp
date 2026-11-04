@@ -395,6 +395,10 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
         return value >= 1.0;
     if (schemaKey == kAudioLevelParameterSchemaKey)
         return value >= 0.0 && value <= 2.0;
+    // #480: a Shuffle's or Pass's non-finite substitute lands in a Float32 sample.
+    if (schemaKey == "bloom.channel-shuffle.non-finite" ||
+        schemaKey == "bloom.channel-pass.non-finite")
+        return value >= -3.4028234663852886e38 && value <= 3.4028234663852886e38;
     if (schemaKey == kTextLineHeightParameterSchemaKey)
         return value > 0.0;
     if (hasUnitDomainSchemaKey(schemaKey)) {

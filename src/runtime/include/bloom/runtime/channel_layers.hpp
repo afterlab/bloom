@@ -10,7 +10,10 @@
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/evaluation.hpp>
 
+#include <bloom/render/image.hpp>
+
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -24,12 +27,26 @@ struct ChannelLayerAssembly final {
     [[nodiscard]] bool ok() const noexcept { return diagnostic.empty() && !cancelled; }
 };
 
+// #480: the evaluated image of an Image to Channel Set layer. The export evaluates the layer's
+// CompiledChannelSource::imagePlan (the plan re-rooted at the layer's image) through the frame's
+// own route. A null image is an absent one (it writes zeros); `failed` refuses the whole assembly.
+struct ChannelLayerImage final {
+    std::shared_ptr<const render::Rgba32fImage> image;
+    bool failed = false;
+    bool cancelled = false;
+};
+using ChannelLayerImageSource =
+    std::function<ChannelLayerImage(const std::shared_ptr<const CompiledCompositionPlan>&)>;
+
 // Worker-only. Channels named R, G, B or A belong to the RGBA root and are never written as layers.
+// Image to Channel Set channels read the stored lanes of `images(imagePlan)` at the same global
+// pixel (zero outside its data window); without `images` they are refused.
 [[nodiscard]] ChannelLayerAssembly
 assembleOutputChannelLayers(const CompiledCompositionPlan& plan, core::RationalTime time,
                             const std::filesystem::path& assetBase,
                             const EvaluationColorIntent& colorIntent,
                             render::ImageWindow dataWindow, render::ImageWindow displayWindow,
-                            std::size_t byteBudget, const CancellationToken& cancellation);
+                            std::size_t byteBudget, const CancellationToken& cancellation,
+                            const ChannelLayerImageSource& images = {});
 
 } // namespace bloom::runtime
