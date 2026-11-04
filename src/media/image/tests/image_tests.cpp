@@ -291,15 +291,20 @@ std::vector<std::byte> filteredPng(const unsigned width, const unsigned height,
 void testFastPngMatchesStb(Expectations& check) {
     namespace detail = bloom::media::detail;
     constexpr std::size_t budget = std::size_t{64} * 1024U * 1024U;
-    for (const unsigned depth : {8U, 16U}) {
-        for (const unsigned colourType : {0U, 2U, 4U, 6U}) {
-            const auto bytes = filteredPng(37, 11, depth, colourType);
-            detail::ImageInfo info;
-            check.expect(detail::imageInfo(bytes, info), "generated PNG header reads");
-            const auto fast = detail::fastPngSamples(bytes, info, budget);
-            const auto reference = detail::stbImageSamples(bytes, info, budget);
-            check.expect(fast.has_value() && !reference.empty() && *fast == reference,
-                         "zlib PNG samples equal the stb decoder for every filter and type");
+    // Rows are unfiltered as inflate completes them: a one-pixel column, a small image and one
+    // whose rows straddle the IDAT split many times over all match stb.
+    for (const auto& [width, height] :
+         {std::pair{37U, 11U}, std::pair{1U, 7U}, std::pair{613U, 97U}}) {
+        for (const unsigned depth : {8U, 16U}) {
+            for (const unsigned colourType : {0U, 2U, 4U, 6U}) {
+                const auto bytes = filteredPng(width, height, depth, colourType);
+                detail::ImageInfo info;
+                check.expect(detail::imageInfo(bytes, info), "generated PNG header reads");
+                const auto fast = detail::fastPngSamples(bytes, info, budget);
+                const auto reference = detail::stbImageSamples(bytes, info, budget);
+                check.expect(fast.has_value() && !reference.empty() && *fast == reference,
+                             "zlib PNG samples equal the stb decoder for every filter and type");
+            }
         }
     }
     {

@@ -187,58 +187,139 @@ namespace {
            (std::to_integer<std::uint32_t>(bytes[2]) << 8U) |
            std::to_integer<std::uint32_t>(bytes[3]);
 }
-[[nodiscard]] std::uint8_t paeth(const int a, const int b, const int c) noexcept {
-    const int p = a + b - c;
-    const int pa = std::abs(p - a);
-    const int pb = std::abs(p - b);
-    const int pc = std::abs(p - c);
-    if (pa <= pb && pa <= pc)
-        return static_cast<std::uint8_t>(a);
-    return static_cast<std::uint8_t>(pb <= pc ? b : c);
+[[nodiscard]] inline std::uint8_t paeth(const int a, const int b, const int c) noexcept {
+    // p - a, p - b and p - c of the PNG predictor p = a + b - c, with its tie order.
+    const int pa = std::abs(b - c);
+    const int pb = std::abs(a - c);
+    const int pc = std::abs(a + b - 2 * c);
+    return static_cast<std::uint8_t>(pa <= pb && pa <= pc ? a : (pb <= pc ? b : c));
 }
-// Reverses the five PNG row filters in place over `raw` (filter byte + row bytes per row).
-[[nodiscard]] bool unfilterRows(std::vector<std::uint8_t>& raw, const std::size_t rowBytes,
-                                const std::size_t height, const std::size_t pixelBytes) noexcept {
-    std::uint8_t* previous = nullptr;
-    for (std::size_t row = 0; row < height; ++row) {
-        auto* line = raw.data() + row * (rowBytes + 1);
-        const auto filter = line[0];
-        auto* current = line + 1;
-        switch (filter) {
-        case 0:
+// Reverses one PNG row filter in place. `previous` is the unfiltered row above, or a zero row for
+// the first row. The pixel size is a template argument so the per-byte loops carry no bounds or
+// first-row tests and the compiler can keep each channel's dependency chain in registers.
+template <std::size_t PixelBytes>
+[[nodiscard]] bool unfilterRow(const std::uint8_t filter, std::uint8_t* current,
+                               const std::uint8_t* previous, const std::size_t rowBytes) noexcept {
+    const std::size_t head = std::min(PixelBytes, rowBytes);
+    switch (filter) {
+    case 0:
+        return true;
+    case 1:
+        for (std::size_t i = PixelBytes; i < rowBytes; ++i)
+            current[i] = static_cast<std::uint8_t>(current[i] + current[i - PixelBytes]);
+        return true;
+    case 2:
+        for (std::size_t i = 0; i < rowBytes; ++i)
+            current[i] = static_cast<std::uint8_t>(current[i] + previous[i]);
+        return true;
+    case 3:
+        for (std::size_t i = 0; i < head; ++i)
+            current[i] = static_cast<std::uint8_t>(current[i] + (previous[i] >> 1U));
+        for (std::size_t i = PixelBytes; i < rowBytes; ++i)
+            current[i] = static_cast<std::uint8_t>(
+                current[i] + ((unsigned{current[i - PixelBytes]} + previous[i]) >> 1U));
+        return true;
+    case 4:
+        // With no left or corner neighbour the predictor is the byte above.
+        for (std::size_t i = 0; i < head; ++i)
+            current[i] = static_cast<std::uint8_t>(current[i] + previous[i]);
+        for (std::size_t i = PixelBytes; i < rowBytes; ++i)
+            current[i] = static_cast<std::uint8_t>(
+                current[i] + paeth(current[i - PixelBytes], previous[i], previous[i - PixelBytes]));
+        return true;
+    default:
+        return false;
+    }
+}
+// One unfiltered row to RGBA16: big-endian 16-bit samples, 8-bit samples widened as v * 257, grey
+// replicated, opaque alpha at the maximum (the samples stbi_load_16(..., 4) returns).
+template <std::size_t Channels, std::size_t SampleBytes>
+void rowSamples(const std::uint8_t* line, std::uint16_t* out, const std::size_t width) noexcept {
+    const auto sample = [line](const std::size_t index) noexcept {
+        const auto* bytes = line + index * SampleBytes;
+        if constexpr (SampleBytes == 2)
+            return static_cast<std::uint16_t>((unsigned{bytes[0]} << 8U) | bytes[1]);
+        else
+            return static_cast<std::uint16_t>(bytes[0] * 257U);
+    };
+    for (std::size_t x = 0; x < width; ++x, out += 4) {
+        const std::size_t base = x * Channels;
+        if constexpr (Channels <= 2) {
+            const auto grey = sample(base);
+            out[0] = grey;
+            out[1] = grey;
+            out[2] = grey;
+            out[3] = Channels == 2 ? sample(base + 1) : std::uint16_t{0xFFFF};
+        } else {
+            out[0] = sample(base);
+            out[1] = sample(base + 1);
+            out[2] = sample(base + 2);
+            out[3] = Channels == 4 ? sample(base + 3) : std::uint16_t{0xFFFF};
+        }
+    }
+}
+// Unfilters and converts rows as inflate completes them, so each row is processed while it is
+// still in cache instead of in a second pass over the whole inflated image.
+class PngRowDecoder {
+  public:
+    PngRowDecoder(const std::size_t width, const std::size_t rowBytes, const std::size_t channels,
+                  const std::size_t sampleBytes)
+        : width_(width), rowBytes_(rowBytes), zeroRow_(rowBytes, 0) {
+        const auto key = channels * 10 + sampleBytes;
+        switch (key) {
+        case 11:
+            bind<1, 1>();
             break;
-        case 1:
-            for (std::size_t i = pixelBytes; i < rowBytes; ++i)
-                current[i] = static_cast<std::uint8_t>(current[i] + current[i - pixelBytes]);
+        case 12:
+            bind<1, 2>();
             break;
-        case 2:
-            if (previous != nullptr)
-                for (std::size_t i = 0; i < rowBytes; ++i)
-                    current[i] = static_cast<std::uint8_t>(current[i] + previous[i]);
+        case 21:
+            bind<2, 1>();
             break;
-        case 3:
-            for (std::size_t i = 0; i < rowBytes; ++i) {
-                const unsigned left = i >= pixelBytes ? current[i - pixelBytes] : 0U;
-                const unsigned up = previous != nullptr ? previous[i] : 0U;
-                current[i] = static_cast<std::uint8_t>(current[i] + ((left + up) >> 1U));
-            }
+        case 22:
+            bind<2, 2>();
             break;
-        case 4:
-            for (std::size_t i = 0; i < rowBytes; ++i) {
-                const int left = i >= pixelBytes ? current[i - pixelBytes] : 0;
-                const int up = previous != nullptr ? previous[i] : 0;
-                const int corner =
-                    i >= pixelBytes && previous != nullptr ? previous[i - pixelBytes] : 0;
-                current[i] = static_cast<std::uint8_t>(current[i] + paeth(left, up, corner));
-            }
+        case 31:
+            bind<3, 1>();
+            break;
+        case 32:
+            bind<3, 2>();
+            break;
+        case 41:
+            bind<4, 1>();
             break;
         default:
-            return false;
+            bind<4, 2>();
+            break;
         }
-        previous = current;
     }
-    return true;
-}
+    // Processes rows [rowsDone, rows) of `raw` (filter byte + row bytes per row).
+    [[nodiscard]] bool process(std::uint8_t* raw, std::uint16_t* samples,
+                               const std::size_t rows) noexcept {
+        for (; rowsDone_ < rows; ++rowsDone_) {
+            auto* line = raw + rowsDone_ * (rowBytes_ + 1);
+            const std::uint8_t* previous = rowsDone_ == 0 ? zeroRow_.data() : line - rowBytes_;
+            if (!unfilter_(line[0], line + 1, previous, rowBytes_))
+                return false;
+            convert_(line + 1, samples + rowsDone_ * width_ * 4U, width_);
+        }
+        return true;
+    }
+    [[nodiscard]] std::size_t rowsDone() const noexcept { return rowsDone_; }
+
+  private:
+    template <std::size_t Channels, std::size_t SampleBytes> void bind() noexcept {
+        unfilter_ = &unfilterRow<Channels * SampleBytes>;
+        convert_ = &rowSamples<Channels, SampleBytes>;
+    }
+    std::size_t width_;
+    std::size_t rowBytes_;
+    std::size_t rowsDone_ = 0;
+    std::vector<std::uint8_t> zeroRow_;
+    bool (*unfilter_)(std::uint8_t, std::uint8_t*, const std::uint8_t*,
+                      std::size_t) noexcept = nullptr;
+    void (*convert_)(const std::uint8_t*, std::uint16_t*, std::size_t) noexcept = nullptr;
+};
 } // namespace
 
 // The common PNG subset decoded through zlib's inflate: non-interlaced 8/16-bit grey, grey+alpha,
@@ -282,6 +363,8 @@ std::optional<std::vector<std::uint16_t>> fastPngSamples(const std::span<const s
     if (pixels * 24U + inflatedBytes > pixelBudget)
         return std::nullopt;
     std::vector<std::uint8_t> raw(static_cast<std::size_t>(inflatedBytes));
+    std::vector<std::uint16_t> samples(static_cast<std::size_t>(pixels) * 4U);
+    PngRowDecoder rows(width, rowBytes, channels, sampleBytes);
     z_stream stream{};
     if (inflateInit(&stream) != Z_OK)
         return std::nullopt;
@@ -289,10 +372,14 @@ std::optional<std::vector<std::uint16_t>> fastPngSamples(const std::span<const s
         z_stream& stream;
         ~End() { inflateEnd(&stream); }
     } end{stream};
-    stream.next_out = raw.data();
-    stream.avail_out = static_cast<uInt>(raw.size());
     if (raw.size() > std::numeric_limits<uInt>::max())
         return std::nullopt;
+    // Inflate a cache-sized window of rows at a time and unfilter/convert each completed row at
+    // once, while it is still in cache.
+    const std::size_t window = std::max<std::size_t>(rowBytes + 1, std::size_t{256} * 1024U);
+    const auto produced = [&] { return static_cast<std::size_t>(stream.next_out - raw.data()); };
+    stream.next_out = raw.data();
+    stream.avail_out = 0;
     bool finished = false;
     for (std::size_t position = 8; position + 12 <= bytes.size() && !finished;) {
         const auto length = static_cast<std::size_t>(pngWord(bytes.data() + position));
@@ -308,7 +395,10 @@ std::optional<std::vector<std::uint16_t>> fastPngSamples(const std::span<const s
                 reinterpret_cast<Bytef*>(const_cast<std::byte*>(bytes.data()) + position + 8);
             stream.avail_in = static_cast<uInt>(length);
             while (stream.avail_in != 0) {
+                stream.avail_out = static_cast<uInt>(std::min(window, raw.size() - produced()));
                 const auto status = inflate(&stream, Z_NO_FLUSH);
+                if (!rows.process(raw.data(), samples.data(), produced() / (rowBytes + 1)))
+                    return std::nullopt;
                 if (status == Z_STREAM_END) {
                     finished = true;
                     break;
@@ -321,29 +411,8 @@ std::optional<std::vector<std::uint16_t>> fastPngSamples(const std::span<const s
         }
         position += 12 + length;
     }
-    if (!finished || stream.avail_out != 0 || !unfilterRows(raw, rowBytes, height, pixelBytes))
+    if (!finished || produced() != raw.size() || rows.rowsDone() != height)
         return std::nullopt;
-    std::vector<std::uint16_t> samples(static_cast<std::size_t>(pixels) * 4U);
-    for (std::size_t row = 0; row < height; ++row) {
-        const auto* line = raw.data() + row * (rowBytes + 1) + 1;
-        auto* out = samples.data() + row * width * 4U;
-        for (std::size_t x = 0; x < width; ++x) {
-            std::array<std::uint16_t, 4> value{0, 0, 0, 0xFFFF};
-            for (std::size_t c = 0; c < channels; ++c) {
-                const auto* sample = line + (x * channels + c) * sampleBytes;
-                value[c] = sampleBytes == 2
-                               ? static_cast<std::uint16_t>((sample[0] << 8U) | sample[1])
-                               : static_cast<std::uint16_t>(sample[0] * 257U);
-            }
-            if (channels <= 2) {
-                const auto alpha = channels == 2 ? value[1] : std::uint16_t{0xFFFF};
-                value = {value[0], value[0], value[0], alpha};
-            } else if (channels == 3) {
-                value[3] = 0xFFFF;
-            }
-            std::copy(value.begin(), value.end(), out + x * 4U);
-        }
-    }
     return samples;
 }
 
