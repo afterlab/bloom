@@ -189,7 +189,8 @@ run at the 2e-6/exact-alpha gate.
 
 ## Levels, Curves and Hue/Saturation
 
-`bloom.levels`, `bloom.curves` and `bloom.hue-saturation`, schema 1 (#340), are Image-in,
+`bloom.levels` and `bloom.hue-saturation`, schema 1 (#340), and `bloom.curves`, schema 2 (#493),
+are Image-in,
 Image-out grades listed under Color in the Add menu. None of them performs a colour transform or
 reads the working colour space: the values are graded exactly as stored, so a Raw data pass (Z
 depth, mist, normals, position) interpreted with the Raw input colour space can be normalised or
@@ -216,18 +217,58 @@ and out-of-range data keep their slope. An input range too narrow for binary32 (
 one) is a hard step at input black. The constant `clamp` switch (`bloom.levels.clamp`, default
 off, no socket) limits each graded RGB value to `[0, 1]`.
 
-Curves has `kCurvePointCount` (5) animatable/drivable Vector 2 points per channel, `(input,
-output)`, each its own socket (`<channel>Point1`..`Point5`, schema keys
-`bloom.curves.<channel>.point-<n>`), on the identity line at 0, 0.25, 0.5, 0.75 and 1 by default.
-Coordinates are finite within `[-1e6, 1e6]`. The points are narrowed to binary32 and sorted by
-input; a point whose input repeats an earlier one is dropped, and a single distinct input is a
-constant. The curve is the Fritsch-Carlson monotone piecewise cubic (PCHIP, the tangents SciPy's
-`PchipInterpolator` computes) through the points: it passes through every point, never overshoots
-between monotone points and is flat at a local extremum. Below the first and above the last point
-it extrapolates linearly along the end tangent, so values above 1 continue the curve for HDR. A
-channel whose points all lie on `y = x` is an exact pass-through. Points too close together for
-binary32 segment coefficients refuse with a diagnostic. The constant `clamp` switch
-(`bloom.curves.clamp`) limits each graded RGB value to `[0, 1]`.
+Curves (schema 2, `grade_curves.hpp` and `bloom/runtime/grade_curve.hpp`) has nine animatable
+Path parameters used as point lists, with no sockets, then the constant clamp. Each value is an
+open Path of Corner anchors without handles; an anchor's point is one curve point `(input, output)`
+and at most `kMaximumCurvePoints` (256) are allowed. In order (roles, schema keys
+`bloom.curves.<key>`):
+
+| Curve | Role / key | Input | Output | Default |
+| --- | --- | --- | --- | --- |
+| RGB master, red, green, blue, alpha | `master`.. `alpha` | value, `[-1e6, 1e6]` | value, `[-1e6, 1e6]` | `(0,0), (1,1)` |
+| Hue vs Hue | `hueVsHue` / `hue-vs-hue` | hue, `[0, 1]` | hue shift in turns, `[-0.5, 0.5]` | empty |
+| Hue vs Saturation | `hueVsSaturation` / `hue-vs-saturation` | hue, `[0, 1]` | gain, `[0, 1000]` | empty |
+| Hue vs Luma | `hueVsLuma` / `hue-vs-luma` | hue, `[0, 1]` | gain, `[0, 1000]` | empty |
+| Luma vs Saturation | `lumaVsSaturation` / `luma-vs-saturation` | luma, `[-1e6, 1e6]` | gain, `[0, 1000]` | empty |
+
+The points are narrowed to binary32 and sorted by input; a point whose input repeats an earlier
+one is dropped, and a single distinct input is a constant. Every curve is the Fritsch-Carlson
+monotone piecewise cubic (PCHIP, the tangents SciPy's `PchipInterpolator` computes) through its
+points: it passes through every point, never overshoots between monotone points and is flat at a
+local extremum. The ends differ by kind. A channel curve extrapolates linearly along its end
+tangents, so values above 1 continue the curve for HDR. Luma vs Saturation holds its end values.
+The three hue curves are periodic over the hue strip: a hue input of 1 is hue 0, interior and end
+tangents take their neighbours across the wrap, and one segment joins the last point to the first
+through 1. A channel curve that is empty or has two or more points all on `y = x` is an exact
+pass-through, so the default and the schema 1 five-point identity are both identities; a hue or
+Luma vs Saturation curve that is empty or whose every output is neutral (0 for Hue vs Hue, 1 for a
+gain) is the identity. Points too close together for binary32 segment coefficients refuse with a
+diagnostic. The constant `clamp` switch (`bloom.curves.clamp`) limits each graded RGB value to
+`[0, 1]`.
+
+Each curve is animatable as a whole value (ADR 0028's whole-value Path keys): a keyed curve
+interpolates point by point between keys with the same number of points and holds the earlier key
+otherwise. A curve is never driven; the graph is its only editor.
+
+The hue curves read one colour model, chosen to agree with Hue/Saturation: the Filter Effects
+luminance weights `0.213, 0.715, 0.072`, and a chroma plane `w . c = 0` spanned by `e1`, the chroma
+of pure red, and `e2`, the first column of the Filter Effects `hueRotate` sine matrix projected onto
+the plane (the direction Hue/Saturation turns red by a quarter turn). A colour's chroma
+`c = RGB - L` has least-squares coordinates `(a, b)` in that basis, folded into two rows applied to
+RGB. Its hue is the diamond angle of `(a, b)` in turns (0 at red, a quarter at `+e2`), which needs
+only ratios, so CPU and GPU hues agree exactly; greys (`R == G == B`) have no hue and pass the hue
+block unchanged. On the straight colour after the channel curves, in order:
+
+1. Hue vs Hue moves `(a, b)` to the diamond direction of `hue + shift` at the same Euclidean length
+   and adds the change along `e1, e2`, so luminance is unchanged.
+2. Hue vs Saturation and Luma vs Saturation multiply into one gain `g` (Luma vs Saturation reads the
+   luma before the hue shift), applied as the Filter Effects `saturate` form `L' + g (RGB - L')`.
+3. Hue vs Luma scales RGB by `1 + (v - 1) t` with `t = s / (s + |L|)` and `s = |a| + |b|`, so the
+   gain fades out toward neutral colours and never divides by zero.
+
+Then the clamp, the alpha curve and premultiplication by the graded alpha. No colour conversion
+happens inside the node; HDR and negative values pass through every step, and the hue curves never
+change alpha.
 
 Hue/Saturation has an animatable/drivable `hue` (`bloom.hue-saturation.hue`, degrees, default 0,
 within `[-1e6, 1e6]`) and `saturation` (`bloom.hue-saturation.saturation`, a factor, default 1,
@@ -241,8 +282,12 @@ negative values scale linearly and are never clamped, and no unpremultiply is ne
 
 Each grade prepares one packed binary32 table on the host (`PreparedColorGrade`): per Levels
 channel the pivot, reciprocal range, inverse gamma, output black and range; per Curves channel the
-knots and one cubic polynomial `a + dx(b + dx(c + dx d))` per segment, with the extrapolations as
-the first and last segments; for Hue/Saturation the three matrix rows. The CPU reference applies
+control vec4 `[clamp, hueActive]`, the luma weights, the two opponent rows and `e1`, `e2`, then a
+header `[n, identity, base, ends]` per curve and, at `base`, its knots, `n + 1` segment origins and
+`n + 1` cubic polynomials `a + dx(b + dx(c + dx d))` (the extrapolation, hold or wrap segments
+first and last), each list padded to whole vec4s; for Hue/Saturation the three matrix rows. A curve
+finds its segment by binary search over the knots. A schema 1 five-point curve prepares the same
+segments as before, so existing Curves output is unchanged. The CPU reference applies
 that table with the same binary32 operations, ordered `fma`, and correctly rounded division. A grade
 whose every channel is the identity and that does not clamp (the defaults, zero hue with unit
 saturation) aliases its input exactly. A non-finite straight value or result is a diagnosed
@@ -263,15 +308,37 @@ cancellation and retirement for preview, still and sequence export, video export
 render. The kernels are classified Required as `effect.LevelsKernel`, `effect.CurvesKernel` and
 `effect.HueSaturationKernel`, and covered by the Required `node.bloom.levels`, `node.bloom.curves`
 and `node.bloom.hue-saturation` fixtures (an HDR, signed, partial-alpha gradient, full frame and
-ROI); there is no exception. Gamma uses the device `pow`, so a gamma other than 1 on the alpha
-channel matches the CPU within the 2e-6 gate rather than bit-exactly.
+ROI) and the Required feature fixtures `feature.curves.points` (nine points on a channel),
+`feature.curves.hue_vs_hue`, `feature.curves.hue_vs_saturation`, `feature.curves.hue_vs_luma` and
+`feature.curves.luma_vs_saturation`; there is no exception. Gamma uses the device `pow`, and Hue vs
+Hue the device `sqrt`, so a gamma other than 1 on the alpha channel and a hue shift match the CPU
+within the 2e-6 gate rather than bit-exactly.
 
 None of the three has a mask input yet: the shared mask input for image effects belongs to #383.
-Their curves are edited as numeric points in Properties and on the node card, because Bloom has no
-graphical transfer-curve editor.
+
+The curves are edited in a graph (`bloom/ui/curve_graph.hpp`), two of them in Properties (the
+channel curves, tabs RGB/R/G/B/A, and the hue curves, tabs Hue/Hue, Hue/Sat, Hue/Luma, Luma/Sat),
+and the node card draws the channel curves read-only. A click adds a point and the drag that
+follows moves it; a press that moves nothing commits nothing; Delete or a double-click removes a
+point (a channel curve keeps two); Escape, the right button, losing focus or hiding cancels. A drag
+is a session value edit (ADR 0017): the graph and the Viewer follow it through the request-scoped
+override and the release commits one command, or a key at the playhead on a keyed curve. The graph
+draws the identity diagonal (a neutral line for the other curves) and the 0..1 box; a channel
+curve's square view grows to hold every point plus 25% headroom above 1, a gain view spans 0..2
+and Hue vs Hue half a turn either way, and the hue curves draw the hue strip behind them.
+
+Behind a channel curve and Luma vs Saturation the graph draws the node input's luminance
+histogram, on by default as session state. It is requested from `ImagePreviewController` only by
+the graph's paint, so a hidden graph asks for nothing: the controller evaluates the node's `input`
+source (`inspectedInputSource`) through `CompositionPreviewController::submitNodePreview` at 256
+pixels on the longest side, on the GPU display route where it is available (labelled CPU
+otherwise), and a worker bins the displayed luma into 128 bins scaled to the fullest. It is
+display-referred, a guide to where the image's values sit rather than a scene-linear measurement,
+and never touches the render output.
 
 Tests: the direct CPU test compares Levels and Curves against independent double-precision
-formulas (Curves in the Hermite basis) over HDR, negative and partial-alpha pixels with clamp on and
+formulas (Curves in the Hermite basis, with any number of points, periodic hue curves and the hue
+colour model computed independently) over HDR, negative and partial-alpha pixels with clamp on and
 off, normalises a Raw depth pass, and checks steps, identities, point order, constants, domains,
 windows, budget, cancellation and the generated programs; Hue/Saturation is compared against the
 Filter Effects matrices with neutral and luminance preservation. Evaluator tests cover the

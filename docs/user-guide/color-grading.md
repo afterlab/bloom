@@ -5,8 +5,9 @@ as well as on colour: none of them converts colour, so a depth, mist, normal or 
 adjusted exactly as it was rendered. All three are in the **Color** section of the Add menu and
 the Tab search. Each takes an image on **Input** and returns the adjusted image on **Image**.
 
-Every control can be animated or linked from another node, and every change can be undone and is
-saved with the project. A node left at its defaults changes nothing.
+Every control can be animated, and every change can be undone and is saved with the project.
+Levels and Hue/Saturation controls can also be linked from another node. A node left at its
+defaults changes nothing.
 
 ## Channels
 
@@ -46,18 +47,59 @@ highest value, which helps you find the near and far values.
 
 ## Curves
 
-Each channel has five points, **Point 1** to **Point 5**. Each point is an input value (X) and the
-output value (Y) it maps to. They start on a straight line at 0, 0.25, 0.5, 0.75 and 1, which
-changes nothing. Move a point's Y to bend the curve there: raise the low points and lower the high
-points for less contrast, or the reverse for an S-curve. You can also move the X values; the points
-don't need to be in order.
+Curves has a graph for each channel and four hue curves. Select the node to edit them in
+Properties: the first graph has a tab for **RGB** (the master), **R**, **G**, **B** and **A**, and the
+second a tab for each hue curve. The node card draws the channel curves too.
+
+- **Click** the graph to add a point there, and keep the button down to drag it into place.
+- **Drag** a point to move it. **Escape** or the right mouse button cancels the drag.
+- **Double-click** a point, or select it and press **Delete**, to remove it.
+- **In** and **Out** under the graph set the selected point exactly.
+
+A curve can have any number of points, up to 256. Each drag, added point or removed point is one
+step to undo. The diamond next to the tabs adds a key for the whole curve at the playhead, so a
+curve can change over time; between two keys with the same number of points each point moves in a
+straight line, otherwise the curve changes at the next key.
+
+### Channel curves
+
+The input runs along the bottom and the output up the side. A new curve is the straight diagonal
+from 0, 0 to 1, 1, which changes nothing. Raise the low part and lower the high part for less
+contrast, or the reverse for an S-curve. The box marks 0 to 1; the graph always shows some range
+above 1 and grows to hold any point you place there, for HDR. A channel always keeps at least two
+points.
 
 The curve passes through every point and never overshoots between them. Past the first and last
-points the curve continues in a straight line in the direction it was heading, so HDR values above
-1 are still graded. Points with the same input value count once.
+points it continues in a straight line in the direction it was heading, so HDR values above 1 are
+still graded. Points with the same input value count once.
 
-Bloom has no graphical curve editor yet: set the points as numbers in Properties or on the node
-card.
+Behind the curve the graph draws a histogram of the node's input brightness, as the Viewer would
+show it. Turn it off with the **Histogram** check box; it is only worked out while the graph is on
+screen and never changes the image.
+
+### Hue curves
+
+| Curve | Changes |
+| --- | --- |
+| **Hue vs Hue** | Turns the colours of each hue toward another hue, up to half way round. |
+| **Hue vs Sat** | Makes each hue more (above 1) or less (below 1) colourful. |
+| **Hue vs Luma** | Brightens (above 1) or darkens (below 1) each hue. |
+| **Luma vs Sat** | Makes dark, middle or bright parts more or less colourful. |
+
+The hue curves run along the colour strip drawn behind them, which wraps: the right edge is the
+same red as the left edge, so a point near one edge also shapes the curve near the other. A new hue
+curve is empty and changes nothing; the dashed line marks the value that leaves colours unchanged.
+Greys are never changed by the hue curves, and alpha never is.
+
+The hue curves use the same colour wheel and brightness weights as Hue/Saturation, after the
+channel curves and before **Clamp**. Like the rest of the node they don't convert colour, so HDR
+values and render passes keep their range.
+
+### Older projects
+
+A project saved before Curves had a graph stored five points per channel. It opens with those
+points as the new curves, exactly. If a point was animated, it opens at its first key; if it was
+linked from another node, it opens at its starting value. Hue curves start empty.
 
 ## Hue/Saturation
 

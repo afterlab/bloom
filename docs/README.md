@@ -76,7 +76,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [The Image Preview node](user-guide/image-preview.md) — a node-card thumbnail of any point in the
   graph, its display choices, and showing it as the node editor background.
 - [Levels, Curves and Hue/Saturation](user-guide/color-grading.md) — per-channel grades for colour
-  and render passes, clamp, HDR curves and normalizing a depth pass.
+  and render passes, clamp, the curve graph, hue curves, HDR curves and normalizing a depth pass.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
   channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard

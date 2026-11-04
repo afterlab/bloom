@@ -125,7 +125,7 @@ Depends on #337, #338.
 
 ### 9. [#340: Levels, Curves and image Hue/Saturation](https://github.com/kinetik-gg/bloom/issues/340)
 
-Build on pointwise effects and usable typed curve/ramp editing. Explicit color model and HDR/alpha behavior. Prerequisite: data reader block picker/create/edit workflow and color audit corrections. Implemented: per-channel Levels and Curves (RGB master, R/G/B/A; clamp off by default; Curves are numeric PCHIP points with linear HDR extrapolation) and Hue/Saturation (Filter Effects hue-rotate and saturate matrices), with no colour transform so Raw data passes grade as stored. The optional mask input waits on #383.
+Build on pointwise effects and usable typed curve/ramp editing. Explicit color model and HDR/alpha behavior. Prerequisite: data reader block picker/create/edit workflow and color audit corrections. Implemented: per-channel Levels and Curves (RGB master, R/G/B/A; clamp off by default; Curves are PCHIP point lists with linear HDR extrapolation, edited in a graph with hue curves since #493) and Hue/Saturation (Filter Effects hue-rotate and saturate matrices), with no colour transform so Raw data passes grade as stored. The optional mask input waits on #383.
 
 Depends on #332.
 

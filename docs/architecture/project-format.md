@@ -939,6 +939,32 @@ fails with one `UnsupportedNodeVersion` error carrying its `nodeTypeId`, `nodeVe
 schema-version path. Reconstruction applies the same registry validation to decoded envelopes and
 names the node ID. Old or future versions of a known kind are never silently upgraded, downgraded,
 or interpreted through another definition. No parameters or IDs are injected and no edges are dropped.
+The one typed exception is Curves schema 1, which opens as schema 2 through the documented
+migration below ("Curves Schema 2"); any other old Curves shape still fails.
+
+#### Curves Schema 2
+
+Opening a project (#493) migrates each `bloom.curves` node of schema 1 (five Vector 2 points per
+channel, `<channel>Point1`..`Point5`, schema keys `bloom.curves.<channel>.point-<n>`) to schema 2
+(one Path point-list per channel and four hue curves, see
+[image filters](image-filters.md#levels-curves-and-huesaturation)). The decoder admits that one old
+version and `migrateLegacyCurvesNodes` rewrites the decoded envelope before reconstruction, on the
+open path only (never in save verification); the document schema version is unchanged and the next
+save writes schema 2.
+
+- Each channel's five points, in point order, become that channel's curve. A constant point is
+  copied exactly. An animated point takes its first key per component (a component without keys
+  takes the record's default value, then the identity default) and its animation curve is removed.
+  A driven point (a driver binding, not an edge) takes the identity default its node started with;
+  the value node that drove it stays in the graph, no longer bound.
+- No id is allocated: each channel's curve reuses its first point's parameter id, and the four hue
+  curves reuse the master channel's second to fifth point ids, starting empty (the identity). The
+  remaining point records are removed. The clamp record is unchanged.
+- A schema 1 node missing any point binding is not migrated and fails as an unsupported node
+  version.
+
+The five old identity points are an exact identity in schema 2, and five-point curves prepare the
+same segments as before, so a migrated project renders as it did.
 
 The canonical writer is **1.24** and the load floor is **1.15**. Opening 1.15 applies the additive
 asset metadata defaults during typed decoding and reports the resulting document as 1.24. The
