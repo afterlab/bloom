@@ -24,7 +24,9 @@ Matte Erode and Matte Dilate are implemented by #338 (see
 implemented by #340 (see [image filters](../architecture/image-filters.md#levels-curves-and-huesaturation)).
 Separate Channels and Combine Channels are implemented by #479 (see
 [image filters](../architecture/image-filters.md#separate-channels-and-combine-channels)).
-Chunks #339 and #341–#349 remain planned. The
+Drop Shadow, Glow and Light Wrap are implemented by #339 (see
+[image filters](../architecture/image-filters.md#drop-shadow-glow-and-light-wrap)).
+Chunks #341–#349 remain planned. The
 inventory below records
 the original audit baseline rather than claiming those delivered nodes remain absent.
 
@@ -118,7 +120,7 @@ Depends on #334, #337.
 
 ### 8. [#339: Drop Shadow, Glow and Light Wrap recipes](https://github.com/kinetik-gg/bloom/issues/339)
 
-Compose existing matte/threshold/filter/offset/composite primitives. Separate Light Wrap until foreground reconstruction semantics are ready; do not clone blur code.
+Compose existing matte/threshold/filter/offset/composite primitives. Separate Light Wrap until foreground reconstruction semantics are ready; do not clone blur code. Implemented: each node lowers to a chain of the existing primitives (the separable blurs, Transform 2D, Luma Key, Set Alpha, Multiply Alpha, Image Mix, Levels and a Merge entry with an explicit blend mode) with derived values in the value graph; Glow has a threshold above 1 with a knee, an optional key pass and Mask and multi-octave falloff; Light Wrap takes a background input; all three are premultiplication-correct and HDR-safe.
 
 Depends on #337, #338.
 

@@ -546,3 +546,83 @@ dropdowns, refusals, undo/redo, ranking and reopen. The ImageCombineV1 native te
 Channel against the CPU reference pixel for pixel, and the native image-effect harness runs Channel
 Select over signed/HDR/partial-alpha solids at the 2e-6/exact-alpha gate with warm zero-dispatch
 and changed-mapping runs.
+
+## Drop Shadow, Glow and Light Wrap
+
+`bloom.drop-shadow`, `bloom.glow` and `bloom.light-wrap`, schema 1 (#339), are compositing
+recipes listed under Compositing in the Add menu. Each has a required Image input, `input`, and an
+Image output, `image`. None has its own pixel kernel: the compiler lowers each node to a chain of
+the existing image primitives (`compositing_recipes.hpp`), and every value the chain derives from
+the node's parameters (an offset, a knee bound, an octave weight, a gain) is a value-graph
+operation the compiler appends after the value pass, folded to a constant when its operands are
+constant. A keyframed or wired parameter therefore animates through the same value graph as any
+other parameter. A derived value names no document parameter: like a compiler-synthesized constant,
+it carries no parameter identity and claims none in plan validation, so each authored parameter
+keeps the one kernel field it drives directly (Light Wrap's second use of its radius reads it
+through the value graph, since an animation curve has one image-parameter owner). All three are premultiplication-correct and HDR-safe: colour is scaled straight
+and re-associated by the primitive that owns it, nothing clamps colour, and the composites are the
+Porter-Duff forms below. A muted node passes its input through.
+
+Drop Shadow parameters and defaults: `color` (black, opaque; its alpha scales the opacity),
+`opacity` 0.75 in `[0, 1]`, `direction` 135 degrees measured clockwise from up (down-right on the
+y-down canvas), `distance` 10 pixels in `[0, 16384]`, `softness` 8 pixels in `[0, 256]`, and the
+constant switch `shadowOnly` (off). The chain is a coverage Matte Blur of the input's alpha by
+`softness` with a transparent edge, so the shadow grows past the input's data window; a Transform
+2D translating by `(distance sin(direction), -distance cos(direction))`; Levels on that white
+coverage with the straight colour's output white at `color` and the alpha's at
+`opacity * color.alpha`; then a plain Merge of the input over the shadow. Shadow Only publishes the
+shadow alone.
+
+Glow parameters and defaults: `threshold` 1.0 (so only over-white HDR values glow by default),
+`knee` 0.5 centred on the threshold, `intensity` 1 in `[0, 1000]`, `size` 64 pixels in `[0, 256]`,
+`falloff` 0.6 in `[0, 1]`, `tint` (white; its alpha is ignored), the constant integer `octaves` 5 in
+`[1, 8]` and the constant switch `glowOnly` (off). The optional `key` Image input (a render pass
+or any image) replaces the input as the glow source, and the optional `mask` Mask input limits it.
+Luma Key ramps the source's straight Rec. 709 luma from `threshold - knee/2` to
+`threshold + knee/2` (a zero knee is a hard step), and Set Alpha with that coverage keeps the
+source's straight colour at the ramped coverage: premultiplied colour times the ramp, never alpha
+squared. A connected mask multiplies its coverage in (Multiply Alpha). Octave `j` of `n` is a
+Gaussian blur with radius `size * 2^(j - (n - 1))`, so the widest is `size` and each further octave
+halves it; the octaves are folded widest first by Image Mix so octave `j` carries the normalized
+weight `falloff^j / sum(falloff^i)`: falloff 0 keeps only the tightest octave and 1 weighs
+them all equally. Levels scales the glow's straight colour by `tint * intensity`, and a Merge entry
+with the explicit Add mode adds it to the input (`co = cg + ci`, `ao = ag + ai - ag ai`). Glow Only
+publishes the glow alone. An unconnected key or mask is omitted; one connected to an empty image is
+a transparent image.
+
+Light Wrap parameters and defaults: `radius` 16 pixels in `[0, 256]`, `amount` 0.75 in `[0, 1]`,
+and the constant switch `wrapOnly` (off), with an optional `background` Image input. The
+background is blurred by `radius` with a Clamp edge, so the frame edge does not darken it; the
+foreground's alpha is blurred by `radius` with a transparent edge; Multiply Alpha by the inverted
+spread coverage keeps the blurred background only where it spills over the foreground's edges;
+Levels scales its alpha by `amount` (a separate gain rather than Multiply Alpha's factor, so the
+alpha is one rounding on the CPU and the device alike); and a Merge entry with the explicit Atop
+mode composites it onto the
+foreground (`co = cw af + cf (1 - aw)`, `ao = af`), so the wrap only lightens or tints the
+foreground within its own coverage. Wrap Only uses the In mode (`co = cw af`, `ao = aw af`) and
+publishes the wrap alone. With no background there is nothing to wrap: the node passes the input
+through, and Wrap Only produces a transparent image.
+
+Every chain operation keeps its own cache identity, so a changed opacity, tint or amount re-runs
+only Levels and the Merge, and a changed radius re-runs from the blur it drives
+on. Windows follow the primitives: blurs grow transparent-edge data windows by their support, the
+Merge's data window is the union of its entries and its display window the composition's. ROI,
+cancellation, progress, budget and retirement are those of the primitives and the Merge; no recipe
+publishes a partial image. On the GPU each primitive is its existing Required resident command and
+the explicit Merge modes take the per-entry BlendV1 path, for preview, still and sequence export,
+video export and headless render. The recipes are covered by the Required `node.bloom.drop-shadow`,
+`node.bloom.glow` and `node.bloom.light-wrap` fixtures (an HDR, partial-alpha gradient over an HDR
+background, full frame and ROI); there is no exception. Glow's device cases key an HDR,
+partial-alpha solid: Luma Key's coverage is a function of colour, and a generated gradient's colour
+is within 2e-6 of the CPU reference on a device rather than bit-exact, so only a solid source can
+meet the exact-alpha gate.
+
+Tests: the direct recipe test compares each chain and its variants (Shadow Only; a hard one-octave
+Glow Only; a keyed, masked Glow; Wrap Only) with an independent double-precision reference (direct
+2D Gaussians, the straight luma ramp, the octave sum and the Porter-Duff composites) at 1e-4, and
+covers warm reuse, invalidation, ROI, animation, cancellation and budget refusal. Compiler tests
+cover lowering, folding, octave radii and weights, the Merge modes, animated values and mute;
+registry, model, command, Properties and archive tests cover the definitions, wiring, switches,
+refusals, undo/redo and reopen. The scene-preparation test checks the Add, Atop and In blend
+commands, and the native image-effect harness runs all three recipes against the CPU oracle at the
+2e-6/exact-alpha gate with warm zero-dispatch and changed-value runs.

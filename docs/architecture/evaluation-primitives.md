@@ -417,6 +417,11 @@ contract.
 - **Ordering and blending are separate.** The stack says which layer is above which and is still
   visited in reverse so the first entry is topmost; the mode comes from the Layer Output the entry
   names, so reordering two layers and re-blending one are independent edits.
+- **A plain image entry may name its mode.** An entry with no Layer is Normal unless it carries an
+  explicit mode (`CompiledMergeInput::blendMode`, #339), which only the compiler's recipes write:
+  Glow adds its glow with `Add`, Light Wrap composites its wrap `Atop` (or `In`) the foreground. A
+  Layer entry never carries one. The mode is keyed with the entry and reaches the same per-entry
+  BlendV1 fold on the GPU route; its absence keeps every existing key.
 - **Alpha is source-over under every separable mode.** For `Normal` through `Divide` only the color
   combination varies, computed with exactly the alpha expression the source-over kernel uses, so
   such a mode never changes how much of the backdrop a layer covers. The channel extremes (`Minimum`,
