@@ -1701,10 +1701,11 @@ footage", completed and total files; cancellable). It starts when a project is i
 and after an import, Relink or Reload Footage commits; a newer request supersedes the running pass,
 and project replacement and shutdown cancel it. It never queues ahead of an import, a save or an
 open on the one blocking-I/O worker: one that starts meanwhile stops the pass at once (mid-file),
-and the pass starts again when they finish, skipping what it already read. While it hashes, the
-worker thread runs at the operating system's idle priority (`platform::IdleThreadPriorityScope`:
-Linux idle I/O class, plus `SCHED_IDLE` where `RLIMIT_NICE` lets the thread return from it; the
-Darwin background state on macOS; Windows background mode) and is restored afterwards.
+and the pass starts again when they finish, skipping what it already read. The hashing runs on a
+thread of its own, which the worker waits for, at the operating system's idle priority
+(`platform::IdleThreadPriorityScope`: on Linux `SCHED_IDLE` and the idle I/O class, applied
+without privilege because the thread ends with the pass; the Darwin background state on macOS;
+Windows background mode).
 
 The pass hashes every still image (`platform::hashSourceFile`, which records the memo when the
 file's identity holds still across the read), every pending member whose file still carries its

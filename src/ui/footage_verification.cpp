@@ -4,7 +4,9 @@
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/platform/thread_priority.hpp>
 
+#include <exception>
 #include <set>
+#include <thread>
 #include <utility>
 
 namespace bloom::ui {
@@ -71,24 +73,47 @@ std::vector<FootageVerificationItem> footageVerificationWork(const document::Pro
     return work;
 }
 
+namespace {
+void hashAll(const std::vector<FootageVerificationItem>& items, const std::function<bool()>& cancel,
+             const FootageVerificationProgress& progress, FootageVerificationReport& report);
+} // namespace
+
 FootageVerificationReport verifyFootageFiles(const std::vector<FootageVerificationItem>& items,
                                              const std::function<bool()>& cancel,
                                              const FootageVerificationProgress& progress) {
     FootageVerificationReport report;
     report.files = items.size();
-    const platform::IdleThreadPriorityScope idle;
+    // The pass runs on its own thread, which exits with it, so Linux can put it in SCHED_IDLE
+    // (an unprivileged thread cannot leave that policy, which rules out the shared I/O worker).
+    std::exception_ptr failure;
+    std::thread([&] {
+        const platform::IdleThreadPriorityScope idle(true);
+        try {
+            hashAll(items, cancel, progress, report);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+    }).join();
+    if (failure)
+        std::rethrow_exception(failure);
+    return report;
+}
+
+namespace {
+void hashAll(const std::vector<FootageVerificationItem>& items, const std::function<bool()>& cancel,
+             const FootageVerificationProgress& progress, FootageVerificationReport& report) {
     for (std::size_t index = 0; index < items.size(); ++index) {
         const auto& item = items[index];
         if (cancel && cancel()) {
             report.cancelled = true;
-            return report;
+            return;
         }
         if (progress)
             progress(index, items.size(), item.path);
         const auto hash = platform::hashSourceFile(item.path, cancel);
         if (hash.error == platform::SourceHashError::Cancelled) {
             report.cancelled = true;
-            return report;
+            return;
         }
         if (hash.error != platform::SourceHashError::None)
             continue;
@@ -108,7 +133,7 @@ FootageVerificationReport verifyFootageFiles(const std::vector<FootageVerificati
     }
     if (progress)
         progress(items.size(), items.size(), {});
-    return report;
 }
+} // namespace
 
 } // namespace bloom::ui

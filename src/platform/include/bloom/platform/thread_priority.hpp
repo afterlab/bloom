@@ -17,10 +17,12 @@ namespace bloom::platform {
 //  - Windows: THREAD_MODE_BACKGROUND_BEGIN (CPU, I/O and memory priority), then
 //    THREAD_MODE_BACKGROUND_END.
 // Every step is best effort: a refused change leaves that part of the thread as it was, and the
-// accessors say what was applied.
+// accessors say what was applied. `threadEndsWithScope` declares that the calling thread exits
+// when the scope ends (a dedicated thread): Linux then applies SCHED_IDLE even when the thread
+// could not leave it again, and does not restore the CPU policy.
 class IdleThreadPriorityScope final {
   public:
-    IdleThreadPriorityScope() noexcept;
+    explicit IdleThreadPriorityScope(bool threadEndsWithScope = false) noexcept;
     ~IdleThreadPriorityScope();
     IdleThreadPriorityScope(const IdleThreadPriorityScope&) = delete;
     IdleThreadPriorityScope& operator=(const IdleThreadPriorityScope&) = delete;
@@ -37,6 +39,7 @@ class IdleThreadPriorityScope final {
   private:
     bool cpuIdle_ = false;
     bool ioIdle_ = false;
+    bool restoreCpu_ = true;
     // The previous Linux state: CPU policy, its priority and the I/O priority value.
     int previousPolicy_ = 0;
     int previousPriority_ = 0;

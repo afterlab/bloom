@@ -72,5 +72,15 @@ int main() {
 #endif
     });
     worker.join();
+#if defined(__linux__)
+    // A dedicated thread that ends with the scope enters SCHED_IDLE without any privilege.
+    std::thread dedicated([] {
+        const bloom::platform::IdleThreadPriorityScope idle(true);
+        expect(idle.cpuIdle() && policy() == SCHED_IDLE,
+               "a thread that ends with the scope runs at SCHED_IDLE");
+        expect((ioPriority() >> 13) == 3, "and in the idle I/O class");
+    });
+    dedicated.join();
+#endif
     return failures == 0 ? 0 : 1;
 }

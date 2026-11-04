@@ -50,7 +50,7 @@ bool mayLeaveIdlePolicy() noexcept {
 }
 } // namespace
 
-IdleThreadPriorityScope::IdleThreadPriorityScope() noexcept {
+IdleThreadPriorityScope::IdleThreadPriorityScope(const bool threadEndsWithScope) noexcept {
     const int io = ioPriority();
     if (io >= 0 && setIoPriority(kIoprioClassIdle << kIoprioClassShift)) {
         previousIoPriority_ = io;
@@ -59,8 +59,9 @@ IdleThreadPriorityScope::IdleThreadPriorityScope() noexcept {
     sched_param parameter{};
     int policy = 0;
     if (pthread_getschedparam(pthread_self(), &policy, &parameter) != 0 || policy == SCHED_IDLE ||
-        !mayLeaveIdlePolicy())
+        (!threadEndsWithScope && !mayLeaveIdlePolicy()))
         return;
+    restoreCpu_ = !threadEndsWithScope;
     sched_param idle{};
     idle.sched_priority = 0;
     if (pthread_setschedparam(pthread_self(), SCHED_IDLE, &idle) == 0) {
@@ -71,7 +72,7 @@ IdleThreadPriorityScope::IdleThreadPriorityScope() noexcept {
 }
 
 IdleThreadPriorityScope::~IdleThreadPriorityScope() {
-    if (cpuIdle_) {
+    if (cpuIdle_ && restoreCpu_) {
         sched_param parameter{};
         parameter.sched_priority = previousPriority_;
         static_cast<void>(pthread_setschedparam(pthread_self(), previousPolicy_, &parameter));
@@ -82,7 +83,7 @@ IdleThreadPriorityScope::~IdleThreadPriorityScope() {
 #elif defined(__APPLE__)
 // Darwin's background state for one thread: lower CPU priority and throttled I/O (the effect of
 // the background quality-of-service class), entered and left through setpriority(2).
-IdleThreadPriorityScope::IdleThreadPriorityScope() noexcept {
+IdleThreadPriorityScope::IdleThreadPriorityScope(const bool) noexcept {
     if (getpriority(PRIO_DARWIN_THREAD, 0) != 0)
         return; // already in the background state; leave it to its owner
     if (setpriority(PRIO_DARWIN_THREAD, 0, PRIO_DARWIN_BG) == 0) {
@@ -96,7 +97,7 @@ IdleThreadPriorityScope::~IdleThreadPriorityScope() {
         static_cast<void>(setpriority(PRIO_DARWIN_THREAD, 0, 0));
 }
 #elif defined(_WIN32)
-IdleThreadPriorityScope::IdleThreadPriorityScope() noexcept {
+IdleThreadPriorityScope::IdleThreadPriorityScope(const bool) noexcept {
     // Fails when the thread is already in background mode; then nothing is ended either.
     if (SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != 0) {
         cpuIdle_ = true;
@@ -109,7 +110,7 @@ IdleThreadPriorityScope::~IdleThreadPriorityScope() {
         static_cast<void>(SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END));
 }
 #else
-IdleThreadPriorityScope::IdleThreadPriorityScope() noexcept = default;
+IdleThreadPriorityScope::IdleThreadPriorityScope(const bool) noexcept {}
 IdleThreadPriorityScope::~IdleThreadPriorityScope() = default;
 #endif
 
