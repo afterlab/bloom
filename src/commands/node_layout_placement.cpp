@@ -185,10 +185,21 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     rows += 2.0;
     if (definition->lowering == document::NodeLoweringKind::ValueBoundsReadout)
         rows += static_cast<double>(definition->outputs.size());
-    return {dropdowns ? std::max(width, kDropdownCardWidth)
-            : wide    ? std::max(width, kWideCardWidth)
-                      : width,
-            kTitleBand + sockets * kRow + pills + rows * kRow + kPadding};
+    const double cardWidth = dropdowns ? std::max(width, kDropdownCardWidth)
+                             : wide    ? std::max(width, kWideCardWidth)
+                                       : width;
+    // #490: an Image Preview draws its thumbnail below its rows at the composition's aspect, at
+    // most twice as tall as it is wide.
+    double thumbnail = 0.0;
+    if (definition->lowering == document::NodeLoweringKind::ImagePreview) {
+        const auto& format = composition.format();
+        const double inner = std::max(0.0, cardWidth - 2.0 * kPadding);
+        const double aspect = format.width() > 0 ? static_cast<double>(format.height()) /
+                                                       static_cast<double>(format.width())
+                                                 : 1.0;
+        thumbnail = std::min(inner * aspect, inner * 2.0) + kPadding;
+    }
+    return {cardWidth, kTitleBand + sockets * kRow + pills + rows * kRow + kPadding + thumbnail};
 }
 
 NodeCardSizes nodeCardSizes(const document::Composition& composition,
