@@ -438,7 +438,10 @@ value edit over the three parameters and one command on release (a key at the pl
 animated value). Under each wheel a slider drags its master (one command per drag), a button
 resets the wheel, and a caret shows its four value rows; a double-click on the wheel resets its
 master and colour as one command, and Alt-click toggles its value rows. The primaries bar is six
-named value fields in two columns (one command per scrub or entry) with a caret for their rows.
+value fields, one per row with its whole name in a label column beside it (one command per scrub
+or entry), with a caret for their rows. The Levels card is wide enough for its five channel tabs
+beside the Values caret. A card draws only inside its own rectangle: the socket name of a row kept
+behind the widget is hidden with the row.
 On the card the 22 value rows, with their sockets, stay hidden until a caret or Alt-click shows a
 group; a linked value's row always shows.
 
