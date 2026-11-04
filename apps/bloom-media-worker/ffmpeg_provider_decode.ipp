@@ -39,14 +39,14 @@ struct DecodeSession::State final {
     std::size_t node = 0;
     Device device;
     bool parityProven = false;
-    // Sequential software video requests: the last one served, whether it followed the one
-    // before it, and the next frame decoded ahead of its request.
+    // Forward software video requests: the last one served, whether it moved forward from the one
+    // before it, and the frame after it, decoded ahead of its request.
     std::optional<provider::CallRequest> lastVideo;
-    bool sequential = false;
+    bool forward = false;
     std::optional<std::pair<provider::CallRequest, provider::FrameProduct>> ahead;
     void reset() {
         lastVideo.reset();
-        sequential = false;
+        forward = false;
         ahead.reset();
         input.reset();
         cursor = {};
@@ -116,8 +116,11 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
             state.cursor = {};
         }
         if (!state.hardware) {
-            state.sequential = state.lastVideo && sameVideoRequest(*state.lastVideo, request) &&
-                               state.lastVideo->frame + 1 == request.frame;
+            // #474: playback that falls behind skips frames but keeps moving forward. The frame
+            // decoded ahead is always the next one: any later forward request is at or past it, so
+            // the long-GOP decoder never has to seek back to its keyframe for it.
+            state.forward = state.lastVideo && sameVideoRequest(*state.lastVideo, request) &&
+                            request.frame > state.lastVideo->frame;
             state.lastVideo = request;
             if (state.ahead && sameVideoRequest(state.ahead->first, request) &&
                 state.ahead->first.frame == request.frame) {
@@ -179,7 +182,7 @@ provider::Payload DecodeSession::call(const provider::CallRequest& request) {
 }
 void DecodeSession::decodeAhead() {
     auto& state = *state_;
-    if (state.hardware || !state.sequential || state.ahead || !state.lastVideo || !state.input)
+    if (state.hardware || !state.forward || state.ahead || !state.lastVideo || !state.input)
         return;
     auto next = *state.lastVideo;
     ++next.frame;

@@ -337,7 +337,10 @@ void decodeAhead(const std::filesystem::path& directory) {
     const video::SourceRevisionAccess preview{video::SourceRevisionPolicy::Retained, true};
     video::VideoDecodeSession session(directory / "numbered-h264.mp4");
     const auto probe = std::get<provider::ProbeResult>(session.probe());
-    for (const auto n : {40U, 41U, 42U, 43U, 3U, 4U, 5U, 30U, 31U, 44U, 45U, 46U, 47U, 2U, 3U}) {
+    // #474: after any forward step (playback that falls behind, a 50p source in a 25p
+    // composition, a forward jump) the next frame is decoded ahead.
+    for (const auto n : {40U, 41U, 42U, 43U, 3U, 4U, 5U, 30U, 31U, 44U, 45U, 46U, 47U, 2U, 3U, 5U,
+                         7U, 9U, 12U, 15U, 16U, 20U, 29U, 30U, 32U, 47U}) {
         const auto result = session.frame(probe, 0, n, 0, nullptr, {}, {}, {}, {}, preview);
         check(std::holds_alternative<Frame>(result), "decode-ahead request decodes");
         check(frameLuma(std::get<Frame>(result)) == 16 + n * 3,

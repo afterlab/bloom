@@ -1890,10 +1890,15 @@ transport stays 0. The pixels are the same either way. A 2160p 10-bit HEVC frame
 4:4:4:4 planes) had cost about 21 ms to encode and pipe, and 40-45 ms during playback; in the
 session benchmark sequential HEVC and AV1 2160p decode went from about 37 ms to 20-22 ms a frame.
 
-A retained software decoder pipelines in-order requests: after sending a frame, while the host
-handles it, the worker decodes the next frame of the same request when the last two requests were
-consecutive, and serves it at once when it is asked for. Any other request discards it; past the
-end of the stream, or on any failure, the session resets exactly as after a failed request. The
+A retained software decoder pipelines forward requests: after sending a frame, while the host
+handles it, the worker decodes the next frame when the last two requests of the same stream moved
+forward, and serves it at once when it is asked for. Playback that has fallen behind skips frames
+but still moves forward (issue #474: before, only consecutive requests were decoded ahead, so a
+skip stopped the pipelining and the session fell further behind). The frame decoded ahead is always
+the next one, never one a stride predicts: a later forward request is then at or past it, so a
+long-GOP decoder never seeks back to its keyframe for a request the prediction overshot. Any other
+request discards it; past the end of the stream, or on any failure, the session resets exactly as
+after a failed request. The
 worker keeps frame-sized allocations in its heap (glibc `M_MMAP_THRESHOLD` 32 MiB) instead of
 mapping and faulting in each frame again, about 21,000 page faults per 1080p frame, and Linux worker
 pipes use 1 MiB buffers. On the 1080p ProRes 422 HQ benchmark shot (project B) a RAM preview fill
