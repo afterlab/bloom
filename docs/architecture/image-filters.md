@@ -666,8 +666,10 @@ commands, and the native image-effect harness runs all three recipes against the
 (0, the default and the glow described above), Physical (1) and Streak (2). The modes and the
 shared controls below are optional parameters of the same schema-1 node: a Glow saved before them
 binds none, lowers with their defaults and therefore renders exactly the Classic chain it always
-did (the compiler test proves the plan identical). A new node binds them all, so its Properties
-rows show them; an older node shows only its Classic rows. Every chain is still a recipe of
+did (the compiler test proves the plan identical). A new node binds them all. Opening a project
+binds each one an older Glow lacks at its default (#534, see
+[project format](project-format.md#glow-controls)), so every Glow shows the same Properties rows
+and card sockets and still renders bit-identically. Every chain is still a recipe of
 primitives with derived values in the value graph, so each value animates or is driven as usual.
 
 **Physical** is a multi-scale, energy-conserving glow with an inverse-power falloff. Its point-spread

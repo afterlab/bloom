@@ -965,6 +965,18 @@ save writes schema 2.
 - A schema 1 node missing any point binding is not migrated and fails as an unsupported node
   version.
 
+#### Glow Controls
+
+Opening a project (#534) binds every optional `bloom.glow` parameter a node lacks: the #506 mode and
+shared controls (`mode`, `exponent`, the per-channel radius, `gradient`, `outerTint`, `points`,
+`angle`, `length`, `chromatic`, `dirtAmount`, `rollOff`), which a Glow saved before #506 never had.
+`migrateLegacyGlowNodes` rewrites the decoded envelope before reconstruction, on the open path only
+(never in save verification). Each missing role gets a new constant record at its definition
+default on a newly allocated parameter id (the allocator high water advances); bound roles keep
+their ids and values. The node schema (1) and the document schema version are unchanged. The
+compiler already lowered an unbound role with that default, so the plan and every pixel are the
+same, and Properties and the node card then show the full control set, as for a new Glow.
+
 The five old identity points are an exact identity in schema 2, and five-point curves prepare the
 same segments as before, so a migrated project renders as it did.
 
