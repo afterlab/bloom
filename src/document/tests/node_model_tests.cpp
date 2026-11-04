@@ -238,7 +238,7 @@ void compositionNesting() {
 void multiplyInvertDefinitions() {
     const auto* multiply = builtInNodeDefinitions().find("bloom.multiply", 1);
     const auto* invert = builtInNodeDefinitions().find("bloom.invert", 1);
-    expect(multiply && multiply->category == NodeCategory::Color &&
+    expect(multiply && multiply->category == NodeCategory::Grade &&
                multiply->lowering == NodeLoweringKind::ImageEffect &&
                multiply->inputs.size() == 2 &&
                multiply->inputs[0].valueKind == SocketValueKind::Image &&
@@ -250,9 +250,8 @@ void multiplyInvertDefinitions() {
                std::get<double>(multiply->parameters[0].defaultValue) == 1.0 &&
                isScalarAnimatableSchemaKey("bloom.multiply.factor"),
            "Multiply exposes an animatable, linkable scene-linear factor with neutral one");
-    expect(invert && invert->category == NodeCategory::Color &&
-               invert->lowering == NodeLoweringKind::ImageEffect &&
-               invert->inputs.size() == 1 &&
+    expect(invert && invert->category == NodeCategory::Grade &&
+               invert->lowering == NodeLoweringKind::ImageEffect && invert->inputs.size() == 1 &&
                invert->inputs[0].valueKind == SocketValueKind::Image &&
                invert->parameters.empty() && invert->outputs.size() == 1 &&
                invert->outputs[0].valueKind == SocketValueKind::Image,

@@ -49,7 +49,7 @@ QString nodeCategoryName(const document::NodeCategory category) {
     case document::NodeCategory::Layers:
         return QCoreApplication::translate("node_editor", "Layers");
     case document::NodeCategory::Color:
-        return QCoreApplication::translate("node_editor", "Color");
+        return QCoreApplication::translate("node_editor", "Color Management");
     case document::NodeCategory::Compositing:
         return QCoreApplication::translate("node_editor", "Compositing");
     case document::NodeCategory::Values:
@@ -62,6 +62,10 @@ QString nodeCategoryName(const document::NodeCategory category) {
         return QCoreApplication::translate("node_editor", "Utilities");
     case document::NodeCategory::Transform:
         return QCoreApplication::translate("node_editor", "Transform");
+    case document::NodeCategory::Filters:
+        return QCoreApplication::translate("node_editor", "Filters");
+    case document::NodeCategory::Grade:
+        return QCoreApplication::translate("node_editor", "Grade");
     }
     return {};
 }
@@ -69,9 +73,6 @@ QString nodeCategoryName(const document::NodeCategory category) {
 QString nodeCategoryName(const QString& category) { return category; }
 QString nodeCategoryName(const document::NodeDefinition& definition) {
     const auto& type = definition.key.typeId;
-    if (type == "bloom.gaussian-blur" || type == "bloom.box-blur" || type == "bloom.matte-blur" ||
-        type == "bloom.matte-erode" || type == "bloom.matte-dilate")
-        return QCoreApplication::translate("node_editor", "Filters");
     if (type == document::kTimeValueNodeType || type == document::kFrameNumberNodeType ||
         type == document::kFrameRateNodeType || type == document::kSecondsToFramesNodeType ||
         type == document::kFramesToSecondsNodeType ||
@@ -79,7 +80,7 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
         type == document::kTimecodeToSecondsNodeType)
         return QStringLiteral("Time");
     // #479: Separate/Combine Color (Value) join the other Color value nodes, apart from the image
-    // Separate/Combine Channels under Color.
+    // Separate/Combine Channels under Compositing (#500).
     if (type == document::kSeparateHsvNodeType || type == document::kCombineHsvNodeType ||
         type == document::kHueShiftNodeType || type == document::kLuminanceNodeType ||
         type == document::kColorMixNodeType || type == document::kSeparateRgbaNodeType ||
@@ -104,13 +105,23 @@ QString nodeCategoryName(const document::NodeDefinition& definition) {
     return nodeCategoryName(definition.category);
 }
 std::span<const QString> nodeCategoryOrder() {
-    static const std::array order{
-        QStringLiteral("Sources"),   QStringLiteral("Layers"),  QStringLiteral("Compositing"),
-        QStringLiteral("Transform"), QStringLiteral("Filters"), QStringLiteral("Color"),
-        QStringLiteral("Values"),    QStringLiteral("Math"),    QStringLiteral("Convert"),
-        QStringLiteral("String"),    QStringLiteral("Logic"),   QStringLiteral("Time"),
-        QStringLiteral("Color Values"), QStringLiteral("Vector"), QStringLiteral("Utilities"),
-        QStringLiteral("Output")};
+    static const std::array order{QStringLiteral("Sources"),
+                                  QStringLiteral("Layers"),
+                                  QStringLiteral("Compositing"),
+                                  QStringLiteral("Transform"),
+                                  QStringLiteral("Filters"),
+                                  QStringLiteral("Grade"),
+                                  QStringLiteral("Color Management"),
+                                  QStringLiteral("Values"),
+                                  QStringLiteral("Math"),
+                                  QStringLiteral("Convert"),
+                                  QStringLiteral("String"),
+                                  QStringLiteral("Logic"),
+                                  QStringLiteral("Time"),
+                                  QStringLiteral("Color Values"),
+                                  QStringLiteral("Vector"),
+                                  QStringLiteral("Utilities"),
+                                  QStringLiteral("Output")};
     return order;
 }
 

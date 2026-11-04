@@ -94,12 +94,34 @@ std::string nodeTypeDisplayName(const std::string_view typeId) {
     return result;
 }
 
+// A switch without a default (#500): a NodeCategory added without a name here is a -Wswitch
+// diagnostic, and an unnamed value reads back empty rather than as another category's name.
 std::string_view nodeCategoryName(const document::NodeCategory category) noexcept {
-    constexpr std::array<std::string_view, 9> names{"sources", "layers",    "compositing",
-                                                    "color",   "values",    "math",
-                                                    "output",  "utilities", "transform"};
-    const auto index = static_cast<std::size_t>(category);
-    return index < names.size() ? names[index] : "utilities";
+    switch (category) {
+    case document::NodeCategory::Sources:
+        return "sources";
+    case document::NodeCategory::Layers:
+        return "layers";
+    case document::NodeCategory::Compositing:
+        return "compositing";
+    case document::NodeCategory::Color:
+        return "color";
+    case document::NodeCategory::Values:
+        return "values";
+    case document::NodeCategory::Math:
+        return "math";
+    case document::NodeCategory::Output:
+        return "output";
+    case document::NodeCategory::Utilities:
+        return "utilities";
+    case document::NodeCategory::Transform:
+        return "transform";
+    case document::NodeCategory::Filters:
+        return "filters";
+    case document::NodeCategory::Grade:
+        return "grade";
+    }
+    return {};
 }
 
 std::string_view socketKindName(const document::SocketValueKind kind) noexcept {

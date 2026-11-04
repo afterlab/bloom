@@ -6,7 +6,9 @@
 #include <QRegion>
 #include <QShortcut>
 #include <QStringList>
+#include <algorithm>
 #include <bloom/document/image_channel_nodes.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <limits>
 #include <memory>
@@ -275,15 +277,16 @@ void testSearchKeyboardAndMenus() {
     // order is where pixels come from, how they are arranged, what numbers drive them, the
     // arithmetic over those numbers, the plumbing that carries them, and finally where the picture
     // goes. Transform (Resize, Fit, Crop, Pad, Flip, Rotate 90) and Filters (blurs) follow
-    // Compositing (ui-grammar.md).
+    // Compositing (ui-grammar.md); #500: then Grade, then Color Management.
     expect(sectionHeadings(list->model()) ==
                QStringList{
                    QStringLiteral("Sources"), QStringLiteral("Layers"),
                    QStringLiteral("Compositing"), QStringLiteral("Transform"),
-                   QStringLiteral("Filters"), QStringLiteral("Color"), QStringLiteral("Values"),
+                   QStringLiteral("Filters"), QStringLiteral("Grade"),
+                   QStringLiteral("Color Management"), QStringLiteral("Values"),
                    QStringLiteral("Math"), QStringLiteral("Convert"), QStringLiteral("String"),
-                   QStringLiteral("Logic"), QStringLiteral("Time"),
-                   QStringLiteral("Color Values"), QStringLiteral("Vector"), QStringLiteral("Utilities"), QStringLiteral("Output")},
+                   QStringLiteral("Logic"), QStringLiteral("Time"), QStringLiteral("Color Values"),
+                   QStringLiteral("Vector"), QStringLiteral("Utilities"), QStringLiteral("Output")},
            "every populated section is headed, in category order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,
@@ -514,24 +517,41 @@ void testSearchKeyboardAndMenus() {
         for (const auto& category : node_editor::nodeCategoryOrder())
             expected.append(node_editor::nodeCategoryName(category));
         expect(sections == expected, "whose sections are the registry's categories, in order");
-        auto* colour = addMenu->findChild<QMenu*>("nodeAddCategoryMenu.Color");
-        QStringList colourNodes;
-        if (colour)
-            for (auto* entry : colour->actions())
-                colourNodes.append(entry->text());
-        expect(colourNodes.contains("OCIO Color Space Transform") &&
-                   colourNodes.contains("OCIO File Transform") &&
-                   colourNodes.contains("Exposure") && colourNodes.contains("Offset") &&
-                   colourNodes.contains("Multiply") && colourNodes.contains("Invert") &&
-                   // #340
-                   colourNodes.contains("Levels") && colourNodes.contains("Curves") &&
-                   colourNodes.contains("Hue/Saturation") &&
-                   // #494
-                   colourNodes.contains("Grade") &&
-                   // #479
-                   colourNodes.contains("Separate Channels") &&
-                   colourNodes.contains("Combine Channels") && colourNodes.size() == 12,
-               "Color offers the registered image-effect nodes");
+        // #500: every NodeCategory has its own section name, and that section is in the order.
+        QStringList categoryNames;
+        for (const auto category : document::kNodeCategories) {
+            const auto name = node_editor::nodeCategoryName(category);
+            expect(!name.isEmpty() && !categoryNames.contains(name) &&
+                       std::ranges::find(node_editor::nodeCategoryOrder(), name) !=
+                           node_editor::nodeCategoryOrder().end(),
+                   "each node category names its own ordered section");
+            categoryNames.append(name);
+        }
+        const auto entries = [addMenu](const char* name) {
+            QStringList nodes;
+            if (auto* section = addMenu->findChild<QMenu*>(name))
+                for (auto* entry : section->actions())
+                    nodes.append(entry->text());
+            nodes.sort();
+            return nodes;
+        };
+        // #500: the image grades are their own section, apart from colour management.
+        expect(entries("nodeAddCategoryMenu.Grade") == QStringList{"Curves", "Exposure", "Grade",
+                                                                   "Hue/Saturation", "Invert",
+                                                                   "Levels", "Multiply", "Offset"},
+               "Grade offers the image grades");
+        expect(entries("nodeAddCategoryMenu.Color Management") ==
+                   QStringList{"OCIO Color Space Transform", "OCIO File Transform"},
+               "Color Management offers only the OCIO transforms");
+        const auto compositing = entries("nodeAddCategoryMenu.Compositing");
+        expect(compositing.contains("Separate Channels") &&
+                   compositing.contains("Combine Channels") && compositing.contains("Shuffle") &&
+                   compositing.contains("Drop Shadow"),
+               "Separate and Combine Channels sit beside the other channel nodes in Compositing");
+        expect(entries("nodeAddCategoryMenu.Filters") == QStringList{"Box Blur", "Gaussian Blur",
+                                                                     "Matte Blur", "Matte Dilate",
+                                                                     "Matte Erode"},
+               "Filters offers the blurs and matte filters");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
                "a singleton already present is listed disabled with its refusal");

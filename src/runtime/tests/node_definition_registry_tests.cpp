@@ -9,7 +9,9 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <iostream>
+#include <optional>
 #include <source_location>
 #include <span>
 #include <stdexcept>
@@ -188,6 +190,39 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             wrap->inputs[1].valueKind == runtime::SocketValueKind::Image &&
                             !wrap->inputs[1].required,
                         "#339: Light Wrap takes an optional background Image");
+    // #500: grading is its own category apart from colour management (the OCIO transforms), the
+    // blurs and matte filters are Filters, and the image channel nodes and #339 recipes are
+    // Compositing.
+    const auto categoryOf = [&](const std::string_view type) {
+        std::optional<document::NodeCategory> category;
+        for (const auto& definition : registry.definitions())
+            if (definition.key.typeId == type)
+                category = definition.category;
+        return category;
+    };
+    const auto expectCategory = [&](const std::initializer_list<std::string_view> types,
+                                    const document::NodeCategory category) {
+        for (const auto type : types)
+            expectations.expect(categoryOf(type) == category,
+                                "#500: " + std::string(type) + " is listed in its category");
+    };
+    expectCategory({"bloom.grade", "bloom.levels", "bloom.curves", "bloom.hue-saturation",
+                    "bloom.exposure", "bloom.offset", "bloom.multiply", "bloom.invert"},
+                   document::NodeCategory::Grade);
+    expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
+                   document::NodeCategory::Color);
+    expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
+                    "bloom.matte-erode", "bloom.matte-dilate"},
+                   document::NodeCategory::Filters);
+    expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
+                    "bloom.glow", "bloom.light-wrap"},
+                   document::NodeCategory::Compositing);
+    expectations.expect(std::ranges::count_if(registry.definitions(),
+                                              [](const auto& definition) {
+                                                  return definition.category ==
+                                                         document::NodeCategory::Color;
+                                              }) == 2,
+                        "#500: Color holds only the two OCIO colour-management transforms");
     // #340: Levels has five animatable Scalars per channel (RGB master, red, green, blue, alpha)
     // and Curves (#493 schema 2) nine animatable point-list curves (master, red, green, blue,
     // alpha, then the four hue curves) with no sockets, then a constant clamp; Hue/Saturation has
@@ -197,7 +232,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     const auto* hueSaturation = registry.find("bloom.hue-saturation", 1);
     expectations.expect(
         levels && levels->lowering == runtime::NodeLoweringKind::ImageEffect &&
-            levels->category == document::NodeCategory::Color && levels->inputs.size() == 26 &&
+            levels->category == document::NodeCategory::Grade && levels->inputs.size() == 26 &&
             levels->parameters.size() == 26 &&
             levels->inputs[0] ==
                 document::InputPortDefinition{"input", runtime::SocketValueKind::Image} &&
@@ -248,7 +283,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     const auto* grade = registry.find("bloom.grade", 1);
     expectations.expect(
         grade && grade->lowering == runtime::NodeLoweringKind::ImageEffect &&
-            grade->category == document::NodeCategory::Color && grade->inputs.size() == 23 &&
+            grade->category == document::NodeCategory::Grade && grade->inputs.size() == 23 &&
             grade->parameters.size() == 22 &&
             grade->inputs[1] == document::InputPortDefinition{"liftMaster",
                                                               runtime::SocketValueKind::Scalar,
@@ -269,7 +304,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     const auto* separate = registry.find("bloom.separate-channels", 1);
     const auto* combine = registry.find("bloom.combine-channels", 1);
     expectations.expect(separate && separate->lowering == runtime::NodeLoweringKind::ImageEffect &&
-                            separate->category == document::NodeCategory::Color &&
+                            separate->category == document::NodeCategory::Compositing &&
                             separate->inputs ==
                                 std::vector<document::InputPortDefinition>{
                                     {"input", runtime::SocketValueKind::Image}} &&
@@ -283,7 +318,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "#479: Separate Channels offers red, green, blue and alpha Image outputs");
     expectations.expect(
         combine && combine->lowering == runtime::NodeLoweringKind::ImageEffect &&
-            combine->category == document::NodeCategory::Color &&
+            combine->category == document::NodeCategory::Compositing &&
             combine->inputs ==
                 std::vector<document::InputPortDefinition>{
                     {"red", runtime::SocketValueKind::Image, false},

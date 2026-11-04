@@ -145,7 +145,7 @@ template <typename Definition>
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
-                              NodeCategory::Color};
+                              NodeCategory::Grade};
     for (std::size_t channel = 0; channel < kGradeChannelCount; ++channel)
         for (std::size_t field = 0; field < kLevelsFieldCount; ++field) {
             definition.parameters.push_back(
@@ -171,7 +171,7 @@ template <typename Definition>
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
-                              NodeCategory::Color};
+                              NodeCategory::Grade};
     for (const auto curve : kGradeCurves)
         definition.parameters.push_back({std::string(gradeCurveRole(curve)),
                                          std::string(gradeCurveSchemaKey(curve)),
@@ -197,7 +197,7 @@ template <typename Definition>
               ParameterValueKind::Float64, true, true, 1.0}},
             std::nullopt,
             NodeCardinality::Many,
-            NodeCategory::Color};
+            NodeCategory::Grade};
 }
 
 // #494 Grade: an Image in and out; the four wheels (lift, gamma, gain, offset), each a master, red,
@@ -211,7 +211,7 @@ template <typename Definition>
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
-                              NodeCategory::Color};
+                              NodeCategory::Grade};
     const auto add = [&](std::string role, std::string schemaKey, const double neutral) {
         definition.parameters.push_back(
             {role, std::move(schemaKey), ParameterValueKind::Float64, true, true, neutral});
@@ -300,7 +300,7 @@ template <typename Definition>
         {},
         std::nullopt,
         NodeCardinality::Many,
-        NodeCategory::Color};
+        NodeCategory::Compositing};
     for (const auto port : kImageChannelPortNames)
         definition.outputs.push_back({std::string(port), SocketValueKind::Image});
     return definition;
@@ -319,7 +319,7 @@ template <typename Definition>
         {},
         std::nullopt,
         NodeCardinality::Many,
-        NodeCategory::Color};
+        NodeCategory::Compositing};
     for (std::size_t channel = 0; channel < kImageChannelCount; ++channel) {
         definition.inputs.push_back(
             {std::string(kImageChannelPortNames[channel]), SocketValueKind::Image, false});
@@ -1074,7 +1074,7 @@ template <typename Definition>
                               {},
                               std::nullopt,
                               NodeCardinality::Many,
-                              NodeCategory::Color};
+                              NodeCategory::Grade};
     if (parameterKey != nullptr) {
         definition.parameters.push_back(
             {"amount", parameterKey, ParameterValueKind::Float64, true, true, neutral});
@@ -1174,7 +1174,7 @@ template <typename Definition>
          {"edge", "bloom.blur.edge", ParameterValueKind::Integer, true, false, std::int64_t{0}}},
         std::nullopt,
         NodeCardinality::Many,
-        NodeCategory::Color};
+        NodeCategory::Filters};
 }
 
 // #337 Matte Blur: the Gaussian Blur controls over Mask coverage. The input is required, like
@@ -1190,7 +1190,7 @@ template <typename Definition>
          {"edge", "bloom.blur.edge", ParameterValueKind::Integer, true, false, std::int64_t{0}}},
         std::nullopt,
         NodeCardinality::Many,
-        NodeCategory::Compositing};
+        NodeCategory::Filters};
 }
 
 // #338 Luma Key: animatable/drivable low and high luma thresholds and a constant invert.

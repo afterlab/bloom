@@ -2,6 +2,8 @@
 
 #include <bloom/document/parameter.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -245,6 +247,8 @@ enum class NodeCategory : std::uint8_t {
     Sources,
     Layers,
     Compositing,
+    // Colour management (#500): the OCIO transforms, shown as the "Color Management" section.
+    // Grading lives in Grade; the enum keeps its name to limit churn.
     Color,
     Values,
     // Task UTIL-1. Arithmetic and shaping got their own section because Utilities had become the
@@ -257,8 +261,31 @@ enum class NodeCategory : std::uint8_t {
     Utilities,
     // Geometric image operations (Flip, Rotate 90). Not persisted, like every category.
     Transform,
+    // #500: the blurs and matte filters, which the Add menu already listed under Filters.
+    Filters,
+    // #500: image grades that never convert colour (Grade, Levels, Curves, Hue/Saturation,
+    // Exposure, Offset, Multiply, Invert), apart from colour management.
+    Grade,
     // Retained persisted schemas, excluded from new-node authoring categories.
 };
+
+// Every NodeCategory, in declaration order (#500). The surfaces that name a category (the Add menu
+// and the scripting/MCP reference) switch over the enum without a default, so a new value without
+// a name is a -Wswitch diagnostic, and their tests walk this list and every registered definition
+// so no category can fall back to another's name silently. The assertion keeps the list in order.
+inline constexpr std::array kNodeCategories{
+    NodeCategory::Sources, NodeCategory::Layers,    NodeCategory::Compositing,
+    NodeCategory::Color,   NodeCategory::Values,    NodeCategory::Math,
+    NodeCategory::Output,  NodeCategory::Utilities, NodeCategory::Transform,
+    NodeCategory::Filters, NodeCategory::Grade};
+static_assert(
+    [] {
+        for (std::size_t index = 0; index < kNodeCategories.size(); ++index)
+            if (static_cast<std::size_t>(kNodeCategories[index]) != index)
+                return false;
+        return true;
+    }(),
+    "kNodeCategories lists every NodeCategory in declaration order");
 
 // How many instances of a node type one composition may hold (task S1, item 5). The composition's
 // single evaluation endpoint and its single layer-stack operator are structural singletons: a

@@ -8,9 +8,12 @@
 #include <bloom/scripting/node_reference.hpp>
 #include <bloom/scripting/operation_reference.hpp>
 
+#include <algorithm>
+#include <initializer_list>
 #include <iostream>
 #include <set>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -212,6 +215,52 @@ void timesReadBackInBothUnits() {
            "one NTSC frame is exact");
 }
 
+// #500: every NodeCategory has its own explicit scripting/MCP name, so a new category can never
+// read back as another's ("utilities" was the silent fallback of an ordinal table). The grading
+// nodes report "grade", the blurs and matte filters "filters", the OCIO transforms "color", and the
+// image channel nodes "compositing": the `category` that MCP `nodes` and `node-types` return.
+void everyNodeCategoryIsNamed() {
+    using bloom::document::NodeCategory;
+    std::set<std::string_view> names;
+    for (const auto category : bloom::document::kNodeCategories) {
+        const auto name = nodeCategoryName(category);
+        const auto ordinal = std::to_string(static_cast<int>(category));
+        expect(!name.empty(), "NodeCategory " + ordinal + " has no scripting name");
+        expect(names.insert(name).second,
+               "NodeCategory " + ordinal + " shares the name " + std::string(name));
+        expect((name == "utilities") == (category == NodeCategory::Utilities),
+               "NodeCategory " + ordinal + " reads back as utilities");
+    }
+    for (const auto& definition : bloom::document::builtInNodeDefinitions().definitions())
+        expect(std::ranges::find(bloom::document::kNodeCategories, definition.category) !=
+                       bloom::document::kNodeCategories.end() &&
+                   !nodeCategoryName(definition.category).empty(),
+               definition.key.typeId + " is in an unlisted category");
+    const auto typeJson = [](const std::string_view typeId) {
+        const auto& registry = bloom::document::builtInNodeDefinitions();
+        for (const auto& definition : registry.definitions())
+            if (definition.key.typeId == typeId)
+                return nodeTypeJson(definition, false);
+        return std::string{};
+    };
+    const auto pinned = [&](const std::initializer_list<std::string_view> types,
+                            const std::string_view category) {
+        for (const auto type : types)
+            expect(contains(typeJson(type), "\"category\":\"" + std::string(category) + "\""),
+                   std::string(type) + " reports category " + std::string(category));
+    };
+    pinned({"bloom.grade", "bloom.levels", "bloom.curves", "bloom.hue-saturation", "bloom.exposure",
+            "bloom.offset", "bloom.multiply", "bloom.invert"},
+           "grade");
+    pinned({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"}, "color");
+    pinned({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
+            "bloom.matte-dilate"},
+           "filters");
+    pinned({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow",
+            "bloom.light-wrap"},
+           "compositing");
+}
+
 } // namespace
 
 int main() {
@@ -221,6 +270,7 @@ int main() {
     helpTextCarriesTheReference();
     everyChoiceParameterHasValues();
     timesReadBackInBothUnits();
+    everyNodeCategoryIsNamed();
     if (failures != 0) {
         std::cerr << failures << " reference check(s) failed\n";
         return 1;

@@ -168,7 +168,13 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
                     std::pair{document::kFrameNumberNodeType, "Time"},
                     std::pair{document::kHueShiftNodeType, "Color Values"},
                     std::pair{document::kVector2MathNodeType, "Vector"},
-                    std::pair{document::kCompositionSizeNodeType, "Values"}})
+                    std::pair{document::kCompositionSizeNodeType, "Values"},
+                    // #500
+                    std::pair{std::string_view{"bloom.grade"}, "Grade"},
+                    std::pair{std::string_view{"bloom.exposure"}, "Grade"},
+                    std::pair{std::string_view{"bloom.ocio-file-transform"}, "Color Management"},
+                    std::pair{std::string_view{"bloom.gaussian-blur"}, "Filters"},
+                    std::pair{std::string_view{"bloom.separate-channels"}, "Compositing"}})
         expect(category(type) == expected, window, "F24 normalized node category");
     for (const auto& definition : document::builtInNodeDefinitions().definitions())
         if (node_editor::nodeCategoryName(definition) == "Utilities")
