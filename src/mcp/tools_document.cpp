@@ -171,6 +171,37 @@ document::PathValue pathValue(yyjson_val* item) {
     return path;
 }
 
+// #541: a gradient argument has the shape the parameter projection publishes: {"stops":
+// [{"position": p, "color": [r, g, b, a]}]}.
+document::GradientValue gradientValue(yyjson_val* item) {
+    auto* stops = yyjson_obj_get(item, "stops");
+    if (yyjson_obj_size(item) != 1 || !yyjson_is_arr(stops) ||
+        yyjson_arr_size(stops) > document::kMaximumGradientStops)
+        throw InvalidInput("A gradient is {stops}");
+    document::GradientValue gradient;
+    yyjson_arr_iter rows = yyjson_arr_iter_with(stops);
+    while (auto* row = yyjson_arr_iter_next(&rows)) {
+        auto* position = yyjson_obj_get(row, "position");
+        auto* color = yyjson_obj_get(row, "color");
+        if (!yyjson_is_obj(row) || yyjson_obj_size(row) != 2 || !yyjson_is_num(position) ||
+            !yyjson_is_arr(color) || yyjson_arr_size(color) != 4)
+            throw InvalidInput("A gradient stop is {position, color: [r, g, b, a]}");
+        std::array<double, 4> rgba{};
+        for (std::size_t index = 0; index < 4; ++index) {
+            auto* channel = yyjson_arr_get(color, index);
+            if (!yyjson_is_num(channel))
+                throw InvalidInput("A gradient stop colour is four numbers");
+            rgba[index] = yyjson_get_num(channel);
+        }
+        gradient.stops.push_back(
+            {yyjson_get_num(position), core::Color4d{rgba[0], rgba[1], rgba[2], rgba[3]}});
+    }
+    if (!gradient.isValid())
+        throw InvalidInput("A gradient has 1 to 64 stops, positions in 0..1 and finite colours "
+                           "with alpha in 0..1");
+    return gradient;
+}
+
 scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
     if (depth > 16)
         throw InvalidInput("Argument exceeds nesting limit");
@@ -199,9 +230,11 @@ scripting::Value value(yyjson_val* item, const std::size_t depth = 0) {
             values.push_back(value(child, depth + 1));
         return scripting::Value(std::move(values));
     }
+    if (yyjson_is_obj(item) && yyjson_obj_get(item, "stops") != nullptr)
+        return scripting::Value(gradientValue(item));
     if (yyjson_is_obj(item))
         return scripting::Value(pathValue(item));
-    throw InvalidInput("Operation arguments require scalars, arrays or paths");
+    throw InvalidInput("Operation arguments require scalars, arrays, paths or gradients");
 }
 
 bool matches(yyjson_val* value, const scripting::ValueKind kind) {

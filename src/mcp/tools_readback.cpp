@@ -445,7 +445,8 @@ yyjson_mut_val* keyframesQuery(Json& out, yyjson_mut_val* result,
                 valueKind = "color";
                 componentRows<4>(rows, curve.components, {"red", "green", "blue", "alpha"});
             } else {
-                valueKind = "path";
+                valueKind = std::is_same_v<Curve, document::GradientAnimationCurve> ? "gradient"
+                                                                                      : "path";
                 for (const auto& key : curve.keyframes)
                     rows.push_back({.keyframe = key.id.value(),
                                     .component = std::nullopt,
@@ -835,6 +836,8 @@ yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& compos
                     return document::ParameterValueKind::Color4d;
                 else if constexpr (std::is_same_v<T, document::PathValue>)
                     return document::ParameterValueKind::Path;
+                else if constexpr (std::is_same_v<T, document::GradientValue>)
+                    return document::ParameterValueKind::Gradient;
                 else
                     return kind;
             },

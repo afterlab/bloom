@@ -1096,6 +1096,39 @@ void fieldTestArguments() {
            "a path value reaches the parameter and is judged by its kind: " + result);
 }
 
+// #541: a Colorize's gradient is set as {"stops": [{position, color}]} and reads back the same way.
+void gradientReadBack() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.node.add","args":{"composition":1,)"
+                           R"("nodeType":"bloom.colorize"}})");
+    expect(outputId(result, "node") != 0, "a Colorize is added: " + result);
+    const auto nodes = server.call("query", R"({"kind":"nodes","composition":1})");
+    const auto gradient = firstMatch(nodes, R"re("gradient":(\d+))re");
+    expect(!gradient.empty(), "the Colorize lists its gradient parameter: " + nodes);
+    if (gradient.empty())
+        return;
+    result = transact(R"({"op":"bloom.parameter.set-source","args":{"composition":1,"parameter":)" +
+                      gradient +
+                      R"(,"value":{"stops":[{"position":0,"color":[0,0,0,1]},)"
+                      R"({"position":0.4,"color":[1,0.5,0,1]},)"
+                      R"({"position":1,"color":[1,1,1,1]}]}}})");
+    expect(contains(result, R"("isError":false)") && contains(result, R"("succeeded":true)"),
+           "a gradient value is accepted: " + result);
+    const auto read = server.call(
+        "query", R"({"kind":"parameter","composition":1,"parameter":)" + gradient + "}");
+    expect(contains(read, R"("stops")") && contains(read, R"("position":0.4)") &&
+               contains(read, R"("valueKind":"gradient")"),
+           "the gradient reads back as its stops: " + read);
+    result = transact(R"({"op":"bloom.parameter.set-source","args":{"composition":1,"parameter":)" +
+                      gradient + R"(,"value":{"stops":[]}}})");
+    expect(contains(result, "A gradient has 1 to 64 stops"),
+           "a gradient without stops is refused, saying why: " + result);
+}
+
 // profiler.snapshot (#423): unbound it says so; bound it returns the snapshot as JSON with
 // schemaVersion, absent values as null, and the fixed histogram and pool shapes.
 void profilerSnapshotTool() {
@@ -1223,6 +1256,7 @@ int main() {
         animationReadBack();
         mergeEntryReadBack();
         fieldTestArguments();
+        gradientReadBack();
         parityTools();
         stdioStopsWhileInputIdle();
     } catch (const std::exception& error) {

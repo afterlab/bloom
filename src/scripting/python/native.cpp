@@ -211,6 +211,35 @@ document::Vec2d pathPoint(const nb::handle value) {
     return point;
 }
 
+// #541: a gradient argument is the mapping bloom.data projects for a gradient value: {"stops":
+// [{"position": p, "color": (r, g, b, a)}]}.
+Value gradientValue(const nb::dict& mapping) {
+    if (nb::len(mapping) != 1)
+        throw nb::type_error("A gradient is {'stops': [...]}");
+    const auto stops = nb::borrow<nb::sequence>(mapping["stops"]);
+    if (nb::len(stops) > document::kMaximumGradientStops)
+        throw nb::value_error("A gradient has at most 64 stops");
+    document::GradientValue gradient;
+    for (const auto item : stops) {
+        if (!nb::isinstance<nb::dict>(item))
+            throw nb::type_error("A gradient stop is a mapping with a position and a color");
+        const auto row = nb::borrow<nb::dict>(item);
+        if (nb::len(row) != 2 || !row.contains("position") || !row.contains("color"))
+            throw nb::type_error("A gradient stop is {'position': p, 'color': (r, g, b, a)}");
+        const auto color = nb::borrow<nb::sequence>(row["color"]);
+        if (nb::len(color) != 4)
+            throw nb::type_error("A gradient stop colour is four numbers");
+        gradient.stops.push_back(
+            {nb::cast<double>(row["position"]),
+             core::Color4d{nb::cast<double>(color[0]), nb::cast<double>(color[1]),
+                           nb::cast<double>(color[2]), nb::cast<double>(color[3])}});
+    }
+    if (!gradient.isValid())
+        throw nb::value_error("A gradient has 1 to 64 stops, positions in 0..1 and finite colours "
+                              "with alpha in 0..1");
+    return Value(std::move(gradient));
+}
+
 // ADR 0028: a path argument is the mapping bloom.data projects for a path value: {"closed": bool,
 // "anchors": [{"point": (x, y), "in_handle": (x, y) or None, "out_handle": (x, y) or None}]}.
 Value pathValue(const nb::dict& mapping) {
@@ -300,9 +329,12 @@ Value scriptValue(const nb::handle value, const std::size_t depth) {
         return Value(std::move(array));
     }
     if (nb::isinstance<nb::dict>(value)) {
-        return pathValue(nb::borrow<nb::dict>(value));
+        const auto mapping = nb::borrow<nb::dict>(value);
+        if (mapping.contains("stops"))
+            return gradientValue(mapping);
+        return pathValue(mapping);
     }
-    throw nb::type_error("Expected a scalar, an array or a path of Bloom argument values");
+    throw nb::type_error("Expected a scalar, an array, a path or a gradient of Bloom argument values");
 }
 
 nb::dict NativeHost::transact(const nb::list& operations, const std::string& label,

@@ -55,6 +55,18 @@ std::string pathJson(const document::PathValue& path) {
     return text + "]}";
 }
 
+// #541: a gradient as {"stops": [{"position": p, "color": [r, g, b, a]}]}, stops in stored order.
+std::string gradientJson(const document::GradientValue& gradient) {
+    std::string text = "{\"stops\":[";
+    for (std::size_t index = 0; index < gradient.stops.size(); ++index) {
+        const auto& stop = gradient.stops[index];
+        text += (index == 0 ? "" : ",") + std::string("{\"position\":") + number(stop.position) +
+                ",\"color\":" +
+                vector({stop.color.red, stop.color.green, stop.color.blue, stop.color.alpha}) + "}";
+    }
+    return text + "]}";
+}
+
 // A multiplication that reports overflow instead of wrapping, portable to every compiler.
 std::optional<std::int64_t> multiplied(const std::int64_t left, const std::int64_t right) {
     if (left == 0 || right == 0)
@@ -159,6 +171,8 @@ std::string parameterValueJson(const document::ParameterValue& value) {
             else if constexpr (std::is_same_v<T, core::RationalTime>)
                 return "[" + std::to_string(held.numerator()) + "," +
                        std::to_string(held.denominator()) + "]";
+            else if constexpr (std::is_same_v<T, document::GradientValue>)
+                return gradientJson(held);
             else
                 return pathJson(held);
         },

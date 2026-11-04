@@ -45,6 +45,19 @@ nb::object parameterValue(const document::ParameterValue& value) {
                 }
                 path["anchors"] = anchors;
                 return path;
+            } else if constexpr (std::is_same_v<T, document::GradientValue>) {
+                // #541: {"stops": [{"position": p, "color": (r, g, b, a)}]}.
+                nb::list stops;
+                for (const auto& stop : item.stops) {
+                    nb::dict row;
+                    row["position"] = stop.position;
+                    row["color"] = nb::make_tuple(stop.color.red, stop.color.green,
+                                                  stop.color.blue, stop.color.alpha);
+                    stops.append(row);
+                }
+                nb::dict gradient;
+                gradient["stops"] = stops;
+                return gradient;
             } else {
                 return nb::cast(item);
             }
@@ -81,8 +94,10 @@ nb::list keyframes(const std::vector<document::ScalarKeyframe>& keys) {
 }
 
 // ADR 0028: a Path key's value projects as the whole path (closed flag, anchors and handles), the
-// same mapping a path argument accepts, so a key read here can be passed straight back.
-nb::list keyframes(const std::vector<document::PathKeyframe>& keys) {
+// same mapping a path argument accepts, so a key read here can be passed straight back. #541: a
+// Gradient key's value projects as the whole gradient the same way.
+template <typename Key>
+nb::list wholeValueKeyframes(const std::vector<Key>& keys) {
     nb::list result;
     for (const auto& key : keys) {
         nb::dict row;
@@ -94,6 +109,14 @@ nb::list keyframes(const std::vector<document::PathKeyframe>& keys) {
         result.append(row);
     }
     return result;
+}
+
+nb::list keyframes(const std::vector<document::PathKeyframe>& keys) {
+    return wholeValueKeyframes(keys);
+}
+
+nb::list keyframes(const std::vector<document::GradientKeyframe>& keys) {
+    return wholeValueKeyframes(keys);
 }
 
 // #502: a layer's controls by role -- parameter ids and constant values (None for an animated or

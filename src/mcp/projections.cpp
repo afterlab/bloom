@@ -45,6 +45,20 @@ yyjson_mut_val* parameterValue(Json& out, const document::ParameterValue& value)
                 out.append(result, out.signedNumber(item.numerator()));
                 out.append(result, out.signedNumber(item.denominator()));
                 return result;
+            } else if constexpr (std::is_same_v<T, document::GradientValue>) {
+                // #541: {"stops": [{"position": p, "color": [r, g, b, a]}]}, as a gradient
+                // argument accepts.
+                auto* gradient = out.object();
+                auto* stops = out.array();
+                for (const auto& stop : item.stops) {
+                    auto* row = out.object();
+                    out.set(row, "position", out.real(stop.position));
+                    out.set(row, "color", vector(out, {stop.color.red, stop.color.green,
+                                                       stop.color.blue, stop.color.alpha}));
+                    out.append(stops, row);
+                }
+                out.set(gradient, "stops", stops);
+                return gradient;
             } else {
                 auto* path = out.object();
                 out.set(path, "closed", out.boolean(item.closed));

@@ -327,6 +327,17 @@ std::string valueJson(const Value& value) {
                             "}";
                 }
                 return text + "]}";
+            } else if constexpr (std::is_same_v<Held, document::GradientValue>) {
+                std::string text = "{\"stops\":[";
+                for (std::size_t index = 0; index < held.stops.size(); ++index) {
+                    const auto& stop = held.stops[index];
+                    text += (index == 0 ? "" : ",") + std::string("{\"position\":") +
+                            numberText(stop.position) + ",\"color\":[" +
+                            numberText(stop.color.red) + "," + numberText(stop.color.green) + "," +
+                            numberText(stop.color.blue) + "," + numberText(stop.color.alpha) +
+                            "]}";
+                }
+                return text + "]}";
             } else {
                 std::string text = "[";
                 for (std::size_t index = 0; index < held.size(); ++index)

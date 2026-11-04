@@ -379,6 +379,49 @@ class Parser final {
     return Value{std::move(path)};
 }
 
+// #541: a gradient object, {"stops": [{"position": p, "color": [r, g, b, a]}]}, the shape the
+// parameter projection publishes.
+[[nodiscard]] std::optional<Value> gradientOf(const JsonObject& object) {
+    const auto stops = object.find("stops");
+    if (object.size() != 1 || stops == object.end())
+        return std::nullopt;
+    const auto* rows = std::get_if<JsonArray>(&stops->second.storage);
+    if (rows == nullptr || rows->size() > document::kMaximumGradientStops)
+        return std::nullopt;
+    const auto numberOf = [](const JsonValue& value) -> std::optional<double> {
+        if (const auto* real = std::get_if<double>(&value.storage))
+            return *real;
+        if (const auto* whole = std::get_if<std::int64_t>(&value.storage))
+            return static_cast<double>(*whole);
+        return std::nullopt;
+    };
+    document::GradientValue gradient;
+    for (const auto& row : *rows) {
+        const auto* fields = std::get_if<JsonObject>(&row.storage);
+        if (fields == nullptr || fields->size() != 2)
+            return std::nullopt;
+        const auto position = fields->find("position");
+        const auto color = fields->find("color");
+        if (position == fields->end() || color == fields->end())
+            return std::nullopt;
+        const auto at = numberOf(position->second);
+        const auto* channels = std::get_if<JsonArray>(&color->second.storage);
+        if (!at || channels == nullptr || channels->size() != 4)
+            return std::nullopt;
+        std::array<double, 4> rgba{};
+        for (std::size_t index = 0; index < 4; ++index) {
+            const auto channel = numberOf((*channels)[index]);
+            if (!channel)
+                return std::nullopt;
+            rgba[index] = *channel;
+        }
+        gradient.stops.push_back({*at, core::Color4d{rgba[0], rgba[1], rgba[2], rgba[3]}});
+    }
+    if (!gradient.isValid())
+        return std::nullopt;
+    return Value{std::move(gradient)};
+}
+
 [[nodiscard]] std::optional<Value> convert(const JsonValue& json) {
     return std::visit(
         [](const auto& value) -> std::optional<Value> {
@@ -395,6 +438,8 @@ class Parser final {
                 }
                 return Value{std::move(result)};
             } else if constexpr (std::is_same_v<Type, JsonObject>) {
+                if (value.contains("stops"))
+                    return gradientOf(value);
                 return pathOf(value);
             } else if constexpr (std::is_same_v<Type, std::nullptr_t>) {
                 return std::nullopt;

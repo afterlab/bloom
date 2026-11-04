@@ -145,6 +145,10 @@ using AnimationValue = std::variant<double, document::Vec2d, document::Vec3d, co
     if (const auto* result = std::get_if<document::PathValue>(&value.storage)) {
         return result->isValid() ? std::optional(document::ParameterValue(*result)) : std::nullopt;
     }
+    // #541: a gradient parameter's {stops} object.
+    if (const auto* result = std::get_if<document::GradientValue>(&value.storage)) {
+        return result->isValid() ? std::optional(document::ParameterValue(*result)) : std::nullopt;
+    }
     const auto authoredValue = animationValueOf(value);
     if (!authoredValue.has_value()) {
         return std::nullopt;
@@ -1023,6 +1027,15 @@ std::string pythonLiteral(const Value& value) {
                                        std::string(document::pathAnchorModeName(anchor.mode)) + "\""
                                  : std::string()) +
                             "}";
+                }
+                return text + "]}";
+            } else if constexpr (std::is_same_v<Held, document::GradientValue>) {
+                std::string text = "{\"stops\": [";
+                for (std::size_t index = 0; index < held.stops.size(); ++index) {
+                    const auto& stop = held.stops[index];
+                    text += (index == 0 ? std::string() : std::string(", ")) +
+                            "{\"position\": " + pythonLiteral(Value(stop.position)) +
+                            ", \"color\": " + pythonLiteral(Value(stop.color)) + "}";
                 }
                 return text + "]}";
             } else {
