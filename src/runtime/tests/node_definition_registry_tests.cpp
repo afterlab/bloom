@@ -1,7 +1,8 @@
-#include <bloom/document/channel_nodes.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/runtime/gpu_coverage_contract.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 
 #include <algorithm>
@@ -135,8 +136,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Radial Gradient: 30 structural/image definitions plus 100 value-library definitions. ADR 0028
     // adds the Mask node; ADR 0026 adds Shuffle, Channel Copy and Remove; #364 adds Cryptomatte.
     // #336 adds the standalone Transform 2D; #337 adds Matte Blur; #338 adds Matte Erode, Matte
-    // Dilate and Luma Key.
-    expectations.expect(registry.definitions().size() == 140,
+    // Dilate and Luma Key; #490 adds the Image Preview sink.
+    expectations.expect(registry.definitions().size() == 141,
                         "startup contribution includes every built-in definition");
     for (const auto* type : {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip",
                              "bloom.rotate-90", "bloom.resize", "bloom.fit", "bloom.transform-2d",
@@ -174,6 +175,50 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             multiplyAlpha->inputs[1].name == "matte" &&
                             !multiplyAlpha->inputs[1].required && imageMix->inputs[1].required,
                         "#361: Set Alpha and Multiply Alpha mattes are optional, Mix's is not");
+    // #490: the Image Preview is a sink with one optional input that also takes the pixel kinds,
+    // and one inline display choice.
+    const auto* imagePreview = registry.find("bloom.image-preview", 1);
+    expectations.expect(
+        imagePreview && imagePreview->lowering == runtime::NodeLoweringKind::ImagePreview &&
+            imagePreview->outputs.empty() && imagePreview->inputs.size() == 1 &&
+            imagePreview->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            !imagePreview->inputs[0].required && imagePreview->inputs[0].acceptsPixelKinds &&
+            imagePreview->parameters.size() == 1 &&
+            imagePreview->parameters[0].schemaKey == "bloom.image-preview.display" &&
+            !imagePreview->parameters[0].supportsAnimation &&
+            imagePreview->category == document::NodeCategory::Output,
+        "#490: Image Preview is an inspection sink with a display choice");
+    if (imagePreview) {
+        auto withOutput = *imagePreview;
+        withOutput.outputs.push_back({"image", runtime::SocketValueKind::Image});
+        runtime::NodeDefinitionRegistry scratch;
+        expectations.expect(scratch.registerDefinition(withOutput) ==
+                                runtime::NodeRegistrationStatus::InvalidDefinition,
+                            "#490: an Image Preview with an output is refused");
+    }
+    expectations.expect(std::ranges::none_of(
+                            registry.definitions(),
+                            [](const auto& definition) {
+                                return definition.key.typeId != "bloom.image-preview" &&
+                                       std::ranges::any_of(definition.inputs, [](const auto& port) {
+                                           return port.acceptsPixelKinds;
+                                       });
+                            }),
+                        "#490: only the inspection input takes every pixel kind");
+    // #490 GPU coverage classification: the sink lowers to no operation (its preview is the
+    // upstream operations through the Viewer's GPU route), so it is a scope, not a pixel
+    // operation, and needs no node fixture of its own.
+    const auto coverage = runtime::gpuNodeTypeCoverage(registry);
+    expectations.expect(
+        !runtime::gpuLoweringIsPixelOperation(runtime::NodeLoweringKind::ImagePreview) &&
+            runtime::gpuLoweringOperationId(runtime::NodeLoweringKind::ImagePreview) ==
+                "scope.inspection" &&
+            std::ranges::none_of(coverage,
+                                 [](const auto& entry) {
+                                     return std::string_view{entry.id} ==
+                                            "node.bloom.image-preview";
+                                 }),
+        "#490: the Image Preview is classified as an inspection scope, not a pixel operation");
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);
     expectations.expect(
         matteBlur && matteBlur->lowering == runtime::NodeLoweringKind::ImageEffect &&

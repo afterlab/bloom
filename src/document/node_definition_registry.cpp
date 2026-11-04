@@ -1,6 +1,8 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 
+#include <bloom/document/image_preview.hpp>
+
 #include "value_node_definitions.hpp"
 
 #include <bloom/document/graph.hpp>
@@ -360,6 +362,8 @@ template <typename Definition>
                             false);
     case NodeLoweringKind::Cryptomatte:
         return definition == cryptomatteDefinition();
+    case NodeLoweringKind::ImagePreview:
+        return definition == imagePreviewDefinition();
     case NodeLoweringKind::Channel:
         return definition == channelShuffleDefinition() ||
                definition == channelCopyDefinition() || definition == channelRemoveDefinition();
@@ -1185,6 +1189,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         layerOutputDefinition(),
         layerStackDefinition(),
         compositionOutputDefinition(),
+        imagePreviewDefinition(),
         textDefinition(),
         imageDefinition(),
         cstDefinition(),

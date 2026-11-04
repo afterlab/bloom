@@ -188,9 +188,27 @@ struct InputPortDefinition {
     std::string name;
     SocketValueKind valueKind = SocketValueKind::Image;
     bool required = true;
+    // #490: an inspection input (the Image Preview's) that also takes a Mask or a ChannelSet and
+    // shows it as its image. False for every port that feeds evaluation.
+    bool acceptsPixelKinds = false;
 
     friend bool operator==(const InputPortDefinition&, const InputPortDefinition&) = default;
 };
+
+// The pixel-carrying kinds an inspection input (acceptsPixelKinds) takes.
+[[nodiscard]] constexpr bool isPixelSocketKind(const SocketValueKind kind) noexcept {
+    return kind == SocketValueKind::Image || kind == SocketValueKind::Mask ||
+           kind == SocketValueKind::ChannelSet;
+}
+
+// isAcceptedSocketConnection() for a declared input: the same rule, plus the pixel kinds an
+// inspection input takes. Every connect and validation path that has the input's declaration asks
+// this one.
+[[nodiscard]] constexpr bool isAcceptedInputConnection(const SocketValueKind source,
+                                                       const InputPortDefinition& input) noexcept {
+    return isAcceptedSocketConnection(source, input.valueKind) ||
+           (input.acceptsPixelKinds && isPixelSocketKind(source));
+}
 
 struct OutputPortDefinition {
     std::string name;
@@ -307,6 +325,9 @@ enum class NodeLoweringKind {
     Channel,
     // #364: the Cryptomatte node (runtime::CompiledCryptomatte).
     Cryptomatte,
+    // #490: the Image Preview inspection sink. It lowers to nothing: it has no output, so no plan
+    // reaches it, and the interface previews its input through a Viewer-only inspection plan.
+    ImagePreview,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -349,6 +370,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Mask:
     case NodeLoweringKind::Channel:
     case NodeLoweringKind::Cryptomatte:
+    case NodeLoweringKind::ImagePreview:
         return false;
     }
     return false;

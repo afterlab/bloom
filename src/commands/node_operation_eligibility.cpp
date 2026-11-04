@@ -74,7 +74,7 @@ bool canDissolveNode(const document::Composition& composition, const document::N
             continue;
         const auto targetKind = graph.inputKind(edge.destination, registry);
         if (sourceKind && targetKind &&
-            !document::isAcceptedSocketConnection(*sourceKind, *targetKind))
+            !graph.acceptsConnection(*sourceKind, edge.destination, registry))
             return false;
     }
     return !survivorsDrivenBy(composition, {nodeId});

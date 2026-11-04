@@ -572,6 +572,15 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
                 out.set(row, "port", out.text(port.name));
                 out.set(row, "kind", out.text(scripting::socketKindName(port.valueKind)));
                 out.set(row, "required", out.boolean(port.required));
+                // #490: an inspection input (the Image Preview's) also takes these kinds.
+                if (port.acceptsPixelKinds) {
+                    auto* also = out.array();
+                    out.append(
+                        also, out.text(scripting::socketKindName(document::SocketValueKind::Mask)));
+                    out.append(also, out.text(scripting::socketKindName(
+                                         document::SocketValueKind::ChannelSet)));
+                    out.set(row, "alsoAccepts", also);
+                }
                 yyjson_mut_val* source = out.null();
                 for (const auto& edge : graph.edges()) {
                     const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);

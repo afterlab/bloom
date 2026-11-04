@@ -4,6 +4,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/image_preview.hpp>
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/project.hpp>
@@ -1922,6 +1923,7 @@ int main() {
         testBlurLowering(expectations);
         testTransform2DLowering(expectations);
         testMatteBlurLowering(expectations);
+        testImagePreviewInspection(expectations);
         testMatteMorphologyLowering(expectations);
         testLumaKeyLowering(expectations);
         testLiveValueOverrideOwners(expectations);

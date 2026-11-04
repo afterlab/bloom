@@ -633,14 +633,22 @@ lower(const std::vector<document::NodeId>& order) {
     if (request_.channelInspection && request_.channelInspection->channels.empty()) {
         // #364 Viewer matte preview: an inspection with no channels shows a pixel output port
         // (a Cryptomatte's Mask) directly.
+        // #490: an Image Preview shows any node's Image or Mask output the same way.
         const auto& inspection = *request_.channelInspection;
-        const auto port = portOperations_.find({inspection.node, inspection.port});
-        if (port == portOperations_.end()) {
+        std::optional<runtime::OperationIndex> shown;
+        if (const auto port = portOperations_.find({inspection.node, inspection.port});
+            port != portOperations_.end())
+            shown = port->second;
+        else if (const auto* inspected = findNode(inspection.node);
+                 inspected != nullptr && inspectsPixelOutput(*inspected))
+            shown = sourceOperation(document::OutputPortRef{inspection.node, inspection.port},
+                                    indices);
+        if (!shown) {
             addTopologyFailure(inspection.node, "The inspected output has no pixels.");
             return {};
         }
         const auto mergeIndex = runtime::OperationIndex::fromRaw(operations.size());
-        operations.emplace_back(runtime::CompiledMerge{outputNodeId, {{{}, {}, port->second}}});
+        operations.emplace_back(runtime::CompiledMerge{outputNodeId, {{{}, {}, *shown}}});
         planOutput = runtime::OperationIndex::fromRaw(operations.size());
         operations.emplace_back(runtime::CompiledCompositionOutput{outputNodeId, mergeIndex});
     } else if (request_.channelInspection) {
@@ -975,6 +983,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     // CompiledChannelShuffle; channel algebra compiles into its expression).
     case NodeLoweringKind::Channel:
     case NodeLoweringKind::Cryptomatte:
+    // #490: an Image Preview has no output, so no plan reaches it.
+    case NodeLoweringKind::ImagePreview:
     case NodeLoweringKind::Unsupported:
     // A value lowering never reaches here: compileValueGraph() compiled it into the plan's value
     // operations, and lower()'s own loop skips it. Reaching this arm means the two passes disagree

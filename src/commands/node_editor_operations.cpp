@@ -251,7 +251,10 @@ OperationResult AddEditorNode::apply(document::Draft& draft) const {
             return connected.status == OperationStatus::Rejected ? connected : result;
         }
         for (const auto& port : definition->inputs) {
-            if (port.valueKind != kind)
+            // #490: an inspection input (the Image Preview's) also takes a Mask or ChannelSet.
+            if (port.valueKind != kind &&
+                !(kind && document::isAcceptedInputConnection(*kind, port) &&
+                  port.acceptsPixelKinds))
                 continue;
             const auto connected =
                 ConnectPorts(composition_, *output_, document::NodeInputRef{*node, port.name})

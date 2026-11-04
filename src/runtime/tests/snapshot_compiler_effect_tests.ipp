@@ -824,3 +824,101 @@ void testLumaKeyLowering(Expectations& expectations) {
                             "Luma Key lowers to the LumaKeyKernel of its Image");
     }
 }
+
+// #490: an Image Preview never enters the composition's plan, and the Viewer-only inspection plan
+// it is previewed through is exactly the inspected node's output -- here a Gaussian Blur's image --
+// without the layer stack or any other part of the composition.
+void testImagePreviewInspection(Expectations& expectations) {
+    using namespace document;
+    const auto blurNode = NodeId::fromRaw(970);
+    const auto previewNode = NodeId::fromRaw(971);
+    const auto build = [&](const bool withPreview) {
+        auto project = makeProject(singleLayerOptions());
+        auto* composition = project.findComposition(kCompositionId);
+        auto& graph = composition->graph();
+        const auto radius = ParameterId::fromRaw(970);
+        const auto edge = ParameterId::fromRaw(971);
+        require(composition->parameters().insert(
+                    {radius, "bloom.blur.radius", ConstantValueSource{2.5}}),
+                "blur radius is valid");
+        require(composition->parameters().insert(
+                    {edge, "bloom.blur.edge", ConstantValueSource{std::int64_t{1}}}),
+                "blur edge is valid");
+        require(graph.addNode({blurNode, "bloom.gaussian-blur",
+                               {{"radius", radius}, {"edge", edge}}, 1}),
+                "blur node adds");
+        require(graph.eraseEdge(kFirstSourceEdge), "source edge removed");
+        require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                               NodeInputRef{blurNode, "input"}}),
+                "image enters blur");
+        require(graph.addEdge(
+                    {EdgeId::fromRaw(970),
+                     {blurNode, "image"},
+                     NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
+                "blur enters Layer");
+        if (withPreview) {
+            const auto display = ParameterId::fromRaw(972);
+            require(composition->parameters().insert(
+                        {display, std::string(kImagePreviewDisplayParameterSchemaKey),
+                         ConstantValueSource{std::int64_t{2}}}),
+                    "display is valid");
+            require(graph.addNode({previewNode, std::string(kImagePreviewNodeType),
+                                   {{std::string(kImagePreviewDisplayParameterRole), display}},
+                                   kImagePreviewNodeSchemaVersion}),
+                    "preview adds");
+            require(graph.addEdge({EdgeId::fromRaw(971), {blurNode, "image"},
+                                   NodeInputRef{previewNode, "image"}}),
+                    "blur enters the preview");
+        }
+        return project;
+    };
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+
+    auto previewed = build(true);
+    expectations.expect(previewed.validate().ok(), "an Image Preview document validates");
+    const auto with = compile(std::move(previewed), registry);
+    const auto without = compile(build(false), registry);
+    expectations.expect(with.plan && without.plan &&
+                            std::ranges::equal(with.plan->operations(), without.plan->operations()) &&
+                            with.plan->output() == without.plan->output(),
+                        "an Image Preview leaves the composition's compiled plan unchanged");
+
+    document::Document document(build(true));
+    runtime::SnapshotCompiler compiler(registry);
+    const auto inspected = compiler.compile(
+        {.snapshot = document.snapshot(),
+         .compositionId = kCompositionId,
+         .parameterOverrides = {},
+         .channelInspection = runtime::ChannelInspection{blurNode, "image", {}}},
+        runtime::CancellationToken{});
+    expectations.expect(inspected.plan != nullptr, "a blur's image output can be inspected");
+    if (!inspected.plan)
+        return;
+    const auto& operations = inspected.plan->operations();
+    const auto* output =
+        std::get_if<runtime::CompiledCompositionOutput>(&operations[inspected.plan->output().value()]);
+    const auto* merge =
+        output ? std::get_if<runtime::CompiledMerge>(&operations[output->input.value()]) : nullptr;
+    const auto* shown = merge && merge->entries.size() == 1
+                            ? std::get_if<runtime::CompiledImageEffect>(
+                                  &operations[merge->entries.front().input.value()])
+                            : nullptr;
+    expectations.expect(shown != nullptr && shown->sourceNodeId == blurNode,
+                        "the inspection plan shows the blur's own operation");
+    expectations.expect(std::ranges::none_of(operations,
+                                             [](const auto& operation) {
+                                                 return std::holds_alternative<
+                                                     runtime::CompiledLayerOutput>(operation);
+                                             }),
+                        "the inspection plan carries none of the layer stack");
+    const auto refused = compiler.compile(
+        {.snapshot = document.snapshot(),
+         .compositionId = kCompositionId,
+         .parameterOverrides = {},
+         .channelInspection = runtime::ChannelInspection{blurNode, "radius", {}}},
+        runtime::CancellationToken{});
+    expectations.expect(refused.plan == nullptr,
+                        "an inspection of a port with no pixels is refused");
+}

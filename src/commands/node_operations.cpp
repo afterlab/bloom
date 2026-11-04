@@ -425,7 +425,7 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
         return OperationResult::rejected(
             OperationIssueCode::InvalidTarget,
             "Connection requires existing registered source and destination ports");
-    if (sourceKind && inputKind && !document::isAcceptedSocketConnection(*sourceKind, *inputKind))
+    if (sourceKind && inputKind && !graph.acceptsConnection(*sourceKind, destination_, registry_))
         return OperationResult::rejected(OperationIssueCode::SocketKindMismatch,
                                          "Connected socket kinds do not match");
     // Task S7: a link into an operand socket is the PARAMETER's driver binding, not an edge. One

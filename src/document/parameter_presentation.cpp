@@ -172,6 +172,7 @@ const std::vector<Entry>& table() {
 constexpr std::array kChoiceSchemas{
     std::string_view("bloom.boolean.operation"),
     std::string_view("bloom.channel-shuffle.mode"),
+    std::string_view("bloom.image-preview.display"),
     std::string_view("bloom.compare.operation"),
     std::string_view("bloom.convert.rounding-mode"),
     std::string_view("bloom.convert.radix"),

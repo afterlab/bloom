@@ -3,6 +3,7 @@
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/image_preview.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -344,6 +345,10 @@ constantMatchesSchema(const std::string_view schemaKey,
     }
     if (isChannelParameterSchemaKey(schemaKey))
         return isChannelParameterValueValid(schemaKey, constant.value);
+    if (schemaKey == kImagePreviewDisplayParameterSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value <= kMaximumImagePreviewDisplay;
+    }
     if (schemaKey == "bloom.image.asset")
         return std::holds_alternative<std::string>(constant.value);
     if (schemaKey == kImageInputColorSpaceIdParameterSchemaKey ||
@@ -431,7 +436,8 @@ constantMatchesSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
     if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
          schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter" ||
-         schemaKey == "bloom.shape.path") &&
+         schemaKey == "bloom.shape.path" ||
+         schemaKey == bloom::document::kImagePreviewDisplayParameterSchemaKey) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
     if (!isGenericallyValidSource(source)) {

@@ -349,11 +349,12 @@ class CompilePass final {
                     if (!consumesEdge(*node, *edge))
                         continue;
                     // A Viewer inspection plan needs only the inspected node's channel sets.
-                    // The Cryptomatte preview also shows the node's input image.
+                    // The Cryptomatte preview also shows the node's input image, and a pixel
+                    // output inspection (#490 Image Preview) needs every input of its node.
                     if (request_.channelInspection && nodeId == request_.channelInspection->node &&
                         request_.channelInspection->port !=
                             document::kCryptomattePreviewInspectionPort &&
-                        !isChannelSetInput(*node, *edge))
+                        !inspectsPixelOutput(*node) && !isChannelSetInput(*node, *edge))
                         continue;
                     reachableEdges.emplace(edge->id, edge);
                     pending.push_back(edge->source.nodeId);
@@ -412,6 +413,23 @@ class CompilePass final {
                 edge->destination);
         }
         return true;
+    }
+
+    // #490: an inspection with no channels of an Image or Mask output of a node other than a
+    // Cryptomatte (whose Mask inspection reads only its channel set) shows that output's own
+    // pixels, so the node is evaluated as the composition would evaluate it.
+    [[nodiscard]] bool inspectsPixelOutput(const document::NodeRecord& node) const {
+        const auto& inspection = request_.channelInspection;
+        if (!inspection || !inspection->channels.empty() || inspection->node != node.id)
+            return false;
+        const auto* definition = registry_.find(node.typeId, node.schemaVersion);
+        if (definition == nullptr || definition->lowering == runtime::NodeLoweringKind::Cryptomatte)
+            return false;
+        return std::ranges::any_of(definition->outputs, [&](const auto& output) {
+            return output.name == inspection->port &&
+                   (output.valueKind == document::SocketValueKind::Image ||
+                    output.valueKind == document::SocketValueKind::Mask);
+        });
     }
 
     [[nodiscard]] bool isChannelSetInput(const document::NodeRecord& node,
@@ -556,6 +574,7 @@ class CompilePass final {
             }
 
             const runtime::SocketValueKind* inputKind = nullptr;
+            const runtime::InputPortDefinition* fixedInput = nullptr;
             std::visit(
                 [&](const auto& input) {
                     using Input = std::decay_t<decltype(input)>;
@@ -563,6 +582,7 @@ class CompilePass final {
                         if (const auto* definition =
                                 findInput(*destinationDefinition->second, input.port)) {
                             inputKind = &definition->valueKind;
+                            fixedInput = definition;
                         }
                     } else if (destinationDefinition->second->layerSlotInput.has_value() &&
                                destinationDefinition->second->layerSlotInput->role == input.role) {
@@ -582,7 +602,9 @@ class CompilePass final {
                 addFailure(runtime::CompileDiagnosticCode::UnknownPort,
                            std::move(diagnosticSubject), "Edge destination port is unknown",
                            "The destination is not declared by its registered node definition.");
-            } else if (!document::isAcceptedSocketConnection(output->valueKind, *inputKind)) {
+            } else if (fixedInput != nullptr
+                           ? !document::isAcceptedInputConnection(output->valueKind, *fixedInput)
+                           : !document::isAcceptedSocketConnection(output->valueKind, *inputKind)) {
                 auto diagnosticSubject =
                     subject(destinationNode(edge->destination), "destination.port");
                 diagnosticSubject.edgeId = edge->id;

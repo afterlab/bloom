@@ -1,3 +1,6 @@
+#include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/image_preview.hpp>
+#include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/render_reachability.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -461,6 +464,108 @@ void testDriverSourceValidation() {
     expect(driverIssues(kOutput, "image") != 0, "a driver from a sink node is refused");
 }
 
+// #490: the Image Preview is an inspection sink. Its one input takes an Image, a Mask or a
+// ChannelSet (and nothing else), nothing connects from it, its display is a constant choice, and no
+// change to it reaches the composition output -- so it never invalidates a RAM Preview frame.
+void testImagePreviewSink() {
+    Fixture fixture;
+    constexpr auto kPreview = NodeId::fromRaw(9);
+    constexpr auto kMaskPreview = NodeId::fromRaw(10);
+    constexpr auto kChannelPreview = NodeId::fromRaw(11);
+    constexpr auto kReroutedPreview = NodeId::fromRaw(12);
+    constexpr auto kMatte = NodeId::fromRaw(13);
+    constexpr auto kImage = NodeId::fromRaw(14);
+    constexpr auto kReroute = NodeId::fromRaw(15);
+    constexpr auto kAudio = NodeId::fromRaw(16);
+    constexpr auto kDisplay = ParameterId::fromRaw(70);
+    auto& graph = fixture.graph;
+    const auto preview = [&](const NodeId id, const std::vector<ParameterBinding> bindings = {}) {
+        require(graph.addNode({id, std::string(kImagePreviewNodeType), bindings,
+                               kImagePreviewNodeSchemaVersion}),
+                "preview");
+    };
+    preview(kPreview, {{std::string(kImagePreviewDisplayParameterRole), kDisplay}});
+    preview(kMaskPreview);
+    preview(kChannelPreview);
+    preview(kReroutedPreview);
+    require(graph.addNode({kMatte, "bloom.matte-blur", {}, 1}), "matte");
+    require(graph.addNode(
+                {kImage, std::string(kImageSourceNodeType), {}, kImageSourceNodeSchemaVersion}),
+            "image");
+    require(graph.addNode({kReroute, std::string(kRerouteNodeType), {}, kValueNodeSchemaVersion}),
+            "reroute");
+    require(graph.addNode(
+                {kAudio, std::string(kAudioSourceNodeType), {}, kAudioSourceNodeSchemaVersion}),
+            "audio");
+    fixture.connect({kFirstSolid, "image"}, NodeInputRef{kPreview, "image"});
+    fixture.connect({kMatte, "mask"}, NodeInputRef{kMaskPreview, "image"});
+    fixture.connect({kImage, "channels"}, NodeInputRef{kChannelPreview, "image"});
+    fixture.connect({kSecondSolid, "image"}, NodeInputRef{kReroute, std::string(kValuePortName)});
+    fixture.connect({kReroute, std::string(kValuePortName)},
+                    NodeInputRef{kReroutedPreview, "image"});
+    expect(
+        graph.acceptsConnection(SocketValueKind::Mask, NodeInputRef{kPreview, "image"}) &&
+            graph.acceptsConnection(SocketValueKind::ChannelSet, NodeInputRef{kPreview, "image"}) &&
+            !graph.acceptsConnection(SocketValueKind::Audio, NodeInputRef{kPreview, "image"}) &&
+            !graph.acceptsConnection(SocketValueKind::Scalar, NodeInputRef{kPreview, "image"}),
+        "an Image Preview input takes the pixel kinds and only those");
+    expect(!graph.acceptsConnection(SocketValueKind::Mask, NodeInputRef{kBlur, "input"}),
+           "an ordinary Image input still refuses a Mask");
+    expect(!graph.addEdge(
+               {EdgeId::fromRaw(900), {kAudio, "audio"}, NodeInputRef{kMaskPreview, "image"}}) &&
+               !graph.addEdge({EdgeId::fromRaw(901),
+                               {kValue, std::string(kValuePortName)},
+                               NodeInputRef{kChannelPreview, "image"}}),
+           "an Audio or Scalar output does not connect to an Image Preview");
+    expect(
+        !graph.addEdge({EdgeId::fromRaw(902), {kPreview, "image"}, NodeInputRef{kBlur, "input"}}),
+        "nothing connects from an Image Preview");
+
+    expect((imagePreviewSource(graph, kPreview) ==
+            ImagePreviewSource{{kFirstSolid, "image"}, SocketValueKind::Image}) &&
+               (imagePreviewSource(graph, kMaskPreview) ==
+                ImagePreviewSource{{kMatte, "mask"}, SocketValueKind::Mask}) &&
+               (imagePreviewSource(graph, kChannelPreview) ==
+                ImagePreviewSource{{kImage, "channels"}, SocketValueKind::ChannelSet}),
+           "an Image Preview shows the output its input is connected to");
+    expect(imagePreviewSource(graph, kReroutedPreview) ==
+               ImagePreviewSource{{kSecondSolid, "image"}, SocketValueKind::Image},
+           "an Image Preview follows its input through reroutes");
+    expect(!imagePreviewSource(graph, kBlur).has_value(),
+           "only an Image Preview has a preview source");
+
+    auto composition = fixture.build();
+    require(composition.parameters().insert({kDisplay,
+                                             std::string(kImagePreviewDisplayParameterSchemaKey),
+                                             ConstantValueSource{std::int64_t{6}}}),
+            "display");
+    expect(!composition.parameters().insert({ParameterId::fromRaw(71),
+                                             std::string(kImagePreviewDisplayParameterSchemaKey),
+                                             ConstantValueSource{std::int64_t{7}}}) &&
+               !composition.parameters().insert(
+                   {ParameterId::fromRaw(72), std::string(kImagePreviewDisplayParameterSchemaKey),
+                    DriverBindingSource{kValue, std::string(kValuePortName)}}),
+           "the display is a constant in RGBA..Normalized");
+    const auto options = parameterEnumOptions(kImagePreviewDisplayParameterSchemaKey);
+    expect(options.size() == 7 && options.front().label == "RGBA" &&
+               options.back().label == "Normalized" && options.back().value == 6,
+           "the display choices are named for every surface");
+    // The fixture's unwired sources lack their parameters; the links themselves must validate.
+    const auto validation = composition.graph().validate(composition.parameters());
+    expect(std::ranges::none_of(validation.issues(),
+                                [](const ValidationIssue& issue) {
+                                    return issue.code == ValidationCode::SocketKindMismatch ||
+                                           issue.path.find("edges") != std::string::npos;
+                                }),
+           "pixel-kind links into Image Previews validate");
+
+    const auto reachability = RenderReachability::compute(composition);
+    for (const auto id : {kPreview, kMaskPreview, kChannelPreview, kReroutedPreview})
+        expect(!reachability.reaches(id), "an Image Preview is never reached by the output");
+    expect(confine(composition, kPreview).kind == RenderConfinementKind::Unaffected,
+           "an Image Preview edit leaves every rendered frame unaffected");
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--benchmark") == 0)
         return runBenchmark();
@@ -473,6 +578,7 @@ int main(int argc, char** argv) {
         testNestedDependencies();
         testNormalizationAndWork();
         testDriverSourceValidation();
+        testImagePreviewSink();
     } catch (const std::exception& error) {
         std::cerr << "fixture failure: " << error.what() << '\n';
         return 1;

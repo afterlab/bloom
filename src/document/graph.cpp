@@ -291,7 +291,7 @@ bool CanonicalGraph::addEdge(EdgeRecord edge, const NodeDefinitionRegistry& regi
     // Task S7: equal kinds, or one of the whitelisted promotions. The ONE predicate every connect
     // path asks (node_definition_registry.hpp), so this, validate() below, ConnectPorts and the
     // compiler's edge check cannot disagree about which links exist.
-    if (sourceKind && targetKind && !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
+    if (sourceKind && targetKind && !acceptsConnection(*sourceKind, edge.destination, registry)) {
         return false;
     }
     if (!edge.id.isValid() || !edge.source.nodeId.isValid() ||
@@ -649,7 +649,7 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             result.add(ValidationCode::InvalidValue, path + ".source",
                        "This node is a sink and declares no output to connect from");
         } else if (sourceKind && targetKind &&
-                   !isAcceptedSocketConnection(*sourceKind, *targetKind)) {
+                   !acceptsConnection(*sourceKind, edge.destination, registry)) {
             result.add(ValidationCode::SocketKindMismatch, path,
                        "Connected socket kinds do not match");
         }
@@ -904,6 +904,21 @@ CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistr
             return definition->audioLayerSlotInput->valueKind;
     }
     return std::nullopt;
+}
+
+bool CanonicalGraph::acceptsConnection(const SocketValueKind source, const InputPortRef& input,
+                                       const NodeDefinitionRegistry& registry) const {
+    const auto target = inputKind(input, registry);
+    if (!target || isAcceptedSocketConnection(source, *target))
+        return true;
+    const auto* fixed = std::get_if<NodeInputRef>(&input);
+    const auto* node = fixed ? findNode(fixed->nodeId) : nullptr;
+    const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
+    if (definition == nullptr)
+        return false;
+    const auto port =
+        std::ranges::find(definition->inputs, fixed->port, &InputPortDefinition::name);
+    return port != definition->inputs.end() && isAcceptedInputConnection(source, *port);
 }
 
 } // namespace bloom::document

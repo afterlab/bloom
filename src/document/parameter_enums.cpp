@@ -1,6 +1,7 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/image_preview.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/shape.hpp>
@@ -143,6 +144,8 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return sequential({"Left", "Center", "Right"});
     if (schemaKey == kTextOverflowParameterSchemaKey)
         return sequential({"Clip", "Grow"});
+    if (schemaKey == kImagePreviewDisplayParameterSchemaKey)
+        return sequential({"RGBA", "RGB", "Alpha", "Red", "Green", "Blue", "Normalized"});
     if (schemaKey == "bloom.channel-shuffle.mode")
         return {{"Color", kChannelShuffleColourMode}, {"Raw", kChannelShuffleRawMode}};
     if (schemaKey == kScalarOperationParameterSchemaKey) {

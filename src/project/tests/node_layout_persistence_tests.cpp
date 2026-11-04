@@ -169,8 +169,10 @@ void blurNodeReopen() {
     auto draft = owned.draft(before);
     auto* composition = draft.project().findComposition(initial.initialCompositionId);
     std::vector<document::NodeId> nodes;
-    for (const auto* type : {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
-                             "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"}) {
+    // #490: the Image Preview's display (1, RGB) reopens with the node.
+    for (const auto* type :
+         {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
+          "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");

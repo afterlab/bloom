@@ -16,6 +16,7 @@ target_sources(
         layer_masks.cpp
         layer_source.cpp
         channel_nodes.cpp
+        image_preview.cpp
         layer_stack.cpp
         new_project.cpp
         parameter.cpp
@@ -39,6 +40,7 @@ target_sources(
             include/bloom/document/keyframe_handles.hpp
             include/bloom/document/layer_source.hpp
             include/bloom/document/channel_nodes.hpp
+            include/bloom/document/image_preview.hpp
             include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp
             include/bloom/document/document.hpp

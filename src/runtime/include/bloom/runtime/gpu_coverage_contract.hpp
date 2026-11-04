@@ -443,6 +443,9 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::Channel:
     case NodeLoweringKind::Cryptomatte:
         return true;
+    // #490: an inspection sink lowers to no operation; its preview is its upstream operations
+    // through the Viewer's GPU preview route.
+    case NodeLoweringKind::ImagePreview:
     case NodeLoweringKind::AudioSource:
     case NodeLoweringKind::Unsupported:
     case NodeLoweringKind::ValueConstant:
@@ -504,6 +507,8 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
         return "scope.audio";
     case NodeLoweringKind::Unsupported:
         return "scope.unsupported";
+    case NodeLoweringKind::ImagePreview:
+        return "scope.inspection";
     case NodeLoweringKind::ValueConstant:
     case NodeLoweringKind::ValueTime:
     case NodeLoweringKind::ValueScalarMath:

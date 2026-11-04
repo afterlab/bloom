@@ -232,7 +232,13 @@ std::string nodeTypeJson(const document::NodeDefinition& definition, const bool 
         const auto& port = definition.inputs[index];
         text += (index == 0 ? "" : ",") + std::string("{\"port\":") + detail::jsonQuote(port.name) +
                 ",\"kind\":" + detail::jsonQuote(socketKindName(port.valueKind)) +
-                ",\"required\":" + (port.required ? "true" : "false") + "}";
+                ",\"required\":" + (port.required ? "true" : "false");
+        // #490: an inspection input (the Image Preview's) also takes these kinds.
+        if (port.acceptsPixelKinds)
+            text += ",\"alsoAccepts\":[" +
+                    detail::jsonQuote(socketKindName(document::SocketValueKind::Mask)) + "," +
+                    detail::jsonQuote(socketKindName(document::SocketValueKind::ChannelSet)) + "]";
+        text += "}";
     }
     text += "],\"outputs\":[";
     for (std::size_t index = 0; index < definition.outputs.size(); ++index) {
@@ -287,7 +293,8 @@ std::string nodeReferenceMarkdown() {
         "either the stored value or its label (case-insensitive). `query {kind:\"node-types\", "
         "nodeType}` returns the same data as JSON.\n\n"
         "Port kinds connect when they are equal, or when the source promotes: integer to "
-        "scalar, boolean to integer or scalar, scalar to vector2 or vector3.\n\n"
+        "scalar, boolean to integer or scalar, scalar to vector2 or vector3. An Image "
+        "Preview's input also takes a mask or a channel set.\n\n"
         "## Blend modes\n\n";
     for (const auto& choice : parameterChoices(document::kBlendModeParameterSchemaKey))
         text += "- " + std::to_string(choice.value) + " " + choice.label + "\n";
@@ -313,6 +320,11 @@ std::string nodeReferenceMarkdown() {
         };
         ports("Inputs", definition->inputs);
         ports("Outputs", definition->outputs);
+        if (definition->lowering == document::NodeLoweringKind::ImagePreview)
+            text += "An inspection sink: its input (an image, a mask or a channel set) is drawn on "
+                    "the node and, optionally, behind the node editor's graph. It has no output "
+                    "and never changes the composition's output, RAM Preview, exports or "
+                    "renders.\n\n";
         if (definition->layerSlotInput)
             text += "Layer stack slots: role `" + definition->layerSlotInput->role + "`" +
                     (definition->audioLayerSlotInput

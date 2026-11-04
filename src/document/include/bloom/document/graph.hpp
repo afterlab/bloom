@@ -231,6 +231,12 @@ class CanonicalGraph final {
     [[nodiscard]] std::optional<SocketValueKind>
     inputKind(const InputPortRef& input,
               const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
+    // Whether a `source` kind may connect into `input`: isAcceptedSocketConnection() against
+    // inputKind(), or -- #490 -- a pixel kind into an inspection input (acceptsPixelKinds). True
+    // when the input's kind is unknown, which is the caller's (or the compiler's) own diagnostic.
+    [[nodiscard]] bool
+    acceptsConnection(SocketValueKind source, const InputPortRef& input,
+                      const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const;
     // The kind a reroute node carries: the kind of whatever feeds it, through a chain of reroutes,
     // or nothing when it is unconnected (task FIX1, item I). Both kind accessors above answer with
     // this for a reroute, so every connect-time and validation-time check asks one question.

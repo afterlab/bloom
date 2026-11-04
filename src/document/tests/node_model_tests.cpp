@@ -263,7 +263,7 @@ int main() {
            "all built-in nodes register successfully at application startup");
     for (const auto* type :
          {"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
-          "bloom.matte-dilate", "bloom.luma-key", "bloom.video-source"})
+          "bloom.matte-dilate", "bloom.luma-key", "bloom.video-source", "bloom.image-preview"})
         expect(completeRegistry.find(type, 1) != nullptr,
                "blur registration does not truncate the built-in registry");
     const auto* shape = builtInNodeDefinitions().find(kShapeSourceNodeType, 1);
