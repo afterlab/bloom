@@ -678,8 +678,11 @@ void testBlendingRowEditsThroughOneCommandWithUndo(Expectations& expectations) {
     if (blending == nullptr) {
         return;
     }
+    int modeRows = 0;
+    for (int index = 0; index < blending->count(); ++index)
+        modeRows += blending->itemData(index).isValid() ? 1 : 0;
     expectations.expect(
-        blending->isEnabled() && blending->count() == static_cast<int>(core::kBlendModes.size()) &&
+        blending->isEnabled() && modeRows == static_cast<int>(core::kBlendModes.size()) &&
             blending->currentText() == ui::blendModeDisplayName(core::kDefaultBlendMode),
         "a new layer's Blending row is enabled, offers every mode, and reads Normal");
 

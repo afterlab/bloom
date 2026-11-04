@@ -244,7 +244,11 @@ void testBlendingDropdownOnALayerCardCommits() {
     expect(dropdown != nullptr, "the layer card hosts a blending dropdown");
     if (dropdown == nullptr)
         return;
-    expect(dropdown->count() == static_cast<int>(core::kBlendModes.size()) &&
+    // The separators between the mode groups are rows with no data; every other row is a mode.
+    int modeRows = 0;
+    for (int index = 0; index < dropdown->count(); ++index)
+        modeRows += dropdown->itemData(index).isValid() ? 1 : 0;
+    expect(modeRows == static_cast<int>(core::kBlendModes.size()) &&
                dropdown->currentText() == blendModeDisplayName(core::kDefaultBlendMode),
            "it offers the same vocabulary the other two surfaces do, starting at Normal");
 

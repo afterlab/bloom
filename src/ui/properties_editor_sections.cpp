@@ -20,8 +20,8 @@
 #include "properties_anchor_grid.hpp"
 #include "properties_sections.hpp"
 #include "properties_text_edit.hpp"
-#include "value_presentation.hpp"
 #include "properties_value_edits.hpp"
+#include "value_presentation.hpp"
 
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -159,10 +159,7 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
     blendMode_ = new kit::KDropdown(body);
     blendMode_->setObjectName("blendModeEditor");
     blendMode_->setAccessibleName(tr("Blending"));
-    for (const auto mode : core::kBlendModes) {
-        blendMode_->addItem(blendModeDisplayName(mode),
-                            QVariant::fromValue(core::blendModeStoredValue(mode)));
-    }
+    addBlendModeItems(*blendMode_);
     addRow(rows, body, makeRowLabel(tr("Blending Mode"), body), nullptr, blendMode_);
 
     opacity_ = properties::makeParameterCell(QStringLiteral("opacityEditor"), tr("Opacity"), {},
@@ -346,8 +343,8 @@ void PropertiesEditor::buildTextSection(QVBoxLayout* layout) {
     auto* rows = section->bodyLayout();
 
     // The kit text field, bound by the one text-parameter editor (properties::bindTextEdit): typing
-    // previews live, and Return, Escape, Tab or focus loss commit ONE Edit Text transaction -- never
-    // one per keystroke.
+    // previews live, and Return, Escape, Tab or focus loss commit ONE Edit Text transaction --
+    // never one per keystroke.
     textContent_ = new kit::KLineEdit(body);
     textContent_->setObjectName("textContentEditor");
     textContent_->setAccessibleName(tr("Text content"));
@@ -665,8 +662,7 @@ void PropertiesEditor::bindCommits() {
         if (rebuilding_ || index < 0) {
             return;
         }
-        const auto mode =
-            core::blendModeFromStoredValue(blendMode_->itemData(index).value<std::int64_t>());
+        const auto mode = blendModeFromDropdownIndex(*blendMode_, index);
         if (mode.has_value()) {
             (void)session_.setSelectedBlendMode(*mode);
         }

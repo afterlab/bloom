@@ -438,9 +438,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
             });
     }
     blending_->setObjectName("timelinePropertyBlending");
-    for (auto mode : core::kBlendModes)
-        blending_->addItem(blendModeDisplayName(mode),
-                           QVariant::fromValue(core::blendModeStoredValue(mode)));
+    addBlendModeItems(*blending_);
 
     alignment_->setObjectName("timelinePropertyAlignment");
     alignment_->setAccessibleName(tr("Alignment"));
@@ -495,8 +493,7 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     connect(blending_, &kit::KDropdown::activated, this, [this](int index) {
         if (binding_ || index < 0)
             return;
-        const auto mode =
-            core::blendModeFromStoredValue(blending_->itemData(index).value<std::int64_t>());
+        const auto mode = blendModeFromDropdownIndex(*blending_, index);
         const auto layer = entry_.layerId;
         session_.selectLayer(layer);
         if (mode)
@@ -720,8 +717,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         if (role == document::kBlendModeParameterRole) {
             const auto mode = session_.blendModeForLayer(entry.layerId);
             if (mode)
-                blending_->setCurrentIndex(static_cast<int>(
-                    std::ranges::find(core::kBlendModes, *mode) - core::kBlendModes.begin()));
+                blending_->setCurrentIndex(blendModeDropdownIndex(*blending_, *mode));
             blending_->show();
         }
         if (color) {

@@ -6,6 +6,7 @@
 #include <bloom/ui/timeline_editor.hpp>
 
 #include <bloom/ui/kit/color.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
@@ -122,6 +123,39 @@ QString blendModeDisplayName(const core::BlendMode mode) {
         return "Normal";
     }();
     return QCoreApplication::translate("bloom::ui::BlendMode", name);
+}
+
+void addBlendModeItems(kit::KDropdown& dropdown) {
+    for (std::size_t index = 0; index < core::kBlendModes.size(); ++index) {
+        const auto mode = core::kBlendModes[index];
+        if (index > 0 &&
+            core::blendModeGroup(core::kBlendModes[index - 1]) != core::blendModeGroup(mode)) {
+            dropdown.addSeparator();
+        }
+        dropdown.addItem(blendModeDisplayName(mode),
+                         QVariant::fromValue(core::blendModeStoredValue(mode)));
+    }
+}
+
+std::optional<core::BlendMode> blendModeFromDropdownIndex(const kit::KDropdown& dropdown,
+                                                          const int index) {
+    if (index < 0 || index >= dropdown.count()) {
+        return std::nullopt;
+    }
+    const auto data = dropdown.itemData(index);
+    if (!data.isValid()) {
+        return std::nullopt;
+    }
+    return core::blendModeFromStoredValue(data.value<std::int64_t>());
+}
+
+int blendModeDropdownIndex(const kit::KDropdown& dropdown, const core::BlendMode mode) {
+    for (int index = 0; index < dropdown.count(); ++index) {
+        if (blendModeFromDropdownIndex(dropdown, index) == mode) {
+            return index;
+        }
+    }
+    return -1;
 }
 
 QString exactColorText(const core::Color4d color) {

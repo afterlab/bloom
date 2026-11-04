@@ -18,6 +18,10 @@ namespace bloom::document {
 struct ParameterRecord;
 } // namespace bloom::document
 
+namespace bloom::ui::kit {
+class KDropdown;
+} // namespace bloom::ui::kit
+
 namespace bloom::ui {
 
 class CompositionSession;
@@ -55,6 +59,20 @@ class CompositionSession;
 // offering the same vocabulary must offer the same words, and core::kBlendModes already fixes the
 // order they appear in.
 [[nodiscard]] QString blendModeDisplayName(core::BlendMode mode);
+
+// Fills a blend-mode dropdown: every mode in core::kBlendModes order, named by
+// blendModeDisplayName(), with the mode's stored integer as item data and a hairline separator
+// between consecutive core::BlendModeGroup runs (Normal | blends | arithmetic | extremes | mattes).
+// A separator occupies a row, so a caller maps rows and modes only through the item data --
+// blendModeDropdownIndex() and blendModeFromDropdownIndex() -- never by position in kBlendModes.
+void addBlendModeItems(kit::KDropdown& dropdown);
+
+// The row of a dropdown filled by addBlendModeItems() that shows `mode`, or -1.
+[[nodiscard]] int blendModeDropdownIndex(const kit::KDropdown& dropdown, core::BlendMode mode);
+
+// The mode a row of such a dropdown names; a separator or an out-of-range row names none.
+[[nodiscard]] std::optional<core::BlendMode>
+blendModeFromDropdownIndex(const kit::KDropdown& dropdown, int index);
 
 [[nodiscard]] bool addDefaultSolidLayer(CompositionSession& session);
 [[nodiscard]] bool addDefaultTextLayer(CompositionSession& session);

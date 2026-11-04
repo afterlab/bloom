@@ -772,8 +772,7 @@ class NodeItem final : public QGraphicsObject {
         if (refreshing_ || blendMode_ == nullptr || index < 0 || session_ == nullptr) {
             return;
         }
-        const auto mode =
-            core::blendModeFromStoredValue(blendMode_->itemData(index).value<std::int64_t>());
+        const auto mode = blendModeFromDropdownIndex(*blendMode_, index);
         // By LAYER, never through the selection: setLayerBlendMode() is the primitive the timeline
         // row already uses for exactly this reason, and the card knows which layer it draws.
         const auto layerId = session_->layerForNode(id_);
@@ -1117,10 +1116,7 @@ class NodeItem final : public QGraphicsObject {
                 blendMode_->setObjectName(QStringLiteral("nodeBlendModeDropdown"));
                 blendMode_->setAccessibleName(tr("Blending"));
                 blendMode_->setControlSize(kit::KDropdown::ControlSize::Dense);
-                for (const auto mode : core::kBlendModes) {
-                    blendMode_->addItem(blendModeDisplayName(mode),
-                                        QVariant::fromValue(core::blendModeStoredValue(mode)));
-                }
+                addBlendModeItems(*blendMode_);
                 blendMode_->resize(blendMode_->sizeHint());
                 prepareField(blendMode_);
                 registerControlRole(blendMode_, document::kBlendModeParameterRole);
@@ -1901,17 +1897,8 @@ class NodeItem final : public QGraphicsObject {
             blendMode_->setEnabled(mode.has_value());
             blendMode_->setToolTip(describe(parameter, tr("Blending is not exposed by this node")));
             const QSignalBlocker blocker(blendMode_);
-            int row = 0;
-            if (mode.has_value()) {
-                const auto stored = core::blendModeStoredValue(*mode);
-                for (int index = 0; index < blendMode_->count(); ++index) {
-                    if (blendMode_->itemData(index).value<std::int64_t>() == stored) {
-                        row = index;
-                        break;
-                    }
-                }
-            }
-            blendMode_->setCurrentIndex(row);
+            const int row = mode.has_value() ? blendModeDropdownIndex(*blendMode_, *mode) : -1;
+            blendMode_->setCurrentIndex(row >= 0 ? row : 0);
         }
 
         if (textContent_ != nullptr) {

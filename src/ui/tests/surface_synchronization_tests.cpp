@@ -502,7 +502,11 @@ int run(int argc, char** argv) {
     // --------------------------------------------------------------
     if (auto* dropdown = surfaces.blendingDropdown(0)) {
         click(dropdown);
-        pickPopupRow(*dropdown, dropdown->currentIndex() == 0 ? 1 : 0);
+        // Picked by mode: the separators between the mode groups take rows too.
+        const auto normalRow = ui::blendModeDropdownIndex(*dropdown, core::BlendMode::Normal);
+        pickPopupRow(*dropdown, dropdown->currentIndex() == normalRow
+                                    ? ui::blendModeDropdownIndex(*dropdown, core::BlendMode::Add)
+                                    : normalRow);
         agree(surfaces, "after a timeline row edit");
     }
 

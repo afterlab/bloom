@@ -1144,19 +1144,40 @@ void testBlendingAndParentAreLiveKDropdowns(Expectations& expectations) {
         return;
     }
 
-    expectations.expect(blending->isEnabled() &&
-                            blending->count() == static_cast<int>(bloom::core::kBlendModes.size()),
-                        "Blending is enabled and offers every implemented blend mode");
-    bool vocabularyInOrder = blending->count() == static_cast<int>(core::kBlendModes.size());
-    for (std::size_t index = 0; index < core::kBlendModes.size() && vocabularyInOrder; ++index) {
-        vocabularyInOrder = blending->itemText(static_cast<int>(index)) ==
-                                ui::blendModeDisplayName(core::kBlendModes[index]) &&
-                            blending->itemData(static_cast<int>(index)).value<std::int64_t>() ==
-                                core::blendModeStoredValue(core::kBlendModes[index]);
+    // A separator row (no data) sits exactly between two consecutive core::BlendModeGroup runs;
+    // every other row is the next mode in core::kBlendModes order.
+    bool vocabularyInOrder = true;
+    bool separatorsAtGroups = true;
+    std::size_t next = 0;
+    bool lastWasSeparator = false;
+    for (int row = 0; row < blending->count(); ++row) {
+        if (!blending->itemData(row).isValid()) {
+            separatorsAtGroups = separatorsAtGroups && next > 0 &&
+                                 next < core::kBlendModes.size() && !lastWasSeparator &&
+                                 core::blendModeGroup(core::kBlendModes[next - 1]) !=
+                                     core::blendModeGroup(core::kBlendModes[next]);
+            lastWasSeparator = true;
+            continue;
+        }
+        if (next > 0 && !lastWasSeparator)
+            separatorsAtGroups =
+                separatorsAtGroups && core::blendModeGroup(core::kBlendModes[next - 1]) ==
+                                          core::blendModeGroup(core::kBlendModes[next]);
+        vocabularyInOrder =
+            vocabularyInOrder && next < core::kBlendModes.size() &&
+            blending->itemText(row) == ui::blendModeDisplayName(core::kBlendModes[next]) &&
+            blending->itemData(row).value<std::int64_t>() ==
+                core::blendModeStoredValue(core::kBlendModes[next]);
+        ++next;
+        lastWasSeparator = false;
     }
+    expectations.expect(blending->isEnabled() && next == core::kBlendModes.size(),
+                        "Blending is enabled and offers every implemented blend mode");
     expectations.expect(vocabularyInOrder,
                         "each row carries its mode's shared display name and stored value, in "
                         "core::kBlendModes order");
+    expectations.expect(separatorsAtGroups,
+                        "a hairline separates each blend-mode group and nothing else");
     expectations.expect(blending->currentText() ==
                             ui::blendModeDisplayName(core::kDefaultBlendMode),
                         "a newly created layer's row starts at its authored Normal");

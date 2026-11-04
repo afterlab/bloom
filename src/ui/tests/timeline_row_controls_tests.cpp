@@ -74,7 +74,11 @@ int run(int argc, char** argv) {
         return failures == 0 ? 0 : 1;
     }
 
-    const int target = dropdown->currentIndex() == 0 ? 1 : 0;
+    // Rows are found by mode, never by position: separators between the mode groups take rows too.
+    const auto normalRow = blendModeDropdownIndex(*dropdown, core::BlendMode::Normal);
+    const int target = dropdown->currentIndex() == normalRow
+                           ? blendModeDropdownIndex(*dropdown, core::BlendMode::Add)
+                           : normalRow;
     const auto expected =
         core::blendModeFromStoredValue(dropdown->itemData(target).value<std::int64_t>());
     pickPopupRow(*dropdown, target);
@@ -163,7 +167,10 @@ int run(int argc, char** argv) {
                 return 1;
             const auto scrolledBefore = surfaces.session.blendModeForLayer(*scrolledLayer);
             click(scrolled);
-            const int pick = scrolled->currentIndex() == 0 ? 1 : 0;
+            const int pick = scrolled->currentIndex() ==
+                                     blendModeDropdownIndex(*scrolled, core::BlendMode::Normal)
+                                 ? blendModeDropdownIndex(*scrolled, core::BlendMode::Add)
+                                 : blendModeDropdownIndex(*scrolled, core::BlendMode::Normal);
             const auto picked =
                 core::blendModeFromStoredValue(scrolled->itemData(pick).value<std::int64_t>());
             pickPopupRow(*scrolled, pick);

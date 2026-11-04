@@ -286,10 +286,7 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
     dropdown->setObjectName(QStringLiteral("layerBlendingDropdown"));
     dropdown->setAccessibleName(TimelineEditor::tr("Blending"));
     dropdown->setControlSize(kit::KDropdown::ControlSize::Dense);
-    for (const auto mode : core::kBlendModes) {
-        dropdown->addItem(blendModeDisplayName(mode),
-                          QVariant::fromValue(core::blendModeStoredValue(mode)));
-    }
+    addBlendModeItems(*dropdown);
     return dropdown;
 }
 
@@ -297,13 +294,7 @@ kit::KDropdown* makeBlendingDropdown(QWidget* parent) {
 // fill order.
 [[nodiscard]] int blendingDropdownIndex(const kit::KDropdown& dropdown,
                                         const core::BlendMode mode) {
-    const auto stored = core::blendModeStoredValue(mode);
-    for (int index = 0; index < dropdown.count(); ++index) {
-        if (dropdown.itemData(index).value<std::int64_t>() == stored) {
-            return index;
-        }
-    }
-    return -1;
+    return blendModeDropdownIndex(dropdown, mode);
 }
 
 // The hairline that closes every row, in both halves of the grid: rows are FLAT (no striping at all
@@ -421,8 +412,7 @@ class TimelineLayerRow final : public kit::KRow {
             if (binding_ || !layerId_.has_value() || index < 0) {
                 return;
             }
-            const auto mode =
-                core::blendModeFromStoredValue(blending_->itemData(index).value<std::int64_t>());
+            const auto mode = blendModeFromDropdownIndex(*blending_, index);
             if (!mode.has_value()) {
                 return;
             }
@@ -1317,7 +1307,12 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
     connect(menu->addAction(tr("Rename")), &QAction::triggered, this,
             [this, layerId] { renameLayer(layerId); });
     auto* blending = menu->addMenu(tr("Blending"));
+    std::optional<core::BlendModeGroup> previousGroup;
     for (const auto mode : core::kBlendModes) {
+        // The same groups the Blending dropdowns separate.
+        if (previousGroup.has_value() && *previousGroup != core::blendModeGroup(mode))
+            blending->addSeparator();
+        previousGroup = core::blendModeGroup(mode);
         auto* action = blending->addAction(blendModeDisplayName(mode));
         action->setCheckable(true);
         action->setChecked(session_.blendModeForLayer(layerId) == mode);

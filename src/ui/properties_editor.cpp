@@ -444,12 +444,10 @@ void PropertiesEditor::configureMergeInputs() {
         rowLayout->addWidget(name, 1);
         auto* blend = new kit::KDropdown(row);
         blend->setObjectName(QStringLiteral("mergeInputBlendMode"));
-        for (const auto mode : core::kBlendModes)
-            blend->addItem(blendModeDisplayName(mode));
+        addBlendModeItems(*blend);
         const auto mode =
             session_.blendModeForLayer(entry.layerId).value_or(core::BlendMode::Normal);
-        blend->setCurrentIndex(static_cast<int>(
-            std::distance(core::kBlendModes.begin(), std::ranges::find(core::kBlendModes, mode))));
+        blend->setCurrentIndex(blendModeDropdownIndex(*blend, mode));
         const auto* boundary = composition->graph().findLayer(entry.layerId);
         blend->setEnabled(boundary && !boundary->locked);
         for (const auto& binding : source->parameters)
@@ -458,10 +456,9 @@ void PropertiesEditor::configureMergeInputs() {
                                                       binding.parameterId.value())));
         rowLayout->addWidget(blend);
         const auto layerId = entry.layerId;
-        connect(blend, &kit::KDropdown::activated, row, [this, layerId](int index) {
-            if (index >= 0 && static_cast<std::size_t>(index) < core::kBlendModes.size())
-                (void)session_.setLayerBlendMode(
-                    layerId, core::kBlendModes[static_cast<std::size_t>(index)]);
+        connect(blend, &kit::KDropdown::activated, row, [this, layerId, blend](int index) {
+            if (const auto chosen = blendModeFromDropdownIndex(*blend, index))
+                (void)session_.setLayerBlendMode(layerId, *chosen);
         });
         auto* opacity = new kit::KValueField(row);
         opacity->setObjectName(QStringLiteral("mergeInputOpacity"));
@@ -588,17 +585,8 @@ void PropertiesEditor::configureBlendMode() {
     const auto mode = layerId.has_value() ? session_.blendModeForLayer(*layerId) : std::nullopt;
     blendMode_->setEnabled(mode.has_value());
     const QSignalBlocker blocker(blendMode_);
-    int row = 0;
-    if (mode.has_value()) {
-        const auto stored = core::blendModeStoredValue(*mode);
-        for (int index = 0; index < blendMode_->count(); ++index) {
-            if (blendMode_->itemData(index).value<std::int64_t>() == stored) {
-                row = index;
-                break;
-            }
-        }
-    }
-    blendMode_->setCurrentIndex(row);
+    const int row = mode.has_value() ? blendModeDropdownIndex(*blendMode_, *mode) : -1;
+    blendMode_->setCurrentIndex(row >= 0 ? row : 0);
     blendMode_->setToolTip(mode.has_value()
                                ? tr("How this layer combines with the layers beneath it")
                                : tr("Blending is not exposed by this selection"));
