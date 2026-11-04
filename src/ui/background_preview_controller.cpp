@@ -197,8 +197,9 @@ void BackgroundPreviewController::fillNextFrame() {
     // flight have not all claimed their phases yet, so growing from a partly filled set would
     // count the same room twice. Admission makes a frame that does not fit wait.
     if (widthProvider_ && inFlight_.empty()) {
-        readAheadWidth_ = std::max<std::size_t>(
-            1, widthProvider_(static_cast<std::uint64_t>(format.width()) * format.height()));
+        readAheadWidth_ = std::clamp<std::size_t>(
+            widthProvider_(static_cast<std::uint64_t>(format.width()) * format.height()), 1,
+            kMaximumReadAheadFrames);
     }
     const std::size_t width = widthProvider_ ? readAheadWidth_ : 1;
     if (inFlight_.size() >= width) {

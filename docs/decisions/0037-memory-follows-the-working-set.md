@@ -71,7 +71,8 @@ What changed:
   ceiling (a quarter of the assigned operation budget for one native image), the per-request
   preview allowance (a quarter of the assigned preview budget for one request's live GPU set), the
   aggregate GPU request-owned reservation default, and the preview frames-in-flight sizing (a
-  quarter of free capacity, at most eight frames). The headroom preference's default share and the
+  quarter of free capacity, at most one frame per hardware thread for a RAM fill and eight for
+  playback read-ahead; see the frames-in-flight amendment below). The headroom preference's default share and the
   pressure hysteresis margin (an eighth of the headroom) are the headroom itself, not a fraction of
   physical memory.
 
@@ -94,6 +95,18 @@ evaluator's operation cache and shared with its decoded-video cache:
 - A composition with no request in flight keeps its window until a request for another
   composition begins; then that window is dropped (its entries are already inside it), so only
   compositions in use keep one (#462).
+
+### Frames in flight follow the hardware threads (amendment, 2026-11-04)
+
+The preview frames-in-flight ceiling of eight frames is removed (#477). Each frame decodes and
+prepares its footage serially on one CPU worker, so a fill runs at frames in flight divided by that
+per-frame time: with eight frames a 2160p PNG16 fill kept 8.2 of 16 hardware threads busy while the
+GPU owner thread was busy 46% of the time and idle the rest. A RAM preview fill now keeps at most
+one frame per hardware thread in flight, still sized to a quarter of the free capacity at the start
+of a run (at least one frame when one fits). Playback read-ahead keeps at most eight frames
+(`BackgroundPreviewController::kMaximumReadAheadFrames`): its frames prepare concurrently, and with
+sixteen the frames nearest the playhead landed later, so cold playback ran slower and dropped more
+frames than with eight. The playback preroll window stays at most eight frames.
 
 ## Audit of pixel-holding stores
 

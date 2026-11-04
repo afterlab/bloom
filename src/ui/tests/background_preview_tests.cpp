@@ -627,6 +627,49 @@ void testReadAheadKeepsCapacitySizedFramesInFlight(Expectations& expectations) {
     finishFixture(fixture, expectations);
 }
 
+// #477: read-ahead stays within its own maximum even when capacity would hold many more frames,
+// so the frames nearest the playhead are not slowed by a wide concurrent window.
+void testReadAheadStaysWithinItsMaximum(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("Read ahead maximum", time(12, 25)));
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }), "initial ready");
+    fixture.frameCache->clear();
+    std::mutex mutex;
+    std::condition_variable released;
+    bool open = false;
+    auto prepare = [&](const document::Snapshot& snapshot,
+                       const runtime::PreviewRequestIdentity& identity, std::size_t limit,
+                       const std::vector<runtime::SnapshotParameterOverride>& override,
+                       runtime::TaskContext& context) {
+        {
+            std::unique_lock lock(mutex);
+            released.wait_for(lock, std::chrono::seconds(5), [&] { return open; });
+        }
+        return fixture.pipelineFixture.pipeline(snapshot, identity, limit, override, context);
+    };
+    ui::BackgroundPreviewController background(fixture.session, fixture.controller,
+                                               fixture.scheduler, fixture.bridge, prepare);
+    background.setIdleFill(true);
+    background.setReadAheadWidthProvider([](std::uint64_t) { return std::size_t{64}; });
+    fixture.controller.setPlaybackActive(true);
+    background.fillNextFrame();
+    constexpr auto maximum = ui::BackgroundPreviewController::kMaximumReadAheadFrames;
+    expectations.expect(waitUntil([&] { return background.inFlightCount() == maximum; }),
+                        "read-ahead fills its maximum window");
+    background.fillNextFrame();
+    expectations.expect(background.inFlightCount() == maximum,
+                        "read-ahead never exceeds its maximum, whatever capacity allows");
+    {
+        std::lock_guard lock(mutex);
+        open = true;
+    }
+    released.notify_all();
+    expectations.expect(waitUntil([&] { return fixture.frameCache->size() == 12; }),
+                        "every frame still lands in the cache");
+    background.beginShutdown();
+    fixture.controller.setPlaybackActive(false);
+    finishFixture(fixture, expectations);
+}
+
 // LAYOUT-2: a layout-only edit does not restart the background pass, and it keeps filling under
 // the retained evaluation revision, so the key it fills and the snapshot it captured cannot
 // disagree. (Deliberate foreground priority still yields through the existing event filter.)
@@ -864,6 +907,7 @@ int main(int argc, char** argv) {
         testVisibleAdmissionAndSupersession(expectations);
         testBackgroundFillsAheadWhilePlaying(expectations);
         testReadAheadKeepsCapacitySizedFramesInFlight(expectations);
+        testReadAheadStaysWithinItsMaximum(expectations);
         testWorkAreaBoundsBackground(expectations);
         testBackgroundFillHonoursRegionOfInterest(expectations);
         testOutwardOrderBudgetAndRestart(expectations);

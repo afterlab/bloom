@@ -782,7 +782,7 @@ void hostClaimsFollowRetainedSources() {
 } // namespace
 
 // Preview width is bounded by concurrency and by a quarter of the free capacity, never by how
-// much memory happens to be free: a nearly empty 64 GB machine gets at most eight frames.
+// much memory happens to be free: a nearly empty 64 GB machine gets one frame per hardware thread.
 void previewWidthIsBounded() {
     const std::uint64_t pixels = 2048ULL * 858;
     const std::uint64_t perFrameHost = pixels * (8 + 3 * 16) + 64 * kMiB;
@@ -791,8 +791,10 @@ void previewWidthIsBounded() {
     deliverHost(policy, 60 * kGiB, 1);
     reportDevice(policy, 1, 22 * kGiB);
     const auto ample = previewFramesThatFit(policy, pixels, 512 * kMiB);
-    require(ample >= 1 && ample <= kMaximumPreviewFramesInFlight,
-            "an ample machine still runs at most eight preview frames in flight");
+    const auto threads = std::max(1U, std::thread::hardware_concurrency());
+    // A quarter of 60 GiB holds about ninety of these frames, so up to that many threads decide.
+    require(ample <= threads && ample >= std::min<std::size_t>(threads, 64),
+            "an ample machine runs one preview frame in flight per hardware thread");
     deliverHost(policy, 13 * perFrameHost, 2);
     require(previewFramesThatFit(policy, pixels, 512 * kMiB) <= 3,
             "a run sizes itself to a quarter of the free host capacity");

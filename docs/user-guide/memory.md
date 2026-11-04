@@ -94,8 +94,8 @@ frame needs. It is refused only when one frame cannot fit within the computer's 
 container's) memory minus the headroom, and the refusal names the measured numbers.
 
 Export, rendering and RAM Preview stream: a run holds only the frames in flight (at most four for an
-export, eight for RAM Preview and playback, and never more than a quarter of the free memory at its
-start) plus caches within the headroom. Every finished frame is encoded or written and its memory
+export, one per processor thread for RAM Preview, eight for playback, and never more than a quarter
+of the free memory at its start) plus caches within the headroom. Every finished frame is encoded or written and its memory
 released, so the length of an export is never limited by memory. An export also keeps the caches
 from filling with frames it uses once: during an export a decoded frame, a converted upload or a
 result is kept only when the export asks for it a second time (a still image, a static layer, a held

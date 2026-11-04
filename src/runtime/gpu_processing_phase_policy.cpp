@@ -666,9 +666,11 @@ std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy& policy,
         return 0;
     const auto host = framePixels * (8 + 3 * 16) + metadata;
     const auto device = addSaturating(deviceWorkingBytes, framePixels * 16);
-    // Frames in flight are bounded by what concurrency gains, never by how much memory is free: the
-    // device executes one scene at a time, so a few frames ahead keep decode, the GPU and the
-    // readback overlapped, and more only hold memory. One run also sizes itself to at most a
+    // Frames in flight are bounded by what concurrency gains, never by how much memory is free.
+    // Each frame decodes and prepares its footage on one CPU worker (a PNG or EXR member is one
+    // serial decode), so fill throughput is frames in flight over that per-frame time: one frame
+    // per hardware thread keeps every core busy, while the device runs one scene at a time and
+    // the GPU owner stays idle about half the time (#477). One run also sizes itself to at most a
     // quarter of the free capacity at its start, so it can never take most of the machine.
     // Device stages run one at a time and a phase claims device memory only during its own
     // stage, so the device need decides whether a frame fits at all, not how many are in flight.
@@ -678,7 +680,7 @@ std::size_t previewFramesThatFit(const GpuProcessingPhasePolicy& policy,
     const auto withinQuarter = policy.framesThatFit(addSaturating(host, host * 3), 0);
     const auto fits = policy.framesThatFit(host, 0);
     const auto frames = std::max<std::size_t>(withinQuarter, std::min<std::size_t>(fits, 1));
-    return std::min<std::size_t>({frames, threads, kMaximumPreviewFramesInFlight});
+    return std::min<std::size_t>(frames, threads);
 }
 
 render::GpuProcessingPhaseGrant

@@ -38,9 +38,14 @@ class BackgroundPreviewController final : public QObject {
     void setIdleFill(bool enabled);
     [[nodiscard]] bool active() const noexcept { return playing_ || idleFill_; }
     // Frames in flight ahead of the playhead come from measured capacity: the provider answers
-    // how many more frames of `framePixels` fit the processing root now. Without one, a single
-    // frame is in flight.
+    // how many more frames of `framePixels` fit the processing root now, at most
+    // kMaximumReadAheadFrames. Without one, a single frame is in flight.
     using ReadAheadWidthProvider = std::function<std::size_t(std::uint64_t framePixels)>;
+    // Read-ahead frames prepare concurrently, so a wider window makes the frames nearest the
+    // playhead land later: with sixteen frames cold playback ran slower and dropped more frames
+    // than with eight (#477), while a RAM fill, which needs every frame, gains from one frame per
+    // hardware thread.
+    static constexpr std::size_t kMaximumReadAheadFrames = 8;
     void setReadAheadWidthProvider(ReadAheadWidthProvider provider) {
         widthProvider_ = std::move(provider);
     }
