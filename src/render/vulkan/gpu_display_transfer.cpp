@@ -432,7 +432,8 @@ bool GpuDisplayTransfer::isOwnerThread() const noexcept {
 bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
                                std::shared_ptr<const GpuDisplayImage> image,
                                const std::uint64_t byteBudget,
-                               const std::shared_ptr<GpuProcessingPhaseLease>& hostPhase) noexcept {
+                               const std::shared_ptr<GpuProcessingPhaseLease>& hostPhase,
+                               PackedRgba8Storage* const preparedHost) noexcept {
     try {
         if (impl_ == nullptr || impl_->state != GpuDisplayTransferState::Idle) {
             return false;
@@ -566,7 +567,12 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
             return false;
         }
 
-        if (hostPhase) {
+        if (hostPhase && preparedHost != nullptr &&
+            preparedHost->ownership() == PackedRgba8Ownership::RootedProvisional &&
+            static_cast<std::uint64_t>(preparedHost->size()) * sizeof(Rgba8) == bytes) {
+            // Created and first touched off the owner thread; the checks below still admit it.
+            impl_->pixels = std::move(*preparedHost);
+        } else if (hostPhase) {
             auto storage = PackedRgba8Storage::create(
                 static_cast<std::size_t>(bytes / sizeof(Rgba8)), hostPhase,
                 static_cast<std::size_t>(std::min<std::uint64_t>(

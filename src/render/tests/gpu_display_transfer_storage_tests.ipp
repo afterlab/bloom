@@ -303,6 +303,36 @@ void rootedBufferTransfers(Expectations& checks, GpuDevice& device,
                       recovered.take().has_value() && !device.displayTransferPending(),
                   "recoverable foreign handoff allows same-generation reuse without clearing any "
                   "fuse or latch");
+    {
+        // #477: host storage created and touched off the owner from the same phase is adopted
+        // as is; storage of any other size is left alone and the transfer allocates its own.
+        const auto count = static_cast<std::size_t>(gpuDisplayImageImpl(*source)->width) *
+                           gpuDisplayImageImpl(*source)->height;
+        auto prepared = PackedRgba8Storage::create(count, phase, 1ULL << 20);
+        auto mismatched = PackedRgba8Storage::create(count + 1, phase, 1ULL << 20);
+        bufferRequire(bool(prepared) && bool(mismatched), "prepared host storage is admitted");
+        const auto* preparedPixels = prepared.value()->pixels().data();
+        GpuDisplayTransfer adopted;
+        bufferRequire(adopted.begin(device, source, 1ULL << 20, phase, prepared.value()) &&
+                          prepared.value()->size() == 0 &&
+                          complete(adopted) == GpuDisplayTransferState::Ready,
+                      "the transfer takes the prepared storage");
+        auto adoptedResult = adopted.take();
+        bufferRequire(adoptedResult && adoptedResult->pixels().data() == preparedPixels &&
+                          adoptedResult->pixels().size() == count &&
+                          std::ranges::all_of(adoptedResult->pixels(),
+                                              [&](const Rgba8& value) {
+                                                  return value ==
+                                                         adoptedResult->pixels().front();
+                                              }) &&
+                          adoptedResult->pixels().front().alpha == 255,
+                      "the final pixels land in the prepared storage");
+        GpuDisplayTransfer own;
+        bufferRequire(own.begin(device, source, 1ULL << 20, phase, mismatched.value()) &&
+                          mismatched.value()->size() == count + 1 &&
+                          complete(own) == GpuDisplayTransferState::Ready && own.take(),
+                      "storage of another size is not adopted");
+    }
     GpuDisplayTransfer unknown;
     bufferRequire(unknown.begin(device, source, 1ULL << 20, phase),
                   "real rooted submission before observed timeout");

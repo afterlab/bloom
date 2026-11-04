@@ -383,6 +383,13 @@ Bounded shutdown quarantines only the final image/device/fence/staging, releases
 and host context, and preserves its independent reservation through scheduler/service destruction.
 An exited owner is explicit; future recovery is not promised.
 
+The resident packed route creates a frame's rooted host storage on the CPU worker that prepares its
+GPU scene, from that scene's own phase, so the worker rather than the device owner first touches its
+pages (#477: faulting a fresh 2160p frame in cost the owner about 27 ms of kernel time per frame).
+The transfer adopts that provisional storage only when it is exactly the transfer's size and still
+admits it with the same staging and host checks; otherwise it allocates as before. A cancelled or
+failed stage drops the unused storage with its record.
+
 Private Linux strict core/synchronization checks qualify WSI-disabled Neutral/general Full, Half,
 ROI and adjusted output against CPU pixels with zero CPU fallback. Full 1920×1080 measured source
 8,847,360 B, staging 8,294,400 B and host 8,294,400 B. Shutdown retained the source/staging sum

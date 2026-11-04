@@ -78,6 +78,12 @@ struct PreviewDisplayStageRecord final {
     // resident native sub-state. `resident` is set when this record was started through the GPU
     // scene stage function.
     std::shared_ptr<const PreviewGpuSceneStage> gpuStage;
+    // GPU-prepared packed route: host storage for the final packed transfer, created from the
+    // stage's phase and first touched by the GPU-scene child on a CPU worker, so the owner thread
+    // never faults a frame's fresh pages in (#477: about 27 ms of kernel time per 2160p frame on
+    // the owner). Written before the child's result becomes visible; the service thread reads it
+    // only after consuming that result, as with cpuNativePhase.
+    std::optional<render::PackedRgba8Storage> preparedPackedHost;
     std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> residentProcessor;
     bool resident = false;
     ResidentNativePhase residentPhase = ResidentNativePhase::None;

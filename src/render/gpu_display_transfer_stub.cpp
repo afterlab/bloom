@@ -18,8 +18,8 @@ GpuDisplayTransfer::GpuDisplayTransfer() : impl_(std::make_unique<Impl>()) {}
 GpuDisplayTransfer::~GpuDisplayTransfer() = default;
 
 bool GpuDisplayTransfer::begin(GpuDevice&, std::shared_ptr<const GpuDisplayImage> image,
-                               std::uint64_t,
-                               const std::shared_ptr<GpuProcessingPhaseLease>&) noexcept {
+                               std::uint64_t, const std::shared_ptr<GpuProcessingPhaseLease>&,
+                               PackedRgba8Storage*) noexcept {
     image.reset();
     impl_->state = GpuDisplayTransferState::Failure;
     impl_->diagnostic = {GpuDisplayTransferCode::DeviceUnavailable,

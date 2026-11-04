@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -258,6 +259,34 @@ void teardownTerminalResidentRoute(const std::shared_ptr<PreviewDisplayServiceCo
 // GPU-scene CPU preparation child (service-thread submission, CPU worker execution)
 // -----------------------------------------------------------------------------------------------
 
+namespace {
+// GPU-prepared packed route: create the frame's final packed host storage on this CPU worker, from
+// the stage's own phase, so its pages are faulted in here instead of on the GPU owner thread when
+// the transfer begins. Any refusal leaves the storage to the transfer, as before.
+void prepareResidentPackedHost(
+    const std::shared_ptr<PreviewDisplayServiceCore>& core, PreviewDisplayStageRecord& stage,
+    const TaskResult<PreviewGpuSceneStageOutcomeHandle>& result) noexcept {
+    if (core->options.product != GpuPreviewDisplayProductMode::GpuPreparedPacked ||
+        result.state() != TaskState::Succeeded || !result.value().has_value() ||
+        *result.value() == nullptr)
+        return;
+    const auto& outcome = **result.value();
+    if (outcome.status != PreviewGpuSceneStageStatus::Prepared || !outcome.stage ||
+        !outcome.stage->scene() || !outcome.stage->phaseLease())
+        return;
+    const auto extent = outcome.stage->scene()->outputDescriptor().dataWindow().extent();
+    const auto pixels = static_cast<std::uint64_t>(extent.width()) * extent.height();
+    if (pixels == 0 || pixels > std::numeric_limits<std::size_t>::max() / sizeof(render::Rgba8))
+        return;
+    auto storage = render::PackedRgba8Storage::create(
+        static_cast<std::size_t>(pixels), outcome.stage->phaseLease(),
+        static_cast<std::size_t>(std::min<std::uint64_t>(core->options.packedTransferByteAllowance,
+                                                         std::numeric_limits<std::size_t>::max())));
+    if (storage)
+        stage.preparedPackedHost.emplace(std::move(*storage.value()));
+}
+} // namespace
+
 void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                const bool cancellationRequested,
                                GpuTaskCompletion<PreviewPreparationResultHandle> completion,
@@ -294,7 +323,7 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
     try {
         auto child = core->scheduler->submit<PreviewGpuSceneStageOutcomeHandle>(
             std::move(childRequest),
-            [core, snapshot = std::move(submission.snapshot),
+            [core, stage, snapshot = std::move(submission.snapshot),
              identity = std::move(submission.identity), limit = submission.pixelStorageByteLimit,
              overrides = std::move(submission.overrides)](
                 TaskContext& context) -> TaskResult<PreviewGpuSceneStageOutcomeHandle> {
@@ -303,6 +332,7 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
                     return Result::cancelled();
                 }
                 auto result = core->gpuStageFunction(snapshot, identity, limit, overrides, context);
+                prepareResidentPackedHost(core, *stage, result);
                 core->notify();
                 return result;
             });

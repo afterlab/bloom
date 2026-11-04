@@ -113,10 +113,14 @@ bool residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore
         }
         stage->packedTransferStartedAt = std::chrono::steady_clock::now();
         core->packedTransfer = std::make_unique<render::GpuDisplayTransfer>();
-        if (!core->packedTransfer->begin(*core->device, std::move(source),
-                                         std::min(allowance - metadata - sourceBytes,
-                                                  core->options.packedTransferByteAllowance),
-                                         stage->gpuStage->phaseLease())) {
+        // The host storage the GPU-scene child already created and touched off this thread.
+        auto* preparedHost = stage->preparedPackedHost ? &*stage->preparedPackedHost : nullptr;
+        const bool begun = core->packedTransfer->begin(
+            *core->device, std::move(source),
+            std::min(allowance - metadata - sourceBytes, core->options.packedTransferByteAllowance),
+            stage->gpuStage->phaseLease(), preparedHost);
+        stage->preparedPackedHost.reset();
+        if (!begun) {
             if (core->packedQueueTimingActive && core->packedQueueTiming)
                 core->packedQueueTiming->cancel();
             reason = core->packedTransfer->diagnostic().message;

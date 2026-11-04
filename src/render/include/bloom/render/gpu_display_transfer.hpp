@@ -116,10 +116,13 @@ class GpuDisplayTransfer final {
 
     // Source must be complete and bound to this owner/device. byteBudget admits actual rounded
     // staging plus concurrent eventual host capacity; source native bytes remain separately
-    // charged.
-    [[nodiscard]] bool
-    begin(GpuDevice& device, std::shared_ptr<const GpuDisplayImage> image, std::uint64_t byteBudget,
-          const std::shared_ptr<GpuProcessingPhaseLease>& hostPhase = {}) noexcept;
+    // charged. `preparedHost`, when non-null, is provisional host storage created from the same
+    // `hostPhase` off the owner thread, with its pages already touched (#477); begin takes it when
+    // it is exactly the transfer's size, and otherwise allocates as before.
+    [[nodiscard]] bool begin(GpuDevice& device, std::shared_ptr<const GpuDisplayImage> image,
+                             std::uint64_t byteBudget,
+                             const std::shared_ptr<GpuProcessingPhaseLease>& hostPhase = {},
+                             PackedRgba8Storage* preparedHost = nullptr) noexcept;
     [[nodiscard]] GpuDisplayTransferState poll() noexcept;
     // Exactly once in Ready; returns to Idle. No host result is published on cancellation/failure.
     [[nodiscard]] std::optional<GpuDisplayTransferResult> take() noexcept;
