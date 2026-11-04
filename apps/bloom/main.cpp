@@ -373,7 +373,9 @@ int main(int argc, char* argv[]) try {
          .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
                       .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
                       .requestedExecutorBytes = std::nullopt,
-                      // The general OCIO arm's 512 MiB ceiling plus concurrent transfer storage.
+                      // A stated room of 512 MiB for one general OCIO display job (the arm has
+                      // no fixed ceiling since #474; measured peaks replace this need, #417)
+                      // plus concurrent transfer storage.
                       .deviceWorkingBytes = 512ULL * 1024 * 1024 +
                                             gpuPreviewDisplayOptions.packedTransferByteAllowance}});
     auto gpuPreviewCpuStage = bloom::ui::makeCompositionPreviewCpuStage(

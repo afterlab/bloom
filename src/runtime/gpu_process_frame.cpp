@@ -132,6 +132,11 @@ struct GpuProcessFrameEvaluator::Impl final {
     // waited for, or was squeezed onto the CPU by, the room its own cache held. Pinned entries
     // (the running scene's own images and hits) are never evicted.
     void keepRoomForNextPhase();
+    // Owner thread: gives back up to `bytes` of device retention under pressure (a waiting
+    // shortfall, or free device memory below the VRAM headroom): the scene cache first, then the
+    // retained OCIO programs of the scene executor and the output colour stage (#474), which have
+    // no fixed byte ceiling of their own; each least recently used first. Returns what it freed.
+    std::uint64_t reclaimDevice(std::uint64_t bytes);
     GpuProcessFrameOutcome
     runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                const EvaluationRequest& request,
@@ -786,9 +791,18 @@ void GpuProcessFrameEvaluator::Impl::reportDevice() {
     auto live = device->availableAllocationBudget();
     const auto wanted =
         deviceReclaimBytes(*deviceReclaim, live, options.processingPhasePolicy->headroom().vramBytes);
-    if (wanted != 0 && cache && cache->reclaim(wanted) != 0)
+    if (wanted != 0 && reclaimDevice(wanted) != 0)
         live = device->availableAllocationBudget();
     static_cast<void>(options.processingPhasePolicy->reportDevice(device->ownershipEpoch(), live));
+}
+
+std::uint64_t GpuProcessFrameEvaluator::Impl::reclaimDevice(const std::uint64_t bytes) {
+    std::uint64_t released = cache ? cache->reclaim(bytes) : 0;
+    if (released < bytes && executor)
+        released += executor->reclaimOcioPrograms(bytes - released);
+    if (released < bytes && outputColor)
+        released += outputColor->reclaimPrograms(bytes - released);
+    return released;
 }
 
 void GpuProcessFrameEvaluator::Impl::keepRoomForNextPhase() {
@@ -797,6 +811,8 @@ void GpuProcessFrameEvaluator::Impl::keepRoomForNextPhase() {
     const auto room = options.processingPhasePolicy->usableCapacity();
     if (!room.deviceReady || room.deviceFreeBytes >= nextPhaseRoomBytes)
         return;
+    // The scene cache only: the retained programs serve every next frame of a run, so they give
+    // way to measured pressure (reportDevice), not to this anticipation.
     if (cache->reclaim(nextPhaseRoomBytes - room.deviceFreeBytes) != 0)
         static_cast<void>(options.processingPhasePolicy->reportDevice(
             device->ownershipEpoch(), device->availableAllocationBudget()));

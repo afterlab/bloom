@@ -21,6 +21,7 @@
 #include <bloom/runtime/gpu_ocio_command.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -62,13 +63,16 @@ struct GpuOcioExecutorDiagnostic final {
 };
 
 struct GpuOcioExecutorBudgets final {
-    // Bounded native-program cache: entry count and the sum of the commands' descriptor-declared
-    // retained bytes. Both are hard ceilings checked before insertion.
+    // Native-program cache: at most this many entries, least recently used evicted first.
     std::uint64_t maxPrograms = 16;
-    std::uint64_t maxRetainedProgramBytes = 512ULL * 1024ULL * 1024ULL;
+    // No fixed byte ceilings by default (#474): usable VRAM (the live budget minus the VRAM
+    // headroom) is the only device ceiling. The retained programs give their bytes back on demand
+    // through reclaim(), and each dispatch is bounded by its own byte budget. A caller may still
+    // pass explicit ceilings (qualification and tests do).
+    std::uint64_t maxRetainedProgramBytes = std::numeric_limits<std::uint64_t>::max();
     // Forwarded to each render::GpuOcioProgram create() as its own hard allocation ceilings.
-    std::uint64_t maxOwnedBytesPerProgram = 512ULL * 1024ULL * 1024ULL;
-    std::uint64_t maxLutBytesPerProgram = 256ULL * 1024ULL * 1024ULL;
+    std::uint64_t maxOwnedBytesPerProgram = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t maxLutBytesPerProgram = std::numeric_limits<std::uint64_t>::max();
     // A pending native job that has not retired by this deadline is cancelled and failed closed.
     std::uint64_t jobDeadlineMilliseconds = 5000;
 };
@@ -119,6 +123,11 @@ class GpuOcioProgramExecutor final {
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
     // Clears only proven retired failed-program transients on the owning device thread.
     void discardRetiredFailures() noexcept;
+    // Evict on demand (#474), owner thread: releases retained native programs, least recently used
+    // first, until at least `bytes` of their actual retained allocations are freed or none is left
+    // to release. The current job's program and any program whose submission is not proven
+    // retired are kept. Returns the bytes released (zero off the owner thread).
+    std::uint64_t reclaim(std::uint64_t bytes) noexcept;
 
     // Returns None when the command was accepted and submitted. `uniformOverride` is an optional
     // same-size replacement for the command's immutable OCIO uniform snapshot (empty selects the

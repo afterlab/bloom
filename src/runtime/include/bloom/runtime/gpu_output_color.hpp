@@ -136,6 +136,8 @@ class GpuOutputColorStage final {
     [[nodiscard]] bool isBoundTo(const render::GpuDevice& device) const noexcept;
     // True while the executor or the combined readback holds an unproven submission.
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // Evict on demand (#474): GpuOcioProgramExecutor::reclaim of this stage's retained programs.
+    std::uint64_t reclaimPrograms(std::uint64_t bytes) noexcept;
 
     // Accepts one job. `command` may be null (identity arm, process payload only); otherwise its
     // geometry must match `processImage`. Returns None on acceptance. `byteBudget` bounds the

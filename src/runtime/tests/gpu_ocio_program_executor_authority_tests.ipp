@@ -209,9 +209,10 @@ void testUploadFaultRetirement(Expectations& expectations, GpuDevice& device,
     bloom::render::GpuProcessingPhaseBudget phases;
     phases.setHostCapacity(kBudget, true);
     phases.setDeviceCapacity(kBudget, true);
-    // This control declares the existing per-program resource envelope. The former 8KiB grant
-    // predated LUT accounting and cannot authorize real HDR sampled-image backing.
-    const auto programEnvelope = GpuOcioExecutorBudgets{}.maxOwnedBytesPerProgram;
+    // This control declares a per-program resource envelope that holds the HDR LUT program (the
+    // executor's defaults have no fixed ceiling since #474). The former 8KiB grant predated LUT
+    // accounting and cannot authorize real HDR sampled-image backing.
+    const std::uint64_t programEnvelope = 512ULL * 1024ULL * 1024ULL;
     auto phase = phases.reserve(
         {.fixedHostBytes = 4096, .deviceWorkingBytes = programEnvelope, .sourceFree = true});
     expectations.expect(phase.lease && device.retainProcessingPhase(phase.lease),

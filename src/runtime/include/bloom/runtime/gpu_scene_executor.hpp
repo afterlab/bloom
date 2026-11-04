@@ -240,17 +240,21 @@ struct GpuSceneExecutorBudgets final {
     // Structural ceilings validated before any Vulkan work.
     std::uint64_t maxCommands = 4096;
     std::uint64_t maxCoverageBytes = 256ULL * 1024ULL * 1024ULL;
-    // Bounded OCIO native-program cache: entry count and the sum of the programs' ACTUAL VMA
-    // retained allocation bytes (never a descriptor-declared sample estimate). The per-program
+    // OCIO native-program cache: at most this many entries, least recently used evicted first.
+    // Retained bytes are the programs' ACTUAL VMA allocations (never a descriptor-declared sample
+    // estimate). No fixed byte ceiling by default (#474): usable VRAM is the only device ceiling,
+    // and the programs give their bytes back on demand (reclaimOcioPrograms). The per-program
     // ceilings are forwarded to render::GpuOcioProgram::create.
     std::uint64_t maxOcioPrograms = 8;
-    std::uint64_t maxOcioRetainedProgramBytes = 256ULL * 1024ULL * 1024ULL;
+    std::uint64_t maxOcioRetainedProgramBytes = std::numeric_limits<std::uint64_t>::max();
     // No fixed per-program ceiling on the job's output image (#425, #474): a 4320p RGBA32F effect
     // output alone is 506 MiB, and a fixed 512 MiB refused it beside the program's LUTs and sent
     // the frame to the CPU. Each dispatch is bounded by its request's live byte budget, which
     // follows usable VRAM (the live budget minus the VRAM headroom).
     std::uint64_t maxOcioOwnedBytesPerProgram = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t maxOcioLutBytesPerProgram = 256ULL * 1024ULL * 1024ULL;
+    // Likewise no fixed LUT ceiling (#474): a program's LUTs are bounded by the descriptor's own
+    // structural limits when it is extracted and by the request's live byte budget.
+    std::uint64_t maxOcioLutBytesPerProgram = std::numeric_limits<std::uint64_t>::max();
     // A native job that has not retired by this deadline is cancelled and failed closed.
     std::uint64_t jobDeadlineMilliseconds = 5000;
     // Optional genuine queue-clock span, including host polling and submission gaps.
@@ -319,6 +323,13 @@ class GpuSceneExecutor final {
     // True once a device generation loss was observed. This executor is terminal and unusable; it
     // must be destroyed on the owner thread and recreated on a new generation.
     [[nodiscard]] bool deviceLost() const noexcept;
+
+    // Evict on demand (#474), owner thread: releases retained OCIO native programs, least recently
+    // used first, until at least `bytes` of their actual retained allocations are freed or none is
+    // left to release. The program of the step in flight and any program whose submission is not
+    // proven retired are kept; a released program is created again by the next step that needs
+    // it. Returns the bytes released (zero off the owner thread).
+    std::uint64_t reclaimOcioPrograms(std::uint64_t bytes) noexcept;
 
     // Validates + plans the scene and returns None when accepted. The scene is retained for the job
     // lifetime. A refusal (OverBudget / InvalidScene / InvalidReference / CycleDetected / ...)

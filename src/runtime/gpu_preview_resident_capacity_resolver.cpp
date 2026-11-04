@@ -106,8 +106,14 @@ void refreshResidentForegroundCapacity(
             *core->deviceReclaim, allocation,
             core->options.processingPhasePolicy->headroom().vramBytes);
         if (wanted != 0) {
-            const auto released =
+            auto released =
                 core->residentSceneCache != nullptr ? core->residentSceneCache->reclaim(wanted) : 0;
+            // Then the retained OCIO programs, which have no fixed byte ceiling of their own
+            // (#474): the scene executor's effect programs and the display arm's.
+            if (released < wanted && core->residentExecutor != nullptr)
+                released += core->residentExecutor->reclaimOcioPrograms(wanted - released);
+            if (released < wanted && core->residentGeneralDisplay != nullptr)
+                released += core->residentGeneralDisplay->executor().reclaim(wanted - released);
             if (released < wanted) {
                 std::lock_guard lock(core->stateMutex);
                 ++core->publishedResidentFrameEvictionSerial;

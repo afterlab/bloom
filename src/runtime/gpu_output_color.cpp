@@ -117,6 +117,10 @@ bool GpuOutputColorStage::hasUnretiredSubmission() const noexcept {
            readback_.hasUnretiredSubmission();
 }
 
+std::uint64_t GpuOutputColorStage::reclaimPrograms(const std::uint64_t bytes) noexcept {
+    return executor_ != nullptr ? executor_->reclaim(bytes) : 0;
+}
+
 bool GpuOutputColorStage::retirementSafe(
     const std::shared_ptr<render::GpuProcessingPhaseLease>& phase) const noexcept {
     if (!device_ || ownerThread_ != std::this_thread::get_id() || !device_->isOwnerThread() ||

@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -347,6 +348,32 @@ void testCst(Expectations& expectations, GpuDevice& device, GpuOcioProgramPrepar
         expectations.expect(tightExecutor.executor->counters().programRefusals >= 1,
                             "the refusal is counted");
     }
+
+    // #474: no fixed byte ceiling by default. The retained program gives its actual bytes back on
+    // demand, and the next job creates it again.
+    constexpr auto unbounded = std::numeric_limits<std::uint64_t>::max();
+    const GpuOcioExecutorBudgets defaults;
+    expectations.expect(defaults.maxRetainedProgramBytes == unbounded &&
+                            defaults.maxOwnedBytesPerProgram == unbounded &&
+                            defaults.maxLutBytesPerProgram == unbounded,
+                        "the program cache has no fixed byte ceilings by default");
+    const auto beforeReclaim = executor.executor->counters();
+    const auto released = executor.executor->reclaim(1);
+    const auto afterReclaim = executor.executor->counters();
+    expectations.expect(released == actualBytes && afterReclaim.cacheBytes == 0 &&
+                            afterReclaim.cacheEntries == 0 &&
+                            afterReclaim.programEvictions == beforeReclaim.programEvictions + 1,
+                        "reclaim releases the retained program's actual bytes on demand");
+    const auto recreated = executor.executor->begin(prepared.command, input, {}, kBudget);
+    auto recreatedPoll = executor.executor->poll();
+    while (recreatedPoll == GpuOcioExecutorPollResult::Pending)
+        recreatedPoll = executor.executor->poll();
+    expectations.expect(recreated.code == GpuOcioExecutorDiagnosticCode::None &&
+                            recreatedPoll == GpuOcioExecutorPollResult::Ready &&
+                            executor.executor->takeEffectOutput() != nullptr &&
+                            executor.executor->counters().programCreations ==
+                                afterReclaim.programCreations + 1,
+                        "the next job after a reclaim creates the program again");
 }
 
 void testDisplay(Expectations& expectations, GpuDevice& device, GpuOcioProgramPreparer& preparer,

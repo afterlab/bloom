@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -566,6 +567,32 @@ void testScene(Expectations& expectations, GpuDevice& device,
         expectations.expect(tightResult.executor->counters().ocioProgramRefusals >= 1,
                             "the refusal is counted");
     }
+
+    // #474: no fixed byte ceiling by default. Under pressure the retained programs give their
+    // actual bytes back, least recently used first, and the next scene creates them again.
+    constexpr auto unbounded = std::numeric_limits<std::uint64_t>::max();
+    expectations.expect(GpuSceneExecutorBudgets{}.maxOcioRetainedProgramBytes == unbounded &&
+                            GpuSceneExecutorBudgets{}.maxOcioLutBytesPerProgram == unbounded,
+                        "the OCIO program cache has no fixed byte ceilings by default");
+    const auto beforeReclaim = executor.counters();
+    const auto released = executor.reclaimOcioPrograms(1);
+    const auto afterOne = executor.counters();
+    expectations.expect(
+        released > 0 && afterOne.ocioProgramEvictions == beforeReclaim.ocioProgramEvictions + 1 &&
+            afterOne.ocioRetainedProgramBytes == beforeReclaim.ocioRetainedProgramBytes - released,
+        "a reclaim releases one least recently used program's actual bytes");
+    const auto rest = executor.reclaimOcioPrograms(unbounded);
+    expectations.expect(executor.counters().ocioRetainedProgramBytes == 0 &&
+                            released + rest == beforeReclaim.ocioRetainedProgramBytes,
+                        "a large reclaim releases every retained program");
+    const auto rerunScene = buildScene(fixture, prepared.command);
+    const auto creationsBefore = executor.counters().ocioProgramCreations;
+    cacheResult.cache->clear();
+    expectations.expect(runScene(expectations, executor, rerunScene, "after reclaim"),
+                        "the scene runs after its programs were reclaimed");
+    static_cast<void>(executor.takeImage());
+    expectations.expect(executor.counters().ocioProgramCreations == creationsBefore + 1,
+                        "the next scene creates its reclaimed program again");
 }
 
 void testCancelledEffectReleasesPhase(Expectations& expectations, GpuDevice& device,

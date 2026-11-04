@@ -301,6 +301,32 @@ void GpuOcioProgramExecutor::discardRetiredFailures() noexcept {
     }
 }
 
+std::uint64_t GpuOcioProgramExecutor::reclaim(const std::uint64_t bytes) noexcept {
+    if (!impl_ || !impl_->onOwnerThread())
+        return 0;
+    auto& impl = *impl_;
+    std::uint64_t released = 0;
+    while (released < bytes) {
+        auto victim = impl.programs.end();
+        for (auto candidate = impl.programs.begin(); candidate != impl.programs.end();
+             ++candidate) {
+            const auto* program = candidate->second.program.get();
+            if (program == nullptr || program == impl.active || candidate->second.bytes == 0 ||
+                program->hasUnretiredSubmission())
+                continue;
+            if (victim == impl.programs.end() || candidate->second.serial < victim->second.serial)
+                victim = candidate;
+        }
+        if (victim == impl.programs.end())
+            break;
+        released += victim->second.bytes;
+        impl.totalBytes -= victim->second.bytes;
+        impl.programs.erase(victim);
+        ++impl.counters.programEvictions;
+    }
+    return released;
+}
+
 bool GpuOcioProgramExecutor::teardownDrainIncomplete() noexcept {
     return render::GpuOcioProgram::teardownDrainIncomplete();
 }

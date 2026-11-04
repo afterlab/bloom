@@ -443,7 +443,18 @@ to the frame cache (`PreviewFrameCache::evictGpuResidentBytes`), dropping least 
 resident frames. A native allocation refused for device room in a device stage asks for the phase's
 need the same way before its retry. When another program takes VRAM and the live free memory falls
 below the VRAM headroom, the owner evicts the difference at its next device sample, as host caches
-shrink when free RAM falls below the RAM headroom. Because retained cache images are root claims, a full cache
+shrink when free RAM falls below the RAM headroom. The retained OCIO native programs follow the
+same rule (#474): neither
+the scene executor's effect-program cache nor the `GpuOcioProgramExecutor` behind the display arm and
+the output colour stage has a fixed byte ceiling any more (they were 256 MiB retained and 256 MiB
+LUT per program in the scene executor, 512 MiB retained and 512 MiB owned per program in the display
+arm). Each keeps what fits, and when the scene cache cannot cover a shortfall the owner releases
+their programs least recently used first (`GpuSceneExecutor::reclaimOcioPrograms`,
+`GpuOcioProgramExecutor::reclaim`), never the running job's program or one whose submission is not
+proven retired; a released program is created again by the next job that needs it. Each dispatch
+stays bounded by its request's live byte budget. The final-render owner's anticipatory room for
+its next frame (#492) evicts only the scene cache, so a run's programs are not recreated every
+frame. Because retained cache images are root claims, a full cache
 leaves little room beside it: a measured envelope's executor ceiling is therefore never below its
 measured need (which fits the remaining room), and the rooted foreground request credits the scene
 cache's retained bytes back, so a cache that fills the device makes work wait or evicts, never
@@ -1356,9 +1367,10 @@ stage's end releases the rest at once, quietly (the phase's own release is the w
 attempt's cleanup cannot retry itself). Device claims at any time are therefore the root's own
 native allocations plus the unallocated needs of the stages running.
 
-**Device needs follow measured peaks (#417).** The stated device need is ceiling-sized: the
-desktop's preview working allowance is the general OCIO arm's 512 MiB ceiling plus the 320 MiB
-packed-transfer allowance whatever the frame size. Each released phase records the most native
+**Device needs follow measured peaks (#417).** The stated device need is a fixed estimate: the
+desktop's preview working allowance is 512 MiB of room for one general OCIO display job (the arm's
+former per-program ceiling, which #474 removed) plus the 320 MiB packed-transfer allowance whatever
+the frame size. Each released phase records the most native
 storage it held at one time under its stated envelope (working bytes, minimum executor bytes,
 fixed host bytes and minimum source bytes: equal for the frames of one composition, resolution and
 plan). A later phase of the same envelope needs the largest recorded peak plus a quarter, never

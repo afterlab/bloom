@@ -169,6 +169,34 @@ std::optional<render::GpuImage> GpuSceneExecutor::Impl::takeOcioOutput() {
     return std::optional<render::GpuImage>(std::move(*output));
 }
 
+std::uint64_t GpuSceneExecutor::reclaimOcioPrograms(const std::uint64_t bytes) noexcept {
+    if (impl_ == nullptr || impl_->device == nullptr || !impl_->device->isOwnerThread())
+        return 0;
+    auto& impl = *impl_;
+    std::uint64_t released = 0;
+    while (released < bytes) {
+        auto victim = impl.ocioPrograms.end();
+        for (auto candidate = impl.ocioPrograms.begin(); candidate != impl.ocioPrograms.end();
+             ++candidate) {
+            const auto* program = candidate->second.program.get();
+            if (program == nullptr || program == impl.nativeOcioProgram ||
+                candidate->second.retainedBytes == 0 || program->hasUnretiredSubmission())
+                continue;
+            if (victim == impl.ocioPrograms.end() ||
+                candidate->second.serial < victim->second.serial)
+                victim = candidate;
+        }
+        if (victim == impl.ocioPrograms.end())
+            break;
+        released += victim->second.retainedBytes;
+        impl.ocioProgramBytes -= victim->second.retainedBytes;
+        impl.ocioPrograms.erase(victim);
+        ++impl.counters.ocioProgramEvictions;
+    }
+    impl.counters.ocioRetainedProgramBytes = impl.ocioProgramBytes;
+    return released;
+}
+
 bool GpuSceneExecutor::Impl::ocioProgramsUnretired() const noexcept {
     for (const auto& [key, entry] : ocioPrograms) {
         static_cast<void>(key);
