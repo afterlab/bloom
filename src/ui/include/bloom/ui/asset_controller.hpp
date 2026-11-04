@@ -195,12 +195,34 @@ class AssetController final : public QObject {
     void setCachePurgeGate(bool gated);
     [[nodiscard]] bool acceptsEdits() const;
     [[nodiscard]] QByteArray dragToken() const { return dragToken_; }
+    // Verify footage (#495): hashes the project's still images and unverified image-sequence
+    // members once, in the background (BlockingIo, Background priority, idle OS priority), so the
+    // ADR 0025 memo learns their digests and the next save records them. Started when a project is
+    // installed and after an import, Relink or Reload; a newer request supersedes (cancels) the
+    // older one. Waits while an import or a save/open is running (one blocking-I/O worker), and a
+    // save or import that starts meanwhile stops it at once; it starts again when they finish.
+    void verifyFootage();
+    [[nodiscard]] bool verifyingFootage() const noexcept { return verifying_; }
+    // What the last verification pass that ran to the end found (files, hashed, changed).
+    struct FootageVerificationSummary final {
+        std::size_t files = 0;
+        std::size_t hashed = 0;
+        std::size_t changed = 0;
+    };
+    [[nodiscard]] const std::optional<FootageVerificationSummary>&
+    lastFootageVerification() const noexcept {
+        return lastVerification_;
+    }
   signals:
     void changed();
     void activityChanged();
     void diagnostic(QString message);
     void importStarted();
     void importFinished(const bloom::ui::AssetController::ImportReport& report);
+    // A verification pass found bytes that differ from their recorded digest (#495). The
+    // application purges the decoded media and finished-frame caches through the media purge, so
+    // nothing rendered from the changed bytes stays cached.
+    void footageChanged();
 
   private:
     using OperationHandle = std::shared_ptr<std::unique_ptr<commands::Operation>>;
@@ -265,6 +287,9 @@ class AssetController final : public QObject {
     void poll();
     // One status notice for an import job's diagnostics; the Jobs panel keeps each one.
     void emitImportFailures(const std::vector<runtime::TaskDiagnostic>& issues);
+    // Cancels a running verification pass; `resume` starts it again once the worker is free.
+    void stopFootageVerification(bool resume);
+    void finishFootageVerification();
     void finishImport(runtime::TaskResult<OperationHandle>& result);
     CompositionSession& session_;
     std::optional<document::AssetFolderId> importFolder_;
@@ -279,6 +304,12 @@ class AssetController final : public QObject {
     media::cache::MediaDiskCache* mediaDiskCache_ = nullptr;
     AudioProcessingAdmission audioAdmission_;
     runtime::TaskHandle<OperationHandle> import_;
+    struct FootageVerificationResult;
+    runtime::TaskHandle<std::shared_ptr<FootageVerificationResult>> verification_;
+    std::optional<FootageVerificationSummary> lastVerification_;
+    bool verifying_ = false;
+    // A pass was asked for (or stopped for other blocking I/O) and is still due.
+    bool verificationDue_ = false;
     runtime::TaskHandle<std::shared_ptr<Thumbnails>> preview_;
     runtime::TaskHandle<std::shared_ptr<InputColorCatalog>> inputColorCatalogTask_;
     std::shared_ptr<InputColorCatalog> inputColorCatalog_;

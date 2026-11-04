@@ -958,6 +958,19 @@ bloom_add_test(
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 
+# #495: the background Verify footage pass and its Assets controller job.
+add_executable(bloom_footage_verification_test footage_verification_tests.cpp)
+target_include_directories(bloom_footage_verification_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_footage_verification_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_footage_verification_test)
+bloom_add_test(
+    NAME bloom.ui.footage-verification
+    COMMAND bloom_footage_verification_test
+    LABELS ui integration assets
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 add_executable(bloom_assets_panel_test assets_panel_tests.cpp)
 target_include_directories(bloom_assets_panel_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_assets_panel_test PRIVATE bloom_ui Qt6::Test)

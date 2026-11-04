@@ -797,6 +797,22 @@ int main(int argc, char* argv[]) try {
         [&gpuPreviewDisplayService](const std::chrono::milliseconds timeout) {
             return gpuPreviewDisplayService.purgeRetainedCaches(timeout);
         });
+    // Verify footage (#495): bytes that no longer match their recorded digest purge the decoded
+    // media and finished-frame caches through the same media purge as Edit | Purge, so nothing
+    // rendered from them stays cached. A purge already running is followed by one more.
+    auto footagePurgeDue = std::make_shared<bool>(false);
+    QObject::connect(&assetController, &bloom::ui::AssetController::footageChanged,
+                     &cachePurgeController, [&cachePurgeController, footagePurgeDue] {
+                         *footagePurgeDue = !cachePurgeController.requestMediaPurge();
+                     });
+    QObject::connect(
+        &cachePurgeController, &bloom::ui::CachePurgeController::purgeFinished,
+        &cachePurgeController,
+        [&cachePurgeController, footagePurgeDue] {
+            if (*footagePurgeDue)
+                *footagePurgeDue = !cachePurgeController.requestMediaPurge();
+        },
+        Qt::QueuedConnection);
     // Native (server-side) window chrome only (task C1): MainWindow no longer takes a chrome mode
     // at all -- there is nothing left for main() to read from settings before constructing it.
     bloom::ui::MainWindow window(editorRegistry, compositionSession, projectHost,

@@ -2,6 +2,7 @@
 #include "asset_thumbnail_display.hpp"
 #include "asset_thumbnail_interpretation.hpp"
 #include "colour_space_names.hpp"
+#include "footage_verification.hpp"
 #include "import_options_pane.hpp"
 #include "network_share_paths.hpp"
 #include <QDir>
@@ -541,6 +542,15 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
         proxyCacheBytes_ = 0;
         decodedAudioBytes_ = 0;
         refresh();
+        verifyFootage();
+    });
+    // A save or open shares the one blocking-I/O worker: a verification pass stops for it at once
+    // and starts again when the project is idle.
+    connect(&host_, &ProjectHost::activityChanged, this, [this] {
+        if (host_.isBusy())
+            stopFootageVerification(true);
+        else if (verificationDue_)
+            verifyFootage();
     });
     connect(&host_, &ProjectHost::colorSettingsChanged, this, [this] {
         const bool requested = inputColorCatalogPending_ || inputColorCatalog_ != nullptr;
@@ -557,6 +567,7 @@ AssetController::AssetController(CompositionSession& session, ProjectHost& host,
     });
     connect(this, &AssetController::diagnostic, &session_, &CompositionSession::commandRejected);
     refresh();
+    verifyFootage();
 }
 AssetController::~AssetController() {
     runtime::processMemoryBudgetLedger().unregisterCache(&proxyCacheBytes_);
@@ -567,6 +578,7 @@ AssetController::~AssetController() {
 bool AssetController::acceptsEdits() const { return host_.canSave(); }
 void AssetController::cancel() {
     pendingReloads_.clear();
+    stopFootageVerification(false);
     previewDirty_ = false;
     if (busy_)
         import_.cancel();
@@ -1128,6 +1140,8 @@ void AssetController::prepare(const QStringList& paths, document::AssetId relink
     import_ = std::move(submission.handle);
     importShared_ = std::move(shared);
     busy_ = true;
+    // The import needs the blocking-I/O worker now; verification resumes after it commits.
+    stopFootageVerification(true);
     bridge_.wake();
     emit activityChanged();
     if (importShared_)
@@ -1967,6 +1981,8 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
                         report.assets.push_back(held->id);
             }
             emitImportFailures(result.diagnostics());
+            // An import, Relink or Reload brings files the memo has not read yet (#495).
+            verificationDue_ = true;
         }
     } else if (result.state() == runtime::TaskState::Failed) {
         emitImportFailures(result.diagnostics());
@@ -1985,6 +2001,83 @@ void AssetController::finishImport(runtime::TaskResult<OperationHandle>& result)
         report.followUp = followUp(report.assets);
     if (shared)
         emit importFinished(report);
+}
+struct AssetController::FootageVerificationResult final {
+    FootageVerificationReport report;
+};
+void AssetController::verifyFootage() {
+    verificationDue_ = true;
+    // One blocking-I/O worker: never queue ahead of (or behind) an import, a save or an open.
+    if (busy_ || host_.isBusy() || !host_.liveDocumentAndStack().first)
+        return;
+    // A newer request supersedes the running pass.
+    if (verifying_)
+        verification_.cancel();
+    verifying_ = false;
+    verificationDue_ = false;
+    // Only stills and image sequences are verified here; a project without them has no job.
+    const auto snapshot = session_.snapshot();
+    if (std::ranges::none_of(snapshot.project().assets(), [](const auto& asset) {
+            return asset.kind == document::AssetKind::Image ||
+                   asset.kind == document::AssetKind::Sequence;
+        }))
+        return;
+    auto submission = scheduler_.submit<std::shared_ptr<FootageVerificationResult>>(
+        runtime::TaskRequest(
+            "Verify footage",
+            {.kind = runtime::TaskOwnerKind::Project, .id = runtime::TaskOwnerId::fromRaw(1)},
+            runtime::TaskPriority::Background, runtime::TaskExecutor::BlockingIo),
+        [snapshot, directory = baseDirectory()](runtime::TaskContext& context) {
+            const auto cancel = [&context] { return context.isCancellationRequested(); };
+            context.reportProgress({.phase = "Verifying footage",
+                                    .subphase = {},
+                                    .completed = 0,
+                                    .total = std::nullopt});
+            const auto work = footageVerificationWork(snapshot.project(), directory, cancel);
+            auto result = std::make_shared<FootageVerificationResult>();
+            result->report = verifyFootageFiles(
+                work, cancel,
+                [&context](const std::size_t completed, const std::size_t total,
+                           const std::filesystem::path& current) {
+                    const auto name = current.filename().u8string();
+                    context.reportProgress({.phase = "Verifying footage",
+                                            .subphase = std::string(name.begin(), name.end()),
+                                            .completed = completed,
+                                            .total = static_cast<std::uint64_t>(total)});
+                });
+            if (result->report.cancelled || context.isCancellationRequested())
+                return runtime::TaskResult<std::shared_ptr<FootageVerificationResult>>::cancelled();
+            auto diagnostics = result->report.diagnostics;
+            return runtime::TaskResult<std::shared_ptr<FootageVerificationResult>>::succeeded(
+                std::move(result), std::move(diagnostics));
+        });
+    if (!submission.accepted())
+        return;
+    verification_ = std::move(submission.handle);
+    verifying_ = true;
+    bridge_.wake();
+}
+void AssetController::stopFootageVerification(const bool resume) {
+    if (!verifying_)
+        return;
+    verification_.cancel();
+    verifying_ = false;
+    verificationDue_ = resume;
+}
+void AssetController::finishFootageVerification() {
+    auto result = verification_.tryTakeResult();
+    if (!result)
+        return;
+    verifying_ = false;
+    if (result->state() != runtime::TaskState::Succeeded || !result->value() || !*result->value())
+        return;
+    const auto& report = (*result->value())->report;
+    lastVerification_ = FootageVerificationSummary{
+        .files = report.files, .hashed = report.hashed, .changed = report.changed};
+    // Changed bytes: nothing rendered from them may stay cached. The memo now holds their actual
+    // digest, so the next decode reports the relink diagnostic.
+    if (report.changed > 0)
+        emit footageChanged();
 }
 void AssetController::poll() {
     for (auto task = imagePartTasks_.begin(); task != imagePartTasks_.end();) {
@@ -2035,9 +2128,13 @@ void AssetController::poll() {
                 const auto next = pendingReloads_.front();
                 pendingReloads_.pop_front();
                 reload(next);
+            } else if (verificationDue_) {
+                verifyFootage();
             }
         }
     }
+    if (verifying_)
+        finishFootageVerification();
     if (previewPending_) {
         auto result = preview_.tryTakeResult();
         if (result) {

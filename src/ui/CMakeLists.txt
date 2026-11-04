@@ -543,6 +543,8 @@ target_sources(
         assets_editor_search.cpp
         assets_editor_internal.hpp
         asset_controller.cpp
+        footage_verification.cpp
+        footage_verification.hpp
         asset_data_thumbnail.cpp
         asset_thumbnail_interpretation.cpp
         asset_data_thumbnail.hpp
