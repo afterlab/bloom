@@ -152,17 +152,24 @@ void main() {
         result = a.a > 0.0 ? vec4(a.rgb * (alpha / a.a), alpha)
                            : vec4(0.0, 0.0, 0.0, alpha);
     } else if (bloom_push.mode == 10u) {
+        // #532: the CPU reference's order (render::multiplyAlphaAmount): amount is one Float32
+        // product of the unit coverage and unit factor, then each premultiplied component times
+        // amount is rounded once, so alpha is bit-exact for every factor.
         float matteCoverage = coverage(b);
+        precise float amount = matteCoverage * bloom_push.factor;
+        // A nonzero subnormal amount or result alpha cannot be reproduced on flush-to-zero
+        // devices; both are tested 2^24 up, where they are normal.
+        precise float scaledAmount = matteCoverage * 16777216.0;
+        scaledAmount = scaledAmount * bloom_push.factor;
         precise float scaledAlpha = a.a * 16777216.0;
-        scaledAlpha = scaledAlpha * matteCoverage;
-        scaledAlpha = scaledAlpha * bloom_push.factor;
-        if (needsSubnormalAlpha(scaledAlpha)) {
+        scaledAlpha = scaledAlpha * amount;
+        if (needsSubnormalAlpha(scaledAmount) || needsSubnormalAlpha(scaledAlpha)) {
             atomicOr(bloom_error.flags[0], 4u);
             imageStore(bloom_output, destination, a);
             return;
         }
-        float amount = clamp(matteCoverage * bloom_push.factor, 0.0, 1.0);
-        result = a * amount;
+        precise vec4 scaled = a * amount;
+        result = scaled;
     } else if (bloom_push.mode == 11u) {
         // The base with one slot set; alpha limited to [0, 1]; Straight premultiplies RGB.
         uint slot = (bloom_push.channel >> 4) & 3u;

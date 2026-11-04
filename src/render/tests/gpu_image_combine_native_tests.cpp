@@ -32,12 +32,13 @@ using namespace bloom::render::composite_proof;
         return *result.value();
     }
     // Match the production CPU evaluator: double products and accumulation, then
-    // one Float32 conversion. Never use the shader expression as its own oracle.
-    const double weight = mode.kind == GpuImageCombineKind::Mix
-                              ? static_cast<double>(mode.factor)
-                              : static_cast<double>(
-                                    matteCoverage(second, {mode.channel, mode.invert})) *
-                                    static_cast<double>(mode.factor);
+    // one Float32 conversion. Never use the shader expression as its own oracle. Multiply Alpha's
+    // amount is the shared Float32 coverage x factor (#532).
+    const double weight =
+        mode.kind == GpuImageCombineKind::Mix
+            ? static_cast<double>(mode.factor)
+            : static_cast<double>(multiplyAlphaAmount(
+                  matteCoverage(second, {mode.channel, mode.invert}), mode.factor));
     const double baseWeight = mode.kind == GpuImageCombineKind::Mix ? 1.0 - weight : weight;
     const double secondWeight = mode.kind == GpuImageCombineKind::Mix ? weight : 0.0;
     return pixel(static_cast<float>(static_cast<double>(base.red()) * baseWeight + static_cast<double>(second.red()) * secondWeight),

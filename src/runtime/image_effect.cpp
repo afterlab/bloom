@@ -792,13 +792,17 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                             ? (*maskRow)[static_cast<std::size_t>(x - maskWindow->originX())]
                                   .alpha()
                             : 0.0F;
+                    // #532: Multiply Alpha rounds coverage x factor to Float32 first, as the
+                    // device does, so each component below is that amount times the base,
+                    // rounded once.
                     const double weight = effect.combine->mode == ImageCombineMode::Mix
                                               ? static_cast<double>(
                                                     !mask ? effect.combine->factor
                                                           : effect.combine->factor * maskCoverage)
-                                              : static_cast<double>(render::matteCoverage(
-                                                    matte, effect.combine->matte)) *
-                                                    static_cast<double>(effect.combine->factor);
+                                              : static_cast<double>(render::multiplyAlphaAmount(
+                                                    render::matteCoverage(matte,
+                                                                          effect.combine->matte),
+                                                    effect.combine->factor));
                     const double baseWeight = effect.combine->mode == ImageCombineMode::Mix
                                                   ? 1.0 - weight : weight;
                     const double matteWeight = effect.combine->mode == ImageCombineMode::Mix

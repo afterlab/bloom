@@ -422,8 +422,7 @@ OperationIndex appendGlow(RecipeEmitter& emitter, const OperationIndex input,
 // the foreground: co = wrap * af + fg * (1 - wrap alpha), alpha af. So the wrap replaces the
 // foreground's colour inside its edges and never changes its alpha. Wrap only composites it In the
 // foreground instead (wrap * af, alpha wrap alpha * af). The amount is a separate Levels gain
-// rather than Multiply Alpha's factor: Levels' alpha is one rounding on every route, where a
-// factor below one rounds coverage * factor first on the device.
+// after the hold-out, so a changed amount re-runs only Levels.
 OperationIndex appendLightWrap(RecipeEmitter& emitter, const OperationIndex input,
                                const OperationIndex background, const LightWrapOperands& operands) {
     const auto softened =

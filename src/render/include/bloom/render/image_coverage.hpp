@@ -73,6 +73,15 @@ matteSelectionFromStoredValue(const std::int64_t value) noexcept {
     return selection.invert ? 1.0F - coverage : coverage;
 }
 
+// #532 Multiply Alpha's per-pixel amount: the matte coverage times the unit factor, one Float32
+// product. Each premultiplied component is then multiplied by this amount and rounded once more,
+// so the CPU reference and the resident ImageCombineV1 shader follow the same two roundings and
+// alpha is bit-exact for every factor, not only a unit one.
+[[nodiscard]] inline float multiplyAlphaAmount(const float coverage, const float factor) noexcept {
+    const float amount = coverage * factor;
+    return amount;
+}
+
 // #479 Separate Channels and Combine Channels: the STORED value of one channel, exactly as the
 // premultiplied pixel holds it -- never divided by alpha, never clamped, with no colour
 // conversion -- so a Raw data pass (depth, normals, motion vectors, IDs) and an HDR or signed value

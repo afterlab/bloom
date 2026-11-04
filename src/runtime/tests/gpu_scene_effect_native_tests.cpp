@@ -19,6 +19,7 @@
 #include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_image.hpp>
+#include <bloom/render/image_coverage.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
@@ -451,6 +452,105 @@ void runPointwiseExtremeAlpha(Expectations& expectations, GpuDevice& device, Gpu
                 executor.executor->counters().dispatches == counters.dispatches,
             "pointwise extreme alpha: warm cache retains parity with zero new dispatches");
     }
+}
+
+// #532 Multiply Alpha below a unit factor: base solid -> Multiply Alpha by a matte solid's alpha
+// -> layer -> Normal merge -> output. Both routes round coverage x factor to Float32 first, then
+// each premultiplied component times that amount once, so alpha is bit-exact.
+[[nodiscard]] std::shared_ptr<const CompiledCompositionPlan>
+multiplyAlphaPlan(const std::uint64_t idBase, const Color4d base, const Color4d matte,
+                  const double factor) {
+    constexpr std::uint64_t layerRaw = 1;
+    std::vector<CompiledOperation> operations;
+    operations.emplace_back(CompiledSolid{NodeId::fromRaw(idBase + 1),
+                                          {ParameterId::fromRaw(idBase + 2), base},
+                                          {ParameterId::fromRaw(idBase + 3), 12.0},
+                                          {ParameterId::fromRaw(idBase + 4), 10.0}});
+    operations.emplace_back(CompiledSolid{NodeId::fromRaw(idBase + 16),
+                                          {ParameterId::fromRaw(idBase + 17), matte},
+                                          {ParameterId::fromRaw(idBase + 18), 12.0},
+                                          {ParameterId::fromRaw(idBase + 19), 10.0}});
+    operations.emplace_back(CompiledImageEffect{
+        NodeId::fromRaw(idBase + 5), OperationIndex::fromRaw(0),
+        bloom::runtime::ImageCombineKernel{
+            bloom::runtime::ImageCombineMode::MultiplyAlpha,
+            CompiledScalarParameter{ParameterId::fromRaw(idBase + 20), factor},
+            bloom::render::ImageCoverageChannel::Alpha},
+        false, false, OperationIndex::fromRaw(1)});
+    operations.emplace_back(CompiledLayerOutput{
+        NodeId::fromRaw(idBase + 6), LayerId::fromRaw(layerRaw), OperationIndex::fromRaw(2),
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 7), bloom::document::Vec2d{6.0, 5.0}},
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 8), bloom::document::Vec2d{0.0, 0.0}},
+        CompiledVec2Parameter{ParameterId::fromRaw(idBase + 9), bloom::document::Vec2d{1.0, 1.0}},
+        CompiledScalarParameter{ParameterId::fromRaw(idBase + 10), 0.0},
+        CompiledScalarParameter{ParameterId::fromRaw(idBase + 11), 1.0},
+        ParameterId::fromRaw(idBase + 12), bloom::core::kDefaultBlendMode});
+    operations.emplace_back(CompiledMerge{
+        NodeId::fromRaw(idBase + 13),
+        std::vector<CompiledMergeInput>{CompiledMergeInput{LayerSlotId::fromRaw(idBase + 14),
+                                                           LayerId::fromRaw(layerRaw),
+                                                           OperationIndex::fromRaw(3)}}});
+    operations.emplace_back(
+        CompiledCompositionOutput{NodeId::fromRaw(idBase + 15), OperationIndex::fromRaw(4)});
+    CompiledCompositionPlanDefinition definition{bloom::document::Revision::fromRaw(kRevision),
+                                                 kProject,
+                                                 CompositionId::fromRaw(idBase + 100),
+                                                 format(12, 10),
+                                                 std::move(operations),
+                                                 OperationIndex::fromRaw(5)};
+    definition.duration = RationalTime::fromInteger(100);
+    return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+}
+
+void runMultiplyAlpha(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const CpuCompositionEvaluator evaluator;
+    // Base alpha 0.7, matte coverage 0.6, factor 0.8: rounding coverage x factor first gives
+    // alpha 0.335999995, one rounding of the exact triple product 0.336000025. The fixture is
+    // only a regression guard while those two orders disagree.
+    constexpr double baseAlpha = 0.7;
+    constexpr double coverage = 0.6;
+    constexpr double factor = 0.8;
+    const float amount = bloom::render::multiplyAlphaAmount(static_cast<float>(coverage),
+                                                            static_cast<float>(factor));
+    const float twoRoundings = static_cast<float>(baseAlpha) * amount;
+    const float oneRounding =
+        static_cast<float>(static_cast<double>(static_cast<float>(baseAlpha)) *
+                           static_cast<double>(static_cast<float>(coverage)) *
+                           static_cast<double>(static_cast<float>(factor)));
+    expectations.expect(twoRoundings != oneRounding,
+                        "multiply alpha native: the fixture separates the two rounding orders");
+    cache.clear();
+    const auto plan = multiplyAlphaPlan(30000, Color4d{-0.25, 1.75, 0.5, baseAlpha},
+                                        Color4d{0.75, -0.25, 2.0, coverage}, factor);
+    const auto request = requestFor(*plan);
+    auto oracleRequest = request;
+    oracleRequest.bypassOperationCache = true;
+    const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+    const auto prepared = builder.build(plan, request);
+    expectations.expect(oracle.frame() && prepared,
+                        "multiply alpha native: CPU oracle and production scene prepare");
+    if (!oracle.frame() || !prepared)
+        return;
+    const auto pixels = oracle.frame()->processImage().pixels();
+    expectations.expect(std::ranges::any_of(pixels,
+                                            [twoRoundings](const Rgba32f pixel) {
+                                                return pixel.alpha() == twoRoundings;
+                                            }),
+                        "multiply alpha native: the CPU reference rounds coverage x factor first");
+    auto executor = GpuSceneExecutor::create(device, cache);
+    expectations.expect(executor.hasValue(), "multiply alpha native: executor creates");
+    if (!executor)
+        return;
+    const auto cold = runScene(*executor.executor, prepared.scene);
+    std::string detail;
+    expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                            parity(cold.pixels, pixels, detail),
+                        "multiply alpha native: factor below one matches the CPU (2e-6, exact "
+                        "alpha): " + detail);
+    const auto counters = executor.executor->counters();
+    expectations.expect(counters.blendDispatches > 0 && counters.readbacks == 0,
+                        "multiply alpha native: resident combine dispatch without readback");
 }
 
 void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
@@ -1468,6 +1568,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
     runPointwiseExtremeAlpha(expectations, device, cache);
+    runMultiplyAlpha(expectations, device, cache);
     runCanvas(expectations, device, cache);
     runDiscrete(expectations, device, cache);
     runResizeFit(expectations, device, cache);

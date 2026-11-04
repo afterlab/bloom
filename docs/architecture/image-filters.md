@@ -628,8 +628,8 @@ and the constant switch `wrapOnly` (off), with an optional `background` Image in
 background is blurred by `radius` with a Clamp edge, so the frame edge does not darken it; the
 foreground's alpha is blurred by `radius` with a transparent edge; Multiply Alpha by the inverted
 spread coverage keeps the blurred background only where it spills over the foreground's edges;
-Levels scales its alpha by `amount` (a separate gain rather than Multiply Alpha's factor, so the
-alpha is one rounding on the CPU and the device alike); and a Merge entry with the explicit Atop
+Levels scales its alpha by `amount` (a separate gain after the hold-out, so a changed amount
+re-runs only Levels); and a Merge entry with the explicit Atop
 mode composites it onto the
 foreground (`co = cw af + cf (1 - aw)`, `ao = af`), so the wrap only lightens or tints the
 foreground within its own coverage. Wrap Only uses the In mode (`co = cw af`, `ao = aw af`) and

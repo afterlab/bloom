@@ -857,8 +857,11 @@ the selected Alpha, straight Red/Green/Blue, or Luma matte channel, treats absen
 zero coverage, reads Luma as the Rec. 709 luma of the premultiplied matte colour (as ADR 0028
 defines for track mattes, so a feathered white matte edge gives its alpha rather than full
 coverage), and multiplies the base premultiplied RGBA by the clamped coverage and animatable
-unit factor. Zero-alpha matte RGB contributes zero; negative and HDR matte channels are clamped
-only after extraction. The base image retains its data/display windows and pixel aspect. CPU and
+unit factor. The amount is one Float32 product of the coverage and the factor, and each
+premultiplied component is multiplied by that amount and rounded once more
+(`render::multiplyAlphaAmount`), so the CPU reference and the resident shader produce bit-exact
+alpha for every factor, not only a unit one. Zero-alpha matte RGB contributes zero; negative and HDR
+matte channels are clamped only after extraction. The base image retains its data/display windows and pixel aspect. CPU and
 resident two-image GPU paths share the coverage contract, with normal cancellation and budget
 admission. The factor, channel and both input content identities invalidate cached output.
 
