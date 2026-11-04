@@ -563,7 +563,9 @@ void NodeItem::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, 
     painter->setFont(kit::font(kit::TypeRole::UiSmall));
     painter->setPen(kit::color(kit::Color::Muted));
     for (const auto* socket : sockets_) {
-        if (parameterSocketY_.contains(socket->name))
+        // #499: a socket whose row a card widget keeps behind it is hidden, and so is its name;
+        // its position is stale, so drawing the name would put it outside the card.
+        if (parameterSocketY_.contains(socket->name) || !socket->isVisible())
             continue;
         const qreal rowExtent = socket->rowHeight();
         const QRectF row(kCardPadding, socket->pos().y() - rowExtent / 2,

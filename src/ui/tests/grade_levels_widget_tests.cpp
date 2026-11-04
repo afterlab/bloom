@@ -11,6 +11,9 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QGraphicsProxyWidget>
+#include <QLabel>
+#include <QStyleOptionGraphicsItem>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -19,7 +22,9 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grade_wheels.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/slider.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/levels_graph.hpp>
@@ -63,6 +68,61 @@ void mouse(QWidget& widget, const QEvent::Type type, const QPointF position,
 void key(QWidget& widget, const int which) {
     QKeyEvent event(QEvent::KeyPress, which, Qt::NoModifier);
     QApplication::sendEvent(&widget, &event);
+}
+
+// #499: a card paints nothing outside its own rectangle (a hidden row's socket name included).
+bool paintsInsideCard(ui::node_editor::NodeItem& item) {
+    const QRectF card = item.cardRect();
+    constexpr int margin = 48;
+    QImage image(static_cast<int>(card.width()) + 2 * margin,
+                 static_cast<int>(card.height()) + 2 * margin, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    {
+        QPainter painter(&image);
+        painter.translate(margin, margin);
+        QStyleOptionGraphicsItem option;
+        option.rect = card.toRect();
+        option.exposedRect = card.adjusted(-margin, -margin, margin, margin);
+        item.paint(&painter, &option, nullptr);
+    }
+    const QRectF inside = card.translated(margin, margin).adjusted(-1.0, -1.0, 1.0, 1.0);
+    for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width(); ++x)
+            if (!inside.contains(QPointF(x + 0.5, y + 0.5)) && qAlpha(image.pixel(x, y)) != 0)
+                return false;
+    return true;
+}
+
+// #499: every shown widget of a card (its card widget and its rows) sits inside the card, and no
+// text the card shows is elided: no label is narrower than its text, and no tab is clipped. The
+// sockets sit on the card's edges by design.
+bool cardContentFits(ui::node_editor::NodeItem& item) {
+    const QRectF bounds = item.cardRect().adjusted(-0.5, -0.5, 0.5, 0.5);
+    bool fits = true;
+    for (auto* child : item.childItems()) {
+        auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
+        if (!child->isVisible() || proxy == nullptr || proxy->widget() == nullptr)
+            continue;
+        if (!bounds.contains(child->mapRectToParent(child->boundingRect()))) {
+            std::cerr << "a card widget lies outside the card\n";
+            fits = false;
+        }
+        for (auto* label : proxy->widget()->findChildren<QLabel*>()) {
+            if (!label->isVisible() || label->text().isEmpty())
+                continue;
+            if (label->text().contains(QChar(0x2026)) ||
+                label->width() < label->fontMetrics().horizontalAdvance(label->text())) {
+                std::cerr << "label '" << label->text().toStdString() << "' is cut short\n";
+                fits = false;
+            }
+        }
+        for (auto* tabs : proxy->widget()->findChildren<ui::kit::KTabBar*>())
+            if (tabs->isVisible() && tabs->tabRect(tabs->count() - 1).right() >= tabs->width()) {
+                std::cerr << "a tab bar is clipped\n";
+                fits = false;
+            }
+    }
+    return fits;
 }
 
 std::optional<double> stored(ui::CompositionSession& session, const document::NodeId node,
@@ -140,6 +200,24 @@ void gradeWheels() {
     };
     expect(!rowShown("liftRed") && !rowShown("temperature"),
            "the card shows the widget, not the value rows");
+    expect(paintsInsideCard(*item), "the Grade card paints no hidden row's label outside it");
+    expect(cardContentFits(*item), "the Grade card's content fits it, nothing elided");
+    // #499: at the default card width every primary's name and value is whole.
+    for (const auto which : document::kGradePrimaries) {
+        const auto role = QString::fromStdString(std::string(document::gradePrimaryRole(which)));
+        auto* label =
+            card->findChild<ui::kit::KLabel*>(QStringLiteral("gradePrimaryLabel.%1").arg(role));
+        auto* field = card->primary(which);
+        const bool whole =
+            label && field &&
+            label->width() >= QFontMetrics(label->font()).horizontalAdvance(label->text()) &&
+            !field->paintedText().contains(QChar(0x2026)) && !field->isDisplayRounded() &&
+            field->width() >= field->sizeHint().width() &&
+            field->geometry().right() <= card->width() && label->geometry().right() < field->x();
+        if (!whole)
+            std::cerr << "primary " << role.toStdString() << " is cut short\n";
+        expect(whole, "a primary's name and value fit the card");
+    }
     const auto collapsedHeight = item->boundingRect().height();
 
     // A puck drag: live, then one command for the three colour values.
@@ -240,6 +318,14 @@ void levelsGraph() {
         return;
     expect(card->showsRole("clamp") && !card->showsRole("masterGamma"),
            "the card keeps the clamp row and hides the values");
+    expect(paintsInsideCard(*item), "the Levels card paints no hidden row's label outside it");
+    expect(cardContentFits(*item), "the Levels card's content fits it, nothing elided");
+    // #499: the five channel tabs fit beside the Values caret.
+    auto* tabs = card->tabs();
+    expect(tabs->count() == 5 && tabs->width() >= tabs->sizeHint().width() &&
+               tabs->tabRect(4).right() < tabs->width() &&
+               tabs->geometry().right() < card->width() - ui::kit::px(ui::kit::Size::Control) + 1,
+           "every channel tab fits on the card");
     auto& canvas = *card->canvas();
     expect(canvas.handlePosition(LevelsHandle::InputBlack) &&
                canvas.handlePosition(LevelsHandle::Gamma) &&

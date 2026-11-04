@@ -516,7 +516,9 @@ int LevelsCardWidget::heightAt(const int width) const {
 }
 
 int LevelsCardWidget::minimumWidthHint() const {
-    return kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control);
+    // #499: every channel tab fits beside the Values caret, so none is clipped.
+    return std::max(kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control),
+                    tabs_->sizeHint().width() + static_cast<int>(small()) + control());
 }
 
 QSize LevelsCardWidget::sizeHint() const {

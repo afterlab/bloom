@@ -469,10 +469,16 @@ GradeCardWidget::GradeCardWidget(CompositionSession& session, const document::No
         auto* field = new kit::KValueField(this);
         field->setObjectName(QStringLiteral("gradePrimary.%1").arg(QString::fromStdString(role)));
         field->setCompact(true);
+        // #499: the field takes the rest of its row, so a long value is not cut short either.
+        field->setMaximumWidth(QWIDGETSIZE_MAX);
         field->setOutlinedAtRest(true);
         configureValueField(*field, document::gradePrimarySchemaKey(which),
                             document::ParameterValueKind::Float64, role);
-        field->setLabel(primaryName(which));
+        auto* label = new kit::KLabel(primaryName(which), this, kit::TypeRole::UiSmall);
+        label->setObjectName(
+            QStringLiteral("gradePrimaryLabel.%1").arg(QString::fromStdString(role)));
+        label->setTone(kit::Color::Muted);
+        primaryLabels_[index] = label;
         field->setAccessibleName(primaryName(which));
         field->setToolTip(primaryName(which));
         field->setDefaultValue(document::gradePrimaryDomain(which).neutral);
@@ -545,7 +551,8 @@ int GradeCardWidget::minimumWidthHint() const {
 int GradeCardWidget::heightAt(const int width) const {
     const int cell = std::max(0, (width - gap()) / 2);
     const int wheels = 2 * (cell + small() + control()) + gap();
-    const int primaries = 4 * control() + 3 * small();
+    const int primaries = (1 + static_cast<int>(document::kGradePrimaryCount)) * control() +
+                          static_cast<int>(document::kGradePrimaryCount) * small();
     return wheels + gap() + primaries;
 }
 
@@ -577,12 +584,17 @@ void GradeCardWidget::place() {
     primariesTitle_->setGeometry(0, y, std::max(0, w - control()), control());
     primariesValues_->setGeometry(std::max(0, w - control()), y, control(), control());
     y += control() + small();
-    // Two columns, so every primary keeps its full name.
-    const int column = std::max(0, (w - small()) / 2);
+    // #499: one primary per row, its whole name in a label column measured from the widest name
+    // and the field taking the rest of the row, so no name or value is cut short.
+    int labels = 0;
+    for (const auto* label : primaryLabels_)
+        labels = std::max(labels, label->sizeHint().width());
+    labels += small();
     for (std::size_t index = 0; index < primaries_.size(); ++index) {
-        const int x = static_cast<int>(index % 2) * (column + small());
-        const int top = y + static_cast<int>(index / 2) * (control() + small());
-        primaries_[index]->setGeometry(x, top, column, control());
+        const int top = y + static_cast<int>(index) * (control() + small());
+        primaryLabels_[index]->setGeometry(0, top, labels, control());
+        primaries_[index]->setGeometry(labels + small(), top, std::max(0, w - labels - small()),
+                                       control());
     }
 }
 

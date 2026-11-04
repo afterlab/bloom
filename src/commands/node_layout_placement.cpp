@@ -34,8 +34,8 @@ constexpr double kTitleBand = 32.0;
 constexpr double kRow = 28.0;
 constexpr double kPadding = 8.0;
 // Size::NodeCardWidth (240) plus the label column an ordinary built-in card can add to it, on the
-// grid's half step. A card with a text field, a video's stream readout or a vector operation's
-// operator selector runs wider still.
+// grid's half step. A card with a text field, a video's stream readout, a vector operation's
+// operator selector or the Levels channel tabs runs wider still.
 constexpr double kCardWidth = 264.0;
 constexpr double kWideCardWidth = 288.0;
 // The Curves card's graph height over its width (node_editor_items.hpp).
@@ -139,6 +139,8 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         return document::kConservativeNodeCardSize;
     const bool wide =
         node->typeId == "bloom.video-source" || node->typeId == document::kVector2MathNodeType ||
+        // #499: the Levels card fits its five channel tabs beside the Values caret.
+        node->typeId == document::kLevelsNodeType ||
         node->typeId == document::kVector3MathNodeType ||
         std::ranges::any_of(definition->parameters,
                             [](const auto& parameter) {
@@ -222,8 +224,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     const double inner = std::max(0.0, cardWidth - 2.0 * kPadding);
     if (node->typeId == document::kGradeNodeType) {
         const double cell = std::max(0.0, std::floor((inner - kPadding) / 2.0));
-        thumbnail = 2.0 * (cell + kSmall + kControl) + kPadding + kPadding + 4.0 * kControl +
-                    3.0 * kSmall + kPadding;
+        // #499: the primaries' title, then one row per primary.
+        thumbnail = 2.0 * (cell + kSmall + kControl) + kPadding + kPadding + 7.0 * kControl +
+                    6.0 * kSmall + kPadding;
     }
     if (node->typeId == document::kLevelsNodeType)
         thumbnail = kControl + kSmall + std::round(inner * kLevelsPlotAspect) +

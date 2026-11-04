@@ -133,6 +133,8 @@ class GradeCardWidget final : public NodeCardWidget {
     kit::KLabel* primariesTitle_ = nullptr;
     kit::KButton* primariesValues_ = nullptr;
     std::array<kit::KValueField*, document::kGradePrimaryCount> primaries_{};
+    // #499: each primary is a row of its own, its full name in a label column beside the field.
+    std::array<kit::KLabel*, document::kGradePrimaryCount> primaryLabels_{};
     // The four wheels' Values groups, then the primaries'.
     std::array<bool, document::kGradeWheelCount + 1> expanded_{};
 };
