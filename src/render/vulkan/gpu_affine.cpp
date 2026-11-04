@@ -291,9 +291,13 @@ GpuAffineDiagnostic GpuAffine::beginAffineMatrix(const GpuAffineMatrixParameters
         parameters.outputDescriptor->dataWindow() != parameters.outputWindow)
         return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                               "the affine output descriptor disagrees with its data window");
+    if (parameters.filter != GpuAffineFilter::Bilinear &&
+        parameters.filter != GpuAffineFilter::Nearest)
+        return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
+                              "the affine filter is unknown");
     return impl_->beginPrepared(
         parameters.source, parameters.outputWindow, map, parameters.opacity, byteBudget,
-        parameters.outputDescriptor ? &*parameters.outputDescriptor : nullptr);
+        parameters.outputDescriptor ? &*parameters.outputDescriptor : nullptr, parameters.filter);
 }
 
 GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
@@ -301,7 +305,8 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
                                                    const GpuAffineMap& affineMap,
                                                    const float opacity,
                                                    const std::uint64_t byteBudget,
-                                                   const Rgba32fImageDescriptor* output) {
+                                                   const Rgba32fImageDescriptor* output,
+                                                   const GpuAffineFilter filter) {
     if (!onOwnerThread()) {
         return makeDiagnostic(GpuAffineDiagnosticCode::WrongThread,
                               "beginAffine must run on the device owner thread");
@@ -505,10 +510,10 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *affine.pipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *affine.pipelineLayout, 0,
                                      {*affineSet}, {});
-    const CompositeTranslationPush push{outputWidth, outputHeight, sourceWidth, sourceHeight,
-                                        opacity};
+    const AffinePush push{outputWidth,  outputHeight, sourceWidth,
+                          sourceHeight, opacity,      static_cast<std::uint32_t>(filter)};
     commandBuffer.pushConstants(*affine.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
-                                sizeof(CompositeTranslationPush), &push);
+                                sizeof(AffinePush), &push);
     // One invocation per output pixel: X tiles the row in 256-wide groups, Y is the row.
     const auto groups = static_cast<std::uint32_t>(
         compositeDispatchGroupCount(static_cast<std::uint64_t>(outputWidth)));

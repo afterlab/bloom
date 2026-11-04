@@ -105,13 +105,13 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return {{"Premultiplied", kCombineChannelsPremultiplied},
                 {"Straight", kCombineChannelsStraight}};
     if (schemaKey == "bloom.resize-fit.filter")
-        return sequential({"Bilinear"});
+        return sequential({"Bilinear", "Nearest"});
     if (schemaKey == "bloom.resize-fit.policy")
         return sequential({"Fit", "Fill"});
     if (schemaKey == "bloom.transform-2d.extent")
         return sequential({"Transformed", "Input", "Display"});
     if (schemaKey == "bloom.transform-2d.filter")
-        return sequential({"Bilinear"});
+        return sequential({"Bilinear", "Nearest"});
     if (schemaKey == "bloom.ocio-file.interpolation")
         return sequential({"Linear", "Tetrahedral", "Best"});
     if (schemaKey == "bloom.ocio-file.direction")

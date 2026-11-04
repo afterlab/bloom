@@ -519,6 +519,32 @@ displayProofRunner(const bool customView) {
                        "src/runtime Resize production affine preparation");
     addImageEffectPlan("node.bloom.fit", bloom::runtime::ResizeFitKernel{10, 7, 1, 1, 0, 1}, 105000,
                        "src/runtime Fit production affine preparation");
+    // #480: Resize, Fit and Transform 2D Nearest through the production affine command.
+    add("feature.resample.nearest", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Resize/Fit and Transform 2D production affine preparation", [] {
+            FixtureRun combined;
+            combined.prepared = true;
+            const auto nearest = bloom::runtime::kResampleFilterNearest;
+            const std::array<ImageEffectKernel, 3> kernels{
+                bloom::runtime::ResizeFitKernel{10, 7, 1, 1, nearest},
+                bloom::runtime::ResizeFitKernel{10, 7, 1, 1, nearest, 1},
+                bloom::runtime::Transform2DKernel{
+                    CompiledVec2Parameter{ParameterId::fromRaw(105530), Vec2d{1.25, -0.5}},
+                    CompiledVec2Parameter{ParameterId::fromRaw(105531), Vec2d{}},
+                    CompiledVec2Parameter{ParameterId::fromRaw(105532), Vec2d{1.5, 0.75}},
+                    CompiledScalarParameter{ParameterId::fromRaw(105533), 30.0},
+                    bloom::runtime::Transform2DExtent::Transformed, nearest}};
+            std::uint64_t idBase = 105500;
+            for (const auto& kernel : kernels) {
+                auto frame = runBuilder(effectPlan(kernel, idBase));
+                idBase += 100;
+                combined.prepared = combined.prepared && frame.prepared;
+                combined.evidence += frame.evidence + "; ";
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            return combined;
+        });
     add("node.bloom.linear-gradient", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime gradient source and native batch tests",
         [] { return runBuilder(withSource(gradient(false, 140000), 140000)); });

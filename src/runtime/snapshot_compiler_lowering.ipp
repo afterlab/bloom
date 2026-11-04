@@ -1499,7 +1499,8 @@ lowerImageEffect(const document::NodeRecord& node,
         const auto* extent = parameterConstant<std::int64_t>(findParameterBinding(node, "extent"));
         const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
         if (translate && pivot && scale && rotation && extent && *extent >= 0 && *extent <= 2 &&
-            filter && *filter == 0)
+            filter && (*filter == runtime::kResampleFilterBilinear ||
+                       *filter == runtime::kResampleFilterNearest))
             return runtime::CompiledImageEffect{
                 node.id, *input,
                 runtime::Transform2DKernel{*translate, *pivot, *scale, *rotation,

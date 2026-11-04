@@ -272,8 +272,13 @@ struct DiscreteImageKernel final {
     }
     friend bool operator==(const DiscreteImageKernel&, const DiscreteImageKernel&) = default;
 };
+// The resample filters of Resize, Fit and Transform 2D. Bilinear (0) interpolates the four taps
+// around the sample point, shared with Layer Output. Nearest (1, #480) copies the one tap whose
+// centre is nearest the sample (the upper tap on an exact half), so data, ID and Cryptomatte
+// images keep their stored values exactly.
+inline constexpr std::int64_t kResampleFilterBilinear = 0;
+inline constexpr std::int64_t kResampleFilterNearest = 1;
 // Constant output geometry. Resize stretches; Fit uses a physical-aspect-preserving fit/fill.
-// Bilinear is the initial explicitly versioned filter (0), shared with Layer Output.
 struct ResizeFitKernel final {
     std::int64_t width = 1920;
     std::int64_t height = 1080;
@@ -288,7 +293,7 @@ struct ResizeFitKernel final {
 // Output vocabulary: translate, pivot (an offset from the centre of the input's content bounds),
 // per-axis scale and clockwise rotation in degrees, all animatable or driven. Extent chooses the
 // output data window: the full transformed support, clipped to the input data window, or clipped
-// to the input display window. Bilinear is the only filter (0), shared with Layer Output.
+// to the input display window. `filter` is kResampleFilterBilinear or kResampleFilterNearest.
 enum class Transform2DExtent : std::uint8_t { Transformed, Input, Display };
 struct Transform2DKernel final {
     CompiledVec2Parameter translate;

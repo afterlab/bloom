@@ -118,6 +118,7 @@ struct GpuSceneExecutorStep final {
     // the output data window is `outputWindow`.
     render::GpuAffineMatrix affineMatrix;
     float affineOpacity = 1.0F;
+    render::GpuAffineFilter affineFilter = render::GpuAffineFilter::Bilinear;
     std::optional<render::Rgba32fImageDescriptor> affineOutputDescriptor{};
     // Blend: `input` is the foreground source, `destination` the backdrop.
     core::BlendMode blendMode = core::kDefaultBlendMode;
@@ -220,7 +221,9 @@ inline constexpr std::string_view kCryptomatteCoverageArtifactToken = "cryptomat
     return std::isfinite(affine.matrix.a) && std::isfinite(affine.matrix.b) &&
            std::isfinite(affine.matrix.tx) && std::isfinite(affine.matrix.c) &&
            std::isfinite(affine.matrix.d) && std::isfinite(affine.matrix.ty) &&
-           std::isfinite(affine.opacity);
+           std::isfinite(affine.opacity) &&
+           (affine.filter == render::GpuAffineFilter::Bilinear ||
+            affine.filter == render::GpuAffineFilter::Nearest);
 }
 
 [[nodiscard]] inline bool
@@ -244,7 +247,7 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow, affine->matrix,
                                              affine->opacity, affine->outputWindow,
                                              affine->pixelAspect, std::string{kAffineArtifactToken},
-                                             affine->outputDescriptor);
+                                             affine->outputDescriptor, affine->filter);
     }
     if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
         if (!pointResampleFieldsValid(*resample)) {

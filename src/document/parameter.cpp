@@ -345,7 +345,7 @@ constantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter") {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value != nullptr && *value >= 0 &&
-               *value <= (schemaKey == "bloom.transform-2d.extent" ? 2 : 0);
+               *value <= (schemaKey == "bloom.transform-2d.extent" ? 2 : 1);
     }
     if (schemaKey.starts_with("bloom.resize-fit.")) {
         if (schemaKey == "bloom.resize-fit.bypass")
@@ -354,7 +354,7 @@ constantMatchesSchema(const std::string_view schemaKey,
         if (!value)
             return false;
         if (schemaKey == "bloom.resize-fit.filter")
-            return *value == 0;
+            return *value == 0 || *value == 1;
         if (schemaKey == "bloom.resize-fit.policy")
             return *value >= 0 && *value <= 1;
         return *value >= 1 && *value <= 32768;

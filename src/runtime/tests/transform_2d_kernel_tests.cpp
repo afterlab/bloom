@@ -72,9 +72,10 @@ Transform2DValues values(const document::Vec2d translate, const document::Vec2d 
 runtime::detail::ImageEffectResult
 run(const Transform2DValues& sampled, const render::Rgba32fImage& input,
     const Transform2DExtent extent = Transform2DExtent::Transformed, const double sx = 1.0,
-    const double sy = 1.0, const std::size_t budget = 1U << 20U) {
+    const double sy = 1.0, const std::size_t budget = 1U << 20U,
+    const std::int64_t filter = runtime::kResampleFilterBilinear) {
     runtime::detail::PreparedImageEffect effect;
-    effect.transform2D = PreparedTransform2D{extent, 0, sampled};
+    effect.transform2D = PreparedTransform2D{extent, filter, sampled};
     return runtime::detail::applyImageEffect(effect, input, nullptr, budget, {},
                                              runtime::OperationIndex::fromRaw(1), {}, sx, sy);
 }
@@ -110,10 +111,47 @@ void testIdentityAndPrepare() {
                                      values({std::numeric_limits<double>::quiet_NaN(), 0}));
     expect(nan.diagnostic.has_value(), "non-finite parameters refuse with a diagnostic");
     auto badFilter = effect;
-    std::get<runtime::Transform2DKernel>(badFilter.kernel).filter = 1;
+    std::get<runtime::Transform2DKernel>(badFilter.kernel).filter = 2;
     expect(context.prepare(badFilter, {}, {}, {}, {}, {}, 1.0, 1.0, {}, {}, values({1, 0}))
                .diagnostic.has_value(),
            "an unknown filter refuses with a diagnostic");
+    auto nearest = effect;
+    std::get<runtime::Transform2DKernel>(nearest.kernel).filter = runtime::kResampleFilterNearest;
+    const auto nearestPrepared =
+        context.prepare(nearest, {}, {}, {}, {}, {}, 1.0, 1.0, {}, {}, values({0.5, 0}));
+    expect(!nearestPrepared.diagnostic && nearestPrepared.cacheIdentity != moved.cacheIdentity,
+           "Nearest is accepted and keyed apart from Bilinear");
+}
+
+// #480: Nearest copies one stored tap per output pixel. A fractional move snaps to whole source
+// pixels instead of blending neighbours, and a rotated, scaled image only ever holds source pixels
+// or transparent black.
+void testNearest() {
+    const auto input = source();
+    const auto moved = run(values({0.25, 0.75}), input, Transform2DExtent::Transformed, 1.0, 1.0,
+                           1U << 20U, runtime::kResampleFilterNearest);
+    const auto blended = run(values({0.25, 0.75}), input);
+    expect(moved.image && blended.image, "a fractional Nearest move produces an image");
+    if (moved.image && blended.image) {
+        bool exact = true;
+        for (const auto pixel : moved.image->pixels())
+            exact = exact && (std::ranges::find(input.pixels(), pixel) != input.pixels().end() ||
+                              pixel == render::Rgba32f::transparent());
+        expect(exact, "a fractional Nearest move copies source pixels exactly");
+        expect(!std::ranges::equal(moved.image->pixels(), blended.image->pixels()),
+               "Bilinear blends the same fractional move");
+    }
+    const auto turned = run(values({0.3, -0.2}, {1.5, 0.75}, 33.0), input,
+                            Transform2DExtent::Transformed, 1.0, 1.0, 1U << 20U,
+                            runtime::kResampleFilterNearest);
+    expect(turned.image != nullptr, "a rotated Nearest transform produces an image");
+    if (turned.image) {
+        bool exact = true;
+        for (const auto pixel : turned.image->pixels())
+            exact = exact && (std::ranges::find(input.pixels(), pixel) != input.pixels().end() ||
+                              pixel == render::Rgba32f::transparent());
+        expect(exact, "a rotated, scaled Nearest transform holds only source pixels");
+    }
 }
 
 void testResample() {
@@ -369,6 +407,7 @@ int main() {
     try {
         testIdentityAndPrepare();
         testResample();
+        testNearest();
         testDegenerateAndExtents();
         testProxy();
         testCancellation();

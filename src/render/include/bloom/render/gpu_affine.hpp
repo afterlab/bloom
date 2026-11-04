@@ -140,6 +140,11 @@ struct GpuAffineParameters final {
     std::optional<LayerTransform> transform;
 };
 
+// The resample filter of the composed-matrix form (#480). Bilinear interpolates the four taps
+// around the sample point; Nearest copies the one tap whose centre is nearest (the upper tap on an
+// exact half-way factor), so data and ID images keep their stored values exactly.
+enum class GpuAffineFilter : std::uint32_t { Bilinear = 0, Nearest = 1 };
+
 // Validated inputs for the composed-matrix form. `opacity` must be finite in [0, 1] and is used as
 // the Float32 binding directly (the caller has already rounded it once).
 struct GpuAffineMatrixParameters final {
@@ -149,6 +154,7 @@ struct GpuAffineMatrixParameters final {
     float opacity = 1.0F;
     // Resize/Fit can author a new display extent/PAR; ordinary layer placements inherit.
     std::optional<Rgba32fImageDescriptor> outputDescriptor{};
+    GpuAffineFilter filter = GpuAffineFilter::Bilinear;
 };
 
 // Per-call ceilings. Defaults are effectively unbounded so the real bounds are the live device

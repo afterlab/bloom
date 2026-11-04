@@ -273,6 +273,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.outputWindow = affineCommand->outputWindow;
         step.affineMatrix = affineCommand->matrix;
         step.affineOpacity = affineCommand->opacity;
+        step.affineFilter = affineCommand->filter;
         step.affineOutputDescriptor = affineCommand->outputDescriptor;
         steps.push_back(std::move(step));
         color[index] = 2;

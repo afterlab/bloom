@@ -49,9 +49,13 @@ emitResizeFitCommand(const ResizeFitKernel& kernel, const OperationIndex input,
         return error;
     const auto matrix = toGpuAffineMatrix(geometry->matrix, source->data, 1.0, 1.0);
     const auto aspect = geometry->descriptor.pixelAspect();
+    const auto filter = kernel.filter == kResampleFilterNearest
+                            ? render::GpuAffineFilter::Nearest
+                            : render::GpuAffineFilter::Bilinear;
     const auto key =
         makeGpuSceneAffineSemanticKey(inputKey, source->data, matrix, 1.0F, output, aspect,
-                                      std::string{kGpuAffineSpirvSha256}, geometry->descriptor);
+                                      std::string{kGpuAffineSpirvSha256}, geometry->descriptor,
+                                      filter);
     result.command = emit(GpuSceneAffineCommand{.sourceOperation = operation,
                                                 .input = inputCommand,
                                                 .inputKey = std::move(inputKey),
@@ -61,7 +65,8 @@ emitResizeFitCommand(const ResizeFitKernel& kernel, const OperationIndex input,
                                                 .opacity = 1.0F,
                                                 .pixelAspect = aspect,
                                                 .semanticKey = key,
-                                                .outputDescriptor = geometry->descriptor});
+                                                .outputDescriptor = geometry->descriptor,
+                                                .filter = filter});
     result.key = key;
     result.window = output;
     result.local = boundsForWindow(output, ctx.hScale, ctx.vScale);

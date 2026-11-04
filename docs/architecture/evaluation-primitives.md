@@ -321,10 +321,13 @@ to centered Fit (contain); Fill (cover) instead crops centered overflow. Both co
 from the source and target pixel aspect ratios. Source data-window offsets and overscan remain
 sampling coordinates; they do not redefine the source display canvas.
 
-Both nodes expose constant width, height, pixel-aspect numerator/denominator, a Bilinear filter
-selector, and bypass. Fit also exposes Fit/Fill. Dimensions and ratio terms are positive integers
-up to 32768; zero, negative, unsupported filter/policy values, and driven/animated geometry are
-rejected. Bilinear is the only filter in this version. The generic registered-node commands provide
+Both nodes expose constant width, height, pixel-aspect numerator/denominator, a filter selector,
+and bypass. Fit also exposes Fit/Fill. Dimensions and ratio terms are positive integers up to
+32768; zero, negative, unsupported filter/policy values, and driven/animated geometry are rejected.
+The filter is **Bilinear** (0, default) or **Nearest** (1, #480). Nearest copies the one source
+tap whose centre is nearest each output sample (on an exact half-way factor, the upper tap), so a
+depth, normal, motion-vector, ID or Cryptomatte image keeps its stored values exactly; with a
+transparent-black tap outside the source data window it never blends two values. The generic registered-node commands provide
 Add, parameter edits, duplication, undo/redo, and project persistence; Properties reads these same
 schemas and selectors.
 
@@ -333,11 +336,12 @@ extent with ceiling and derives its exact PAR to preserve the authored physical 
 Composition Output still chooses the composition render extent. Fit letterboxes with transparent
 black; Fill clips to the target canvas. The existing inverse-mapped affine primitive interpolates
 premultiplied RGBA directly, preserving finite signed/HDR RGB and alpha, with transparent-black
-taps outside the source data window. This initial bilinear filter has no additional downsampling
-antialiasing prefilter.
+taps outside the source data window. Neither filter has a downsampling antialiasing prefilter.
 
-CPU and GPU share checked geometry. The CPU uses the existing parented affine row reference; GPU
-preparation emits resident `GpuSceneAffineCommand` work using `AffineBilinearV1`, including for
+CPU and GPU share checked geometry. The CPU uses the existing parented affine row reference (its
+nearest tap for Nearest); GPU preparation emits resident `GpuSceneAffineCommand` work using
+`AffineBilinearV1`, whose `sampling` push word selects the nearest tap (the Required coverage axis
+`feature.resample.nearest`, shared with Transform 2D), including for
 preview and final-render evaluation. An optional checked output descriptor on individual and batched
 affine work carries the new display canvas/PAR without a pixel readback. Deferred vector inputs
 materialize through existing native coverage before this resample. No CPU-rendered Resize/Fit
@@ -379,16 +383,20 @@ places the same frame and the authored movement stays visible. A zero scale, or 
 the selected extent, publishes no image without a diagnostic, as a collapsed Layer does. Support
 beyond the +/-2^24 device coordinate range, or a non-finite value, fails with an explicit diagnostic.
 An identity transform (no translation, unit scale, a whole-turn rotation) with the Transformed or
-Input extent is an exact passthrough. **Bilinear** (0) is the only `filter` in schema 1, and it has
-no downsampling prefilter.
+Input extent is an exact passthrough. `filter` is **Bilinear** (0, default) or **Nearest** (1,
+#480), with the Resize/Fit meaning; neither has a downsampling prefilter. Nearest resamples on the
+CPU with the parented affine row over the same author-space matrix the GPU command uses, so both
+routes pick the same tap.
 
-GPU preparation emits the Layer stage's raster commands for the same geometry. A pure move becomes
-the exact TranslationOpacity pass, and every other map becomes a resident `GpuSceneAffineCommand`
-(`AffineBilinearV1`) built from the same author-space matrix. A collapsed or fully clipped transform
+GPU preparation emits the Layer stage's raster commands for the same geometry. A pure Bilinear move
+becomes the exact TranslationOpacity pass, and every other map, and every Nearest map, becomes a
+resident `GpuSceneAffineCommand` (`AffineBilinearV1`, its nearest sampling for Nearest) built from
+the same author-space matrix. A collapsed or fully clipped transform
 emits no command. Preview and every final route go through the same production scene executor, and
 no CPU-rendered output is uploaded. Parity follows the affine backend contract: 2e-6 abs-or-rel on all
-components, with bit-exact alpha at the 0/1 endpoints. The required coverage fixtures use dyadic
-coefficients so that the coverage gate's bit-exact alpha check holds by construction.
+components, with bit-exact alpha at the 0/1 endpoints; a Nearest tap is copied bit for bit. The
+required coverage fixtures use dyadic coefficients so that the coverage gate's bit-exact alpha
+check holds by construction.
 
 Cache identity covers the sampled values, the input content-bounds centre, extent, filter, input
 identity, windows/PAR, proxy and ROI. The executor independently keys the actual matrix or

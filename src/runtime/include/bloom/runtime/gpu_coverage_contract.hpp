@@ -110,10 +110,10 @@ BLOOM_GPU_REQUIRED_EFFECT(PointwiseImageKernel, "scene-linear pointwise image ef
 BLOOM_GPU_REQUIRED_EFFECT(ImageCombineKernel, "flat RGBA two-image combine kernel");
 BLOOM_GPU_REQUIRED_EFFECT(CanvasImageKernel, "crop or pad canvas image effect kernel");
 BLOOM_GPU_REQUIRED_EFFECT(DiscreteImageKernel, "exact flip/quarter-turn image kernel");
-BLOOM_GPU_REQUIRED_EFFECT(ResizeFitKernel, "Resize/Fit bilinear kernel");
+BLOOM_GPU_REQUIRED_EFFECT(ResizeFitKernel, "Resize/Fit bilinear or nearest kernel");
 BLOOM_GPU_REQUIRED_EFFECT(SeparableBlurKernel, "premultiplied separable neighborhood filter");
 BLOOM_GPU_REQUIRED_EFFECT(LayerMaskKernel, "layer mask coverage (ADR 0028)");
-BLOOM_GPU_REQUIRED_EFFECT(Transform2DKernel, "Transform 2D bilinear affine kernel");
+BLOOM_GPU_REQUIRED_EFFECT(Transform2DKernel, "Transform 2D bilinear or nearest affine kernel");
 BLOOM_GPU_REQUIRED_EFFECT(LumaKeyKernel, "Luma Key image-to-Mask coverage kernel");
 BLOOM_GPU_REQUIRED_EFFECT(LevelsKernel, "Levels per-channel straight-colour grade (#340)");
 BLOOM_GPU_REQUIRED_EFFECT(CurvesKernel, "Curves per-channel straight-colour grade (#340)");
@@ -291,6 +291,12 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.matte.track", "track matte Alpha/Luma/inverted/absent through the Merge",
         GpuCoverageDisposition::Required,
         "src/runtime track matte production scene preparation"});
+    // #480 Nearest resampling is a pixel semantic of AffineBilinearV1 (its sampling word), never a
+    // CPU resample: Resize, Fit and Transform 2D Nearest each reach the resident affine command.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.resample.nearest", "Nearest filtering for Resize, Fit and Transform 2D",
+        GpuCoverageDisposition::Required,
+        "src/runtime Resize/Fit and Transform 2D production affine preparation"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});

@@ -77,6 +77,38 @@ float alpha(const render::Rgba32fImage& image, const std::int64_t x, const std::
     return pixel.value()->alpha();
 }
 
+// #480: Nearest copies one stored source tap per output pixel, so data and ID values survive a
+// resize bit for bit: every output pixel equals some source pixel, or transparent black at the
+// border, and an exact 2x upscale repeats each source pixel in a 2x2 block.
+void testNearest() {
+    const auto input = source();
+    const auto doubled = run({8, 4, 1, 1, runtime::kResampleFilterNearest}, input);
+    expect(doubled.image != nullptr, "Nearest Resize produces an image");
+    if (!doubled.image)
+        return;
+    bool repeated = true;
+    for (std::int64_t y = 0; y < 4; ++y)
+        for (std::int64_t x = 0; x < 8; ++x) {
+            const auto out = doubled.image->read(x, y);
+            const auto in = input.read(x / 2, y / 2);
+            repeated = repeated && out && in && *out.value() == *in.value();
+        }
+    expect(repeated, "a 2x Nearest Resize repeats each source pixel exactly");
+    const auto shrunk = run({3, 3, 1, 1, runtime::kResampleFilterNearest, 1}, input);
+    expect(shrunk.image != nullptr, "Nearest Fit produces an image");
+    if (!shrunk.image)
+        return;
+    bool copied = true;
+    for (const auto pixel : shrunk.image->pixels()) {
+        const bool fromSource = std::ranges::find(input.pixels(), pixel) != input.pixels().end();
+        copied = copied && (fromSource || pixel == render::Rgba32f::transparent());
+    }
+    expect(copied, "every Nearest Fit pixel is a source pixel or transparent black");
+    const auto bilinear = run({3, 3, 1, 1, runtime::kResampleFilterBilinear, 1}, input);
+    expect(bilinear.image && !std::ranges::equal(bilinear.image->pixels(), shrunk.image->pixels()),
+           "Nearest and Bilinear are different resamples");
+}
+
 void testKernel() {
     const auto input = source();
     const auto identity = run({4, 2}, input);
@@ -145,8 +177,10 @@ void testKernel() {
     expect(!runtime::detail::validResizeFitKernel({0, 8}) &&
                !runtime::detail::validResizeFitKernel({8, -1}) &&
                !runtime::detail::validResizeFitKernel({8, 8, 0, 1}) &&
-               !runtime::detail::validResizeFitKernel({8, 8, 1, 1, 1}),
+               !runtime::detail::validResizeFitKernel({8, 8, 1, 1, 2}),
            "zero/negative extents, degenerate PAR and unknown filters are refused");
+    expect(runtime::detail::validResizeFitKernel({8, 8, 1, 1, runtime::kResampleFilterNearest}),
+           "Nearest is a supported Resize/Fit filter");
     expect(run({0, 8}, input).diagnostic.has_value(),
            "invalid output geometry returns a diagnostic before allocation");
     expect(run({8, 8}, input, 1).diagnostic.has_value(),
@@ -190,6 +224,7 @@ int main() {
     try {
         testProxyInputDescriptor();
         testKernel();
+        testNearest();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

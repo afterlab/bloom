@@ -48,7 +48,7 @@ bool State::initialize() {
                                  translationBindings, 5, 20, reason, pipelines[1]) ||
         !createCompositePipeline(*control, vulkan_detail::kAffineBilinearSpirvCode,
                                  vulkan_detail::kAffineBilinearSpirvByteCount, affineBindings, 4,
-                                 20, reason, pipelines[2]) ||
+                                 kAffinePushBytes, reason, pipelines[2]) ||
         !createCompositePipeline(*control, vulkan_detail::kSourceOverSpirvCode,
                                  vulkan_detail::kSourceOverSpirvByteCount, overBindings, 4, 24,
                                  reason, pipelines[3]) ||
@@ -232,6 +232,7 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
         } else {
             const GpuBatchImageRef* source = nullptr;
             float opacity = 1;
+            std::uint32_t sampling = 0;
             if (const auto* translation = std::get_if<GpuBatchTranslation>(&operations[index])) {
                 source = &translation->source;
                 window = translation->outputWindow;
@@ -243,7 +244,8 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 source = &affine->source;
                 window = affine->outputWindow;
                 opacity = affine->opacity;
-                if (!finite(affine->matrix))
+                sampling = static_cast<std::uint32_t>(affine->filter);
+                if (!finite(affine->matrix) || sampling > 1)
                     window.reset();
             } else if (const auto* over = std::get_if<GpuBatchSourceOver>(&operations[index])) {
                 source = &over->source;
@@ -305,6 +307,9 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 }
                 pack(job, CompositeSourceOverPush{width, height, job.source->width,
                                                   job.source->height, offsetX, offsetY});
+            } else if (job.kind == 2) {
+                pack(job, AffinePush{width, height, job.source->width, job.source->height, opacity,
+                                     sampling});
             } else {
                 pack(job, CompositeTranslationPush{width, height, job.source->width,
                                                    job.source->height, opacity});

@@ -7,8 +7,8 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "8b728e94e85e2d83bd7604e43062f371f0d8578d5a71f06691df30bf747fdd54",
-    "spirvSha256": "3db9745132a3ee0721675dddf5f8d041f4e89eb4a2e5fed0410f80d6468facef",
+    "sha256": "ba352e7fabcbab97e63dd94070dc7ae848d90491bb8e99e69e7f80c0a9d48b30",
+    "spirvSha256": "195fef8930f596eb7b56c21390f74efb1acad430f12e6a6c200b7c26a449a8b2",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
@@ -54,7 +54,7 @@
     }
   ],
   "pushConstant": {
-    "byteCount": 20,
+    "byteCount": 24,
     "fields": [
       {
         "name": "outputWidth",
@@ -75,6 +75,10 @@
       {
         "name": "opacity",
         "type": "float32"
+      },
+      {
+        "name": "sampling",
+        "type": "uint32"
       }
     ]
   },
@@ -88,6 +92,7 @@
     "numeric": "per-finite-component abs-or-rel 2e-6 against render::layerTransformBilinearRow and the parented row; never bit-exact by claim. The compact map is additionally measured bit-exact in the CPU base/factor reduction on the frozen adversarial fixtures (base/factor diff 0); that is per-fixture evidence, not a universal exactness claim.",
     "arithmetic": "CPU uses std::fma(factor,end,(1-factor)*start); shader uses fma() for the same lerp; SPIR-V relaxed contraction is covered by the 2e-6 gate",
     "sampleConvention": "the kernel reconstructs the per-pixel source-local coordinate from six O(1) binary64 inverse-affine coefficients in portable error-free double-float (Dekker/Knuth two-sum/two-product with fma, renormalized). Every rounding-sensitive operation carries `precise`, which glslang only honors for statement-level locals: the two_sum/two_prod steps are inlined in df_add/df_mul because `precise` does not propagate through a struct return or out-parameter. SPIR-V therefore marks every error-free term NoContraction. The reduction (int)floor and single Float32 fraction reproduce the CPU rule: floor(hi+lo) is floor(hi) except when hi is integral and lo<0, and factor is the single rounding of (hi - floor) + lo. No shaderFloat64 and no 64-bit integer type.",
+    "sampling": "0 bilinear; 1 nearest (#480): the single tap at base + (factor >= 0.5) on each axis, times the opacity, bit-exact against the parented nearest row (ParentedLayerTransform) when both reduce to the same tap",
     "opacity": "opacity==0 writes transparent; opacity==1 skips the multiply; otherwise sampled *= opacity",
     "transparentBorder": "base +/- 1 taps outside the source data window are exact transparent black, so premultiplied interpolation produces the correct edge falloff with no unpremultiply round trip",
     "zeroScale": "a collapsed layer (scale 0 on either axis) has no inverse and is an empty layer before resampling; LayerTransform::create refuses it and this operation must not be submitted for one",

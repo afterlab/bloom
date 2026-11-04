@@ -100,11 +100,12 @@ template <typename Charge, typename Emit>
     const render::ImageWindow sourceWindow, const render::ImageWindow outputWindow,
     const LayerMatrix& matrix, const double scaleX, const double scaleY, const double opacity,
     const core::PixelAspectRatio fullPixelAspect, const OperationIndex operationIndex,
-    Charge&& charge, Emit&& emit, GpuSceneCommandIndex& out, std::string& key) {
+    Charge&& charge, Emit&& emit, GpuSceneCommandIndex& out, std::string& key,
+    const render::GpuAffineFilter filter = render::GpuAffineFilter::Bilinear) {
     const auto affineMatrix = toGpuAffineMatrix(matrix, sourceWindow, scaleX, scaleY);
     key = makeGpuSceneAffineSemanticKey(inputKey, sourceWindow, affineMatrix,
                                         static_cast<float>(opacity), outputWindow, fullPixelAspect,
-                                        std::string{kGpuAffineSpirvSha256});
+                                        std::string{kGpuAffineSpirvSha256}, {}, filter);
     if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
                                   sizeof(render::Rgba32f))) {
         return error;
@@ -117,7 +118,8 @@ template <typename Charge, typename Emit>
                                  .matrix = affineMatrix,
                                  .opacity = static_cast<float>(opacity),
                                  .pixelAspect = fullPixelAspect,
-                                 .semanticKey = key};
+                                 .semanticKey = key,
+                                 .filter = filter};
     out = emit(std::move(affine));
     return std::nullopt;
 }

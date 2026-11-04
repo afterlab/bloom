@@ -116,14 +116,22 @@ applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage
     }
     const auto rows = window.extent().height();
     reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, rows});
+    // #480 Nearest: the GPU affine command's own author-space matrix, sampled at one tap.
+    const std::optional<ParentedLayerTransform> nearest =
+        prepared.filter == kResampleFilterNearest
+            ? std::optional{ParentedLayerTransform{geometry->matrix, inputDescriptor.dataWindow(),
+                                                   horizontalScale, verticalScale, 1.0F, true}}
+            : std::nullopt;
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
         if (cancellation.isCancellationRequested()) {
             result.cancelled = true;
             return result;
         }
         const auto row = target.value()->row(y);
-        if (!row || render::layerTransformBilinearRow(*source.value(), window, y,
-                                                      *geometry->transform, *row.value())) {
+        if (!row || (nearest ? nearest->row(*source.value(), window, y, *row.value())
+                             : render::layerTransformBilinearRow(*source.value(), window, y,
+                                                                 *geometry->transform,
+                                                                 *row.value()))) {
             result.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidPixel,
                                                  "the resample produced an invalid row");
             return result;
@@ -575,8 +583,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
             return result;
         }
         const auto window = geometry->descriptor.dataWindow();
-        const ParentedLayerTransform transform{geometry->matrix, input.descriptor()->dataWindow(),
-                                               1.0, 1.0, 1.0F};
+        const ParentedLayerTransform transform{
+            geometry->matrix, input.descriptor()->dataWindow(), 1.0, 1.0, 1.0F,
+            effect.resizeFit->filter == kResampleFilterNearest};
         for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
             if (cancellation.isCancellationRequested()) {
                 result.cancelled = true;

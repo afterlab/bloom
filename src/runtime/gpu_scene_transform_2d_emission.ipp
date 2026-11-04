@@ -86,14 +86,20 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
     // only moves, otherwise the accepted affine command for the same author-space matrix.
     GpuSceneCommandIndex emitted = kInvalidGpuSceneCommand;
     std::string key;
-    if (const auto delta = translationOnlyDeviceDelta(*geometry->transform, source->data, output)) {
+    // #480 Nearest always takes the affine command: the translation pass interpolates a
+    // fractional move.
+    const bool nearest = prepared.filter == kResampleFilterNearest;
+    const auto delta = nearest ? std::nullopt
+                               : translationOnlyDeviceDelta(*geometry->transform, source->data, output);
+    if (delta) {
         if (const auto error = emitTranslationOpacityCommand(
                 inputCommand, inputKey, source->data, output, delta->first, delta->second, 1.0,
                 source->pixelAspect, operation, charge, emit, emitted, key))
             return error;
     } else if (const auto error = emitAffineLayerCommand(
                    inputCommand, inputKey, source->data, output, geometry->matrix, ctx.hScale,
-                   ctx.vScale, 1.0, source->pixelAspect, operation, charge, emit, emitted, key)) {
+                   ctx.vScale, 1.0, source->pixelAspect, operation, charge, emit, emitted, key,
+                   nearest ? render::GpuAffineFilter::Nearest : render::GpuAffineFilter::Bilinear)) {
         return error;
     }
     result.command = emitted;

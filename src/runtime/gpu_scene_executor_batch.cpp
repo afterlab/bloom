@@ -54,9 +54,9 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
             const auto source = ref(step.input);
             if (!source || !step.outputWindow)
                 return std::nullopt;
-            operations.emplace_back(render::GpuBatchAffine{*source, *step.outputWindow,
-                                                           step.affineMatrix, step.affineOpacity,
-                                                           step.affineOutputDescriptor});
+            operations.emplace_back(render::GpuBatchAffine{
+                *source, *step.outputWindow, step.affineMatrix, step.affineOpacity,
+                step.affineOutputDescriptor, step.affineFilter});
         } else if (step.kind == GpuSceneExecutorStepKind::SourceOver) {
             const auto source = ref(step.input);
             const auto destination =

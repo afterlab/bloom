@@ -61,6 +61,7 @@ struct GpuBatchAffine final {
     GpuAffineMatrix matrix;
     float opacity;
     std::optional<Rgba32fImageDescriptor> outputDescriptor{};
+    GpuAffineFilter filter = GpuAffineFilter::Bilinear;
 };
 struct GpuBatchSourceOver final {
     GpuBatchImageRef source;

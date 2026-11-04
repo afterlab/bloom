@@ -28,6 +28,9 @@
 // (-1, extent) on either axis; base = (int)floor(sample); factor = (float)(sample - base). base +/- 1
 // taps outside the source data window are exact transparent black.
 //
+// Nearest (#480, push `sampling` 1) copies the single tap at base + (factor >= 0.5) on each axis,
+// times the opacity, mirroring the parented nearest row (src/runtime/layer_parent_transform.hpp).
+//
 // Arithmetic policy: the CPU interpolates with std::fma(factor, end, (1 - factor) * start); the
 // shader evaluates the same expression with GLSL fma(). Tap selection, the sample point, floor,
 // factor, opacity multiply, and the transparent-border rule are exact.
@@ -51,6 +54,7 @@ layout(push_constant) uniform BloomAffinePushConstants {
     uint sourceWidth;    // source data-window width/height
     uint sourceHeight;
     float opacity;       // float32 opacity, already rounded once on the host
+    uint sampling;       // 0 bilinear, 1 nearest (#480): the one tap nearest the sample point
 } bloom_affine_push;
 
 const int kSentinelBase = -2147483648;
@@ -208,6 +212,23 @@ void main()
     int baseYi = int(baseY);
     if (baseXi == kSentinelBase) {
         imageStore(bloom_affine_output, outputLocal, transparent);
+        return;
+    }
+
+    if (bloom_affine_push.sampling == 1u) {
+        // Nearest: the tap whose centre is nearest the sample, the upper one on an exact half.
+        vec4 nearest = bloom_fetch(baseXi + (factorX >= 0.5 ? 1 : 0),
+                                   baseYi + (factorY >= 0.5 ? 1 : 0));
+        uint nearestErrors = bloom_lane_errors(nearest);
+        if (nearestErrors != 0u) {
+            atomicOr(bloom_error.flags[0], nearestErrors);
+            imageStore(bloom_affine_output, outputLocal, transparent);
+            return;
+        }
+        if (bloom_affine_push.opacity != 1.0) {
+            nearest *= bloom_affine_push.opacity;
+        }
+        imageStore(bloom_affine_output, outputLocal, nearest);
         return;
     }
 

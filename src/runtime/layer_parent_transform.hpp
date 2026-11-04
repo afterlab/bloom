@@ -48,13 +48,15 @@ struct LayerMatrix {
 };
 
 // Single resample of a parented layer, with the same pixel-edge/proxy convention as LayerTransform.
-// The unparented path continues to use the reference primitive unchanged.
+// The unparented path continues to use the reference primitive unchanged. `nearest` (#480 Resize,
+// Fit and Transform 2D Nearest) copies the one tap at floor + (factor >= 0.5) on each axis instead
+// of interpolating, the CPU reference of AffineBilinearV1's nearest sampling.
 class ParentedLayerTransform {
   public:
     ParentedLayerTransform(LayerMatrix matrix, render::ImageWindow window, double sx, double sy,
-                           float opacity)
+                           float opacity, bool nearest = false)
         : matrix_(matrix), window_(window), sx_(sx), sy_(sy), opacity_(opacity),
-          determinant_(matrix.a * matrix.d - matrix.b * matrix.c) {}
+          determinant_(matrix.a * matrix.d - matrix.b * matrix.c), nearest_(nearest) {}
     [[nodiscard]] bool finite() const {
         return std::isfinite(determinant_) && std::isfinite(matrix_.a) &&
                std::isfinite(matrix_.b) && std::isfinite(matrix_.c) && std::isfinite(matrix_.d) &&
@@ -132,8 +134,9 @@ class ParentedLayerTransform {
                        iy = static_cast<std::int64_t>(std::floor(y));
             const auto fx = static_cast<float>(x - static_cast<double>(ix)),
                        fy = static_cast<float>(y - static_cast<double>(iy));
-            auto p = lerp(lerp(sample(ix, iy), sample(ix + 1, iy), fx),
-                          lerp(sample(ix, iy + 1), sample(ix + 1, iy + 1), fx), fy);
+            auto p = nearest_ ? sample(ix + (fx >= 0.5F ? 1 : 0), iy + (fy >= 0.5F ? 1 : 0))
+                              : lerp(lerp(sample(ix, iy), sample(ix + 1, iy), fx),
+                                     lerp(sample(ix, iy + 1), sample(ix + 1, iy + 1), fx), fy);
             for (auto& channel : p)
                 channel *= opacity_;
             const auto pixel = render::Rgba32f::fromPremultiplied(p[0], p[1], p[2], p[3]);
@@ -150,5 +153,6 @@ class ParentedLayerTransform {
     double sx_, sy_;
     float opacity_;
     double determinant_;
+    bool nearest_ = false;
 };
 } // namespace bloom::runtime::detail

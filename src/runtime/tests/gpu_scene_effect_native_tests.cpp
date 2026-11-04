@@ -676,7 +676,11 @@ void runResizeFit(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
     for (const bloom::runtime::ResizeFitKernel kernel :
          {bloom::runtime::ResizeFitKernel{8, 8}, bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 0, 1},
           bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 0, 2},
-          bloom::runtime::ResizeFitKernel{16, 12, 2, 1, 0, 1}}) {
+          bloom::runtime::ResizeFitKernel{16, 12, 2, 1, 0, 1},
+          // #480 Nearest: the same geometry through AffineBilinearV1's nearest sampling.
+          bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 1},
+          bloom::runtime::ResizeFitKernel{8, 8, 1, 1, 1, 1},
+          bloom::runtime::ResizeFitKernel{16, 12, 2, 1, 1, 2}}) {
         auto definition = effectPlan(CstKernel{}, 25000)->copyDefinition();
         std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
         const auto plan = std::make_shared<const CompiledCompositionPlan>(std::move(definition));
@@ -747,14 +751,22 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
         double rotation;
         Vec2d pivot;
         Transform2DExtent extent;
+        std::int64_t filter = bloom::runtime::kResampleFilterBilinear;
     };
+    constexpr auto kNearest = bloom::runtime::kResampleFilterNearest;
     const std::array cases{
         Case{{1.5, -0.75}, {1, 1}, 0.0, {}, Transform2DExtent::Transformed},
         Case{{0.25, 0.5}, {1.5, 0.5}, 30.0, {1, 0.5}, Transform2DExtent::Transformed},
         Case{{2, 1}, {-1, 1}, 90.0, {}, Transform2DExtent::Transformed},
         Case{{0, 0}, {1.25, 1.25}, 20.0, {}, Transform2DExtent::Display},
         Case{{3, 0.5}, {1, 1}, -12.5, {}, Transform2DExtent::Input},
-        Case{{0, 0}, {0, 1}, 0.0, {}, Transform2DExtent::Transformed}};
+        Case{{0, 0}, {0, 1}, 0.0, {}, Transform2DExtent::Transformed},
+        // #480 Nearest: a fractional move (never the translation pass), a rotated scale and a
+        // mirrored quarter turn copy exact source taps on both routes.
+        Case{{1.25, -0.375}, {1, 1}, 0.0, {}, Transform2DExtent::Transformed, kNearest},
+        Case{{0.25, 0.375}, {1.5, 0.75}, 30.0, {1, 0.5}, Transform2DExtent::Transformed,
+             kNearest},
+        Case{{2, 1}, {-1, 1}, 90.0, {}, Transform2DExtent::Display, kNearest}};
     std::uint64_t id = 26000;
     for (const auto& item : cases) {
         for (const bool shapeSource : {false, true}) {
@@ -765,7 +777,7 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
                     CompiledVec2Parameter{ParameterId::fromRaw(id + 31), item.pivot},
                     CompiledVec2Parameter{ParameterId::fromRaw(id + 32), item.scale},
                     CompiledScalarParameter{ParameterId::fromRaw(id + 33), item.rotation},
-                    item.extent};
+                    item.extent, item.filter};
                 auto definition = effectPlan(CstKernel{}, id)->copyDefinition();
                 std::get<CompiledImageEffect>(definition.operations[1]).kernel = kernel;
                 if (shapeSource) {

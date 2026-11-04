@@ -31,9 +31,19 @@ namespace bloom::render {
 
 // 4 bindings: source image, output image, per-pixel sample buffer, error-flag buffer.
 inline constexpr std::uint32_t kAffineBindingCount = 4;
-// Reuses the exact translation push-constant layout: output width/height, source width/height,
-// opacity. Both are 20 bytes of tightly packed uint32/float32.
-inline constexpr std::uint32_t kAffinePushBytes = 20;
+// The translation push-constant layout (output width/height, source width/height, opacity) plus
+// the #480 sampling word (0 bilinear, 1 nearest): 24 bytes of tightly packed uint32/float32.
+inline constexpr std::uint32_t kAffinePushBytes = 24;
+
+struct AffinePush final {
+    std::uint32_t outputWidth;
+    std::uint32_t outputHeight;
+    std::uint32_t sourceWidth;
+    std::uint32_t sourceHeight;
+    float opacity;
+    std::uint32_t sampling;
+};
+static_assert(sizeof(AffinePush) == kAffinePushBytes);
 
 static_assert(sizeof(GpuAffineSample) == 16);
 
@@ -96,7 +106,9 @@ struct GpuAffine::Impl final {
                                                     ImageWindow outputWindow,
                                                     const GpuAffineMap& affineMap, float opacity,
                                                     std::uint64_t byteBudget,
-                                                    const Rgba32fImageDescriptor* output = nullptr);
+                                                    const Rgba32fImageDescriptor* output = nullptr,
+                                                    GpuAffineFilter filter =
+                                                        GpuAffineFilter::Bilinear);
     // Bounded resident-slot management, defined in gpu_affine_retirement.cpp. Acquire is called
     // before the first native allocation; release is owner-thread retirement; orphan is the
     // foreign-thread or unproven owner path that preserves the already-owned slot for the owner

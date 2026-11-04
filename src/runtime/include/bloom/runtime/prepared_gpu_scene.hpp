@@ -289,6 +289,8 @@ struct GpuSceneAffineCommand final {
     // it recomputes the effective key from the fields above and the actual device selection.
     std::string semanticKey;
     std::optional<render::Rgba32fImageDescriptor> outputDescriptor{};
+    // #480 Resize, Fit and Transform 2D Nearest; every layer placement is Bilinear.
+    render::GpuAffineFilter filter = render::GpuAffineFilter::Bilinear;
 };
 
 // A BlendV1 composite of two resident inputs under an explicit core::BlendMode. `source` is the
@@ -459,7 +461,9 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
                               const render::ImageWindow& outputWindow,
                               const core::PixelAspectRatio& pixelAspect,
                               const std::string& artifactDigest,
-                              const std::optional<render::Rgba32fImageDescriptor>& output = {}) {
+                              const std::optional<render::Rgba32fImageDescriptor>& output = {},
+                              const render::GpuAffineFilter filter =
+                                  render::GpuAffineFilter::Bilinear) {
     std::string key = "affine-bilinear-v1|in=";
     key.append(inputKey);
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
@@ -486,6 +490,9 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
         gpu_scene_key_detail::appendSemanticWindow(key, output->displayWindow());
         gpu_scene_key_detail::appendSemanticPixelAspect(key, output->pixelAspect());
     }
+    // #480: a Nearest resample is a different image; Bilinear keys are unchanged.
+    if (filter == render::GpuAffineFilter::Nearest)
+        key.append("|sampling=nearest");
     return key;
 }
 

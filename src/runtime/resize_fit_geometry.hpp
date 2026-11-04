@@ -15,7 +15,9 @@ namespace bloom::runtime::detail {
     return kernel.width > 0 && kernel.width <= 32768 && kernel.height > 0 &&
            kernel.height <= 32768 && kernel.pixelAspectNumerator > 0 &&
            kernel.pixelAspectNumerator <= 32768 && kernel.pixelAspectDenominator > 0 &&
-           kernel.pixelAspectDenominator <= 32768 && kernel.filter == 0 && kernel.policy >= 0 &&
+           kernel.pixelAspectDenominator <= 32768 &&
+           (kernel.filter == kResampleFilterBilinear || kernel.filter == kResampleFilterNearest) &&
+           kernel.policy >= 0 &&
            kernel.policy <= 2;
 }
 
