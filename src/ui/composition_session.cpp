@@ -1721,8 +1721,10 @@ bool CompositionSession::appendParameterEdit(commands::Transaction& transaction,
             if constexpr (std::is_same_v<Held, double> || std::is_same_v<Held, document::Vec2d> ||
                           std::is_same_v<Held, document::Vec3d> ||
                           std::is_same_v<Held, core::Color4d> ||
-                          std::is_same_v<Held, document::PathValue>) {
-                // A Path (a #493 Curves curve) sets the whole-value key at this time.
+                          std::is_same_v<Held, document::PathValue> ||
+                          std::is_same_v<Held, document::GradientValue>) {
+                // A Path (a #493 Curves curve) or a Gradient (#541) sets the whole-value key at
+                // this time.
                 transaction.emplace<commands::SetKeyframeAtTime>(
                     compositionId_, animated->curveId, keyTimeOf(parameterId, time), held);
                 return true;
@@ -2602,8 +2604,15 @@ CompositionSession::effectiveParameterValue(const document::ParameterRecord* par
     if (valueEdit_)
         for (const auto& linked : valueEdit_->linked)
             if (linked.parameter == parameter->id)
-                if (const auto* scalar = std::get_if<double>(&linked.value))
-                    return ParameterSample(*scalar);
+                return std::visit(
+                    [](const auto& value) -> std::optional<ParameterSample> {
+                        if constexpr (std::is_constructible_v<ParameterSample,
+                                                              const std::decay_t<decltype(value)>&>)
+                            return ParameterSample(value);
+                        else
+                            return std::nullopt;
+                    },
+                    linked.value);
     if (valueEdit_ && isValueEditing(parameter->id))
         return std::visit(
             [](const auto& value) -> std::optional<ParameterSample> {
@@ -2997,7 +3006,9 @@ bool CompositionSession::toggleKeyframeFor(const document::ParameterRecord* para
     const auto parameterId = parameter->id;
     if (parameter->schemaKey == document::kLayerMaskPathSchemaKey)
         return toggleMaskPathKey(parameter->id);
-    if (document::isPathAnimatableSchemaKey(parameter->schemaKey))
+    // #493 a Curves curve, #541 a gradient: whole-value keys.
+    if (document::isPathAnimatableSchemaKey(parameter->schemaKey) ||
+        document::isGradientAnimatableSchemaKey(parameter->schemaKey))
         return togglePathParameterKey(*parameter);
     const auto label = keyframeCommandLabel(parameter->schemaKey);
     // The key lands on the parameter's own clock (ADR 0024), not the composition's.
@@ -3104,6 +3115,7 @@ bool CompositionSession::toggleKeyframesForParameters(
         const auto* parameter = current->parameters().find(id);
         if (parameter == nullptr || !document::isAnimatableSchemaKey(parameter->schemaKey) ||
             document::isPathAnimatableSchemaKey(parameter->schemaKey) ||
+            document::isGradientAnimatableSchemaKey(parameter->schemaKey) ||
             parameter->schemaKey == document::kLayerMaskPathSchemaKey)
             continue;
         const bool constant = std::holds_alternative<document::ConstantValueSource>(parameter->source);

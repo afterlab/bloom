@@ -452,7 +452,8 @@ class CompositionSession final : public QObject {
     // The keyframe gesture for a mask path parameter: constant -> one key, no key here -> a key at
     // the sampled path, key here -> delete it (the last key becomes a constant).
     [[nodiscard]] bool toggleMaskPathKey(document::ParameterId pathParameter);
-    // #493: the same gesture for any other Path parameter (a Curves curve).
+    // #493: the same gesture for any other Path parameter (a Curves curve), and #541 for a
+    // gradient.
     [[nodiscard]] bool togglePathParameterKey(const document::ParameterRecord& parameter);
     [[nodiscard]] bool setTrackMatte(document::LayerId target,
                                      std::optional<document::TrackMatte> matte);

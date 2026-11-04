@@ -65,7 +65,8 @@ CompositionSession::liveValue(const document::ParameterId parameterId) const {
                 return linked.value;
     if (parameter) {
         const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
-        if (constant && std::holds_alternative<document::PathValue>(constant->value))
+        if (constant && (std::holds_alternative<document::PathValue>(constant->value) ||
+                         std::holds_alternative<document::GradientValue>(constant->value)))
             return constant->value;
         // #493: an animated Path (a Curves curve) at the playhead on its own clock.
         if (const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source);
@@ -73,6 +74,13 @@ CompositionSession::liveValue(const document::ParameterId parameterId) const {
             if (auto path = masks::pathParameterAt(*current, parameterId,
                                                    keyTimeAtPlayhead(parameterId)))
                 return document::ParameterValue{std::move(*path)};
+        // #541: an animated Gradient (a Colorize Gradient Map) at the playhead.
+        if (const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source))
+            if (const auto* curve = current->animationCurves().findGradient(animated->curveId);
+                curve && !curve->keyframes.empty())
+                if (auto gradient = runtime::sampleGradientCurve(
+                        runtime::compileAnimationCurve(*curve), keyTimeAtPlayhead(parameterId)))
+                    return document::ParameterValue{std::move(*gradient)};
     }
     if (const auto sample = effectiveParameterValue(parameter))
         return std::visit([](const auto& value) -> document::ParameterValue { return value; },
@@ -289,8 +297,14 @@ std::vector<runtime::SnapshotParameterOverride> CompositionSession::valueEditOve
         result.push_back(
             {valueEdit_->revision, valueEdit_->anchor->parameter, valueEdit_->anchor->value});
     for (const auto& linked : valueEdit_->linked)
-        if (const auto* scalar = std::get_if<double>(&linked.value))
-            result.push_back({valueEdit_->revision, linked.parameter, *scalar});
+        std::visit(
+            [&](const auto& value) {
+                using Override = decltype(runtime::SnapshotParameterOverride::value);
+                if constexpr (std::is_constructible_v<Override,
+                                                      const std::decay_t<decltype(value)>&>)
+                    result.push_back({valueEdit_->revision, linked.parameter, value});
+            },
+            linked.value);
     return result;
 }
 

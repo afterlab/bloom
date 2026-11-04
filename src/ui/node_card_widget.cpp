@@ -7,6 +7,7 @@
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/levels_graph.hpp>
+#include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/scalar_slider_widget.hpp>
 
 namespace bloom::ui {
@@ -14,7 +15,8 @@ namespace bloom::ui {
 bool hasNodeCardWidget(const std::string_view typeId) noexcept {
     return typeId == document::kGradeNodeType || typeId == document::kLevelsNodeType ||
            typeId == document::kCurvesNodeType || typeId == document::kHueSaturationNodeType ||
-           typeId == document::kColorizeNodeType || isScalarSliderNodeType(typeId);
+           typeId == document::kColorizeNodeType || isScalarSliderNodeType(typeId) ||
+           hasNodeControlsWidget(typeId);
 }
 
 NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::NodeId node,
@@ -32,6 +34,12 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new ColorizeCardWidget(session, node, card, parent);
     if (isScalarSliderNodeType(typeId))
         return new ScalarSliderCardWidget(session, node, typeId, card, parent);
+    // #541: Properties draws a layer's rotation in its own Transform section (with the same dial),
+    // so only the node card takes the Layer node's widget.
+    if (typeId == "bloom.layer-output" && !card)
+        return nullptr;
+    if (hasNodeControlsWidget(typeId))
+        return new NodeControlsCardWidget(session, node, typeId, card, parent);
     return nullptr;
 }
 

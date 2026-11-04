@@ -327,7 +327,9 @@ int run(int argc, char** argv) {
                 bool hasRole = false, aligned = false;
                 for (auto* child : card->childItems()) {
                     auto* proxy = qgraphicsitem_cast<QGraphicsProxyWidget*>(child);
-                    if (!proxy || !proxy->widget() ||
+                    // #494/#541: a row a card widget keeps behind it (Layer's Rotation behind its
+                    // dial) is hidden and takes no room; its socket follows the widget's own row.
+                    if (!proxy || !proxy->isVisible() || !proxy->widget() ||
                         !proxy->widget()->property("nodeParameterRowPitch").isValid() ||
                         proxy->widget()->property("nodeParameterRole").toString() != socket->name)
                         continue;

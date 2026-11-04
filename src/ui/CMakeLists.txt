@@ -575,6 +575,7 @@ target_sources(
         scalar_slider_widget.cpp
         levels_graph.cpp
         node_card_widget.cpp
+        node_controls_widget.cpp
         image_preview_controller.cpp
         node_editor_image_preview.cpp
         colour_space_names.hpp
@@ -757,6 +758,7 @@ target_sources(
             include/bloom/ui/grade_wheels.hpp
             include/bloom/ui/grading_controls.hpp
             include/bloom/ui/colorize_widget.hpp
+            include/bloom/ui/node_controls_widget.hpp
             include/bloom/ui/hue_saturation_widget.hpp
             include/bloom/ui/scalar_slider_widget.hpp
             include/bloom/ui/levels_graph.hpp

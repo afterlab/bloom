@@ -1,0 +1,596 @@
+#include <bloom/ui/node_controls_widget.hpp>
+
+#include "properties_registry_row.hpp"
+#include "properties_value_edits.hpp"
+
+#include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/project.hpp>
+#include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/grading_controls.hpp>
+#include <bloom/ui/kit/angle_dial.hpp>
+#include <bloom/ui/kit/point_pad.hpp>
+#include <bloom/ui/kit/range_selector.hpp>
+#include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/value_field.hpp>
+
+#include <QCoreApplication>
+#include <QFontMetrics>
+#include <QSignalBlocker>
+
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+
+namespace bloom::ui {
+namespace {
+
+[[nodiscard]] int control() { return kit::px(kit::Size::Control); }
+[[nodiscard]] int small() { return kit::px(kit::Spacing::XS); }
+[[nodiscard]] int dialSide() { return kit::px(kit::Size::Control) + kit::px(kit::Size::ToggleCell); }
+
+[[nodiscard]] const document::NodeDefinition* definitionOf(const CompositionSession& session,
+                                                           const document::NodeId node) {
+    const auto* composition = session.composition();
+    const auto* record = composition ? composition->graph().findNode(node) : nullptr;
+    return record ? document::builtInNodeDefinitions().find(record->typeId, record->schemaVersion)
+                  : nullptr;
+}
+
+// The node's own default for `role`, the value a reset returns to.
+[[nodiscard]] double defaultScalar(const CompositionSession& session, const document::NodeId node,
+                                   const std::string_view role) {
+    const auto* definition = definitionOf(session, node);
+    if (definition == nullptr)
+        return 0.0;
+    const auto found =
+        std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
+    const auto* scalar =
+        found == definition->parameters.end() ? nullptr : std::get_if<double>(&found->defaultValue);
+    return scalar ? *scalar : 0.0;
+}
+
+[[nodiscard]] std::optional<document::Vec2d> defaultVector(const CompositionSession& session,
+                                                           const document::NodeId node,
+                                                           const std::string_view role) {
+    const auto* definition = definitionOf(session, node);
+    if (definition == nullptr)
+        return std::nullopt;
+    const auto found =
+        std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
+    const auto* vector = found == definition->parameters.end()
+                             ? nullptr
+                             : std::get_if<document::Vec2d>(&found->defaultValue);
+    return vector ? std::optional<document::Vec2d>(*vector) : std::nullopt;
+}
+
+[[nodiscard]] std::optional<document::Vec2d> liveVector(const CompositionSession& session,
+                                                        const document::ParameterId id) {
+    const auto value = session.liveValue(id);
+    const auto* vector = value ? std::get_if<document::Vec2d>(&*value) : nullptr;
+    return vector ? std::optional<document::Vec2d>(*vector) : std::nullopt;
+}
+
+[[nodiscard]] QRectF compositionFrame(const CompositionSession& session) {
+    const auto* composition = session.composition();
+    if (composition == nullptr)
+        return {0.0, 0.0, 1920.0, 1080.0};
+    const auto format = composition->format();
+    return {0.0, 0.0, static_cast<double>(format.width()), static_cast<double>(format.height())};
+}
+
+constexpr double kDegreesPerRadian = 180.0 / std::numbers::pi;
+
+} // namespace
+
+// --- AngleDialRow -------------------------------------------------------------------------------
+
+AngleDialRow::AngleDialRow(CompositionSession& session, const document::NodeId node, Spec spec,
+                           QWidget* parent)
+    : QWidget(parent), session_(session), node_(node), spec_(std::move(spec)) {
+    const auto objectRole = QString::fromStdString(spec_.role);
+    setObjectName(QStringLiteral("angleDialRow.%1").arg(objectRole));
+    const auto name = parameterRowLabel(spec_.schemaKey, spec_.role);
+    row_ = new GradingValueRow(session_, node_, spec_.role, spec_.schemaKey, name, spec_.neutral,
+                               this);
+    dial_ = new kit::KAngleDial(this);
+    dial_->setObjectName(QStringLiteral("angleDial.%1").arg(objectRole));
+    dial_->setAccessibleName(name);
+    dial_->setZero(spec_.zeroRight ? kit::KAngleDial::Zero::Right : kit::KAngleDial::Zero::Up);
+    dial_->setCounterClockwise(spec_.counterClockwise);
+    const double scale = spec_.radians ? kDegreesPerRadian : 1.0;
+    dial_->setDefaultValue(spec_.neutral * scale);
+    dial_->setResetText(tr("Reset %1").arg(name));
+    dial_->addAction(row_->keyAction());
+    properties::bindValueEdit(session_, *dial_, [this] {
+        return row_->parameter().value_or(document::ParameterId{});
+    });
+    connect(dial_, &kit::KAngleDial::valueChanged, this, [this, scale, name](const double degrees) {
+        if (const auto id = row_->parameter())
+            static_cast<void>(
+                session_.setParameterValue(*id, degrees / scale, tr("Set %1").arg(name)));
+    });
+}
+
+void AngleDialRow::setLabelWidth(const int width) { row_->setLabelWidth(width); }
+
+int AngleDialRow::labelWidthHint() const { return row_->labelWidthHint(); }
+
+int AngleDialRow::heightHint() const { return std::max(dialSide(), row_->heightHint()); }
+
+int AngleDialRow::minimumWidthHint() const {
+    return row_->minimumWidthHint() + small() + dialSide();
+}
+
+int AngleDialRow::socketY() const { return (heightHint() - row_->heightHint()) / 2 + row_->socketY(); }
+
+void AngleDialRow::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    const int side = dialSide();
+    const int rowWidth = std::max(0, width() - side - small());
+    row_->setGeometry(0, (height() - row_->heightHint()) / 2, rowWidth, row_->heightHint());
+    dial_->setGeometry(width() - side, (height() - side) / 2, side, side);
+}
+
+void AngleDialRow::refresh(const bool locked) {
+    row_->refresh(locked);
+    const auto id = row_->parameter();
+    dial_->setEnabled(id && !locked && scalarEditable(session_, *id));
+    if (const auto value = id ? liveScalar(session_, *id) : std::nullopt;
+        value && !dial_->hasLiveEdit()) {
+        const QSignalBlocker blocker(dial_);
+        dial_->setValue(*value * (spec_.radians ? kDegreesPerRadian : 1.0));
+    }
+}
+
+// --- RangeRow -----------------------------------------------------------------------------------
+
+RangeRow::RangeRow(CompositionSession& session, const document::NodeId node, Spec spec,
+                   QWidget* parent)
+    : QWidget(parent), session_(session), node_(node), spec_(std::move(spec)) {
+    setObjectName(QStringLiteral("rangeRow.%1").arg(QString::fromStdString(spec_.lowRole)));
+    low_ = new GradingValueRow(session_, node_, spec_.lowRole, spec_.schemaKey,
+                               parameterRowLabel(spec_.schemaKey, spec_.lowRole),
+                               defaultScalar(session_, node_, spec_.lowRole), this);
+    if (spec_.highSchemaKey.empty())
+        spec_.highSchemaKey = spec_.schemaKey;
+    high_ = new GradingValueRow(session_, node_, spec_.highRole, spec_.highSchemaKey,
+                                parameterRowLabel(spec_.highSchemaKey, spec_.highRole),
+                                defaultScalar(session_, node_, spec_.highRole), this);
+    selector_ = new kit::KRangeSelector(this);
+    selector_->setObjectName(
+        QStringLiteral("rangeSelector.%1").arg(QString::fromStdString(spec_.lowRole)));
+    selector_->setAccessibleName(spec_.name);
+    selector_->setHandlesMayCross(spec_.mayCross);
+    selector_->setRange(spec_.minimum, spec_.maximum);
+    selector_->setToolTip(tr("Drag either end of %1; the numbers above take exact values")
+                              .arg(spec_.name.toLower()));
+    connect(selector_, &kit::KRangeSelector::editStarted, this, [this] {
+        const auto low = low_->parameter();
+        const auto high = high_->parameter();
+        const auto lowValue = low ? liveScalar(session_, *low) : std::nullopt;
+        const auto highValue = high ? liveScalar(session_, *high) : std::nullopt;
+        editing_ = low && high && lowValue && highValue &&
+                   session_.beginValueEdits({*low, *high}, tr("Set %1").arg(spec_.name));
+        if (editing_) {
+            editLow_ = *lowValue;
+            editHigh_ = *highValue;
+        }
+    });
+    const auto update = [this] {
+        if (editing_ && !session_.updateValueEdits({editLow_, editHigh_}))
+            selector_->cancelEdit();
+    };
+    connect(selector_, &kit::KRangeSelector::lowerValueChanged, this, [this, update](double v) {
+        if (!editing_)
+            return;
+        editLow_ = v;
+        update();
+    });
+    connect(selector_, &kit::KRangeSelector::upperValueChanged, this, [this, update](double v) {
+        if (!editing_)
+            return;
+        editHigh_ = v;
+        update();
+    });
+    connect(selector_, &kit::KRangeSelector::editFinished, this, [this] {
+        const bool owned = editing_ && session_.valueEditActive();
+        editing_ = false;
+        if (owned)
+            static_cast<void>(session_.commitValueEdit());
+    });
+    connect(selector_, &kit::KRangeSelector::editCancelled, this, [this] {
+        const bool owned = editing_ && session_.valueEditActive();
+        editing_ = false;
+        if (owned)
+            session_.cancelValueEdit();
+    });
+    connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
+        // The session dropped the gesture (an undo, a playhead move): so does the track.
+        if (editing_ && !session_.valueEditActive()) {
+            editing_ = false;
+            selector_->cancelEdit();
+        }
+    });
+    connect(selector_, &QObject::destroyed, &session_, [this] {
+        if (editing_ && session_.valueEditActive())
+            session_.cancelValueEdit();
+    });
+}
+
+bool RangeRow::draws(const std::string_view role) const {
+    return role == spec_.lowRole || role == spec_.highRole;
+}
+
+void RangeRow::setLabelWidth(const int width) {
+    low_->setLabelWidth(width);
+    high_->setLabelWidth(width);
+}
+
+int RangeRow::labelWidthHint() const {
+    return std::max(low_->labelWidthHint(), high_->labelWidthHint());
+}
+
+int RangeRow::heightHint() const {
+    return low_->heightHint() + small() + high_->heightHint() + small() + control();
+}
+
+int RangeRow::minimumWidthHint() const {
+    return std::max(low_->minimumWidthHint(), high_->minimumWidthHint());
+}
+
+std::optional<int> RangeRow::socketY(const std::string_view role) const {
+    if (role == spec_.lowRole)
+        return low_->y() + low_->socketY();
+    if (role == spec_.highRole)
+        return high_->y() + high_->socketY();
+    return std::nullopt;
+}
+
+void RangeRow::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    place();
+}
+
+void RangeRow::place() {
+    int y = 0;
+    low_->setGeometry(0, y, width(), low_->heightHint());
+    y += low_->heightHint() + small();
+    high_->setGeometry(0, y, width(), high_->heightHint());
+    y += high_->heightHint() + small();
+    selector_->setGeometry(0, y, width(), control());
+}
+
+void RangeRow::refresh(const bool locked) {
+    low_->refresh(locked);
+    high_->refresh(locked);
+    const auto low = low_->parameter();
+    const auto high = high_->parameter();
+    selector_->setEnabled(low && high && !locked && scalarEditable(session_, *low) &&
+                          scalarEditable(session_, *high));
+    if (selector_->hasLiveEdit())
+        return;
+    const auto lowValue = low ? liveScalar(session_, *low) : std::nullopt;
+    const auto highValue = high ? liveScalar(session_, *high) : std::nullopt;
+    if (lowValue && highValue) {
+        const QSignalBlocker blocker(selector_);
+        selector_->setValues(*lowValue, *highValue);
+    }
+}
+
+// --- PointPadRow --------------------------------------------------------------------------------
+
+PointPadRow::PointPadRow(CompositionSession& session, const document::NodeId node, Spec spec,
+                         QWidget* parent)
+    : QWidget(parent), session_(session), node_(node), spec_(std::move(spec)) {
+    setObjectName(QStringLiteral("pointPadRow"));
+    pad_ = new kit::KPointPad(this);
+    pad_->setObjectName(QStringLiteral("pointPad"));
+    pad_->setConnected(spec_.connected);
+    pad_->setToolTip(tr("Drag a point to move it; Shift-click to send the selected point there"));
+    connect(pad_, &kit::KPointPad::editStarted, this, [this] {
+        const auto ids = parameters();
+        editing_ = ids.size() == spec_.points.size() &&
+                   session_.beginValueEdits(ids, spec_.commandLabel);
+    });
+    connect(pad_, &kit::KPointPad::pointsChanged, this, [this] {
+        if (!editing_)
+            return;
+        const auto frame = spec_.frame ? spec_.frame() : compositionFrame(session_);
+        std::vector<document::ParameterValue> values;
+        for (std::size_t index = 0; index < spec_.points.size(); ++index) {
+            auto at = pad_->value(index);
+            if (spec_.points[index].fromCentre)
+                at -= frame.center();
+            values.emplace_back(document::Vec2d{at.x(), at.y()});
+        }
+        if (!session_.updateValueEdits(values))
+            pad_->cancelEdit();
+    });
+    connect(pad_, &kit::KPointPad::editFinished, this, [this] {
+        const bool owned = editing_ && session_.valueEditActive();
+        editing_ = false;
+        if (owned)
+            static_cast<void>(session_.commitValueEdit());
+    });
+    connect(pad_, &kit::KPointPad::editCancelled, this, [this] {
+        const bool owned = editing_ && session_.valueEditActive();
+        editing_ = false;
+        if (owned)
+            session_.cancelValueEdit();
+    });
+    connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
+        if (editing_ && !session_.valueEditActive()) {
+            editing_ = false;
+            pad_->cancelEdit();
+        }
+    });
+    connect(pad_, &QObject::destroyed, &session_, [this] {
+        if (editing_ && session_.valueEditActive())
+            session_.cancelValueEdit();
+    });
+}
+
+std::vector<document::ParameterId> PointPadRow::parameters() const {
+    std::vector<document::ParameterId> ids;
+    for (const auto& point : spec_.points)
+        if (const auto id = nodeRoleParameter(session_, node_, point.role))
+            ids.push_back(*id);
+    return ids;
+}
+
+int PointPadRow::heightAt(const int width) const { return pad_->heightForWidth(width); }
+
+int PointPadRow::minimumWidthHint() const {
+    // The pad keeps its points' own X/Y rows below it. Its floor is a label plus two position
+    // cells at a wide reading, so the card's width is settled before any drag: dragging a point
+    // never grows the card (and so never rescales the pad under the pointer).
+    const QFontMetrics value(kit::font(kit::TypeRole::Value));
+    const int cell = value.horizontalAdvance(QStringLiteral("-4096.00 px")) + kit::px(kit::Spacing::L);
+    return std::max(pad_->minimumSizeHint().width(),
+                    kit::px(kit::Size::PropertiesLabelWidth) + 2 * cell + 3 * small() +
+                        kit::px(kit::Size::IconSmall));
+}
+
+void PointPadRow::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    pad_->setGeometry(0, 0, width(), height());
+}
+
+void PointPadRow::refresh(const bool locked) {
+    const auto frame = spec_.frame ? spec_.frame() : compositionFrame(session_);
+    pad_->setFrame(frame);
+    bool editable = !locked;
+    std::vector<kit::KPointPad::Point> points;
+    for (const auto& point : spec_.points) {
+        const auto id = nodeRoleParameter(session_, node_, point.role);
+        const auto value = id ? liveVector(session_, *id) : std::nullopt;
+        editable = editable && id && value && scalarEditable(session_, *id);
+        const QPointF origin = point.fromCentre ? frame.center() : QPointF();
+        const auto fallback = defaultVector(session_, node_, point.role);
+        kit::KPointPad::Point shown{point.label,
+                                    value ? origin + QPointF(value->x, value->y) : origin,
+                                    std::nullopt};
+        if (fallback)
+            shown.defaultValue = origin + QPointF(fallback->x, fallback->y);
+        points.push_back(std::move(shown));
+    }
+    pad_->setEnabled(editable);
+    if (!pad_->hasLiveEdit())
+        pad_->setPoints(std::move(points));
+}
+
+// --- NodeControlsCardWidget ---------------------------------------------------------------------
+
+namespace {
+
+struct Controls final {
+    std::vector<PointPadRow::Point> points;
+    bool connected = false;
+    // The frame: the node's own width and height, or the composition's.
+    bool nodeSizedFrame = false;
+    QString padLabel;
+    std::vector<RangeRow::Spec> ranges;
+    std::vector<AngleDialRow::Spec> angles;
+};
+
+[[nodiscard]] std::optional<Controls> controlsFor(const std::string_view typeId) {
+    const auto angle = [](std::string role, std::string schemaKey, const bool zeroRight,
+                          const bool counterClockwise, const bool radians = false) {
+        return AngleDialRow::Spec{std::move(role), std::move(schemaKey), zeroRight,
+                                  counterClockwise, radians, 0.0};
+    };
+    const auto operandRange = [](std::string low, std::string high, QString name) {
+        return RangeRow::Spec{std::move(low), std::move(high), "bloom.operand.scalar",
+                              "bloom.operand.scalar", std::move(name), 0.0, 1.0, true};
+    };
+    Controls controls;
+    if (typeId == "bloom.drop-shadow") {
+        // Clockwise from up, as the shadow is cast.
+        controls.angles.push_back(angle("direction", "bloom.drop-shadow.direction", false, false));
+    } else if (typeId == "bloom.glow") {
+        // A streak's angle is clockwise from screen right.
+        controls.angles.push_back(angle("angle", "bloom.glow.angle", true, false));
+    } else if (typeId == "bloom.layer-output") {
+        controls.angles.push_back(angle("rotation", "bloom.transform.rotation", false, false));
+    } else if (typeId == "bloom.transform-2d") {
+        controls.points = {{"pivot", QCoreApplication::translate("NodeControls", "Pivot"), false},
+                           {"translate", QCoreApplication::translate("NodeControls", "Offset"),
+                            true}};
+        controls.padLabel = QCoreApplication::translate("NodeControls", "Move");
+        controls.angles.push_back(angle("rotation", "bloom.transform-2d.rotation", false, false));
+    } else if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient") {
+        controls.points = {{"start", QCoreApplication::translate("NodeControls", "Start"), false},
+                           {"end", QCoreApplication::translate("NodeControls", "End"), false}};
+        controls.connected = true;
+        controls.nodeSizedFrame = true;
+        controls.padLabel = QCoreApplication::translate("NodeControls", "Move Gradient");
+    } else if (typeId == "bloom.luma-key") {
+        controls.ranges.push_back({"low", "high", "bloom.luma-key.low", "bloom.luma-key.high",
+                                   QCoreApplication::translate("NodeControls", "Key range"), 0.0,
+                                   1.0, true});
+    } else if (typeId == "bloom.map-range") {
+        controls.ranges.push_back(operandRange(
+            "fromMin", "fromMax", QCoreApplication::translate("NodeControls", "From range")));
+        controls.ranges.push_back(operandRange(
+            "toMin", "toMax", QCoreApplication::translate("NodeControls", "To range")));
+    } else if (typeId == "bloom.clamp" || typeId == "bloom.in-range" || typeId == "bloom.random" ||
+               typeId == "bloom.wrap") {
+        controls.ranges.push_back(
+            operandRange("min", "max", QCoreApplication::translate("NodeControls", "Range")));
+    } else if (typeId == "bloom.smoothstep") {
+        controls.ranges.push_back(
+            operandRange("edge0", "edge1", QCoreApplication::translate("NodeControls", "Edges")));
+    } else if (typeId == "bloom.hue-shift") {
+        controls.angles.push_back(angle("degrees", "bloom.operand.scalar", false, false));
+    } else if (typeId == "bloom.rotate-2d" || typeId == "bloom.polar-to-cartesian" ||
+               typeId == "bloom.degrees-to-radians") {
+        // Counter-clockwise from +X in a Y-up frame (value-node-library.md).
+        controls.angles.push_back(angle("degrees", "bloom.operand.scalar", true, true));
+    } else if (typeId == "bloom.radians-to-degrees") {
+        controls.angles.push_back(angle("radians", "bloom.operand.scalar", true, true, true));
+    } else {
+        return std::nullopt;
+    }
+    return controls;
+}
+
+} // namespace
+
+bool hasNodeControlsWidget(const std::string_view typeId) noexcept {
+    return controlsFor(typeId).has_value();
+}
+
+NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
+                                               const document::NodeId node,
+                                               const std::string_view typeId, const bool card,
+                                               QWidget* parent)
+    : NodeCardWidget(parent), session_(session), node_(node) {
+    setObjectName(card ? QStringLiteral("nodeControls") : QStringLiteral("propertiesControls"));
+    QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    policy.setHeightForWidth(true);
+    setSizePolicy(policy);
+    auto controls = controlsFor(typeId).value_or(Controls{});
+    if (!controls.points.empty()) {
+        PointPadRow::Spec spec;
+        spec.points = controls.points;
+        spec.connected = controls.connected;
+        spec.commandLabel = controls.padLabel;
+        if (controls.nodeSizedFrame)
+            spec.frame = [this] {
+                const auto size = [this](const std::string_view role, const double fallback) {
+                    const auto id = nodeRoleParameter(session_, node_, role);
+                    const auto value = id ? liveScalar(session_, *id) : std::nullopt;
+                    return value && *value > 0.0 ? *value : fallback;
+                };
+                const auto frame = compositionFrame(session_);
+                return QRectF(0.0, 0.0, size("width", frame.width()),
+                              size("height", frame.height()));
+            };
+        else
+            spec.frame = [this] { return compositionFrame(session_); };
+        pad_ = new PointPadRow(session_, node_, std::move(spec), this);
+    }
+    for (auto& range : controls.ranges)
+        ranges_.push_back(new RangeRow(session_, node_, std::move(range), this));
+    for (auto& angle : controls.angles) {
+        angle.neutral = defaultScalar(session_, node_, angle.role);
+        angles_.push_back(new AngleDialRow(session_, node_, std::move(angle), this));
+    }
+    for (const auto signal :
+         {&CompositionSession::snapshotChanged, &CompositionSession::liveValueChanged,
+          &CompositionSession::currentTimeChanged})
+        connect(&session_, signal, this, &NodeControlsCardWidget::refresh);
+    refresh();
+}
+
+bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
+    // The pad's points keep their own X/Y rows (the exact numbers, keys and sockets); a range or
+    // an angle row is drawn here.
+    for (const auto* range : ranges_)
+        if (range->draws(role))
+            return false;
+    for (const auto* angle : angles_)
+        if (angle->role() == role)
+            return false;
+    return true;
+}
+
+std::optional<int> NodeControlsCardWidget::socketY(const std::string_view role) const {
+    for (const auto* range : ranges_)
+        if (const auto at = range->socketY(role))
+            return range->y() + *at;
+    for (const auto* angle : angles_)
+        if (angle->role() == role)
+            return angle->y() + angle->socketY();
+    return std::nullopt;
+}
+
+int NodeControlsCardWidget::heightAt(const int width) const {
+    int height = 0;
+    if (pad_ != nullptr)
+        height += pad_->heightAt(width) + small();
+    for (const auto* range : ranges_)
+        height += range->heightHint() + small();
+    for (const auto* angle : angles_)
+        height += angle->heightHint() + small();
+    return std::max(0, height - small());
+}
+
+int NodeControlsCardWidget::minimumWidthHint() const {
+    int width = kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control);
+    if (pad_ != nullptr)
+        width = std::max(width, pad_->minimumWidthHint());
+    for (const auto* range : ranges_)
+        width = std::max(width, range->minimumWidthHint());
+    for (const auto* angle : angles_)
+        width = std::max(width, angle->minimumWidthHint());
+    return width;
+}
+
+QSize NodeControlsCardWidget::sizeHint() const {
+    const int width = minimumWidthHint();
+    return {width, heightAt(width)};
+}
+
+void NodeControlsCardWidget::resizeEvent(QResizeEvent* event) {
+    NodeCardWidget::resizeEvent(event);
+    place();
+}
+
+void NodeControlsCardWidget::place() {
+    // One label column for every row, wide enough for the longest name: labels never truncate.
+    int labels = 0;
+    for (const auto* range : ranges_)
+        labels = std::max(labels, range->labelWidthHint());
+    for (const auto* angle : angles_)
+        labels = std::max(labels, angle->labelWidthHint());
+    int y = 0;
+    if (pad_ != nullptr) {
+        const int h = pad_->heightAt(width());
+        pad_->setGeometry(0, y, width(), h);
+        y += h + small();
+    }
+    for (auto* range : ranges_) {
+        range->setLabelWidth(labels);
+        range->setGeometry(0, y, width(), range->heightHint());
+        y += range->heightHint() + small();
+    }
+    for (auto* angle : angles_) {
+        angle->setLabelWidth(labels);
+        angle->setGeometry(0, y, width(), angle->heightHint());
+        y += angle->heightHint() + small();
+    }
+}
+
+void NodeControlsCardWidget::refresh() {
+    const auto* composition = session_.composition();
+    const bool locked = composition == nullptr || composition->nodeLocked(node_);
+    if (pad_ != nullptr)
+        pad_->refresh(locked);
+    for (auto* range : ranges_)
+        range->refresh(locked);
+    for (auto* angle : angles_)
+        angle->refresh(locked);
+}
+
+} // namespace bloom::ui

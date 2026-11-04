@@ -174,9 +174,10 @@ void PropertiesEditor::configureRegistryRows() {
             if (node->typeId == document::kCryptomatteNodeType)
                 addCryptomatteRows(*node, section);
             // #494: the same widget the node card draws, above the rows it keeps behind it.
-            if (hasNodeCardWidget(node->typeId)) {
+            if (hasNodeCardWidget(node->typeId))
                 cardWidget_ =
                     makeNodeCardWidget(session_, node->id, node->typeId, false, section->body());
+            if (cardWidget_ != nullptr) {
                 section->bodyLayout()->addWidget(cardWidget_);
                 connect(cardWidget_, &NodeCardWidget::rowsChanged, this,
                         &PropertiesEditor::applyCardWidgetRows);

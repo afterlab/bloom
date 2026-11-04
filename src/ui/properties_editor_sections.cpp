@@ -35,6 +35,7 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -212,21 +213,21 @@ void PropertiesEditor::buildTransformSection(QVBoxLayout* layout) {
 
     // Rotation is a single degree field with a 1 degree scrub step. Its range is deliberately wider
     // than one turn: the schema accepts any finite angle so a rotation curve can wind, and a field
-    // that clamped at 360 would silently refuse an authored 450. The slider beside it spans exactly
-    // one turn each way and pins at its ends -- it is the coarse gesture, and the cell stays the
-    // authority for a wound value the slider cannot reach.
+    // that clamped at 360 would silently refuse an authored 450. #541: the dial beside it turns the
+    // value (it winds too, so a turn past 360 keeps counting) -- it is the visual gesture, and the
+    // cell stays the exact entry.
     rotation_ = properties::makeParameterCell(QStringLiteral("rotationEditor"), tr("Rotation"), {},
                                               document::kRotationParameterSchemaKey,
                                               document::ParameterValueKind::Float64, body);
-    rotationSlider_ = new kit::KSlider(body);
-    rotationSlider_->setObjectName(QStringLiteral("rotationSlider"));
-    rotationSlider_->setAccessibleName(tr("Rotation"));
-    configureSlider(*rotationSlider_,
-                    document::parameterPresentation(document::kRotationParameterSchemaKey,
-                                                    document::ParameterValueKind::Float64));
+    rotationDial_ = new kit::KAngleDial(body);
+    rotationDial_->setObjectName(QStringLiteral("rotationDial"));
+    rotationDial_->setAccessibleName(tr("Rotation"));
+    rotationDial_->setDefaultValue(0.0);
+    rotationDial_->setResetText(tr("Reset Rotation"));
+    rotationDial_->setFixedSize(kit::px(kit::Size::Control), kit::px(kit::Size::Control));
     rotationKeyframe_ = makeKeyframeDiamond(session_, document::kRotationParameterRole, body);
     addRow(rows, body, makeRowLabel(tr("Rotation"), body), rotationKeyframe_,
-           {rotationSlider_, rotation_});
+           {rotationDial_, rotation_});
 
     // Scale is authored as a PERCENTAGE and stored as a unitless factor, exactly the way Opacity is
     // authored as a percentage and stored in [0, 1]. Negative percentages are reachable because a
@@ -639,14 +640,14 @@ void PropertiesEditor::bindCommits() {
 
     // A slider keeps the kit edit-session contract, so it binds exactly as a value field does: one
     // drag or one run of keys is one undo entry.
-    const auto bindSlider = [this](kit::KSlider* slider, kit::KValueField* mirror, auto commit) {
-        const auto role = slider == opacitySlider_ ? document::kOpacityParameterRole
-                                                   : document::kRotationParameterRole;
+    const auto bindSlider = [this](auto* slider, kit::KValueField* mirror, auto commit,
+                                   const std::string_view role) {
         properties::bindValueEdit(session_, *slider, [this, role] {
             const auto* parameter = session_.parameterForSelection(role);
             return parameter ? parameter->id : document::ParameterId{};
         });
-        connect(slider, &kit::KSlider::valueChanged, this, [this, slider, mirror, commit] {
+        using Control = std::remove_pointer_t<decltype(slider)>;
+        connect(slider, &Control::valueChanged, this, [this, slider, mirror, commit] {
             if (rebuilding_) {
                 return;
             }
@@ -655,8 +656,10 @@ void PropertiesEditor::bindCommits() {
             commit();
         });
     };
-    bindSlider(opacitySlider_, opacity_, [this] { commitOpacityFromControls(); });
-    bindSlider(rotationSlider_, rotation_, [this] { commitRotationFromControls(); });
+    bindSlider(opacitySlider_, opacity_, [this] { commitOpacityFromControls(); },
+               document::kOpacityParameterRole);
+    bindSlider(rotationDial_, rotation_, [this] { commitRotationFromControls(); },
+               document::kRotationParameterRole);
 
     connect(blendMode_, &kit::KDropdown::activated, this, [this](const int index) {
         if (rebuilding_ || index < 0) {

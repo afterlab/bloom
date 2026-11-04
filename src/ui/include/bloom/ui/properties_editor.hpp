@@ -41,6 +41,7 @@ class KDropdown;
 class KLabel;
 class KLineEdit;
 class KSection;
+class KAngleDial;
 class KSlider;
 class KSwitch;
 } // namespace kit
@@ -209,7 +210,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     kit::KButton* scaleLink_ = nullptr;
     KeyframeDiamond* scaleKeyframe_ = nullptr;
     kit::KValueField* rotation_ = nullptr;
-    kit::KSlider* rotationSlider_ = nullptr;
+    // #541: rotation turns on a dial; the cell beside it keeps the exact (and wound) value.
+    kit::KAngleDial* rotationDial_ = nullptr;
     KeyframeDiamond* rotationKeyframe_ = nullptr;
     kit::KValueField* opacity_ = nullptr;
     kit::KSlider* opacitySlider_ = nullptr;

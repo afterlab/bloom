@@ -1360,6 +1360,7 @@ class NodeItem final : public QGraphicsObject {
 
         switch (declared->valueKind) {
         case document::ParameterValueKind::Path:
+        case document::ParameterValueKind::Gradient:
             return false;
         case document::ParameterValueKind::Boolean: {
             row.toggle = new kit::KSwitch;
@@ -1550,6 +1551,7 @@ class NodeItem final : public QGraphicsObject {
             }
             switch (row.kind) {
             case document::ParameterValueKind::Path:
+            case document::ParameterValueKind::Gradient:
                 return std::nullopt;
             case document::ParameterValueKind::Boolean:
                 return row.toggle == nullptr
@@ -1626,6 +1628,7 @@ class NodeItem final : public QGraphicsObject {
             }
             return;
         case document::ParameterValueKind::Path:
+        case document::ParameterValueKind::Gradient:
         case document::ParameterValueKind::Boolean:
         case document::ParameterValueKind::Integer:
         case document::ParameterValueKind::Vec3d:

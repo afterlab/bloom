@@ -11,6 +11,8 @@
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/gradient_editor.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/tokens.hpp>
@@ -36,6 +38,7 @@ namespace {
 
 constexpr std::string_view kModeRole = "mode";
 constexpr std::string_view kMidpointRole = "midpoint";
+constexpr std::string_view kGradientRole = "gradient";
 constexpr int kGradientSamples = 48;
 constexpr double kMidpointMinimum = 0.01;
 constexpr double kMidpointMaximum = 0.99;
@@ -568,6 +571,280 @@ void ColorizeRampBar::cancelDrag() {
     update();
 }
 
+// --- ColorizeGradientRow ------------------------------------------------------------------------
+
+ColorizeGradientRow::ColorizeGradientRow(CompositionSession& session, const document::NodeId node,
+                                         QWidget* parent)
+    : QWidget(parent), session_(session), node_(node) {
+    setObjectName(QStringLiteral("colorizeGradientRow"));
+    label_ = new kit::KLabel(tr("Gradient"), this, kit::TypeRole::UiSmall);
+    label_->setObjectName(QStringLiteral("colorizeGradientLabel"));
+    label_->setTone(kit::Color::Muted);
+    label_->setToolTip(tr("The colours the input maps through, darkest input on the left."));
+    label_->installEventFilter(this);
+    editor_ = new kit::KGradientEditor(this);
+    editor_->setObjectName(QStringLiteral("colorizeGradientEditor"));
+    editor_->setStopLimits(1, document::kMaximumGradientStops);
+    editor_->setColorConverter(session_.colorConverter(document::kColorizeShadowsSchemaKey));
+    diamond_ = new KeyframeDiamond(session_, std::string(kGradientRole), this);
+    diamond_->setObjectName(QStringLiteral("colorizeGradientDiamond"));
+    stopLabel_ = new kit::KLabel(tr("Stop"), this, kit::TypeRole::UiSmall);
+    stopLabel_->setObjectName(QStringLiteral("colorizeGradientStopLabel"));
+    stopLabel_->setTone(kit::Color::Muted);
+    stopLabel_->setToolTip(tr("The selected stop's colour and where it sits along the gradient."));
+    chip_ = new kit::KColorChip(this);
+    chip_->setObjectName(QStringLiteral("colorizeGradientStopColor"));
+    chip_->setAccessibleName(tr("Stop colour"));
+    chip_->setControlSize(kit::KColorChip::ControlSize::Compact);
+    position_ = new kit::KValueField(this);
+    position_->setObjectName(QStringLiteral("colorizeGradientStopPosition"));
+    position_->setAccessibleName(tr("Stop position"));
+    position_->setCompact(true);
+    position_->setOutlinedAtRest(true);
+    position_->setRange(0.0, 100.0);
+    position_->setDecimals(1);
+    position_->setSingleStep(1.0);
+    position_->setUnit(QStringLiteral("%"));
+    keyAction_ = new QAction(tr("Add Key"), this);
+    keyAction_->setObjectName(QStringLiteral("colorizeGradientKey"));
+    connect(keyAction_, &QAction::triggered, this, [this] {
+        if (const auto id = ensureParameter())
+            static_cast<void>(session_.toggleKeyframeForParameter(*id));
+    });
+    editor_->addAction(keyAction_);
+    const auto bound = [this] { return ensureParameter().value_or(document::ParameterId{}); };
+    properties::bindValueEdit(session_, *editor_, bound);
+    properties::bindValueEdit(session_, *chip_, bound);
+    properties::bindValueEdit(session_, *position_, bound);
+    connect(editor_, &kit::KGradientEditor::stopsChanged, this, [this] {
+        // Only a gesture writes; a projection or a cancelled gesture's restore does not.
+        if (const auto id = parameter(); id && session_.isValueEditing(*id))
+            write(editorValue());
+    });
+    connect(editor_, &kit::KGradientEditor::selectedStopChanged, this, [this] {
+        const auto* composition = session_.composition();
+        refresh(composition == nullptr || composition->nodeLocked(node_));
+    });
+    connect(editor_, &kit::KGradientEditor::stopColorRequested, this, [this](std::size_t) {
+        if (chip_->isEnabled())
+            chip_->openPicker();
+    });
+    connect(chip_, &kit::KColorChip::colorChanged, this, [this](const kit::KColor& colour) {
+        const auto selected = editor_->selectedStop();
+        if (refreshing_ || !selected)
+            return;
+        auto value = editorValue();
+        if (*selected >= value.stops.size())
+            return;
+        value.stops[*selected].color = {static_cast<double>(colour.red),
+                                        static_cast<double>(colour.green),
+                                        static_cast<double>(colour.blue),
+                                        static_cast<double>(colour.alpha)};
+        write(std::move(value));
+    });
+    connect(position_, &kit::KValueField::valueChanged, this, [this](const double percent) {
+        const auto selected = editor_->selectedStop();
+        if (refreshing_ || !selected)
+            return;
+        auto value = editorValue();
+        if (*selected >= value.stops.size())
+            return;
+        value.stops[*selected].position = std::clamp(percent / 100.0, 0.0, 1.0);
+        write(std::move(value));
+    });
+}
+
+std::optional<document::ParameterId> ColorizeGradientRow::parameter() const {
+    return nodeRoleParameter(session_, node_, kGradientRole);
+}
+
+std::optional<document::GradientValue> ColorizeGradientRow::value() const {
+    if (const auto id = parameter()) {
+        const auto live = session_.liveValue(*id);
+        const auto* gradient = live ? std::get_if<document::GradientValue>(&*live) : nullptr;
+        return gradient ? std::optional<document::GradientValue>(*gradient) : std::nullopt;
+    }
+    // A node saved before the gradient: the ramp it renders with, as stops.
+    const auto colour = [this](const std::string_view role) -> std::optional<core::Color4d> {
+        const auto id = nodeRoleParameter(session_, node_, role);
+        const auto live = id ? session_.liveValue(*id) : std::nullopt;
+        const auto* value = live ? std::get_if<core::Color4d>(&*live) : nullptr;
+        return value ? std::optional<core::Color4d>(*value) : std::nullopt;
+    };
+    const auto shadows = colour("shadows");
+    const auto midtones = colour("midtones");
+    const auto highlights = colour("highlights");
+    const auto midpointId = nodeRoleParameter(session_, node_, kMidpointRole);
+    const double midpoint =
+        midpointId ? liveScalar(session_, *midpointId).value_or(defaultScalar(kMidpointRole))
+                   : defaultScalar(kMidpointRole);
+    if (!shadows || !midtones || !highlights)
+        return document::defaultColorizeGradient();
+    return document::GradientValue{{{0.0, *shadows},
+                                    {std::clamp(midpoint, kMidpointMinimum, kMidpointMaximum),
+                                     *midtones},
+                                    {1.0, *highlights}}};
+}
+
+std::optional<document::ParameterId> ColorizeGradientRow::ensureParameter() {
+    if (const auto id = parameter())
+        return id;
+    const auto seeded = value();
+    if (!seeded || !session_.setNodeParameterValue(node_, std::string(kGradientRole), *seeded,
+                                                   tr("Use Gradient")))
+        return std::nullopt;
+    return parameter();
+}
+
+document::GradientValue ColorizeGradientRow::editorValue() const {
+    document::GradientValue value;
+    for (const auto& stop : editor_->stops())
+        value.stops.push_back({stop.position,
+                               {static_cast<double>(stop.color.red),
+                                static_cast<double>(stop.color.green),
+                                static_cast<double>(stop.color.blue),
+                                static_cast<double>(stop.color.alpha)}});
+    return value;
+}
+
+void ColorizeGradientRow::write(document::GradientValue value) {
+    std::ranges::stable_sort(value.stops, {}, &document::GradientStop::position);
+    if (const auto id = ensureParameter())
+        static_cast<void>(session_.setParameterValue(*id, std::move(value), tr("Set Gradient")));
+}
+
+void ColorizeGradientRow::setLabelWidth(const int width) {
+    labelWidth_ = std::max(0, width);
+    place();
+}
+
+int ColorizeGradientRow::labelWidthHint() const {
+    const QFontMetrics metrics(label_->font());
+    return std::max(metrics.horizontalAdvance(label_->text()),
+                    metrics.horizontalAdvance(stopLabel_->text())) +
+           small();
+}
+
+int ColorizeGradientRow::heightHint() const {
+    return editor_->sizeHint().height() + small() + control();
+}
+
+int ColorizeGradientRow::minimumWidthHint() const {
+    return std::max(labelWidth_, labelWidthHint()) + small() + 3 * control() + small() +
+           kit::px(kit::Size::PropertiesFieldMinWidth) + small() + kit::px(kit::Size::IconSmall);
+}
+
+void ColorizeGradientRow::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    place();
+}
+
+void ColorizeGradientRow::place() {
+    const int w = width();
+    const int labelWidth = std::max(labelWidth_, labelWidthHint());
+    const int left = labelWidth + small();
+    const int diamond = kit::px(kit::Size::IconSmall) + small();
+    const int editorHeight = editor_->sizeHint().height();
+    label_->setGeometry(0, 0, labelWidth, control());
+    editor_->setGeometry(left, 0, std::max(0, w - left - diamond), editorHeight);
+    diamond_->move(w - kit::px(kit::Size::IconSmall), (control() - diamond_->height()) / 2);
+    const int y = editorHeight + small();
+    stopLabel_->setGeometry(0, y, labelWidth, control());
+    const int fieldWidth = kit::px(kit::Size::PropertiesFieldWidth);
+    const int chipWidth = std::max(0, w - left - diamond - small() - fieldWidth);
+    const int chipHeight = std::min(control(), chip_->sizeHint().height());
+    chip_->setGeometry(left, y + (control() - chipHeight) / 2, chipWidth, chipHeight);
+    position_->setGeometry(left + chipWidth + small(), y, fieldWidth, control());
+}
+
+bool ColorizeGradientRow::reset() {
+    const auto neutral = defaultValue(kGradientRole);
+    const auto* gradient = neutral ? std::get_if<document::GradientValue>(&*neutral) : nullptr;
+    if (gradient == nullptr)
+        return false;
+    if (const auto current = value(); current && *current == *gradient && parameter())
+        return true;
+    if (const auto id = ensureParameter())
+        return session_.setParameterValue(*id, *gradient, tr("Reset Gradient"));
+    return false;
+}
+
+QMenu* ColorizeGradientRow::makeContextMenu() {
+    auto* menu = kit::makeMenu(this);
+    auto* reset = menu->addAction(tr("Reset Gradient"));
+    reset->setObjectName(QStringLiteral("colorizeGradientReset"));
+    reset->setEnabled(editor_->isEnabled());
+    connect(reset, &QAction::triggered, this, [this] { static_cast<void>(this->reset()); });
+    menu->addAction(keyAction_);
+    return menu;
+}
+
+bool ColorizeGradientRow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == label_ && event->type() == QEvent::MouseButtonDblClick &&
+        static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton && editor_->isEnabled()) {
+        static_cast<void>(reset());
+        return true;
+    }
+    if (watched == label_ && event->type() == QEvent::ContextMenu) {
+        const std::unique_ptr<QMenu> menu(makeContextMenu());
+        menu->exec(static_cast<QContextMenuEvent*>(event)->globalPos());
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void ColorizeGradientRow::refresh(const bool locked) {
+    const auto id = parameter();
+    // A node saved without the gradient is editable too: the first edit binds it.
+    const bool enabled = !locked && (!id || scalarEditable(session_, *id));
+    editor_->setEnabled(enabled);
+    editor_->setColorConverter(session_.colorConverter(document::kColorizeShadowsSchemaKey));
+    const auto gradient = value();
+    if (gradient && !editor_->hasLiveEdit()) {
+        std::vector<kit::KGradientEditor::Stop> stops;
+        for (const auto& stop : gradient->stops)
+            stops.push_back({stop.position,
+                             kit::KColor::fromRgba(static_cast<float>(stop.color.red),
+                                                   static_cast<float>(stop.color.green),
+                                                   static_cast<float>(stop.color.blue),
+                                                   static_cast<float>(stop.color.alpha),
+                                                   kit::ColorSpace::Reference)});
+        const QSignalBlocker blocker(editor_);
+        editor_->setStops(std::move(stops));
+    }
+    if (!editor_->selectedStop() && !editor_->stops().empty()) {
+        const QSignalBlocker blocker(editor_);
+        editor_->setSelectedStop(0);
+    }
+    const auto selected = editor_->selectedStop();
+    const bool stopShown = selected && *selected < editor_->stops().size();
+    chip_->setEnabled(enabled && stopShown);
+    position_->setEnabled(enabled && stopShown);
+    if (stopShown) {
+        const auto& stop = editor_->stops()[*selected];
+        refreshing_ = true;
+        if (!chip_->isPickerOpen() || !session_.valueEditActive())
+            properties::refreshColor(session_, document::kColorizeShadowsSchemaKey,
+                                     core::Color4d{static_cast<double>(stop.color.red),
+                                                   static_cast<double>(stop.color.green),
+                                                   static_cast<double>(stop.color.blue),
+                                                   static_cast<double>(stop.color.alpha)},
+                                     chip_);
+        if (!position_->hasLiveEdit()) {
+            const QSignalBlocker blocker(position_);
+            position_->setValue(stop.position * 100.0);
+        }
+        refreshing_ = false;
+    }
+    diamond_->setParameterId(id.value_or(document::ParameterId{}));
+    diamond_->refresh();
+    const auto state =
+        id ? session_.keyframeDiamondStateForParameter(*id) : KeyframeDiamondState::Unsupported;
+    keyAction_->setText(state == KeyframeDiamondState::AnimatedWithKey ? tr("Remove Key")
+                                                                       : tr("Add Key"));
+    keyAction_->setEnabled(!locked);
+}
+
 // --- ColorizeCardWidget -------------------------------------------------------------------------
 
 ColorizeCardWidget::ColorizeCardWidget(CompositionSession& session, const document::NodeId node,
@@ -590,6 +867,7 @@ ColorizeCardWidget::ColorizeCardWidget(CompositionSession& session, const docume
     amount_->setSlider(amountSlider);
 
     ramp_ = new ColorizeRampBar(session_, node_, this);
+    gradient_ = new ColorizeGradientRow(session_, node_, this);
     ramp_->setStopClicked([this](const std::string& role) {
         if (auto* row = colorRow(role); row && row->chip()->isEnabled())
             row->chip()->openPicker();
@@ -690,16 +968,17 @@ std::vector<QWidget*> ColorizeCardWidget::shownRows() const {
         add(colorRow("highlights"));
         break;
     case document::kColorizeTritone:
-    case document::kColorizeGradientMap:
         add(ramp_);
         add(colorRow("shadows"));
         add(colorRow("midtones"));
         add(colorRow("highlights"));
         add(valueRow("midpoint"));
-        if (mode_ == document::kColorizeGradientMap) {
-            add(valueRow("repetitions"));
-            add(valueRow("phase"));
-        }
+        break;
+    case document::kColorizeGradientMap:
+        // #541: the multi-stop gradient replaces the three-colour ramp.
+        add(gradient_);
+        add(valueRow("repetitions"));
+        add(valueRow("phase"));
         break;
     case document::kColorizeBlackAndWhite:
         for (const auto& weight : weightRows())
@@ -714,6 +993,8 @@ std::vector<QWidget*> ColorizeCardWidget::shownRows() const {
 int ColorizeCardWidget::rowHeight(const QWidget* row) const {
     if (row == ramp_)
         return ramp_->heightHint();
+    if (row == gradient_)
+        return gradient_->heightHint();
     if (const auto* value = qobject_cast<const GradingValueRow*>(row))
         return value->heightHint();
     return control();
@@ -752,6 +1033,7 @@ int ColorizeCardWidget::minimumWidthHint() const {
     int width = kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control);
     // Every row of every mode, so the card keeps its width when the mode changes.
     width = std::max(width, amount_->minimumWidthHint());
+    width = std::max(width, gradient_->minimumWidthHint());
     for (const auto* row : colours_)
         width = std::max(width, row->minimumWidthHint());
     for (const auto* row : values_)
@@ -772,7 +1054,7 @@ void ColorizeCardWidget::resizeEvent(QResizeEvent* event) {
 void ColorizeCardWidget::place() {
     const auto rows = shownRows();
     // One label column for every row, wide enough for the longest name: labels never truncate.
-    int labels = amount_->labelWidthHint();
+    int labels = std::max(amount_->labelWidthHint(), gradient_->labelWidthHint());
     for (const auto* row : colours_)
         labels = std::max(labels, row->labelWidthHint());
     for (const auto* row : values_)
@@ -787,6 +1069,8 @@ void ColorizeCardWidget::place() {
         row->setVisible(std::ranges::find(rows, row) != rows.end());
     }
     ramp_->setVisible(std::ranges::find(rows, ramp_) != rows.end());
+    gradient_->setLabelWidth(labels);
+    gradient_->setVisible(std::ranges::find(rows, gradient_) != rows.end());
     int y = 0;
     for (auto* row : rows) {
         const int h = rowHeight(row);
@@ -810,6 +1094,7 @@ void ColorizeCardWidget::refresh() {
         row->refresh(locked);
     for (auto* row : values_)
         row->refresh(locked);
+    gradient_->refresh(locked);
     // The ramp bar draws the colours and the midpoint the node reads.
     const auto colourOf = [&](const std::string_view role) {
         const auto* row = colorRow(role);
@@ -817,8 +1102,7 @@ void ColorizeCardWidget::refresh() {
         return value ? std::array{(*value)[0], (*value)[1], (*value)[2]} : std::array<double, 3>{};
     };
     std::vector<ColorizeRampBar::Stop> stops;
-    const bool ramp =
-        mode_ == document::kColorizeTritone || mode_ == document::kColorizeGradientMap;
+    const bool ramp = mode_ == document::kColorizeTritone;
     stops.push_back({"shadows", 0.0, colourOf("shadows")});
     if (ramp)
         stops.push_back({"midtones",

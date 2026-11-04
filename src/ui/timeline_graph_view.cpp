@@ -82,8 +82,9 @@ keysOfRecord(const document::AnimationCurveRecord& record, const GraphCurveId& c
     return std::visit(
         [&](const auto& held) -> std::vector<document::ScalarKeyframe> {
             using Curve = std::decay_t<decltype(held)>;
-            if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
-                return {}; // A Path curve has no value graph.
+            if constexpr (std::is_same_v<Curve, document::PathAnimationCurve> ||
+                          std::is_same_v<Curve, document::GradientAnimationCurve>) {
+                return {}; // A Path or Gradient curve has no value graph.
             } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 return curve.component.has_value() ? std::vector<document::ScalarKeyframe>{}
                                                    : held.keyframes;
@@ -102,7 +103,8 @@ compileRecord(const document::AnimationCurveRecord& record, const GraphCurveId& 
     return std::visit(
         [&](const auto& held) -> std::optional<runtime::CompiledScalarCurve> {
             using Curve = std::decay_t<decltype(held)>;
-            if constexpr (std::is_same_v<Curve, document::PathAnimationCurve>) {
+            if constexpr (std::is_same_v<Curve, document::PathAnimationCurve> ||
+                          std::is_same_v<Curve, document::GradientAnimationCurve>) {
                 return std::nullopt;
             } else if constexpr (document::kWholeValueAnimationCurve<Curve>) {
                 if (curve.component.has_value())

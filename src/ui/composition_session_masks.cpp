@@ -8,6 +8,8 @@
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/runtime/animation_sampling.hpp>
+#include <bloom/runtime/curve_compilation.hpp>
 
 namespace bloom::ui {
 namespace {
@@ -139,6 +141,32 @@ bool CompositionSession::togglePathParameterKey(const document::ParameterRecord&
         return handleResult(runTransaction(std::move(transaction)));
     }
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
+    // #541: a gradient keys exactly as a Curves curve does, one whole-value key at the playhead.
+    if (const auto* gradient =
+            source ? current->animationCurves().findGradient(source->curveId) : nullptr) {
+        const auto existing =
+            std::ranges::find(gradient->keyframes, keyTime, &document::GradientKeyframe::time);
+        if (existing == gradient->keyframes.end()) {
+            auto sampled = runtime::sampleGradientCurve(runtime::compileAnimationCurve(*gradient),
+                                                        keyTime);
+            if (!sampled) {
+                reportUnavailable(tr("The gradient could not be sampled here"));
+                return false;
+            }
+            commands::Transaction transaction("Add Gradient Key", snapshot_.revision());
+            transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, source->curveId,
+                                                             keyTime, std::move(*sampled));
+            return handleResult(runTransaction(std::move(transaction)));
+        }
+        commands::Transaction transaction("Remove Gradient Key", snapshot_.revision());
+        if (gradient->keyframes.size() > 1)
+            transaction.emplace<commands::DeleteKeyframe>(compositionId_, source->curveId,
+                                                          existing->id);
+        else
+            transaction.emplace<commands::ConvertAnimationToConstant>(compositionId_, parameter.id,
+                                                                      existing->value);
+        return handleResult(runTransaction(std::move(transaction)));
+    }
     const auto* curve = source ? current->animationCurves().findPath(source->curveId) : nullptr;
     if (curve == nullptr) {
         reportUnavailable(tr("Disconnect the driven parameter before keying its value"));

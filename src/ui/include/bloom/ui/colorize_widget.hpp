@@ -5,12 +5,17 @@
 //
 // - Amount, a grading slider row, always;
 // - Fill: the fill colour's row, a colour chip that opens the colour picker;
-// - Tint, Tritone and Gradient Map: the ramp bar, the gradient the node maps through drawn from
-//   its own colours, with a stop under it for each colour (Tint: shadows and highlights; Tritone
-//   and Gradient Map: shadows, midtones at the midpoint, highlights). Dragging the midtones stop
-//   moves the midpoint; clicking a stop opens its colour picker. Under the bar each stop's colour
-//   row (a chip) and, for the ramp, the Midpoint row; Gradient Map adds Repetitions and Phase
-//   sliders and keeps its Map from and Outside the ramp choices as rows;
+// - Tint and Tritone: the ramp bar, the gradient the node maps through drawn from its own
+//   colours, with a stop under it for each colour (Tint: shadows and highlights; Tritone: shadows,
+//   midtones at the midpoint, highlights). Dragging the midtones stop moves the midpoint; clicking
+//   a stop opens its colour picker. Under the bar each stop's colour row (a chip) and, for
+//   Tritone, the Midpoint row;
+// - Gradient Map (#541): the node's own multi-stop gradient in a kit::KGradientEditor (any number
+//   of stops, added, moved, removed and recoloured on the bar; animatable as one whole-value key),
+//   the selected stop's colour chip and position under it, then Repetitions and Phase sliders and
+//   the Map from and Outside the gradient choices as rows. A node saved before the gradient
+//   existed shows its shadows/midtones/highlights ramp as that gradient, and takes the gradient on
+//   its first edit;
 // - Black & White: the channel mix, one slider row per hue (reds, yellows, greens, cyans, blues,
 //   magentas) over a track that runs from black to that hue.
 //
@@ -21,6 +26,7 @@
 // beside its row.
 
 #include <bloom/document/ids.hpp>
+#include <bloom/document/parameter.hpp>
 #include <bloom/ui/node_card_widget.hpp>
 
 #include <QColor>
@@ -43,7 +49,9 @@ class GradingValueRow;
 class KeyframeDiamond;
 namespace kit {
 class KColorChip;
+class KGradientEditor;
 class KLabel;
+class KValueField;
 } // namespace kit
 
 // One colour value on the widget: its name, its colour chip (the picker) and its diamond.
@@ -156,6 +164,54 @@ class ColorizeRampBar final : public QWidget {
     std::optional<Drag> drag_;
 };
 
+// #541: the Gradient Map's gradient: its name, the gradient editor and its keyframe diamond, and
+// under them the selected stop's colour chip and position. A drag on the bar, a colour pick or a
+// position scrub is one session value edit (one undo step; a key at the playhead when animated).
+class ColorizeGradientRow final : public QWidget {
+    Q_OBJECT
+
+  public:
+    ColorizeGradientRow(CompositionSession& session, document::NodeId node,
+                        QWidget* parent = nullptr);
+
+    [[nodiscard]] kit::KGradientEditor* editor() const noexcept { return editor_; }
+    [[nodiscard]] kit::KColorChip* stopChip() const noexcept { return chip_; }
+    [[nodiscard]] kit::KValueField* stopPosition() const noexcept { return position_; }
+    [[nodiscard]] std::optional<document::ParameterId> parameter() const;
+    // The gradient now: the bound parameter's live value, or for a node saved before it existed
+    // the shadows/midtones/highlights ramp it renders with.
+    [[nodiscard]] std::optional<document::GradientValue> value() const;
+    void setLabelWidth(int width);
+    [[nodiscard]] int labelWidthHint() const;
+    [[nodiscard]] int heightHint() const;
+    [[nodiscard]] int minimumWidthHint() const;
+    bool reset();
+    [[nodiscard]] QMenu* makeContextMenu();
+    void refresh(bool locked);
+
+  protected:
+    void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+  private:
+    // The bound parameter, binding the gradient first on a node saved without it.
+    [[nodiscard]] std::optional<document::ParameterId> ensureParameter();
+    [[nodiscard]] document::GradientValue editorValue() const;
+    void write(document::GradientValue value);
+    void place();
+    CompositionSession& session_;
+    document::NodeId node_;
+    kit::KLabel* label_ = nullptr;
+    kit::KGradientEditor* editor_ = nullptr;
+    KeyframeDiamond* diamond_ = nullptr;
+    kit::KLabel* stopLabel_ = nullptr;
+    kit::KColorChip* chip_ = nullptr;
+    kit::KValueField* position_ = nullptr;
+    QAction* keyAction_ = nullptr;
+    int labelWidth_ = 0;
+    bool refreshing_ = false;
+};
+
 class ColorizeCardWidget final : public NodeCardWidget {
     Q_OBJECT
 
@@ -173,6 +229,7 @@ class ColorizeCardWidget final : public NodeCardWidget {
     [[nodiscard]] std::int64_t mode() const noexcept { return mode_; }
     [[nodiscard]] GradingValueRow* amountRow() const noexcept { return amount_; }
     [[nodiscard]] ColorizeRampBar* rampBar() const noexcept { return ramp_; }
+    [[nodiscard]] ColorizeGradientRow* gradientRow() const noexcept { return gradient_; }
     [[nodiscard]] ColorizeColorRow* colorRow(std::string_view role) const;
     [[nodiscard]] GradingValueRow* valueRow(std::string_view role) const;
     void refresh();
@@ -190,6 +247,7 @@ class ColorizeCardWidget final : public NodeCardWidget {
     std::int64_t mode_ = -1;
     GradingValueRow* amount_ = nullptr;
     ColorizeRampBar* ramp_ = nullptr;
+    ColorizeGradientRow* gradient_ = nullptr;
     std::vector<ColorizeColorRow*> colours_;
     std::vector<GradingValueRow*> values_;
 };

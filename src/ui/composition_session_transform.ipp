@@ -285,7 +285,8 @@ void CompositionSession::updateTransformInteraction(const QPointF screenPoint,
                 } else if constexpr (std::is_same_v<Held, document::Vec3d>) {
                     return finite(held.x) && finite(held.y) && finite(held.z);
                 } else if constexpr (std::is_same_v<Held, core::Color4d> ||
-                                     std::is_same_v<Held, document::PathValue>) {
+                                     std::is_same_v<Held, document::PathValue> ||
+                                     std::is_same_v<Held, document::GradientValue>) {
                     return held.isValid();
                 } else {
                     return true;

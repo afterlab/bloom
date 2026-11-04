@@ -433,6 +433,9 @@ QString parameterText(const document::ParameterRecord& parameter) {
             } else if constexpr (std::is_same_v<Value, document::PathValue>) {
                 return QCoreApplication::translate("node_editor", "%1 anchors")
                     .arg(value.anchors.size());
+            } else if constexpr (std::is_same_v<Value, document::GradientValue>) {
+                return QCoreApplication::translate("node_editor", "%1 stops")
+                    .arg(value.stops.size());
             } else {
                 return QStringLiteral("%1/%2").arg(value.numerator()).arg(value.denominator());
             }

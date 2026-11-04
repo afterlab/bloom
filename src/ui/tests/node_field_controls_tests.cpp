@@ -104,6 +104,7 @@ const char* kindName(const document::ParameterValueKind k) {
     case document::ParameterValueKind::Color4d: return "color";
     case document::ParameterValueKind::String: return "string";
     case document::ParameterValueKind::Path: return "path";
+    case document::ParameterValueKind::Gradient: return "gradient";
     }
     return "?";
 }

@@ -23,6 +23,7 @@
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/painting.hpp>
 #include <bloom/ui/kit/section.hpp>
+#include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -384,7 +385,7 @@ void PropertiesEditor::rebuild() {
         for (auto* field : textColorFields_)
             field->setEnabled(false);
         opacitySlider_->setEnabled(false);
-        rotationSlider_->setEnabled(false);
+        rotationDial_->setEnabled(false);
     }
     rebuilding_ = false;
     filterRows();
@@ -589,11 +590,12 @@ void PropertiesEditor::configureRotation() {
     const auto* parameter = session_.parameterForSelection(document::kRotationParameterRole);
     const auto value = session_.effectiveScalarValue(document::kRotationParameterRole);
     rotation_->setEnabled(value.has_value());
-    rotationSlider_->setEnabled(value.has_value());
+    rotationDial_->setEnabled(value.has_value());
     const QSignalBlocker blocker(rotation_);
-    const QSignalBlocker sliderBlocker(rotationSlider_);
+    const QSignalBlocker dialBlocker(rotationDial_);
     rotation_->setValue(value.value_or(0.0));
-    rotationSlider_->setValue(value.value_or(0.0));
+    if (!rotationDial_->hasLiveEdit())
+        rotationDial_->setValue(value.value_or(0.0));
     rotation_->setToolTip(parameter == nullptr ? tr("Rotation is not exposed by this selection")
                                                : parameterSourceDescription(*parameter));
     rotationKeyframe_->refresh();
