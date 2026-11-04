@@ -1388,6 +1388,35 @@ plans evaluate unchanged; only their version-bearing identities change.
   such a layer, or by a Shuffle leaf that names its channels statically); a plan where every
   operation is reached compiles exactly as before. The export evaluates each layer plan on the
   frame's own route and reads it once at the codec boundary (`frame-output.md`).
+- *Composition Source channels (#480).* A Composition Source's `channels` output is the precomp's
+  layered render: an image-backed source for the composite (`R`, `G`, `B`, `A`, colour in the
+  working space, over the Composition Source's own image operation, or one the compiler adds when
+  only `channels` is used), then the nested Composition Output's channel expression inlined into
+  the reading expression (its steps renumbered, a Remove keeping the nested output's Layers list
+  when it is set) with the composite copied over its root `R`, `G`, `B` and `A`. A muted source is
+  an empty composite. Nested file sources keep their asset and gain the Composition Source as the
+  outermost entry of `CompiledChannelSource::nesting` (outermost first; entry 0 indexes the reading
+  plan's nested plans and curves, entry k+1 those of the plan entry k names). Every route
+  (`detail::resolveChannelSourceTimes`, shared by the CPU reference, GPU media preparation, the
+  layered output and the channel listings) reads such a source at the mapped nested time: each
+  level resolves its offset and scale on the clock of the plan that owns them (the reading
+  operation's resolution for entry 0, a sample of the nested plan at its own time for deeper
+  entries), applies `mapCompositionTime` (offset, scale, Hold/Loop/Ping-pong over the nested
+  duration) and reads the file at the innermost time with that plan's frame rate. The source cache
+  identity is therefore the frame actually read; an unrepresentable time is the warning "Composition
+  source time cannot be represented" and a cancelled resolution cancels the read. Nested
+  image-backed layers (Image to Channel Set, Video `channels`, a deeper composite) carry their
+  `imagePlan`; the reading plan registers each such plan as a nested plan and reads it through a
+  `CompiledCompositionSource` with the precomp's own time mapping, so the composite and those layers
+  lower to Channel Select / Channel Combine over nested Composition Source images on every route
+  (`feature.channels.composition_source`). A Shuffle mixing them with file channels is refused like
+  any image/file mix ("Shuffle reads the image channel <name> with file channels; ..."). A default
+  (empty) slot whose set holds a root `R`, `G` and `B` the compiler can name reads that root even
+  when the set also holds file channels, as resolution would. Nesting cycles are refused when the
+  plan compiles ("Composition nesting cycle"). Pruning a channel layer plan keeps the Layer Output
+  of every time clock a kept operation uses and drops the clocks no kept operation uses. Plan and
+  evaluator semantics versions are unchanged: a plan without a Composition Source `channels` read
+  compiles and evaluates as before.
 
 ## Cryptomatte
 

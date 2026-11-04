@@ -90,6 +90,20 @@ shuffle each and join them with Combine Channels.
 A Video source has a **channels** output too: its frame's R, G, B and A, as colour in the working
 space.
 
+**Passes through a precomp.** A **Composition** source (a precomp) has a **channels** output as
+well, so you can precomp a multilayer render and still pull its passes downstream. It holds what a
+layered OpenEXR render of that composition would: its composited R, G, B and A, plus every layer
+connected to its Composition Output's **channels** input (only the layers the output's **Layers**
+list names, when you set one). Connect it to **Pass**, **Shuffle**, **Channel Copy**, Cryptomatte
+or your own Composition Output's channels exactly like an Image source's channels.
+
+The passes follow the precomp's timing: its **Time Offset**, **Time Scale** (animated or not) and
+**Loop Mode** pick the frame of each pass, at the precomp's own frame rate, and precomps inside
+precomps add up. A Shuffle with its default slots shows the precomp's composite. Like Image to
+Channel Set layers, the composite cannot share one Shuffle with file passes: shuffle each and join
+them with Combine Channels. A precomp cannot contain itself, directly or through another precomp;
+Bloom refuses the cycle.
+
 **Resize, Fit and Transform 2D** have a **Filter** choice. Use **Nearest** for data and ID images:
 it takes each pixel from one source pixel, so depth or ID values are never blended. **Bilinear**
 (the default) is for pictures.

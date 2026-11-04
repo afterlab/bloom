@@ -297,10 +297,24 @@ between `ChannelSet` and `Image`") and §4 as follows; everything else in this r
 8. **Video sources** gain a `channels` output: the decoded video frame's stored R, G, B and A, as
    Color channels in the working space (an Image to Channel Set of the video image), so a Shuffle,
    Channel Copy or the layered output treats footage like any other channel set.
+9. **Composition Sources** gain a `channels` output, so render passes survive a precomp. It holds
+   what a layered OpenEXR render of the precomp would: the composite's R, G, B and A (Color, the
+   Composition Source image) and the nested Composition Output's channel layers (only the layers
+   its Layers list names, when set), the composite replacing their root R, G, B and A. Every channel
+   is read at the precomp's mapped time: its time offset, time scale and loop mode (Hold, Loop,
+   Ping-pong), with animated offset and scale sampled at the parent's time and each further precomp
+   level mapped in turn, at the nested composition's frame rate. File layers read the frame at that
+   time (so their cache identity is that frame); the composite and Image to Channel Set or Video
+   layers are nested Composition Source images, so a Shuffle or Pass reading only them is the same
+   Channel Select / Channel Combine as above, on the GPU and the CPU. A Shuffle may not mix them
+   with file layers (§2). A muted Composition Source is an empty composite; nesting cycles are
+   refused with the diagnostic "Composition nesting cycle".
 
 Cache identity: a Shuffle or Pass key adds the effective mode and the non-finite value; Image to
 Channel Set channels are keyed through the Channel Select and Channel Combine operations over their
-image operations. Because an existing plan with Color mode on a data channel is now refused
+image operations. A precomp's file layers are keyed by the source frame read at the mapped
+nested time and its image layers through the nested Composition Source operations (nested plan
+and nested time). Because an existing plan with Color mode on a data channel is now refused
 instead of colour-converted, CPU evaluator semantics advances 13 -> 14; compiled-plan semantics is
 unchanged (every other existing plan compiles and evaluates the same).
 
