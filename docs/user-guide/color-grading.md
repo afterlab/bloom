@@ -3,7 +3,7 @@
 Grade, Levels, Curves and Hue/Saturation adjust an image's colour. They work on render passes as
 well as on colour: none of them converts colour, so a depth, mist, normal or position pass is
 adjusted exactly as it was rendered. All four are in the **Grade** section of the Add menu and
-the Tab search, with Exposure, Offset, Multiply and Invert. Each takes an image on **Input** and returns the adjusted image on **Image**.
+the Tab search, with Exposure, Offset, Multiply, Invert and [Colorize](#colorize). Each takes an image on **Input** and returns the adjusted image on **Image**.
 
 Every control can be animated, and every change can be undone and is saved with the project.
 Grade, Levels and Hue/Saturation controls can also be linked from another node. A node left at its
@@ -227,6 +227,29 @@ On the card, the strip under **Hue** shows every input hue (**In**) above the co
 Each has one value, shown on its card with its unit over a slider: **Exposure** in stops (+1
 doubles the light; a tick every stop), **Offset** added to every value and **Factor** (Multiply) as a
 multiplier. A drag near the neutral value (0, or 1 for Factor) rests on it; double-click to reset.
+
+## Colorize
+
+Colorize replaces an image's colour from its own tones, keeping its alpha. It is in the **Grade**
+section with the nodes above. Choose what it does with **Mode**:
+
+| Mode | Does |
+| --- | --- |
+| **Fill** | Paints every visible pixel with **Fill color**. |
+| **Tint** | Maps black to **Shadows** and white to **Highlights**; brighter-than-white values keep going past Highlights. |
+| **Tritone** | Maps the brightness through three colours: **Shadows**, **Midtones** at the **Midpoint**, **Highlights**. |
+| **Gradient Map** | Maps the brightness, or one channel (**Map from**), through the same three colours. **Repetitions** fits the gradient that many times into 0 to 1, **Phase** slides it along (in whole gradients) and **Outside the ramp** chooses what happens past its ends: **Clamp** holds the end colours, **Repeat** starts over and **Mirror** runs back and forth. Animate Phase with Repeat or Mirror for cycling colours. |
+| **Black & White** | Turns the image grey, with a slider for how bright each of **Reds**, **Yellows**, **Greens**, **Cyans**, **Blues** and **Magentas** become (from -200% to 300%). |
+
+**Amount** blends the result with the original colour: 100% is the full effect, 0% leaves the image
+unchanged. The default Midpoint, 0.18, is mid grey in scene-linear light.
+
+On the card, Tint, Tritone and Gradient Map show the gradient they map through, drawn from the
+node's own colours, with a stop under it for each colour. Click a stop, or a colour swatch below the
+gradient, to pick its colour. Drag the middle stop to move the Midpoint (hold **Ctrl** for finer
+control, or **Shift**-click the gradient to jump it to the pointer); double-click the gradient to
+reset it. Black & White shows a slider per colour over a track from black to that colour. The card
+shows only the current mode's controls; the others keep their values.
 
 ## Masks
 

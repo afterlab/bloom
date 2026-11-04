@@ -841,3 +841,100 @@ compiler test checks the lowering. The `effect.AlphaAssociationKernel` and
 `node.bloom.alpha-association` coverage fixtures prepare every mode on the production builder, and
 the native grade harness runs every mode on the device against the CPU oracle at the 2e-6/exact-alpha
 gate with a warm zero-dispatch rerun and a changed value that re-dispatches.
+
+## Colorize
+
+`bloom.colorize`, schema 1 (#504), replaces an image's colour from its own tones. It is listed under
+Grade (search also finds it as fill, tint, tritone, duotone, gradient map, ramp, black white,
+monochrome, greyscale, toner or channel mixer) and has one Image in, `input`, and one Image out,
+`image`, over the input's data and display windows with its pixel aspect.
+
+Parameters:
+
+| Control | Role | Default | Kind |
+| --- | --- | --- | --- |
+| Mode | `mode` | Tint | Constant dropdown: Fill (0), Tint (1), Tritone (2), Gradient Map (3), Black & White (4) |
+| Amount | `amount` | 100% | Animatable `[0, 1]`, every mode |
+| Fill color | `fillColor` | White (1, 1, 1) | Animatable colour, Fill |
+| Shadows | `shadows` | Black (0, 0, 0) | Animatable colour, Tint, Tritone and Gradient Map |
+| Midtones | `midtones` | (0.24, 0.17, 0.10), luma 0.18 | Animatable colour, Tritone and Gradient Map |
+| Highlights | `highlights` | White (1, 1, 1) | Animatable colour, Tint, Tritone and Gradient Map |
+| Midpoint | `midpoint` | 0.18 (scene-linear mid grey) | Animatable `[0.01, 0.99]`, Tritone and Gradient Map |
+| Map from | `source` | Luma | Constant dropdown: Luma (0), Red (1), Green (2), Blue (3), Alpha (4); Gradient Map |
+| Outside the ramp | `cycle` | Clamp | Constant dropdown: Clamp (0), Repeat (1), Mirror (2); Gradient Map |
+| Repetitions | `repetitions` | 1 | Animatable `[0, 100]`, Gradient Map |
+| Phase (cycles) | `phase` | 0 | Animatable `[-1000, 1000]`, Gradient Map |
+| Reds, Yellows, Greens, Cyans, Blues, Magentas | `reds` ... `magentas` | 40%, 60%, 40%, 60%, 20%, 80% | Animatable `[-2, 3]` (-200% to 300%), Black & White |
+
+The three choices decide the arithmetic, so they have no socket; every other value is animatable and
+drivable with its own socket in parameter order. A colour's RGB is any finite value within `+-1e6`
+(HDR and signed colours are allowed); its alpha is unused.
+
+Bloom's process image is premultiplied scene-linear RGBA. Colorize works on the straight colour
+`s = rgb / a` as stored, with no colour transform and no clamp of colour, and keeps alpha exactly; a
+pixel with alpha 0 passes unchanged. `L = 0.2126 s.r + 0.7152 s.g + 0.0722 s.b` is the Rec. 709 luma
+the track-matte Luma and Luma Key use. Each mode gives a colour `c`:
+
+- **Fill**: `c = fillColor`, a flat colour over the kept alpha.
+- **Tint**: `c = shadows + L (highlights - shadows)`: black maps to Shadows, white to Highlights,
+  and the line continues past them, so HDR luma above one stays brighter than white.
+- **Tritone** and **Gradient Map** map a position `t` through the three-stop ramp Shadows (at 0),
+  Midtones (at the midpoint `m`) and Highlights (at 1), linear between stops in scene-linear
+  colour: `c = shadows + (t / m)(midtones - shadows)` for `t <= m`, otherwise
+  `c = midtones + ((t - m) / (1 - m))(highlights - midtones)`. Tritone takes `t = clamp(L, 0, 1)`.
+  Gradient Map reads `x`, the luma or one straight channel (alpha is the pixel's alpha), takes
+  `t = x * repetitions + phase`, and then clamps it to `[0, 1]` (Clamp), keeps its fractional part
+  `t - floor(t)` (Repeat, a sawtooth) or reflects it, `u = t - 2 floor(t / 2)`, `t = u > 1 ? 2 - u : u`
+  (Mirror, so neighbouring repetitions meet without a seam). Repeat or Mirror with several
+  repetitions and an animated phase gives the cycling colour of a colour-cycle effect.
+- **Black & White** takes the largest, middle and smallest channel of `s` and
+  `grey = min + (mid - min) * secondary + (max - mid) * primary`, `c = (grey, grey, grey)`. The
+  primary weight belongs to the largest channel (Reds, Greens or Blues) and the secondary to the pair
+  of the two largest, named by the smallest channel (Cyans when red is smallest, Magentas when green
+  is, Yellows when blue is). White stays white, a pure red is Reds, a pure yellow Yellows, and so on;
+  the defaults are the classic black-and-white mix. Ties go to the earlier channel (red, then green),
+  and a tie contributes nothing whichever weight it picks.
+
+Finally `c' = s + amount (c - s)` (exactly `c` at 100%) and the result is `(c' a, a)`. Amount 0 is
+the exact identity and aliases its input. A non-finite straight colour, Gradient Map position or
+result is the grades' non-finite pixel failure, never published.
+
+The node lowers to one `ColorizeKernel` (Required in the GPU coverage contract), a grade kind of the
+shared colour grade machinery (`color_grade_image_effect.hpp`): the host prepares one packed table of
+ten vec4s (`[table mode, amount, source, cycle]`, `[repetitions, phase, midpoint, 0]`,
+`[1 / m, 1 / (1 - m), 0, 0]`, the luma weights, the colours `A`, `B`, `C`, `D` as the mode needs
+them (Fill `A`; Tint `A` = shadows, `B` = highlights - shadows; the ramp `A` = shadows,
+`B` = midtones - shadows, `C` = midtones, `D` = highlights - midtones), and the weights by largest and
+by smallest channel), the CPU reference applies it per pixel, and the device runs one fixed resident
+program that reads the same table with the same binary32 operations (the wrapper's correctly rounded
+division and premultiply, precise fused multiply-adds, exact min, max and floor, the same channel
+ties). A changed mode, colour or value changes only data, never the shader. The compiler lowers only
+the operands the mode reads (Gradient Map also its source and cycle); the others are constants
+without a parameter identity, and the table holds zero for them, so an unused (even animated) value
+neither claims the parameter nor invalidates a cached frame. Cache identity is the prepared table; an
+animated value the mode reads makes the operation time-dependent. Cancellation is checked per row,
+the output is charged to the pixel budget, and preview, RAM preview, still and sequence export, video
+export and headless render all take the same resident command; there is no exception.
+
+The card widget (`colorize_widget.hpp`), drawn the same on the node card and in Properties, shows
+the mode's controls and keeps the rest behind it: Amount over its slider; Fill's colour chip; for
+Tint, Tritone and Gradient Map the ramp bar, the gradient drawn from the node's own colours with a
+stop under it per colour (dragging the midtones stop moves the midpoint, relatively, with Ctrl a
+tenth of the speed; a Shift-press on the bar jumps it to the pointer; clicking a stop opens its colour
+picker; a double-click resets the midpoint), each stop's colour row (a chip that opens the colour
+picker) and the Midpoint row; Gradient Map adds the Repetitions and Phase sliders and shows its two
+choices as rows; Black & White shows the channel mix, one slider row per hue over a track from black
+to that hue. Each value keeps its diamond, its Reset and key menu and its socket beside its row.
+
+Tests: the colorize test compares every mode, each Gradient Map source and cycle, a partial amount
+and a custom mix with an independent double-precision formula over HDR, signed, partial and zero
+alpha (2e-5 relative, exact alpha); checks Fill's flat colour, Tint's and Tritone's stops, the
+classic grey weights and the periodic and mirrored maps; and covers identity, unused values,
+domains, the fixed program, cache identity, the overflow refusal, the budget and cancellation. The
+image effect test runs modes through the evaluator (cold, warm reuse, ROI, invalidation); the
+compiler test checks the lowering of each mode; the commands test edits and refuses values. The
+`effect.ColorizeKernel` and `node.bloom.colorize` coverage fixtures prepare every mode on the
+production builder, and the native grade harness runs every mode on the device against the CPU
+oracle at the 2e-6/exact-alpha gate with a warm zero-dispatch rerun and a changed amount that
+re-dispatches. The grading cards test holds the card in every mode inside its card with no label cut
+short, the ramp drag as one command and the stop click opening the picker.

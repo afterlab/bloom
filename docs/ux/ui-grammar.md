@@ -171,7 +171,8 @@ ruler, lanes, graph editor, work area and navigator, and the graphical grade con
 and Properties share (`NodeCardWidget`): the Grade colour wheel (`GradeWheelCanvas`) and its
 contrast-curve picture (`GradeContrastCanvas`), the Levels histogram with its handles
 (`LevelsGraphCanvas`), the Curves graph (`CurveGraphCanvas`, a value-over-input graph like the graph
-editor) and the Hue/Saturation hue strip (`HueShiftStrip`). Every other grading control is a kit
+editor), the Hue/Saturation hue strip (`HueShiftStrip`) and the Colorize gradient ramp with its
+stops (`ColorizeRampBar`). Every other grading control is a kit
 widget: a value field, or `KSlider`'s grading variant. Other surfaces compose kit widgets.
 
 ## Export panel
@@ -599,7 +600,7 @@ from the GPU route. The node editor background draws the same image in viewport 
 card and over the dot grid.
 
 A graphically edited node (#494: Grade and Levels; #498: Curves; #501: Hue/Saturation, Exposure,
-Offset and Multiply) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
+Offset and Multiply; #504: Colorize) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
 its transport rows and its parameter rows, inset by the card padding at the card's width. The same
 widget is the first thing in its Properties section, so every edit works on the card without
 Properties. Its controls follow the grading rules under "Live Value Editing": each gesture is one
@@ -625,7 +626,14 @@ switch and the channel's Reset, the plot with its handles, and the five values u
 black, gamma, white; "Output" black, white); its Clamp row ("Clamp to 0-1") always shows.
 Hue/Saturation draws its Hue row over the hue strip (input spectrum over the turned one) and its
 Saturation row over its slider. Exposure, Offset and Multiply draw their amount's row over a slider
-ticked along its soft range. Every grading graph (Levels, Curves, the contrast picture) is one
+ticked along its soft range. Colorize shows only its mode's controls (a mode change re-lays the
+card): its Amount row over a slider; a colour row per colour (name, a colour chip that opens the
+colour picker, diamond); for Tint, Tritone and Gradient Map the ramp bar, the gradient drawn from the
+node's colours in display colour with a handle per stop under it (the midtones handle drags the
+midpoint, a Shift-press jumps it, a click on a handle opens that colour's picker, a double-click
+resets the midpoint); Gradient Map's Repetitions and Phase over jog-toned sliders with its Map from
+and Outside the ramp dropdowns as ordinary rows; and for Black & White one slider row per hue over a
+track from black to the hue. Every grading graph (Levels, Curves, the contrast picture) is one
 uniform grey with a grid line every quarter: no lighter 0..1 box and no dark band past 1.
 
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
@@ -1053,7 +1061,7 @@ Filters (`NodeCategory::Filters`) holds the blurs (Gaussian, Box, Matte) and Mat
 Key, the Drop Shadow, Glow and Light Wrap recipes and the image Separate/Combine Channels (beside
 Shuffle, Channel Copy, Remove and Pass) are under Compositing. Grade (`NodeCategory::Grade`) holds the
 image grades that never convert colour: Grade, Levels, Curves, Hue/Saturation, Exposure, Offset,
-Multiply and Invert. Color Management projects `NodeCategory::Color` and holds only the OCIO Color
+Multiply, Invert and Colorize. Color Management projects `NodeCategory::Color` and holds only the OCIO Color
 Space Transform and OCIO File Transform; Color Values holds the color value nodes. A node card's
 eyebrow is its section name. The UI category projection owns normalization.
 Categories are not persisted, so no migration is needed. Utilities contains only reroute and
