@@ -142,8 +142,9 @@ void transform2DRows() {
     auto* filter = row(properties, "filter");
     auto* filters = filter ? filter->findChild<ui::kit::KDropdown*>("propertiesRegistryEnum")
                            : nullptr;
-    expect(filters && filters->count() == 1 && filters->currentText() == QStringLiteral("Bilinear"),
-           "Filter offers the single explicitly versioned Bilinear resampler");
+    expect(filters && filters->count() == 2 && filters->currentText() == QStringLiteral("Bilinear") &&
+               filters->itemText(1) == QStringLiteral("Nearest"),
+           "Filter offers Bilinear (the default) and Nearest (#480)");
     if (selector) {
         selector->chooseIndex(2);
         const auto* record = [&]() -> const document::ParameterRecord* {
