@@ -2,8 +2,8 @@
 
 Grade, Levels, Curves and Hue/Saturation adjust an image's colour. They work on render passes as
 well as on colour: none of them converts colour, so a depth, mist, normal or position pass is
-adjusted exactly as it was rendered. All four are in the **Color** section of the Add menu and
-the Tab search. Each takes an image on **Input** and returns the adjusted image on **Image**.
+adjusted exactly as it was rendered. All four are in the **Grade** section of the Add menu and
+the Tab search, with Exposure, Offset, Multiply and Invert. Each takes an image on **Input** and returns the adjusted image on **Image**.
 
 Every control can be animated, and every change can be undone and is saved with the project.
 Grade, Levels and Hue/Saturation controls can also be linked from another node. A node left at its

@@ -128,7 +128,7 @@ thumbnail, proxy, and rendered frame; no stale color conversion is reused.
 
 1. Select the ACES 1.3 CG configuration and **ACEScg** working space.
 2. Import the show's `.cube` file through the Assets panel. It appears with kind **LUT**.
-3. In Nodes, choose **Add → Color → OCIO File Transform**. Connect the image producer to its
+3. In Nodes, choose **Add → Color Management → OCIO File Transform**. Connect the image producer to its
    **Input**, then connect **Image** to the next image node or Layer Output.
 4. In Properties, select the LUT asset, set **Process Space** to **ACEScct**, and use the LUT
    author's interpolation and direction. The defaults are Linear and Forward.

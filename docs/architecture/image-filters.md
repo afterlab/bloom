@@ -191,7 +191,7 @@ run at the 2e-6/exact-alpha gate.
 
 `bloom.levels` and `bloom.hue-saturation`, schema 1 (#340), and `bloom.curves`, schema 2 (#493),
 are Image-in,
-Image-out grades listed under Color in the Add menu. None of them performs a colour transform or
+Image-out grades listed under Grade in the Add menu. None of them performs a colour transform or
 reads the working colour space: the values are graded exactly as stored, so a Raw data pass (Z
 depth, mist, normals, position) interpreted with the Raw input colour space can be normalised or
 remapped directly. They lower to the `LevelsKernel`, `CurvesKernel` and `HueSaturationKernel`
@@ -399,7 +399,7 @@ solids at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value ru
 
 ## Grade
 
-`bloom.grade`, schema 1 (#494), is an Image-in, Image-out primary grade listed under Color, in the
+`bloom.grade`, schema 1 (#494), is an Image-in, Image-out primary grade listed under Grade, in the
 manner of lift/gamma/gain primaries and the ASC CDL. It lowers to the `GradeKernel` alternative and
 shares the grade machinery above (`color_grade_image_effect.hpp`): one host-prepared binary32
 table, the CPU reference that applies it, and one fixed resident GPU program
@@ -503,9 +503,9 @@ Exposure). These rows carry their sockets.
 ## Separate Channels and Combine Channels
 
 `bloom.separate-channels` and `bloom.combine-channels`, schema 1 (#479), split an image into its
-channels and build an image from channels. Both are listed under Color in the Add menu and work on
-any Image: footage, a nested composition, a generator or a processed result, and render passes
-such as mist, Z depth, normals, motion vectors and IDs. Every value is the stored Float32 channel:
+channels and build an image from channels. Both are listed under Compositing in the Add menu,
+beside the other channel nodes, and work on any Image: footage, a nested composition, a generator
+or a processed result, and render passes such as mist, Z depth, normals, motion vectors and IDs. Every value is the stored Float32 channel:
 nothing is clamped, rounded or colour converted, so a Raw data pass moves between channels exactly
 as stored. Only alpha is limited to `[0, 1]`, the storage invariant. Neither node reads the working
 colour space.

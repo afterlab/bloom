@@ -56,8 +56,9 @@ Audio Source -> Layer --audio-+
 ### Image Effects
 
 An image effect has exactly one Image transport input named `input` and one Image output named
-`image`. `NodeLoweringKind::ImageEffect` is the shared lowering for image-to-image kernels;
-`NodeCategory::Color` follows Compositing in the Add menu and is not persisted. Effects may connect
+`image`. `NodeLoweringKind::ImageEffect` is the shared lowering for image-to-image kernels. Image effects
+are listed under Compositing, Transform, Filters, Grade or Color Management (`NodeCategory::Color`)
+in the Add menu ([UI grammar](../ux/ui-grammar.md)); categories are not persisted. Effects may connect
 any image producer to any image consumer, including chains before a Layer Output, Merge, or Output.
 The ordinary graph dependency validation continues to reject cycles.
 
@@ -68,7 +69,7 @@ transparent black. Identity and bypass share the original image without a divide
 trip. Negative and HDR RGB are retained if finite.
 
 The first image-effect definitions are OCIO Color Space Transform and OCIO File Transform.
-Their registry category is Color, ordered after Compositing and not persisted. Each owns one
+Their registry category is Color, shown as Color Management after Grade, and not persisted. Each owns one
 `input` Image socket and one `image` Image output. Any image producer may feed an effect, and its
 output may feed another effect or any image consumer; ordinary graph validation still rejects
 cycles. For example: Solid → CST → File Transform → CST → Layer Output. Parameters remain command-

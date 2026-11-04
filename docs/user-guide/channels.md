@@ -3,8 +3,9 @@
 Separate Channels splits an image into its red, green, blue and alpha channels, and Combine
 Channels builds an image from channels. Use them to rebuild an image from other images' channels,
 pack render passes into one image, or pull one value out of a pass, such as a mist, depth, normal,
-motion vector or ID pass. Both nodes are in the **Color** section of the Add menu and the Tab
-search; searching "Separate RGB" or "Combine RGB" finds them first.
+motion vector or ID pass. Both nodes are in the **Compositing** section of the Add menu and the
+Tab search, beside the other channel nodes; searching "Separate RGB" or "Combine RGB" finds them
+first.
 
 Both work on any image: footage, a nested composition, a generator or another node's result. The
 values are used exactly as stored. Nothing is clamped or colour converted, so values above 1

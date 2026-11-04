@@ -423,12 +423,13 @@ they placed deliberately, is better than a silent coercion whose rule they have 
 
 The current UI category order and normalized family mapping are owned by [UI grammar](../ux/ui-grammar.md).
 Value-family normalization is a presentation projection. COLOR-3 adds the non-persisted
-`NodeCategory::Color` for image effects.
+`NodeCategory::Color` for colour-management image effects; #500 adds `NodeCategory::Grade` for the
+image grades and `NodeCategory::Filters` for the blurs and matte filters.
 
 ## Color Image Effects
 
 These definitions operate on images and use `NodeLoweringKind::ImageEffect`, independently of the
-Color value nodes. They appear under Add → Color after Compositing.
+Color value nodes. They appear under Add → Color Management, after Grade.
 
 | Node | Image ports | Constant parameters | Behavior |
 | --- | --- | --- | --- |

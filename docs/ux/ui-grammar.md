@@ -1045,10 +1045,16 @@ Properties shows every section with no filter strip and no header search. Sectio
 individually with persisted state; there is no Collapse all / Expand all affordance and no
 section menu. KSection headers carry only the chevron, title, and Reset.
 
-Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Color, Values,
-Math, Convert, String, Logic, Time, Color Values, Vector, Utilities, Output. Transform holds geometric image
-operations (Resize, Fit, Transform 2D, Crop, Pad, Flip, Rotate 90); Filters holds the blurs (Gaussian, Box, Matte) and Matte Erode/Dilate; Luma Key and the Drop Shadow, Glow and Light Wrap recipes are under Compositing; Color holds Levels, Curves, Hue/Saturation and the image Separate/Combine Channels. The UI category projection owns normalization;
-the Color image-effect section projects `NodeCategory::Color`, while Color Values holds the color value nodes.
+Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Grade, Color
+Management, Values, Math, Convert, String, Logic, Time, Color Values, Vector, Utilities, Output.
+Transform holds geometric image operations (Resize, Fit, Transform 2D, Crop, Pad, Flip, Rotate 90);
+Filters (`NodeCategory::Filters`) holds the blurs (Gaussian, Box, Matte) and Matte Erode/Dilate; Luma
+Key, the Drop Shadow, Glow and Light Wrap recipes and the image Separate/Combine Channels (beside
+Shuffle, Channel Copy, Remove and Pass) are under Compositing. Grade (`NodeCategory::Grade`) holds the
+image grades that never convert colour: Grade, Levels, Curves, Hue/Saturation, Exposure, Offset,
+Multiply and Invert. Color Management projects `NodeCategory::Color` and holds only the OCIO Color
+Space Transform and OCIO File Transform; Color Values holds the color value nodes. A node card's
+eyebrow is its section name. The UI category projection owns normalization.
 Categories are not persisted, so no migration is needed. Utilities contains only reroute and
 Separate/Combine XY and XYZ plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
 time conversions; composition readouts and literals remain Values. HSV operations and Separate/Combine Color belong to Color Values; the Color value nodes are
