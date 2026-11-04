@@ -1,8 +1,10 @@
-// #494: the Grade wheels and the graphical Levels, on the node card and in Properties. A puck
-// drag edits a wheel's red, green and blue as one live edit and one command; a master slider and a
-// Levels handle drag are one command each; a press that moves nothing commits nothing; Escape
-// cancels; a double-click resets; Alt-click opens the values behind the widget; the card shows the
-// widget instead of its value rows, and the Levels parameters are the numeric ones.
+// #494, #501: the Grade wheels and the graphical Levels, on the node card and in Properties. A puck
+// drag edits a wheel's red, green and blue as one live edit and one command, relative to the press
+// (a Shift-press jumps, Ctrl is a tenth of the speed); a level jog and a Levels handle drag are one
+// command each; a press that moves nothing commits nothing; Escape cancels; a double-click on the
+// disc resets its colour and the Reset button the wheel; Alt-click opens the values behind the
+// widget; the card shows the widget instead of its value rows, the numbers stay visible on it, and
+// the Levels parameters are the numeric ones.
 
 #include "node_editor_items.hpp"
 
@@ -22,6 +24,8 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grade_wheels.hpp>
+#include <bloom/ui/grading_controls.hpp>
+#include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/slider.hpp>
 #include <bloom/ui/kit/value_field.hpp>
@@ -202,22 +206,32 @@ void gradeWheels() {
            "the card shows the widget, not the value rows");
     expect(paintsInsideCard(*item), "the Grade card paints no hidden row's label outside it");
     expect(cardContentFits(*item), "the Grade card's content fits it, nothing elided");
-    // #499: at the default card width every primary's name and value is whole.
+    // #499, #501: at the default card width every primary's name and value is whole.
     for (const auto which : document::kGradePrimaries) {
-        const auto role = QString::fromStdString(std::string(document::gradePrimaryRole(which)));
-        auto* label =
-            card->findChild<ui::kit::KLabel*>(QStringLiteral("gradePrimaryLabel.%1").arg(role));
+        auto* row = card->primaryRow(which);
+        auto* label = row->label();
         auto* field = card->primary(which);
         const bool whole =
-            label && field &&
             label->width() >= QFontMetrics(label->font()).horizontalAdvance(label->text()) &&
             !field->paintedText().contains(QChar(0x2026)) && !field->isDisplayRounded() &&
-            field->width() >= field->sizeHint().width() &&
-            field->geometry().right() <= card->width() && label->geometry().right() < field->x();
+            row->geometry().right() < card->width() && label->geometry().right() < field->x();
         if (!whole)
-            std::cerr << "primary " << role.toStdString() << " is cut short\n";
+            std::cerr << "primary " << label->text().toStdString() << " is cut short\n";
         expect(whole, "a primary's name and value fit the card");
+        expect(card->socketY(document::gradePrimaryRole(which)).has_value(),
+               "a primary's socket sits beside its row");
     }
+    // #501: a wheel's level and colour are always readable, with their units.
+    expect(card->level(GradeWheel::Lift)->field()->paintedText() == QStringLiteral("+0.000") &&
+               card->level(GradeWheel::Gamma)->field()->paintedText() == QStringLiteral("+0.00 st") &&
+               card->level(GradeWheel::Gain)->field()->paintedText() == QStringLiteral("1.00 \u00d7") &&
+               card->level(GradeWheel::Lift)->label()->text() == QStringLiteral("Lift level"),
+           "each wheel's level is labelled and shows its value with its unit");
+    expect(card->colour(GradeWheel::Lift, 0)->paintedText() == QStringLiteral("+0.00") &&
+               card->colour(GradeWheel::Gain, 2)->paintedText() == QStringLiteral("1.00 \u00d7") &&
+               card->colour(GradeWheel::Lift, 1)->isVisible(),
+           "each wheel's red, green and blue are always shown");
+    expect(card->canvas(GradeWheel::Lift)->neutral(), "a neutral wheel is a hollow donut");
     const auto collapsedHeight = item->boundingRect().height();
 
     // A puck drag: live, then one command for the three colour values.
@@ -245,6 +259,37 @@ void gradeWheels() {
                stored(session, node, "gainRed") == red,
            "the gesture undoes and redoes as one step");
 
+    expect(!wheel.neutral(), "an adjusted wheel fills its centre");
+    // A press outside the disc does nothing.
+    mouse(wheel, QEvent::MouseButtonPress, QPointF(1.0, 1.0));
+    mouse(wheel, QEvent::MouseMove, QPointF(30.0, 30.0));
+    mouse(wheel, QEvent::MouseButtonRelease, QPointF(30.0, 30.0));
+    expect(!wheel.dragging() && stack.size() == commands + 1, "a press outside the disc is ignored");
+    // A press away from the puck does not jump it; Ctrl drags at a tenth of the speed.
+    {
+        const auto before = wheel.puckPosition();
+        const auto disc = wheel.discRect();
+        const QPointF press(disc.center().x() - disc.width() / 4.0, disc.center().y());
+        mouse(wheel, QEvent::MouseButtonPress, press);
+        mouse(wheel, QEvent::MouseMove, press);
+        expect(std::abs(wheel.puckPosition().x() - before.x()) < 1e-6,
+               "pressing the disc away from the puck does not jump it");
+        mouse(wheel, QEvent::MouseMove, press + QPointF(0.0, 0.0), Qt::ControlModifier);
+        mouse(wheel, QEvent::MouseMove, press + QPointF(20.0, 0.0), Qt::ControlModifier);
+        expect(std::abs(wheel.puckPosition().x() - (before.x() + 2.0)) < 0.05,
+               "Ctrl moves the puck a tenth as far");
+        key(wheel, Qt::Key_Escape);
+        mouse(wheel, QEvent::MouseButtonRelease, press + QPointF(20.0, 0.0));
+        // A Shift-press jumps the puck to the pointer.
+        mouse(wheel, QEvent::MouseButtonPress, press, Qt::ShiftModifier);
+        expect(std::abs(wheel.puckPosition().x() - press.x()) < 0.5 &&
+                   std::abs(wheel.puckPosition().y() - press.y()) < 0.5,
+               "a Shift-press jumps the puck to the pointer");
+        key(wheel, Qt::Key_Escape);
+        mouse(wheel, QEvent::MouseButtonRelease, press);
+        expect(stack.size() == commands + 1 && stored(session, node, "gainRed") == red,
+               "Escape cancels a jump");
+    }
     // A press that moves nothing commits nothing; Escape cancels.
     mouse(wheel, QEvent::MouseButtonPress, centre);
     mouse(wheel, QEvent::MouseButtonRelease, centre);
@@ -257,22 +302,38 @@ void gradeWheels() {
                stored(session, node, "gainRed") == red,
            "Escape cancels the drag and commits nothing");
 
-    // The master slider is one command per drag.
+    // The level's jog is one command per drag, a step a pixel, with no end stops.
     auto& master = *card->master(GradeWheel::Lift);
-    const auto handle = master.handleRect().center();
-    mouse(master, QEvent::MouseButtonPress, handle);
-    mouse(master, QEvent::MouseMove, handle + QPointF(15.0, 0.0));
-    mouse(master, QEvent::MouseMove, handle + QPointF(25.0, 0.0));
-    mouse(master, QEvent::MouseButtonRelease, handle + QPointF(25.0, 0.0));
-    expect(stack.size() == commands + 2 && stored(session, node, "liftMaster") > 0.0,
-           "a master slider drag is one command");
+    expect(master.dragMode() == ui::kit::KSlider::DragMode::Jog, "a wheel's level is a jog strip");
+    const QPointF strip(master.width() / 2.0, master.height() / 2.0);
+    mouse(master, QEvent::MouseButtonPress, strip);
+    mouse(master, QEvent::MouseMove, strip + QPointF(15.0, 0.0));
+    mouse(master, QEvent::MouseMove, strip + QPointF(25.0, 0.0));
+    mouse(master, QEvent::MouseButtonRelease, strip + QPointF(25.0, 0.0));
+    const auto lifted = stored(session, node, "liftMaster");
+    expect(stack.size() == commands + 2 && lifted && std::abs(*lifted - 0.025) < 1e-9,
+           "a level jog drag is one command, 0.001 a pixel");
+    expect(card->level(GradeWheel::Lift)->field()->paintedText() == QStringLiteral("+0.025"),
+           "the level shows the jog's value");
 
-    // A double-click resets the wheel, master and colour, as one command.
-    mouse(wheel, QEvent::MouseButtonDblClick, centre);
-    expect(stack.size() == commands + 3 && stored(session, node, "gainRed") == 1.0 &&
-               stored(session, node, "gainGreen") == 1.0 &&
+    // A double-click on the disc resets its colour only, as one command; Reset resets the wheel.
+    {
+        auto& lift = *card->canvas(GradeWheel::Lift);
+        mouse(lift, QEvent::MouseButtonPress, lift.puckPosition());
+        mouse(lift, QEvent::MouseMove, lift.puckPosition() + QPointF(10.0, 0.0));
+        mouse(lift, QEvent::MouseButtonRelease, lift.puckPosition());
+    }
+    mouse(*card->canvas(GradeWheel::Lift), QEvent::MouseButtonDblClick,
+          card->canvas(GradeWheel::Lift)->discRect().center());
+    expect(stored(session, node, "liftRed") == 0.0 && stored(session, node, "liftMaster") == lifted,
+           "a double-click on the disc resets its colour and keeps its level");
+    mouse(wheel, QEvent::MouseButtonDblClick, wheel.discRect().center());
+    expect(stored(session, node, "gainRed") == 1.0 && stored(session, node, "gainGreen") == 1.0 &&
                stored(session, node, "gainBlue") == 1.0,
-           "a double-click resets the wheel as one command");
+           "a double-click resets the wheel's colour as one command");
+    card->resetButton(GradeWheel::Lift)->click();
+    expect(stored(session, node, "liftMaster") == 0.0, "Reset resets the wheel's level too");
+    const auto afterResets = stack.size();
 
     // Alt-click opens the wheel's values on the card.
     mouse(*card->canvas(GradeWheel::Lift), QEvent::MouseButtonPress,
@@ -283,20 +344,24 @@ void gradeWheels() {
     expect(card->valuesExpanded(GradeWheel::Lift) && card->showsRole("liftRed") &&
                !card->showsRole("gainRed") && rowShown("liftMaster") && rowShown("liftBlue") &&
                !rowShown("gainRed") && item->boundingRect().height() > collapsedHeight &&
-               stack.size() == commands + 3,
+               stack.size() == afterResets,
            "Alt-click opens the wheel's value rows and commits nothing");
-    panel->setPrimariesExpanded(true);
-    expect(panel->showsRole("exposure") && !panel->showsRole("liftRed"),
-           "Properties opens the primaries' rows on its own");
+    panel->setValuesExpanded(GradeWheel::Gain, true);
+    expect(panel->showsRole("gainRed") && !panel->showsRole("liftRed") &&
+               !panel->showsRole("exposure"),
+           "Properties opens a wheel's rows on its own; the primaries draw their own rows");
 
     // A primaries field edits its parameter as one command.
     auto* exposure = card->primary(document::GradePrimary::Exposure);
     exposure->setValue(1.5);
     QApplication::processEvents();
-    expect(stack.size() == commands + 4 && stored(session, node, "exposure") == 1.5,
+    expect(stack.size() == afterResets + 1 && stored(session, node, "exposure") == 1.5,
            "a primaries field writes its value");
     expect(panel->primary(document::GradePrimary::Exposure)->value() == 1.5,
            "the Properties primaries follow the card");
+    expect(card->resetPrimaries() && stored(session, node, "exposure") == 0.0 &&
+               stack.size() == afterResets + 2,
+           "the primaries' Reset is one command");
 }
 
 void levelsGraph() {
@@ -318,13 +383,17 @@ void levelsGraph() {
         return;
     expect(card->showsRole("clamp") && !card->showsRole("masterGamma"),
            "the card keeps the clamp row and hides the values");
+    expect(card->field(LevelsHandle::InputBlack)->paintedText() == QStringLiteral("0.000") &&
+               card->field(LevelsHandle::Gamma)->paintedText() == QStringLiteral("1.00") &&
+               card->field(LevelsHandle::OutputWhite)->isVisible(),
+           "the five Levels values are always shown");
     expect(paintsInsideCard(*item), "the Levels card paints no hidden row's label outside it");
     expect(cardContentFits(*item), "the Levels card's content fits it, nothing elided");
-    // #499: the five channel tabs fit beside the Values caret.
+    // #499: the five channel tabs fit beside the diamond and the Values button.
     auto* tabs = card->tabs();
     expect(tabs->count() == 5 && tabs->width() >= tabs->sizeHint().width() &&
                tabs->tabRect(4).right() < tabs->width() &&
-               tabs->geometry().right() < card->width() - ui::kit::px(ui::kit::Size::Control) + 1,
+               tabs->geometry().right() < card->diamond()->x(),
            "every channel tab fits on the card");
     auto& canvas = *card->canvas();
     expect(canvas.handlePosition(LevelsHandle::InputBlack) &&
@@ -367,6 +436,18 @@ void levelsGraph() {
     mouse(canvas, QEvent::MouseButtonRelease, outputBlack + QPointF(plot.width() * 0.1, 0.0));
     expect(stack.size() == commands + 3 && stored(session, node, "masterOutputBlack") > 0.05,
            "an output black drag is one command");
+    // A press off a handle's centre keeps the offset: nothing jumps.
+    {
+        const auto handle = *canvas.handlePosition(LevelsHandle::OutputBlack);
+        const auto value = stored(session, node, "masterOutputBlack");
+        mouse(canvas, QEvent::MouseButtonPress, handle + QPointF(4.0, 0.0));
+        mouse(canvas, QEvent::MouseMove, handle + QPointF(4.0, 0.0));
+        expect(canvas.values() && (*canvas.values())[3] == *value,
+               "pressing a handle off its centre does not jump it");
+        key(canvas, Qt::Key_Escape);
+        mouse(canvas, QEvent::MouseButtonRelease, handle + QPointF(4.0, 0.0));
+    }
+    expect(tabs->tabModified(0) && !tabs->tabModified(1), "a changed channel's tab carries a dot");
     // A double-click resets a handle.
     mouse(canvas, QEvent::MouseButtonDblClick, *canvas.handlePosition(LevelsHandle::Gamma));
     expect(stack.size() == commands + 4 && stored(session, node, "masterGamma") == 1.0,

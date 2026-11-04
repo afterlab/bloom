@@ -1,15 +1,30 @@
 #pragma once
 
-// #494: the Grade node's card widget: Lift, Gamma, Gain and Offset colour wheels and the primaries
-// bar, drawn and edited the same on the node card and in Properties.
+// #494, #501: the Grade node's card widget: Lift, Gamma, Gain and Offset colour wheels and the
+// primaries, drawn and edited the same on the node card and in Properties.
 //
 // A wheel's colour puck shows the part of its red, green and blue values that is not grey (their
 // mean is kept): the chroma plane perpendicular to grey, red at the vectorscope's 103 degrees, then
 // yellow, green, cyan, blue and magenta anticlockwise. The rim is a chroma of
-// gradeWheelRange(wheel). Dragging the puck moves it by the pointer (Shift for a tenth of the
-// speed) and edits the three values as one session value edit, one command on release;
-// double-clicking a wheel resets it (master and colour) as one command; Alt-click opens its Values
-// group. Under each wheel a slider drags its master and a button resets it.
+// gradeWheelRange(wheel). The wheel is a donut: the hue ring around an empty centre while the
+// colour is neutral, the interior filled with the faded hues once it is not, and nothing else but
+// the puck and its line from the centre.
+//
+// Each wheel follows the shared grading rules (grading_controls.hpp). A press inside the disc
+// drags the puck by the pointer's travel, so it never jumps; a Shift-press jumps it to the pointer,
+// which it then follows; Ctrl (Cmd) moves it at a tenth of the speed, and a modifier change mid-drag
+// continues from where the puck is. The arrow keys nudge it. A drag edits the three values as one
+// session value edit, one command on release. A double-click on the disc resets its colour (the
+// level stays); the wheel's Reset button resets colour and level. Under the disc the wheel's level
+// ("Lift level") is always readable, with its unit, over a jog strip that drags it with no end
+// stops (darker to the left, lighter to the right); under that, the red, green and blue values.
+// The wheel's keyframe diamond keys its four values as one; its Values button (or Alt-click)
+// shows their rows, with their sockets, to link them.
+//
+// The primaries follow, one row each with its diamond and its socket: Temperature and Tint over
+// blue-to-amber and green-to-magenta tracks, Contrast with a detent at 1, Pivot over a small
+// picture of the contrast curve whose pivot marker drags it, Saturation over grey-to-colour and
+// Exposure over whole-stop ticks. Their Reset button resets the six.
 
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/ids.hpp>
@@ -22,8 +37,12 @@
 #include <optional>
 #include <string_view>
 
+class QMenu;
+
 namespace bloom::ui {
 
+class GradingValueRow;
+class KeyframeGroupDiamond;
 namespace kit {
 class KButton;
 class KLabel;
@@ -42,6 +61,8 @@ class KValueField;
 // The hue a wheel shows at angle `degrees` (anticlockwise from the right), as display RGB.
 [[nodiscard]] std::array<double, 3> gradeWheelHueColour(double degrees);
 [[nodiscard]] QString gradeWheelName(document::GradeWheel wheel);
+// What a wheel's level does, for its label's tooltip and accessible description.
+[[nodiscard]] QString gradeWheelLevelDescription(document::GradeWheel wheel);
 
 class GradeWheelCanvas final : public QWidget {
     Q_OBJECT
@@ -57,13 +78,25 @@ class GradeWheelCanvas final : public QWidget {
     // Where the disc and the puck are drawn (widget coordinates).
     [[nodiscard]] QRectF discRect() const;
     [[nodiscard]] QPointF puckPosition() const;
+    // Whether a press at `position` lands on the disc (its circle, the puck's reach included).
+    [[nodiscard]] bool onDisc(QPointF position) const;
+    // Whether the colour is neutral (the donut's centre is empty).
+    [[nodiscard]] bool neutral() const;
     [[nodiscard]] bool dragging() const noexcept { return drag_.has_value(); }
     void cancelDrag();
-    // Sets the wheel's master and colour to neutral as one command.
+    // Sets the wheel's red, green and blue to neutral as one command (the level stays).
+    bool resetColour();
+    // Sets the wheel's level and colour to neutral as one command.
     bool reset();
+    // The right-click menu; the caller owns it (a test seam: the event shows it).
+    [[nodiscard]] QMenu* makeContextMenu();
+
+    [[nodiscard]] QSize sizeHint() const override;
 
   Q_SIGNALS:
     void alternateClicked();
+    // The menu's key action: the card keys the wheel's four values as one.
+    void keyRequested();
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -71,20 +104,82 @@ class GradeWheelCanvas final : public QWidget {
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+
+  private:
+    struct Drag final {
+        // The segment the pointer drags now: where the pointer and the puck were when it began,
+        // and its speed. A modifier change starts a new segment, so nothing jumps.
+        QPointF from;
+        QPointF puck;
+        double scale = 1.0;
+        Qt::KeyboardModifiers modifiers;
+        // Where the puck is now, and how far past the rim it may go (it stops at the rim unless
+        // the values already sat past it).
+        QPointF at;
+        double limit = 1.0;
+        std::array<double, 3> base{};
+        document::ParameterId primary;
+        // A run of arrow keys, not the pointer.
+        bool keys = false;
+    };
+    [[nodiscard]] bool beginDrag(bool keys);
+    void moveTo(QPointF puck);
+    CompositionSession& session_;
+    document::NodeId node_;
+    document::GradeWheel wheel_;
+    std::optional<Drag> drag_;
+    bool hovered_ = false;
+};
+
+// #501, D7: the Pivot row's picture: the contrast curve about the pivot over 0..1, with the pivot's
+// marker on its foot. Dragging the marker (or the picture) moves the pivot by the pointer's travel;
+// a Shift-press jumps it to the pointer; Ctrl a tenth, Shift ten times the speed; a double-click
+// resets it to 0.18.
+class GradeContrastCanvas final : public QWidget {
+    Q_OBJECT
+
+  public:
+    GradeContrastCanvas(CompositionSession& session, document::NodeId node,
+                        QWidget* parent = nullptr);
+
+    [[nodiscard]] double contrast() const;
+    [[nodiscard]] double pivot() const;
+    [[nodiscard]] QRectF plotRect() const;
+    [[nodiscard]] double pivotX() const;
+    [[nodiscard]] bool dragging() const noexcept { return drag_.has_value(); }
+    void cancelDrag();
+    bool resetPivot();
+    // The right-click menu; the caller owns it.
+    [[nodiscard]] QMenu* makeContextMenu();
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
     void hideEvent(QHideEvent* event) override;
 
   private:
     struct Drag final {
-        QPointF pressed;
-        QPointF puck;
-        std::array<double, 3> base{};
-        document::ParameterId primary;
+        document::ParameterId parameter;
+        double fromX = 0.0;
+        double base = 0.0;
+        double scale = 1.0;
+        Qt::KeyboardModifiers modifiers;
     };
+    [[nodiscard]] std::optional<document::ParameterId> parameter(std::string_view role) const;
     CompositionSession& session_;
     document::NodeId node_;
-    document::GradeWheel wheel_;
     std::optional<Drag> drag_;
 };
 
@@ -98,19 +193,29 @@ class GradeCardWidget final : public NodeCardWidget {
     [[nodiscard]] bool showsRole(std::string_view role) const override;
     [[nodiscard]] int heightAt(int width) const override;
     [[nodiscard]] int minimumWidthHint() const override;
+    [[nodiscard]] std::optional<int> socketY(std::string_view role) const override;
     [[nodiscard]] QSize sizeHint() const override;
 
     [[nodiscard]] GradeWheelCanvas* canvas(document::GradeWheel wheel) const;
+    // The wheel's level: its row (label, value) and the jog strip under it.
+    [[nodiscard]] GradingValueRow* level(document::GradeWheel wheel) const;
     [[nodiscard]] kit::KSlider* master(document::GradeWheel wheel) const;
+    // The wheel's red (0), green (1) and blue (2) values.
+    [[nodiscard]] kit::KValueField* colour(document::GradeWheel wheel, std::size_t channel) const;
     [[nodiscard]] kit::KButton* resetButton(document::GradeWheel wheel) const;
+    [[nodiscard]] kit::KButton* valuesButton(document::GradeWheel wheel) const;
+    [[nodiscard]] KeyframeGroupDiamond* diamond(document::GradeWheel wheel) const;
+    [[nodiscard]] GradingValueRow* primaryRow(document::GradePrimary primary) const;
     [[nodiscard]] kit::KValueField* primary(document::GradePrimary primary) const;
-    // Opens or closes a wheel's Values group (its master, red, green and blue rows); the primaries'
-    // group is opened with setPrimariesExpanded().
+    [[nodiscard]] kit::KButton* primariesReset() const noexcept { return primariesReset_; }
+    [[nodiscard]] GradeContrastCanvas* contrastCanvas() const noexcept { return contrast_; }
+    // Opens or closes a wheel's Values group (its master, red, green and blue rows, with their
+    // sockets).
     void setValuesExpanded(document::GradeWheel wheel, bool expanded);
     [[nodiscard]] bool valuesExpanded(document::GradeWheel wheel) const;
-    void setPrimariesExpanded(bool expanded);
-    [[nodiscard]] bool primariesExpanded() const noexcept { return expanded_.back(); }
-    // Re-reads the sliders and fields from the session.
+    // Resets the six primaries as one command.
+    bool resetPrimaries();
+    // Re-reads the fields and diamonds from the session.
     void refresh();
 
   protected:
@@ -118,11 +223,22 @@ class GradeCardWidget final : public NodeCardWidget {
 
   private:
     struct Cell final {
-        GradeWheelCanvas* canvas = nullptr;
-        kit::KSlider* master = nullptr;
+        kit::KLabel* title = nullptr;
+        KeyframeGroupDiamond* diamond = nullptr;
         kit::KButton* reset = nullptr;
         kit::KButton* values = nullptr;
+        GradeWheelCanvas* canvas = nullptr;
+        GradingValueRow* level = nullptr;
+        std::array<kit::KValueField*, 3> colour{};
     };
+    struct Metrics final {
+        int cell = 0;
+        int disc = 0;
+        int cellHeight = 0;
+        int primariesTop = 0;
+    };
+    [[nodiscard]] Metrics metrics(int width) const;
+    [[nodiscard]] int cellMinimumWidth() const;
     void place();
     void setExpanded(std::size_t group, bool expanded);
     [[nodiscard]] std::optional<document::ParameterId> parameter(std::string_view role) const;
@@ -131,12 +247,11 @@ class GradeCardWidget final : public NodeCardWidget {
     document::NodeId node_;
     std::array<Cell, document::kGradeWheelCount> cells_{};
     kit::KLabel* primariesTitle_ = nullptr;
-    kit::KButton* primariesValues_ = nullptr;
-    std::array<kit::KValueField*, document::kGradePrimaryCount> primaries_{};
-    // #499: each primary is a row of its own, its full name in a label column beside the field.
-    std::array<kit::KLabel*, document::kGradePrimaryCount> primaryLabels_{};
-    // The four wheels' Values groups, then the primaries'.
-    std::array<bool, document::kGradeWheelCount + 1> expanded_{};
+    kit::KButton* primariesReset_ = nullptr;
+    std::array<GradingValueRow*, document::kGradePrimaryCount> primaries_{};
+    GradeContrastCanvas* contrast_ = nullptr;
+    // The four wheels' Values groups.
+    std::array<bool, document::kGradeWheelCount> expanded_{};
 };
 
 } // namespace bloom::ui

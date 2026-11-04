@@ -1,22 +1,37 @@
 #include <bloom/ui/levels_graph.hpp>
 
+#include "properties_value_edits.hpp"
+#include "value_presentation.hpp"
+
 #include <bloom/document/project.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/painting.hpp>
+#include <bloom/ui/kit/slider.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/tab_bar.hpp>
 #include <bloom/ui/kit/tokens.hpp>
+#include <bloom/ui/kit/typography.hpp>
+#include <bloom/ui/kit/value_field.hpp>
 
+#include <QAction>
+#include <QContextMenuEvent>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QLinearGradient>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <memory>
 
 namespace bloom::ui {
 namespace {
@@ -43,7 +58,47 @@ constexpr double kHeadroom = 0.1;
     return handle == LevelsHandle::OutputBlack || handle == LevelsHandle::OutputWhite;
 }
 
-[[nodiscard]] QString handleName(const LevelsHandle handle) {
+[[nodiscard]] QColor channelInk(const std::size_t channel) {
+    switch (channel) {
+    case 1:
+        return kit::color(kit::Color::ComponentX);
+    case 2:
+        return kit::color(kit::Color::ComponentY);
+    case 3:
+        return kit::color(kit::Color::ComponentZ);
+    default:
+        return kit::color(kit::Color::Foreground);
+    }
+}
+
+[[nodiscard]] QString channelName(const std::size_t channel) {
+    switch (channel) {
+    case 1:
+        return QObject::tr("Red");
+    case 2:
+        return QObject::tr("Green");
+    case 3:
+        return QObject::tr("Blue");
+    case 4:
+        return QObject::tr("Alpha");
+    default:
+        return QObject::tr("RGB");
+    }
+}
+
+[[nodiscard]] std::vector<document::ParameterId> channelParameters(const CompositionSession& session,
+                                                                   const document::NodeId node,
+                                                                   const std::size_t channel) {
+    std::vector<document::ParameterId> ids;
+    for (std::size_t field = 0; field < document::kLevelsFieldCount; ++field)
+        if (const auto id = nodeRoleParameter(session, node, document::levelsRole(channel, field)))
+            ids.push_back(*id);
+    return ids;
+}
+
+} // namespace
+
+QString levelsHandleName(const LevelsHandle handle) {
     switch (handle) {
     case LevelsHandle::InputBlack:
         return QObject::tr("Input Black");
@@ -58,21 +113,6 @@ constexpr double kHeadroom = 0.1;
     }
     return QObject::tr("Output White");
 }
-
-[[nodiscard]] QColor channelInk(const std::size_t channel) {
-    switch (channel) {
-    case 1:
-        return kit::color(kit::Color::ComponentX);
-    case 2:
-        return kit::color(kit::Color::ComponentY);
-    case 3:
-        return kit::color(kit::Color::ComponentZ);
-    default:
-        return kit::color(kit::Color::Foreground);
-    }
-}
-
-} // namespace
 
 double levelsGammaHandle(const double black, const double white, const double gamma) noexcept {
     return black + (white - black) * std::pow(0.5, gamma);
@@ -95,8 +135,7 @@ LevelsGraphCanvas::LevelsGraphCanvas(CompositionSession& session, const document
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
     setAccessibleName(tr("Levels graph"));
-    setToolTip(tr("Drag the black, gamma and white handles; double-click a handle to reset it; "
-                  "Alt-click for the values"));
+    setToolTip(tr("Levels: %1").arg(channelName(channel_)));
     for (const auto signal :
          {&CompositionSession::snapshotChanged, &CompositionSession::liveValueChanged,
           &CompositionSession::currentTimeChanged})
@@ -110,31 +149,23 @@ void LevelsGraphCanvas::setChannel(const std::size_t channel) {
         return;
     cancelDrag();
     channel_ = channel;
+    setToolTip(tr("Levels: %1").arg(channelName(channel_)));
     update();
 }
 
 std::optional<document::ParameterId> LevelsGraphCanvas::parameter(const LevelsHandle handle) const {
-    const auto* composition = session_.composition();
-    const auto* record = composition ? composition->graph().findNode(node_) : nullptr;
-    if (record == nullptr)
-        return std::nullopt;
-    const auto role = document::levelsRole(channel_, static_cast<std::size_t>(handle));
-    const auto binding =
-        std::ranges::find(record->parameters, role, &document::ParameterBinding::role);
-    if (binding == record->parameters.end())
-        return std::nullopt;
-    return binding->parameterId;
+    return nodeRoleParameter(session_, node_,
+                             document::levelsRole(channel_, static_cast<std::size_t>(handle)));
 }
 
 std::optional<std::array<double, document::kLevelsFieldCount>> LevelsGraphCanvas::values() const {
     std::array<double, document::kLevelsFieldCount> values{};
     for (std::size_t field = 0; field < values.size(); ++field) {
         const auto id = parameter(static_cast<LevelsHandle>(field));
-        const auto value = id ? session_.liveValue(*id) : std::nullopt;
-        const auto* scalar = value ? std::get_if<double>(&*value) : nullptr;
-        if (scalar == nullptr)
+        const auto value = id ? liveScalar(session_, *id) : std::nullopt;
+        if (!value)
             return std::nullopt;
-        values[field] = *scalar;
+        values[field] = *value;
     }
     return values;
 }
@@ -232,6 +263,35 @@ std::optional<LevelsHandle> LevelsGraphCanvas::handleAt(const QPointF position) 
     return nearest;
 }
 
+std::optional<LevelsHandle> LevelsGraphCanvas::nearestInRow(const QPointF position) const {
+    const auto plot = plotRect();
+    if (position.y() < plot.bottom())
+        return std::nullopt;
+    const bool output = position.y() >= outputRect().top() - small() / 2.0;
+    std::optional<LevelsHandle> nearest;
+    qreal best = std::numeric_limits<qreal>::max();
+    for (const auto handle : kHandles) {
+        if (isOutput(handle) != output)
+            continue;
+        const auto centre = handlePosition(handle);
+        if (!centre)
+            continue;
+        const qreal distance = std::abs(centre->x() - position.x());
+        if (distance < best) {
+            best = distance;
+            nearest = handle;
+        }
+    }
+    return nearest;
+}
+
+double LevelsGraphCanvas::handleValueAt(const LevelsHandle handle, const double x) const {
+    const auto plot = plotRect();
+    const auto range = isOutput(handle) ? outputRange() : inputRange();
+    const double u = std::clamp((x - plot.left()) / plot.width(), 0.0, 1.0);
+    return range.low + u * (range.high - range.low);
+}
+
 void LevelsGraphCanvas::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -241,12 +301,13 @@ void LevelsGraphCanvas::paintEvent(QPaintEvent*) {
     const auto x = [&](const double value) {
         return plot.left() + plot.width() * (value - input.low) / (input.high - input.low);
     };
+    const auto y = [&](const double value) {
+        return plot.bottom() - plot.height() * (value - output.low) / (output.high - output.low);
+    };
+    // #501: one uniform grey under the whole plot, as every grading graph, HDR range included.
     painter.setPen(Qt::NoPen);
-    painter.setBrush(kit::color(kit::Color::SurfaceSunken));
-    painter.drawRect(plot);
-    // The 0..1 span, lighter than the HDR range around it.
     painter.setBrush(kit::color(kit::Color::Field));
-    painter.drawRect(QRectF(QPointF(x(0.0), plot.top()), QPointF(x(1.0), plot.bottom())));
+    painter.drawRect(plot);
     // The input histogram, requested only here, while the graph is drawn.
     if (auto* previews = session_.imagePreviews(); previews && previews->histogramsShown()) {
         const auto bins = previews->histogram(node_).bins;
@@ -261,6 +322,14 @@ void LevelsGraphCanvas::paintEvent(QPaintEvent*) {
             painter.drawRect(QRectF(x0, plot.bottom() - tall, x1 - x0, tall));
         }
     }
+    // The grid: a line every quarter across the whole plot, the same past 1 as below it.
+    kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
+    for (double t = std::ceil(input.low * 4.0) / 4.0; t < input.high; t += 0.25)
+        if (t > input.low)
+            painter.drawLine(QPointF(x(t), plot.top()), QPointF(x(t), plot.bottom()));
+    for (double t = std::ceil(output.low * 4.0) / 4.0; t < output.high; t += 0.25)
+        if (t > output.low)
+            painter.drawLine(QPointF(plot.left(), y(t)), QPointF(plot.right(), y(t)));
     const auto current = values();
     if (current) {
         // The channel's transfer, input along the plot, output up it over the output range.
@@ -288,6 +357,16 @@ void LevelsGraphCanvas::paintEvent(QPaintEvent*) {
         painter.drawPath(path);
         painter.restore();
     }
+    // 0 and 1 on the plot's foot, where the input reaches them.
+    painter.setFont(kit::font(kit::TypeRole::UiSmall));
+    painter.setPen(kit::color(kit::Color::Muted));
+    const QFontMetricsF metrics(painter.font());
+    const qreal inset = kit::px(kit::Spacing::XXS);
+    const qreal baseline = plot.bottom() - inset - metrics.descent();
+    painter.drawText(QPointF(x(0.0) + inset, baseline), QStringLiteral("0"));
+    painter.drawText(QPointF(x(1.0) - inset - metrics.horizontalAdvance(QStringLiteral("1")),
+                             baseline),
+                     QStringLiteral("1"));
     kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(plot);
@@ -320,14 +399,17 @@ void LevelsGraphCanvas::paintEvent(QPaintEvent*) {
         triangle.lineTo(centre->x() - half, tip + handleExtent());
         triangle.closeSubpath();
         const bool active = drag_ && drag_->handle == handle;
+        const bool hovered = !drag_ && hovered_ == handle;
         const auto fill =
             handle == LevelsHandle::Gamma ? kit::Color::Muted
             : handle == LevelsHandle::InputBlack || handle == LevelsHandle::OutputBlack
                 ? kit::Color::Background
                 : kit::Color::Foreground;
         painter.setBrush(kit::color(fill));
-        painter.setPen(QPen(kit::color(active ? kit::Color::Accent : kit::Color::BorderHover),
-                            active ? kit::kEmphasisStroke : kit::kHairlineWidth));
+        painter.setPen(QPen(kit::color(active    ? kit::Color::Accent
+                                       : hovered ? kit::Color::Foreground
+                                                 : kit::Color::BorderHover),
+                            active || hovered ? kit::kEmphasisStroke : kit::kHairlineWidth));
         painter.drawPath(triangle);
     }
     if (hasFocus()) {
@@ -353,7 +435,13 @@ void LevelsGraphCanvas::mousePressEvent(QMouseEvent* event) {
         emit alternateClicked();
         return;
     }
-    const auto handle = handleAt(event->position());
+    const auto modifiers = event->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier);
+    const bool jump = modifiers.testFlag(Qt::ShiftModifier);
+    auto handle = handleAt(event->position());
+    // A Shift-press on a handle's track jumps the nearest handle of that row to the pointer.
+    if (jump)
+        if (const auto nearest = nearestInRow(event->position()))
+            handle = nearest;
     const auto id = handle ? parameter(*handle) : std::nullopt;
     const auto current = values();
     if (!handle || !id || !current)
@@ -362,26 +450,69 @@ void LevelsGraphCanvas::mousePressEvent(QMouseEvent* event) {
     const auto output = outputRange();
     if (!session_.beginValueEdit(*id))
         return;
-    drag_ = Drag{*handle, *id, input, output, *current};
+    Drag drag;
+    drag.handle = *handle;
+    drag.parameter = *id;
+    drag.input = input;
+    drag.output = output;
+    drag.base = *current;
+    // Gamma's handle stands at its position, not at its value.
+    if (*handle == LevelsHandle::Gamma)
+        drag.origin = levelsGammaHandle((*current)[0], (*current)[1], (*current)[2]);
+    else
+        drag.origin = (*current)[static_cast<std::size_t>(*handle)];
+    drag.fromX = event->position().x();
+    drag.modifiers = modifiers;
+    drag.scale = kit::KSlider::dragScale(modifiers);
+    drag_ = drag;
+    if (jump) {
+        drag_->scale = 1.0;
+        drag_->origin = handleValueAt(*handle, event->position().x());
+        const double next =
+            *handle == LevelsHandle::Gamma
+                ? levelsGammaAt(drag_->base[0], drag_->base[1], drag_->origin)
+                : std::clamp(drag_->origin, -document::kMaximumGradeValue,
+                             document::kMaximumGradeValue);
+        if (!session_.updateValueEdit(next))
+            cancelDrag();
+    }
+    drag_->at = drag_->origin;
     update();
 }
 
 void LevelsGraphCanvas::mouseMoveEvent(QMouseEvent* event) {
-    if (!drag_)
+    if (!drag_) {
+        const auto over = handleAt(event->position());
+        if (over != hovered_) {
+            hovered_ = over;
+            setCursor(over ? Qt::SizeHorCursor : Qt::ArrowCursor);
+            update();
+        }
         return;
+    }
     if (!session_.isValueEditing(drag_->parameter)) {
         drag_.reset();
         update();
         return;
     }
+    const auto modifiers = event->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier);
+    if (modifiers != drag_->modifiers) {
+        // A modifier change continues from where the handle is, so it never jumps.
+        drag_->origin = drag_->at;
+        drag_->fromX = event->position().x();
+        drag_->modifiers = modifiers;
+        drag_->scale = kit::KSlider::dragScale(modifiers);
+    }
     const auto plot = plotRect();
     const auto& range = isOutput(drag_->handle) ? drag_->output : drag_->input;
-    const double u = std::clamp((event->position().x() - plot.left()) / plot.width(), 0.0, 1.0);
-    const double value = range.low + u * (range.high - range.low);
+    // Relative: the handle moves by the pointer's travel, from where it was pressed.
+    const double travel = (event->position().x() - drag_->fromX) * drag_->scale *
+                          (range.high - range.low) / std::max<qreal>(1.0, plot.width());
+    drag_->at = std::clamp(drag_->origin + travel, range.low, range.high);
     const double next =
         drag_->handle == LevelsHandle::Gamma
-            ? levelsGammaAt(drag_->base[0], drag_->base[1], value)
-            : std::clamp(value, -document::kMaximumGradeValue, document::kMaximumGradeValue);
+            ? levelsGammaAt(drag_->base[0], drag_->base[1], drag_->at)
+            : std::clamp(drag_->at, -document::kMaximumGradeValue, document::kMaximumGradeValue);
     if (!session_.updateValueEdit(next))
         cancelDrag();
     event->accept();
@@ -407,8 +538,63 @@ void LevelsGraphCanvas::mouseDoubleClickEvent(QMouseEvent* event) {
         return;
     }
     cancelDrag();
+    // A double-click on a handle resets it; on the plot, the channel.
     if (const auto handle = handleAt(event->position()))
         static_cast<void>(resetHandle(*handle));
+    else if (plotRect().contains(event->position()))
+        static_cast<void>(resetChannel());
+    event->accept();
+}
+
+QMenu* LevelsGraphCanvas::makeContextMenu(const QPointF position) {
+    auto* menu = kit::makeMenu(this);
+    const auto current = values();
+    if (const auto handle = handleAt(position)) {
+        const auto index = static_cast<std::size_t>(*handle);
+        auto* reset = menu->addAction(tr("Reset %1").arg(levelsHandleName(*handle)));
+        reset->setObjectName(QStringLiteral("levelsGraphResetHandle"));
+        reset->setEnabled(isEnabled() && current &&
+                          (*current)[index] != document::kLevelsFieldDefaults[index]);
+        connect(reset, &QAction::triggered, this,
+                [this, handle = *handle] { static_cast<void>(resetHandle(handle)); });
+    }
+    auto* channel = menu->addAction(tr("Reset %1").arg(channelName(channel_)));
+    channel->setObjectName(QStringLiteral("levelsGraphResetChannel"));
+    bool changed = false;
+    if (current)
+        for (std::size_t field = 0; field < document::kLevelsFieldCount; ++field)
+            changed = changed || (*current)[field] != document::kLevelsFieldDefaults[field];
+    channel->setEnabled(isEnabled() && changed);
+    connect(channel, &QAction::triggered, this, [this] { static_cast<void>(resetChannel()); });
+    const auto ids = channelParameters(session_, node_, channel_);
+    std::size_t keyable = 0;
+    std::size_t keyed = 0;
+    for (const auto id : ids) {
+        const auto state = session_.keyframeDiamondStateForParameter(id);
+        keyable += state != KeyframeDiamondState::Unsupported ? 1U : 0U;
+        keyed += state == KeyframeDiamondState::AnimatedWithKey ? 1U : 0U;
+    }
+    if (keyable != 0) {
+        menu->addSeparator();
+        auto* key = menu->addAction(keyed == keyable
+                                        ? tr("Remove %1 Keys").arg(channelName(channel_))
+                                        : tr("Key %1").arg(channelName(channel_)));
+        key->setObjectName(QStringLiteral("levelsGraphKey"));
+        connect(key, &QAction::triggered, this, &LevelsGraphCanvas::keyRequested);
+    }
+    auto* show = menu->addAction(tr("Show Values"));
+    show->setObjectName(QStringLiteral("levelsGraphShowValues"));
+    connect(show, &QAction::triggered, this, &LevelsGraphCanvas::alternateClicked);
+    return menu;
+}
+
+void LevelsGraphCanvas::contextMenuEvent(QContextMenuEvent* event) {
+    if (drag_) {
+        event->accept();
+        return;
+    }
+    const std::unique_ptr<QMenu> menu(makeContextMenu(event->pos()));
+    menu->exec(event->globalPos());
     event->accept();
 }
 
@@ -432,6 +618,14 @@ void LevelsGraphCanvas::hideEvent(QHideEvent* event) {
     QWidget::hideEvent(event);
 }
 
+void LevelsGraphCanvas::leaveEvent(QEvent* event) {
+    if (hovered_) {
+        hovered_.reset();
+        update();
+    }
+    QWidget::leaveEvent(event);
+}
+
 void LevelsGraphCanvas::cancelDrag() {
     if (!drag_)
         return;
@@ -450,7 +644,22 @@ bool LevelsGraphCanvas::resetHandle(const LevelsHandle handle) {
     const double neutral = document::kLevelsFieldDefaults[static_cast<std::size_t>(handle)];
     if ((*current)[static_cast<std::size_t>(handle)] == neutral)
         return true;
-    return session_.setParameterValue(*id, neutral, tr("Reset %1").arg(handleName(handle)));
+    return session_.setParameterValue(*id, neutral, tr("Reset %1").arg(levelsHandleName(handle)));
+}
+
+bool LevelsGraphCanvas::resetChannel() {
+    const auto current = values();
+    if (!current)
+        return false;
+    std::vector<std::pair<document::ParameterId, document::ParameterValue>> changes;
+    for (std::size_t field = 0; field < document::kLevelsFieldCount; ++field)
+        if (const auto id = parameter(static_cast<LevelsHandle>(field));
+            id && (*current)[field] != document::kLevelsFieldDefaults[field])
+            changes.emplace_back(*id, document::kLevelsFieldDefaults[field]);
+    if (changes.empty())
+        return true;
+    return session_.setParameterValues(std::move(changes),
+                                       tr("Reset Levels %1").arg(channelName(channel_)));
 }
 
 // --- LevelsCardWidget ---------------------------------------------------------------------------
@@ -467,29 +676,96 @@ LevelsCardWidget::LevelsCardWidget(CompositionSession& session, const document::
     tabs_->setObjectName(QStringLiteral("levelsGraphTabs"));
     for (const auto& text : {tr("RGB"), tr("R"), tr("G"), tr("B"), tr("A")})
         tabs_->addTab(text);
+    for (int index = 0; index < tabs_->count(); ++index)
+        tabs_->setTabToolTip(index, channelName(static_cast<std::size_t>(index)));
     tabs_->setCurrentIndex(0);
-    auto* disclosure = new kit::KButton(kit::IconId::CaretRight, QString{}, this);
+    diamond_ = new KeyframeGroupDiamond(session_, tr("Levels"), this);
+    diamond_->setObjectName(QStringLiteral("levelsGraphDiamond"));
+    // The Values disclosure: its caret turns down while the channel's rows are shown.
+    auto* disclosure = new kit::KButton(kit::IconId::CaretRight, tr("Values"), this);
     disclosure->setVariant(kit::KButton::Variant::Ghost);
     disclosure->setControlSize(kit::KButton::ControlSize::Compact);
+    disclosure->setCheckable(true);
     disclosure->setObjectName(QStringLiteral("levelsGraphValues"));
     disclosure->setAccessibleName(tr("Levels values"));
-    disclosure->setToolTip(tr("Show this channel's values"));
+    disclosure->setToolTip(tr("Show this channel's rows, with their sockets, to link them"));
     values_ = disclosure;
+    histogram_ = new kit::KCheckBox(tr("Histogram"), this);
+    histogram_->setObjectName(QStringLiteral("levelsGraphHistogram"));
+    histogram_->setCheckable(true);
+    histogram_->setAccessibleName(tr("Histogram"));
+    histogram_->setToolTip(tr("The input's luminance histogram behind the levels"));
+    reset_ = new kit::KButton(kit::IconId::Reset, QString{}, this);
+    reset_->setObjectName(QStringLiteral("levelsGraphReset"));
+    reset_->setControlSize(kit::KButton::ControlSize::Compact);
+    reset_->setAccessibleName(tr("Reset channel"));
+    reset_->setToolTip(tr("Reset this channel's five values"));
     canvas_ = new LevelsGraphCanvas(session_, node_, this);
+    inputLabel_ = new kit::KLabel(tr("Input"), this, kit::TypeRole::UiSmall);
+    inputLabel_->setObjectName(QStringLiteral("levelsGraphInputLabel"));
+    inputLabel_->setTone(kit::Color::Muted);
+    outputLabel_ = new kit::KLabel(tr("Output"), this, kit::TypeRole::UiSmall);
+    outputLabel_->setObjectName(QStringLiteral("levelsGraphOutputLabel"));
+    outputLabel_->setTone(kit::Color::Muted);
+    for (std::size_t index = 0; index < fields_.size(); ++index) {
+        const auto handle = static_cast<LevelsHandle>(index);
+        auto* field = new kit::KValueField(this);
+        field->setObjectName(QStringLiteral("levelsGraphField.%1").arg(index));
+        field->setCompact(true);
+        field->setOutlinedAtRest(true);
+        field->setMaximumWidth(QWIDGETSIZE_MAX);
+        configureValueField(*field, document::levelsSchemaKey(0, index),
+                            document::ParameterValueKind::Float64,
+                            document::levelsRole(0, index));
+        field->setDefaultValue(document::kLevelsFieldDefaults[index]);
+        field->setAccessibleName(levelsHandleName(handle));
+        field->setToolTip(levelsHandleName(handle));
+        field->setResetText(tr("Reset %1").arg(levelsHandleName(handle)));
+        auto* key = new QAction(tr("Add Key"), field);
+        key->setObjectName(QStringLiteral("levelsGraphFieldKey"));
+        connect(key, &QAction::triggered, this, [this, handle] {
+            if (const auto id = canvas_->parameter(handle))
+                static_cast<void>(session_.toggleKeyframeForParameter(*id));
+        });
+        field->addAction(key);
+        properties::bindValueEdit(session_, *field, [this, handle] {
+            return canvas_->parameter(handle).value_or(document::ParameterId{});
+        });
+        connect(field, &kit::KValueField::valueChanged, this, [this, handle](const double value) {
+            if (const auto id = canvas_->parameter(handle))
+                static_cast<void>(session_.setParameterValue(
+                    *id, value, tr("Set %1").arg(levelsHandleName(handle))));
+        });
+        fields_[index] = field;
+    }
     connect(tabs_, &kit::KTabBar::currentChanged, this, [this](const int index) {
         if (index < 0)
             return;
         canvas_->setChannel(static_cast<std::size_t>(index));
+        refresh();
         if (expanded_)
             emit rowsChanged();
     });
     connect(values_, &QAbstractButton::clicked, this, [this] { setValuesExpanded(!expanded_); });
     connect(canvas_, &LevelsGraphCanvas::alternateClicked, this,
             [this] { setValuesExpanded(!expanded_); });
-    connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
-        const auto* composition = session_.composition();
-        canvas_->setEnabled(composition != nullptr && !composition->nodeLocked(node_));
+    connect(canvas_, &LevelsGraphCanvas::keyRequested, diamond_,
+            [this] { static_cast<void>(diamond_->toggle()); });
+    connect(reset_, &QAbstractButton::clicked, canvas_,
+            [this] { static_cast<void>(canvas_->resetChannel()); });
+    connect(histogram_, &kit::KSwitch::toggled, this, [this](const bool on) {
+        if (auto* previews = session_.imagePreviews())
+            previews->setHistogramsShown(on);
     });
+    for (const auto signal :
+         {&CompositionSession::snapshotChanged, &CompositionSession::liveValueChanged,
+          &CompositionSession::currentTimeChanged})
+        connect(&session_, signal, this, &LevelsCardWidget::refresh);
+    refresh();
+}
+
+kit::KValueField* LevelsCardWidget::field(const LevelsHandle handle) const {
+    return fields_[static_cast<std::size_t>(handle)];
 }
 
 bool LevelsCardWidget::showsRole(const std::string_view role) const {
@@ -504,36 +780,119 @@ bool LevelsCardWidget::showsRole(const std::string_view role) const {
 }
 
 void LevelsCardWidget::setValuesExpanded(const bool expanded) {
+    {
+        const QSignalBlocker blocker(values_);
+        values_->setChecked(expanded);
+    }
+    values_->setIconId(expanded ? kit::IconId::CaretDown : kit::IconId::CaretRight);
     if (expanded_ == expanded)
         return;
     expanded_ = expanded;
-    values_->setIconId(expanded ? kit::IconId::CaretDown : kit::IconId::CaretRight);
     emit rowsChanged();
 }
 
 int LevelsCardWidget::heightAt(const int width) const {
-    return control() + static_cast<int>(small()) + canvasHeight(width);
+    // Tabs, the histogram switch, the graph, then the input and output values.
+    return 2 * (control() + static_cast<int>(small())) + canvasHeight(width) +
+           static_cast<int>(small()) + 2 * control() + static_cast<int>(small());
 }
 
 int LevelsCardWidget::minimumWidthHint() const {
-    // #499: every channel tab fits beside the Values caret, so none is clipped.
-    return std::max(kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control),
-                    tabs_->sizeHint().width() + static_cast<int>(small()) + control());
+    // #499: every channel tab fits beside the diamond and the Values button, so none is clipped;
+    // three values fit beside their caption.
+    // The gaps either side of the diamond.
+    const int gaps = 2 * static_cast<int>(small());
+    const int header = tabs_->sizeHint().width() + gaps + kit::px(kit::Size::IconSmall) +
+                       values_->sizeHint().width();
+    const int label =
+        std::max(inputLabel_->sizeHint().width(), outputLabel_->sizeHint().width());
+    const int values =
+        label + static_cast<int>(small()) +
+        3 * (kit::px(kit::Size::PropertiesFieldWidth) + static_cast<int>(small()));
+    return std::max({kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control),
+                     header, values});
 }
 
 QSize LevelsCardWidget::sizeHint() const {
-    const int width = kit::px(kit::Size::DropdownWidthExpanded);
+    const int width = std::max(minimumWidthHint(), kit::px(kit::Size::DropdownWidthExpanded));
     return {width, heightAt(width)};
 }
 
 void LevelsCardWidget::resizeEvent(QResizeEvent* event) {
     NodeCardWidget::resizeEvent(event);
+    place();
+}
+
+void LevelsCardWidget::place() {
     const int w = width();
-    const int tabsWidth = std::max(0, w - control() - static_cast<int>(small()));
-    tabs_->setGeometry(0, 0, tabsWidth, control());
-    values_->setGeometry(std::max(0, w - control()), 0, control(), control());
-    const int top = control() + static_cast<int>(small());
-    canvas_->setGeometry(0, top, w, canvasHeight(w));
+    const int s = static_cast<int>(small());
+    // The tabs, then the channel's diamond and its Values button at the right of their row.
+    const int values = values_->sizeHint().width();
+    values_->setGeometry(std::max(0, w - values), 0, values, control());
+    const int diamondX = std::max(0, w - values - s - diamond_->width());
+    diamond_->move(diamondX, (control() - diamond_->height()) / 2);
+    tabs_->setGeometry(0, 0, std::max(0, diamondX - s), control());
+    int y = control() + s;
+    histogram_->setGeometry(0, y, std::min(w - control() - s, histogram_->sizeHint().width()),
+                            control());
+    reset_->setGeometry(std::max(0, w - control()), y, control(), control());
+    y += control() + s;
+    canvas_->setGeometry(0, y, w, canvasHeight(w));
+    y += canvasHeight(w) + s;
+    // The values under the graph: black at the left, gamma in the middle, white at the right.
+    const int label = std::max(inputLabel_->sizeHint().width(), outputLabel_->sizeHint().width());
+    const int left = label + s;
+    const int field = std::max(0, (w - left - 2 * s) / 3);
+    const auto column = [&](const int index) { return left + index * (field + s); };
+    inputLabel_->setGeometry(0, y, label, control());
+    fields_[0]->setGeometry(column(0), y, field, control());
+    fields_[2]->setGeometry(column(1), y, field, control());
+    fields_[1]->setGeometry(column(2), y, w - column(2), control());
+    y += control() + s;
+    outputLabel_->setGeometry(0, y, label, control());
+    fields_[3]->setGeometry(column(0), y, field, control());
+    fields_[4]->setGeometry(column(2), y, w - column(2), control());
+}
+
+void LevelsCardWidget::refresh() {
+    const auto* composition = session_.composition();
+    const bool locked = composition == nullptr || composition->nodeLocked(node_);
+    canvas_->setEnabled(!locked);
+    reset_->setEnabled(!locked);
+    if (auto* previews = session_.imagePreviews()) {
+        const QSignalBlocker blocker(histogram_);
+        histogram_->setChecked(previews->histogramsShown());
+    }
+    const auto channel = canvas_->channel();
+    diamond_->setParameters(channelParameters(session_, node_, channel));
+    diamond_->refresh();
+    for (std::size_t index = 0; index < fields_.size(); ++index) {
+        auto* field = fields_[index];
+        const auto id = canvas_->parameter(static_cast<LevelsHandle>(index));
+        field->setEnabled(id && !locked && scalarEditable(session_, *id));
+        if (id && !field->hasLiveEdit())
+            if (const auto value = liveScalar(session_, *id)) {
+                const QSignalBlocker blocker(field);
+                field->setValue(*value);
+            }
+        const auto state =
+            id ? session_.keyframeDiamondStateForParameter(*id) : KeyframeDiamondState::Unsupported;
+        for (auto* action : field->actions()) {
+            action->setVisible(state != KeyframeDiamondState::Unsupported);
+            action->setText(state == KeyframeDiamondState::AnimatedWithKey ? tr("Remove Key")
+                                                                            : tr("Add Key"));
+        }
+    }
+    // A dot on each channel's tab that is not at its defaults.
+    for (std::size_t tab = 0; tab < document::kGradeChannelCount; ++tab) {
+        bool modified = false;
+        for (std::size_t index = 0; index < document::kLevelsFieldCount; ++index)
+            if (const auto id = nodeRoleParameter(session_, node_, document::levelsRole(tab, index)))
+                if (const auto value = liveScalar(session_, *id))
+                    modified = modified || *value != document::kLevelsFieldDefaults[index];
+        tabs_->setTabModified(static_cast<int>(tab), modified);
+    }
+    canvas_->update();
 }
 
 } // namespace bloom::ui

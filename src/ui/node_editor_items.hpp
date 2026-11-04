@@ -1268,7 +1268,8 @@ class NodeItem final : public QGraphicsObject {
         OperandRow row;
         row.parameterId = binding->parameterId;
         row.kind = declared->valueKind;
-        const auto label = displayTypeName(role);
+        // #501, D15: the name Properties gives the same parameter.
+        const auto label = parameterRowLabel(declared->schemaKey, role);
         const auto commit = [this, index] { commitOperand(index); };
         // Task FIX1, item G: a literal value node whose kind has a curve gets the SAME diamond a
         // layer parameter has, bound to its own parameter. The predicate is the schema's, never a
@@ -2273,6 +2274,11 @@ class NodeItem final : public QGraphicsObject {
             positionProxy(cardWidget_, kCardPadding, y);
             proxy->setVisible(!layout_.collapsed);
             proxy->setOpacity(layout_.muted ? 0.5 : 1.0);
+            // #501: a parameter whose row the widget draws itself keeps its socket beside it.
+            for (const auto& row : valueRows_)
+                if (const auto role = controlRoles_.find(row.widget); role != controlRoles_.end())
+                    if (const auto at = cardWidget_->socketY(role->second.toStdString()))
+                        parameterSocketY_.try_emplace(role->second, y + *at);
             y += widgetHeight;
         }
         const auto placeRow = [this, rowHeight, labelColumn](QWidget* field, qreal top) {
@@ -2348,7 +2354,13 @@ class NodeItem final : public QGraphicsObject {
         if (cardWidget_ == nullptr)
             return true;
         const auto role = controlRoles_.find(field);
-        return role == controlRoles_.end() || linkedInputs_.contains(role->second) ||
+        if (role == controlRoles_.end())
+            return true;
+        // #501: a row the widget draws itself never shows twice, linked or not: its socket sits
+        // beside the widget's row.
+        if (cardWidget_->socketY(role->second.toStdString()))
+            return false;
+        return linkedInputs_.contains(role->second) ||
                cardWidget_->showsRole(role->second.toStdString());
     }
 

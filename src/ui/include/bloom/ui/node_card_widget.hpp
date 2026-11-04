@@ -12,14 +12,19 @@
 // a long list of fields. A row whose input is linked always shows, so every link has its socket.
 //
 // The mechanism is not specific to these nodes: makeNodeCardWidget() is the one factory the node
-// card and Properties ask. #498: the Curves node's curve graph is the third (curve_graph.hpp). No
-// other existing node has a graphical main control: a shape, mask, gradient or transform is drawn
-// and dragged in the Viewer, and every other node's controls are values, choices and switches.
+// card and Properties ask. #498: the Curves node's curve graph is the third (curve_graph.hpp).
+// #501: Hue/Saturation draws its hue strip and saturation slider (hue_saturation_widget.hpp), and
+// Exposure, Offset and Multiply their amount's slider (scalar_slider_widget.hpp); each draws its
+// values' rows itself, with their sockets beside them (socketY). Every grading widget follows the
+// shared rules of grading_controls.hpp. No other existing node has a graphical main control: a
+// shape, mask, gradient or transform is drawn and dragged in the Viewer, and every other node's
+// controls are values, choices and switches.
 
 #include <QWidget>
 
 #include <bloom/document/ids.hpp>
 
+#include <optional>
 #include <string_view>
 
 namespace bloom::ui {
@@ -38,6 +43,13 @@ class NodeCardWidget : public QWidget {
     [[nodiscard]] virtual int heightAt(int width) const = 0;
     // The narrowest the widget stays readable.
     [[nodiscard]] virtual int minimumWidthHint() const = 0;
+    // #501: where the widget draws the row of `role` itself (its name, number and diamond, a
+    // full-width row), as a y in the widget, so the card puts that parameter's socket beside it
+    // rather than keeping it behind a hidden row; none for a role it does not draw that way.
+    [[nodiscard]] virtual std::optional<int> socketY(std::string_view role) const {
+        static_cast<void>(role);
+        return std::nullopt;
+    }
     // A layout gives the widget heightAt() its width (Properties); a card sizes it itself.
     [[nodiscard]] bool hasHeightForWidth() const override { return true; }
     [[nodiscard]] int heightForWidth(int width) const override { return heightAt(width); }

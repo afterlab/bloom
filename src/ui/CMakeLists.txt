@@ -560,6 +560,9 @@ target_sources(
         composition_thumbnail_controller.cpp
         curve_graph.cpp
         grade_wheels.cpp
+        grading_controls.cpp
+        hue_saturation_widget.cpp
+        scalar_slider_widget.cpp
         levels_graph.cpp
         node_card_widget.cpp
         image_preview_controller.cpp
@@ -742,6 +745,9 @@ target_sources(
             include/bloom/ui/composition_thumbnail_controller.hpp
             include/bloom/ui/curve_graph.hpp
             include/bloom/ui/grade_wheels.hpp
+            include/bloom/ui/grading_controls.hpp
+            include/bloom/ui/hue_saturation_widget.hpp
+            include/bloom/ui/scalar_slider_widget.hpp
             include/bloom/ui/levels_graph.hpp
             include/bloom/ui/node_card_widget.hpp
             include/bloom/ui/image_preview_controller.hpp

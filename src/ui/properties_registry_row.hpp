@@ -58,6 +58,10 @@ bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const Composition
 // 1; an empty (default) slot shows the default colour layer's channel it reads. #480: the Pass node's
 // pass picker shares the listing and offers its layers and channels.
 [[nodiscard]] bool isShuffleSlotSchema(std::string_view schemaKey) noexcept;
+// #501, D15: a parameter row's name, the one function a Properties row and a node card row (and a
+// card widget's own row) take it from, so the two surfaces cannot name a value differently. A unit
+// is the field's, never the name's.
+[[nodiscard]] QString parameterRowLabel(std::string_view schemaKey, std::string_view role);
 bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
                                 const document::NodeRecord& node, std::string_view schemaKey);
 // #487: a data reader's block, offered as the project's data blocks of the reader's kind; 0 (the

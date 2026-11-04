@@ -1371,6 +1371,11 @@ target_include_directories(bloom_grade_levels_widget_test PRIVATE ${CMAKE_CURREN
 target_link_libraries(bloom_grade_levels_widget_test PRIVATE bloom_ui bloom_commands)
 bloom_enable_warnings(bloom_grade_levels_widget_test)
 bloom_add_test(NAME bloom.ui.grade-levels-widgets COMMAND bloom_grade_levels_widget_test LABELS ui integration TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_executable(bloom_grading_cards_test grading_cards_tests.cpp)
+target_include_directories(bloom_grading_cards_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_grading_cards_test PRIVATE bloom_ui bloom_commands)
+bloom_enable_warnings(bloom_grading_cards_test)
+bloom_add_test(NAME bloom.ui.grading-cards COMMAND bloom_grading_cards_test LABELS ui integration TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(bloom_properties_registry_test properties_registry_tests.cpp)
 target_link_libraries(bloom_properties_registry_test PRIVATE bloom_ui)

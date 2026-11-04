@@ -301,8 +301,9 @@ void paintCurveGraph(QPainter& painter, const QRectF& rect, const CurveGraphPict
     const auto active = picture.active;
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
+    // #501: one uniform grey under the whole graph, HDR range included, as every grading graph.
     painter.setPen(Qt::NoPen);
-    painter.setBrush(kit::color(kit::Color::SurfaceSunken));
+    painter.setBrush(kit::color(kit::Color::Field));
     painter.drawRect(rect);
     const auto at = [&](const double x, const double y) {
         return curveGraphPoint(rect, range, {x, y});
@@ -320,11 +321,6 @@ void paintCurveGraph(QPainter& painter, const QRectF& rect, const CurveGraphPict
         }
         painter.setBrush(strip);
         painter.drawRect(rect);
-    } else {
-        // The 0..1 box, lighter than the HDR range around it.
-        const QRectF box = QRectF(at(0.0, 1.0), at(1.0, 0.0)).normalized().intersected(rect);
-        painter.setBrush(kit::color(kit::Color::Field));
-        painter.drawRect(box);
     }
     if (!picture.histogram.empty()) {
         const auto bins = picture.histogram.size();
@@ -341,21 +337,19 @@ void paintCurveGraph(QPainter& painter, const QRectF& rect, const CurveGraphPict
             painter.drawRect(QRectF(x0, box.bottom() - height, x1 - x0, height));
         }
     }
-    // Quarter lines, then the 0..1 box outline.
+    // The grid: a line every quarter across the whole graph, the same past 1 as below it.
     kit::applyHairlinePen(painter, kit::color(kit::Color::Border));
     painter.setBrush(Qt::NoBrush);
-    for (int line = 1; line < 4; ++line) {
-        const double t = line / 4.0;
-        if (hue) {
-            painter.drawLine(at(t, range.bottom), at(t, range.top));
-        } else {
-            painter.drawLine(at(t, std::max(range.bottom, 0.0)), at(t, 1.0));
-            painter.drawLine(at(std::max(range.left, 0.0), t), at(1.0, t));
-        }
-    }
-    if (!hue) {
-        kit::applyHairlinePen(painter, kit::color(kit::Color::BorderHover));
-        painter.drawRect(QRectF(at(0.0, 1.0), at(1.0, 0.0)).normalized());
+    if (hue) {
+        for (int line = 1; line < 4; ++line)
+            painter.drawLine(at(line / 4.0, range.bottom), at(line / 4.0, range.top));
+    } else {
+        for (double t = std::ceil(range.left * 4.0) / 4.0; t <= range.right; t += 0.25)
+            if (t > range.left)
+                painter.drawLine(at(t, range.bottom), at(t, range.top));
+        for (double t = std::ceil(range.bottom * 4.0) / 4.0; t <= range.top; t += 0.25)
+            if (t > range.bottom)
+                painter.drawLine(at(range.left, t), at(range.right, t));
     }
     // The identity: the diagonal for a channel curve, the neutral line otherwise.
     QPen identity(kit::color(kit::Color::Faint), kit::kHairlineWidth, Qt::DashLine);

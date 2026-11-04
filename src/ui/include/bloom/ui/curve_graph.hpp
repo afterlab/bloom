@@ -16,9 +16,9 @@
 // curve. The right-click menu offers Delete Point, Reset Curve and the curve's key at the playhead.
 // paintCurveGraph() draws the picture.
 //
-// The graph shows the identity diagonal (a neutral line for the hue and Luma vs Saturation curves)
-// and the 0..1 box; a channel curve's view grows past 1 to hold every point and always shows some
-// HDR range above 1. The hue curves and Luma vs Saturation name their axes and draw a colour band
+// The graph is one grey from edge to edge (#501), with a grid line every quarter and the identity
+// diagonal (a neutral line for the hue and Luma vs Saturation curves); a channel curve's view grows
+// past 1 to hold every point and always shows some HDR range above 1, drawn like the rest. The hue curves and Luma vs Saturation name their axes and draw a colour band
 // along each: the hue strip of bloom/runtime/grade_curve.hpp (wrapping at both edges), black to
 // white for luma, grey to colour for saturation, and the hue turned by the shift for Hue vs Hue.
 // Behind a channel curve and Luma vs Saturation the graph can draw the node's input luminance

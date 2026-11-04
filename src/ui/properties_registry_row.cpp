@@ -19,6 +19,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/host/font_catalogue.hpp>
@@ -60,6 +61,39 @@ document::ShapeKind nodeShapeKind(const document::Composition& composition,
         }
     return document::ShapeKind::Rectangle;
 }
+QString parameterRowLabel(const std::string_view schemaKey, const std::string_view role) {
+    return
+        isEffectColorSpaceSchema(schemaKey)
+            ? node_editor::displayTypeName(role)
+        : isInputColorSpaceSchema(schemaKey)             ? QObject::tr("Input color space")
+        : schemaKey == document::kTextParameterSchemaKey ? QObject::tr("Text")
+        : schemaKey == "bloom.exposure.stops"            ? QObject::tr("Exposure")
+        : schemaKey == "bloom.offset.amount"             ? QObject::tr("Offset")
+        : schemaKey == "bloom.multiply.factor"           ? QObject::tr("Factor")
+        // #501: what the switch clamps.
+        : schemaKey == document::kLevelsClampSchemaKey ||
+                schemaKey == document::kCurvesClampSchemaKey
+            ? QObject::tr("Clamp to 0\u20131")
+        : schemaKey == "bloom.image-mix.factor"          ? QObject::tr("Mix factor")
+        : schemaKey == "bloom.multiply-alpha.factor"     ? QObject::tr("Alpha factor")
+        : schemaKey == "bloom.multiply-alpha.channel" ||
+                schemaKey == "bloom.set-alpha.channel"
+            ? QObject::tr("Matte channel")
+        : schemaKey == "bloom.rotate-90.quarter-turns" ? QObject::tr("Quarter turns (clockwise)")
+        : schemaKey == "bloom.blur.radius"             ? QObject::tr("Radius (pixels)")
+        : schemaKey == "bloom.blur.edge"               ? QObject::tr("Edges")
+        : schemaKey == "bloom.luma-key.low"            ? QObject::tr("Low luma")
+        : schemaKey == "bloom.luma-key.high"           ? QObject::tr("High luma")
+        : schemaKey == "bloom.luma-key.invert"         ? QObject::tr("Invert key")
+        : schemaKey == document::kTextAlignmentParameterSchemaKey ? QObject::tr("Text Alignment")
+        : schemaKey == document::kTextLineHeightParameterSchemaKey ? QObject::tr("Line Height")
+        : schemaKey == document::kTextLetterSpacingParameterSchemaKey
+            ? QObject::tr("Letter Spacing")
+        : schemaKey == document::kTextSizeParameterSchemaKey
+            ? QObject::tr("Font Size")
+            : node_editor::displayTypeName(role);
+}
+
 PropertiesRowVisibility
 propertiesRowVisibility(const std::string_view role, const std::string_view schemaKey,
                         const std::optional<document::ShapeKind> shape) noexcept {
@@ -94,32 +128,7 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
     setObjectName("propertiesRegistryRow");
     setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(parameter.value())));
     setProperty("role", QString::fromStdString(definition_.role));
-    const auto label =
-        isEffectColorSpaceSchema(definition_.schemaKey)
-            ? node_editor::displayTypeName(definition_.role)
-        : isInputColorSpaceSchema(definition_.schemaKey)             ? tr("Input color space")
-        : definition_.schemaKey == document::kTextParameterSchemaKey ? tr("Text")
-        : definition_.schemaKey == "bloom.exposure.stops"            ? tr("Exposure (stops)")
-        : definition_.schemaKey == "bloom.offset.amount"             ? tr("Offset")
-        : definition_.schemaKey == "bloom.multiply.factor"           ? tr("Factor")
-        : definition_.schemaKey == "bloom.image-mix.factor"          ? tr("Mix factor")
-        : definition_.schemaKey == "bloom.multiply-alpha.factor"     ? tr("Alpha factor")
-        : definition_.schemaKey == "bloom.multiply-alpha.channel" ||
-                definition_.schemaKey == "bloom.set-alpha.channel"
-            ? tr("Matte channel")
-        : definition_.schemaKey == "bloom.rotate-90.quarter-turns" ? tr("Quarter turns (clockwise)")
-        : definition_.schemaKey == "bloom.blur.radius"             ? tr("Radius (pixels)")
-        : definition_.schemaKey == "bloom.blur.edge"               ? tr("Edges")
-        : definition_.schemaKey == "bloom.luma-key.low"            ? tr("Low luma")
-        : definition_.schemaKey == "bloom.luma-key.high"           ? tr("High luma")
-        : definition_.schemaKey == "bloom.luma-key.invert"         ? tr("Invert key")
-        : definition_.schemaKey == document::kTextAlignmentParameterSchemaKey ? tr("Text Alignment")
-        : definition_.schemaKey == document::kTextLineHeightParameterSchemaKey ? tr("Line Height")
-        : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
-            ? tr("Letter Spacing")
-        : definition_.schemaKey == document::kTextSizeParameterSchemaKey
-            ? tr("Font Size")
-            : node_editor::displayTypeName(definition_.role);
+    const auto label = parameterRowLabel(definition_.schemaKey, definition_.role);
     setProperty("rowLabel", label);
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);

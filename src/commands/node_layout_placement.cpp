@@ -34,20 +34,25 @@ constexpr double kTitleBand = 32.0;
 constexpr double kRow = 28.0;
 constexpr double kPadding = 8.0;
 // Size::NodeCardWidth (240) plus the label column an ordinary built-in card can add to it, on the
-// grid's half step. A card with a text field, a video's stream readout, a vector operation's
-// operator selector or the Levels channel tabs runs wider still.
+// grid's half step. A card with a text field, a video's stream readout or a vector operation's
+// operator selector runs wider still.
 constexpr double kCardWidth = 264.0;
 constexpr double kWideCardWidth = 288.0;
 // #498: the Curves card widget's graph height over its width (curve_graph.cpp), and the card's
 // width: its six curve tabs beside the curve's keyframe diamond.
 constexpr double kCurveGraphAspect = 0.75;
 constexpr double kCurvesCardWidth = 320.0;
-// #494: the Grade and Levels card widgets' metrics (grade_wheels.cpp, levels_graph.cpp):
-// Size::Control, Spacing::XS and Spacing::S, Size::IconSmall and the Levels plot's aspect.
+// #494, #501: the Grade and Levels card widgets' metrics (grade_wheels.cpp, levels_graph.cpp):
+// Size::Control, Spacing::XS and Spacing::S, Size::IconSmall, the share of a wheel's cell its disc
+// takes and the Levels plot's aspect; and their widths: the Grade card's two wheels side by side,
+// each with its three colour values, and the Levels card's three values beside their caption.
 constexpr double kControl = 26.0;
 constexpr double kSmall = 4.0;
 constexpr double kLevelsHandle = 12.0;
 constexpr double kLevelsPlotAspect = 0.45;
+constexpr double kGradeDiscShare = 0.8;
+constexpr double kGradeCardWidth = 432.0;
+constexpr double kLevelsCardWidth = 360.0;
 // A card whose parameters draw as dropdowns (enum choices, OCIO and input colour spaces) carries
 // the Properties panel's field control, which is wider still.
 constexpr double kDropdownCardWidth = 384.0;
@@ -141,8 +146,6 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         return document::kConservativeNodeCardSize;
     const bool wide =
         node->typeId == "bloom.video-source" || node->typeId == document::kVector2MathNodeType ||
-        // #499: the Levels card fits its five channel tabs beside the Values caret.
-        node->typeId == document::kLevelsNodeType ||
         node->typeId == document::kVector3MathNodeType ||
         std::ranges::any_of(definition->parameters,
                             [](const auto& parameter) {
@@ -208,6 +211,10 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     const double cardWidth = dropdowns ? std::max(width, kDropdownCardWidth)
                              : node->typeId == document::kCurvesNodeType
                                  ? std::max(width, kCurvesCardWidth)
+                             : node->typeId == document::kGradeNodeType
+                                 ? std::max(width, kGradeCardWidth)
+                             : node->typeId == document::kLevelsNodeType
+                                 ? std::max(width, kLevelsCardWidth)
                              : wide ? std::max(width, kWideCardWidth)
                                     : width;
     // #490: an Image Preview draws its thumbnail below its rows at the composition's aspect, at
@@ -227,18 +234,22 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         thumbnail = 3.0 * kControl + 3.0 * kSmall +
                     std::round(std::max(0.0, cardWidth - 2.0 * kPadding) * kCurveGraphAspect) +
                     kPadding;
-    // #494: the wheels two by two (each a square, its slider row under it) and the primaries
-    // bar's title and three rows; the Levels tabs, plot, handles and output bar.
+    // #494, #501: the wheels two by two (each its title, its disc, its level row over its jog
+    // strip and its colour values), then the primaries' title, five rows over their sliders, the
+    // Pivot row and its contrast curve; the Levels tabs, the histogram switch, the plot with its
+    // handles and output bar, and the input and output values.
     const double inner = std::max(0.0, cardWidth - 2.0 * kPadding);
     if (node->typeId == document::kGradeNodeType) {
         const double cell = std::max(0.0, std::floor((inner - kPadding) / 2.0));
-        // #499: the primaries' title, then one row per primary.
-        thumbnail = 2.0 * (cell + kSmall + kControl) + kPadding + kPadding + 7.0 * kControl +
-                    6.0 * kSmall + kPadding;
+        const double wheel = 4.0 * kControl + 3.0 * kSmall + std::round(cell * kGradeDiscShare);
+        thumbnail = 2.0 * wheel + 2.0 * kPadding + (kControl + kSmall) +
+                    5.0 * (2.0 * kControl + kSmall) + (kControl + kSmall) + 2.0 * kControl +
+                    kPadding;
     }
     if (node->typeId == document::kLevelsNodeType)
-        thumbnail = kControl + kSmall + std::round(inner * kLevelsPlotAspect) +
-                    2.0 * kLevelsHandle + kSmall + kPadding + kPadding;
+        thumbnail = 2.0 * (kControl + kSmall) + std::round(inner * kLevelsPlotAspect) +
+                    2.0 * kLevelsHandle + kSmall + kPadding + kSmall + 2.0 * kControl + kSmall +
+                    kPadding;
     return {cardWidth, kTitleBand + sockets * kRow + pills + rows * kRow + kPadding + thumbnail};
 }
 
