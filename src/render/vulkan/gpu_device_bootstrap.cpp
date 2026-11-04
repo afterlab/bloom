@@ -1,5 +1,7 @@
 #include "gpu_device_private.hpp"
 
+#include <bloom/core/telemetry_counters.hpp>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -287,6 +289,17 @@ selectPhysicalDevice(const vk::raii::Instance& instance) {
         best = selection;
     }
     return best;
+}
+
+// Every native device-memory allocation and free the allocator makes (a dedicated image, a new
+// block), counted process-wide so a frame's fresh device storage is measurable (#477).
+void VKAPI_PTR countDeviceMemoryAllocation(VmaAllocator, std::uint32_t, VkDeviceMemory,
+                                           const VkDeviceSize size, void*) {
+    core::telemetry::countGpuDeviceMemoryAllocation(size);
+}
+void VKAPI_PTR countDeviceMemoryFree(VmaAllocator, std::uint32_t, VkDeviceMemory,
+                                     const VkDeviceSize size, void*) {
+    core::telemetry::countGpuDeviceMemoryFree(size);
 }
 
 } // namespace
@@ -629,6 +642,10 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     allocatorInfo.instance = rawInstance;
     allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2;
     allocatorInfo.pVulkanFunctions = &vmaFunctions;
+    VmaDeviceMemoryCallbacks memoryCallbacks{};
+    memoryCallbacks.pfnAllocate = countDeviceMemoryAllocation;
+    memoryCallbacks.pfnFree = countDeviceMemoryFree;
+    allocatorInfo.pDeviceMemoryCallbacks = &memoryCallbacks;
     // The budget flag is only valid with the extension actually enabled; VMA would otherwise
     // report no budget. The fallback path below never requires it.
     if (selection->memoryBudgetSupported) {

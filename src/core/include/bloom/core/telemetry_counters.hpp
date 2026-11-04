@@ -83,6 +83,19 @@ struct GpuTransferTotals final {
 };
 [[nodiscard]] GpuTransferTotals gpuTransferTotals() noexcept;
 
+// Cumulative native device-memory allocations and frees (vkAllocateMemory / vkFreeMemory made by
+// the device allocator), each a driver call that maps or unmaps memory: a per-frame figure shows
+// how much of a frame's device storage is created fresh instead of reused.
+void countGpuDeviceMemoryAllocation(std::uint64_t bytes) noexcept;
+void countGpuDeviceMemoryFree(std::uint64_t bytes) noexcept;
+struct GpuDeviceMemoryTotals final {
+    std::uint64_t allocations = 0;
+    std::uint64_t allocatedBytes = 0;
+    std::uint64_t frees = 0;
+    std::uint64_t freedBytes = 0;
+};
+[[nodiscard]] GpuDeviceMemoryTotals gpuDeviceMemoryTotals() noexcept;
+
 // The driver's device-local heap budget and usage (VK_EXT_memory_budget), published by a GPU
 // owner thread when it queries them. Absent until the first publication.
 void publishGpuHeapBudget(std::uint64_t budgetBytes, std::uint64_t usageBytes,

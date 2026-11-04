@@ -24,6 +24,10 @@ struct Counters final {
     alignas(64) std::atomic<std::uint64_t> uploadBytes{0};
     std::atomic<std::uint64_t> readbackBytes{0};
     std::atomic<std::uint64_t> submits{0};
+    alignas(64) std::atomic<std::uint64_t> deviceAllocations{0};
+    std::atomic<std::uint64_t> deviceAllocatedBytes{0};
+    std::atomic<std::uint64_t> deviceFrees{0};
+    std::atomic<std::uint64_t> deviceFreedBytes{0};
     alignas(64) std::atomic<std::uint64_t> heapBudgetBytes{0};
     std::atomic<std::uint64_t> heapUsageBytes{0};
     // 0 until the first publication.
@@ -137,6 +141,20 @@ GpuTransferTotals gpuTransferTotals() noexcept {
     const auto& source = counters();
     return {source.uploadBytes.load(relaxed), source.readbackBytes.load(relaxed),
             source.submits.load(relaxed)};
+}
+
+void countGpuDeviceMemoryAllocation(const std::uint64_t bytes) noexcept {
+    counters().deviceAllocations.fetch_add(1, relaxed);
+    counters().deviceAllocatedBytes.fetch_add(bytes, relaxed);
+}
+void countGpuDeviceMemoryFree(const std::uint64_t bytes) noexcept {
+    counters().deviceFrees.fetch_add(1, relaxed);
+    counters().deviceFreedBytes.fetch_add(bytes, relaxed);
+}
+GpuDeviceMemoryTotals gpuDeviceMemoryTotals() noexcept {
+    const auto& source = counters();
+    return {source.deviceAllocations.load(relaxed), source.deviceAllocatedBytes.load(relaxed),
+            source.deviceFrees.load(relaxed), source.deviceFreedBytes.load(relaxed)};
 }
 
 void publishGpuHeapBudget(const std::uint64_t budgetBytes, const std::uint64_t usageBytes,
