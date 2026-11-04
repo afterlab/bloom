@@ -321,6 +321,10 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
     // qualification. The resident report is the only authority for resident selection.
     if (core->gpuStageFunction != nullptr) {
         const bool neutralQualified = createAndQualifyResidentRoute(core);
+        // #477: frames reuse the transient native storage of the frames before them instead of
+        // allocating it per frame. Only a rooted route, whose waits evict it, parks storage.
+        if (core->options.processingPhasePolicy && core->device)
+            core->device->setNativeStorageReuse(true);
         // A failed Neutral qualification is not fatal for the general display route: as long as the
         // owner created the scene executor (and retained a live resident display), the service is
         // Ready and each request decides per-stage. The service is only Unavailable when neither

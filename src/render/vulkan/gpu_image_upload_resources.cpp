@@ -1,5 +1,6 @@
 #include "gpu_image_upload_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 
 #include <bloom/core/telemetry_counters.hpp>
 
@@ -37,7 +38,7 @@ UploadStagingBuffer::~UploadStagingBuffer() { release(); }
 void UploadStagingBuffer::release() noexcept {
     half.release();
     if (armed && state != nullptr) {
-        vmaDestroyBuffer(state->allocator, buffer, allocation);
+        vulkan_detail::destroyNativeBuffer(*state, buffer, allocation);
         // The host-visible upload staging buffer is scratch (ADR 0037): it leaves the live line.
         core::telemetry::stagingReleased(bytes);
         if (token.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
@@ -67,7 +68,7 @@ UploadHalfImage& UploadHalfImage::operator=(UploadHalfImage&& other) noexcept {
 
 void UploadHalfImage::release() noexcept {
     if (image != VK_NULL_HANDLE && state != nullptr) {
-        vmaDestroyImage(state->allocator, image, allocation);
+        vulkan_detail::destroyNativeImage(*state, image, allocation);
         if (state->nativeImageBackingsDestroyed != UINT64_MAX)
             ++state->nativeImageBackingsDestroyed;
     }

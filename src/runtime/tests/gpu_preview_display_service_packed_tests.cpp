@@ -272,6 +272,75 @@ bool matrix(Expectations& checks, const TestOptions& options,
             counters.fullFrameReadbacks == counters.packedTransfers &&
             counters.packedReservedBytes == 0 && counters.packedRetainedHostBytes == 0,
         "production GPU scene and one final transfer per cold product, no CPU scene fallback");
+    {
+        // #477: while one frame transfers, the next frame's scene executor runs under its own
+        // phase. The transfer is held Pending (the real one keeps running) until the stage behind
+        // it has started; both frames then complete on the GPU with CPU-identical pixels.
+        auto core = bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
+        auto hold = std::make_shared<std::atomic_bool>(true);
+        core->packedTransferPollOverride = [hold](bloom::render::GpuDisplayTransfer& transfer) {
+            return hold->load() ? bloom::render::GpuDisplayTransferState::Pending : transfer.poll();
+        };
+        const auto before = service.status().counters;
+        // Two owners: requests of one owner supersede each other.
+        const bloom::runtime::TaskOwner owner{.kind = bloom::runtime::TaskOwnerKind::Composition,
+                                              .id = bloom::runtime::TaskOwnerId::fromRaw(8)};
+        const bloom::runtime::TaskOwner otherOwner{.kind =
+                                                       bloom::runtime::TaskOwnerKind::Composition,
+                                                   .id = bloom::runtime::TaskOwnerId::fromRaw(9)};
+        // Two requests must fit the scheduler's request-owned capacity together.
+        constexpr std::size_t kAheadBudget = kBudget / 4;
+        auto first = makeIdentity(*plan, 300, {}, {}, {});
+        auto second = makeIdentity(*plan, 301, {}, {}, {});
+        refresh();
+        auto firstSubmission = service.submit(TaskRequest("packed ahead first", owner), snapshot,
+                                              first, kAheadBudget, {});
+        checks.expect(
+            firstSubmission.accepted() &&
+                waitUntil(
+                    [&] {
+                        return bloom::runtime::detail::GpuPreviewDisplayServiceTestAccess::
+                                   residentActivePhase(*core) ==
+                               bloom::runtime::detail::ResidentNativePhase::Transfer;
+                    },
+                    5s),
+            "the first frame reaches its packed transfer");
+        auto secondSubmission = service.submit(TaskRequest("packed ahead second", otherOwner),
+                                               snapshot, second, kAheadBudget, {});
+        checks.expect(
+            secondSubmission.accepted() &&
+                waitUntil(
+                    [&] { return service.status().counters.scenesAhead > before.scenesAhead; }, 3s),
+            "the next frame's scene executor starts while the first frame transfers");
+        hold->store(false);
+        core->notify();
+        const auto firstResult =
+            firstSubmission.accepted() ? awaitResult(firstSubmission.handle) : std::nullopt;
+        const auto secondResult =
+            secondSubmission.accepted() ? awaitResult(secondSubmission.handle) : std::nullopt;
+        auto firstFrame = packedResult(firstResult);
+        auto secondFrame = packedResult(secondResult);
+        for (const auto* result : {&firstResult, &secondResult})
+            if (*result && !packedResult(*result))
+                for (const auto& diagnostic : (*result)->diagnostics())
+                    std::cerr << "AHEAD_DIAGNOSTIC " << diagnostic.code << ": "
+                              << diagnostic.summary << '\n';
+        checks.expect(firstFrame && secondFrame &&
+                          firstFrame->provenance().provider ==
+                              bloom::runtime::PreviewDisplayProvider::GpuPreparedPacked &&
+                          secondFrame->provenance().provider ==
+                              bloom::runtime::PreviewDisplayProvider::GpuPreparedPacked &&
+                          service.status().counters.cpuFallbacks == before.cpuFallbacks,
+                      "both overlapped frames complete on the GPU");
+        if (firstFrame)
+            compareCpu(checks, *firstFrame, plan, *processor);
+        if (secondFrame)
+            compareCpu(checks, *secondFrame, plan, *processor);
+        checks.expect(
+            waitUntil([&] { return policy->snapshot().reservations.admittedPhases == 0; }, 2s),
+            "both overlapped phases are released");
+        core->packedTransferPollOverride = {};
+    }
     auto externalPin = full->displayOnlyFrame();
     const auto retainedBytes =
         proof->transfer.hostStorageBytes +

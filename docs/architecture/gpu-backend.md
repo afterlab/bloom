@@ -390,6 +390,38 @@ The transfer adopts that provisional storage only when it is exactly the transfe
 admits it with the same staging and host checks; otherwise it allocates as before. A cancelled or
 failed stage drops the unused storage with its record.
 
+The preview device reuses a frame's transient native storage for the frames after it (#477). Each
+frame's processing images, upload staging, display image and packed-readback staging used to be
+created and destroyed per frame, and each creation was a driver allocation and mapping: about 34
+device-memory allocations and frees per 2160p PNG16 frame, roughly 5 s of owner kernel time over a
+240-frame fill. With reuse enabled (the rooted preview route enables it once its resident route
+qualifies), an image or buffer the device allocator issued is parked instead of freed when its
+owner releases it, which owners do only after its submission is proven retired. The next
+allocation with the identical create info and allocator flags takes it back under a fresh storage
+token reserved and reconciled against the current phase, so a parked object is charged to no phase
+and a reused one to exactly the phase that uses it. Parked storage holds no content anyone reads: a
+reused image starts in an undefined layout like a new one. It is not a cap and not a cache of
+pixels; it follows the memory rule like the device caches. Device-local parked storage is freed
+first, least recently parked first, whenever work waits for device memory or the driver's free
+memory falls below the VRAM headroom (before the scene cache and the retained OCIO programs, and
+whatever those releases park is freed with them); parked host-visible staging is freed whenever
+work waits for host memory. A nominal-heap device counts parked bytes as allocated. Retained OCIO
+programs are always freed, never parked. `GpuDevice::nativeStorageReuseStats()` reports parked bytes
+and reuse counts.
+
+The preview owner also overlaps consecutive frames (#477). The scene executor is free as soon as
+the display took its output, so while the active stage displays and transfers its frame, the next
+ready stage begins its executor under its own processing phase. The device retains one phase and
+parks at most one more (`GpuDevice::parkProcessingPhase` and `selectProcessingPhase`); the owner
+selects a stage's phase before every native step of that stage, so storage tokens and retirement
+always apply to the stage doing the work. Only a clean start happens ahead: a cancelled stage, a
+refused phase or a refused executor begin leaves the next stage queued for the ordinary path. The
+stage ahead is polled until its executor settles and becomes the active stage when the previous one
+is done, where its result (Ready, failure or cancellation) takes the existing path. While a stage
+is ahead the executor is that stage's: the active stage's retirement cancels and waits for only its
+display and transfer, and a terminal route teardown sends the stage ahead to the CPU path with a
+conservatively unproven phase, as it does the active one. The service counts `scenesAhead`.
+
 Private Linux strict core/synchronization checks qualify WSI-disabled Neutral/general Full, Half,
 ROI and adjusted output against CPU pixels with zero CPU fallback. Full 1920×1080 measured source
 8,847,360 B, staging 8,294,400 B and host 8,294,400 B. Shutdown retained the source/staging sum

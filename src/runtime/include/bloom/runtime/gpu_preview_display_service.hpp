@@ -155,6 +155,9 @@ struct GpuPreviewDisplayServiceCounters final {
     std::uint64_t nativeDispatches = 0;
     // Uploads the executor began ahead of their own step, beside another native job (#405).
     std::uint64_t uploadsAhead = 0;
+    // Resident scenes whose executor began while the previous frame was still displaying or
+    // transferring (#477).
+    std::uint64_t scenesAhead = 0;
     // Native uploads, and the work submissions that carried the native operations (a batch is one).
     std::uint64_t nativeUploads = 0;
     std::uint64_t nativeSubmissions = 0;

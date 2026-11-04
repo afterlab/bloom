@@ -1,5 +1,6 @@
 #include "gpu_composite_private.hpp"
 #include "gpu_native_buffer_allocation_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 
 #include <cstring>
 #include <limits>
@@ -71,7 +72,7 @@ CompositeBuffer& CompositeBuffer::operator=(CompositeBuffer&& other) noexcept {
 
 void CompositeBuffer::releaseStaging() noexcept {
     if (stagingBuffer != VK_NULL_HANDLE && state != nullptr) {
-        vmaDestroyBuffer(state->allocator, stagingBuffer, stagingAllocation);
+        vulkan_detail::destroyNativeBuffer(*state, stagingBuffer, stagingAllocation);
         if (stagingStorageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
             ++state->nativeBufferBackingsDestroyed;
         composite_detail::metadataStagingLiveBytes.fetch_sub(stagingBytes);
@@ -107,7 +108,7 @@ void CompositeBuffer::recordInitialization(const VkCommandBuffer commandBuffer) 
 void CompositeBuffer::release() noexcept {
     releaseStaging();
     if (armed && state != nullptr) {
-        vmaDestroyBuffer(state->allocator, buffer, allocation);
+        vulkan_detail::destroyNativeBuffer(*state, buffer, allocation);
         if (storageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
             ++state->nativeBufferBackingsDestroyed;
     }

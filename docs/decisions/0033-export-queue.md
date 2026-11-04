@@ -286,11 +286,12 @@ default.
 ### 9. GPU admission with strict Viewer priority
 
 Today preview and export each own a GPU device generation, and both draw on one shared processing
-root (`GpuProcessingPhasePolicy`). Each generation retains at most one processing phase, and an
-unproven retirement latches it. A refused request returns an `admissionRetry` watermark and its
-caller retries when that watermark moves. Under a long export that model lets export hold the root's
-bytes while the Viewer is refused, and an unproven export retirement latches the export generation
-for every subsequent frame.
+root (`GpuProcessingPhasePolicy`). Each generation retains at most one processing phase (the
+preview owner may park one more while the next frame's executor overlaps the previous frame's
+display and transfer, #477), and an unproven retirement latches it. A refused request returns an
+`admissionRetry` watermark and its caller retries when that watermark moves. Under a long export
+that model lets export hold the root's bytes while the Viewer is refused, and an unproven export
+retirement latches the export generation for every subsequent frame.
 
 `runtime::GpuAdmissionArbiter`, constructed once by the composition root around the shared policy
 and passed explicitly to the preview service and the export provider (no locator), replaces

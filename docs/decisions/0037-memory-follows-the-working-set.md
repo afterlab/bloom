@@ -108,6 +108,16 @@ of a run (at least one frame when one fits). Playback read-ahead keeps at most e
 sixteen the frames nearest the playhead landed later, so cold playback ran slower and dropped more
 frames than with eight. The playback preroll window stays at most eight frames.
 
+### Reused native storage holds no content (amendment, 2026-11-04)
+
+The preview device parks a frame's released native images and staging buffers and gives them to the
+next allocation of the same shape instead of allocating again (#477): a 2160p PNG16 frame made about
+34 device-memory allocations and frees, each a driver call. This keeps storage, not data: nothing
+reads what a parked object held, so rule 1 stands (no host copy of data the GPU holds is kept), and
+the upload staging still leaves the live staging line when its upload completes. Parked storage has
+no fixed size or count; it is freed least recently parked first whenever work waits for device or
+host memory or the device's free memory falls below the VRAM headroom, ahead of every cache.
+
 ## Audit of pixel-holding stores
 
 Bytes per frame are measured at 720p (1280×720) on the GPU route unless noted. "Reuse measured"

@@ -52,6 +52,7 @@ struct NativeProgress final {
     std::uint64_t executorSteps = 0;
     const void* activeStage = nullptr;
     int activePhase = 0;
+    const void* aheadStage = nullptr;
     std::size_t residentReady = 0;
     std::size_t ready = 0;
     std::size_t stages = 0;
@@ -69,6 +70,7 @@ nativeProgress(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core) n
                                  : 0,
             .activeStage = active.get(),
             .activePhase = active != nullptr ? static_cast<int>(active->residentPhase) : 0,
+            .aheadStage = core->residentAhead.get(),
             .residentReady = core->residentNativeReady.size(),
             .ready = core->nativeReady.size(),
             .stages = core->stages.size(),
@@ -524,6 +526,18 @@ GpuPreviewDisplayService::GpuPreviewDisplayService(TaskScheduler& scheduler,
                                   if (const auto held = weak.lock())
                                       held->notify();
                               });
+        // Parked host-visible staging (#477) is host memory: a wait for host memory frees it.
+        core->options.processingPhasePolicy->addRetentionReclaimer(
+            [weak = std::weak_ptr(core)](const render::GpuProcessingPhaseDomain domain,
+                                         const std::uint64_t shortfall) -> std::uint64_t {
+                if (domain != render::GpuProcessingPhaseDomain::Host)
+                    return 0;
+                if (const auto held = weak.lock()) {
+                    held->hostStorageReclaim->request(shortfall);
+                    held->notify();
+                }
+                return 0;
+            });
     }
 
     if (!core->options.enabled) {
@@ -613,6 +627,7 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
         core.counterResidentGraphJobs.load(std::memory_order_relaxed);
     result.counters.nativeDispatches = core.counterNativeDispatches.load(std::memory_order_relaxed);
     result.counters.uploadsAhead = core.counterUploadsAhead.load(std::memory_order_relaxed);
+    result.counters.scenesAhead = core.counterScenesAhead.load(std::memory_order_relaxed);
     result.counters.nativeUploads = core.counterNativeUploads.load(std::memory_order_relaxed);
     result.counters.nativeSubmissions =
         core.counterNativeSubmissions.load(std::memory_order_relaxed);

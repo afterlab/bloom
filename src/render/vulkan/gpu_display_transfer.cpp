@@ -5,6 +5,7 @@
 #include "gpu_display_transfer_fault.hpp"
 #include "gpu_display_transfer_retirement_private.hpp"
 #include "gpu_native_buffer_allocation_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_resident_display_private.hpp"
 
 #include <algorithm>
@@ -72,7 +73,7 @@ struct StagingBuffer final {
 
     void release() noexcept {
         if (armed && state != nullptr) {
-            vmaDestroyBuffer(state->allocator, buffer, allocation);
+            vulkan_detail::destroyNativeBuffer(*state, buffer, allocation);
             if (state->nativeBufferBackingsDestroyed != UINT64_MAX)
                 ++state->nativeBufferBackingsDestroyed;
         }

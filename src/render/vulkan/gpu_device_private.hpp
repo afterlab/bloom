@@ -39,7 +39,9 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace bloom::render::queue_timing_detail {
 struct State;
@@ -85,6 +87,61 @@ class DynamicLibrary final {
 // Private one-shot owner-thread fault control; None is the production path.
 enum class NativeImageAllocationFault : std::uint8_t { None, Allocation, Reconcile, Bind, View };
 enum class NativeBufferAllocationFault : std::uint8_t { None, Allocation, Reconcile, Bind, Map };
+
+// #477: retired transient native storage kept for the next frame of the same shape. A frame's
+// processing images and buffers (uploads, intermediates, the display image and the packed
+// readback staging) are created and destroyed per frame; each creation is a driver allocation and
+// mapping. With reuse enabled, an image or buffer the allocator issued is parked instead of freed
+// when its owner releases it (after its submission is proven retired, as before), and the next
+// allocation with the identical create info and allocator flags takes it back under a fresh
+// storage token for the current phase. Parked storage holds no content anyone reads (a reused
+// image starts in an undefined layout exactly like a new one) and is evicted least recently
+// parked first whenever work waits for memory or the device's free memory falls below the
+// headroom. Off by default; an owner opts in. All members are guarded by `mutex`.
+struct NativeStorageReuse final {
+    struct Shape final {
+        bool image = false;
+        std::uint32_t flags = 0;
+        std::uint32_t kind = 0; // image type, or buffer sharing mode
+        std::uint32_t format = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        std::uint32_t depth = 0;
+        std::uint32_t levels = 0;
+        std::uint32_t layers = 0;
+        std::uint32_t samples = 0;
+        std::uint32_t tiling = 0;
+        std::uint32_t usage = 0;
+        std::uint64_t bytes = 0; // buffer size
+        std::uint32_t allocationFlags = 0;
+        std::uint32_t requiredFlags = 0;
+        std::uint32_t preferredFlags = 0;
+        std::uint32_t memoryUsage = 0;
+        friend bool operator==(const Shape&, const Shape&) = default;
+    };
+    struct Entry final {
+        Shape shape;
+        std::uint64_t handle = 0; // VkImage or VkBuffer bits
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        std::uint64_t requirementBytes = 0;
+        std::uint64_t allocationBytes = 0;
+        std::uint32_t memoryType = 0;
+        std::uint32_t heap = 0;
+        bool deviceLocal = false;
+    };
+    std::mutex mutex;
+    bool enabled = false;
+    // Issued by the allocator while enabled, keyed by handle bits (images and buffers apart).
+    std::unordered_map<std::uint64_t, Entry> issuedImages;
+    std::unordered_map<std::uint64_t, Entry> issuedBuffers;
+    // Least recently parked first.
+    std::vector<Entry> parked;
+    std::uint64_t parkedDeviceBytes = 0;
+    std::uint64_t parkedHostBytes = 0;
+    std::uint64_t reused = 0;
+    std::uint64_t created = 0;
+    std::uint64_t evictedBytes = 0;
+};
 
 struct DeviceAllocatorState final {
     DeviceAllocatorState() = default;
@@ -137,6 +194,9 @@ struct DeviceAllocatorState final {
     // Declared before native RAII fields: all native teardown precedes final quota release. The
     // lease points only to a neutral ledger, never back to this generation (no reference cycle).
     std::shared_ptr<GpuProcessingPhaseLease> processingPhase;
+    // #477: a proven phase moved aside while the next frame's phase is retained; see
+    // GpuDevice::parkProcessingPhase.
+    std::shared_ptr<GpuProcessingPhaseLease> parkedProcessingPhase;
     GpuProcessingRootIdentity processingRoot;
     std::optional<NativePresentationStorageRefusal> presentationStorageRefusal;
     std::optional<NativeImageStorageRefusal> imageStorageRefusal;
@@ -151,6 +211,7 @@ struct DeviceAllocatorState final {
     // is only a distinct queue when the presentation family differs from the compute family.
     vk::raii::Queue presentQueue{nullptr};
     VmaAllocator allocator = VK_NULL_HANDLE;
+    NativeStorageReuse storageReuse;
 
     // Nonzero private domain-control mask intersects real image requirements; 0 is unmodified.
     std::uint32_t nativeImageMemoryTypeMaskForTests = 0;

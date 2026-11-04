@@ -83,6 +83,10 @@ void refreshResidentForegroundCapacity(
         return;
     }
     const auto now = std::chrono::steady_clock::now();
+    // Parked host-visible storage (#477) goes back as soon as work waits for host memory.
+    if (core->hostStorageReclaim->pending())
+        static_cast<void>(
+            core->device->releaseReusableNativeStorage(core->hostStorageReclaim->take(), false));
     // Work waiting for device memory is answered at once, not at the next sampling slot.
     if (!core->deviceReclaim->pending() &&
         core->foregroundCapacitySampledAt != std::chrono::steady_clock::time_point{} &&
@@ -106,14 +110,22 @@ void refreshResidentForegroundCapacity(
             *core->deviceReclaim, allocation,
             core->options.processingPhasePolicy->headroom().vramBytes);
         if (wanted != 0) {
-            auto released =
-                core->residentSceneCache != nullptr ? core->residentSceneCache->reclaim(wanted) : 0;
+            // Parked native storage (#477) holds nothing anyone reads, so it goes first.
+            auto released = core->device->releaseReusableNativeStorage(wanted, true);
+            const auto parkedBefore = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+            if (released < wanted && core->residentSceneCache != nullptr)
+                released += core->residentSceneCache->reclaim(wanted - released);
             // Then the retained OCIO programs, which have no fixed byte ceiling of their own
             // (#474): the scene executor's effect programs and the display arm's.
             if (released < wanted && core->residentExecutor != nullptr)
                 released += core->residentExecutor->reclaimOcioPrograms(wanted - released);
             if (released < wanted && core->residentGeneralDisplay != nullptr)
                 released += core->residentGeneralDisplay->executor().reclaim(wanted - released);
+            // Storage those releases parked is freed too, so what they report is given back.
+            const auto parkedAfter = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+            if (parkedAfter > parkedBefore)
+                static_cast<void>(
+                    core->device->releaseReusableNativeStorage(parkedAfter - parkedBefore, true));
             if (released < wanted) {
                 std::lock_guard lock(core->stateMutex);
                 ++core->publishedResidentFrameEvictionSerial;
@@ -135,6 +147,11 @@ void refreshResidentForegroundCapacity(
                                   std::numeric_limits<std::uint64_t>::max() - ownedImageBytes
                               ? std::numeric_limits<std::uint64_t>::max()
                               : ownedImageBytes + images.retiringAllocationBytes;
+        // Parked native storage (#477) is allocated too, outside the image registry.
+        const auto parked = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+        ownedImageBytes = parked > std::numeric_limits<std::uint64_t>::max() - ownedImageBytes
+                              ? std::numeric_limits<std::uint64_t>::max()
+                              : ownedImageBytes + parked;
     }
     if (core->options.processingPhasePolicy) {
         if (allocation.source == render::GpuAllocationBudgetSource::DeviceLocalEstimate) {

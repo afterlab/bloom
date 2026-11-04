@@ -1,3 +1,4 @@
+#include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_path_coverage_private.hpp"
 
 #include <array>
@@ -306,7 +307,7 @@ GpuPathCoverageMaskOwner::~GpuPathCoverageMaskOwner() { release(); }
 
 void GpuPathCoverageMaskOwner::release() noexcept {
     if (state != nullptr && buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(state->allocator, buffer, allocation);
+        vulkan_detail::destroyNativeBuffer(*state, buffer, allocation);
         if (storageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
             ++state->nativeBufferBackingsDestroyed;
     }

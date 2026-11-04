@@ -1,6 +1,7 @@
 #include "gpu_image_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_oracle_readback_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 
@@ -155,7 +156,7 @@ void GpuImageImpl::destroy() noexcept {
         view = VK_NULL_HANDLE;
     }
     if (image != VK_NULL_HANDLE) {
-        vmaDestroyImage(state->allocator, image, allocation);
+        vulkan_detail::destroyNativeImage(*state, image, allocation, !deviceLost);
         if (state->nativeImageBackingsDestroyed != UINT64_MAX)
             ++state->nativeImageBackingsDestroyed;
         image = VK_NULL_HANDLE;

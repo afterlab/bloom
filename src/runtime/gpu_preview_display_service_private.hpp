@@ -254,6 +254,10 @@ struct PreviewDisplayServiceCore final {
     // as a finished-frame eviction (below) for the UI frame cache.
     const std::shared_ptr<GpuDeviceReclaimRequest> deviceReclaim =
         std::make_shared<GpuDeviceReclaimRequest>();
+    // #477: host-visible parked native storage (staging) is host memory; work waiting for host
+    // memory records its shortfall here and the owner frees that parked storage.
+    const std::shared_ptr<GpuDeviceReclaimRequest> hostStorageReclaim =
+        std::make_shared<GpuDeviceReclaimRequest>();
     // Under stateMutex: each owner request to evict finished resident frames, by serial.
     std::uint64_t publishedResidentFrameEvictionSerial = 0;
     std::uint64_t publishedResidentFrameEvictionBytes = 0;
@@ -264,6 +268,7 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterResidentGraphJobs{0};
     std::atomic<std::uint64_t> counterNativeDispatches{0};
     std::atomic<std::uint64_t> counterUploadsAhead{0};
+    std::atomic<std::uint64_t> counterScenesAhead{0};
     std::atomic<std::uint64_t> counterNativeUploads{0};
     std::atomic<std::uint64_t> counterNativeSubmissions{0};
     std::atomic<std::uint64_t> counterUploadSubmitNanoseconds{0};
@@ -335,6 +340,10 @@ struct PreviewDisplayServiceCore final {
     std::deque<std::shared_ptr<PreviewDisplayStageRecord>> residentNativeReady;
     std::shared_ptr<PreviewDisplayStageRecord> residentNativeActive;
     bool residentNativeInFlight = false;
+    // #477: the next resident stage, whose scene executor runs while the active stage displays and
+    // transfers its frame (the executor is free once the display took its output). Its phase is
+    // retained beside the active one; it becomes the active stage when that one is done.
+    std::shared_ptr<PreviewDisplayStageRecord> residentAhead;
 
     // Narrow fault seam: injectable clock/poll for the bounded native-dispatch deadline.
     // Empty uses the real steady clock and the pipeline's own poll().
@@ -610,6 +619,13 @@ struct GpuPreviewDisplayServiceTestAccess final {
     }
     static std::size_t residentReadyCount(const PreviewDisplayServiceCore& core) {
         return core.residentNativeReady.size();
+    }
+    static bool residentAheadActive(const PreviewDisplayServiceCore& core) {
+        return core.residentAhead != nullptr;
+    }
+    static ResidentNativePhase residentActivePhase(const PreviewDisplayServiceCore& core) {
+        return core.residentNativeActive != nullptr ? core.residentNativeActive->residentPhase
+                                                    : ResidentNativePhase::None;
     }
     static bool residentRouteAvailable(const PreviewDisplayServiceCore& core) {
         return core.residentExecutor != nullptr && core.residentDisplay != nullptr;

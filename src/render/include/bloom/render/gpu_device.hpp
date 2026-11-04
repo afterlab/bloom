@@ -194,6 +194,20 @@ struct GpuImageReclamationStats final {
     std::uint64_t ownerReclaims = 0;
 };
 
+// Native storage reuse (#477): retired transient images and buffers parked for the next frame of
+// the same shape instead of being freed. Bytes are the parked allocations: device-local ones, and
+// host-visible system memory (staging) apart. `reused` counts allocations served from the parked
+// set, `created` the ones that needed a new native allocation while reuse was enabled.
+struct GpuNativeStorageReuseStats final {
+    bool enabled = false;
+    std::uint64_t parkedEntries = 0;
+    std::uint64_t parkedDeviceBytes = 0;
+    std::uint64_t parkedHostBytes = 0;
+    std::uint64_t reused = 0;
+    std::uint64_t created = 0;
+    std::uint64_t evictedBytes = 0;
+};
+
 // Exact-generation program ownership, including live aliases that have not requested retirement.
 // Counts are lifetime diagnostics, not owned allocation bytes.
 struct GpuOcioProgramRetirementStats final {
@@ -277,6 +291,17 @@ class GpuDevice final {
     void reclaimReleasedImages() noexcept;
     [[nodiscard]] GpuImageReclamationStats imageReclamationStats() const noexcept;
     [[nodiscard]] GpuOcioProgramRetirementStats ocioProgramRetirementStats() const noexcept;
+    // Owner-thread only (#477). While enabled, a transient processing image or buffer this
+    // generation's allocator issued is parked when its owner releases it, and the next allocation
+    // of the identical shape takes it back instead of allocating; nothing is reused while a parked
+    // object could still be referenced, because owners release only after their submissions are
+    // proven retired. Disabling frees everything parked. Off by default.
+    void setNativeStorageReuse(bool enabled) noexcept;
+    [[nodiscard]] GpuNativeStorageReuseStats nativeStorageReuseStats() const noexcept;
+    // Owner-thread only. Frees parked storage, least recently parked first, until at least `bytes`
+    // are released: device-local storage when `deviceLocal`, host-visible system memory otherwise.
+    // Returns the bytes released.
+    std::uint64_t releaseReusableNativeStorage(std::uint64_t bytes, bool deviceLocal) noexcept;
     // Includes closed generations after their GpuDevice facade has been destroyed.
     [[nodiscard]] static GpuImageReclamationStats processImageReclamationStats() noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;
@@ -305,7 +330,16 @@ class GpuDevice final {
     [[nodiscard]] GpuProcessingRootIdentity processingRootIdentity() const noexcept;
     [[nodiscard]] bool retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) noexcept;
     void retireProcessingPhase(std::uint64_t leaseId, bool retirementProven) noexcept;
+    // True while a phase is retained or parked.
     [[nodiscard]] bool processingPhaseOccupied() const noexcept;
+    // Owner-only (#477): one frame's display and transfer may finish while the next frame's
+    // processing runs. `parkProcessingPhase` moves the retained phase aside (only a proven one,
+    // and only when none is parked yet) so the next frame's phase can be retained;
+    // `selectProcessingPhase` makes the retained or parked phase with `leaseId` the retained one,
+    // parking the other. Native storage and retirement always apply to the retained phase, so an
+    // owner selects a frame's phase before each native step of that frame.
+    [[nodiscard]] bool parkProcessingPhase() noexcept;
+    [[nodiscard]] bool selectProcessingPhase(std::uint64_t leaseId) noexcept;
     // Owner-only recovery from an unproven retirement (a failed, timed-out or cancelled frame whose
     // native work could not be proven retired). Waits for the whole device to go idle, which proves
     // every submission on every queue of this generation has completed, then proves and releases

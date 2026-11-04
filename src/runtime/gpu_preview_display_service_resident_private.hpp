@@ -108,7 +108,9 @@ residentPackedTransferFinish(const std::shared_ptr<PreviewDisplayServiceCore>& c
                              const PreviewDisplayStageRecord& stage, std::string& reason) noexcept;
 
 // Owner thread cancellation/terminal probes.
-void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+// `includeExecutor` false leaves the scene executor running for the stage ahead (#477).
+void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                          bool includeExecutor = true) noexcept;
 [[nodiscard]] bool
 residentOwnerDrainRequired(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 // True while the resident display owns a submitted job whose fence has not been proven retired.

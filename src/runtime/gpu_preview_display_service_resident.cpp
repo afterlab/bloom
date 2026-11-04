@@ -223,6 +223,7 @@ void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core)
     // or is destroyed. Then the packed native teardown drains/quarantines in GpuNeutralDisplay.
     core->residentNativeReady.clear();
     core->residentNativeActive.reset();
+    core->residentAhead.reset();
     core->residentNativeInFlight = false;
     retireResidentRoute(core);
     core->display.reset();
@@ -685,12 +686,13 @@ residentFinishFrame(const std::shared_ptr<PreviewDisplayServiceCore>& core,
     return frame;
 }
 
-void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+void residentCancelNative(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                          const bool includeExecutor) noexcept {
     if (core->packedTransfer)
         core->packedTransfer->cancel();
     if (core->packedQueueTiming)
         core->packedQueueTiming->cancel();
-    if (core->residentExecutor != nullptr) {
+    if (includeExecutor && core->residentExecutor != nullptr) {
         core->residentExecutor->cancel();
     }
     if (core->residentDisplay != nullptr) {

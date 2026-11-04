@@ -4,6 +4,7 @@
 #include "gpu_display_transfer_retirement_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_image_upload_retirement_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_ocio_program_private.hpp"
 #include "gpu_operation_batch_private.hpp"
 #include "gpu_output_color_readback_retirement_private.hpp"
@@ -95,6 +96,35 @@ void GpuDevice::reclaimReleasedImages() noexcept {
         ocio_program_detail::drainPrograms(*impl_->control);
         image_detail::drainImages(*impl_->control);
     }
+}
+void GpuDevice::setNativeStorageReuse(const bool enabled) noexcept {
+    if (!isOwnerThread() || impl_->control == nullptr)
+        return;
+    if (enabled) {
+        const std::lock_guard lock(impl_->control->storageReuse.mutex);
+        impl_->control->storageReuse.enabled = true;
+        return;
+    }
+    vulkan_detail::closeStorageReuse(*impl_->control);
+}
+GpuNativeStorageReuseStats GpuDevice::nativeStorageReuseStats() const noexcept {
+    if (impl_ == nullptr || impl_->control == nullptr)
+        return {};
+    auto& reuse = impl_->control->storageReuse;
+    const std::lock_guard lock(reuse.mutex);
+    return {.enabled = reuse.enabled,
+            .parkedEntries = reuse.parked.size(),
+            .parkedDeviceBytes = reuse.parkedDeviceBytes,
+            .parkedHostBytes = reuse.parkedHostBytes,
+            .reused = reuse.reused,
+            .created = reuse.created,
+            .evictedBytes = reuse.evictedBytes};
+}
+std::uint64_t GpuDevice::releaseReusableNativeStorage(const std::uint64_t bytes,
+                                                      const bool deviceLocal) noexcept {
+    if (!isOwnerThread() || impl_->control == nullptr || bytes == 0)
+        return 0;
+    return vulkan_detail::releaseParkedStorage(*impl_->control, bytes, deviceLocal);
 }
 GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noexcept {
     if (!impl_ || !impl_->control) {
@@ -197,7 +227,31 @@ GpuPhaseRecovery GpuDevice::recoverUnprovenProcessingPhase() noexcept {
     return GpuPhaseRecovery::Recovered;
 }
 bool GpuDevice::processingPhaseOccupied() const noexcept {
-    return !isOwnerThread() || !impl_->control || impl_->control->processingPhase != nullptr;
+    return !isOwnerThread() || !impl_->control || impl_->control->processingPhase != nullptr ||
+           impl_->control->parkedProcessingPhase != nullptr;
+}
+bool GpuDevice::parkProcessingPhase() noexcept {
+    if (!isOwnerThread() || !impl_->control)
+        return false;
+    auto& control = *impl_->control;
+    if (!control.processingPhase || control.parkedProcessingPhase ||
+        control.processingPhaseUnproven || control.processingPhase->isUnproven())
+        return false;
+    control.parkedProcessingPhase = std::move(control.processingPhase);
+    control.imageStorageRefusal.reset();
+    control.bufferStorageRefusal.reset();
+    return true;
+}
+bool GpuDevice::selectProcessingPhase(const std::uint64_t leaseId) noexcept {
+    if (!isOwnerThread() || !impl_->control)
+        return false;
+    auto& control = *impl_->control;
+    if (control.processingPhase && control.processingPhase->id() == leaseId)
+        return true;
+    if (!control.parkedProcessingPhase || control.parkedProcessingPhase->id() != leaseId)
+        return false;
+    std::swap(control.processingPhase, control.parkedProcessingPhase);
+    return true;
 }
 
 std::optional<NativeImageStorageRefusal> GpuDevice::nativeImageStorageRefusal() const noexcept {
@@ -512,7 +566,10 @@ DeviceAllocatorState::~DeviceAllocatorState() {
     if (processingPhase) {
         processingPhase->markUnproven();
     }
+    if (parkedProcessingPhase)
+        parkedProcessingPhase->markUnproven();
     if (allocator != VK_NULL_HANDLE) {
+        closeStorageReuse(*this);
         vmaDestroyAllocator(allocator);
         allocator = VK_NULL_HANDLE;
     }

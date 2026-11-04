@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_device_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 
 namespace bloom::render::vulkan_detail {
 
@@ -28,6 +29,28 @@ namespace bloom::render::vulkan_detail {
         // Explicit legacy/untracked resources retain the established VMA AUTO route.
         return vmaCreateImage(state.allocator, &imageInfo, &preferred, &image, &allocation,
                               nullptr) == VK_SUCCESS;
+    }
+    // #477: a parked image of the identical shape is taken back under a fresh token for this
+    // phase; a refused reservation leaves it parked and takes the ordinary path, which reports
+    // the same refusal.
+    const bool reuse = !presentation && storageReuseEligible(state, imageInfo.pNext);
+    const auto shape = reuse ? imageReuseShape(imageInfo) : NativeStorageReuse::Shape{};
+    if (reuse) {
+        if (const auto parked = takeParkedStorage(state, shape)) {
+            const NativeImageStorageIdentity identity{state.presentationEpoch, parked->memoryType,
+                                                      parked->heap, parked->deviceLocal};
+            auto grant = NativeImageStorageToken::reserve(state.processingPhase,
+                                                          parked->requirementBytes, identity);
+            if (grant.token && grant.token->reconcile(parked->allocationBytes, identity)) {
+                token = std::move(*grant.token);
+                image = handleFromBits<VkImage>(parked->handle);
+                allocation = parked->allocation;
+                noteIssuedStorage(state, *parked, true);
+                return true;
+            }
+            grant.token.reset();
+            restoreParkedStorage(state, *parked);
+        }
     }
     const auto* dispatch = state.device.getDispatcher();
     const VkDevice device = static_cast<VkDevice>(*state.device);
@@ -132,6 +155,17 @@ namespace bloom::render::vulkan_detail {
             state.presentationStorageRefusal.reset();
         if (presentation)
             static_cast<void>(token.promote());
+        if (reuse)
+            noteIssuedStorage(state,
+                              {.shape = shape,
+                               .handle = handleBits(image),
+                               .allocation = allocation,
+                               .requirementBytes = requirements.memoryRequirements.size,
+                               .allocationBytes = actual.size,
+                               .memoryType = selected,
+                               .heap = heap,
+                               .deviceLocal = identity.deviceLocal},
+                              false);
         return true;
     }
     if (allocationAttempted)

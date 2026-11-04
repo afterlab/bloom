@@ -1,3 +1,4 @@
+#include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_ocio_program_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 
@@ -101,7 +102,7 @@ struct ImageOwner final {
     ImageOwner& operator=(const ImageOwner&) = delete;
     ~ImageOwner() {
         if (image != VK_NULL_HANDLE && state != nullptr) {
-            vmaDestroyImage(state->allocator, image, allocation);
+            vulkan_detail::destroyNativeImage(*state, image, allocation, false);
             if (storage.bytes() != 0 && state->nativeImageBackingsDestroyed != UINT64_MAX) {
                 ++state->nativeImageBackingsDestroyed;
             }
@@ -120,7 +121,7 @@ struct Staging final {
     vulkan_detail::DeviceAllocatorState* state = nullptr;
     ~Staging() {
         if (buffer != VK_NULL_HANDLE && state != nullptr) {
-            vmaDestroyBuffer(state->allocator, buffer, allocation);
+            vulkan_detail::destroyNativeBuffer(*state, buffer, allocation, false);
             if (storage.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
                 ++state->nativeBufferBackingsDestroyed;
         }
@@ -136,7 +137,8 @@ void releaseQuarantineResources(UploadQuarantine& slot) noexcept {
         return;
     }
     if (slot.staging != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(slot.state->allocator, slot.staging, slot.stagingAllocation);
+        vulkan_detail::destroyNativeBuffer(*slot.state, slot.staging, slot.stagingAllocation,
+                                           false);
         if (slot.stagingStorage.bytes() != 0 &&
             slot.state->nativeBufferBackingsDestroyed != UINT64_MAX)
             ++slot.state->nativeBufferBackingsDestroyed;
@@ -144,7 +146,7 @@ void releaseQuarantineResources(UploadQuarantine& slot) noexcept {
     slot.staging = VK_NULL_HANDLE;
     slot.stagingStorage = {};
     if (slot.image != VK_NULL_HANDLE) {
-        vmaDestroyImage(slot.state->allocator, slot.image, slot.imageAllocation);
+        vulkan_detail::destroyNativeImage(*slot.state, slot.image, slot.imageAllocation, false);
         if (slot.storage.bytes() != 0 && slot.state->nativeImageBackingsDestroyed != UINT64_MAX) {
             ++slot.state->nativeImageBackingsDestroyed;
         }
@@ -628,7 +630,7 @@ void destroySampledResource(vulkan_detail::DeviceAllocatorState& state, SampledR
     if (resource.view != VK_NULL_HANDLE) {
         dispatcher->vkDestroyImageView(device, resource.view, nullptr);
     }
-    vmaDestroyImage(state.allocator, resource.image, resource.allocation);
+    vulkan_detail::destroyNativeImage(state, resource.image, resource.allocation, false);
     if (resource.storage.bytes() != 0) {
         if (state.nativeImageBackingsDestroyed != UINT64_MAX) {
             ++state.nativeImageBackingsDestroyed;

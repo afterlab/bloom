@@ -88,6 +88,26 @@ pickResidentReadyStage(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
     return stage;
 }
 
+// #477: while a stage is ahead, the scene executor is that stage's; the active stage then owns
+// only its display and packed transfer, so its retirement neither waits for nor cancels the
+// executor.
+[[nodiscard]] bool activeExecutorUnretired(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
+    return core->residentAhead == nullptr && residentExecutorHasUnretiredSubmission(core);
+}
+[[nodiscard]] bool
+activeOwnerDrainRequired(const std::shared_ptr<PreviewDisplayServiceCore>& core) {
+    return core->residentAhead == nullptr && residentOwnerDrainRequired(core);
+}
+
+// Makes `stage`'s phase the device's retained phase, so its native storage and retirement apply
+// to it while another stage's phase is retained beside it (#477).
+void selectStagePhase(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                      const PreviewDisplayStageRecord& stage) noexcept {
+    if (core->device && stage.processingPhaseArmed && stage.gpuStage &&
+        stage.gpuStage->phaseLease())
+        static_cast<void>(core->device->selectProcessingPhase(stage.gpuStage->phaseLease()->id()));
+}
+
 // The allocator-generation slot protects all native quarantine families, including synchronous
 // OCIO LUT upload. Planning alone submits nothing. Once poll/display/transfer can submit, a failure
 // without whole-phase proof is sticky even when a wrapper's logical state no longer reports work.
@@ -96,9 +116,9 @@ void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& co
                             const bool proven) noexcept {
     if (stage->processingPhaseArmed && core->device && stage->gpuStage &&
         stage->gpuStage->phaseLease()) {
-        if (proven && !residentDeviceLost(core) && !residentOwnerDrainRequired(core) &&
-            !residentExecutorHasUnretiredSubmission(core) &&
-            !residentDisplayHasUnretiredSubmission(core) &&
+        selectStagePhase(core, *stage);
+        if (proven && !residentDeviceLost(core) && !activeOwnerDrainRequired(core) &&
+            !activeExecutorUnretired(core) && !residentDisplayHasUnretiredSubmission(core) &&
             !residentDisplayHasUnretiredSubmissionGeneral(core)) {
             // Cancellation may retire a display submission without consuming its output. Its
             // unpublished image/staging tokens still own the phase, so dispose them before the
@@ -143,9 +163,8 @@ void finishResidentImmediately(const std::shared_ptr<PreviewDisplayServiceCore>&
                               imageRefusal->revisionAfterOwnRelease, false};
         }
     }
-    if (storageRefusal && !residentDeviceLost(core) && !residentOwnerDrainRequired(core) &&
-        !residentExecutorHasUnretiredSubmission(core) &&
-        !residentDisplayHasUnretiredSubmission(core) &&
+    if (storageRefusal && !residentDeviceLost(core) && !activeOwnerDrainRequired(core) &&
+        !activeExecutorUnretired(core) && !residentDisplayHasUnretiredSubmission(core) &&
         !residentDisplayHasUnretiredSubmissionGeneral(core) &&
         (!core->residentDisplay || !core->residentDisplay->hasUnretiredSubmission()) &&
         (!core->packedTransfer || !core->packedTransfer->hasUnretiredSubmission()))
@@ -216,7 +235,7 @@ void beginResidentRetirement(const std::shared_ptr<PreviewDisplayServiceCore>& c
         core->counterResidentFailures.fetch_add(1, std::memory_order_relaxed);
     }
     stage->processingPhaseFailed = stage->processingPhaseFailed || nativeFailure;
-    residentCancelNative(core);
+    residentCancelNative(core, core->residentAhead == nullptr);
     stage->nativeDiscard = stage->nativeDiscard || stage->cancellationRequested ||
                            core->stopping.load(std::memory_order_acquire);
     stage->residentRetirePumps = 0;
@@ -251,6 +270,74 @@ void teardownTerminalResidentRoute(const std::shared_ptr<PreviewDisplayServiceCo
     core->residentRouteTerminal = true;
     core->counterRetirementUnprovenTeardowns.fetch_add(1, std::memory_order_relaxed);
     retireResidentRoute(core);
+    // The executor the stage ahead ran on was drained or quarantined with the route (#477): its
+    // phase keeps the conservative charge and the frame takes the CPU path, like the active one.
+    if (auto ahead = std::exchange(core->residentAhead, nullptr)) {
+        ahead->residentPhase = ResidentNativePhase::Done;
+        ahead->processingPhaseFailed = true;
+        releaseProcessingPhase(core, ahead, false);
+        if (ahead->cancellationRequested || ahead->nativeDiscard ||
+            core->stopping.load(std::memory_order_acquire)) {
+            completeCancelled(ahead);
+        } else {
+            core->recordCpuFallback(GpuPreviewCpuFallbackReason::NativeFailure);
+            dispatchResidentCpuFallbackChild(core, ahead);
+        }
+    }
+}
+
+// #477: while the active stage displays and transfers its frame, the scene executor is free, so
+// the next ready stage begins its executor under its own phase, retained beside the active one.
+// Only a clean start happens here: anything that would refuse or fail the next stage leaves it
+// queued, and the ordinary path meets it once the active stage is done. The stage ahead is polled
+// until its executor settles; its result is handled when it becomes the active stage.
+void advanceResidentAhead(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                          const std::shared_ptr<PreviewDisplayStageRecord>& active) {
+    if (core->residentAhead == nullptr) {
+        if ((active->residentPhase != ResidentNativePhase::Display &&
+             active->residentPhase != ResidentNativePhase::Transfer) ||
+            active->cancellationRequested || active->nativeDiscard ||
+            core->stopping.load(std::memory_order_acquire) || core->residentRouteTerminal ||
+            core->residentNativeReady.empty() || !core->device || !active->processingPhaseArmed ||
+            !active->gpuStage || !active->gpuStage->phaseLease() ||
+            core->residentExecutor->state() != GpuSceneExecutorJobState::Idle ||
+            residentExecutorHasUnretiredSubmission(core) || residentOwnerDrainRequired(core))
+            return;
+        auto next = pickResidentReadyStage(core);
+        if (next == nullptr)
+            return;
+        const auto& phase = next->gpuStage ? next->gpuStage->phaseLease() : nullptr;
+        selectStagePhase(core, *active);
+        if (next->cancellationRequested || !phase || !core->device->parkProcessingPhase()) {
+            core->residentNativeReady.push_front(next);
+            return;
+        }
+        if (!core->device->retainProcessingPhase(phase)) {
+            selectStagePhase(core, *active);
+            core->residentNativeReady.push_front(next);
+            return;
+        }
+        next->processingPhaseArmed = true;
+        std::string reason;
+        if (!residentExecutorBegin(core, *next, reason)) {
+            // Planning only; nothing was submitted under this phase.
+            core->device->retireProcessingPhase(phase->id(), true);
+            next->processingPhaseArmed = false;
+            selectStagePhase(core, *active);
+            core->residentNativeReady.push_front(next);
+            return;
+        }
+        next->nativeDispatched = true;
+        next->nativeStartedAt = nativeNow(core);
+        next->residentPhase = ResidentNativePhase::Executor;
+        core->residentAhead = std::move(next);
+        core->counterScenesAhead.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (core->residentExecutor->state() == GpuSceneExecutorJobState::Pending) {
+        selectStagePhase(core, *core->residentAhead);
+        core->residentAhead->processingPhaseTouched = true;
+        static_cast<void>(residentExecutorPoll(core));
+    }
 }
 
 } // namespace
@@ -550,6 +637,12 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         return;
     }
 
+    if (!core->residentNativeInFlight && core->residentAhead != nullptr) {
+        // #477: the stage ahead becomes active; its executor may already have settled.
+        core->residentNativeActive = std::exchange(core->residentAhead, nullptr);
+        core->residentNativeInFlight = true;
+        return;
+    }
     if (!core->residentNativeInFlight) {
         auto stage = pickResidentReadyStage(core);
         if (stage == nullptr) {
@@ -610,6 +703,9 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         core->residentNativeInFlight = false;
         return;
     }
+    if (core->residentExecutor != nullptr)
+        advanceResidentAhead(core, stage);
+    selectStagePhase(core, *stage);
 
     const bool cancelled = stage->cancellationRequested || stage->nativeDiscard ||
                            core->stopping.load(std::memory_order_acquire);
@@ -869,11 +965,14 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
         // authoritative test is hasUnretiredSubmission(), NOT state(): a logical Failure can leave
         // an unretired submission behind and ownerDrainRequired() does not latch an ordinary
         // cancel.
-        if (core->residentExecutor != nullptr &&
+        // With a stage ahead, the executor is that stage's (#477): it is neither taken nor
+        // waited for here.
+        const bool executorOwned = core->residentAhead == nullptr;
+        if (executorOwned && core->residentExecutor != nullptr &&
             core->residentExecutor->state() == GpuSceneExecutorJobState::Ready) {
             static_cast<void>(core->residentExecutor->takeImage());
         }
-        if (core->residentExecutor != nullptr &&
+        if (executorOwned && core->residentExecutor != nullptr &&
             (core->residentExecutor->state() == GpuSceneExecutorJobState::Pending ||
              residentExecutorHasUnretiredSubmission(core) || residentOwnerDrainRequired(core))) {
             static_cast<void>(residentExecutorPoll(core));
@@ -894,7 +993,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             return;
         }
         const bool executorRetired =
-            core->residentExecutor == nullptr ||
+            !executorOwned || core->residentExecutor == nullptr ||
             (core->residentExecutor->state() != GpuSceneExecutorJobState::Pending &&
              !residentExecutorHasUnretiredSubmission(core) && !residentOwnerDrainRequired(core));
         const bool displayRetired = !residentDisplayHasUnretiredSubmission(core);

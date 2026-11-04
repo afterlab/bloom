@@ -1,6 +1,7 @@
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_native_image_allocation_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_resident_display_private.hpp"
 #include "gpu_resident_display_readback_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
@@ -86,7 +87,7 @@ bool createResidentDisplayBuffer(DeviceAllocatorState& state, const std::uint64_
 void destroyResidentBuffer(DeviceAllocatorState& state, ResidentBuffer& buffer,
                            const std::shared_ptr<GpuProcessingPhaseLease>& failedOrigin) noexcept {
     if (buffer.buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(state.allocator, buffer.buffer, buffer.allocation);
+        destroyNativeBuffer(state, buffer.buffer, buffer.allocation);
         if (buffer.storageToken.bytes() != 0 && state.nativeBufferBackingsDestroyed != UINT64_MAX)
             ++state.nativeBufferBackingsDestroyed;
     }
@@ -225,7 +226,7 @@ void GpuDisplayImageImpl::destroy() noexcept {
         view = VK_NULL_HANDLE;
     }
     if (image != VK_NULL_HANDLE) {
-        vmaDestroyImage(state->allocator, image, allocation);
+        vulkan_detail::destroyNativeImage(*state, image, allocation, !deviceLost);
         if (state->nativeImageBackingsDestroyed != UINT64_MAX)
             ++state->nativeImageBackingsDestroyed;
         image = VK_NULL_HANDLE;

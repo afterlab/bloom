@@ -163,6 +163,15 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     bloom_enable_warnings(bloom_render_native_image_allocation_test)
     bloom_add_test(NAME bloom.render.native_image_allocation
         COMMAND bloom_render_native_image_allocation_test LABELS unit gpu memory)
+    add_executable(bloom_render_native_storage_reuse_test native_storage_reuse_tests.cpp)
+    target_link_libraries(bloom_render_native_storage_reuse_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_native_storage_reuse_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_native_storage_reuse_test)
+    bloom_add_test(NAME bloom.render.native_storage_reuse
+        COMMAND bloom_render_native_storage_reuse_test LABELS unit gpu memory)
+    set_tests_properties(bloom.render.native_storage_reuse PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(bloom_render_native_ocio_image_storage_test native_ocio_image_storage_tests.cpp)
     target_link_libraries(bloom_render_native_ocio_image_storage_test PRIVATE
         bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)

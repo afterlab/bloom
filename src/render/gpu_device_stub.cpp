@@ -55,6 +55,9 @@ const GpuCapabilityReport& GpuDevice::capabilityReport() const noexcept {
 
 void GpuDevice::reclaimReleasedImages() noexcept {}
 GpuImageReclamationStats GpuDevice::imageReclamationStats() const noexcept { return {}; }
+void GpuDevice::setNativeStorageReuse(bool) noexcept {}
+GpuNativeStorageReuseStats GpuDevice::nativeStorageReuseStats() const noexcept { return {}; }
+std::uint64_t GpuDevice::releaseReusableNativeStorage(std::uint64_t, bool) noexcept { return 0; }
 GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noexcept { return {}; }
 GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept { return {}; }
 
@@ -67,6 +70,8 @@ bool GpuDevice::retainProcessingPhase(std::shared_ptr<GpuProcessingPhaseLease>) 
 }
 void GpuDevice::retireProcessingPhase(std::uint64_t, bool) noexcept {}
 bool GpuDevice::processingPhaseOccupied() const noexcept { return true; }
+bool GpuDevice::parkProcessingPhase() noexcept { return false; }
+bool GpuDevice::selectProcessingPhase(std::uint64_t) noexcept { return false; }
 GpuPhaseRecovery GpuDevice::recoverUnprovenProcessingPhase() noexcept {
     return GpuPhaseRecovery::Failed;
 }

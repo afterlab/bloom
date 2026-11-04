@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_device_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 
 #include <utility>
 
@@ -38,6 +39,40 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
     }
     if (!presentation && (state.processingPhaseUnproven || state.processingPhase->isUnproven()))
         return NativeBufferAllocationOutcome::Failed;
+    const auto reserveFor = [&](const std::uint64_t bytes, const NativeBufferStorageIdentity& at) {
+        return presentation
+                   ? NativeBufferStorageToken::reservePresentation(state.processingRoot, bytes, at)
+               : purpose == NativeBufferPurpose::Processing
+                   ? NativeBufferStorageToken::reserveProcessing(state.processingPhase, bytes, at)
+               : purpose == NativeBufferPurpose::Upload
+                   ? NativeBufferStorageToken::reserveUpload(state.processingPhase, bytes, at)
+                   : NativeBufferStorageToken::reserve(state.processingPhase, bytes, at);
+    };
+    // #477: a parked buffer of the identical shape and allocator flags is taken back under a
+    // fresh token for this phase; a refused reservation leaves it parked and takes the ordinary
+    // path, which reports the same refusal.
+    const bool reuse = !presentation && storageReuseEligible(state, bufferInfo.pNext);
+    const auto shape = reuse ? bufferReuseShape(bufferInfo, original) : NativeStorageReuse::Shape{};
+    if (reuse) {
+        if (const auto parked = takeParkedStorage(state, shape);
+            parked && parked->requirementBytes <= maximumBackingBytes) {
+            const NativeBufferStorageIdentity identity{state.presentationEpoch, parked->memoryType,
+                                                       parked->heap, parked->deviceLocal};
+            auto grant = reserveFor(parked->requirementBytes, identity);
+            if (grant.token && grant.token->reconcile(parked->allocationBytes, identity)) {
+                token = std::move(*grant.token);
+                buffer = handleFromBits<VkBuffer>(parked->handle);
+                allocation = parked->allocation;
+                vmaGetAllocationInfo(state.allocator, allocation, &allocationInfo);
+                noteIssuedStorage(state, *parked, true);
+                return NativeBufferAllocationOutcome::Allocated;
+            }
+            grant.token.reset();
+            restoreParkedStorage(state, *parked);
+        } else if (parked) {
+            restoreParkedStorage(state, *parked);
+        }
+    }
     const auto* dispatch = state.device.getDispatcher();
     const VkDevice device = static_cast<VkDevice>(*state.device);
     if (dispatch->vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS)
@@ -93,17 +128,7 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
         const NativeBufferStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
-        auto grant =
-            presentation ? NativeBufferStorageToken::reservePresentation(
-                               state.processingRoot, requirements.memoryRequirements.size, identity)
-            : purpose == NativeBufferPurpose::Processing
-                ? NativeBufferStorageToken::reserveProcessing(
-                      state.processingPhase, requirements.memoryRequirements.size, identity)
-            : purpose == NativeBufferPurpose::Upload
-                ? NativeBufferStorageToken::reserveUpload(
-                      state.processingPhase, requirements.memoryRequirements.size, identity)
-                : NativeBufferStorageToken::reserve(state.processingPhase,
-                                                    requirements.memoryRequirements.size, identity);
+        auto grant = reserveFor(requirements.memoryRequirements.size, identity);
         if (!grant.token) {
             if (grant.status == GpuProcessingPhaseAdmission::BudgetRefused ||
                 grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity)
@@ -167,6 +192,17 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
             state.presentationStorageRefusal.reset();
         if (presentation)
             static_cast<void>(token.promote());
+        if (reuse)
+            noteIssuedStorage(state,
+                              {.shape = shape,
+                               .handle = handleBits(buffer),
+                               .allocation = allocation,
+                               .requirementBytes = requirements.memoryRequirements.size,
+                               .allocationBytes = allocationInfo.size,
+                               .memoryType = selected,
+                               .heap = heap,
+                               .deviceLocal = identity.deviceLocal},
+                              false);
         return NativeBufferAllocationOutcome::Allocated;
     }
     if (attempted)

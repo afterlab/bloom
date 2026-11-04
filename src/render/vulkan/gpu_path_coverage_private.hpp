@@ -10,6 +10,7 @@
 #include <bloom/render/gpu_path_coverage.hpp>
 
 #include "gpu_device_private.hpp"
+#include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_path_coverage_fault.hpp"
 
 #include <atomic>
@@ -89,7 +90,7 @@ struct GpuPathCoverageHostBuffer final {
 
     void release() noexcept {
         if (armed && state != nullptr) {
-            vmaDestroyBuffer(state->allocator, buffer, allocation);
+            vulkan_detail::destroyNativeBuffer(*state, buffer, allocation);
             if (storageToken.bytes() != 0 && state->nativeBufferBackingsDestroyed != UINT64_MAX)
                 ++state->nativeBufferBackingsDestroyed;
         }
