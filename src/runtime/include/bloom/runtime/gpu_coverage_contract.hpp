@@ -118,6 +118,9 @@ BLOOM_GPU_REQUIRED_EFFECT(LumaKeyKernel, "Luma Key image-to-Mask coverage kernel
 BLOOM_GPU_REQUIRED_EFFECT(LevelsKernel, "Levels per-channel straight-colour grade (#340)");
 BLOOM_GPU_REQUIRED_EFFECT(CurvesKernel, "Curves per-channel straight-colour grade (#340)");
 BLOOM_GPU_REQUIRED_EFFECT(HueSaturationKernel, "Hue/Saturation linear RGB matrix (#340)");
+BLOOM_GPU_REQUIRED_EFFECT(ChannelSelectKernel, "stored-channel select of one image (#479)");
+BLOOM_GPU_REQUIRED_EFFECT(ChannelCombineKernel,
+                          "stored-channel set from a second image (#479 Combine Channels)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

@@ -66,6 +66,9 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // (detail::ColorGradeKind); `gradeData` (the prepared table) is its storage-buffer data, part
     // of the prepare key and the command identity, so keyed grades never recompile.
     ColorGrade = 11,
+    // #479 Separate Channels / Combine Channels: the one fixed Channel Select neighbourhood
+    // program; `channelSelect` (detail::channelSelectProgramData) is its storage-buffer data.
+    ChannelSelect = 12,
 };
 
 struct GpuOcioTransformSpec final {
@@ -91,6 +94,8 @@ struct GpuOcioTransformSpec final {
     // ColorGrade only: detail::ColorGradeKind and detail::PreparedColorGrade::data.
     std::uint8_t gradeKind = 0;
     std::vector<float> gradeData;
+    // ChannelSelect only: detail::channelSelectProgramData.
+    std::array<float, 8> channelSelect{};
     // LayerMask only.
     std::vector<std::byte> maskData;
     // FootageInterpretation only.

@@ -20,6 +20,7 @@
 //    takes the existing CPU reference path; it is never substituted with an identity result.
 
 #include "canvas_image_effect.hpp"
+#include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -291,11 +292,21 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
     const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel);
-    if (combine != nullptr) {
+    // #479 Combine Channels: the base with one slot set from the second image, on the same
+    // resident two-input ImageCombineV1 dispatch (its Set Channel mode).
+    const auto* channelCombine = std::get_if<ChannelCombineKernel>(&effect.kernel);
+    const auto preparedChannel =
+        channelCombine ? prepareChannelCombine(*channelCombine) : std::nullopt;
+    if (channelCombine != nullptr && !preparedChannel)
+        return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    "Channel combine slot or source is out of domain");
+    if (combine != nullptr || channelCombine != nullptr) {
         // The same closed selector the CPU reference prepares (image_effect.cpp): a driver samples
         // the whole stored enumeration, a constant arrives split into channel and invert.
         std::optional<render::MatteSelection> selection;
-        if (combine->drivenChannel) {
+        if (preparedChannel) {
+            selection = render::MatteSelection{preparedChannel->source, false};
+        } else if (combine->drivenChannel) {
             const auto* sampled = resolvedValue<std::int64_t>(*combine->drivenChannel, resolved);
             if (sampled == nullptr)
                 return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
@@ -306,8 +317,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             selection = render::MatteSelection{combine->channel, combine->invert};
         }
         if (!effect.secondaryInput || effect.secondaryInput->value() >= plan.operations().size() ||
-            static_cast<std::uint8_t>(combine->mode) >
-                static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha) ||
+            (combine != nullptr &&
+             static_cast<std::uint8_t>(combine->mode) >
+                 static_cast<std::uint8_t>(ImageCombineMode::MultiplyAlpha)) ||
             !selection)
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Image combine kernel or second input is invalid");
@@ -320,7 +332,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         // transparent black; it never reads a matte texel and never falls back to the CPU.
         const bool matteAbsent = !outputWindowOf[secondValue];
         float factor = 1.0F;
-        if (combine->factor) {
+        if (combine == nullptr) {
+            // Set Channel has no factor.
+        } else if (combine->factor) {
             const auto sampled = resolveParameter(*combine->factor, plan, resolved);
             if (!sampled || !std::isfinite(sampled->value) || sampled->value < 0.0 ||
                 sampled->value > 1.0)
@@ -331,7 +345,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Image combine factor is missing");
         }
-        if (combine->mode == ImageCombineMode::Mix && factor == 0.0F)
+        if (combine != nullptr && combine->mode == ImageCombineMode::Mix && factor == 0.0F)
             return identity();
 
         // Both image inputs may be deferred vector leaves. Materialize each through the same
@@ -381,7 +395,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         std::optional<render::ImageWindow> maskWindow;
         if (effect.maskInput) {
             const auto maskValue = effect.maskInput->value();
-            if (combine->mode != ImageCombineMode::Mix || maskValue >= plan.operations().size())
+            if (combine == nullptr || combine->mode != ImageCombineMode::Mix ||
+                maskValue >= plan.operations().size())
                 return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                             "Image combine mask is invalid");
             if (!outputWindowOf[maskValue]) {
@@ -410,13 +425,18 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
                                       sizeof(render::Rgba32f)))
             return error;
-        const render::GpuImageCombineParameters parameters{
-            static_cast<render::GpuImageCombineKind>(combine->mode),
+        render::GpuImageCombineParameters parameters{
+            combine != nullptr ? static_cast<render::GpuImageCombineKind>(combine->mode)
+                               : render::GpuImageCombineKind::SetChannel,
             factor,
             selection->channel,
             selection->invert,
             matteAbsent,
             maskMode};
+        if (preparedChannel) {
+            parameters.slot = preparedChannel->slot;
+            parameters.premultiply = preparedChannel->premultiply;
+        }
         GpuSceneBlendCommand command{.sourceOperation = operationIndex,
                                      .source = secondCommand,
                                      .destination = baseCommand,
@@ -454,10 +474,11 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* blurKernel = std::get_if<SeparableBlurKernel>(&effect.kernel);
     const auto* masksKernel = std::get_if<LayerMaskKernel>(&effect.kernel);
     const auto* lumaKeyKernel = std::get_if<LumaKeyKernel>(&effect.kernel);
+    const auto* selectKernel = std::get_if<ChannelSelectKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
         blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr &&
-        !isColorGradeKernel(effect.kernel)) {
+        selectKernel == nullptr && !isColorGradeKernel(effect.kernel)) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "An image effect kernel is not supported");
     }
@@ -578,6 +599,19 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         leg.kind = GpuOcioTransformKind::ColorGrade;
         leg.gradeKind = static_cast<std::uint8_t>(grade->kind);
         leg.gradeData = grade->data;
+        legs.push_back(std::move(leg));
+    } else if (selectKernel != nullptr) {
+        // #479: the CPU reference's prepared mapping as the one fixed program's data; the identity
+        // mapping aliases its input exactly, as on the CPU.
+        const auto select = prepareChannelSelect(*selectKernel);
+        if (!select)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Channel select sources are out of domain");
+        if (select->identity)
+            return identity();
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::ChannelSelect;
+        leg.channelSelect = channelSelectProgramData(*select);
         legs.push_back(std::move(leg));
     } else if (lumaKeyKernel != nullptr) {
         // #338: the CPU reference's prepared key as the one fixed program's data. Never an
@@ -845,7 +879,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     result.window = outputWindow;
     // A grade can lift transparent pixels inside the data window (an alpha transfer), so its
     // content bounds are that whole window, as on the CPU reference.
-    result.local = blur || isColorGradeKernel(effect.kernel)
+    // A Channel Select (#479) makes every pixel of the window opaque or reads alpha from colour.
+    result.local = blur || isColorGradeKernel(effect.kernel) || selectKernel != nullptr
                        ? boundsForWindow(outputWindow, ctx.hScale, ctx.vScale)
                        : bounds[inputValue].output;
     result.output = result.local;

@@ -511,6 +511,13 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
             key.append("|invert");
         if (imageCombine->matteAbsent)
             key.append("|absent-matte");
+        // #479 Set Channel's slot and premultiply, appended only for that kind.
+        if (imageCombine->kind == render::GpuImageCombineKind::SetChannel) {
+            key.append("|slot=");
+            key.append(std::to_string(static_cast<unsigned>(imageCombine->slot)));
+            if (imageCombine->premultiply)
+                key.append("|premultiply");
+        }
         // ADR 0028: Image Mix's mask, appended only when used.
         if (imageCombine->mask != render::GpuImageCombineParameters::Mask::None) {
             key.append("|mask=");

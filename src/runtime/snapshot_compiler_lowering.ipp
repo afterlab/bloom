@@ -252,6 +252,20 @@ lower(const std::vector<document::NodeId>& order) {
             definition->lowering != runtime::NodeLoweringKind::ImageEffect)
             continue;
         auto input = firstImageInput(*node);
+        // #479 Combine Channels' first CONNECTED input is its base, which owns every window: the
+        // result is empty when that input is, or when no input is connected at all.
+        if (node->typeId == document::kCombineChannelsNodeType && !isMuted(id)) {
+            input.reset();
+            for (const auto port : document::kImageChannelPortNames)
+                if (fixedInputEdge(id, port) != nullptr) {
+                    input = document::NodeInputRef{id, std::string(port)};
+                    break;
+                }
+            if (!input) {
+                emptyImages_.insert(id);
+                continue;
+            }
+        }
         // #338 Luma Key reads an Image and publishes a Mask, so muted it carries nothing through
         // (an empty Mask), but an empty Image upstream makes its Mask empty too.
         if (!input && !isMuted(id))
@@ -461,6 +475,46 @@ lower(const std::vector<document::NodeId>& order) {
                 addTopologyFailure(nodeId, "Muted empty image was not classified.");
                 return {};
             }
+            continue;
+        }
+        // #479 Separate Channels: one Channel Select per used output, each a grey image of its
+        // channel (R = G = B = the stored channel, A = 1) over the input's data window.
+        if (node->typeId == document::kSeparateChannelsNodeType) {
+            const auto input =
+                findInputOperation(nodeId, document::kSeparateChannelsInputPort, indices);
+            if (!input) {
+                addTopologyFailure(nodeId, "Separate Channels input could not be lowered.");
+                return {};
+            }
+            std::optional<runtime::OperationIndex> first;
+            for (std::size_t channel = 0; channel < document::kImageChannelCount; ++channel) {
+                const auto port = document::kImageChannelPortNames[channel];
+                const bool inspected = request_.channelInspection &&
+                                       request_.channelInspection->node == nodeId &&
+                                       request_.channelInspection->port == port;
+                if (!hasReachableOutput(nodeId, port) && !inspected)
+                    continue;
+                const auto source = static_cast<runtime::ImageChannelSource>(channel);
+                const auto index = runtime::OperationIndex::fromRaw(operations.size());
+                operations.emplace_back(runtime::CompiledImageEffect{
+                    nodeId, *input,
+                    runtime::ChannelSelectKernel{
+                        {source, source, source, runtime::ImageChannelSource::One}}});
+                portOperations_.insert_or_assign({nodeId, std::string(port)}, index);
+                if (!first)
+                    first = index;
+            }
+            if (first)
+                indices.emplace(nodeId, *first);
+            continue;
+        }
+        // #479 Combine Channels: a Channel Select of the base, then a Channel Combine per further
+        // connected input.
+        if (node->typeId == document::kCombineChannelsNodeType) {
+            const auto combined = lowerCombineChannels(*node, operations, indices);
+            if (!combined)
+                return {};
+            indices.emplace(nodeId, *combined);
             continue;
         }
         const auto* outputEdge = fixedInputEdge(nodeId, document::kCompositionOutputInputPort);
@@ -1123,6 +1177,85 @@ lowerCompositionSource(const document::NodeRecord& node) {
     runtime::CompiledCompositionSource source{node.id, index, {*offset, *scale, *loop}};
     compositionSources_.emplace(node.id, source);
     return source;
+}
+
+// #479 Combine Channels. The first connected input (red, then green, blue, alpha) is the base: a
+// Channel Select of it fills its own slots (every input reading that same image folds in here),
+// zero for an unconnected red, green or blue and one for an unconnected alpha. Each further
+// connected input then sets its slot with a Channel Combine, alpha last; a connected input with no
+// image reads zero. A Straight alpha mode premultiplies in the last operation only.
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerCombineChannels(const document::NodeRecord& node,
+                     std::vector<runtime::CompiledOperation>& operations,
+                     std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    std::array<runtime::ImageChannelSource, document::kImageChannelCount> sources{};
+    for (std::size_t slot = 0; slot < document::kImageChannelCount; ++slot) {
+        const auto* value = parameterConstant<std::int64_t>(
+            findParameterBinding(node, document::kCombineChannelsSourceRoles[slot]));
+        if (value == nullptr || *value < 0 || *value >= document::kImageChannelSourceCount) {
+            addTopologyFailure(node.id, "Combine Channels source channels could not be lowered.");
+            return std::nullopt;
+        }
+        sources[slot] = static_cast<runtime::ImageChannelSource>(*value);
+    }
+    const auto* mode = parameterConstant<std::int64_t>(
+        findParameterBinding(node, document::kCombineChannelsAlphaModeRole));
+    if (mode == nullptr || (*mode != document::kCombineChannelsPremultiplied &&
+                            *mode != document::kCombineChannelsStraight)) {
+        addTopologyFailure(node.id, "Combine Channels alpha mode could not be lowered.");
+        return std::nullopt;
+    }
+    const bool premultiply = *mode == document::kCombineChannelsStraight;
+    std::array<std::optional<runtime::OperationIndex>, document::kImageChannelCount> inputs{};
+    for (std::size_t slot = 0; slot < document::kImageChannelCount; ++slot) {
+        const auto* edge = fixedInputEdge(node.id, document::kImageChannelPortNames[slot]);
+        if (edge == nullptr)
+            continue;
+        // A connected input with no image is a transparent image, as for Image Mix's second.
+        if (emptyImages_.contains(edge->source.nodeId) && !indices.contains(edge->source.nodeId)) {
+            const auto empty = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(runtime::CompiledMerge{edge->source.nodeId, {}});
+            indices.emplace(edge->source.nodeId, empty);
+        }
+        inputs[slot] = sourceOperation(edge->source, indices);
+        if (!inputs[slot]) {
+            addTopologyFailure(node.id, "Combine Channels input could not be lowered.");
+            return std::nullopt;
+        }
+    }
+    const auto base =
+        std::ranges::find_if(inputs, [](const auto& input) { return input.has_value(); });
+    if (base == inputs.end()) {
+        addTopologyFailure(node.id, "Combine Channels has no connected input.");
+        return std::nullopt;
+    }
+    const auto baseInput = **base;
+    runtime::ChannelSelectKernel select;
+    std::vector<std::size_t> pending;
+    for (std::size_t slot = 0; slot < document::kImageChannelCount; ++slot) {
+        const bool alpha = slot + 1 == document::kImageChannelCount;
+        if (inputs[slot] && *inputs[slot] == baseInput) {
+            select.sources[slot] = sources[slot];
+            continue;
+        }
+        // A slot a later operation sets keeps a nonzero alpha meanwhile, so no colour is lost.
+        select.sources[slot] =
+            alpha ? runtime::ImageChannelSource::One : runtime::ImageChannelSource::Zero;
+        if (inputs[slot])
+            pending.push_back(slot);
+    }
+    select.premultiply = premultiply && pending.empty();
+    auto current = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(runtime::CompiledImageEffect{node.id, baseInput, select});
+    for (const auto slot : pending) {
+        runtime::ChannelCombineKernel kernel{static_cast<std::uint8_t>(slot), sources[slot],
+                                             premultiply && slot == pending.back()};
+        const auto next = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(
+            runtime::CompiledImageEffect{node.id, current, kernel, false, false, *inputs[slot]});
+        current = next;
+    }
+    return current;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

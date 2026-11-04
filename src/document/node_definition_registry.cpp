@@ -1,5 +1,6 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 
 #include <bloom/document/image_preview.hpp>
@@ -200,6 +201,52 @@ template <typename Definition>
             NodeCategory::Color};
 }
 
+// #479 Separate Channels: one Image in; red, green, blue and alpha Image outputs.
+[[nodiscard]] NodeDefinition separateChannelsDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{
+        {std::string(kSeparateChannelsNodeType), kImageChannelNodeSchemaVersion},
+        NodeLoweringKind::ImageEffect,
+        {{std::string(kSeparateChannelsInputPort), SocketValueKind::Image}},
+        {},
+        {},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+    for (const auto port : kImageChannelPortNames)
+        definition.outputs.push_back({std::string(port), SocketValueKind::Image});
+    return definition;
+}
+
+// #479 Combine Channels: four optional Image inputs (red, green, blue, alpha), a constant source
+// channel dropdown per input and the constant alpha mode, one Image out. No sockets: the choices
+// are closed constants, like Luma Key's invert.
+[[nodiscard]] NodeDefinition combineChannelsDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{
+        {std::string(kCombineChannelsNodeType), kImageChannelNodeSchemaVersion},
+        NodeLoweringKind::ImageEffect,
+        {},
+        {{std::string(kCombineChannelsOutputPort), SocketValueKind::Image}},
+        {},
+        std::nullopt,
+        NodeCardinality::Many,
+        NodeCategory::Color};
+    for (std::size_t channel = 0; channel < kImageChannelCount; ++channel) {
+        definition.inputs.push_back(
+            {std::string(kImageChannelPortNames[channel]), SocketValueKind::Image, false});
+        definition.parameters.push_back({std::string(kCombineChannelsSourceRoles[channel]),
+                                         std::string(kCombineChannelsSourceSchemaKey),
+                                         ParameterValueKind::Integer, true, false,
+                                         kCombineChannelsSourceDefaults[channel]});
+    }
+    definition.parameters.push_back({std::string(kCombineChannelsAlphaModeRole),
+                                     std::string(kCombineChannelsAlphaModeSchemaKey),
+                                     ParameterValueKind::Integer, true, false,
+                                     kCombineChannelsPremultiplied});
+    return definition;
+}
+
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
@@ -264,6 +311,10 @@ template <typename Definition>
             return definition == curvesDefinition();
         if (definition.key.typeId == kHueSaturationNodeType)
             return definition == hueSaturationDefinition();
+        if (definition.key.typeId == kSeparateChannelsNodeType)
+            return definition == separateChannelsDefinition();
+        if (definition.key.typeId == kCombineChannelsNodeType)
+            return definition == combineChannelsDefinition();
         if (definition.key.typeId == "bloom.transform-2d") {
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 5 &&
                    hasLeadingImageInput(definition, "input") &&
@@ -1295,6 +1346,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         levelsDefinition(),
         curvesDefinition(),
         hueSaturationDefinition(),
+        separateChannelsDefinition(),
+        combineChannelsDefinition(),
         videoDefinition(),
         audioDefinition(),
         compositionSourceDefinition(),

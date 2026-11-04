@@ -296,6 +296,31 @@ PreparedImageEffect ImageEffectContext::prepare(
         prepared.colorGrade = std::move(grade);
         return prepared;
     }
+    // #479: constant channel moves. An identity select aliases its input exactly.
+    if (const auto* select = std::get_if<ChannelSelectKernel>(&effect.kernel)) {
+        auto channels = prepareChannelSelect(*select);
+        if (!channels) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Channel select sources are out of domain");
+            return prepared;
+        }
+        if (channels->identity)
+            return {};
+        prepared.cacheIdentity = channelSelectIdentity(*channels);
+        prepared.channelSelect = std::move(channels);
+        return prepared;
+    }
+    if (const auto* combine = std::get_if<ChannelCombineKernel>(&effect.kernel)) {
+        auto channel = prepareChannelCombine(*combine);
+        if (!channel || !effect.secondaryInput) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Channel combine slot or source is out of domain");
+            return prepared;
+        }
+        prepared.cacheIdentity = channelCombineIdentity(*channel);
+        prepared.channelCombine = std::move(channel);
+        return prepared;
+    }
     if (const auto* blur = std::get_if<SeparableBlurKernel>(&effect.kernel)) {
         prepared.blur =
             prepareSeparableBlur(*blur, sampledAmount, horizontalScale, verticalScale);
@@ -435,6 +460,12 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.colorGrade)
         return applyColorGrade(*effect.colorGrade, input, pixelBudget, cancellation, operation,
                                progress);
+    if (effect.channelSelect)
+        return applyChannelSelect(*effect.channelSelect, input, pixelBudget, cancellation,
+                                  operation, progress);
+    if (effect.channelCombine)
+        return applyChannelCombine(*effect.channelCombine, input, secondary, pixelBudget,
+                                   cancellation, operation, progress);
     if (effect.transform2D)
         return applyTransform2D(*effect.transform2D, input, pixelBudget, cancellation, operation,
                                 progress, horizontalScale, verticalScale);

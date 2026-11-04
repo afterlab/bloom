@@ -22,6 +22,8 @@ implemented by #337 (see [image filters](../architecture/image-filters.md#matte-
 Matte Erode and Matte Dilate are implemented by #338 (see
 [image filters](../architecture/image-filters.md#luma-key)). Levels, Curves and Hue/Saturation are
 implemented by #340 (see [image filters](../architecture/image-filters.md#levels-curves-and-huesaturation)).
+Separate Channels and Combine Channels are implemented by #479 (see
+[image filters](../architecture/image-filters.md#separate-channels-and-combine-channels)).
 Chunks #339 and #341–#349 remain planned. The
 inventory below records
 the original audit baseline rather than claiming those delivered nodes remain absent.

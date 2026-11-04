@@ -77,6 +77,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   graph, its display choices, and showing it as the node editor background.
 - [Levels, Curves and Hue/Saturation](user-guide/color-grading.md) — per-channel grades for colour
   and render passes, clamp, HDR curves and normalizing a depth pass.
+- [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
+  channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard
   easing curves, Easy Ease, shy layers and layer names that follow their source.
 - [Scripting Bloom with Python](user-guide/python.md) — Python package, transactions and embedding.

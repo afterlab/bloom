@@ -3,6 +3,7 @@
 
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/persisted_text.hpp>
 #include <bloom/document/value_operations.hpp>
@@ -285,6 +286,16 @@ constantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == "bloom.image-mix.factor" || schemaKey == "bloom.multiply-alpha.factor") {
         const auto* value = std::get_if<double>(&constant.value);
         return value != nullptr && std::isfinite(*value) && *value >= 0.0 && *value <= 1.0;
+    }
+    // #479: the closed source channel (R, G, B, A, Luma) and alpha mode enumerations.
+    if (schemaKey == kCombineChannelsSourceSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value < kImageChannelSourceCount;
+    }
+    if (schemaKey == kCombineChannelsAlphaModeSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr &&
+               (*value == kCombineChannelsPremultiplied || *value == kCombineChannelsStraight);
     }
     if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel") {
         // The closed matte selector (render::MatteSelection): 0-4 A/R/G/B/Luma, 5-9 inverted.

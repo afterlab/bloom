@@ -1,6 +1,7 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
@@ -98,6 +99,11 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel")
         return sequential({"Alpha", "Red", "Green", "Blue", "Luma", "Alpha Inverted",
                            "Red Inverted", "Green Inverted", "Blue Inverted", "Luma Inverted"});
+    if (schemaKey == kCombineChannelsSourceSchemaKey)
+        return sequential({"Red", "Green", "Blue", "Alpha", "Luma"});
+    if (schemaKey == kCombineChannelsAlphaModeSchemaKey)
+        return {{"Premultiplied", kCombineChannelsPremultiplied},
+                {"Straight", kCombineChannelsStraight}};
     if (schemaKey == "bloom.resize-fit.filter")
         return sequential({"Bilinear"});
     if (schemaKey == "bloom.resize-fit.policy")

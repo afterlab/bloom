@@ -380,11 +380,37 @@ struct HueSaturationKernel final {
     CompiledScalarParameter saturation; // factor, 1 = unchanged
     friend bool operator==(const HueSaturationKernel&, const HueSaturationKernel&) = default;
 };
+// #479 Separate Channels and Combine Channels move STORED channel values (render::
+// storedImageChannel) between images with no colour transform, no division by alpha and no clamp
+// except alpha's own [0, 1], so a Raw data pass and HDR or signed values travel unchanged.
+// A slot of a Channel Select reads one input channel or a constant.
+enum class ImageChannelSource : std::uint8_t { Red, Green, Blue, Alpha, Luma, Zero, One };
+// One input. Output component k (red, green, blue, alpha) is sources[k] of the input pixel; alpha
+// is limited to [0, 1] and `premultiply` then multiplies red, green and blue by it. A Separate
+// Channels output is {c, c, c, One}; a Combine Channels starts from one of these on its first
+// connected input. The identity mapping without premultiply aliases its input.
+struct ChannelSelectKernel final {
+    std::array<ImageChannelSource, 4> sources{ImageChannelSource::Red, ImageChannelSource::Green,
+                                              ImageChannelSource::Blue, ImageChannelSource::Alpha};
+    bool premultiply = false;
+    friend bool operator==(const ChannelSelectKernel&, const ChannelSelectKernel&) = default;
+};
+// Two inputs: the base (`input`, which owns every window) with component `slot` (0 red .. 3 alpha)
+// set to the `source` channel of `secondaryInput` at the same global pixel (zero outside its data
+// window, or when it has no image). Alpha is limited to [0, 1]; `premultiply` as above. `source`
+// is never Zero or One (an unconnected Combine Channels input lowers to a Channel Select constant).
+struct ChannelCombineKernel final {
+    std::uint8_t slot = 0;
+    ImageChannelSource source = ImageChannelSource::Red;
+    bool premultiply = false;
+    friend bool operator==(const ChannelCombineKernel&, const ChannelCombineKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
                  SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
-                 LevelsKernel, CurvesKernel, HueSaturationKernel>;
+                 LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
+                 ChannelCombineKernel>;
 
 // #340: visits every animatable operand of a Levels, Curves or Hue/Saturation kernel in the
 // kernel's canonical order (channel-major), calling `visit(parameter)` with a

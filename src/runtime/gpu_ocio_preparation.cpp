@@ -1,5 +1,6 @@
 #include <bloom/runtime/gpu_ocio_preparation.hpp>
 
+#include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
 #include "footage_interpretation_pass.hpp"
 #include "layer_mask_coverage.hpp"
@@ -88,6 +89,12 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
         appendU64(bytes, transform.gradeKind);
         appendU64(bytes, transform.gradeData.size());
         for (const auto value : transform.gradeData)
+            appendF64(bytes, static_cast<double>(value));
+    }
+    // Appended only for #479 Channel Select, so every earlier key keeps its exact bytes.
+    if (transform.kind == GpuOcioTransformKind::ChannelSelect) {
+        appendText(bytes, "channel-select");
+        for (const auto value : transform.channelSelect)
             appendF64(bytes, static_cast<double>(value));
     }
     appendU64(bytes, transform.maskData.size());
@@ -303,6 +310,8 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
         case GpuOcioTransformKind::ColorGrade:
             return detail::buildColorGradeProgram(
                 static_cast<detail::ColorGradeKind>(transform.gradeKind), transform.gradeData);
+        case GpuOcioTransformKind::ChannelSelect:
+            return detail::buildChannelSelectProgram(transform.channelSelect);
         case GpuOcioTransformKind::LayerMask:
             return detail::buildLayerMaskProgram(transform.maskData);
         case GpuOcioTransformKind::FootageInterpretation:

@@ -135,8 +135,8 @@ const std::vector<Entry>& table() {
         {"bloom.shape.stroke-cap", choice()},
         {"bloom.shape.stroke-join", choice()},
         // Text.
-        {kTextSizeParameterSchemaKey, number(kAboveZero, kMaximumTextSizePixels, 1.0, 400.0, 1.0,
-                                             1, kPixels)},
+        {kTextSizeParameterSchemaKey,
+         number(kAboveZero, kMaximumTextSizePixels, 1.0, 400.0, 1.0, 1, kPixels)},
         {kTextLineHeightParameterSchemaKey,
          number(kAboveZero, kHighest, 0.5, 3.0, 1.0, 1, kPercent, 100.0)},
         {kTextLetterSpacingParameterSchemaKey, pixels(kLowest, kHighest, 100.0)},
@@ -165,10 +165,10 @@ const std::vector<Entry>& table() {
         // Image effects.
         {"bloom.blur.radius", pixels(0.0, kMaximumBlurRadiusPixels, 64.0)},
         {"bloom.blur.edge", choice()},
-        {"bloom.luma-key.low", number(-kMaximumLumaKeyThreshold, kMaximumLumaKeyThreshold, 0.0, 1.0,
-                                      0.01, 3)},
-        {"bloom.luma-key.high", number(-kMaximumLumaKeyThreshold, kMaximumLumaKeyThreshold, 0.0,
-                                       1.0, 0.01, 3)},
+        {"bloom.luma-key.low",
+         number(-kMaximumLumaKeyThreshold, kMaximumLumaKeyThreshold, 0.0, 1.0, 0.01, 3)},
+        {"bloom.luma-key.high",
+         number(-kMaximumLumaKeyThreshold, kMaximumLumaKeyThreshold, 0.0, 1.0, 0.01, 3)},
         {"bloom.exposure.stops", number(kLowest, kHighest, -4.0, 4.0, 0.1, 2)},
         {"bloom.offset.amount", number(kLowest, kHighest, -1.0, 1.0, 0.01, 3)},
         {"bloom.multiply.factor", number(kLowest, kHighest, 0.0, 2.0, 0.01, 3)},
@@ -176,6 +176,9 @@ const std::vector<Entry>& table() {
         {"bloom.multiply-alpha.factor", factor()},
         {"bloom.multiply-alpha.channel", choice()},
         {"bloom.set-alpha.channel", choice()},
+        // #479 Combine Channels.
+        {"bloom.combine-channels.source", choice()},
+        {"bloom.combine-channels.alpha-mode", choice()},
         {"bloom.crop.left", pixels(0.0, 16777216.0, 1024.0)},
         {"bloom.crop.top", pixels(0.0, 16777216.0, 1024.0)},
         {"bloom.crop.right", pixels(0.0, 16777216.0, 1024.0)},
@@ -193,8 +196,8 @@ const std::vector<Entry>& table() {
                static_cast<double>(std::numeric_limits<std::int64_t>::max()), -3.0, 3.0)},
         // Masks.
         {kLayerMaskFeatherSchemaKey, pixels(0.0, kMaximumLayerMaskFeatherPixels, 100.0)},
-        {kLayerMaskExpansionSchemaKey, pixels(-kMaximumLayerMaskExpansionPixels,
-                                              kMaximumLayerMaskExpansionPixels, 100.0)},
+        {kLayerMaskExpansionSchemaKey,
+         pixels(-kMaximumLayerMaskExpansionPixels, kMaximumLayerMaskExpansionPixels, 100.0)},
     };
     return entries;
 }

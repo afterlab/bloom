@@ -451,7 +451,8 @@ enum class ScalarDomain : std::uint8_t {
             [index, &plan, &failure](const CompiledImageEffect& effect) {
                 const bool validInputArity =
                     effect.secondaryInput.has_value() ==
-                    std::holds_alternative<ImageCombineKernel>(effect.kernel);
+                    (std::holds_alternative<ImageCombineKernel>(effect.kernel) ||
+                     std::holds_alternative<ChannelCombineKernel>(effect.kernel));
                 bool validKernel = true;
                 if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
                     validKernel =
@@ -480,6 +481,12 @@ enum class ScalarDomain : std::uint8_t {
                             hasValidScalarCurveReference(mask.feather, plan, index, failure) &&
                             hasValidScalarCurveReference(mask.expansion, plan, index, failure) &&
                             hasValidScalarCurveReference(mask.opacity, plan, index, failure);
+                if (const auto* select = std::get_if<ChannelSelectKernel>(&effect.kernel))
+                    validKernel = detail::prepareChannelSelect(*select).has_value();
+                if (const auto* combine = std::get_if<ChannelCombineKernel>(&effect.kernel))
+                    validKernel = detail::prepareChannelCombine(*combine).has_value() &&
+                                  effect.secondaryInput.has_value() &&
+                                  effect.secondaryInput->value() < index;
                 if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel))
                     validKernel = discrete->quarterTurns <= 3;
                 if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
@@ -2368,7 +2375,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
                      std::holds_alternative<Transform2DKernel>(effect->kernel) ||
                      std::holds_alternative<LumaKeyKernel>(effect->kernel) ||
-                     isColorGradeKernel(effect->kernel))) {
+                     isColorGradeKernel(effect->kernel) ||
+                     std::holds_alternative<ChannelSelectKernel>(effect->kernel) ||
+                     std::holds_alternative<ChannelCombineKernel>(effect->kernel))) {
                     auto failure = *preparedEffect->diagnostic;
                     failure.subject = operationSubject;
                     return EvaluationResult::failed(std::move(failure));
@@ -3239,7 +3248,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                             effect.kernel) ||
                                         preparedEffect->resizeFit || preparedEffect->blur ||
                                         preparedEffect->transform2D || preparedEffect->lumaKey ||
-                                        preparedEffect->colorGrade) {
+                                        preparedEffect->colorGrade ||
+                                        preparedEffect->channelSelect ||
+                                        preparedEffect->channelCombine) {
                                         operationFailure = std::move(*result.diagnostic);
                                         return;
                                     }

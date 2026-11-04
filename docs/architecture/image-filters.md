@@ -281,3 +281,82 @@ lowering, mute pass-through, the definitions, add, wiring, undo/redo, refusals a
 preparation checks one command per grade, that a changed value reuses the compiled shader, and
 identity aliasing; the native image-effect harness runs every kind over signed/HDR/partial-alpha
 solids at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value runs.
+
+## Separate Channels and Combine Channels
+
+`bloom.separate-channels` and `bloom.combine-channels`, schema 1 (#479), split an image into its
+channels and build an image from channels. Both are listed under Color in the Add menu and work on
+any Image: footage, a nested composition, a generator or a processed result, and render passes
+such as mist, Z depth, normals, motion vectors and IDs. Every value is the stored Float32 channel:
+nothing is clamped, rounded or colour converted, so a Raw data pass moves between channels exactly
+as stored. Only alpha is limited to `[0, 1]`, the storage invariant. Neither node reads the working
+colour space.
+
+Separate Channels has one required Image input, `input`, and four Image outputs, `red`, `green`,
+`blue` and `alpha`. Each output is a grey image, R = G = B = the stored channel and A = 1, over the
+input's data and display windows with its pixel aspect. The channels are read as stored, that is
+premultiplied: a half-transparent pixel's `red` output is its associated red.
+
+Combine Channels has four optional Image inputs in the same order, `red`, `green`, `blue` and
+`alpha`, and one Image output, `image`. Each input has a constant source dropdown (no socket):
+`redSource`, `greenSource`, `blueSource` and `alphaSource` (schema
+`bloom.combine-channels.source`; stored values Red 0, Green 1, Blue 2, Alpha 3, Luma 4), which
+picks the stored channel of that input's image, or the Rec. 709 luma of its stored colour
+(`0.2126 R + 0.7152 G + 0.0722 B`, computed in double and narrowed once). The defaults are Red,
+Green, Blue and Red: every grey image carries its value in red, so Separate Channels wired
+straight into Combine Channels reproduces the input bit-exactly. An unconnected red, green or blue
+is 0 and an unconnected alpha is 1, so the alpha is optional. The constant `alphaMode` dropdown
+(`bloom.combine-channels.alpha-mode`) declares the alpha association of the combined colour:
+Premultiplied (0, the default) takes red, green and blue as already associated with the alpha, as
+Bloom stores images and as Separate Channels outputs them; Straight (1) multiplies them by the
+alpha. A combined alpha of zero publishes transparent black, because a premultiplied image cannot
+hold colour at zero coverage.
+
+The first connected input owns the output's data and display windows and pixel aspect; another
+input is read at the same global pixel, and is 0 outside its own data window or when it has no
+image at the requested time. When the first connected input has no image, or no input is
+connected, Combine Channels produces no image. A muted node passes its first image input through.
+
+The compiler lowers each reachable Separate Channels output to one `ChannelSelectKernel` (four
+slot sources: a stored channel, Luma, Zero or One, and a premultiply flag). Combine Channels lowers
+to a Channel Select of its first connected input, folding every other input that reads the same
+image into that select, then one `ChannelCombineKernel` (slot, source channel, premultiply) per
+remaining connected input in red, green, blue, alpha order; the Straight multiply is on the last
+operation. `channel_image_effect.hpp` holds the one CPU reference and the GPU program text over
+`render::storedImageChannel` and `render::setImageChannel`. ADR 0026's Shuffle, Channel Copy and
+Remove are not reused: they rename and copy named channels of a multi-channel file before an image
+exists, whereas these nodes work on the composited Rgba32f image of any upstream node.
+
+The prepared mapping forms the effect cache identity, and both inputs' content identities enter a
+combine's operation key. ROI evaluation is pointwise. The CPU reference checks cancellation at every
+row and every 4096 pixels, reports per-row progress and allocates its output only within the
+request's pixel budget; cancellation, budget refusal and failures publish no partial image. A red,
+green, blue and alpha select without premultiply aliases its input.
+
+On the GPU a Channel Select is one resident `ProcessNeighborhood` command from one fixed program
+(semantics `bloom.render.channel-select.v1`) whose storage buffer holds the mapping, so a changed
+dropdown changes data and the command identity, never the shader; its Luma uses the same widened
+two-sum accumulation as ImageCombineV1. A Channel Combine is the `ImageCombineV1` Set Channel mode
+(mode 11, slot in bits 4-5 of the channel word and premultiply in bit 6) over the two resident
+images. Both run through the same scene builder, executor, admission, caches, cancellation and
+retirement for preview, still and sequence export, video export and headless render. The kernels
+are classified Required as `effect.ChannelSelectKernel` and `effect.ChannelCombineKernel`, and
+covered by the Required `node.bloom.separate-channels` and `node.bloom.combine-channels` fixtures
+(an HDR, signed, partial-alpha gradient, full frame and ROI); there is no exception.
+
+To make an image search find the image nodes first, the Color value nodes are named as values:
+Separate Color (Value) and Combine Color (Value) (`bloom.separate-rgba`, `bloom.combine-rgba`),
+Separate HSV (Value), Combine HSV (Value), Hue Shift (Value) and Luminance (Value), all listed
+under Color Values. Only display names and Add menu sections changed; type ids, ports and saved
+projects are unchanged.
+
+Tests: the direct CPU test checks the exact stored greys of HDR, signed, partial-alpha,
+transparent and Raw data pixels, Luma, an exact Separate-to-Combine round trip, Straight
+association, the alpha clamp, a smaller or absent second image, domains, budget, cancellation,
+identities and the program. Evaluator tests cover reference parity, warm reuse, ROI, invalidation,
+identity aliasing and malformed plans; compiler tests cover lowering, folding, mute and output
+inspection; registry, command, Properties, search and archive tests cover the definitions, wiring,
+dropdowns, refusals, undo/redo, ranking and reopen. The ImageCombineV1 native test compares Set
+Channel against the CPU reference pixel for pixel, and the native image-effect harness runs Channel
+Select over signed/HDR/partial-alpha solids at the 2e-6/exact-alpha gate with warm zero-dispatch
+and changed-mapping runs.
