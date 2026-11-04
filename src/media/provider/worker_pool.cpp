@@ -3,6 +3,7 @@
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <bloom/platform/file_snapshot.hpp>
+#include <bloom/platform/shared_frame_arena.hpp>
 #include <mutex>
 #include <new>
 #include <random>
@@ -121,6 +122,18 @@ class Connection final {
     return Unavailable{Error::UnexpectedMessage, "Worker returned no media product"};
 }
 
+// Issue #474: the shared frame arena a retained decoder's frames cross. It holds the largest
+// product of the stream (16-bit 4:4:4:4 or RGBA16, 8 bytes a pixel at the displayed extent the
+// frame is checked against) and at least an 8K UHD one, so the worker a probe launches serves the
+// frames after it. The region is sparse: only the pages a frame writes are committed.
+constexpr std::uint64_t kFrameArenaFloorBytes = 7680ULL * 4320ULL * 8ULL;
+[[nodiscard]] std::uint64_t frameArenaBytes(const CallRequest& request) noexcept {
+    if (request.capability.role != Role::VideoDecode || request.width <= 1 || request.height <= 1)
+        return kFrameArenaFloorBytes;
+    return std::max(kFrameArenaFloorBytes,
+                    static_cast<std::uint64_t>(request.width) * request.height * 8U);
+}
+
 // The Profiler's helper-process names (#423).
 constexpr const char* kMediaWorkerName = "Media worker";
 constexpr const char* kRetainedMediaWorkerName = "Media worker (retained)";
@@ -220,8 +233,13 @@ struct MediaWorkerPool::State {
         Clock::time_point lastUsed;
         std::size_t calls = 0;
         std::uint64_t addressSpace = 0;
+        // Issue #474: the frames this worker decodes cross here instead of the pipe.
+        std::shared_ptr<const platform::SharedFrameArena> arena;
     };
     WorkerPoolOptions options;
+    // Set when this platform or process cannot create a shared frame arena: frames then cross the
+    // pipe, and retained workers are not relaunched to get one.
+    bool arenaUnavailable = false;
     std::atomic<bool> stopping{false};
     std::atomic<std::size_t> active{0};
     std::mutex retainedMutex;
@@ -318,8 +336,14 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         const auto addressSpace =
             std::max(state_->options.process.addressSpaceBytes,
                      workerAddressSpaceBytes(request.width, request.height));
+        // Only a frame larger than the held arena relaunches the worker for a larger one.
+        const auto arenaBytes = state_->arenaUnavailable ? 0U : frameArenaBytes(request);
+        const auto arenaHeld = [&] {
+            return state_->retained->arena ? state_->retained->arena->size() : 0U;
+        };
         if (state_->retained && (state_->retained->snapshot != snapshot ||
                                  state_->retained->addressSpace < addressSpace ||
+                                 arenaHeld() < arenaBytes ||
                                  now - state_->retained->started >= std::chrono::minutes(5) ||
                                  now - state_->retained->lastUsed >= std::chrono::seconds(30) ||
                                  state_->retained->calls >= kRetainedCallLimit))
@@ -329,6 +353,20 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
             options.inputSnapshot = snapshot;
             options.addressSpaceBytes = addressSpace;
             options.arguments.emplace_back("--retained-video");
+            std::shared_ptr<const platform::SharedFrameArena> arena;
+            if (arenaBytes != 0) {
+                auto created = platform::SharedFrameArena::create(arenaBytes);
+                if (auto* made = std::get_if<std::unique_ptr<platform::SharedFrameArena>>(&created))
+                    arena = std::move(*made);
+                else
+                    state_->arenaUnavailable = true;
+            }
+            if (arena) {
+                // The worker maps the arena inside its address-space limit.
+                options.addressSpaceBytes = addressSpace + arena->size();
+                options.frameArena = arena;
+                options.arguments.emplace_back("--frame-arena");
+            }
             auto launched = platform::ProcessSupervisor::launch(options);
             auto* process = std::get_if<std::unique_ptr<platform::ProcessSupervisor>>(&launched);
             if (!process)
@@ -342,6 +380,9 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
             state_->retained->listed = core::telemetry::HelperProcessRegistration(
                 pid, kRetainedMediaWorkerName, state_.get());
             state_->retained->addressSpace = addressSpace;
+            state_->retained->arena = std::move(arena);
+            if (state_->retained->arena)
+                state_->retained->host.acceptArenaFrames();
             Connection connection(*state_->retained->process, now + state_->options.timeout,
                                   cancelled);
             auto hello =
@@ -366,6 +407,17 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         if (const auto* error = std::get_if<Unavailable>(&message.payload)) {
             state_->retained.reset();
             return *error;
+        }
+        if (const auto* placed = std::get_if<ArenaFrameV1>(&message.payload)) {
+            // Copied out now, before the next request lets the worker write the arena again.
+            auto taken = retained.arena ? takeArenaFrame(*placed, retained.arena->bytes())
+                                        : Result<FrameProduct>{Unavailable{
+                                              Error::UnexpectedMessage, "No frame arena"}};
+            if (const auto* error = std::get_if<Unavailable>(&taken)) {
+                state_->retained.reset();
+                return *error;
+            }
+            message.payload = std::get<FrameProduct>(std::move(taken));
         }
         auto product = validatedProduct(request, std::move(message));
         if (std::holds_alternative<Unavailable>(product)) {

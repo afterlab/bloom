@@ -209,6 +209,54 @@ FrameProduct frame(Reader& r) {
     require(validLayout(f));
     return f;
 }
+// The plane geometry of an arena frame. The planes' bytes are in the arena, so the full layout
+// check (validLayout) runs on the copied product (takeArenaFrame).
+[[nodiscard]] bool validArenaLayout(const ArenaFrameV1& v) {
+    if (v.frame.planes.empty() || v.frame.planes.size() > Limits::planes ||
+        v.offsets.size() != v.frame.planes.size())
+        return false;
+    std::uint64_t total = 0;
+    for (const auto& p : v.frame.planes) {
+        if (!p.bytes.empty() || p.width == 0 || p.height == 0 || p.width > Limits::dimension ||
+            p.height > Limits::dimension)
+            return false;
+        total += static_cast<std::uint64_t>(p.stride) * p.height;
+        if (total > Limits::productBytes)
+            return false;
+    }
+    return true;
+}
+void arenaFrame(Writer& w, const ArenaFrameV1& v) {
+    require(validArenaLayout(v));
+    w.enumeration(v.frame.format, 1, 5);
+    w.rational(v.frame.pts);
+    colour(w, v.frame.colour);
+    w.count(v.frame.planes.size(), Limits::planes);
+    for (std::size_t i = 0; i < v.frame.planes.size(); ++i) {
+        const auto& p = v.frame.planes[i];
+        w.number(p.width);
+        w.number(p.height);
+        w.number(p.stride);
+        w.number(v.offsets[i]);
+    }
+}
+ArenaFrameV1 arenaFrame(Reader& r) {
+    ArenaFrameV1 v;
+    v.frame.format = r.enumeration<PixelFormat>(1, 5);
+    v.frame.pts = r.rational();
+    v.frame.colour = colour(r);
+    const auto n = r.count(Limits::planes);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        CpuPlane p;
+        p.width = r.number<std::uint32_t>();
+        p.height = r.number<std::uint32_t>();
+        p.stride = r.number<std::uint32_t>();
+        v.frame.planes.push_back(std::move(p));
+        v.offsets.push_back(r.number<std::uint64_t>());
+    }
+    require(validArenaLayout(v));
+    return v;
+}
 void index(Writer& w, const DemuxIndex& value) {
     require(valid(value));
     w.count(value.keyframes.size(), Limits::indexEntries);
@@ -346,7 +394,7 @@ Result<Bytes> encodeMessage(const Message& m) {
         w.number(magic);
         w.number(kProtocolVersion);
         w.number(kSchemaVersion);
-        w.enumeration(m.kind, 1, 15);
+        w.enumeration(m.kind, 1, 16);
         w.number(m.session);
         w.number(m.sequence);
         switch (m.kind) {
@@ -361,6 +409,9 @@ Result<Bytes> encodeMessage(const Message& m) {
             break;
         case MessageKind::Frame:
             frame(w, std::get<FrameProduct>(m.payload));
+            break;
+        case MessageKind::ArenaFrame:
+            arenaFrame(w, std::get<ArenaFrameV1>(m.payload));
             break;
         case MessageKind::Index:
             index(w, std::get<DemuxIndex>(m.payload));
@@ -437,7 +488,7 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
         const auto schema = r.number<std::uint16_t>();
         require(protocol == kProtocolVersion && schema == kSchemaVersion, Error::VersionMismatch);
         Message m;
-        m.kind = r.enumeration<MessageKind>(1, 15);
+        m.kind = r.enumeration<MessageKind>(1, 16);
         m.session = r.number<std::uint64_t>();
         m.sequence = r.number<std::uint64_t>();
         require(m.session != 0 && m.sequence != 0);
@@ -453,6 +504,9 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
             break;
         case MessageKind::Frame:
             m.payload = frame(r);
+            break;
+        case MessageKind::ArenaFrame:
+            m.payload = arenaFrame(r);
             break;
         case MessageKind::Index:
             m.payload = index(r);
@@ -500,6 +554,57 @@ Result<Message> decodeMessage(std::span<const std::byte> bytes) {
         return Unavailable{Error::Oversized, "Inbound media allocation failed"};
     }
 }
+std::optional<ArenaFrameV1> placeInArena(const FrameProduct& product,
+                                         const std::span<std::byte> arena) {
+    if (!validLayout(product))
+        return std::nullopt;
+    ArenaFrameV1 placed;
+    placed.frame.format = product.format;
+    placed.frame.pts = product.pts;
+    placed.frame.colour = product.colour;
+    std::uint64_t offset = 0;
+    for (const auto& plane : product.planes)
+        if (plane.bytes.size() > arena.size() - offset)
+            return std::nullopt;
+        else
+            offset += plane.bytes.size();
+    offset = 0;
+    for (const auto& plane : product.planes) {
+        std::copy(plane.bytes.begin(), plane.bytes.end(),
+                  arena.begin() + static_cast<std::ptrdiff_t>(offset));
+        placed.frame.planes.push_back({plane.width, plane.height, plane.stride, {}});
+        placed.offsets.push_back(offset);
+        offset += plane.bytes.size();
+    }
+    return placed;
+}
+Result<FrameProduct> takeArenaFrame(const ArenaFrameV1& placed,
+                                    const std::span<const std::byte> arena) {
+    try {
+        if (!validArenaLayout(placed))
+            return Unavailable{Error::InvalidValue, "Invalid arena frame layout"};
+        FrameProduct product;
+        product.format = placed.frame.format;
+        product.pts = placed.frame.pts;
+        product.colour = placed.frame.colour;
+        for (std::size_t i = 0; i < placed.frame.planes.size(); ++i) {
+            const auto& plane = placed.frame.planes[i];
+            const auto size = static_cast<std::uint64_t>(plane.stride) * plane.height;
+            const auto offset = placed.offsets[i];
+            if (offset > arena.size() || size > arena.size() - offset)
+                return Unavailable{Error::BadLength, "Arena frame plane lies outside the arena"};
+            CpuPlane copy{plane.width, plane.height, plane.stride, {}};
+            const auto first = arena.begin() + static_cast<std::ptrdiff_t>(offset);
+            copy.bytes.assign(first, first + static_cast<std::ptrdiff_t>(size));
+            product.planes.push_back(std::move(copy));
+        }
+        if (!validLayout(product))
+            return Unavailable{Error::InvalidValue, "Invalid arena frame layout"};
+        return product;
+    } catch (const std::bad_alloc&) {
+        return Unavailable{Error::Oversized, "Arena frame allocation failed"};
+    }
+}
 Result<Message> HostProtocol::receive(std::span<const std::byte> bytes, MessageKind expectedKind) {
     auto decoded = decodeMessage(bytes);
     auto* m = std::get_if<Message>(&decoded);
@@ -507,7 +612,10 @@ Result<Message> HostProtocol::receive(std::span<const std::byte> bytes, MessageK
         return std::get<Unavailable>(decoded);
     if (m->session != session_ || m->sequence != lastSequence_ + 1)
         return Unavailable{Error::Replay, "Stale session or out-of-order message"};
-    if (m->kind != expectedKind && (m->kind != MessageKind::Failure || !handshaken_))
+    const bool arenaFrame = arenaFrames_ && expectedKind == MessageKind::Frame &&
+                            m->kind == MessageKind::ArenaFrame && handshaken_;
+    if (m->kind != expectedKind && !arenaFrame &&
+        (m->kind != MessageKind::Failure || !handshaken_))
         return Unavailable{Error::UnexpectedMessage, "Unexpected media response"};
     if (!handshaken_) {
         if (m->kind != MessageKind::Handshake)

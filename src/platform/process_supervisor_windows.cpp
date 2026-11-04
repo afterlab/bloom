@@ -272,7 +272,7 @@ ProcessSupervisor::~ProcessSupervisor() { stop(); }
 
 ProcessResult<std::unique_ptr<ProcessSupervisor>>
 ProcessSupervisor::launch(const ProcessOptions& options) {
-    if (options.inputSnapshot || options.stagedOutput)
+    if (options.inputSnapshot || options.stagedOutput || options.frameArena)
         return ProcessFailure{ProcessError::Spawn, ERROR_NOT_SUPPORTED};
     std::wstring executable;
     if (!widen(options.executable, executable) || executable.empty() ||

@@ -1,5 +1,10 @@
 #include "support.hpp"
 #include <bloom/media/provider/protocol.hpp>
+
+#include <algorithm>
+#include <limits>
+#include <utility>
+#include <vector>
 using namespace bloom::media::provider;
 namespace {
 void rejected(const Bytes& bytes, Error error) {
@@ -7,6 +12,90 @@ void rejected(const Bytes& bytes, Error error) {
     test::check(std::holds_alternative<Unavailable>(result) &&
                     std::get<Unavailable>(result).reason == error,
                 "typed hostile-frame rejection");
+}
+// Issue #474: a retained decoder's frame crosses as plane geometry plus offsets into the host's
+// shared arena; the host copies it out and checks every plane against the arena.
+void arenaFrames(const Handshake& h) {
+    FrameProduct frame;
+    frame.format = PixelFormat::Yuv420p8;
+    frame.pts = {7, 24};
+    frame.colour = {1, 1, 1, 1};
+    for (const auto& [width, height] : {std::pair{4U, 3U}, {2U, 2U}, {2U, 2U}}) {
+        CpuPlane plane{width, height, width, {}};
+        for (std::uint32_t i = 0; i < width * height; ++i)
+            plane.bytes.push_back(static_cast<std::byte>(i * 7U + width));
+        frame.planes.push_back(std::move(plane));
+    }
+    std::vector<std::byte> arena(64, std::byte{0xEE});
+    test::check(!placeInArena(frame, std::span(arena).first(19)).has_value(),
+                "a frame larger than the arena crosses the pipe instead");
+    const auto placed = placeInArena(frame, arena);
+    test::check(placed.has_value() && placed->offsets == std::vector<std::uint64_t>{0, 12, 16} &&
+                    std::ranges::all_of(placed->frame.planes,
+                                        [](const CpuPlane& p) { return p.bytes.empty(); }),
+                "planes are placed back to back and leave the message empty");
+    if (!placed)
+        return;
+    const auto taken = takeArenaFrame(*placed, arena);
+    test::check(std::holds_alternative<FrameProduct>(taken) &&
+                    std::get<FrameProduct>(taken) == frame,
+                "the copied-out frame equals the decoded frame");
+    const auto encoded =
+        std::get<Bytes>(encodeMessage({MessageKind::ArenaFrame, 42, 2, *placed}));
+    const auto handshake = std::get<Bytes>(encodeMessage({MessageKind::Handshake, 42, 1, h}));
+    {
+        HostProtocol pipeOnly(42, h);
+        (void)pipeOnly.receive(handshake, MessageKind::Handshake);
+        test::check(std::get<Unavailable>(pipeOnly.receive(encoded, MessageKind::Frame)).reason ==
+                        Error::UnexpectedMessage,
+                    "a host without an arena refuses arena frames");
+    }
+    HostProtocol host(42, h);
+    host.acceptArenaFrames();
+    test::check(std::holds_alternative<Unavailable>(host.receive(encoded, MessageKind::Handshake)),
+                "an arena frame is no handshake");
+    (void)host.receive(handshake, MessageKind::Handshake);
+    const auto received = host.receive(encoded, MessageKind::Frame);
+    test::check(std::holds_alternative<Message>(received) &&
+                    std::get<ArenaFrameV1>(std::get<Message>(received).payload) == *placed,
+                "an arena host accepts the frame where it expects a Frame");
+    // Planes outside the arena, or a geometry that does not match the layout, are refused.
+    auto outside = *placed;
+    outside.offsets[2] = 61;
+    test::check(std::get<Unavailable>(takeArenaFrame(outside, arena)).reason == Error::BadLength,
+                "a plane past the arena end is refused");
+    outside.offsets[2] = std::numeric_limits<std::uint64_t>::max() - 1;
+    test::check(std::get<Unavailable>(takeArenaFrame(outside, arena)).reason == Error::BadLength,
+                "an offset that would wrap is refused");
+    auto mismatched = *placed;
+    mismatched.frame.planes[1].width = 3;
+    mismatched.frame.planes[1].stride = 3;
+    test::check(std::holds_alternative<Unavailable>(takeArenaFrame(mismatched, arena)),
+                "a chroma plane that does not match the luma plane is refused");
+    auto missing = *placed;
+    missing.offsets.pop_back();
+    test::check(std::holds_alternative<Unavailable>(takeArenaFrame(missing, arena)) &&
+                    std::holds_alternative<Unavailable>(
+                        encodeMessage({MessageKind::ArenaFrame, 42, 2, missing})),
+                "every plane needs an offset");
+    // Any mutation of the message either fails to decode or copies out a valid frame from inside
+    // the arena; it never reads outside it.
+    for (std::size_t size = 0; size < encoded.size(); ++size)
+        test::check(
+            std::holds_alternative<Unavailable>(decodeMessage(std::span(encoded).first(size))),
+            "truncated arena frame refused");
+    for (std::size_t i = 0; i < encoded.size(); ++i)
+        for (unsigned bit = 0; bit < 8; ++bit) {
+            auto mutation = encoded;
+            mutation[i] ^= static_cast<std::byte>(1U << bit);
+            const auto decoded = decodeMessage(mutation);
+            if (const auto* accepted = std::get_if<Message>(&decoded))
+                if (const auto* hostile = std::get_if<ArenaFrameV1>(&accepted->payload)) {
+                    const auto copied = takeArenaFrame(*hostile, arena);
+                    if (const auto* product = std::get_if<FrameProduct>(&copied))
+                        test::check(validLayout(*product), "a hostile arena frame stays bounded");
+                }
+        }
 }
 void run() {
     Handshake h{test::execution(),
@@ -106,6 +195,7 @@ void run() {
     }
     encoded.pop_back();
     rejected(encoded, Error::Truncated);
+    arenaFrames(h);
 }
 } // namespace
 int main() {

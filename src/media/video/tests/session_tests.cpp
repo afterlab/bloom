@@ -3,6 +3,7 @@
 #include <atomic>
 #include <bit>
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/core/telemetry_counters.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/colour.hpp>
 #include <bloom/media/video/session.hpp>
@@ -16,6 +17,8 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -208,6 +211,24 @@ void retainedRouting(const std::filesystem::path& directory) {
         check(frameLuma(std::get<Frame>(result)) == 16 + n * 3,
               "forward decode within the GOP returns the exact frame");
     }
+    // Issue #474: on Linux the retained decoder's frames cross a shared frame arena, not the pipe.
+#if defined(__linux__)
+    {
+        std::array<bloom::core::telemetry::HelperProcess,
+                   bloom::core::telemetry::kHelperProcessSlots>
+            helpers{};
+        const auto count = bloom::core::telemetry::readHelperProcesses(helpers);
+        bool mapped = false;
+        for (std::size_t index = 0; index < count; ++index) {
+            if (std::string_view(helpers[index].name) != "Media worker (retained)")
+                continue;
+            std::ifstream maps("/proc/" + std::to_string(helpers[index].pid) + "/maps");
+            for (std::string line; std::getline(maps, line);)
+                mapped = mapped || line.find("bloom-frame-arena") != std::string::npos;
+        }
+        check(mapped, "the retained decoder maps the shared frame arena");
+    }
+#endif
     // Concurrent callers for different frames wait for the decoder instead of failing Busy.
     std::array<provider::Result<Frame>, 4> results{provider::Unavailable{}, provider::Unavailable{},
                                                    provider::Unavailable{},
@@ -253,6 +274,10 @@ void retainedRouting(const std::filesystem::path& directory) {
     check(std::holds_alternative<Frame>(rendered) &&
               final.implementation == provider::Implementation::Software,
           "final decode stays on the software reference");
+    // The revalidated request is a one-shot worker whose frame crosses the pipe; the retained
+    // reference crossed the arena. The bytes are the same.
+    check(std::holds_alternative<Frame>(rendered) && *std::get<Frame>(rendered) == *reference,
+          "a frame crossing the arena equals the frame crossing the pipe");
     // ProRes has no hardware declaration, so a preference is not a fallback.
     video::VideoDecodeSession prores(directory / "numbered-prores.mov");
     const auto proresProbe = std::get<provider::ProbeResult>(prores.probe());
@@ -508,8 +533,10 @@ void eightK(const std::filesystem::path& directory) {
     if (worker.load() > 0 && std::filesystem::exists("/proc/self/limits")) {
         const auto limit = addressSpaceLimit(worker.load());
         std::cout << "8K worker address space: " << limit << " bytes\n";
-        check(limit == provider::workerAddressSpaceBytes(7680, 4320),
-              "the 8K decode worker runs with its stream-sized address space");
+        // Issue #474: plus the retained decoder's shared frame arena, an 8K UHD frame of 16-bit
+        // 4:4:4:4 planes.
+        check(limit == provider::workerAddressSpaceBytes(7680, 4320) + 7680ULL * 4320ULL * 8ULL,
+              "the 8K decode worker runs with its stream-sized address space and frame arena");
     }
 }
 // Issue #367: variable cadence, display orientation, interlace and RGB-coded streams.

@@ -17,6 +17,7 @@
 #endif
 #include "worker_io.hpp"
 #include <bloom/platform/process_supervisor.hpp>
+#include <bloom/platform/shared_frame_arena.hpp>
 #include <chrono>
 #include <cstdlib>
 #if defined(__GLIBC__)
@@ -45,6 +46,8 @@ int main(int argc, char** argv) {
     mallopt(M_TRIM_THRESHOLD, 256 << 20);
 #endif
     bool retainedVideo = false;
+    // Issue #474: the host's shared frame arena, installed as fd 6 for a retained decoder.
+    std::unique_ptr<bloom::platform::WorkerFrameArena> arena;
 #ifdef BLOOM_FAKE_WORKER
     (void)argc;
     (void)argv;
@@ -58,6 +61,7 @@ int main(int argc, char** argv) {
     bool hardware = false;
     bool hardwareDecode = false;
     bool nvenc = false;
+    bool frameArena = false;
     int stagedOutput = -1;
     for (int i = 1; i < argc; ++i) {
         const auto argument = std::string_view(argv[i]);
@@ -73,6 +77,8 @@ int main(int argc, char** argv) {
             hardwareDecode = true;
         else if (argument == "--retained-video")
             retainedVideo = true;
+        else if (argument == "--frame-arena")
+            frameArena = true;
         else if (argument == "--staged-output")
             stagedOutput = 5; // ADR 0033 section 16: ProcessSupervisor installs it as fd 5.
         else
@@ -80,6 +86,15 @@ int main(int argc, char** argv) {
     }
     if (hardwareDecode && (hardware || !retainedVideo))
         return 2; // Preview hardware decode is a retained, decode-only worker generation.
+    if (frameArena && !retainedVideo)
+        return 2; // The arena carries a retained decoder's frames only.
+    if (frameArena) {
+        auto opened = bloom::platform::WorkerFrameArena::open();
+        auto* mapped = std::get_if<std::unique_ptr<bloom::platform::WorkerFrameArena>>(&opened);
+        if (!mapped)
+            return 2;
+        arena = std::move(*mapped);
+    }
     if (nvenc && (hardware || hardwareDecode || retainedVideo))
         return 2; // NVENC is an encode-only generation of its own.
     hardware = hardware && ffmpeg::hardwareEncodeAvailable();
@@ -173,10 +188,19 @@ int main(int argc, char** argv) {
                 kind = provider::MessageKind::EncodeQc;
             if (std::holds_alternative<provider::EncodedChunkV1>(payload))
                 kind = provider::MessageKind::EncodedChunk;
+            // A frame that fits the arena crosses as one copy into shared memory; the host copies
+            // it out before its next request, so one region serves every frame.
+            if (arena && kind == provider::MessageKind::Frame)
+                if (auto placed = provider::placeInArena(std::get<provider::FrameProduct>(payload),
+                                                         arena->bytes())) {
+                    payload = std::move(*placed);
+                    kind = provider::MessageKind::ArenaFrame;
+                }
             if (!worker::write({kind, session, sequence, std::move(payload)}))
                 return 9;
 #if !defined(BLOOM_FAKE_WORKER) && !defined(BLOOM_VIDEOTOOLBOX_WORKER)
-            if (decoder && kind == provider::MessageKind::Frame)
+            if (decoder && (kind == provider::MessageKind::Frame ||
+                            kind == provider::MessageKind::ArenaFrame))
                 decoder->decodeAhead();
 #endif
         }

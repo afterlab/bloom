@@ -263,7 +263,8 @@ Full-frame digests on the export paths, and why each remains:
 Every one runs on the accelerated rounds, and the process-pixel digest runs on the frame's own
 analysis worker while other frames of the same export evaluate and encode.
 
-Decoded and encoded frames cross the media worker pipe without plane digests (provider schema 8).
+Decoded and encoded frames cross the media worker pipe, or a retained Linux decoder's shared frame
+arena (media-io.md), without plane digests (provider schema 9).
 The pipe joins two of Bloom's own processes, every message is length-checked, and a worker able to
 corrupt a plane could recompute its digest, so the digests guarded nothing; they cost a SHA-256 of
 every frame on each side, on the serial path of a video decode session (on 1080p ProRes 422 HQ,

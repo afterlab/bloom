@@ -1082,14 +1082,17 @@ The wire envelope is `u32 body_length`, `u32 magic=0x314d4c42`, `u16 protocol=1`
 `u16 schema=2`, `u8 kind`, `u64 session`, `u64 sequence`, then payload. The fixed body header
 is 25 bytes. Every response echoes the host's nonzero session nonce and next sequence.
 Handshake, Call, Probe, Frame, Cancel, Shutdown, Ack and Failure use kind values 1 through 8.
-Index and Audio use 9 and 10.
+Index and Audio use 9 and 10; the shared-arena frame of a retained decoder uses 16 (see "Shared
+frame arena").
 The host checks the complete expected execution identity, including provider/build, lock digest,
 OS/architecture/SDK/driver/device, generation, software/hardware use, transport, synchronization,
 resource profile, entitlement, availability and trust domain. The handshake also binds exact
 capability/evidence declarations, ordered pipeline digests and transport modes. The host owns
 qualification expectations; a worker cannot promote its own authority. A rejected frame never
 advances protocol state. Transport 0 copies length-prefixed planes over pipes; transport 1
-reserves shared-memory slabs and cannot be selected for execution in this version.
+reserves shared-memory slabs and cannot be selected for execution in this version. A retained Linux
+decoder's frame arena is a host-granted capability under transport 0, not transport 1: messages
+still cross the pipe, and only those frames' plane bytes cross the arena.
 
 `MediaWorkerPool` submits only `BlockingIo` tasks with indeterminate activity, cancellation,
 diagnostics and bounded process-slot admission. The scheduler bounds queued requests; terminal
@@ -1865,9 +1868,27 @@ fixture through both routes with zero byte mismatches. On this AMD driver, hardw
 random seek returned a frame presented after the target; that is a typed refusal and the session
 fell back to software as designed.
 
-Decoded planes cross the worker pipe without digests (provider schema 8; see
+Decoded planes cross the worker pipe without digests (provider schema 9; see
 [frame output](frame-output.md)): the message is length-checked and every consumer of the
 immutable product (the decoded cache and color conversion) checks structure and budget.
+
+**Shared frame arena (issue #474).** On Linux a retained decoder's frames do not cross the pipe.
+When the pool launches a retained worker it creates an anonymous shared-memory region
+(`platform::SharedFrameArena`, a sealed memfd the host maps read-only) the size of the stream's
+largest product, eight bytes a pixel at the displayed extent, and at least an 8K UHD one, so the
+worker a probe launched serves the frames after it; the region is sparse, and only the pages frames
+write are committed. It is installed as the worker's fd 6 (`--frame-arena`) and added to the
+worker's address-space limit; only a larger frame relaunches the worker for a larger arena. The
+worker copies a frame's planes into the arena and sends an `ArenaFrame` message
+(kind 16) that carries the plane geometry and arena offsets only. The host accepts it only from a
+worker it gave an arena, checks every plane against the arena bounds, copies the planes out into an
+ordinary product and checks its layout before it sends the next request, so one region serves every
+frame and the worker never rewrites planes being read. The size is sealed, so a worker cannot shrink
+the region under the host's mapping. A frame that does not fit, or a platform without the arena
+(macOS and Windows supervisors refuse the option), crosses the pipe as before; the execution
+transport stays 0. The pixels are the same either way. A 2160p 10-bit HEVC frame (66 MB of 16-bit
+4:4:4:4 planes) had cost about 21 ms to encode and pipe, and 40-45 ms during playback; in the
+session benchmark sequential HEVC and AV1 2160p decode went from about 37 ms to 20-22 ms a frame.
 
 A retained software decoder pipelines in-order requests: after sending a frame, while the host
 handles it, the worker decodes the next frame of the same request when the last two requests were

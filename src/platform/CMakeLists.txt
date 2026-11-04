@@ -137,7 +137,7 @@ endif()
 # Process supervision has no font catalogue or filesystem publication dependency. Workers link
 # this narrow target so codec trust domains do not inherit unused platform-library closures.
 add_library(bloom_platform_process STATIC file_snapshot.cpp private_temporary_directory.cpp
-                                          source_identity.cpp)
+                                          shared_frame_arena.cpp source_identity.cpp)
 target_link_libraries(bloom_platform_process PUBLIC bloom_core)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Threads REQUIRED)
@@ -154,6 +154,7 @@ endif()
 target_sources(bloom_platform_process PUBLIC FILE_SET HEADERS BASE_DIRS include
                FILES include/bloom/platform/process_supervisor.hpp include/bloom/platform/file_snapshot.hpp
                      include/bloom/platform/private_temporary_directory.hpp
+                     include/bloom/platform/shared_frame_arena.hpp
                      include/bloom/platform/source_identity.hpp)
 target_compile_features(bloom_platform_process PUBLIC cxx_std_20)
 bloom_enable_warnings(bloom_platform_process)

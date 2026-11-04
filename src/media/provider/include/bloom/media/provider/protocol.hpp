@@ -2,8 +2,13 @@
 #include <bloom/media/provider/encode.hpp>
 #include <bloom/media/provider/registry.hpp>
 
+#include <cstddef>
+#include <optional>
+#include <span>
+#include <vector>
+
 namespace bloom::media::provider {
-inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 8;
+inline constexpr std::uint16_t kProtocolVersion = 1, kSchemaVersion = 9;
 inline constexpr std::uint32_t kEnvelopeBytes = 25;
 enum class MessageKind : std::uint8_t {
     Handshake = 1,
@@ -20,8 +25,27 @@ enum class MessageKind : std::uint8_t {
     EncodeFinish = 12,
     EncodeRead = 13,
     EncodedChunk = 14,
-    EncodeQc = 15
+    EncodeQc = 15,
+    // Issue #474: a decoded frame whose planes the retained worker wrote into the host's shared
+    // frame arena; the message carries the plane geometry and arena offsets only.
+    ArenaFrame = 16
 };
+// The planes of `frame` carry width, height and stride with no bytes; `offsets[i]` is where plane
+// i's stride * height bytes start in the arena.
+struct ArenaFrameV1 {
+    FrameProduct frame;
+    std::vector<std::uint64_t> offsets;
+    friend bool operator==(const ArenaFrameV1&, const ArenaFrameV1&) = default;
+};
+// Worker side: copies the planes of `product` back to back into `arena`. Empty when they do not fit,
+// and the frame then crosses the pipe as an ordinary Frame.
+[[nodiscard]] std::optional<ArenaFrameV1> placeInArena(const FrameProduct& product,
+                                                       std::span<std::byte> arena);
+// Host side: copies an arena frame out into an ordinary product. Every plane must lie inside the
+// arena and the result must be a valid layout; the copy is taken before the next request, so the
+// worker never rewrites the planes while they are read.
+[[nodiscard]] Result<FrameProduct> takeArenaFrame(const ArenaFrameV1& placed,
+                                                  std::span<const std::byte> arena);
 struct Handshake {
     ProviderExecutionKeyV1 execution;
     std::vector<ProviderDeclaration> declarations;
@@ -42,7 +66,7 @@ struct CallRequest {
 };
 using Payload = std::variant<Handshake, CallRequest, ProbeResult, FrameProduct, DemuxIndex,
                              AudioBlock, EncodeSettingsV1, EncodedChunkV1, EncodeQcV1,
-                             std::uint64_t, std::monostate, Unavailable>;
+                             std::uint64_t, std::monostate, Unavailable, ArenaFrameV1>;
 struct Message {
     MessageKind kind = MessageKind::Ack;
     std::uint64_t session = 0, sequence = 0;
@@ -60,10 +84,13 @@ class HostProtocol final {
     [[nodiscard]] Result<Message> receive(std::span<const std::byte> frame,
                                           MessageKind expectedKind);
     [[nodiscard]] const Handshake& expectedHandshake() const { return expected_; }
+    // A host that installed a shared frame arena accepts ArenaFrame where it expects a Frame.
+    void acceptArenaFrames() noexcept { arenaFrames_ = true; }
 
   private:
     std::uint64_t session_ = 0, lastSequence_ = 0;
     Handshake expected_;
     bool handshaken_ = false;
+    bool arenaFrames_ = false;
 };
 } // namespace bloom::media::provider
