@@ -3,8 +3,8 @@
 #include "image_work_statistics.hpp"
 #include "stb_image_adapter.hpp"
 #include <algorithm>
-#include <bit>
 #include <array>
+#include <bit>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/color/ocio_cpu_input_processor.hpp>
@@ -269,6 +269,28 @@ std::filesystem::path resolveImagePath(std::string_view relativePath, std::strin
     }
     return core::absolutePathFromFileUri(relinkHint).value_or(std::filesystem::path{});
 }
+namespace {
+// A capture admitted by its identity alone, with no recorded digest to stand for (a stamped member
+// still pending its background digest): an identity for these bytes in this process, never a
+// content digest. Path and the full file identity, so two files never share it.
+core::Sha256Digest unverifiedCaptureIdentity(const std::filesystem::path& path,
+                                             const platform::FileIdentity& identity) {
+    core::Sha256Hasher hasher;
+    const auto text = path.generic_u8string();
+    std::string record = "BloomUnverifiedCapture";
+    record.push_back('\0');
+    record.append(reinterpret_cast<const char*>(text.data()), text.size());
+    for (const auto value :
+         {identity.size, static_cast<std::uint64_t>(identity.modifiedNanoseconds),
+          static_cast<std::uint64_t>(identity.changedNanoseconds), identity.volume,
+          identity.fileIdHigh, identity.fileIdLow}) {
+        record.push_back('\0');
+        record += std::to_string(value);
+    }
+    (void)hasher.update(std::as_bytes(std::span(record.data(), record.size())));
+    return hasher.finalize();
+}
+} // namespace
 std::optional<ImageSourceStamp> observeImageSourceStamp(const std::filesystem::path& path) {
     const auto identity = platform::observeFileIdentity(path);
     if (!identity)
@@ -296,8 +318,13 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
                 false,
                 ImageDiagnosticCode::DigestMismatch};
         };
-        // #473: no byte is read from a file that is no longer the one import stamped.
-        if (expectedStamp && observedBefore && stampOf(*observedBefore) != *expectedStamp)
+        // ADR 0025 (amended 2026-11-04): a changed identity forces a full hash. A stamped member
+        // without a digest has nothing to compare, so no byte is read from a file that is no
+        // longer the one import stamped (#473); a verified member (stamp and digest, document
+        // 1.36) is rehashed and admitted only when its bytes still hash to that digest.
+        const bool stampChanged =
+            expectedStamp && observedBefore && stampOf(*observedBefore) != *expectedStamp;
+        if (stampChanged && !expectedDigest)
             return changedSinceImport();
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         if (!input)
@@ -309,8 +336,8 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
         detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
         if (length < 0)
             return {{}, "Image size could not be read", false, ImageDiagnosticCode::FileReadFailed};
-        // File size admits a capture, never proves an unchanged revision. SHA256 below is over
-        // the same owned bytes the parsers will read, even if the path is concurrently replaced.
+        // File size admits a capture, never proves an unchanged revision. Decode reads only these
+        // owned bytes, even if the path is concurrently replaced: old and new bytes never mix.
         constexpr auto overhead = sizeof(ImageSourceRevision) + std::size_t{512};
         const auto lengthBytes = static_cast<std::uint64_t>(length);
         if (hostByteBudget < overhead || lengthBytes > hostByteBudget - overhead)
@@ -322,7 +349,6 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
         ioStart = detail::ImageWorkClock::now();
         input.seekg(0);
         detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
-        core::Sha256Hasher hasher;
         for (std::size_t offset = 0; offset < bytes.size();) {
             if (cancelled(cancel))
                 return {{}, {}, true, ImageDiagnosticCode::Cancelled};
@@ -331,17 +357,12 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
             input.read(reinterpret_cast<char*>(bytes.data() + offset),
                        static_cast<std::streamsize>(count));
             detail::addImageWork(statistics.ioNanoseconds, detail::imageWorkNanoseconds(ioStart));
-            const auto hashStart = detail::ImageWorkClock::now();
-            const auto hashed = hasher.update(std::span(bytes).subspan(offset, count));
-            detail::addImageWork(statistics.hashNanoseconds,
-                                 detail::imageWorkNanoseconds(hashStart));
-            if (input.gcount() != static_cast<std::streamsize>(count) || !hashed)
+            if (input.gcount() != static_cast<std::streamsize>(count))
                 return {{},
                         "Image source changed or failed during capture",
                         false,
                         ImageDiagnosticCode::FileReadFailed};
             detail::addImageWork(statistics.bytesRead, count);
-            detail::addImageWork(statistics.bytesHashed, count);
             offset += count;
         }
         ioStart = detail::ImageWorkClock::now();
@@ -354,29 +375,65 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
                     ImageDiagnosticCode::FileReadFailed};
         if (cancelled(cancel))
             return {{}, {}, true, ImageDiagnosticCode::Cancelled};
-        const auto hashStart = detail::ImageWorkClock::now();
-        const auto digest = hasher.finalize();
-        detail::addImageWork(statistics.hashNanoseconds, detail::imageWorkNanoseconds(hashStart));
         platform::recordFullSourceRead(bytes.size());
         const auto observedAfter = platform::observeFileIdentity(path);
         const bool unchanged = observedBefore && observedAfter &&
                                *observedBefore == *observedAfter &&
                                observedAfter->size == bytes.size();
-        if (unchanged)
-            platform::verifiedSourceDigests().record(path, *observedAfter, digest);
-        // The bytes stand for the stamp only when the file kept it across the whole read.
-        if (expectedStamp && (!unchanged || stampOf(*observedAfter) != *expectedStamp))
+        const auto hashBytes = [&] {
+            const auto hashStart = detail::ImageWorkClock::now();
+            core::Sha256Hasher hasher;
+            if (!hasher.update(std::span<const std::byte>(bytes)))
+                throw std::bad_alloc();
+            const auto value = hasher.finalize();
+            detail::addImageWork(statistics.hashNanoseconds,
+                                 detail::imageWorkNanoseconds(hashStart));
+            detail::addImageWork(statistics.bytesHashed, bytes.size());
+            if (unchanged)
+                platform::verifiedSourceDigests().record(path, *observedAfter, value);
+            return value;
+        };
+        // What admits these bytes, without hashing them when nothing changed:
+        // - a full hash the process memo recorded for this exact identity (a refuting memo digest
+        //   reports the relink diagnostic);
+        // - a stamped member whose file carried its stamp across the whole read;
+        // - otherwise the identity bracket alone (the recorded digest is verified by the
+        //   background "Verify footage" pass, which refutes a changed file).
+        // A changed identity, during the read or against the stamp, forces the hash.
+        std::optional<core::Sha256Digest> digest;
+        bool verified = false;
+        // The memo knowing this path under another identity is a changed identity too.
+        const auto known =
+            unchanged ? platform::verifiedSourceDigests().knownIdentity(path) : std::nullopt;
+        const bool identityChanged = known && *known != *observedAfter;
+        if (unchanged && !stampChanged)
+            if (const auto memo = platform::verifiedSourceDigests().find(path, *observedAfter)) {
+                digest = *memo;
+                verified = true;
+            }
+        if (!digest && (stampChanged || !unchanged || identityChanged)) {
+            if (expectedStamp && !expectedDigest && !unchanged)
+                return changedSinceImport();
+            digest = hashBytes();
+            verified = true;
+        }
+        if (expectedStamp && !expectedDigest && stampOf(*observedAfter) != *expectedStamp)
             return changedSinceImport();
-        if (expectedDigest && digest != *expectedDigest)
+        if (expectedDigest && digest && *digest != *expectedDigest)
             return {{},
                     "Image content changed; relink the asset",
                     false,
                     ImageDiagnosticCode::DigestMismatch};
+        if (!digest) {
+            platform::verifiedSourceDigests().admit(path, *observedAfter);
+            digest =
+                expectedDigest ? *expectedDigest : unverifiedCaptureIdentity(path, *observedAfter);
+        }
         const auto probeStart = detail::ImageWorkClock::now();
         ImageResult<ImageProbe> probe;
         const auto view = std::span<const std::byte>(bytes);
         if (isExrMagic(view)) {
-            probe = detail::probeExr(view, digest, cancel);
+            probe = detail::probeExr(view, *digest, cancel);
         } else if (isTiffMagic(view)) {
             // Worker TIFF providers currently consume locators, not immutable byte revisions.
             return providerMissing<std::shared_ptr<const ImageSourceRevision>>();
@@ -387,15 +444,16 @@ captureImageSourceRevision(const std::filesystem::path& path, const std::size_t 
                         "Invalid PNG/JPEG header or image dimensions",
                         false,
                         ImageDiagnosticCode::InvalidHeader};
-            probe = {stillProbe(info, digest,
-                                isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg),
-                     {}};
+            probe = {
+                stillProbe(info, *digest, isPngMagic(view) ? ImageFormat::Png : ImageFormat::Jpeg),
+                {}};
         }
         detail::addImageWork(statistics.probeNanoseconds, detail::imageWorkNanoseconds(probeStart));
         if (!probe.value.has_value())
             return {{}, probe.diagnostic, probe.cancelled, probe.code};
         auto revision = std::shared_ptr<const ImageSourceRevision>(
-            new ImageSourceRevision(std::move(bytes), std::move(*probe.value), statistics));
+            new ImageSourceRevision(std::move(bytes), std::move(*probe.value), statistics,
+                                    unchanged ? observedAfter : std::nullopt, verified));
         if (revision->retainedBytes() > hostByteBudget)
             return {{},
                     "Image source metadata exceeds the host byte budget",
@@ -727,14 +785,15 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
 // decoder's 16-bit RGBA samples and an all-half OpenEXR colour layer its binary16 samples; the
 // SampleConvertV1 parameters reproduce decodeImage's raw conversion of the same interpretation.
 static ImageResult<std::shared_ptr<const render::NativeSampleImage>>
-decodeImageSamplesImpl(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
-                       const CancelImageWork& cancel, const std::size_t pixelBudget) {
+decodeImageSamplesImpl(const ImageSourceRevision& revision,
+                       const ImageInterpretation& interpretation, const CancelImageWork& cancel,
+                       const std::size_t pixelBudget) {
     using Decoded = std::shared_ptr<const render::NativeSampleImage>;
     static_assert(std::endian::native == std::endian::little,
                   "native samples are uploaded as little-endian words");
     const auto unavailable = [](std::string detail) {
-        return ImageResult<Decoded>{{}, std::move(detail), false,
-                                    ImageDiagnosticCode::NativeSamplesUnavailable};
+        return ImageResult<Decoded>{
+            {}, std::move(detail), false, ImageDiagnosticCode::NativeSamplesUnavailable};
     };
     // Only the raw decode (no colour conversion) has a native-sample form.
     if (interpretation.colorSpace != ImageColorSpace::Raw ||
@@ -749,17 +808,21 @@ decodeImageSamplesImpl(const ImageSourceRevision& revision, const ImageInterpret
         if (!decoded.value)
             return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
         const auto& layout = decoded.value->layout;
-        const auto data = render::ImageWindow::create(layout.dataX, layout.dataY, layout.width,
-                                                      layout.height);
-        const auto display = render::ImageWindow::create(
-            layout.displayX, layout.displayY, layout.displayWidth, layout.displayHeight);
+        const auto data =
+            render::ImageWindow::create(layout.dataX, layout.dataY, layout.width, layout.height);
+        const auto display = render::ImageWindow::create(layout.displayX, layout.displayY,
+                                                         layout.displayWidth, layout.displayHeight);
         if (!data || !display)
-            return {{}, "OpenEXR image window is invalid", false,
+            return {{},
+                    "OpenEXR image window is invalid",
+                    false,
                     ImageDiagnosticCode::InvalidDataWindow};
         const auto descriptor = render::Rgba32fImageDescriptor::create(
             *data.value(), *display.value(), core::PixelAspectRatio::square());
         if (!descriptor)
-            return {{}, "OpenEXR image descriptor is invalid", false,
+            return {{},
+                    "OpenEXR image descriptor is invalid",
+                    false,
                     ImageDiagnosticCode::InvalidDataWindow};
         conversion.layout = render::NativeSampleLayout::RgbaHalf;
         conversion.alpha = layout.premultiplied ? render::NativeSampleAlpha::Premultiplied
@@ -774,7 +837,9 @@ decodeImageSamplesImpl(const ImageSourceRevision& revision, const ImageInterpret
         auto samples = render::NativeSampleImage::create(*descriptor.value(), conversion,
                                                          std::span(&plane, 1), storage);
         if (!samples)
-            return {{}, "OpenEXR samples do not match their layout", false,
+            return {{},
+                    "OpenEXR samples do not match their layout",
+                    false,
                     ImageDiagnosticCode::DecodeFailed};
         ImageResult<Decoded> result{*samples.value(), {}};
         result.repairedPixels = decoded.value->repairedPixels;
@@ -784,13 +849,17 @@ decodeImageSamplesImpl(const ImageSourceRevision& revision, const ImageInterpret
         return unavailable("TIFF stills are decoded by a provider");
     detail::ImageInfo info;
     if (!detail::imageInfo(bytes, info) || !validInfo(info))
-        return {{}, "Invalid PNG/JPEG header or image dimensions", false,
+        return {{},
+                "Invalid PNG/JPEG header or image dimensions",
+                false,
                 ImageDiagnosticCode::InvalidHeader};
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
     auto decodedSamples = detail::imageSamples(bytes, info, pixelBudget);
     if (decodedSamples.empty())
-        return {{}, "PNG/JPEG decode failed or exceeded the pixel budget", false,
+        return {{},
+                "PNG/JPEG decode failed or exceeded the pixel budget",
+                false,
                 ImageDiagnosticCode::DecodeFailed};
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
@@ -809,12 +878,14 @@ decodeImageSamplesImpl(const ImageSourceRevision& revision, const ImageInterpret
                            ? render::NativeSampleAlpha::Unpremultiply
                            : render::NativeSampleAlpha::Straight;
     auto storage = std::make_shared<const std::vector<std::uint16_t>>(std::move(decodedSamples));
-    const render::NativeSamplePlane plane{
-        std::as_bytes(std::span<const std::uint16_t>(*storage)), width, height, width * 8U};
+    const render::NativeSamplePlane plane{std::as_bytes(std::span<const std::uint16_t>(*storage)),
+                                          width, height, width * 8U};
     auto samples = render::NativeSampleImage::create(*descriptor.value(), conversion,
                                                      std::span(&plane, 1), storage);
     if (!samples)
-        return {{}, "PNG/JPEG samples do not match their layout", false,
+        return {{},
+                "PNG/JPEG samples do not match their layout",
+                false,
                 ImageDiagnosticCode::DecodeFailed};
     return {*samples.value(), {}};
 }
@@ -840,7 +911,9 @@ decodeImageSamples(const ImageSourceRevision& revision, const ImageInterpretatio
                                           hostByteBudget - revision.retainedBytes());
         } catch (const std::exception&) {
             return ImageResult<std::shared_ptr<const render::NativeSampleImage>>{
-                {}, "Image decode allocation or I/O failed", false,
+                {},
+                "Image decode allocation or I/O failed",
+                false,
                 ImageDiagnosticCode::AllocationFailure};
         }
     }();
@@ -927,7 +1000,8 @@ decodeStillChannels(const ImageSourceRevision& revision, const ImageChannelSelec
             const auto component = picked[plane];
             planes[plane].resize(static_cast<std::size_t>(pixels));
             for (std::size_t pixel = 0; pixel < planes[plane].size(); ++pixel)
-                planes[plane][pixel] = static_cast<float>(samples[pixel * 4U + component]) / 65535.0F;
+                planes[plane][pixel] =
+                    static_cast<float>(samples[pixel * 4U + component]) / 65535.0F;
             auto descriptor =
                 render::describeChannel(available[component], render::ChannelSampleKind::Float);
             descriptors.push_back(std::move(descriptor));

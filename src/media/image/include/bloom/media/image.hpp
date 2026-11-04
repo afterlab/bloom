@@ -1,11 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/core/sha256.hpp>
+#include <bloom/platform/source_identity.hpp>
 #include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/image.hpp>
 #include <bloom/render/native_samples.hpp>
-#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -215,6 +216,16 @@ class ImageSourceRevision final {
     [[nodiscard]] const ImageSourceCaptureStatistics& captureStatistics() const noexcept {
         return captureStatistics_;
     }
+    // The file identity observed before and after the read when it held across it. While a later
+    // observation is identical, the original still holds these bytes (ADR 0025).
+    [[nodiscard]] const std::optional<platform::FileIdentity>& sourceIdentity() const noexcept {
+        return sourceIdentity_;
+    }
+    // True when a full SHA-256 of these bytes (now or recorded in the process memo for this
+    // identity) produced probe().contentDigest. False when the identity check admitted them and
+    // the digest is the recorded one (or, for a pending member, a capture identity) awaiting the
+    // background verification (ADR 0025, amended 2026-11-04).
+    [[nodiscard]] bool contentVerified() const noexcept { return contentVerified_; }
     [[nodiscard]] std::size_t retainedBytes() const noexcept {
         std::size_t total = sizeof(ImageSourceRevision) + bytes_.capacity() +
                             probe_.colorSpaceTag.capacity() +
@@ -226,18 +237,26 @@ class ImageSourceRevision final {
 
   private:
     ImageSourceRevision(std::vector<std::byte> bytes, ImageProbe probe,
-                        ImageSourceCaptureStatistics statistics)
-        : bytes_(std::move(bytes)), probe_(std::move(probe)), captureStatistics_(statistics) {}
+                        ImageSourceCaptureStatistics statistics,
+                        std::optional<platform::FileIdentity> identity, bool verified)
+        : bytes_(std::move(bytes)), probe_(std::move(probe)), captureStatistics_(statistics),
+          sourceIdentity_(identity), contentVerified_(verified) {}
     friend ImageResult<std::shared_ptr<const ImageSourceRevision>>
     captureImageSourceRevision(const std::filesystem::path&, std::size_t, const CancelImageWork&,
                                std::optional<core::Sha256Digest>, std::optional<ImageSourceStamp>);
     std::vector<std::byte> bytes_;
     ImageProbe probe_;
     ImageSourceCaptureStatistics captureStatistics_;
+    std::optional<platform::FileIdentity> sourceIdentity_;
+    bool contentVerified_ = false;
 };
 
-// `expectedStamp` (#473) admits the bytes only when the file's stamp before and after the read is
-// that stamp (DigestMismatch otherwise): a sequence member read for the first time after import.
+// Reads the file into an immutable revision without hashing it when its identity held across the
+// read (ADR 0025, amended 2026-11-04). `expectedDigest` is the recorded digest: a process-memo
+// digest for this identity must equal it, and a file that changed during the read or against
+// `expectedStamp` is hashed and admitted only when its bytes hash to it. `expectedStamp` (#473)
+// alone admits the bytes only when the file's stamp before and after the read is that stamp
+// (DigestMismatch otherwise): a sequence member pending its digest.
 [[nodiscard]] ImageResult<std::shared_ptr<const ImageSourceRevision>>
 captureImageSourceRevision(const std::filesystem::path& path, std::size_t hostByteBudget,
                            const CancelImageWork& cancel = {},
@@ -403,8 +422,9 @@ scanSequence(const std::filesystem::path& path, const CancelImageWork& cancel = 
 [[nodiscard]] std::optional<std::string> sequenceKey(const std::filesystem::path& path);
 // Whether `path`'s numbered group is an image sequence: two of its files, ignoring any frame
 // range, have consecutive frame numbers or three share one
-// constant step. Lists the directory only, stopping at the first such pair or triple. False for a name without a frame number. True for an unreadable directory, which
-// scanSequence() reports. Nullopt when cancelled.
+// constant step. Lists the directory only, stopping at the first such pair or triple. False for a
+// name without a frame number. True for an unreadable directory, which scanSequence() reports.
+// Nullopt when cancelled.
 [[nodiscard]] std::optional<bool> formsSequence(const std::filesystem::path& path,
                                                 const CancelImageWork& cancel = {});
 // How many members scanSequence() would read for `path`, by listing its directory only: 1 for a

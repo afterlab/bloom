@@ -35,8 +35,10 @@ struct SourceReadWork final {
 [[nodiscard]] SourceReadWork sourceReadWork() noexcept;
 void recordFullSourceRead(std::uint64_t bytes) noexcept;
 
-// Bounded process-wide memo of (absolute path, identity) -> verified SHA-256. Entries are recorded
-// only by a full hash whose bracketing observations matched. Thread-safe.
+// Bounded process-wide memo of (absolute path, identity) -> verified SHA-256. Digests are recorded
+// only by a full hash whose bracketing observations matched. ADR 0025 (amended 2026-11-04): an
+// identity that admitted bytes without a hash is remembered too (admit()), vouching for no digest,
+// so a later different identity of the same path forces the hash. Thread-safe.
 class VerifiedSourceDigests final {
   public:
     static constexpr std::size_t kEntryLimit = 4096;
@@ -44,6 +46,12 @@ class VerifiedSourceDigests final {
                                                          const FileIdentity& identity) const;
     void record(const std::filesystem::path& path, const FileIdentity& identity,
                 const core::Sha256Digest& digest);
+    // The identity the memo last saw for `path` (verified or admitted), if any.
+    [[nodiscard]] std::optional<FileIdentity>
+    knownIdentity(const std::filesystem::path& path) const;
+    // Remembers that `identity` admitted bytes without a full hash; keeps a verified entry of the
+    // same identity.
+    void admit(const std::filesystem::path& path, const FileIdentity& identity);
     void forget(const std::filesystem::path& path);
     void clear();
     [[nodiscard]] std::size_t size() const;

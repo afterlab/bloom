@@ -28,6 +28,10 @@ struct ImageSourceSelection {
     // #473: the stamp a stamped member's file must still carry; its bytes are verified by it
     // rather than by `digest`.
     std::optional<media::ImageSourceStamp> expectedStamp;
+    // The digest the project records for the bytes: the asset's, or the member's (absent for a
+    // member pending its background digest). A capture compares it only when the process memo or
+    // a changed identity supplies a full hash (ADR 0025, amended 2026-11-04).
+    std::optional<core::Sha256Digest> recordedDigest;
     media::ImageInterpretation interpretation;
     std::shared_ptr<const color::CpuColorSpaceProcessor> inputProcessor;
     std::string resolvedInputColorSpaceName;
@@ -91,6 +95,8 @@ struct ImageSourceReadAheadTarget final {
     core::Sha256Digest digest;
     // #473: a stamped member is captured against its stamp instead of `digest`.
     std::optional<media::ImageSourceStamp> stamp;
+    // The digest the project records for the member (absent while it is pending, document 1.36).
+    std::optional<core::Sha256Digest> recordedDigest;
     std::string revisionKey;
 };
 // The distinct sequence members the next `frames` composition frames after `time` select (start

@@ -160,6 +160,7 @@ imageSequenceReadAheadTargets(const CompiledImageSource& source, const core::Rat
              .stamp = member->stamp ? std::optional(media::ImageSourceStamp{
                                           member->stamp->size, member->stamp->modifiedNanoseconds})
                                     : std::nullopt,
+             .recordedDigest = member->contentDigest,
              .revisionKey = std::move(key)});
     }
     return targets;
@@ -201,6 +202,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
     const auto& asset = *source.asset;
     const document::AssetLocator* locator = &asset.locator;
     selected.digest = asset.contentDigest;
+    selected.recordedDigest = asset.contentDigest;
     std::int64_t memberFrame = 0;
     // #381: a missing frame shows nothing; no file is read.
     const auto missingFrame = [&](const std::int64_t frame) {
@@ -225,6 +227,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
         chosen = &member;
         locator = &member.locator;
         selected.digest = document::sequenceMemberIdentity(member);
+        selected.recordedDigest = member.contentDigest;
         selected.expectedStamp =
             member.stamp ? std::optional(media::ImageSourceStamp{member.stamp->size,
                                                                  member.stamp->modifiedNanoseconds})
@@ -282,20 +285,20 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
                     selected.retainedRevision = true;
                 } else {
                     // Revalidate: the retained bytes stand for the original only while a cheap
-                    // identity observation still matches the one that bracketed a full hash of
-                    // them (and, for a stamped member, the stamp import listed).
+                    // identity observation still matches the one that bracketed their capture
+                    // (ADR 0025: the identity check, no hash) and no full hash in the process
+                    // memo refutes the recorded digest.
                     selected.path =
                         media::resolveImagePath(locator->path, locator->relinkHint, base);
                     const auto observed = platform::observeSource(selected.path);
-                    const auto& retainedDigest = cached->sourceRevision->probe().contentDigest;
-                    const bool current =
-                        observed.digest && *observed.digest == retainedDigest &&
-                        (selected.expectedStamp ? observed.identity &&
-                                                      media::ImageSourceStamp{
-                                                          observed.identity->size,
-                                                          observed.identity->modifiedNanoseconds} ==
-                                                          *selected.expectedStamp
-                                                : retainedDigest == selected.digest);
+                    const auto& retained = *cached->sourceRevision;
+                    const bool refuted = observed.digest && selected.recordedDigest &&
+                                         *observed.digest != *selected.recordedDigest;
+                    const bool current = !refuted && observed.identity &&
+                                         retained.sourceIdentity() &&
+                                         *observed.identity == *retained.sourceIdentity() &&
+                                         (selected.expectedStamp ||
+                                          retained.probe().contentDigest == selected.digest);
                     if (current) {
                         selected.sourceRevision = cached->sourceRevision;
                         selected.retainedRevision = true;
@@ -307,8 +310,7 @@ selectImageSource(const CompiledImageSource& source, core::RationalTime time,
             selected.path = media::resolveImagePath(locator->path, locator->relinkHint, base);
             capture = media::captureImageSourceRevision(
                 selected.path, hostByteBudget, [&] { return cancel.isCancellationRequested(); },
-                selected.expectedStamp ? std::nullopt : std::optional(selected.digest),
-                selected.expectedStamp);
+                selected.recordedDigest, selected.expectedStamp);
             selected.sourceRevision = capture.value ? *capture.value : nullptr;
             selected.cancelled = capture.cancelled;
             selected.budgetExceeded =
@@ -626,7 +628,9 @@ decodeRawImageSamples(const ImageSourceSelection& selected, const std::size_t bu
     if (!selected.available)
         return {{}, selected.warning};
     if (selected.missingFrame || !selected.sourceRevision)
-        return {{}, "The selection has no decoded native samples", false,
+        return {{},
+                "The selection has no decoded native samples",
+                false,
                 media::ImageDiagnosticCode::NativeSamplesUnavailable};
     return media::decodeImageSamples(
         *selected.sourceRevision, rawImageInterpretation(selected),

@@ -17,10 +17,10 @@ namespace bloom::runtime {
 class OperationCache;
 
 // Captures upcoming image-sequence files into an evaluator's operation cache on its own I/O
-// workers. A frame's source read and hash then overlap earlier frames instead of running inside
-// that frame's scene preparation, and several reads stay outstanding so a network share overlaps
-// its latency. Captures are the same verified source revisions selection makes (exact bytes,
-// content digest checked), stored under the same keys, so a later selection finds them like any
+// workers. A frame's source read then overlaps earlier frames instead of running inside that
+// frame's scene preparation, and several reads stay outstanding so a network share overlaps its
+// latency. Captures are the same source revisions selection makes (exact bytes admitted by the file
+// identity, ADR 0025), stored under the same keys, so a later selection finds them like any
 // other cached revision. Read-ahead never evicts: a file that would not fit the cache's free
 // budget is skipped. Thread-safe; request() never blocks.
 class ImageSequenceReadAhead final {
@@ -30,6 +30,8 @@ class ImageSequenceReadAhead final {
         core::Sha256Digest digest;
         // #473: a member import stamped without reading it is captured against its stamp.
         std::optional<media::ImageSourceStamp> stamp;
+        // The member's recorded digest (absent while it is pending its background digest).
+        std::optional<core::Sha256Digest> recordedDigest;
         std::string revisionKey;
         std::size_t byteBudget = 0;
         // The composition frame the capture is for (ADR 0037): its entry is tagged with it, so it

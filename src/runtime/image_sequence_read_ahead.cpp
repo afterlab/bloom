@@ -66,8 +66,7 @@ struct ImageSequenceReadAhead::State final {
         const auto generation = cache->decodedMediaGeneration();
         auto revision = media::captureImageSourceRevision(
             job.request.path, job.request.byteBudget, [this] { return stopping.load(); },
-            job.request.stamp ? std::nullopt : std::optional(job.request.digest),
-            job.request.stamp);
+            job.request.recordedDigest, job.request.stamp);
         if (!revision.value || !*revision.value ||
             (!job.request.stamp && (*revision.value)->probe().contentDigest != job.request.digest))
             return false;

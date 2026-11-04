@@ -143,8 +143,9 @@ void importReadsOneMember() {
     }
 }
 
-// A stamped member is read and digested on first use, off any UI thread, and the digest is
-// recorded; a revalidated reuse then reads nothing.
+// A stamped member is read on first use, off any UI thread, and admitted by its stamp without a
+// hash (ADR 0025, amended 2026-11-04: its digest is computed in the background); a revalidated
+// reuse then reads nothing.
 void firstReadDigests() {
     Folder folder("bloom-lazy-sequence-first-read");
     for (int frame = 1; frame <= 4; ++frame)
@@ -162,16 +163,21 @@ void firstReadDigests() {
                selected.expectedStamp.has_value(),
            "the stamped member is available on its first read");
     expect(afterFirst.fullReads - before.fullReads == 1, "its first read reads it once");
-    const auto recorded = platform::observeSource(second).digest;
-    expect(recorded && *recorded == fileDigest(second) &&
-               selected.sourceRevision->probe().contentDigest == *recorded,
-           "the first read records the member's content digest");
+    expect(!platform::observeSource(second).digest && !selected.sourceRevision->contentVerified() &&
+               selected.sourceRevision->captureStatistics().bytesHashed == 0,
+           "the first read admits the member by its stamp without hashing it");
     expect(selected.digest == doc::sequenceMemberIdentity(asset.manifest.members[1]),
            "its cache identity is the provisional stamp identity");
     const auto again = select(source, folder.path, 1, &cache);
     expect(again.available && again.retainedRevision &&
                platform::sourceReadWork().fullReads == afterFirst.fullReads,
            "a revalidated reuse reads nothing");
+    // The background pass hashes it later; the memo then vouches for the stamped bytes.
+    const auto background = platform::hashSourceFile(second);
+    expect(background.error == platform::SourceHashError::None &&
+               background.digest == fileDigest(second) &&
+               platform::observeSource(second).digest == fileDigest(second),
+           "a background hash records the member's content digest");
     expect(select(source, folder.path, 2).digest != selected.digest,
            "two members of one size never share an identity");
 }

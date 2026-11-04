@@ -71,6 +71,8 @@ struct MemoEntry final {
     FileIdentity identity;
     core::Sha256Digest digest;
     std::uint64_t used = 0;
+    // False for an identity admitted without a full hash (admit()): it vouches for no digest.
+    bool verified = true;
 };
 struct MemoState final {
     mutable std::mutex mutex;
@@ -161,17 +163,45 @@ std::optional<core::Sha256Digest> VerifiedSourceDigests::find(const std::filesys
     const auto key = memoKey(path);
     const std::lock_guard lock(state.mutex);
     const auto found = state.entries.find(key);
-    if (found == state.entries.end() || found->second.identity != identity)
+    if (found == state.entries.end() || found->second.identity != identity ||
+        !found->second.verified)
         return {};
     found->second.used = ++state.clock;
     return found->second.digest;
+}
+std::optional<FileIdentity>
+VerifiedSourceDigests::knownIdentity(const std::filesystem::path& path) const {
+    auto& state = memoState();
+    const auto key = memoKey(path);
+    const std::lock_guard lock(state.mutex);
+    const auto found = state.entries.find(key);
+    if (found == state.entries.end())
+        return {};
+    found->second.used = ++state.clock;
+    return found->second.identity;
+}
+void VerifiedSourceDigests::admit(const std::filesystem::path& path, const FileIdentity& identity) {
+    auto& state = memoState();
+    auto key = memoKey(path);
+    const std::lock_guard lock(state.mutex);
+    if (const auto found = state.entries.find(key);
+        found != state.entries.end() && found->second.identity == identity)
+        return; // never downgrade a verified entry of the same identity
+    state.entries.insert_or_assign(std::move(key),
+                                   MemoEntry{identity, core::Sha256Digest{}, ++state.clock, false});
+    if (state.entries.size() > kEntryLimit) {
+        const auto oldest = std::ranges::min_element(
+            state.entries, {}, [](const auto& entry) { return entry.second.used; });
+        state.entries.erase(oldest);
+    }
 }
 void VerifiedSourceDigests::record(const std::filesystem::path& path, const FileIdentity& identity,
                                    const core::Sha256Digest& digest) {
     auto& state = memoState();
     auto key = memoKey(path);
     const std::lock_guard lock(state.mutex);
-    state.entries.insert_or_assign(std::move(key), MemoEntry{identity, digest, ++state.clock});
+    state.entries.insert_or_assign(std::move(key),
+                                   MemoEntry{identity, digest, ++state.clock, true});
     if (state.entries.size() > kEntryLimit) {
         const auto oldest = std::ranges::min_element(
             state.entries, {}, [](const auto& entry) { return entry.second.used; });

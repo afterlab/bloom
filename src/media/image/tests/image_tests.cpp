@@ -17,15 +17,18 @@
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/platform/source_identity.hpp>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <future>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -332,6 +335,115 @@ void testFastPngMatchesStb(Expectations& check) {
 
 } // namespace
 
+// ADR 0025 (amended 2026-11-04): a first use admits the bytes by the file identity without a full
+// SHA-256, and decodes pixels identical to a digest-first capture. A changed identity still forces
+// the hash, and a memo digest that refutes the recorded digest reports the relink diagnostic.
+void testDeferredDigests(bloom_output_png_test_support::Expectations& check,
+                         bloom_output_png_test_support::ScratchDirectory& scratch) {
+    namespace media = bloom::media;
+    namespace platform = bloom::platform;
+    for (const auto* extension : {"png", "exr"}) {
+        const auto path = scratch.file(std::string("deferred.") + extension);
+        if (std::string_view(extension) == "png")
+            png(path);
+        else
+            exr(path, false, Imf::HALF);
+        std::vector<std::byte> bytes;
+        {
+            std::ifstream input(path, std::ios::binary);
+            const std::string text(std::istreambuf_iterator<char>(input), {});
+            bytes.resize(text.size());
+            std::memcpy(bytes.data(), text.data(), text.size());
+        }
+        const auto recorded = bloom::core::Sha256Hasher::hash(bytes);
+        check.expect(recorded.has_value(), "fixture digest");
+        if (!recorded)
+            continue;
+        platform::verifiedSourceDigests().clear();
+        const auto readsBefore = platform::sourceReadWork();
+        const auto deferred =
+            media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, *recorded);
+        check.expect(deferred && !(*deferred.value)->contentVerified() &&
+                         (*deferred.value)->captureStatistics().bytesHashed == 0 &&
+                         (*deferred.value)->probe().contentDigest == *recorded &&
+                         (*deferred.value)->sourceIdentity().has_value() &&
+                         platform::sourceReadWork().fullReads == readsBefore.fullReads + 1,
+                     "a first use reads the file once and admits it by its identity, no hash");
+        check.expect(
+            !platform::verifiedSourceDigests().find(path, *platform::observeFileIdentity(path)),
+            "an admitted identity vouches for no digest");
+        // Digest-first: the hash is in the memo before the capture (a background pass).
+        platform::verifiedSourceDigests().clear();
+        const auto hashed = platform::hashSourceFile(path);
+        const auto first =
+            media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, *recorded);
+        check.expect(hashed.error == platform::SourceHashError::None && first &&
+                         (*first.value)->contentVerified() &&
+                         (*first.value)->probe().contentDigest == *recorded,
+                     "a digest-first capture is verified by the memo");
+        if (!deferred || !first)
+            continue;
+        const auto a = media::decodeImage(**deferred.value);
+        const auto b = media::decodeImage(**first.value);
+        check.expect(a && b && *(*a.value)->descriptor() == *(*b.value)->descriptor() &&
+                         (*a.value)->pixels().size() == (*b.value)->pixels().size() &&
+                         std::memcmp((*a.value)->pixels().data(), (*b.value)->pixels().data(),
+                                     (*a.value)->pixels().size_bytes()) == 0,
+                     "digest-deferred and digest-first captures decode identical pixels");
+        // A memo digest that differs from the recorded digest refutes it.
+        auto refutingBytes = bloom::core::Sha256Digest::Bytes{};
+        std::ranges::copy(recorded->bytes(), refutingBytes.begin());
+        refutingBytes[0] ^= 1U;
+        const auto refuting = bloom::core::Sha256Digest::fromBytes(refutingBytes);
+        platform::verifiedSourceDigests().record(path, *platform::observeFileIdentity(path),
+                                                 refuting);
+        const auto refuted =
+            media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, *recorded);
+        check.expect(!refuted && refuted.code == media::ImageDiagnosticCode::DigestMismatch,
+                     "a full hash that refutes the recorded digest reports the relink diagnostic");
+        // A changed identity (here a rewrite with the same bytes) forces a rehash, which admits
+        // unchanged content; changed content is refused.
+        platform::verifiedSourceDigests().clear();
+        (void)media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, *recorded);
+        const auto stampBefore = media::observeImageSourceStamp(path);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        {
+            std::ofstream rewrite(path, std::ios::binary | std::ios::trunc);
+            rewrite.write(reinterpret_cast<const char*>(bytes.data()),
+                          static_cast<std::streamsize>(bytes.size()));
+        }
+        const auto rehashed =
+            media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, *recorded);
+        check.expect(rehashed && (*rehashed.value)->contentVerified() &&
+                         (*rehashed.value)->captureStatistics().bytesHashed == bytes.size(),
+                     "a changed identity forces the hash, which admits the same bytes");
+        // A verified member (stamp and digest, document 1.36) whose stamp changed is rehashed.
+        const auto verifiedMember = media::captureImageSourceRevision(
+            path, media::kMaxImageStorageBytes, {}, *recorded, stampBefore);
+        check.expect(stampBefore && verifiedMember && (*verifiedMember.value)->contentVerified(),
+                     "a verified member with a changed stamp is admitted by its digest");
+        {
+            std::ofstream rewrite(path, std::ios::binary | std::ios::trunc);
+            const std::string changed(bytes.size(), 'x');
+            rewrite.write(changed.data(), static_cast<std::streamsize>(changed.size()));
+        }
+        const auto changed =
+            media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, *recorded);
+        check.expect(!changed && changed.code == media::ImageDiagnosticCode::DigestMismatch,
+                     "changed content under a changed identity reports the relink diagnostic");
+    }
+    // A pending member (stamp only) is admitted by its stamp without a hash.
+    const auto pending = scratch.file("pending.0001.png");
+    png(pending);
+    bloom::platform::verifiedSourceDigests().clear();
+    const auto stamp = media::observeImageSourceStamp(pending);
+    const auto admitted =
+        media::captureImageSourceRevision(pending, media::kMaxImageStorageBytes, {}, {}, stamp);
+    check.expect(stamp && admitted && !(*admitted.value)->contentVerified() &&
+                     (*admitted.value)->captureStatistics().bytesHashed == 0,
+                 "a pending stamped member is admitted by its stamp without a hash");
+}
+
 int main() {
     using namespace bloom_output_png_test_support;
     namespace media = bloom::media;
@@ -356,11 +468,12 @@ int main() {
             continue;
         const auto revision = *captured.value;
         const auto& measured = revision->captureStatistics();
-        check.expect(measured.bytesRead == revision->bytes().size() &&
-                         measured.bytesHashed == revision->bytes().size() &&
-                         measured.ioNanoseconds > 0 && measured.hashNanoseconds > 0 &&
-                         measured.probeNanoseconds > 0,
-                     "fresh revision separates measured I/O, SHA256 and metadata work");
+        // The path decode above hashed the file, so the process memo vouches for this identity
+        // and the capture reads it without hashing again (ADR 0025).
+        check.expect(measured.bytesRead == revision->bytes().size() && measured.bytesHashed == 0 &&
+                         measured.ioNanoseconds > 0 && measured.probeNanoseconds > 0 &&
+                         revision->contentVerified(),
+                     "a memo-verified revision separates measured I/O and metadata work, no hash");
         const auto ownDigest = bloom::core::Sha256Hasher::hash(revision->bytes());
         check.expect(ownDigest && *ownDigest == revision->probe().contentDigest,
                      "source revision SHA256 describes its actual decoder bytes");
@@ -406,6 +519,7 @@ int main() {
         check.expect(!refused && refused.code == media::ImageDiagnosticCode::PixelBudgetExceeded,
                      "encoded revision is charged before decoder working-set admission");
     }
+    testDeferredDigests(check, scratch);
     {
         const auto path = scratch.file("capture-budget.png");
         png(path);

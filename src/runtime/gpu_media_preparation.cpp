@@ -253,6 +253,7 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
         requests.push_back({.path = std::move(target.path),
                             .digest = target.digest,
                             .stamp = target.stamp,
+                            .recordedDigest = target.recordedDigest,
                             .revisionKey = std::move(target.revisionKey),
                             .byteBudget = byteBudget(request.pixelStorageByteLimit),
                             .use = use});
@@ -273,8 +274,8 @@ rawUploadDescriptor(const render::Rgba32fImageDescriptor& source,
     // A still image keeps its data window's offset inside the source frame
     // (frameRelativeDataWindow); a video frame is always a (0,0)-origin frame.
     const auto data = source.dataWindow();
-    const auto window = framed ? frameRelativeDataWindow(source)
-                               : [&]() -> std::optional<render::ImageWindow> {
+    const auto window =
+        framed ? frameRelativeDataWindow(source) : [&]() -> std::optional<render::ImageWindow> {
         auto created =
             render::ImageWindow::create(0, 0, data.extent().width(), data.extent().height());
         if (!created)
@@ -722,8 +723,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             ++statistics.imageConversions;
             if (native.code == media::ImageDiagnosticCode::PixelBudgetExceeded)
                 outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;
-            outcome.failure = native.diagnostic.empty() ? "Image source could not be decoded"
-                                                        : native.diagnostic;
+            outcome.failure =
+                native.diagnostic.empty() ? "Image source could not be decoded" : native.diagnostic;
             return outcome;
         }
     }
