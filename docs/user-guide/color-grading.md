@@ -24,13 +24,26 @@ controls.
 | **Gain** | The highlights: scales the image, 1 is unchanged. Black stays put. |
 | **Offset** | Everything: adds the same amount to every value. |
 
-- **Drag the puck** in a wheel to push that range toward a colour: toward red adds red, toward the
-  opposite side adds cyan. Hold **Shift** to move it slowly. The puck stops at the rim.
-- **Drag the slider** under a wheel to change its master: how much the wheel lifts, bends, scales
-  or offsets all three channels.
-- **Double-click** a wheel, or press its **Reset** button, to set it back to neutral.
-- **Alt-click** a wheel, or press the arrow next to Reset, to show its numbers: the master and the
-  red, green and blue values. Type exact values there, key them, or link them from another node.
+A wheel shows an empty centre while it is neutral; once you push it toward a colour, the centre
+fills with that wheel's hues.
+
+- **Drag** anywhere in a wheel to move its puck: it moves as far as the pointer does, so it never
+  jumps. **Shift-click** to jump the puck to the pointer, then drag. Hold **Ctrl** (**Cmd** on macOS)
+  to move it a tenth as far; you can press or release Ctrl during the drag. The puck stops at the
+  rim. Toward red adds red, toward the opposite side adds cyan. The arrow keys nudge it.
+- **Double-click** a wheel to reset its colour; its level stays. Its **Reset** button resets colour
+  and level.
+- Under each wheel, **Lift level** (Gamma, Gain, Offset level) shows how much the wheel lifts,
+  bends, scales or offsets all three channels: Lift and Offset add (`+0.000`), Gamma is in stops of
+  its power (`+0.00 st`; the tooltip shows the power) and Gain multiplies (`1.00 ×`). Drag the strip
+  under it: left is darker, right is lighter, with no end stops; Ctrl is finer and Shift faster.
+  Drag or type the number, or double-click the label to reset the level.
+- The three numbers under that are the wheel's red, green and blue (underlined in their colour).
+  Drag or type them; right-click one to reset or key it.
+- The **diamond** next to a wheel's name keys its level and colour at the playhead, as one step.
+  **Values** (or Alt-click the wheel) shows the wheel's rows on the card, with their sockets, to link
+  them from another node.
+- Right-click a wheel for its resets, its key and Values.
 
 Each drag is one step to undo. The wheels go round like a vectorscope: red at the top left, then
 yellow, green, cyan, blue and magenta. Moving the puck keeps the brightness of the three values the
@@ -38,10 +51,14 @@ same and only changes their balance.
 
 ### Primaries
 
-The bar under the wheels has **Temperature** (positive is warmer), **Tint** (positive is more
-magenta), **Contrast** and its **Pivot** (the value contrast turns around; 0.18 is middle grey),
-**Saturation** (1 is unchanged, 0 is grey) and **Exposure** in stops. Drag a field or type a value.
-The arrow next to **Primaries** shows their rows, to key or link them.
+Under the wheels, each primary is a row with its number, its diamond and its socket, over a control
+that shows what it does: **Temperature** (blue to amber; positive is warmer), **Tint** (green to
+magenta; positive is more magenta), **Contrast** (1 is unchanged), **Pivot** (the value contrast
+turns around; 0.18 is middle grey), shown over a small picture of the contrast curve whose marker
+you can drag, **Saturation** (grey to colour; 1 is unchanged, 0 is grey) and **Exposure** in stops
+(a tick every stop). A slider moves by the pointer's travel; **Shift-click** jumps it to the pointer
+and a drag near the neutral value rests on it. Double-click a slider, or a name, to reset it. The
+**Reset** button next to **Primaries** resets all six.
 
 ### How it works
 
@@ -69,17 +86,26 @@ inside the image's area.
 
 ## Levels
 
-Levels draws the input's brightness histogram with handles you drag, on its node card and in
-Properties. Choose a channel with the tabs (**RGB**, **R**, **G**, **B**, **A**), then:
+Levels draws the input's levels with handles you drag, on its node card and in Properties. Choose a
+channel with the tabs (**RGB**, **R**, **G**, **B**, **A**; a dot marks a channel you have changed),
+then:
 
-- Drag the **black** and **white** handles under the histogram to set Input Black and Input White.
+- Drag the **black** and **white** handles under the graph to set Input Black and Input White.
 - Drag the **grey** handle between them for Gamma: left brightens the middle, right darkens it.
 - Drag the two handles under the output bar for Output Black and Output White.
-- **Double-click** a handle to reset it. **Escape** or the right mouse button cancels a drag.
-- **Alt-click** the graph, or press the arrow next to the tabs, to show that channel's numbers.
+- A handle moves as far as the pointer does, so it never jumps. **Shift-click** under the graph to
+  jump the nearest handle to the pointer. Hold **Ctrl** (**Cmd**) for a tenth of the speed, Shift
+  for ten times.
+- The five numbers under the graph are the channel's **Input** black, gamma and white and its
+  **Output** black and white. Drag or type them.
+- **Double-click** a handle to reset it, or the graph to reset the channel; the **Reset** button
+  beside **Histogram** does the same. **Escape** or the right mouse button cancels a drag.
+- The **diamond** beside the tabs keys the channel's five values at the playhead. **Values** (or
+  Alt-click the graph) shows the channel's rows with their sockets, to link them.
 
-Each drag is one step to undo. The graph grows to show a black or white point outside 0 to 1. The
-histogram is only worked out while the graph is on screen.
+Each drag is one step to undo. The graph marks 0 and 1 along its foot and grows to show a black or
+white point outside 0 to 1. Turn on **Histogram** to see the input's brightness behind it; it is only
+worked out while the graph is on screen.
 
 Each channel has **Input Black**, **Input White**, **Gamma**, **Output Black** and **Output White**.
 Input Black and Input White pick the range that maps to Output Black and Output White. Gamma bends
@@ -145,8 +171,8 @@ curve has a single preset, **Reset**, which empties it.
 
 The input runs along the bottom and the output up the side. A new curve is the straight diagonal
 from 0, 0 to 1, 1, which changes nothing. Raise the low part and lower the high part for less
-contrast, or the reverse for an S-curve. The box marks 0 to 1; the graph always shows some range
-above 1 and grows to hold any point you place there, for HDR. A channel always keeps at least two
+contrast, or the reverse for an S-curve. The grid has a line every quarter; the graph always shows
+some range above 1, drawn like the rest, and grows to hold any point you place there, for HDR. A channel always keeps at least two
 points.
 
 The curve passes through every point and never overshoots between them. Past the first and last
@@ -191,6 +217,16 @@ the image is: 1 is unchanged, 0 is grey and values above 1 (up to 1000) are more
 stay grey, and each colour keeps its brightness. Hue/Saturation uses the hue-rotate and saturate
 filters of the web Filter Effects standard. It doesn't change alpha, and it works on HDR and
 negative values without limiting them.
+
+On the card, the strip under **Hue** shows every input hue (**In**) above the colour it becomes
+(**Out**). Drag the strip to slide the output colours with the pointer; it wraps at 180 degrees.
+**Saturation** has a slider from grey to colour with a mark at 1. Double-click either to reset it.
+
+## Exposure, Offset and Multiply
+
+Each has one value, shown on its card with its unit over a slider: **Exposure** in stops (+1
+doubles the light; a tick every stop), **Offset** added to every value and **Factor** (Multiply) as a
+multiplier. A drag near the neutral value (0, or 1 for Factor) rests on it; double-click to reset.
 
 ## Masks
 

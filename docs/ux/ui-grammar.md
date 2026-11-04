@@ -168,9 +168,11 @@ styling at the `ListRow` pitch, with no per-row widgets.
 
 Painting outside the kit is limited to viewer canvas, node scene items, timeline
 ruler, lanes, graph editor, work area and navigator, and the graphical grade controls a node card
-and Properties share (`NodeCardWidget`): the Grade colour wheel (`GradeWheelCanvas`), the Levels
-histogram with its handles (`LevelsGraphCanvas`) and the Curves graph (`CurveGraphCanvas`, a
-value-over-input graph like the graph editor). Other surfaces compose kit widgets.
+and Properties share (`NodeCardWidget`): the Grade colour wheel (`GradeWheelCanvas`) and its
+contrast-curve picture (`GradeContrastCanvas`), the Levels histogram with its handles
+(`LevelsGraphCanvas`), the Curves graph (`CurveGraphCanvas`, a value-over-input graph like the graph
+editor) and the Hue/Saturation hue strip (`HueShiftStrip`). Every other grading control is a kit
+widget: a value field, or `KSlider`'s grading variant. Other surfaces compose kit widgets.
 
 ## Export panel
 
@@ -596,18 +598,35 @@ placeholder line is muted UiSmall (Warn for a failure), and a "CPU" chip marks p
 from the GPU route. The node editor background draws the same image in viewport space, behind every
 card and over the dot grid.
 
-A graphically edited node (#494: Grade and Levels) carries a card widget (`NodeCardWidget`, made
-by `makeNodeCardWidget`) between its transport rows and its parameter rows, inset by the card
-padding at the card's width. The same widget is the first thing in its Properties section, so
-every edit works on the card without Properties: each drag is one session value edit and one
-command on release, and a double-click on a wheel or a handle resets it. The widget decides which
-parameter rows show: the numbers stay behind it (Alt-click it, or its caret Values button) for
-exact entry, keys and links, and are hidden otherwise, with their sockets. A row whose input is
-linked always shows, so every link keeps its socket. Grade draws its four wheels two by two, each
-with its name, its master slider, a Reset button and a Values caret, then the primaries bar (two
-columns of named value fields). Levels draws a channel tab bar (RGB, R, G, B, A) with a Values
-caret, then the histogram plot with its black, gamma and white handles and the output bar with
-its two handles; its Clamp row always shows.
+A graphically edited node (#494: Grade and Levels; #498: Curves; #501: Hue/Saturation, Exposure,
+Offset and Multiply) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
+its transport rows and its parameter rows, inset by the card padding at the card's width. The same
+widget is the first thing in its Properties section, so every edit works on the card without
+Properties. Its controls follow the grading rules under "Live Value Editing": each gesture is one
+session value edit and one command, a double-click resets the control it lands on, the right-click
+menu offers Reset and the value's key, every value shows its number with its unit, and every
+animatable value shows its keyframe diamond on the widget. The widget decides which parameter rows
+show. A value the widget draws as a full-width row of its own (name, number, diamond) keeps its
+socket beside that row (`socketY`): the Grade primaries, Hue/Saturation's two values and the
+Exposure, Offset and Multiply amounts. A group the widget draws in several controls keeps its rows,
+with their sockets, behind a Values button (or Alt-click), to link them: a Grade wheel's four
+values, a Levels channel's five. A row whose input is linked always shows.
+
+Grade draws its four wheels two by two. Each has a title row (name, the wheel's keyframe diamond,
+Reset, Values), the donut wheel (the hue ring around an empty centre while neutral, filled once the
+colour is not, and only the puck and its line from the centre), the level row ("Lift level", its
+signed value and unit) over its jog strip, and the red, green and blue values underlined in their
+colours; the card is wide enough for all of them. The primaries follow, one row each over its
+slider: Temperature (blue to amber), Tint (green to magenta), Contrast (detent at 1), Pivot (a
+picture of the contrast curve whose marker drags the pivot), Saturation (grey to colour) and Exposure
+(whole-stop ticks), with a Reset button for the six. Levels draws its channel tabs (a dot on a
+changed channel, the full name in the tooltip) with the channel's diamond and Values, the Histogram
+switch and the channel's Reset, the plot with its handles, and the five values under it ("Input"
+black, gamma, white; "Output" black, white); its Clamp row ("Clamp to 0-1") always shows.
+Hue/Saturation draws its Hue row over the hue strip (input spectrum over the turned one) and its
+Saturation row over its slider. Exposure, Offset and Multiply draw their amount's row over a slider
+ticked along its soft range. Every grading graph (Levels, Curves, the contrast picture) is one
+uniform grey with a grid line every quarter: no lighter 0..1 box and no dark band past 1.
 
 `NodeCardWidth` is the normal floor. Content can require a wider minimum, and an authored
 resize remains authoritative above that minimum. `Arrange All` reads the graph like the layer
@@ -1476,7 +1495,29 @@ percent-of-size reading on top. The active field keeps its text/caret or scrub b
 fields show the live number. Color-picker spatial drags and channel edits use the same
 live/commit/cancel boundary; closing an active picker, with Escape too, accepts its edit. A
 `KSlider` and a `KRangeSelector` keep the same edit-session contract: a drag (or a run of keys) is
-one edit, pressing a slider's handle keeps its grab offset, and grab loss commits. A range
+one edit, pressing a slider's handle keeps its grab offset, and grab loss commits.
+
+The grading widgets (#501; `bloom/ui/grading_controls.hpp`) -- the Grade wheels, levels, primaries,
+Levels handles, Curves points, the Hue/Saturation strip and slider, and the Exposure, Offset and
+Multiply sliders -- share one rule set. A press never jumps a value: a puck, handle, point or slider
+moves by the pointer's travel from where it was pressed. A Shift-press on a wheel disc or a slider
+or handle track jumps to the pointer and then follows the drag. Ctrl (Cmd on macOS) is a tenth of
+the speed on every drag, Shift held during a one-dimensional drag ten times, as a value field's
+scrub; pressing or releasing a modifier mid-drag starts a new segment from the value reached. A
+double-click resets the control it lands on (a wheel disc its colour, a level its level, a handle
+its value), a group's Reset button the group, and the right-click menu of every control offers
+Reset and its key at the playhead (a group's menu its group key and Show Values). Every animatable
+value shows its keyframe diamond on the widget (one diamond keys a group's values as one command);
+every value shows its number with its unit (`st` for stops, `×` for a multiplier, `°` for degrees;
+bipolar values signed); a card is widened rather than hiding a value or cutting a label short. One
+gesture is one undo step. `KSlider`'s grading variant carries the rule: `DragMode::Relative` (a
+press keeps the value, a Shift-press jumps, Ctrl and Shift scale, a detent at the neutral value
+snaps a full-speed drag), `DragMode::Jog` (no handle and no end stops, a step a pixel, the pointer
+wrapping as a scrub does, a knurl that scrolls with the value), a neutral the fill grows from and a
+tick marks, ticks along the track, a gradient track that shows what the value means, and a chevron
+for a value past the track. Tooltips name a control and its value; the gestures show in the cursor
+(a horizontal-resize cursor on a slider, strip or handle, a crosshair over a wheel disc) and in the
+hover highlight. A range
 selector's arrow, Page and Home/End keys move its active handle, Tab moves to the other handle
 before focus leaves, and handles that sit on each other are told apart by the first move's
 direction. Preview rendering runs independently of these control readbacks.

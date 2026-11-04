@@ -316,21 +316,29 @@ within the 2e-6 gate rather than bit-exactly.
 
 None of the three has a mask input yet: the shared mask input for image effects belongs to #383.
 
-Levels is edited graphically (#494) on its node card and in Properties by the same widget
-(`bloom/ui/levels_graph.hpp`, a `NodeCardWidget`): a tab per channel (RGB, R, G, B, A) over the
-node input's luminance histogram (the Curves histogram below, requested only while the plot
-paints), with handles for the channel's input black, gamma and input white under the plot and
-for its output black and white under an output bar. The parameters are the numeric ones above,
-unchanged, so existing output and identities are unchanged. The gamma handle sits at
+Levels is edited graphically (#494, #501) on its node card and in Properties by the same widget
+(`bloom/ui/levels_graph.hpp`, a `NodeCardWidget`): a tab per channel (RGB, R, G, B, A; a dot marks
+a channel that is not at its defaults) with the channel's keyframe diamond and a Values button, the
+Histogram switch and a Reset button for the channel, the plot over the node input's luminance
+histogram (the Curves histogram below, requested only while the plot paints and the switch is on),
+with handles for the channel's input black, gamma and input white under the plot and for its output
+black and white under an output bar, and the five values always shown under it ("Input": black,
+gamma, white; "Output": black, white). The parameters are the numeric ones above, unchanged, so
+existing output and identities are unchanged. The gamma handle sits at
 `inputBlack + (inputWhite - inputBlack) * 0.5^gamma`, where the output is half way between output
 black and white; dragging it maps back through `gamma = log(t) / log(0.5)`, limited to the gamma
 domain. The plot spans `0..1` and grows to hold a black or white point outside it, plus 10%
-headroom; a drag keeps the range it started with. Each drag is one session value edit and one
+headroom; a drag keeps the range it started with. The plot is one uniform grey with a grid line
+every quarter and 0 and 1 marked on its foot. A handle drag follows the shared grading rules
+(`bloom/ui/grading_controls.hpp`): it moves by the pointer's travel, so a handle never jumps; a
+Shift-press on a handle's row jumps the nearest handle to the pointer; Ctrl drags at 0.1x and Shift
+at 10x, a modifier change starting a new segment. Each drag is one session value edit and one
 command on release; a press that moves nothing commits nothing; Escape, the right button, losing
-focus or hiding cancels; a double-click resets a handle to its default as one command. The card
-shows the widget and the Clamp row instead of the 25 value rows; Alt-click the plot, or its Values
-caret, to show the current channel's five rows (with their sockets) for exact entry, keys and
-links. A linked value's row always shows.
+focus or hiding cancels; a double-click resets a handle to its default, and on the plot the channel,
+as one command. The right-click menu offers those resets, the channel's key (one command for its
+five values) and Show Values. The card shows the widget and the Clamp row ("Clamp to 0-1") instead
+of the 25 value rows; Alt-click the plot, or its Values button, to show the current channel's five
+rows with their sockets, to link them. A linked value's row always shows.
 
 The curves are edited in one graph (`bloom/ui/curve_graph.hpp`, `CurvesCardWidget`, a
 `NodeCardWidget`) drawn the same on the node card and in Properties (#498): a tab bar picks the
@@ -348,7 +356,8 @@ the reset is the double-click's one history step. Escape, the right button, losi
 cancels a drag. A drag is a session value edit (ADR 0017): the graph and the Viewer follow it
 through the request-scoped override and the release commits one command, or a key at the playhead on
 a keyed curve; a preset or reset is one command the same way. The graph draws the identity diagonal
-(a neutral line for the other curves) and the 0..1 box; a channel curve's square view grows to hold
+(a neutral line for the other curves) over one uniform grey with a grid line every quarter, the
+range above 1 drawn like the rest (#501: no lighter 0..1 box); a channel curve's square view grows to hold
 every point plus 25% headroom above 1, a gain view spans 0..2 and Hue vs Hue half a turn either way.
 The hue curves draw the hue strip behind them, and every curve that is not a channel curve names its
 axes and draws a band along each: the hue strip or a black-to-white luma ramp along the input, and
@@ -451,22 +460,45 @@ production builder; the native harness runs both over signed/HDR/partial-alpha s
 2e-6/exact-alpha gate with warm zero-dispatch and a changed-value rerun. There is no exception.
 
 The node card and Properties draw the same widget (`bloom/ui/grade_wheels.hpp`, a
-`NodeCardWidget`): the Lift, Gamma, Gain and Offset wheels two by two, then the primaries bar.
+`NodeCardWidget`): the Lift, Gamma, Gain and Offset wheels two by two, then the primaries.
 A wheel's puck shows the part of its red, green and blue that is not grey, in the chroma plane
 perpendicular to grey with red at the vectorscope's 103 degrees (then yellow, green, cyan, blue
 and magenta anticlockwise); the rim is a chroma length of 0.25 (Lift), 0.5 (Gamma, Gain) or 0.1
-(Offset). Dragging the puck moves it with the pointer (Shift for a tenth of the speed, stopped at
-the rim) and writes the three values that put it there while keeping their mean, as one session
+(Offset). The wheel is a donut (#501): the hue ring around an empty centre (half its radius) while
+the colour is neutral, the centre filled with the faded hues once it is not, with only the puck and
+its line from the centre on it. Only a press inside the disc starts a drag, and the puck moves by the
+pointer's travel (1:1 in disc pixels, stopped at the rim), so it never jumps; a Shift-press jumps it
+to the pointer, which it then follows; Ctrl (Cmd) moves it at 0.1x, and a modifier change mid-drag
+starts a new segment from where the puck is. The arrow keys nudge it (a run of keys is one edit).
+The drag writes the three values that put the puck there while keeping their mean, as one session
 value edit over the three parameters and one command on release (a key at the playhead on an
-animated value). Under each wheel a slider drags its master (one command per drag), a button
-resets the wheel, and a caret shows its four value rows; a double-click on the wheel resets its
-master and colour as one command, and Alt-click toggles its value rows. The primaries bar is six
-value fields, one per row with its whole name in a label column beside it (one command per scrub
-or entry), with a caret for their rows. The Levels card is wide enough for its five channel tabs
-beside the Values caret. A card draws only inside its own rectangle: the socket name of a row kept
-behind the widget is hidden with the row.
-On the card the 22 value rows, with their sockets, stay hidden until a caret or Alt-click shows a
-group; a linked value's row always shows.
+animated value). A wheel's title row holds its name, its keyframe diamond (one command keys or
+unkeys its four values), a Reset button (colour and level) and a Values button that shows its four
+value rows with their sockets; Alt-click also toggles them. A double-click on the disc resets its
+colour only. Under the disc the wheel's level is always readable: "Lift level" (and so on, its
+tooltip saying what it does) with its signed value and unit (`+0.000` for Lift and Offset, `+0.00
+st` for Gamma, stops of the power, `1.00 ×` for Gain), over a jog strip 88% of the disc wide: a
+step a pixel (0.001 for Lift and Offset, 0.01 for Gamma and Gain), Ctrl 0.1x, Shift 10x, no end
+stops short of the domain, the pointer wrapping at the screen edge as a scrub does; darker to the
+left, a tick at neutral, a bar from neutral to the value and a chevron when the value lies past the
+soft span. Under that, the red, green and blue values (two places shown, three stored), each
+underlined in its channel's colour. The primaries are one row each, its name, its value with its
+unit, its keyframe diamond and its socket beside the row: Temperature and Tint over blue-to-amber and
+green-to-magenta tracks, Contrast (×) with a detent at 1, Pivot over a picture of the contrast curve
+whose marker drags the pivot, Saturation (×) over grey to colour and Exposure (st) over whole-stop
+ticks; their Reset button resets the six as one command. A card draws only inside its own
+rectangle: the socket name of a row kept behind the widget is hidden with the row. On the card a
+wheel's four rows, with their sockets, stay hidden until its Values button or Alt-click shows them;
+a linked value's row always shows.
+
+Hue/Saturation's card (`bloom/ui/hue_saturation_widget.hpp`) draws its Hue row over a hue strip:
+the input spectrum above, and below it each input hue in the colour the node turns it into, through
+the node's own matrix (`runtime::hueSaturationMatrix`, which the CPU reference prepares its kernel
+from). Dragging the strip slides the output spectrum with the pointer and turns the hue, wrapping at
+±180°. The Saturation row sits over a grey-to-colour slider with a detent at 1. Exposure, Offset and
+Multiply (`bloom/ui/scalar_slider_widget.hpp`) draw their amount's row (Exposure in stops, Factor as
+a multiplier) over a slider with a detent at neutral and ticks along its soft range (whole stops for
+Exposure). These rows carry their sockets.
 
 ## Separate Channels and Combine Channels
 
