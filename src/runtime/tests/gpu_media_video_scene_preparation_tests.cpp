@@ -4,8 +4,13 @@
 #include "gpu_process_frame_preparation_private.hpp"
 #include "packed_host_retirement_private.hpp"
 #include "video_source.hpp"
+#include <bloom/runtime/task_scheduler.hpp>
+#include <bloom/runtime/task_types.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <fstream>
+#include <mutex>
+#include <stdexcept>
 #include <thread>
 
 #include <bloom/runtime/prepared_gpu_scene.hpp>
@@ -370,6 +375,81 @@ void testVideoBudgetRefusal(Expectations& expectations, const std::filesystem::p
 
 } // namespace
 
+[[nodiscard]] bloom::runtime::CancellationToken makeCancelledToken() {
+    using namespace bloom::runtime;
+    TaskSchedulerConfig config = TaskSchedulerConfig::defaults();
+    config.cpuWorkerCount = 1;
+    config.blockingIoWorkerCount = 1;
+    TaskScheduler scheduler(config);
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+    CancellationToken token;
+    auto submission = scheduler.submit<void>(
+        TaskRequest("video cancel token",
+                    {.kind = TaskOwnerKind::Composition, .id = TaskOwnerId::fromRaw(98)}),
+        [&](TaskContext& context) {
+            {
+                std::lock_guard lock(mutex);
+                token = context.cancellation();
+                entered = true;
+            }
+            condition.notify_all();
+            std::unique_lock lock(mutex);
+            condition.wait(lock, [&] { return release; });
+            return TaskResult<void>::succeeded();
+        });
+    if (!submission.accepted())
+        throw std::logic_error("cancel token task was refused");
+    {
+        std::unique_lock lock(mutex);
+        condition.wait(lock, [&] { return entered; });
+    }
+    submission.handle.cancel();
+    {
+        std::lock_guard lock(mutex);
+        release = true;
+    }
+    condition.notify_all();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!submission.handle.tryTakeResult().has_value() &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    scheduler.beginShutdown();
+    while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    return token;
+}
+
+// Issue #474: a cancelled request is not a failure of the source. The context keeps the session
+// (its decoder and position), so playback, which cancels requests all the time, does not start a
+// new decoder for the next frame.
+void testCancelledRequestKeepsSession(Expectations& expectations,
+                                      const std::filesystem::path& fixtures) {
+    const auto path = fixtures / "numbered-h264.mp4";
+    if (!std::filesystem::is_regular_file(path)) {
+        expectations.expect(false, "the H.264 fixture is present");
+        return;
+    }
+    const auto asset = videoAsset(path, 24000);
+    const auto plan = videoPlan(format(96, 64), asset, LayerValues{}, 24000);
+    const bloom::runtime::CompiledVideoSource source{
+        document::NodeId::fromRaw(24010), asset, 0, 0, 0, std::string{}};
+    bloom::runtime::detail::VideoSourceContext context;
+    const auto rate = plan->format().frameRate();
+    const auto first = bloom::runtime::detail::selectVideoSource(
+        source, RationalTime::fromInteger(0), rate, fixtures, context, true, {});
+    expectations.expect(first.frame != nullptr && context.retainedSessionCount() == 1,
+                        "the first request decodes and retains one session");
+    const auto cancelled = bloom::runtime::detail::selectVideoSource(
+        source, rationalTime(1, 2), rate, fixtures, context, true, makeCancelledToken());
+    expectations.expect(cancelled.cancelled && cancelled.frame == nullptr,
+                        "a cancelled request returns no frame");
+    expectations.expect(context.retainedSessionCount() == 1,
+                        "a cancelled request keeps the retained session");
+}
+
 int main(int argc, char** argv) {
     try {
         std::filesystem::path fixtures;
@@ -397,6 +477,7 @@ int main(int argc, char** argv) {
         testVideoBudgetRefusal(expectations, fixtures);
         testVideoSourceRevisionBoundary(expectations, fixtures);
         testRootedVideoSourceClosure(expectations, fixtures);
+        testCancelledRequestKeepsSession(expectations, fixtures);
         if (!expectations.ok()) {
             std::cerr << "FAIL: GPU media video scene preparation expectations failed\n";
             return 1;

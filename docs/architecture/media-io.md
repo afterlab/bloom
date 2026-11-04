@@ -1803,7 +1803,13 @@ Assets expose this exact note:
 `VideoDecodeSession` serializes each asset's requests through one retained `MediaWorkerPool`
 worker per route. Identical frame requests share one decode; other concurrent requests wait,
 cancellably, for the decoder rather than receiving `Busy`, and the 30 second watchdog bounds each
-worker exchange rather than the queue. The evaluator admits retained sessions by memory: each is
+worker exchange rather than the queue. A cancelled request is not a failure of the source (#474):
+the evaluator keeps the session, and a cancellation observed before an exchange starts or after
+its reply arrived keeps the retained worker and its decoder position; only a cancellation that
+interrupts an exchange retires the worker. Discarding the session on every cancellation made
+playback, which cancels requests all the time, start a new worker for almost every frame, and a
+long-GOP stream then decoded again from its keyframe (2160p HEVC with one keyframe in 240 frames
+played at 2.5 fps). The evaluator admits retained sessions by memory: each is
 charged a conservative worker estimate (64 MiB plus 24 frames of 16-bit 4:4:4 planes, capped at
 the stream's worker address space) against a session budget of usable memory, keeping
 at least two so two sources can alternate and at most the eight files the source-snapshot quota

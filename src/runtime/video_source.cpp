@@ -305,7 +305,12 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
         selection.cancelled = error->reason == media::provider::Error::Cancelled;
         // A failed cold capture must not pin an unresolved/offline locator. On reconnect the
         // next request resolves the locator again. Pointer identity protects a newer generation.
-        if (allowInsertion)
+        // A cancelled or shut-down request is not a failure of the source: the session keeps its
+        // decoder and position. Discarding it there made playback, which cancels requests all the
+        // time, start a new decoder for almost every frame, and a long-GOP stream then decoded
+        // again from its keyframe (#474).
+        if (allowInsertion && error->reason != media::provider::Error::Cancelled &&
+            error->reason != media::provider::Error::Shutdown)
             context.discardFailedSession(revisionKey, session);
     } else
         selection.frame = std::get<std::shared_ptr<const media::provider::FrameProduct>>(product);

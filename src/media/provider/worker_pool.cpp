@@ -293,8 +293,11 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         ~Slot() { count.fetch_sub(1); }
     } slot{state_->active};
     const auto cancelled = [&] { return state_->stopping.load() || (cancel && cancel()); };
+    // Nothing was exchanged yet, so a retained worker keeps its decoder state (#474). Only a
+    // cancellation that interrupts an exchange leaves the protocol unknown and retires it.
     if (cancelled()) {
-        state_->retained.reset();
+        if (state_->stopping.load())
+            state_->retained.reset();
         return Unavailable{Error::Cancelled, "Video worker call cancelled"};
     }
     const bool retain =
@@ -364,10 +367,6 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
             state_->retained.reset();
             return *error;
         }
-        if (cancelled()) {
-            state_->retained.reset();
-            return Unavailable{Error::Cancelled, "Cancelled before video product publication"};
-        }
         auto product = validatedProduct(request, std::move(message));
         if (std::holds_alternative<Unavailable>(product)) {
             state_->retained.reset();
@@ -375,6 +374,13 @@ MediaWorkerPool::call(const MediaAttempt& attempt, const std::size_t step, CallR
         }
         retained.lastUsed = Clock::now();
         ++retained.calls;
+        // The exchange completed, so the worker is consistent and stays: a cancellation now only
+        // withholds this product (#474).
+        if (cancelled()) {
+            if (state_->stopping.load())
+                state_->retained.reset();
+            return Unavailable{Error::Cancelled, "Cancelled before video product publication"};
+        }
         return product;
     } catch (const std::bad_alloc&) {
         state_->retained.reset();

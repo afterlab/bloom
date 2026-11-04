@@ -366,6 +366,8 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
     options.capacity = 1;
     options.timeout = std::chrono::seconds(30);
     options.retainedVideo = true;
+    std::atomic<int> launches{0};
+    options.launched = [&launches](std::int64_t) { ++launches; };
     MediaWorkerPool pool(options);
     const auto declaration = [&](Role role, std::string_view codec) {
         const auto found = std::ranges::find_if(hello.declarations, [&](const auto& d) {
@@ -421,6 +423,26 @@ void sequentialAudioIsLinear(const std::filesystem::path& directory) {
     const auto early = mean(1), late = mean(blocks - 16);
     std::cout << "audio block mean early " << early << " ms, late " << late << " ms\n";
     test::check(late < early * 3.0 + 10.0, "sequential audio decode is linear, not quadratic");
+    // Issue #474: a call cancelled before anything was exchanged keeps the retained worker and
+    // its position; the next block continues in the same process.
+    const auto launchedBefore = launches.load();
+    CallRequest next;
+    next.capability = audioDeclaration.capability;
+    next.source = path.string();
+    next.sourceDigest = probe.sourceDigest;
+    next.frame = samples - block;
+    next.samples = block;
+    const auto cancelled = pool.call(
+        std::get<MediaAttempt>(registry.begin(ffmpegPipeline(audioDeclaration))), 0, next, snapshot,
+        [] { return true; }, true);
+    const auto* refusal = std::get_if<Unavailable>(&cancelled);
+    test::check(refusal && refusal->reason == Error::Cancelled, "a cancelled call is refused");
+    test::check(std::holds_alternative<AudioBlock>(pool.call(
+                    std::get<MediaAttempt>(registry.begin(ffmpegPipeline(audioDeclaration))), 0,
+                    next, snapshot, {}, true)),
+                "the call after a cancellation decodes");
+    test::check(launches.load() == launchedBefore,
+                "a cancellation before the exchange keeps the retained worker");
     // A non-continuing request reopens and still returns exact samples.
     CallRequest jump;
     jump.capability = audioDeclaration.capability;
