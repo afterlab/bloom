@@ -524,8 +524,11 @@ void testResizeFitParameters(TestContext& test) {
                                    ConstantValueSource{std::int64_t{0}});
         refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aspect,
                                    ConstantValueSource{std::int64_t{0}});
+        // #480: Nearest (1) is the second filter; nothing beyond it is.
+        (void)exercise<SetParameterSource>(test, fixture, *filter,
+                                           ConstantValueSource{std::int64_t{1}});
         refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *filter,
-                                   ConstantValueSource{std::int64_t{1}});
+                                   ConstantValueSource{std::int64_t{2}});
         if (const auto policy = result.outputId<ParameterId>("parameter.policy")) {
             (void)exercise<SetParameterSource>(test, fixture, *policy,
                                                ConstantValueSource{std::int64_t{1}});
@@ -559,8 +562,10 @@ void testTransform2DParameters(TestContext& test) {
                                ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *extent,
                                ConstantValueSource{std::int64_t{3}});
+    (void)exercise<SetParameterSource>(test, fixture, *filter,
+                                       ConstantValueSource{std::int64_t{1}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *filter,
-                               ConstantValueSource{std::int64_t{1}});
+                               ConstantValueSource{std::int64_t{2}});
 }
 
 // #337: Matte Blur is added, wired Mask to Mask, edited, undone and redone through the generic node
