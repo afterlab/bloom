@@ -79,4 +79,11 @@ struct GradeHueModel final {
 // A displayable colour of `hue` (luma 0.5, the chroma scaled into [0, 1]), for the hue strip.
 [[nodiscard]] std::array<double, 3> gradeHueColor(double hue) noexcept;
 
+// #340, #501: the Hue/Saturation node's colour matrix, M = saturate(saturation) * hueRotate(hue),
+// the Filter Effects Module Level 1 feColorMatrix operations with the luma weights above. The CPU
+// reference prepares its kernel from it and the Hue/Saturation card draws its output spectrum
+// through it, so the two cannot disagree. Row-major: RGB' = M RGB.
+[[nodiscard]] std::array<std::array<double, 3>, 3> hueSaturationMatrix(double hueDegrees,
+                                                                       double saturation) noexcept;
+
 } // namespace bloom::runtime

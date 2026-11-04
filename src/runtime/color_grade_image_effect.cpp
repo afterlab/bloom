@@ -5,6 +5,7 @@
 #include "operation_key.hpp"
 
 #include <bloom/runtime/animation_sampling.hpp>
+#include <bloom/runtime/grade_curve.hpp>
 
 #include <bloom/document/color_grade_nodes.hpp>
 
@@ -109,34 +110,12 @@ prepareHueSaturation(const std::span<const double> values) {
     PreparedColorGrade grade{ColorGradeKind::HueSaturation,
                              std::vector<float>(kHueSaturationFloats, 0.0F),
                              hue == 0.0 && s == 1.0};
-    const double radians = std::fmod(hue, 360.0) * (std::numbers::pi / 180.0);
-    const double cosine = std::cos(radians);
-    const double sine = std::sin(radians);
-    // Filter Effects Module Level 1, feColorMatrix hueRotate and saturate.
-    const std::array<std::array<double, 3>, 3> rotate{{
-        {kLumaRed + cosine * (1.0 - kLumaRed) - sine * kLumaRed,
-         kLumaGreen - cosine * kLumaGreen - sine * kLumaGreen,
-         kLumaBlue - cosine * kLumaBlue + sine * (1.0 - kLumaBlue)},
-        {kLumaRed - cosine * kLumaRed + sine * 0.143,
-         kLumaGreen + cosine * (1.0 - kLumaGreen) + sine * 0.140,
-         kLumaBlue - cosine * kLumaBlue - sine * 0.283},
-        {kLumaRed - cosine * kLumaRed - sine * (1.0 - kLumaRed),
-         kLumaGreen - cosine * kLumaGreen + sine * kLumaGreen,
-         kLumaBlue + cosine * (1.0 - kLumaBlue) + sine * kLumaBlue},
-    }};
-    const std::array<std::array<double, 3>, 3> saturate{{
-        {kLumaRed + (1.0 - kLumaRed) * s, kLumaGreen - kLumaGreen * s, kLumaBlue - kLumaBlue * s},
-        {kLumaRed - kLumaRed * s, kLumaGreen + (1.0 - kLumaGreen) * s, kLumaBlue - kLumaBlue * s},
-        {kLumaRed - kLumaRed * s, kLumaGreen - kLumaGreen * s, kLumaBlue + (1.0 - kLumaBlue) * s},
-    }};
-    // Hue first, then saturation: M = saturate * rotate.
+    // Filter Effects Module Level 1, feColorMatrix hueRotate and saturate (one definition, shared
+    // with the Hue/Saturation card's spectrum).
+    const auto matrix = hueSaturationMatrix(hue, s);
     for (std::size_t row = 0; row < 3; ++row)
-        for (std::size_t column = 0; column < 3; ++column) {
-            double sum = 0.0;
-            for (std::size_t k = 0; k < 3; ++k)
-                sum += saturate[row][k] * rotate[k][column];
-            grade.data[4 * row + column] = static_cast<float>(sum);
-        }
+        for (std::size_t column = 0; column < 3; ++column)
+            grade.data[4 * row + column] = static_cast<float>(matrix[row][column]);
     return grade;
 }
 

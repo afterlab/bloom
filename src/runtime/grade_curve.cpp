@@ -237,4 +237,39 @@ std::array<double, 3> gradeHueColor(const double hue) noexcept {
     return {0.5 + chroma[0] * scale, 0.5 + chroma[1] * scale, 0.5 + chroma[2] * scale};
 }
 
+std::array<std::array<double, 3>, 3> hueSaturationMatrix(const double hueDegrees,
+                                                         const double saturation) noexcept {
+    constexpr double red = 0.213;
+    constexpr double green = 0.715;
+    constexpr double blue = 0.072;
+    const double radians = std::fmod(hueDegrees, 360.0) * (3.14159265358979323846 / 180.0);
+    const double cosine = std::cos(radians);
+    const double sine = std::sin(radians);
+    const double s = saturation;
+    // Filter Effects Module Level 1, feColorMatrix hueRotate and saturate.
+    const std::array<std::array<double, 3>, 3> rotate{{
+        {red + cosine * (1.0 - red) - sine * red, green - cosine * green - sine * green,
+         blue - cosine * blue + sine * (1.0 - blue)},
+        {red - cosine * red + sine * 0.143, green + cosine * (1.0 - green) + sine * 0.140,
+         blue - cosine * blue - sine * 0.283},
+        {red - cosine * red - sine * (1.0 - red), green - cosine * green + sine * green,
+         blue + cosine * (1.0 - blue) + sine * blue},
+    }};
+    const std::array<std::array<double, 3>, 3> saturate{{
+        {red + (1.0 - red) * s, green - green * s, blue - blue * s},
+        {red - red * s, green + (1.0 - green) * s, blue - blue * s},
+        {red - red * s, green - green * s, blue + (1.0 - blue) * s},
+    }};
+    // Hue first, then saturation: M = saturate * rotate.
+    std::array<std::array<double, 3>, 3> matrix{};
+    for (std::size_t row = 0; row < 3; ++row)
+        for (std::size_t column = 0; column < 3; ++column) {
+            double sum = 0.0;
+            for (std::size_t k = 0; k < 3; ++k)
+                sum += saturate[row][k] * rotate[k][column];
+            matrix[row][column] = sum;
+        }
+    return matrix;
+}
+
 } // namespace bloom::runtime
