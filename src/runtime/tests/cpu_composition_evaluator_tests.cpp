@@ -372,6 +372,23 @@ twoSolidBlendPlan(const core::BlendMode topMode, const core::BlendMode bottomMod
                                                    runtime::OperationIndex::fromRaw(5)});
 }
 
+// twoSolidBlendPlan() with the TOP layer narrowed to the left half of the frame (a 2x2 solid
+// centred at x = 1), so the right half of the stack window has a backdrop and no layer pixels at
+// all.
+[[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan>
+partialTopBlendPlan(const core::BlendMode topMode) {
+    auto definition = twoSolidBlendPlan(topMode, core::BlendMode::Normal)->copyDefinition();
+    std::get<runtime::CompiledSolid>(definition.operations[0]) = runtime::CompiledSolid{
+        kSolidNodeA,
+        {kColorA, core::Color4d{1.0, 0.5, 0.25, 0.5}},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1000), 2.0},
+        {bloom::document::ParameterId::fromRaw(kSolidNodeA.value() * 100 + 1001), 2.0}};
+    definition.operations[1] =
+        layerOutput(kLayerNodeA, kLayerA, runtime::OperationIndex::fromRaw(0), kLayerParametersA,
+                    {.position = {1.0, 1.0}, .blendMode = topMode});
+    return std::make_shared<const runtime::CompiledCompositionPlan>(std::move(definition));
+}
+
 [[nodiscard]] std::shared_ptr<const runtime::CompiledCompositionPlan> emptyStackPlan() {
     std::vector<runtime::CompiledOperation> operations;
     operations.emplace_back(runtime::CompiledMerge{kStackNode, {}});
@@ -1240,7 +1257,7 @@ void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations
         }
         return *value.value();
     };
-    const std::array<Case, 8> cases{{
+    const std::array<Case, 18> cases{{
         {BlendMode::Normal, premultiplied(0.625F, 0.5F, 0.5F, 1.0F)},
         {BlendMode::Add, premultiplied(0.75F, 0.75F, 0.875F, 1.0F)},
         {BlendMode::Multiply, premultiplied(0.25F, 0.375F, 0.46875F, 1.0F)},
@@ -1249,6 +1266,16 @@ void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations
         {BlendMode::Darken, premultiplied(0.25F, 0.5F, 0.5F, 1.0F)},
         {BlendMode::Lighten, premultiplied(0.625F, 0.5F, 0.75F, 1.0F)},
         {BlendMode::Difference, premultiplied(0.5F, 0.25F, 0.625F, 1.0F)},
+        {BlendMode::Subtract, premultiplied(-0.25F, 0.25F, 0.625F, 1.0F)},
+        {BlendMode::Divide, premultiplied(0.25F, 0.75F, 1.875F, 1.0F)},
+        {BlendMode::Minimum, premultiplied(0.25F, 0.25F, 0.125F, 0.5F)},
+        {BlendMode::Maximum, premultiplied(0.5F, 0.5F, 0.75F, 1.0F)},
+        {BlendMode::In, premultiplied(0.5F, 0.25F, 0.125F, 0.5F)},
+        {BlendMode::Out, render::Rgba32f::transparent()},
+        {BlendMode::Atop, premultiplied(0.625F, 0.5F, 0.5F, 1.0F)},
+        {BlendMode::Xor, premultiplied(0.125F, 0.25F, 0.375F, 0.5F)},
+        {BlendMode::Stencil, premultiplied(0.125F, 0.25F, 0.375F, 0.5F)},
+        {BlendMode::Mask, premultiplied(0.125F, 0.25F, 0.375F, 0.5F)},
     }};
     expectations.expect(cases.size() == core::kBlendModes.size(),
                         "the Merge stage is exercised under every implemented blend mode");
@@ -1285,6 +1312,28 @@ void testStackCompositesEachLayerUnderItsOwnBlendMode(Expectations& expectations
     expectations.expect(normalPixel != nullptr && bottomPixel != nullptr && topPixel != nullptr &&
                             *bottomPixel == *normalPixel && *topPixel != *normalPixel,
                         "each stack entry contributes its own layer's blend mode");
+
+    // Where the top layer has NO pixels, a mode that keeps the backdrop under a transparent source
+    // leaves it bit-identical, and In, Out, Mask and Minimum clear it -- the whole stack window is
+    // folded for those modes, not only the layer's own data window.
+    const auto backdrop = premultiplied(0.25F, 0.5F, 0.75F, 1.0F);
+    for (const auto mode : core::kBlendModes) {
+        const auto plan = partialTopBlendPlan(mode);
+        const auto result = evaluator.evaluate(plan, requestFor(*plan), {});
+        render::Rgba32f inside = render::Rgba32f::transparent();
+        render::Rgba32f outside = render::Rgba32f::transparent();
+        const auto* covered = pixel(result, 1, 1, inside);
+        const auto* uncovered = pixel(result, 3, 1, outside);
+        const bool keeps = core::blendModeKeepsBackdropUnderTransparentSource(mode);
+        const auto expectedOutside =
+            keeps || mode == BlendMode::Maximum ? backdrop : render::Rgba32f::transparent();
+        const auto& fullCase = cases[static_cast<std::size_t>(core::blendModeStoredValue(mode))];
+        expectations.expect(result.status() == runtime::EvaluationStatus::Evaluated &&
+                                covered != nullptr && uncovered != nullptr &&
+                                *covered == fullCase.expected && *uncovered == expectedOutside,
+                            "outside a layer's pixels only In, Out, Mask and Minimum change the "
+                            "backdrop (Maximum keeps a non-negative one)");
+    }
 }
 
 void testLayerRangeIsHalfOpen(Expectations& expectations) {

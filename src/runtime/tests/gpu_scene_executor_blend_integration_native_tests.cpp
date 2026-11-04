@@ -1,4 +1,4 @@
-// Native vertical for the all-8 blend-mode slice: a REAL CompiledCompositionPlan -> the production
+// Native vertical for every blend mode: a REAL CompiledCompositionPlan -> the production
 // CpuGpuSceneBuilder -> the production GpuSceneExecutor on a Vulkan device -> readback compared to
 // a genuine, uncached CpuCompositionEvaluator frame under the documented 2e-6 absolute-or-relative
 // gate. This exercises the builder's actual blend emission (not the proof-only fixture seam), so a
@@ -6,7 +6,7 @@
 // matches the CPU evaluator.
 //
 // Without a loader the test skips cleanly; --require-device makes that a failure. On a device
-// without shaderFloat64 the six general modes are refused honestly (Unsupported/DispatchRefused)
+// without shaderFloat64 the general modes are refused honestly (Unsupported/DispatchRefused)
 // and the test accepts that instead of claiming a pass.
 
 #include "gpu_blend_native_support.hpp"
@@ -458,11 +458,8 @@ int main(int argc, char** argv) {
             return 1;
         }
         CpuCompositionEvaluator evaluator;
-        const std::array modes{BlendMode::Normal,  BlendMode::Add,       BlendMode::Multiply,
-                               BlendMode::Screen,  BlendMode::Overlay,   BlendMode::Darken,
-                               BlendMode::Lighten, BlendMode::Difference};
         std::uint64_t idBase = 70000;
-        for (const auto mode : modes) {
+        for (const auto mode : bloom::core::kBlendModes) {
             runMode(expectations, evaluator, *device.device, *cache.cache, mode, idBase);
             idBase += 100;
         }

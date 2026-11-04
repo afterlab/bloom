@@ -357,9 +357,7 @@ void runBlendMode(Expectations& expectations, GpuDevice& device, GpuSceneCache& 
 }
 
 void runBlendMatrix(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
-    const auto modes = std::array<BlendMode, 8>{
-        BlendMode::Normal,  BlendMode::Add,    BlendMode::Multiply, BlendMode::Screen,
-        BlendMode::Overlay, BlendMode::Darken, BlendMode::Lighten,  BlendMode::Difference};
+    const auto& modes = bloom::core::kBlendModes;
     for (std::size_t i = 0; i < modes.size(); ++i) {
         runBlendMode(expectations, device, cache, modes[i],
                      "blend-mode-" + std::to_string(static_cast<unsigned>(i)));

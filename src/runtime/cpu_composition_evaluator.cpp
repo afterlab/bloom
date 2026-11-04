@@ -4121,12 +4121,23 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     std::max(sourceWindow.originX(), window.originX());
                                 const auto lastColumn =
                                     std::min(sourceWindow.maxXExclusive(), window.maxXExclusive());
-                                if (lastColumn <= firstColumn)
+                                // Minimum, Maximum, In, Out and Mask change the backdrop where the
+                                // layer has no pixels too (In clears it, Maximum lifts a negative
+                                // channel), so those modes walk the whole stack window with a
+                                // transparent source outside the layer's own data window -- the
+                                // same transparent tap the GPU kernel reads there.
+                                const bool wholeWindow =
+                                    !core::blendModeKeepsBackdropUnderTransparentSource(blendMode);
+                                if (lastColumn <= firstColumn && !wholeWindow)
                                     continue;
                                 const auto columnOffset = firstColumn - window.originX();
                                 const auto sourceOffset = firstColumn - sourceWindow.originX();
                                 const auto columnCount =
-                                    static_cast<std::size_t>(lastColumn - firstColumn);
+                                    lastColumn > firstColumn
+                                        ? static_cast<std::size_t>(lastColumn - firstColumn)
+                                        : std::size_t{0};
+                                const auto windowWidth =
+                                    static_cast<std::size_t>(window.extent().width());
                                 // Entries fold in order, bottom to top, because each one composites
                                 // over what the ones beneath it left behind. The ROWS of one entry
                                 // are independent of each other, so they band; the entries
@@ -4136,17 +4147,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 const auto outcome = runRowBandPass(
                                     rowBands, cancellation, height, window.originY(),
                                     [&image, &source, sourceWindow, columnOffset, sourceOffset,
-                                     columnCount, blendMode,
+                                     columnCount, blendMode, wholeWindow, windowWidth,
                                      &operationSubject](const std::int64_t y) -> RowFailure {
-                                        if (y < sourceWindow.originY() ||
-                                            y >= sourceWindow.maxYExclusive()) {
+                                        const bool sourceRowInside =
+                                            y >= sourceWindow.originY() &&
+                                            y < sourceWindow.maxYExclusive();
+                                        if (!sourceRowInside && !wholeWindow) {
                                             return std::nullopt;
-                                        }
-                                        auto sourceRow = source.row(y);
-                                        if (!sourceRow) {
-                                            return imageDiagnostic(
-                                                *sourceRow.error(), operationSubject,
-                                                "Layer Stack source row could not be addressed");
                                         }
                                         auto destinationRow = image.row(y);
                                         if (!destinationRow) {
@@ -4154,6 +4161,43 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                                    operationSubject,
                                                                    "Layer Stack destination row "
                                                                    "could not be addressed");
+                                        }
+                                        if (wholeWindow) {
+                                            // One row-sized transparent source carrying the layer's
+                                            // own pixels where it has them.
+                                            std::vector<render::Rgba32f> aligned(
+                                                windowWidth, render::Rgba32f::transparent());
+                                            if (sourceRowInside && columnCount > 0) {
+                                                auto sourceRow = source.row(y);
+                                                if (!sourceRow) {
+                                                    return imageDiagnostic(
+                                                        *sourceRow.error(), operationSubject,
+                                                        "Layer Stack source row could not be "
+                                                        "addressed");
+                                                }
+                                                const auto span = sourceRow.value()->subspan(
+                                                    static_cast<std::size_t>(sourceOffset),
+                                                    columnCount);
+                                                std::ranges::copy(
+                                                    span,
+                                                    aligned.begin() +
+                                                        static_cast<std::ptrdiff_t>(columnOffset));
+                                            }
+                                            if (const auto rowStatus =
+                                                    render::blendLinearRec709SceneRow(
+                                                        blendMode, aligned,
+                                                        *destinationRow.value())) {
+                                                return imageDiagnostic(
+                                                    *rowStatus, operationSubject,
+                                                    "Layer Stack blend could not be evaluated");
+                                            }
+                                            return std::nullopt;
+                                        }
+                                        auto sourceRow = source.row(y);
+                                        if (!sourceRow) {
+                                            return imageDiagnostic(
+                                                *sourceRow.error(), operationSubject,
+                                                "Layer Stack source row could not be addressed");
                                         }
                                         if (const auto rowStatus =
                                                 render::blendLinearRec709SceneRow(
