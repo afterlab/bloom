@@ -398,7 +398,8 @@ emitMergeCommand(const CompiledMerge& stack, const CompiledCompositionPlan& plan
     std::vector<OrderedForeground> ordered;
     bool allNormal = true;
     for (auto entry = stack.entries.rbegin(); entry != stack.entries.rend(); ++entry) {
-        core::BlendMode mode = core::BlendMode::Normal;
+        // #339: a plain image entry may name its mode explicitly (never a Layer entry).
+        core::BlendMode mode = entry->blendMode.value_or(core::BlendMode::Normal);
         const auto layerIndex = mergeEntryLayerIndex(plan, entry->input);
         if (const auto* layerOutput =
                 std::get_if<CompiledLayerOutput>(&plan.operations()[layerIndex.value()]);

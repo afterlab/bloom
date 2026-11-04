@@ -356,8 +356,10 @@ enum class ScalarDomain : std::uint8_t {
                                                 const CompiledCompositionPlan& plan,
                                                 const std::size_t index,
                                                 EvaluationDiagnostic& failure) {
-    // ADR 0028: a compiler-synthesized constant names no document parameter.
-    if (!parameter.id.isValid() && !std::holds_alternative<double>(parameter.source)) {
+    // ADR 0028: a compiler-synthesized constant names no document parameter; nor does a value a
+    // compositing recipe derives in the value graph (#339).
+    if (!parameter.id.isValid() && !std::holds_alternative<double>(parameter.source) &&
+        !std::holds_alternative<ValueOutputIndex>(parameter.source)) {
         failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                              "Operation has an invalid parameter identity", {},
                              subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
@@ -378,7 +380,8 @@ enum class ScalarDomain : std::uint8_t {
                                                const CompiledCompositionPlan& plan,
                                                const std::size_t index,
                                                EvaluationDiagnostic& failure) {
-    if (!parameter.id.isValid() && !std::holds_alternative<core::Color4d>(parameter.source)) {
+    if (!parameter.id.isValid() && !std::holds_alternative<core::Color4d>(parameter.source) &&
+        !std::holds_alternative<ValueOutputIndex>(parameter.source)) {
         failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
                              "Operation has an invalid parameter identity", {},
                              subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
@@ -399,7 +402,8 @@ enum class ScalarDomain : std::uint8_t {
                                               const CompiledCompositionPlan& plan,
                                               const std::size_t index,
                                               EvaluationDiagnostic& failure) {
-    if (!parameter.id.isValid() ||
+    // A synthesized constant or derived value (#339) names no document parameter; a curve does.
+    if ((!parameter.id.isValid() && std::holds_alternative<Vec2CurveIndex>(parameter.source)) ||
         (std::holds_alternative<Vec2CurveIndex>(parameter.source) &&
          std::get<Vec2CurveIndex>(parameter.source).value() >= plan.vec2Curves().size())) {
         failure = diagnostic(EvaluationDiagnosticCode::InvalidPlan,
@@ -746,8 +750,12 @@ enum class ScalarDomain : std::uint8_t {
                     }
                     const auto* layer = std::get_if<CompiledLayerOutput>(
                         &plan.operations()[mergeEntryLayerIndex(plan, entry.input).value()]);
-                    if (entry.layerId.isValid() &&
-                        (layer == nullptr || layer->layerId != entry.layerId)) {
+                    // #339: an explicit blend mode belongs to a plain image entry only.
+                    if ((entry.layerId.isValid() &&
+                         (layer == nullptr || layer->layerId != entry.layerId)) ||
+                        (entry.blendMode && (entry.layerId.isValid() ||
+                                             !core::blendModeFromStoredValue(
+                                                 core::blendModeStoredValue(*entry.blendMode))))) {
                         failure = diagnostic(
                             EvaluationDiagnosticCode::InvalidPlan,
                             "Layer Stack entry does not match its layer output", {},
@@ -996,9 +1004,12 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                     const std::string_view field, const ScalarDomain domain,
                                     const EvaluationSubject& operationSubject) {
         // ADR 0028: a compiler-synthesized constant (a track matte's unit factor, the Mask node's
-        // canvas size) names no document parameter; it is validated but claims no identity.
+        // canvas size) names no document parameter; it is validated but claims no identity. #339:
+        // so does a value a compositing recipe derives in the value graph (a Glow knee bound, a
+        // Drop Shadow offset), since it is not any one authored parameter.
         const bool synthesized =
-            !parameter.id.isValid() && std::holds_alternative<double>(parameter.source);
+            !parameter.id.isValid() && (std::holds_alternative<double>(parameter.source) ||
+                                        std::holds_alternative<ValueOutputIndex>(parameter.source));
         if (!synthesized && !registerParameter(parameter.id, operationSubject)) {
             return false;
         }
@@ -1050,7 +1061,11 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
     const auto registerVec2 = [&](const CompiledVec2Parameter& parameter,
                                   const std::string_view field,
                                   const EvaluationSubject& operationSubject) {
-        if (!registerParameter(parameter.id, operationSubject)) {
+        // As for a scalar: a synthesized constant or derived value claims no identity (#339).
+        const bool synthesized =
+            !parameter.id.isValid() && (std::holds_alternative<document::Vec2d>(parameter.source) ||
+                                        std::holds_alternative<ValueOutputIndex>(parameter.source));
+        if (!synthesized && !registerParameter(parameter.id, operationSubject)) {
             return false;
         }
         if (const auto* constant = std::get_if<document::Vec2d>(&parameter.source)) {
@@ -1101,7 +1116,8 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                                    const std::string_view field,
                                    const EvaluationSubject& operationSubject) {
         const bool synthesized =
-            !parameter.id.isValid() && std::holds_alternative<core::Color4d>(parameter.source);
+            !parameter.id.isValid() && (std::holds_alternative<core::Color4d>(parameter.source) ||
+                                        std::holds_alternative<ValueOutputIndex>(parameter.source));
         if (!synthesized && !registerParameter(parameter.id, operationSubject)) {
             return false;
         }
@@ -2821,8 +2837,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         } else if constexpr (std::is_same_v<Step, CompiledMerge>) {
 
                             key.add(step.entries.size());
-                            for (const auto& entry : step.entries)
+                            for (const auto& entry : step.entries) {
                                 key.add(entry.layerId.isValid());
+                                // #339: an explicit mode is keyed; its absence keeps the bytes.
+                                if (entry.blendMode)
+                                    key.add(core::blendModeStoredValue(*entry.blendMode));
+                            }
                         }
                     },
                     plan->operations()[index]);
@@ -4107,7 +4127,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 const auto layerIndex = mergeEntryLayerIndex(*plan, entry->input);
                                 const auto* layerOutput = std::get_if<CompiledLayerOutput>(
                                     &plan->operations()[layerIndex.value()]);
-                                auto blendMode = core::BlendMode::Normal;
+                                // #339: a plain image entry may name its mode explicitly.
+                                auto blendMode = entry->blendMode.value_or(core::BlendMode::Normal);
                                 if (layerOutput != nullptr && entry->layerId.isValid()) {
                                     // Task DRIVE-1: the mode may be driven, so it is READ here
                                     // rather than copied out of the plan.

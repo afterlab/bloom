@@ -721,10 +721,15 @@ struct CompiledLayerOutput {
 };
 
 // Plan v3: an invalid layerId denotes a plain image with Normal blending.
+// #339: a plain image entry (no layer) may instead name its blend mode explicitly; the compositing
+// recipes add (Glow) or wrap (Light Wrap, Atop) an image this way. A Layer entry never carries
+// one, since its mode is the Layer Output's own. Appended with an absent default, so no existing
+// plan value changes meaning.
 struct CompiledMergeInput {
     document::LayerSlotId slotId;
     document::LayerId layerId;
     OperationIndex input;
+    std::optional<core::BlendMode> blendMode{};
 
     friend bool operator==(const CompiledMergeInput&, const CompiledMergeInput&) = default;
 };
