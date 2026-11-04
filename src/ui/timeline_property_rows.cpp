@@ -13,6 +13,8 @@
 #include <QTimer>
 #include <QVariant>
 #include <algorithm>
+#include <bloom/core/blend_mode.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -25,6 +27,8 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
+#include <span>
 
 namespace bloom::ui {
 namespace {
@@ -55,13 +59,26 @@ constexpr int kPropertyIndentStep = kit::px(kit::Spacing::M);
 // The two nodes a layer's own rows already come from. Task DRIVE-1's upstream walk starts from
 // exactly these, so the value nodes it reaches are the ones driving what the twirl-down shows.
 [[nodiscard]] std::vector<document::NodeId> upstreamSeeds(const CompositionSession& session,
-                                                          const document::LayerId layerId) {
+                                                          const TimelineLayerEntry& layer) {
     std::vector<document::NodeId> seeds;
-    if (const auto boundary = session.boundaryNodeForLayer(layerId))
+    if (const auto boundary = session.boundaryNodeForLayer(layer.layerId))
         seeds.push_back(*boundary);
-    if (const auto source = session.directSourceNodeForLayer(layerId))
+    if (const auto source = session.directSourceNodeForLayer(layer.layerId))
         seeds.push_back(*source);
+    else if (!layer.layerId.isValid() && layer.imageNodeId.isValid())
+        seeds.push_back(layer.imageNodeId);
     return seeds;
+}
+
+// The node whose own parameters a row's Source group lists: the layer's content, or a plain
+// entry's source. A nested Merge or an Adjustment has none worth a row.
+[[nodiscard]] std::optional<document::NodeId> sourceNodeFor(const CompositionSession& session,
+                                                            const TimelineLayerEntry& layer) {
+    if (const auto source = session.directSourceNodeForLayer(layer.layerId))
+        return source;
+    if (!layer.layerId.isValid() && layer.imageNodeId.isValid())
+        return layer.imageNodeId;
+    return std::nullopt;
 }
 
 // GitHub #197. The timeline's colour adapter used to show and commit the raw stored reference
@@ -161,6 +178,10 @@ QString upstreamGroupKey(const document::NodeId nodeId) {
     return QStringLiteral("upstream-%1").arg(nodeId.value());
 }
 
+QString timelineGroupKey(const TimelineLayerEntry& layer, const QString& key) {
+    return layer.layerId.isValid() ? key : key + QStringLiteral("@slot-%1").arg(layer.slotId.value());
+}
+
 std::vector<TimelineLayerEntry> timelinePropertyEntries(
     const CompositionSession& session, const std::vector<TimelineLayerEntry>& layers,
     const std::set<document::LayerId>& expanded,
@@ -177,8 +198,10 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
         // parameters show, every group they sit in opens, and Object/Transform rows stand directly
         // under the layer.
         const auto* reveal = revealFound == revealed.end() ? nullptr : &revealFound->second;
-        layer.expanded =
-            !layer.imageNodeId.isValid() && (expanded.contains(layer.layerId) || reveal != nullptr);
+        // #502: every row twirls down, a plain entry's too (its rows show its default layer).
+        layer.expanded = layer.expanded ||
+                         (layer.layerId.isValid() && expanded.contains(layer.layerId)) ||
+                         reveal != nullptr;
         rows.push_back(layer);
         if (!layer.expanded)
             continue;
@@ -191,12 +214,13 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
         // whose title is a node's display name -- which two nodes may share -- while its key is the
         // node's own identity and therefore never collides. Under a reveal a heading waits for its
         // first revealed row, so a group with nothing revealed never shows.
-        const auto group = [&](const QString& key, const QString& title = {},
+        const auto group = [&](const QString& name, const QString& title = {},
                                const bool flattenable = false) {
+            const auto key = timelineGroupKey(layer, name);
             auto entry = layer;
             entry.rowKind = TimelineLayerEntry::Kind::Group;
             entry.depth = 1;
-            entry.name = title.isEmpty() ? key : title;
+            entry.name = title.isEmpty() ? name : title;
             entry.group = key;
             groupKey = key;
             groupOpen = reveal != nullptr || !collapsedGroups.contains({layer.layerId, key});
@@ -207,13 +231,11 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
             else
                 rows.push_back(entry);
         };
-        const auto add = [&](document::NodeId nodeId, std::string_view role, const QString& name) {
+        const auto addBinding = [&](std::span<const document::ParameterBinding> bindings,
+                                    std::string_view role, const QString& name) {
             if (!groupOpen)
                 return;
-            const auto* node = composition->graph().findNode(nodeId);
-            if (!node)
-                return;
-            for (const auto& binding : node->parameters) {
+            for (const auto& binding : bindings) {
                 if (binding.role != role)
                     continue;
                 if (reveal != nullptr && !reveal->contains(binding.parameterId))
@@ -259,26 +281,55 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
                 }
             }
         };
-        if (const auto boundary = session.boundaryNodeForLayer(layer.layerId)) {
+        // #502: the layer's own rows -- a Layer node's bindings or an entry layer's own -- and for a
+        // plain entry the same rows at its default layer's values (parameterId invalid): editing
+        // one creates the entry's layer in the same step.
+        const auto addDefault = [&](std::string_view role, const QString& name) {
+            if (!groupOpen || reveal != nullptr)
+                return;
+            auto entry = layer;
+            entry.rowKind = TimelineLayerEntry::Kind::Parameter;
+            entry.depth = 2;
+            entry.group = groupKey;
+            entry.name = name;
+            entry.role = std::string(role);
+            entry.parameterId = {};
+            entry.expanded = false;
+            rows.push_back(entry);
+        };
+        const auto* boundaryLayer =
+            layer.layerId.isValid() ? composition->graph().findLayer(layer.layerId) : nullptr;
+        const auto add = [&](std::string_view role, const QString& name) {
+            if (boundaryLayer != nullptr)
+                addBinding(document::layerParameterBindings(composition->graph(), *boundaryLayer),
+                           role, name);
+            else if (layer.mergeNodeId.isValid())
+                addDefault(role, name);
+        };
+        if (boundaryLayer != nullptr || layer.mergeNodeId.isValid()) {
             group(QObject::tr("Object"), {}, true);
-            add(*boundary, document::kOpacityParameterRole, QObject::tr("Opacity"));
-            add(*boundary, document::kBlendModeParameterRole, QObject::tr("Blending"));
+            add(document::kOpacityParameterRole, QObject::tr("Opacity"));
+            add(document::kBlendModeParameterRole, QObject::tr("Blending"));
             group(QObject::tr("Transform"), {}, true);
-            add(*boundary, document::kPositionParameterRole, QObject::tr("Position"));
-            add(*boundary, document::kAnchorParameterRole, QObject::tr("Anchor"));
-            add(*boundary, document::kScaleParameterRole, QObject::tr("Scale"));
-            add(*boundary, document::kRotationParameterRole, QObject::tr("Rotation"));
+            add(document::kPositionParameterRole, QObject::tr("Position"));
+            add(document::kAnchorParameterRole, QObject::tr("Anchor"));
+            add(document::kScaleParameterRole, QObject::tr("Scale"));
+            add(document::kRotationParameterRole, QObject::tr("Rotation"));
         }
         // ADR 0028: the layer's masks, between its own rows and its source's.
         appendMaskEntries(session, layer, collapsedGroups, rows, reveal);
-        if (const auto source = session.directSourceNodeForLayer(layer.layerId)) {
+        if (const auto source = sourceNodeFor(session, layer)) {
             const auto* node = composition->graph().findNode(*source);
             bool heading = false;
             const auto* definition =
-                document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
-            if (!definition)
-                continue;
-            for (const auto& declared : definition->parameters) {
+                node == nullptr || node->typeId == document::kLayerStackNodeType ||
+                        node->typeId == document::kAdjustmentNodeType
+                    ? nullptr
+                    : document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+            const auto declaredParameters =
+                definition ? std::span<const document::ParameterDefinition>(definition->parameters)
+                           : std::span<const document::ParameterDefinition>{};
+            for (const auto& declared : declaredParameters) {
                 if (node->typeId == document::kShapeSourceNodeType &&
                     !document::shapeRoleVisible(nodeShapeKind(*composition, *node), declared.role))
                     continue;
@@ -318,7 +369,7 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
                     name = QObject::tr("Line Height");
                 if (binding.role == document::kTextLetterSpacingParameterRole)
                     name = QObject::tr("Letter Spacing");
-                add(*source, binding.role, name);
+                addBinding(node->parameters, binding.role, name);
             }
         }
         // Task DRIVE-1. A layer's own parameters are not the whole of what animates it: a driven
@@ -328,7 +379,7 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
         // -- the same nodes, in the same order, that the Properties panel lists upstream of a
         // selection. The rows inside are ordinary parameter rows, so they carry the same diamond,
         // the same lane, and the same drag gestures every layer parameter already has.
-        for (const auto& upstream : session.upstreamNodes(upstreamSeeds(session, layer.layerId),
+        for (const auto& upstream : session.upstreamNodes(upstreamSeeds(session, layer),
                                                           UpstreamTraversal::DriverLinksOnly)) {
             const auto* node = composition->graph().findNode(upstream.id);
             const auto* definition =
@@ -351,7 +402,8 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
                           node_editor::nodeDisplayName(*composition, *node));
                     heading = true;
                 }
-                add(upstream.id, found->role, node_editor::displayTypeName(found->role));
+                addBinding(node->parameters, found->role,
+                           node_editor::displayTypeName(found->role));
             }
         }
     }
@@ -417,7 +469,16 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
                 commitValues(i);
         });
         properties::bindValueEdit(
-            session_, *field, [this] { return entry_.parameterId; },
+            session_, *field,
+            [this] {
+                // #502: a plain entry's row gains its layer when an edit starts; the session folds
+                // that into the edit's own undo step (or withdraws it if nothing is committed).
+                if (!entry_.parameterId.isValid() && entry_.mergeNodeId.isValid() &&
+                    !entry_.role.empty())
+                    return session_.materializeEntryParameter(entry_.entry(), entry_.role)
+                        .value_or(document::ParameterId{});
+                return entry_.parameterId;
+            },
             [this, i]() -> std::optional<document::AnimationComponent> {
                 if (entry_.component)
                     return entry_.component;
@@ -495,6 +556,15 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
             return;
         const auto mode = blendModeFromDropdownIndex(*blending_, index);
         const auto layer = entry_.layerId;
+        if (!layer.isValid() && entry_.mergeNodeId.isValid()) {
+            if (mode)
+                (void)session_.setEntryParameterValue(
+                    entry_.entry(), document::kBlendModeParameterRole,
+                    document::ParameterValue{
+                        static_cast<std::int64_t>(core::blendModeStoredValue(*mode))},
+                    tr("Set Blend Mode"));
+            return;
+        }
         session_.selectLayer(layer);
         if (mode)
             (void)session_.setSelectedBlendMode(*mode);
@@ -614,9 +684,12 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         // timelinePropertyDiamond, even though both are painted by this one widget.
         diamond_->setObjectName(componentRow ? QStringLiteral("timelineComponentDiamond")
                                              : QStringLiteral("timelinePropertyDiamond"));
+        // #502: a plain entry's row shows its default layer's value (no parameter yet).
+        const bool plain = !entry.parameterId.isValid() && entry.mergeNodeId.isValid();
         diamond_->setComponent(entry.component);
         diamond_->setRole(entry.role);
         diamond_->setParameterId(entry.parameterId);
+        diamond_->setEntry(plain ? std::optional(entry.entry()) : std::nullopt);
         diamond_->refresh();
         const auto role = std::string_view(entry.role);
         const auto* record = session_.composition()->parameters().find(entry.parameterId);
@@ -639,13 +712,21 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             alignment_->setEnabled(value != nullptr);
             diamond_->hide();
         }
-        const auto vector = session_.effectiveVec2Value(entry.parameterId);
-        const auto vector3 = session_.effectiveVec3Value(entry.parameterId);
-        const auto scalar = session_.effectiveScalarValue(entry.parameterId);
-        const auto color = session_.effectiveColorValue(entry.parameterId);
+        const auto plainValue =
+            plain ? session_.entryParameterValue(entry.entry(), role) : std::nullopt;
+        const auto plainAs = [&]<typename Value>() -> std::optional<Value> {
+            const auto* held = plainValue ? std::get_if<Value>(&*plainValue) : nullptr;
+            return held ? std::optional(*held) : std::nullopt;
+        };
+        const auto vector = plain ? plainAs.template operator()<document::Vec2d>()
+                                  : session_.effectiveVec2Value(entry.parameterId);
+        const auto vector3 = plain ? std::nullopt : session_.effectiveVec3Value(entry.parameterId);
+        const auto scalar = plain ? plainAs.template operator()<double>()
+                                  : session_.effectiveScalarValue(entry.parameterId);
+        const auto color = plain ? std::nullopt : session_.effectiveColorValue(entry.parameterId);
         const bool components = vector.has_value() || vector3.has_value() || color.has_value();
         const int count = componentRow ? 1 : color ? 0 : vector3 ? 3 : vector ? 2 : scalar ? 1 : 0;
-        disclosure_->setVisible(components && !componentRow);
+        disclosure_->setVisible(components && !componentRow && !plain);
         for (std::size_t i = 0; i < fields_.size(); ++i) {
             cells_[i]->setVisible(static_cast<int>(i) < count);
             components_[i]->hide();
@@ -698,11 +779,15 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
                                                 document::AnimationComponent::Red)
                                           : 0)
                              : static_cast<std::size_t>(i);
+            // A plain entry's row presents its role through the entry layer's own schema.
+            std::string_view schemaKey = record ? std::string_view(record->schemaKey)
+                                                : std::string_view{};
+            if (!record)
+                for (const auto& entryRole : document::entryLayerRoles())
+                    if (entryRole.role == role)
+                        schemaKey = entryRole.schemaKey;
             const auto presentation = document::componentPresentation(
-                document::parameterPresentation(record ? std::string_view(record->schemaKey)
-                                                       : std::string_view{},
-                                                kind, role),
-                kind, component);
+                document::parameterPresentation(schemaKey, kind, role), kind, component);
             configureValueField(*field, presentation);
             // GitHub #197: a signed/HDR colour (or unavailable conversion) presents exact
             // reference numbers under the same "reference" suffix Properties uses.
@@ -715,7 +800,8 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             field->show();
         }
         if (role == document::kBlendModeParameterRole) {
-            const auto mode = session_.blendModeForLayer(entry.layerId);
+            const auto mode = plain ? std::optional(core::BlendMode::Normal)
+                                    : session_.blendModeForLayer(entry.layerId);
             if (mode)
                 blending_->setCurrentIndex(blendModeDropdownIndex(*blending_, *mode));
             blending_->show();
@@ -735,7 +821,7 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         }
         const auto* composition = session_.composition();
         const auto* layer = composition ? composition->graph().findLayer(entry.layerId) : nullptr;
-        setEnabled(layer && !layer->locked);
+        setEnabled(plain || (layer && !layer->locked));
     }
     binding_ = false;
 }
@@ -776,6 +862,20 @@ void TimelinePropertyRow::commitValues(const std::size_t index) {
     // Stored values: each field's own display scale (a percentage, a scale factor) divides back.
     const double x = numericFieldValue(*fields_[0]), y = numericFieldValue(*fields_[1]),
                  z = numericFieldValue(*fields_[2]);
+    // #502: a plain entry's row writes its default layer's role (the entry's layer is created in
+    // the same step).
+    if (!entry.parameterId.isValid() && entry.mergeNodeId.isValid()) {
+        const auto current = session_.entryParameterValue(entry.entry(), role);
+        if (!current)
+            return;
+        document::ParameterValue value =
+            std::holds_alternative<document::Vec2d>(*current)
+                ? document::ParameterValue{document::Vec2d{x, y}}
+                : document::ParameterValue{x};
+        (void)session_.setEntryParameterValue(entry.entry(), role, std::move(value),
+                                              tr("Set %1").arg(entry.name));
+        return;
+    }
     if (entry.component) {
         double value = numericFieldValue(*fields_[0]);
         const auto* record = session_.composition()

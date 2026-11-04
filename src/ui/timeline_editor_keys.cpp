@@ -84,7 +84,8 @@ std::vector<document::LayerId> TimelineEditor::keyTargetLayers() const {
         const auto boundary = session_.boundaryNodeForLayer(entry.layerId);
         if ((boundary && session_.selectedNodes().contains(*boundary)) ||
             (direct && *direct == entry.layerId) ||
-            session_.selection().contextualLayer == entry.layerId)
+            session_.selection().contextualLayer == entry.layerId ||
+            (entry.mergeNodeId.isValid() && session_.isEntrySelected(entry.entry())))
             selected.push_back(entry.layerId);
     }
     return selected.empty() ? all : selected;
@@ -120,6 +121,9 @@ void TimelineEditor::revealProperties(const int value, const bool additive) {
         } else {
             revealed_.erase(layer);
             expandedLayers_.erase(layer);
+            for (const auto& row : stack_->entries())
+                if (row.layerId == layer)
+                    expandedEntries_.erase(row.slotId);
         }
     }
     rebuild();

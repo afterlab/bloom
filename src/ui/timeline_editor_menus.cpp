@@ -1,6 +1,10 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 
+#include "entry_layer_session_operations.hpp"
+
+#include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/layer_stack_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/shape.hpp>
@@ -32,7 +36,15 @@
 namespace bloom::ui {
 namespace {
 
-std::set<document::NodeId> selectedLayerNodes(const CompositionSession& session) {
+// #502: the selected rows' entries and their layers (a plain entry has none yet).
+std::vector<LayerTarget> selectedTargets(const CompositionSession& session) {
+    std::vector<LayerTarget> targets;
+    for (const auto& entry : session.selectedEntries())
+        targets.push_back({entry, session.entryLayer(entry).value_or(document::LayerId{})});
+    return targets;
+}
+
+[[maybe_unused]] std::set<document::NodeId> selectedLayerNodes(const CompositionSession& session) {
     std::set<document::NodeId> nodes;
     for (const auto node : session.selectedNodes()) {
         const auto layer = session.layerForNode(node);
@@ -101,6 +113,13 @@ void TimelineEditor::createHeaderMenus() {
         shapeAction->setToolTip(
             tr("Add a %1 layer").arg(QString::fromUtf8(document::shapeKindName(kind).data())));
     }
+    add->addSeparator();
+    // #502: the same Adjustment node as Nodes' Add > Layers > Adjustment, with a new entry for it
+    // above the selected row (else at the top), named Adjustment Layer N.
+    auto* adjustment =
+        localAction(add, tr("Adjustment Layer"), QStringLiteral("addAdjustmentLayerAction"), {},
+                    [this] { addAdjustmentLayer(); });
+    adjustment->setToolTip(tr("Add an adjustment layer: it processes the layers below it"));
 
     auto* view = menu(tr("View"), QStringLiteral("timelineViewMenu"));
     const auto toggle = [&](const QString& title, const QString& name, auto callback) {
@@ -169,11 +188,15 @@ void TimelineEditor::createHeaderMenus() {
         editMenu_, tr("Split at Playhead"), QStringLiteral("timelineSplitLayerAction"),
         QKeySequence(Qt::CTRL | Qt::Key_K), [this] {
             commands::Transaction transaction("Split at Playhead", session_.snapshot().revision());
-            for (const auto node : selectedLayerNodes(session_))
-                if (const auto layer = session_.layerForNode(node))
-                    transaction.emplace<commands::SplitLayerAtTime>(session_.compositionId(),
-                                                                    *layer, session_.currentTime());
-            (void)session_.executeTransaction(std::move(transaction));
+            const auto compositionId = session_.compositionId();
+            const auto time = session_.currentTime();
+            appendLayerEdits(transaction, compositionId, selectedTargets(session_),
+                             [compositionId, time](const document::LayerId layer) {
+                                 return std::make_unique<commands::SplitLayerAtTime>(
+                                     compositionId, layer, time);
+                             });
+            if (!transaction.empty())
+                (void)session_.executeTransaction(std::move(transaction));
         });
     bar->addMenu(editMenu_, QStringLiteral("timelineEditButton"), false);
 
@@ -259,7 +282,8 @@ void TimelineEditor::createHeaderMenus() {
         refreshHeaderMenus();
         add->menuAction()->setEnabled(session_.composition() != nullptr);
         selectAll->setEnabled(stack_->rowCount() > 0);
-        selectNone->setEnabled(!session_.selectedNodes().empty());
+        selectNone->setEnabled(!session_.selectedNodes().empty() ||
+                               !session_.selectedEntries().empty());
     });
     connect(select, &QMenu::aboutToShow, this, &TimelineEditor::refreshHeaderMenus);
     connect(editMenu_, &QMenu::aboutToShow, this, &TimelineEditor::refreshHeaderMenus);
@@ -342,8 +366,9 @@ void TimelineEditor::refreshHeaderMenus() {
     editMenu_->addAction(redo != nullptr ? redo : redoAction_);
     editMenu_->addAction(deleteLayerAction_);
     editMenu_->addAction(splitLayerAction_);
-    splitLayerAction_->setEnabled(!selectedLayerNodes(session_).empty());
-    deleteLayerAction_->setEnabled(!selectedLayerNodes(session_).empty());
+    const bool rowsSelected = !session_.selectedEntries().empty();
+    splitLayerAction_->setEnabled(rowsSelected);
+    deleteLayerAction_->setEnabled(rowsSelected);
     const bool available = session_.composition() != nullptr;
     addButton_->setEnabled(available);
     for (const auto* name :
@@ -371,27 +396,44 @@ void TimelineEditor::selectAllLayers() {
     if (composition == nullptr) {
         return;
     }
-    std::set<document::NodeId> nodes;
-    for (const auto& entry : composition->graph().layerStack().entries()) {
-        const auto boundary = session_.boundaryNodeForLayer(entry.layerId);
-        if (boundary.has_value()) {
-            nodes.insert(*boundary);
-        }
-    }
-    if (nodes.empty()) {
+    // #502: every row (every entry of the timeline Merge and of its open groups).
+    std::vector<document::MergeEntryRef> entries;
+    for (const auto& row : stack_->entries())
+        if (row.rowKind == TimelineLayerEntry::Kind::Layer && row.mergeNodeId.isValid())
+            entries.push_back(row.entry());
+    if (entries.empty()) {
         session_.clearSelection();
     } else {
-        session_.selectNodes(nodes, *nodes.begin());
+        session_.selectEntries(entries, entries.front());
     }
 }
 
 void TimelineEditor::deleteSelectedLayers() {
-    auto nodes = selectedLayerNodes(session_);
-    if (nodes.empty()) {
+    // #502: deleting a row deletes its layer -- a Layer node and its content's nodes, or an entry
+    // layer with its Merge entry (a plain entry gains its layer in the same step first).
+    const auto targets = selectedTargets(session_);
+    if (targets.empty()) {
         return;
     }
+    const auto compositionId = session_.compositionId();
+    std::vector<document::LayerId> layers;
+    std::vector<LayerTarget> plain;
+    for (const auto& target : targets) {
+        if (target.layer.isValid()) {
+            if (std::ranges::find(layers, target.layer) == layers.end())
+                layers.push_back(target.layer);
+        } else {
+            plain.push_back(target);
+        }
+    }
     commands::Transaction transaction("Delete Layer", session_.snapshot().revision());
-    transaction.emplace<commands::RemoveNodes>(session_.compositionId(), std::move(nodes));
+    appendLayerEdits(transaction, compositionId, plain,
+                     [compositionId](const document::LayerId layer) {
+                         return std::make_unique<commands::DeleteLayers>(compositionId,
+                                                                         std::vector{layer});
+                     });
+    if (!layers.empty())
+        transaction.emplace<commands::DeleteLayers>(compositionId, layers);
     (void)session_.executeNodeTransaction(std::move(transaction));
 }
 

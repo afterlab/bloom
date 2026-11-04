@@ -4,6 +4,8 @@
 #include "value_presentation.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
+
+#include <bloom/document/merge_entries.hpp>
 #include <memory>
 
 #include "composition_editor_support.hpp"
@@ -408,87 +410,118 @@ void PropertiesEditor::configureObjectToggles() {
 
 void PropertiesEditor::configureMergeInputs() {
     auto* layout = mergeSection_->bodyLayout();
-    while (auto* item = layout->takeAt(0)) {
-        if (auto* widget = item->widget()) {
-            widget->hide();
-            widget->deleteLater();
-        }
-        delete item;
-    }
     const auto* composition = session_.composition();
     const auto* node = session_.selectedNode();
     const auto* merge = composition && node ? composition->graph().merge(node->id) : nullptr;
     mergeInputsPanel_->setVisible(merge != nullptr);
+    // #502: every entry is a layer, so blend mode and opacity are editable on every row; a plain
+    // entry gains its own layer on the first edit, in that edit's undo step. The rows are kept
+    // while the Merge and its entries stay, so that creation never tears down a field mid-drag.
+    std::vector<document::MergeEntryRef> entries;
+    if (merge != nullptr)
+        for (const auto& entry : merge->entries())
+            if (document::mergeSlotImageEdge(composition->graph(), merge->nodeId(),
+                                             entry.slotId) != nullptr)
+                entries.push_back({merge->nodeId(), entry.slotId});
+    const bool same =
+        merge != nullptr && mergeInputsMerge_ == merge->nodeId() &&
+        std::ranges::equal(entries, mergeInputRows_, {}, {}, &MergeInputRow::entry);
+    if (!same) {
+        while (auto* item = layout->takeAt(0)) {
+            if (auto* widget = item->widget()) {
+                widget->hide();
+                widget->deleteLater();
+            }
+            delete item;
+        }
+        mergeInputRows_.clear();
+        mergeInputsMerge_ = merge != nullptr ? merge->nodeId() : document::NodeId{};
+    }
     if (!merge)
         return;
     auto* body = mergeSection_->body();
-    for (const auto& entry : merge->entries()) {
-        const auto edges = composition->graph().edges();
-        const auto edge = std::ranges::find_if(edges, [&](const auto& candidate) {
-            const auto* input = std::get_if<document::LayerStackInputRef>(&candidate.destination);
-            return input && input->stackNodeId == merge->nodeId() && input->slotId == entry.slotId;
-        });
-        const auto* source =
-            edge == edges.end() ? nullptr : composition->graph().findNode(edge->source.nodeId);
-        if (!source)
-            continue;
+    const auto refresh = [this, composition](const MergeInputRow& item) {
+        const auto& graph = composition->graph();
+        const auto* edge = document::mergeSlotImageEdge(graph, item.entry.merge, item.entry.slot);
+        const auto* source = edge ? graph.findNode(edge->source.nodeId) : nullptr;
+        const auto layer = session_.entryLayer(item.entry);
+        const auto* boundary = layer ? graph.findLayer(*layer) : nullptr;
+        const bool locked = boundary != nullptr && boundary->locked;
+        auto* name = item.row->findChild<kit::KLabel*>(QStringLiteral("mergeInputName"));
+        if (name != nullptr) {
+            const auto text = boundary != nullptr ? QString::fromStdString(boundary->name)
+                              : source != nullptr ? node_editor::nodeDisplayName(*composition, *source)
+                                                  : QString();
+            name->setText(text);
+            item.row->setProperty("rowLabel", text);
+        }
+        if (auto* blend = item.row->findChild<kit::KDropdown*>(QStringLiteral("mergeInputBlendMode"))) {
+            const QSignalBlocker blocker(blend);
+            const auto sample =
+                session_.entryParameterValue(item.entry, document::kBlendModeParameterRole);
+            const auto* stored = sample ? std::get_if<std::int64_t>(&*sample) : nullptr;
+            const auto mode = stored ? core::blendModeFromStoredValue(*stored) : std::nullopt;
+            blend->setCurrentIndex(
+                blendModeDropdownIndex(*blend, mode.value_or(core::BlendMode::Normal)));
+            blend->setEnabled(!locked && (sample.has_value() || !layer));
+        }
+        if (auto* opacity =
+                item.row->findChild<kit::KValueField*>(QStringLiteral("mergeInputOpacity"))) {
+            if (opacity->isEditing())
+                return;
+            const QSignalBlocker blocker(opacity);
+            const auto sample =
+                session_.entryParameterValue(item.entry, document::kOpacityParameterRole);
+            const auto* value = sample ? std::get_if<double>(&*sample) : nullptr;
+            opacity->setValue((value ? *value : 1.0) * 100);
+            opacity->setEnabled(!locked && value != nullptr);
+        }
+    };
+    if (same) {
+        for (const auto& item : mergeInputRows_)
+            refresh(item);
+        return;
+    }
+    for (const auto& entry : entries) {
         auto* row = new QWidget(body);
         row->setObjectName(QStringLiteral("mergeInputRow"));
         auto* rowLayout = new QHBoxLayout(row);
         rowLayout->setContentsMargins(0, 0, 0, 0);
-        auto* name = new kit::KLabel(node_editor::nodeDisplayName(*composition, *source), row);
+        auto* name = new kit::KLabel(QString(), row);
         name->setTextFormat(Qt::PlainText);
         name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-        row->setProperty("rowLabel", name->text());
         name->setObjectName(QStringLiteral("mergeInputName"));
         rowLayout->addWidget(name, 1);
         auto* blend = new kit::KDropdown(row);
         blend->setObjectName(QStringLiteral("mergeInputBlendMode"));
         addBlendModeItems(*blend);
-        const auto mode =
-            session_.blendModeForLayer(entry.layerId).value_or(core::BlendMode::Normal);
-        blend->setCurrentIndex(blendModeDropdownIndex(*blend, mode));
-        const auto* boundary = composition->graph().findLayer(entry.layerId);
-        blend->setEnabled(boundary && !boundary->locked);
-        for (const auto& binding : source->parameters)
-            if (binding.role == document::kBlendModeParameterRole)
-                blend->setProperty("parameterId", QVariant::fromValue(static_cast<qulonglong>(
-                                                      binding.parameterId.value())));
         rowLayout->addWidget(blend);
-        const auto layerId = entry.layerId;
-        connect(blend, &kit::KDropdown::activated, row, [this, layerId, blend](int index) {
+        connect(blend, &kit::KDropdown::activated, row, [this, entry, blend](int index) {
             if (const auto chosen = blendModeFromDropdownIndex(*blend, index))
-                (void)session_.setLayerBlendMode(layerId, *chosen);
+                (void)session_.setEntryParameterValue(
+                    entry, document::kBlendModeParameterRole,
+                    document::ParameterValue{core::blendModeStoredValue(*chosen)},
+                    tr("Set Blend Mode"));
         });
         auto* opacity = new kit::KValueField(row);
         opacity->setObjectName(QStringLiteral("mergeInputOpacity"));
         configureValueField(*opacity, document::kOpacityParameterSchemaKey,
                             document::ParameterValueKind::Float64);
-        document::ParameterId opacityId;
-        if (boundary)
-            for (const auto& binding : source->parameters)
-                if (binding.role == document::kOpacityParameterRole)
-                    opacityId = binding.parameterId;
-        properties::bindValueEdit(session_, *opacity, [opacityId] { return opacityId; });
-        connect(&session_, &CompositionSession::liveValueChanged, opacity,
-                [this, opacity, opacityId] {
-                    const QSignalBlocker blocker(opacity);
-                    if (const auto value = session_.effectiveScalarValue(opacityId))
-                        opacity->setValue(*value * 100);
-                });
-        opacity->setProperty("parameterId",
-                             QVariant::fromValue(static_cast<qulonglong>(opacityId.value())));
-        const auto value = opacityId.isValid() ? session_.effectiveScalarValue(opacityId)
-                                               : std::optional<double>{1.0};
-        opacity->setValue(value.value_or(1.0) * 100);
-        opacity->setEnabled(boundary && !boundary->locked && value.has_value());
+        // A scrub on a plain entry creates its layer at the gesture's start; the session folds
+        // that creation into the gesture's commit.
+        properties::bindValueEdit(session_, *opacity, [this, entry] {
+            return session_.materializeEntryParameter(entry, document::kOpacityParameterRole)
+                .value_or(document::ParameterId{});
+        });
         rowLayout->addWidget(opacity);
-        connect(opacity, &kit::KValueField::valueChanged, row, [this, opacityId](double newValue) {
-            if (opacityId.isValid())
-                (void)session_.setParameterValue(opacityId, newValue / 100.0,
-                                                 tr("Set Layer Opacity"));
+        connect(opacity, &kit::KValueField::valueChanged, row, [this, entry](double newValue) {
+            (void)session_.setEntryParameterValue(entry, document::kOpacityParameterRole,
+                                                  document::ParameterValue{newValue / 100.0},
+                                                  tr("Set Layer Opacity"));
         });
         layout->addWidget(row);
+        mergeInputRows_.push_back({row, entry});
+        refresh(mergeInputRows_.back());
     }
 }
 

@@ -1,5 +1,7 @@
 #include "properties_layer_time.hpp"
 
+#include <bloom/document/merge_entries.hpp>
+
 #include "properties_sections.hpp"
 
 #include <QSignalBlocker>
@@ -49,13 +51,9 @@ struct LayerTimeFields final {
 
 bool hasTimeRemap(const document::Composition& composition,
                   const document::LayerOutputBoundary& layer) {
-    const auto* node = composition.graph().findNode(layer.nodeId);
-    if (node == nullptr)
-        return false;
-    for (const auto& binding : node->parameters)
-        if (binding.role == document::kTimeRemapParameterRole)
-            return true;
-    return false;
+    // #502: an entry layer binds Time Remap itself, a Layer node on the node.
+    return document::layerParameterBinding(composition.graph(), layer,
+                                           document::kTimeRemapParameterRole) != nullptr;
 }
 
 kit::KDropdown* modeDropdown(const QString& name, const QString& accessible, QWidget* parent) {

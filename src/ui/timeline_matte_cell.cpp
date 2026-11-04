@@ -4,6 +4,8 @@
 
 #include <QCoreApplication>
 #include <QVariant>
+#include <bloom/commands/layer_mask_operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
@@ -72,6 +74,53 @@ bool activate(CompositionSession& session, const document::LayerId layer, const 
     if (matte == boundary->trackMatte)
         return false;
     return session.setTrackMatte(layer, matte);
+}
+
+void populate(kit::KDropdown& dropdown, const CompositionSession& session,
+              const LayerTarget& target) {
+    if (target.layer.isValid()) {
+        populate(dropdown, session, target.layer);
+        return;
+    }
+    dropdown.clearItems();
+    dropdown.addItem(text("None"), QVariant::fromValue(0LL));
+    const auto* composition = session.composition();
+    const auto* merge = composition ? composition->graph().merge(target.entry.merge) : nullptr;
+    if (merge == nullptr)
+        return;
+    for (const auto& other : merge->entries()) {
+        if (other.slotId == target.entry.slot)
+            continue;
+        if (const auto* layer =
+                document::mergeEntryLayer(composition->graph(), target.entry.merge, other.slotId))
+            dropdown.addItem(QString::fromStdString(layer->name),
+                             QVariant::fromValue(static_cast<long long>(layer->layerId.value())));
+    }
+    for (const auto& [label, code] :
+         {std::pair{text("Alpha (current)"), kActionAlpha}, std::pair{text("Use Luma"), kActionLuma},
+          std::pair{text("Inverted"), kActionInverted}}) {
+        const int index = dropdown.addItem(label, QVariant::fromValue(code));
+        dropdown.setItemEnabled(index, false);
+    }
+    dropdown.setCurrentIndex(0);
+    dropdown.setToolTip(text("Use another layer as this layer's matte"));
+}
+
+bool activate(CompositionSession& session, const LayerTarget& target, const long long code) {
+    if (target.layer.isValid())
+        return activate(session, target.layer, code);
+    if (code <= 0)
+        return false;
+    const auto compositionId = session.compositionId();
+    const document::TrackMatte matte{document::LayerId::fromRaw(static_cast<std::uint64_t>(code)),
+                                     document::TrackMatteChannel::Alpha, false};
+    return session
+        .editEntry(target.entry, text("Set Track Matte"),
+                   [compositionId, matte](const document::LayerId layer) {
+                       return std::make_unique<commands::SetTrackMatte>(compositionId, layer,
+                                                                        matte);
+                   })
+        .changed();
 }
 
 } // namespace bloom::ui::matte_cell

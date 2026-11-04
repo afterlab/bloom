@@ -436,6 +436,9 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     selection_ = {};
     keyframeClipboard_.clear();
     selectedNodes_.clear();
+    selectedEntries_.clear();
+    primaryEntry_.reset();
+    pendingEntryLayer_.reset();
     // The OLD document/command-stack are left untouched, but this session's own interaction state
     // targets them and must not survive the swap.
     transformInteraction_.reset();
@@ -979,6 +982,9 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     selection_ = {};
     keyframeClipboard_.clear();
     selectedNodes_.clear();
+    selectedEntries_.clear();
+    primaryEntry_.reset();
+    pendingEntryLayer_.reset();
     emit compositionChanged();
     if (timeChanged) {
         emit currentTimeChanged();
@@ -1003,11 +1009,14 @@ bool CompositionSession::setCurrentTime(const core::RationalTime time) {
 
 void CompositionSession::clearSelection() {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (selection_ == CompositionSelection{} && selectedNodes_.empty()) {
+    if (selection_ == CompositionSelection{} && selectedNodes_.empty() &&
+        selectedEntries_.empty()) {
         return;
     }
     selection_ = {};
     selectedNodes_.clear();
+    selectedEntries_.clear();
+    primaryEntry_.reset();
     emit selectionChanged();
 }
 
@@ -1054,17 +1063,24 @@ std::optional<MaskSelection> CompositionSession::selectedMask() const {
 
 void CompositionSession::selectLayer(const document::LayerId layerId, const bool extend) {
     Q_ASSERT(QThread::currentThread() == thread());
-    const auto boundary = boundaryNodeForLayer(layerId);
-    if (!boundary.has_value()) {
+    if (layerBoundary(layerId) == nullptr) {
         reportUnavailable(QStringLiteral("The selected layer is no longer available"));
         return;
     }
     CompositionSelection next{.primary = layerId, .contextualLayer = layerId};
     auto nextNodes = extend ? selectedNodes_ : std::set<document::NodeId>{};
-    nextNodes.insert(*boundary);
-    if (selection_ != next || selectedNodes_ != nextNodes) {
+    // #502: an entry layer has no node of its own; its row is remembered as a selected entry.
+    auto nextEntries = extend ? selectedEntries() : std::vector<document::MergeEntryRef>{};
+    const auto entry = entryOfSelectedLayer(layerId);
+    if (const auto boundary = boundaryNodeForLayer(layerId))
+        nextNodes.insert(*boundary);
+    else if (entry && std::ranges::find(nextEntries, *entry) == nextEntries.end())
+        nextEntries.push_back(*entry);
+    if (selection_ != next || selectedNodes_ != nextNodes || selectedEntries_ != nextEntries) {
         selection_ = next;
         selectedNodes_ = nextNodes;
+        selectedEntries_ = std::move(nextEntries);
+        primaryEntry_ = entry;
         emit selectionChanged();
     }
 }
@@ -1097,10 +1113,12 @@ void CompositionSession::selectNodes(std::set<document::NodeId> nodes,
         return;
     }
     CompositionSelection next{.primary = primary, .contextualLayer = layerForNode(primary)};
-    if (selection_ == next && selectedNodes_ == nodes)
+    if (selection_ == next && selectedNodes_ == nodes && selectedEntries_.empty())
         return;
     selection_ = next;
     selectedNodes_ = std::move(nodes);
+    selectedEntries_.clear();
+    primaryEntry_.reset();
     emit selectionChanged();
 }
 
@@ -1215,7 +1233,8 @@ CompositionSession::layerForNode(const document::NodeId nodeId) const {
         visited.push_back(currentNodeId);
 
         for (const auto& boundary : current->graph().layerOutputs()) {
-            if (boundary.nodeId != currentNodeId) {
+            // #502: an entry layer's nodeId is its Merge, which is not the layer's node.
+            if (boundary.nodeId != currentNodeId || boundary.entryOwned()) {
                 continue;
             }
             if (resolvedLayer.has_value() && *resolvedLayer != boundary.layerId) {
@@ -1230,6 +1249,18 @@ CompositionSession::layerForNode(const document::NodeId nodeId) const {
             }
             if (const auto* destination = std::get_if<document::NodeInputRef>(&edge.destination)) {
                 pending.push_back(destination->nodeId);
+            } else if (const auto* slot =
+                           std::get_if<document::LayerStackInputRef>(&edge.destination)) {
+                // #502: a node feeding a Merge entry directly belongs to that entry's own layer.
+                const auto* owned =
+                    document::entryOwnedLayer(current->graph(), slot->stackNodeId, slot->slotId);
+                if (owned == nullptr || slot->role != document::kLayerStackContentInputRole ||
+                    document::mergeEntryLayer(current->graph(), slot->stackNodeId,
+                                              slot->slotId) != owned)
+                    continue;
+                if (resolvedLayer.has_value() && *resolvedLayer != owned->layerId)
+                    return std::nullopt;
+                resolvedLayer = owned->layerId;
             }
         }
     }
@@ -1246,7 +1277,8 @@ CompositionSession::boundaryNodeForLayer(const document::LayerId layerId) const 
         std::ranges::find_if(current->graph().layerOutputs(), [layerId](const auto& candidate) {
             return candidate.layerId == layerId;
         });
-    if (boundary == current->graph().layerOutputs().end()) {
+    // #502: an entry layer has no Layer node (its nodeId names the Merge it belongs to).
+    if (boundary == current->graph().layerOutputs().end() || boundary->entryOwned()) {
         return std::nullopt;
     }
     return boundary->nodeId;
@@ -1255,16 +1287,27 @@ CompositionSession::boundaryNodeForLayer(const document::LayerId layerId) const 
 std::optional<document::NodeId>
 CompositionSession::directSourceNodeForLayer(const document::LayerId layerId) const noexcept {
     const auto* current = composition();
-    const auto boundaryNodeId = boundaryNodeForLayer(layerId);
-    if (current == nullptr || !boundaryNodeId.has_value()) {
+    const auto* layer = layerBoundary(layerId);
+    if (current == nullptr || layer == nullptr) {
         return std::nullopt;
     }
+    const auto boundaryNodeId = layer->nodeId;
+    // #502: an entry layer's content is whatever feeds its Merge slot's image.
+    const auto feeds = [&](const document::EdgeRecord& edge) {
+        if (layer->entryOwned()) {
+            const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
+            return slot != nullptr && slot->stackNodeId == boundaryNodeId &&
+                   slot->slotId == *layer->entrySlot &&
+                   slot->role == document::kLayerStackContentInputRole;
+        }
+        const auto* destination = std::get_if<document::NodeInputRef>(&edge.destination);
+        return destination != nullptr && destination->nodeId == boundaryNodeId &&
+               destination->port == document::kLayerOutputContentInputPort;
+    };
 
     std::optional<document::NodeId> sourceNodeId;
     for (const auto& edge : current->graph().edges()) {
-        const auto* destination = std::get_if<document::NodeInputRef>(&edge.destination);
-        if (destination == nullptr || destination->nodeId != *boundaryNodeId ||
-            destination->port != document::kLayerOutputContentInputPort) {
+        if (!feeds(edge)) {
             continue;
         }
         const auto* sourceNode = current->graph().findNode(edge.source.nodeId);
@@ -1291,6 +1334,16 @@ CompositionSession::parameterForSelection(const std::string_view role) const noe
     if (current == nullptr) {
         return nullptr;
     }
+    // #502: an entry layer owns its parameters itself; its content's own roles come after.
+    if (const auto* layerId = std::get_if<document::LayerId>(&selection_.primary);
+        layerId != nullptr && isEntryLayer(*layerId)) {
+        if (const auto* parameter = layerParameter(*layerId, role))
+            return parameter;
+        const auto sourceNodeId = directSourceNodeForLayer(*layerId);
+        const auto* sourceNode =
+            sourceNodeId.has_value() ? current->graph().findNode(*sourceNodeId) : nullptr;
+        return sourceNode == nullptr ? nullptr : parameterForNode(*sourceNode, role);
+    }
     if (node != nullptr) {
         if (const auto* parameter = parameterForNode(*node, role)) {
             return parameter;
@@ -1312,6 +1365,10 @@ CompositionSession::parameterForSelection(const std::string_view role) const noe
                 return current->parameters().find(*parameterId);
             }
         }
+        for (const auto& layer : current->graph().layerOutputs())
+            for (const auto& binding : layer.parameters)
+                if (binding.parameterId == *parameterId && binding.role == role)
+                    return current->parameters().find(*parameterId);
     }
     return nullptr;
 }
@@ -1399,7 +1456,7 @@ bool CompositionSession::addShapeLayer(const document::ShapeKind kind,
     commands::Transaction transaction("Add Shape Layer", snapshot_.revision());
     transaction.emplace<commands::AddShapeLayer>(compositionId_, kind, std::move(geometry),
                                                  std::move(style));
-    const auto result = commandStack_->execute(std::move(transaction));
+    const auto result = runTransaction(std::move(transaction));
     if (!handleResult(result))
         return false;
     if (const auto layer = result.outputId<document::LayerId>("layer"))
@@ -1417,7 +1474,7 @@ bool CompositionSession::addSolidLayer(const QString& name, const core::Color4d 
     commands::Transaction transaction("Add Solid Layer", snapshot_.revision());
     transaction.emplace<commands::AddSolidLayer>(compositionId_, name.toStdString(), color,
                                                  compositionCenter(*current));
-    const auto result = commandStack_->execute(std::move(transaction));
+    const auto result = runTransaction(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
     if (!handleResult(result)) {
         return false;
@@ -1442,7 +1499,7 @@ bool CompositionSession::addTextLayer(const QString& name, const QString& text, 
     transaction.emplace<commands::AddTextLayer>(
         compositionId_, name.toStdString(), text.toStdString(),
         position.value_or(compositionCenter(*current)), 1.0, size, color, std::move(style));
-    const auto result = commandStack_->execute(std::move(transaction));
+    const auto result = runTransaction(std::move(transaction));
     const auto layerId = result.outputId<document::LayerId>(commands::kAddTextLayerLayerOutput);
     if (!handleResult(result)) {
         return false;
@@ -1475,6 +1532,9 @@ bool CompositionSession::setSelectionScalarParameter(const std::string_view role
     }
 
     const auto* parameter = parameterForTarget(role, target);
+    if (parameter == nullptr && !target &&
+        std::holds_alternative<document::MergeEntryRef>(selection_.primary))
+        return editSelectedPlainEntry(role, value, commandLabel);
     if (parameter == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
@@ -1506,6 +1566,11 @@ bool CompositionSession::setSelectedPosition(const double x, const double y,
                                              const AuthoringTarget target) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* position = parameterForTarget(document::kPositionParameterRole, target);
+    if (position == nullptr && !target &&
+        std::holds_alternative<document::MergeEntryRef>(selection_.primary) && std::isfinite(x) &&
+        std::isfinite(y))
+        return editSelectedPlainEntry(document::kPositionParameterRole, document::Vec2d{x, y},
+                                      QStringLiteral("Set Position"));
     if (position == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose a position"));
         return false;
@@ -1534,6 +1599,10 @@ bool CompositionSession::setSelectionVec2Parameter(const std::string_view role, 
                                                    const AuthoringTarget target) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto* parameter = parameterForTarget(role, target);
+    if (parameter == nullptr && !target &&
+        std::holds_alternative<document::MergeEntryRef>(selection_.primary) && std::isfinite(x) &&
+        std::isfinite(y))
+        return editSelectedPlainEntry(role, document::Vec2d{x, y}, commandLabel);
     if (parameter == nullptr) {
         reportUnavailable(QStringLiteral("The selected object does not expose this parameter"));
         return false;
@@ -1767,13 +1836,7 @@ bool CompositionSession::setSelectedTextColor(const core::Color4d color,
 
 std::optional<core::BlendMode>
 CompositionSession::blendModeForLayer(const document::LayerId layerId) const noexcept {
-    const auto* current = composition();
-    const auto boundaryNodeId = boundaryNodeForLayer(layerId);
-    const auto* node = current == nullptr || !boundaryNodeId.has_value()
-                           ? nullptr
-                           : current->graph().findNode(*boundaryNodeId);
-    const auto* parameter =
-        node == nullptr ? nullptr : parameterForNode(*node, document::kBlendModeParameterRole);
+    const auto* parameter = layerParameter(layerId, document::kBlendModeParameterRole);
     const auto* constantSource =
         parameter == nullptr ? nullptr
                              : std::get_if<document::ConstantValueSource>(&parameter->source);
@@ -1829,13 +1892,7 @@ bool CompositionSession::setLayerParent(document::LayerId layer,
 bool CompositionSession::setLayerBlendMode(const document::LayerId layerId,
                                            const core::BlendMode mode) {
     Q_ASSERT(QThread::currentThread() == thread());
-    const auto* current = composition();
-    const auto boundaryNodeId = boundaryNodeForLayer(layerId);
-    const auto* node = current == nullptr || !boundaryNodeId.has_value()
-                           ? nullptr
-                           : current->graph().findNode(*boundaryNodeId);
-    const auto* parameter =
-        node == nullptr ? nullptr : parameterForNode(*node, document::kBlendModeParameterRole);
+    const auto* parameter = layerParameter(layerId, document::kBlendModeParameterRole);
     if (parameter == nullptr) {
         reportUnavailable(QStringLiteral("That layer does not expose a blend mode"));
         return false;
@@ -1864,6 +1921,11 @@ bool CompositionSession::setSelectedBlendMode(const core::BlendMode mode) {
     Q_ASSERT(QThread::currentThread() == thread());
     // Same resolution rule every other selection-driven writer uses: a directly selected layer, or
     // the contextual layer a node/parameter/keyframe selection resolved to.
+    if (std::holds_alternative<document::MergeEntryRef>(selection_.primary))
+        return editSelectedPlainEntry(
+            document::kBlendModeParameterRole,
+            document::ParameterValue{static_cast<std::int64_t>(core::blendModeStoredValue(mode))},
+            QStringLiteral("Set Blend Mode"));
     const auto* directLayer = std::get_if<document::LayerId>(&selection_.primary);
     const auto layerId =
         directLayer != nullptr ? std::optional(*directLayer) : selection_.contextualLayer;
@@ -2019,7 +2081,7 @@ bool CompositionSession::insertKeyframeAtTime(const document::AnimationCurveId c
         return false;
     }
 
-    const auto result = commandStack_->execute(std::move(transaction));
+    const auto result = runTransaction(std::move(transaction));
     const auto keyframeId = result.outputId<document::KeyframeId>(commands::kKeyframeOutput);
     if (!handleResult(result)) {
         return false;
@@ -2054,6 +2116,7 @@ QString CompositionSession::redoLabel() const {
 
 bool CompositionSession::undo() {
     Q_ASSERT(QThread::currentThread() == thread());
+    pendingEntryLayer_.reset();
     return handleResult(commandStack_->undo());
 }
 
@@ -2067,6 +2130,7 @@ bool CompositionSession::withdrawLastChange() {
 
 bool CompositionSession::redo() {
     Q_ASSERT(QThread::currentThread() == thread());
+    pendingEntryLayer_.reset();
     return handleResult(commandStack_->redo());
 }
 
@@ -2078,13 +2142,13 @@ CompositionSession::executeNodeTransaction(commands::Transaction&& transaction) 
 commands::CommandResult
 CompositionSession::executeTransaction(commands::Transaction&& transaction) {
     Q_ASSERT(QThread::currentThread() == thread());
-    auto result = commandStack_->execute(std::move(transaction));
+    auto result = runTransaction(std::move(transaction));
     (void)handleResult(result);
     return result;
 }
 
 bool CompositionSession::execute(commands::Transaction&& transaction) {
-    return handleResult(commandStack_->execute(std::move(transaction)));
+    return handleResult(runTransaction(std::move(transaction)));
 }
 
 void CompositionSession::handleCommandEvent(const commands::CommandEvent& event) {
@@ -2270,7 +2334,12 @@ bool CompositionSession::selectionExists(const CompositionSelection& selection) 
         return true;
     }
     if (const auto* layerId = std::get_if<document::LayerId>(&selection.primary)) {
-        return boundaryNodeForLayer(*layerId).has_value();
+        return layerBoundary(*layerId) != nullptr;
+    }
+    if (const auto* entry = std::get_if<document::MergeEntryRef>(&selection.primary)) {
+        // A plain entry stays selectable only while it has no layer: once it has one the
+        // selection names the layer (normalizeSelection()).
+        return entryExists(*entry) && !entryLayer(*entry).has_value();
     }
     if (const auto* nodeId = std::get_if<document::NodeId>(&selection.primary)) {
         return current->graph().findNode(*nodeId) != nullptr;
@@ -2404,7 +2473,9 @@ CompositionSession::keyClockForParameter(const document::ParameterId parameterId
         if (!owner.has_value())
             return std::nullopt;
         for (const auto& boundary : current->graph().layerOutputs()) {
-            std::vector<document::NodeId> seeds{boundary.nodeId};
+            std::vector<document::NodeId> seeds;
+            if (!boundary.entryOwned())
+                seeds.push_back(boundary.nodeId);
             if (const auto source = directSourceNodeForLayer(boundary.layerId))
                 seeds.push_back(*source);
             const auto upstream = upstreamNodes(seeds, UpstreamTraversal::DriverLinksAndInputEdges);
@@ -2598,11 +2669,15 @@ template <typename Value>
 } // namespace
 
 std::optional<double> CompositionSession::effectiveScalarValue(const std::string_view role) const {
+    if (const auto* entry = std::get_if<document::MergeEntryRef>(&selection_.primary))
+        return typedSample<double>(entryParameterValue(*entry, role));
     return typedSample<double>(effectiveParameterValue(parameterForSelection(role)));
 }
 
 std::optional<document::Vec2d>
 CompositionSession::effectiveVec2Value(const std::string_view role) const {
+    if (const auto* entry = std::get_if<document::MergeEntryRef>(&selection_.primary))
+        return typedSample<document::Vec2d>(entryParameterValue(*entry, role));
     return typedSample<document::Vec2d>(effectiveParameterValue(parameterForSelection(role)));
 }
 
@@ -2683,11 +2758,19 @@ std::size_t CompositionSession::keyframeCount(const document::AnimationCurveId c
 }
 
 KeyframeDiamondState CompositionSession::keyframeDiamondState(const std::string_view role) const {
+    // #502: a plain entry's layer roles are constants at their defaults until it has a layer.
+    if (std::holds_alternative<document::MergeEntryRef>(selection_.primary))
+        return entryLayerDefault(role) && role != document::kBlendModeParameterRole
+                   ? KeyframeDiamondState::Constant
+                   : KeyframeDiamondState::Unsupported;
     return diamondStateFor(parameterForSelection(role));
 }
 
 KeyframeParameterState
 CompositionSession::keyframeParameterState(const std::string_view role) const {
+    if (std::holds_alternative<document::MergeEntryRef>(selection_.primary))
+        return entryLayerDefault(role) ? KeyframeParameterState::None
+                                       : KeyframeParameterState::Unsupported;
     const auto* parameter = parameterForSelection(role);
     return parameter ? keyframeParameterState(parameter->id, keyTimeAtPlayhead(parameter->id))
                      : KeyframeParameterState::Unsupported;
@@ -2792,6 +2875,8 @@ CompositionSession::diamondStateFor(const document::ParameterRecord* parameter) 
 }
 
 bool CompositionSession::toggleKeyframe(const std::string_view role) {
+    if (const auto* entry = std::get_if<document::MergeEntryRef>(&selection_.primary))
+        return toggleEntryKeyframe(*entry, role);
     return toggleKeyframeFor(parameterForSelection(role));
 }
 
@@ -3185,6 +3270,11 @@ CompositionSession::contextualLayerForParameter(const document::ParameterId para
             return layerForNode(node.id);
         }
     }
+    // #502: an entry layer owns its parameters outside any node binding.
+    for (const auto& layer : current->graph().layerOutputs())
+        for (const auto& binding : layer.parameters)
+            if (binding.parameterId == parameterId)
+                return layer.layerId;
     // ADR 0028: a layer mask owns its four parameters outside any node binding.
     for (const auto& layer : current->graph().layerOutputs())
         for (const auto& mask : layer.masks)
@@ -3198,6 +3288,7 @@ CompositionSession::contextualLayerForParameter(const document::ParameterId para
 
 void CompositionSession::normalizeSelection() {
     const auto before = selectedNodes_;
+    const auto entriesBefore = selectedEntries_;
     const auto oldSelection = selection_;
     std::erase_if(selection_.keyframes,
                   [this](const auto& key) { return !keyframeSelectionExists(key); });
@@ -3212,6 +3303,41 @@ void CompositionSession::normalizeSelection() {
     const auto* current = composition();
     std::erase_if(selectedNodes_,
                   [&](const auto id) { return !current || !current->graph().findNode(id); });
+    std::erase_if(selectedEntries_, [&](const auto& entry) { return !entryExists(entry); });
+    // #502: a selected row stays selected while its entry does, whatever its layer becomes: a plain
+    // entry's first edit creates its layer, Insert Layer Node replaces an entry layer with a Layer
+    // node, and Remove Layer Node returns the values to an entry layer.
+    if (primaryEntry_ && !entryExists(*primaryEntry_))
+        primaryEntry_.reset();
+    if (const auto* entry = std::get_if<document::MergeEntryRef>(&selection_.primary);
+        entry != nullptr && entryExists(*entry)) {
+        if (const auto layer = entryLayer(*entry)) {
+            primaryEntry_ = *entry;
+            selection_.primary = *layer;
+            selection_.contextualLayer = *layer;
+            if (const auto node = boundaryNodeForLayer(*layer))
+                selectedNodes_.insert(*node);
+        }
+    } else if (const auto* layerId = std::get_if<document::LayerId>(&selection_.primary);
+               layerId != nullptr && primaryEntry_) {
+        const auto now = entryLayer(*primaryEntry_);
+        if (layerBoundary(*layerId) == nullptr || (now && *now != *layerId &&
+                                                   std::ranges::none_of(
+                                                       entriesOfLayer(*layerId),
+                                                       [&](const auto& e) {
+                                                           return e == *primaryEntry_;
+                                                       }))) {
+            if (now) {
+                selection_.primary = *now;
+                selection_.contextualLayer = *now;
+                if (const auto node = boundaryNodeForLayer(*now))
+                    selectedNodes_.insert(*node);
+            } else {
+                selection_.primary = *primaryEntry_;
+                selection_.contextualLayer.reset();
+            }
+        }
+    }
     if (!selectionExists(selection_)) {
         if (std::holds_alternative<document::NodeId>(selection_.primary) &&
             !selectedNodes_.empty()) {
@@ -3220,6 +3346,8 @@ void CompositionSession::normalizeSelection() {
         } else {
             selection_ = {};
             selectedNodes_.clear();
+            selectedEntries_.clear();
+            primaryEntry_.reset();
         }
     } else if (const auto* nodeId = std::get_if<document::NodeId>(&selection_.primary)) {
         selectedNodes_.insert(*nodeId);
@@ -3228,7 +3356,7 @@ void CompositionSession::normalizeSelection() {
                    std::get_if<document::DataBlockRecordId>(&selection_.primary)) {
         selectedNodes_ = dataBlockReaders(*blockId);
     }
-    if (before != selectedNodes_ || oldSelection != selection_)
+    if (before != selectedNodes_ || oldSelection != selection_ || entriesBefore != selectedEntries_)
         emit selectionChanged();
 }
 

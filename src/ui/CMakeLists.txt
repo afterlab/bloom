@@ -474,6 +474,9 @@ target_sources(
         audio_playback_session.cpp
         audio_device_control.cpp
         composition_session_drivers.cpp
+        composition_session_entries.cpp
+        entry_layer_session_operations.cpp
+        entry_layer_session_operations.hpp
         composition_session_keyframes.cpp
         composition_session_masks.cpp
         driven_value_resolver.cpp

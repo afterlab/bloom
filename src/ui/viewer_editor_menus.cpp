@@ -361,7 +361,8 @@ void ViewerEditor::selectAllObjects() {
     }
     std::set<document::NodeId> nodes;
     for (const auto& boundary : composition->graph().layerOutputs()) {
-        if (boundary.nodeId.isValid()) {
+        // #502: an entry layer has no node of its own (its nodeId is its Merge).
+        if (boundary.nodeId.isValid() && !boundary.entryOwned()) {
             nodes.insert(boundary.nodeId);
         }
     }
@@ -395,7 +396,8 @@ void ViewerEditor::invertObjectSelection() {
     }
     std::set<document::NodeId> all;
     for (const auto& boundary : composition->graph().layerOutputs()) {
-        if (boundary.nodeId.isValid()) {
+        // #502: an entry layer has no node of its own (its nodeId is its Merge).
+        if (boundary.nodeId.isValid() && !boundary.entryOwned()) {
             all.insert(boundary.nodeId);
         }
     }

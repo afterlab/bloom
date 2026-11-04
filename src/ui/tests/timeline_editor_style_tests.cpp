@@ -9,6 +9,7 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -2718,17 +2719,41 @@ void testOutputMergeRows(Expectations& expectations) {
     (void)fixture.session.executeTransaction(std::move(wire));
     ui::TimelineEditor editor(fixture.session, fixture.controller);
     const auto& rows = editor.layerStackForTest()->entries();
-    expectations.expect(rows.size() == 1 && rows.front().imageNodeId == nested &&
+    expectations.expect(!rows.empty() && rows.front().imageNodeId == nested &&
                             rows.front().clipColor == ui::kit::Color::DataComposition &&
-                            !rows.front().expanded,
-                        "nested Merge appears as one collapsed composition-colored row");
+                            rows.front().groupMerge == nested && !rows.front().layerId.isValid(),
+                        "nested Merge appears as a composition-colored group row (#502)");
     fixture.session.selectNode(*outer);
     ui::PropertiesEditor properties(fixture.session);
     const auto names = properties.findChildren<QLabel*>("mergeInputName");
     const auto modes = properties.findChildren<ui::kit::KDropdown*>("mergeInputBlendMode");
-    expectations.expect(names.size() == 1 && names.front()->text() == rows.front().name &&
-                            modes.size() == 1 && !modes.front()->isEnabled(),
-                        "Merge Properties list ordered plain-image inputs read-only");
+    const auto opacities = properties.findChildren<ui::kit::KValueField*>("mergeInputOpacity");
+    expectations.expect(names.size() == 1 && modes.size() == 1 && modes.front()->isEnabled() &&
+                            opacities.size() == 1 && opacities.front()->isEnabled() &&
+                            std::abs(opacities.front()->value() - 100.0) < 1e-9,
+                        "every Merge entry's blend mode and opacity are editable (#502)");
+    // The first edit of a plain entry gives it its own layer, in that edit's one undo step.
+    const auto undoDepth = fixture.commands.size();
+    if (!modes.isEmpty()) {
+        const auto index = ui::blendModeDropdownIndex(*modes.front(), core::BlendMode::Screen);
+        modes.front()->setCurrentIndex(index);
+        emit modes.front()->activated(index);
+        QCoreApplication::processEvents();
+    }
+    const auto* outerMerge = fixture.session.composition()->graph().merge(*outer);
+    const auto slot = outerMerge && !outerMerge->entries().empty()
+                          ? outerMerge->entries().front().slotId
+                          : document::LayerSlotId{};
+    const auto* own = document::entryOwnedLayer(fixture.session.composition()->graph(), *outer,
+                                                slot);
+    expectations.expect(own != nullptr && fixture.commands.size() == undoDepth + 1 &&
+                            fixture.session.blendModeForLayer(own->layerId) ==
+                                core::BlendMode::Screen,
+                        "a plain entry's first blend edit creates its entry layer in one step");
+    (void)fixture.commands.undo();
+    expectations.expect(document::entryOwnedLayer(fixture.session.composition()->graph(), *outer,
+                                                  slot) == nullptr,
+                        "undo removes the entry layer the edit created");
     commands::Transaction disable("Disable nested Merge", fixture.session.snapshot().revision());
     disable.emplace<commands::SetMergeEnabled>(fixture.session.compositionId(), nested, false);
     (void)fixture.session.executeTransaction(std::move(disable));

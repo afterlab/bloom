@@ -1,5 +1,7 @@
 #include "layer_mask_support.hpp"
 
+#include <bloom/document/merge_entries.hpp>
+
 #include <QCoreApplication>
 #include <algorithm>
 #include <bloom/runtime/animation_sampling.hpp>
@@ -212,14 +214,20 @@ QString channelText(const document::TrackMatteChannel channel) {
 
 std::vector<document::LayerId> matteSourceCandidates(const document::Composition& composition,
                                                      const document::LayerId layer) {
+    // #502: an entry's layer is the Layer node nearest the Merge or the entry's own layer.
     std::vector<document::LayerId> result;
-    for (const auto& stack : composition.graph().merges()) {
-        const auto entries = stack.entries();
-        if (std::ranges::none_of(entries, [&](const auto& e) { return e.layerId == layer; }))
+    const auto& graph = composition.graph();
+    for (const auto& stack : graph.merges()) {
+        std::vector<document::LayerId> layers;
+        for (const auto& entry : stack.entries())
+            if (const auto* entryLayer =
+                    document::mergeEntryLayer(graph, stack.nodeId(), entry.slotId))
+                layers.push_back(entryLayer->layerId);
+        if (std::ranges::find(layers, layer) == layers.end())
             continue;
-        for (const auto& entry : entries)
-            if (entry.layerId.isValid() && entry.layerId != layer)
-                result.push_back(entry.layerId);
+        for (const auto id : layers)
+            if (id != layer && std::ranges::find(result, id) == result.end())
+                result.push_back(id);
     }
     return result;
 }

@@ -119,6 +119,10 @@ class KeyframeDiamond final : public kit::KDiamond {
     void setParameterId(document::ParameterId parameterId);
     void setRole(std::string role);
     void setComponent(std::optional<document::AnimationComponent> component);
+    // #502: binds a plain Merge entry's row (no layer, so no parameter yet): the diamond shows its
+    // default layer's constant `role` and a click keys it, creating the entry's layer in the same
+    // step. Ignored while a parameter is bound.
+    void setEntry(std::optional<document::MergeEntryRef> entry);
     [[nodiscard]] std::optional<document::AnimationComponent> component() const noexcept {
         return component_;
     }
@@ -144,6 +148,7 @@ class KeyframeDiamond final : public kit::KDiamond {
     std::string role_;
     std::optional<document::ParameterId> parameterId_;
     std::optional<document::AnimationComponent> component_;
+    std::optional<document::MergeEntryRef> entry_;
     KeyframeDiamondState state_ = KeyframeDiamondState::Unsupported;
     bool hovered_ = false;
 };

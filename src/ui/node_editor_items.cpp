@@ -293,6 +293,8 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Radial Gradient");
     if (typeId == document::kLayerOutputNodeType)
         return QCoreApplication::translate("node_editor", "Layer");
+    if (typeId == document::kAdjustmentNodeType)
+        return QCoreApplication::translate("node_editor", "Adjustment");
     if (typeId == document::kLayerStackNodeType)
         return QCoreApplication::translate("node_editor", "Merge");
     if (typeId == document::kCompositionOutputNodeType)
@@ -371,7 +373,7 @@ QString nodeSearchKeywords(const std::string_view typeId) {
 QString nodeDisplayName(const document::Composition& composition,
                         const document::NodeRecord& node) {
     for (const auto& boundary : composition.graph().layerOutputs()) {
-        if (boundary.nodeId == node.id && !boundary.name.empty()) {
+        if (!boundary.entryOwned() && boundary.nodeId == node.id && !boundary.name.empty()) {
             return QString::fromStdString(boundary.name);
         }
     }
@@ -1148,7 +1150,7 @@ void NodeItem::startRename() {
         return;
     std::optional<document::LayerId> layer;
     for (const auto& boundary : session_->composition()->graph().layerOutputs())
-        if (boundary.nodeId == id_)
+        if (!boundary.entryOwned() && boundary.nodeId == id_)
             layer = boundary.layerId;
     if (!layer)
         return;

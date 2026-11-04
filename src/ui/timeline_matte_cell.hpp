@@ -1,5 +1,7 @@
 #pragma once
 
+#include "entry_layer_session_operations.hpp"
+
 #include <bloom/document/ids.hpp>
 
 namespace bloom::ui {
@@ -23,6 +25,12 @@ void populate(kit::KDropdown& dropdown, const CompositionSession& session, docum
 
 // Applies the picked item as one SetTrackMatte. Returns whether the document changed.
 bool activate(CompositionSession& session, document::LayerId layer, long long code);
+
+// #502: the same for any Merge entry. A plain entry (no layer yet) lists the layers of the other
+// entries of its Merge and gains its layer in the same step as the matte it picks.
+void populate(kit::KDropdown& dropdown, const CompositionSession& session,
+              const LayerTarget& target);
+bool activate(CompositionSession& session, const LayerTarget& target, long long code);
 
 } // namespace matte_cell
 } // namespace bloom::ui

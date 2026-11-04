@@ -37,7 +37,7 @@ bool CompositionSession::addLayerMask(const document::LayerId layerId, document:
     }
     commands::Transaction transaction("Add Mask", snapshot_.revision());
     transaction.emplace<commands::AddLayerMask>(compositionId_, layerId, std::move(path), mode);
-    const auto result = commandStack_->execute(std::move(transaction));
+    const auto result = runTransaction(std::move(transaction));
     const auto mask = result.outputId<document::LayerMaskId>("mask");
     if (!handleResult(result))
         return false;
@@ -64,7 +64,7 @@ bool CompositionSession::commitMaskPath(const document::LayerId layerId,
     commands::Transaction transaction("Edit Mask Path", snapshot_.revision());
     transaction.emplace<commands::SetLayerMaskPath>(compositionId_, layerId, maskId,
                                                     keyTimeAtPlayhead(mask->path), std::move(path));
-    return handleResult(commandStack_->execute(std::move(transaction)));
+    return handleResult(runTransaction(std::move(transaction)));
 }
 
 bool CompositionSession::toggleMaskPathKey(const document::ParameterId pathParameter) {
@@ -83,7 +83,7 @@ bool CompositionSession::toggleMaskPathKey(const document::ParameterId pathParam
         commands::Transaction transaction("Add Mask Path Key", snapshot_.revision());
         transaction.emplace<commands::AnimateLayerMaskPath>(compositionId_, layerId, maskId,
                                                             keyTime);
-        return handleResult(commandStack_->execute(std::move(transaction)));
+        return handleResult(runTransaction(std::move(transaction)));
     }
     const auto* source = std::get_if<document::AnimationCurveSource>(&record->source);
     const auto* curve = source ? current->animationCurves().findPath(source->curveId) : nullptr;
@@ -102,7 +102,7 @@ bool CompositionSession::toggleMaskPathKey(const document::ParameterId pathParam
         commands::Transaction transaction("Add Mask Path Key", snapshot_.revision());
         transaction.emplace<commands::SetLayerMaskPath>(compositionId_, layerId, maskId, keyTime,
                                                         std::move(*sampled));
-        return handleResult(commandStack_->execute(std::move(transaction)));
+        return handleResult(runTransaction(std::move(transaction)));
     }
     commands::Transaction transaction("Remove Mask Path Key", snapshot_.revision());
     if (curve->keyframes.size() > 1)
@@ -111,7 +111,7 @@ bool CompositionSession::toggleMaskPathKey(const document::ParameterId pathParam
     else
         transaction.emplace<commands::StopAnimatingLayerMaskPath>(compositionId_, layerId, maskId,
                                                                   existing->value);
-    return handleResult(commandStack_->execute(std::move(transaction)));
+    return handleResult(runTransaction(std::move(transaction)));
 }
 
 bool CompositionSession::setTrackMatte(const document::LayerId target,
@@ -120,7 +120,7 @@ bool CompositionSession::setTrackMatte(const document::LayerId target,
     commands::Transaction transaction(matte ? "Set Track Matte" : "Clear Track Matte",
                                       snapshot_.revision());
     transaction.emplace<commands::SetTrackMatte>(compositionId_, target, matte);
-    return handleResult(commandStack_->execute(std::move(transaction)));
+    return handleResult(runTransaction(std::move(transaction)));
 }
 
 // #493: the keyframe gesture for any other Path parameter (a Curves curve), on the parameter's own
@@ -136,7 +136,7 @@ bool CompositionSession::togglePathParameterKey(const document::ParameterRecord&
         commands::Transaction transaction("Add Curve Key", snapshot_.revision());
         transaction.emplace<commands::CreateAnimationForParameter>(compositionId_, parameter.id,
                                                                    keyTime);
-        return handleResult(commandStack_->execute(std::move(transaction)));
+        return handleResult(runTransaction(std::move(transaction)));
     }
     const auto* source = std::get_if<document::AnimationCurveSource>(&parameter.source);
     const auto* curve = source ? current->animationCurves().findPath(source->curveId) : nullptr;
@@ -155,7 +155,7 @@ bool CompositionSession::togglePathParameterKey(const document::ParameterRecord&
         commands::Transaction transaction("Add Curve Key", snapshot_.revision());
         transaction.emplace<commands::SetKeyframeAtTime>(compositionId_, source->curveId, keyTime,
                                                          std::move(*sampled));
-        return handleResult(commandStack_->execute(std::move(transaction)));
+        return handleResult(runTransaction(std::move(transaction)));
     }
     commands::Transaction transaction("Remove Curve Key", snapshot_.revision());
     if (curve->keyframes.size() > 1)
@@ -164,7 +164,7 @@ bool CompositionSession::togglePathParameterKey(const document::ParameterRecord&
     else
         transaction.emplace<commands::ConvertAnimationToConstant>(compositionId_, parameter.id,
                                                                   existing->value);
-    return handleResult(commandStack_->execute(std::move(transaction)));
+    return handleResult(runTransaction(std::move(transaction)));
 }
 
 } // namespace bloom::ui

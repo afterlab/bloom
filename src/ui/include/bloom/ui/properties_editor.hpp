@@ -118,6 +118,14 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void configureMergeInputs();
     QWidget* mergeInputsPanel_ = nullptr;
     kit::KSection* mergeSection_ = nullptr;
+    // #502: one row per entry of the shown Merge, kept while the Merge and its entries stay, so an
+    // edit that creates a plain entry's layer does not tear down the field being dragged.
+    struct MergeInputRow final {
+        QWidget* row = nullptr;
+        document::MergeEntryRef entry{};
+    };
+    std::vector<MergeInputRow> mergeInputRows_;
+    document::NodeId mergeInputsMerge_{};
     void bindCell(kit::KValueField* field, std::string_view role,
                   std::optional<document::AnimationComponent> component,
                   const std::function<void()>& change);

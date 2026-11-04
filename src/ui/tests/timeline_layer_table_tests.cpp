@@ -15,6 +15,11 @@
 #include "timeline_reveal.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/merge_entries.hpp>
+#include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/properties_editor.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_editor_operations.hpp>
@@ -733,6 +738,182 @@ void testPlaybackChurn() {
 }
 
 // The review captures: every state at 2000 and at 900 pixels wide.
+// #502: a composition holding every kind of Timeline row -- a Layer node (shared with a nested
+// Merge), a plain input, a nested Merge group and an Adjustment → Curves entry at the top.
+struct MergeEntryScene final {
+    document::NodeId outer;
+    document::NodeId nested;
+    document::NodeId plainSolid;
+    document::NodeId adjustment;
+    document::LayerId shared;
+};
+
+std::optional<document::NodeId> addNode(Table& table, std::string_view type,
+                                        const document::Vec2d at) {
+    commands::Transaction add("Add node", table.session.snapshot().revision());
+    add.emplace<commands::AddNode>(table.session.compositionId(), std::string(type), at);
+    return table.session.executeTransaction(std::move(add))
+        .outputId<document::NodeId>(commands::kAddNodeOutput);
+}
+
+void connect(Table& table, const document::NodeId source, const std::string& port,
+             document::InputPortRef destination) {
+    commands::Transaction wire("Wire", table.session.snapshot().revision());
+    wire.emplace<commands::ConnectPorts>(table.session.compositionId(),
+                                         document::OutputPortRef{source, port},
+                                         std::move(destination));
+    expect(table.session.executeTransaction(std::move(wire)).changed(), "the fixture wires");
+    QCoreApplication::processEvents();
+}
+
+MergeEntryScene buildMergeEntryScene(Table& table) {
+    MergeEntryScene scene;
+    addSolids(table, 1);
+    scene.shared = table.layer(0);
+    scene.outer = table.session.timelineMerge()->nodeId();
+    const auto layerNode = *table.session.boundaryNodeForLayer(scene.shared);
+    scene.plainSolid = addNode(table, document::kSolidSourceNodeType, {-600, 200}).value();
+    connect(table, scene.plainSolid, "image",
+            document::LayerStackInputRef{scene.outer, {}, "content"});
+    scene.nested = addNode(table, document::kLayerStackNodeType, {-300, 400}).value();
+    const auto nestedSolid = addNode(table, document::kSolidSourceNodeType, {-600, 400}).value();
+    connect(table, nestedSolid, "image", document::LayerStackInputRef{scene.nested, {}, "content"});
+    connect(table, layerNode, "image", document::LayerStackInputRef{scene.nested, {}, "content"});
+    connect(table, scene.nested, "image", document::LayerStackInputRef{scene.outer, {}, "content"});
+    commands::Transaction adjust("Add Adjustment Layer", table.session.snapshot().revision());
+    adjust.emplace<commands::AddAdjustmentLayer>(table.session.compositionId(), scene.outer,
+                                                 std::nullopt);
+    const auto added = table.session.executeTransaction(std::move(adjust));
+    scene.adjustment =
+        added.outputId<document::NodeId>(commands::kEntryLayerNodeOutput).value_or(document::NodeId{});
+    const auto slot = added.outputId<document::LayerSlotId>(commands::kEntryLayerSlotOutput);
+    expect(scene.adjustment.isValid() && slot.has_value(), "Add Adjustment Layer authors");
+    const auto curves = addNode(table, document::kCurvesNodeType, {-300, -200}).value();
+    connect(table, scene.adjustment, "image", document::NodeInputRef{curves, "input"});
+    connect(table, curves, "image", document::LayerStackInputRef{scene.outer, *slot, "content"});
+    QCoreApplication::processEvents();
+    return scene;
+}
+
+const TimelineLayerEntry* rowWhere(const Table& table,
+                                   const std::function<bool(const TimelineLayerEntry&)>& match) {
+    for (const auto& entry : table.rows().entries())
+        if (entry.rowKind == TimelineLayerEntry::Kind::Layer && match(entry))
+            return &entry;
+    return nullptr;
+}
+
+void testMergeEntryRows() {
+    Table table;
+    const auto scene = buildMergeEntryScene(table);
+    const auto* adjustment = rowWhere(table, [](const auto& row) { return row.adjustment; });
+    const auto* plain = rowWhere(table, [&](const auto& row) {
+        return row.imageNodeId == scene.plainSolid && row.nesting == 0;
+    });
+    const auto* group = rowWhere(table, [&](const auto& row) { return row.groupMerge == scene.nested; });
+    const auto* shared = rowWhere(table, [&](const auto& row) {
+        return row.layerId == scene.shared && row.nesting == 0;
+    });
+    expect(adjustment != nullptr && table.rows().entries().front().adjustment,
+           "the Adjustment entry is the top row and shows the adjustment marker");
+    expect(plain != nullptr && !plain->layerId.isValid(), "a plain input is a row with no layer yet");
+    expect(group != nullptr, "a nested Merge is a group row");
+    expect(shared != nullptr && !shared->sharedWith.isEmpty(),
+           "a Layer node feeding two Merges shows the shared marker");
+    // Rows are rebuilt by every edit; keep what the checks below need by value.
+    const auto groupSlot = group != nullptr ? group->slotId : document::LayerSlotId{};
+    // Every row is live: a plain row's first edit creates its entry layer in one undo step.
+    if (plain != nullptr) {
+        const auto entry = plain->entry();
+        const auto depth = table.stack.size();
+        expect(table.session.setEntryParameterValue(entry, document::kOpacityParameterRole,
+                                                    document::ParameterValue{0.5},
+                                                    QStringLiteral("Opacity")),
+               "a plain row's opacity is editable");
+        const auto* own = document::entryOwnedLayer(table.session.composition()->graph(),
+                                                    entry.merge, entry.slot);
+        expect(own != nullptr && table.stack.size() == depth + 1,
+               "the edit created the entry layer in the same undo step");
+        (void)table.stack.undo();
+        QCoreApplication::processEvents();
+        expect(document::entryOwnedLayer(table.session.composition()->graph(), entry.merge,
+                                         entry.slot) == nullptr,
+               "undo returns the plain entry");
+    }
+    // The group row expands in place to its own, equally live entries.
+    const auto before = table.layerRowCount();
+    if (groupSlot.isValid()) {
+        const auto slot = groupSlot;
+        int row = 0;
+        for (const auto& entry : table.rows().entries()) {
+            if (entry.slotId == slot && entry.rowKind == TimelineLayerEntry::Kind::Layer)
+                break;
+            ++row;
+        }
+        if (auto* widget = table.layerRow(row); widget && widget->disclosureButton())
+            click(widget->disclosureButton());
+        QCoreApplication::processEvents();
+    }
+    const auto* nestedRow = rowWhere(table, [&](const auto& row) {
+        return row.nesting == 1 && row.mergeNodeId == scene.nested;
+    });
+    expect(table.layerRowCount() == before + 2 && nestedRow != nullptr,
+           "expanding the group row shows the nested Merge's entries in place");
+    if (nestedRow != nullptr) {
+        const auto entry = nestedRow->entry();
+        expect(table.session.setEntryParameterValue(
+                   entry, document::kBlendModeParameterRole,
+                   document::ParameterValue{core::blendModeStoredValue(core::BlendMode::Multiply)},
+                   QStringLiteral("Blend")),
+               "a nested entry's blend mode is editable in place");
+    }
+}
+
+void captureMergeEntries() {
+    const auto directory = qEnvironmentVariable("BLOOM_TIMELINE_LAYERS_CAPTURE_DIR");
+    if (directory.isEmpty())
+        return;
+    Table table;
+    table.resize(1600);
+    const auto scene = buildMergeEntryScene(table);
+    capture(table, QStringLiteral("i502-timeline"));
+    int row = 0;
+    for (const auto& entry : table.rows().entries()) {
+        if (entry.groupMerge == scene.nested && entry.rowKind == TimelineLayerEntry::Kind::Layer)
+            break;
+        ++row;
+    }
+    if (auto* widget = table.layerRow(row); widget && widget->disclosureButton())
+        click(widget->disclosureButton());
+    QCoreApplication::processEvents();
+    capture(table, QStringLiteral("i502-timeline-expanded"));
+    QWidget nodesWindow;
+    nodesWindow.resize(1400, 800);
+    auto* layout = new QVBoxLayout(&nodesWindow);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto* nodes = new NodeGraphEditor(table.session, &nodesWindow);
+    layout->addWidget(nodes);
+    nodesWindow.show();
+    (void)QTest::qWaitForWindowExposed(&nodesWindow);
+    QTest::qWait(200);
+    QCoreApplication::processEvents();
+    if (auto* view = nodes->findChild<NodeGraphicsView*>())
+        view->frameGraph();
+    QTest::qWait(200);
+    (void)nodesWindow.grab().save(QDir(directory).filePath(QStringLiteral("i502-nodes.png")));
+    QWidget propertiesWindow;
+    propertiesWindow.resize(480, 700);
+    auto* propertiesLayout = new QVBoxLayout(&propertiesWindow);
+    propertiesLayout->setContentsMargins(0, 0, 0, 0);
+    table.session.selectNode(scene.outer);
+    propertiesLayout->addWidget(new PropertiesEditor(table.session, &propertiesWindow));
+    propertiesWindow.show();
+    (void)QTest::qWaitForWindowExposed(&propertiesWindow);
+    QTest::qWait(100);
+    (void)propertiesWindow.grab().save(
+        QDir(directory).filePath(QStringLiteral("i502-properties-merge.png")));
+}
+
 void captureStates(const int width) {
     if (qEnvironmentVariable("BLOOM_TIMELINE_LAYERS_CAPTURE_DIR").isEmpty())
         return;
@@ -806,8 +987,10 @@ int main(int argc, char** argv) {
     testSourceNames();
     testPlaybackCost();
     testPlaybackChurn();
+    testMergeEntryRows();
     captureStates(2000);
     captureStates(900);
+    captureMergeEntries();
     if (failures != 0)
         std::cerr << failures << " failure(s)\n";
     return failures == 0 ? 0 : 1;

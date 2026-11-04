@@ -25,6 +25,11 @@ class KLabel;
 // parameters. It is the node's identity rather than its display name, which two nodes may share.
 [[nodiscard]] QString upstreamGroupKey(document::NodeId nodeId);
 
+// #502. The collapse key of a twirl-down group `key` under `layer`'s row. A plain entry has no
+// layer id yet, so its groups are keyed by its slot as well, and each plain row keeps its own
+// state.
+[[nodiscard]] QString timelineGroupKey(const TimelineLayerEntry& layer, const QString& key);
+
 [[nodiscard]] std::vector<TimelineLayerEntry> timelinePropertyEntries(
     const CompositionSession& session, const std::vector<TimelineLayerEntry>& layers,
     const std::set<document::LayerId>& expanded,

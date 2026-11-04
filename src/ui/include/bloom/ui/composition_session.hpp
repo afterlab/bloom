@@ -4,6 +4,7 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
@@ -14,6 +15,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/layer_time.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/render/display_buffer.hpp>
 #include <bloom/runtime/evaluation.hpp>
@@ -86,9 +88,17 @@ struct MaskSelection final {
     friend bool operator==(const MaskSelection&, const MaskSelection&) = default;
 };
 
+// #502: a MergeEntryRef is a Merge entry that has no layer yet (a plain entry, which behaves as an
+// entry layer at its defaults). Once the entry has a layer the selection names that layer instead.
 using SelectionTarget =
     std::variant<std::monostate, document::LayerId, document::NodeId, document::ParameterId,
-                 document::DataBlockRecordId, KeyframeSelection>;
+                 document::DataBlockRecordId, KeyframeSelection, document::MergeEntryRef>;
+
+// #502: what a row action edits: a Merge entry and its layer, invalid for a plain entry.
+struct LayerTarget final {
+    document::MergeEntryRef entry;
+    document::LayerId layer;
+};
 
 struct CompositionSelection {
     SelectionTarget primary;
@@ -369,6 +379,64 @@ class CompositionSession final : public QObject {
     // is set to.
     [[nodiscard]] std::optional<core::BlendMode>
     blendModeForLayer(document::LayerId layerId) const noexcept;
+
+    // --- #502 Merge entries ------------------------------------------------------------------
+    // Every Merge entry is a layer (docs/architecture/layer-graph-model.md, "Merge"): its layer is
+    // the Layer node nearest the Merge, or the entry's own entry layer (a LayerOutputBoundary whose
+    // nodeId is the Merge), or none yet -- a plain entry, which behaves as an entry layer at its
+    // defaults and is addressed by (merge, slot). The first edit of any control of a plain entry
+    // creates its entry layer in the same undo step (commands::EntryLayerEdit).
+    [[nodiscard]] const document::LayerOutputBoundary*
+    layerBoundary(document::LayerId layerId) const noexcept;
+    // Whether `layerId` is a Merge entry's own layer (no Layer node).
+    [[nodiscard]] bool isEntryLayer(document::LayerId layerId) const noexcept;
+    // The entry's layer, or nullopt for a plain entry.
+    [[nodiscard]] std::optional<document::LayerId>
+    entryLayer(const document::MergeEntryRef& entry) const noexcept;
+    // Every Merge entry whose layer is `layerId` (two or more for a shared Layer node).
+    [[nodiscard]] std::vector<document::MergeEntryRef>
+    entriesOfLayer(document::LayerId layerId) const;
+    // Selects an entry as a timeline row does: its layer when it has one, else the plain entry.
+    // `extend` adds it to the selected entries. An entry layer (or a plain entry) selects no node.
+    void selectEntry(const document::MergeEntryRef& entry, bool extend = false);
+    void selectEntries(const std::vector<document::MergeEntryRef>& entries,
+                       const document::MergeEntryRef& primary);
+    // Whether a row for `entry` is selected: it is (or its layer is) the primary selection, one of
+    // the selected entries, or its Layer node is a selected node.
+    [[nodiscard]] bool isEntrySelected(const document::MergeEntryRef& entry) const;
+    // The entry the primary selection names: a plain entry, or the entry of a selected layer.
+    [[nodiscard]] std::optional<document::MergeEntryRef> selectedEntry() const;
+    // Every selected Merge entry (primary first), for actions over the selected rows.
+    [[nodiscard]] std::vector<document::MergeEntryRef> selectedEntries() const;
+    // One undo step for any control of `entry`: the entry's layer is created first when it has
+    // none, then `build` returns the edit for that layer. Refusals surface as commandRejected().
+    [[nodiscard]] commands::CommandResult editEntry(const document::MergeEntryRef& entry,
+                                                    const QString& label,
+                                                    commands::EntryLayerOperationBuilder build);
+    // Writes `value` to the layer parameter bound to `role` on `entry` (a constant, or a key at the
+    // playhead on an animated parameter), creating the entry's layer first when it has none.
+    [[nodiscard]] bool setEntryParameterValue(const document::MergeEntryRef& entry,
+                                              std::string_view role,
+                                              document::ParameterValue value,
+                                              const QString& label);
+    // The value `role` shows on `entry` at the playhead: its layer's parameter, or the entry layer
+    // default for a plain entry.
+    [[nodiscard]] std::optional<ParameterSample> entryParameterValue(
+        const document::MergeEntryRef& entry, std::string_view role) const;
+    // The entry layer default for `role` in this composition (the identity transform, opacity 1,
+    // Normal), or nullopt for a role an entry layer does not bind.
+    [[nodiscard]] std::optional<document::ParameterValue>
+    entryLayerDefault(std::string_view role) const;
+    // A live gesture (a field scrub, a key toggle) on a plain entry needs real parameter ids. This
+    // creates the entry's layer now and returns the parameter for `role`; the session folds that
+    // creation into the gesture's own commit so the whole gesture stays one undo step, and
+    // withdraws it if the gesture commits nothing. Returns the existing parameter for an entry that
+    // has a layer.
+    [[nodiscard]] std::optional<document::ParameterId>
+    materializeEntryParameter(const document::MergeEntryRef& entry, std::string_view role);
+    // The keyframe diamond on `role` of `entry` (a plain entry gains its layer and the key).
+    [[nodiscard]] bool toggleEntryKeyframe(const document::MergeEntryRef& entry,
+                                           std::string_view role);
 
     [[nodiscard]] bool addShapeLayer(document::ShapeKind kind,
                                      commands::ShapeLayerGeometry geometry = {},
@@ -829,6 +897,19 @@ class CompositionSession final : public QObject {
     ToolController* tools_ = nullptr;
 
     void attachCommandObserver();
+    // #502. Every session transaction goes through here. While a gesture's entry layer is pending
+    // (materializeEntryParameter), the next transaction withdraws that creation and replays itself
+    // after recreating the layer, so both land in ONE undo step.
+    [[nodiscard]] commands::CommandResult runTransaction(commands::Transaction&& transaction);
+    // Withdraws a pending gesture entry layer that nothing was committed into.
+    void withdrawPendingEntryLayer();
+    [[nodiscard]] std::optional<document::MergeEntryRef>
+    entryOfSelectedLayer(document::LayerId layerId) const;
+    [[nodiscard]] const document::ParameterRecord*
+    layerParameter(document::LayerId layerId, std::string_view role) const noexcept;
+    [[nodiscard]] bool entryExists(const document::MergeEntryRef& entry) const noexcept;
+    [[nodiscard]] bool editSelectedPlainEntry(std::string_view role, document::ParameterValue value,
+                                              const QString& label);
     [[nodiscard]] bool execute(commands::Transaction&& transaction);
     void handleCommandEvent(const commands::CommandEvent& event);
     [[nodiscard]] bool handleResult(const commands::CommandResult& result);
@@ -1025,6 +1106,17 @@ class CompositionSession final : public QObject {
     std::optional<MaskSelection> maskSelection_;
     std::vector<commands::KeyframePaste> keyframeClipboard_;
     std::set<document::NodeId> selectedNodes_;
+    // #502: the entries selected together through the Timeline (entry layers and plain entries
+    // have no node to put in selectedNodes_), and the entry the primary layer was selected as, so a
+    // layer that leaves (a Layer node removed, an entry layer adopted) keeps its row selected.
+    std::vector<document::MergeEntryRef> selectedEntries_;
+    std::optional<document::MergeEntryRef> primaryEntry_;
+    struct PendingEntryLayer final {
+        document::Revision revision;
+        document::MergeEntryRef entry;
+    };
+    std::optional<PendingEntryLayer> pendingEntryLayer_;
+    bool foldingEntryLayer_ = false;
     std::optional<TransformInteraction> transformInteraction_;
     struct ValueEdit final {
         document::Revision revision;

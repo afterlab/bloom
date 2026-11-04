@@ -1,6 +1,10 @@
 #include "timeline_layer_labels.hpp"
 
+#include "entry_layer_session_operations.hpp"
+
+#include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/project.hpp>
@@ -60,6 +64,11 @@ QString filterKeyName(const int key) {
 }
 
 void selectLabelGroup(CompositionSession& session, const document::LayerId layer) {
+    const auto entries = session.entriesOfLayer(layer);
+    if (!entries.empty()) {
+        selectLabelGroup(session, LayerTarget{entries.front(), layer});
+        return;
+    }
     const auto* composition = session.composition();
     const auto anchor = session.boundaryNodeForLayer(layer);
     if (composition == nullptr || !anchor)
@@ -73,16 +82,49 @@ void selectLabelGroup(CompositionSession& session, const document::LayerId layer
     session.selectNodes(nodes, *anchor);
 }
 
+void selectLabelGroup(CompositionSession& session, const LayerTarget& anchor) {
+    const auto* composition = session.composition();
+    if (composition == nullptr)
+        return;
+    const auto label = anchor.layer.isValid() ? labelOf(session, anchor.layer) : Label{};
+    std::vector<document::MergeEntryRef> entries;
+    for (const auto& merge : composition->graph().merges())
+        for (const auto& slot : merge.entries()) {
+            const auto* layer =
+                document::mergeEntryLayer(composition->graph(), merge.nodeId(), slot.slotId);
+            if ((layer ? layer->labelColor : Label{}) == label)
+                entries.push_back({merge.nodeId(), slot.slotId});
+        }
+    session.selectEntries(entries, anchor.entry);
+}
+
 void populateLabelMenu(QMenu& menu, CompositionSession& session,
                        const std::vector<document::LayerId>& layers, const document::LayerId anchor,
                        std::function<void()> custom) {
+    std::vector<LayerTarget> targets;
+    for (const auto layer : layers) {
+        const auto entries = session.entriesOfLayer(layer);
+        targets.push_back({entries.empty() ? document::MergeEntryRef{} : entries.front(), layer});
+    }
+    const auto entries = session.entriesOfLayer(anchor);
+    populateLabelMenu(menu, session, targets,
+                      {entries.empty() ? document::MergeEntryRef{} : entries.front(), anchor},
+                      std::move(custom));
+}
+
+void populateLabelMenu(QMenu& menu, CompositionSession& session,
+                       const std::vector<LayerTarget>& targets, const LayerTarget& anchor,
+                       std::function<void()> custom) {
     const auto compositionId = session.compositionId();
     const auto revision = session.snapshot().revision();
-    const auto current = labelOf(session, anchor);
-    const auto apply = [&session, compositionId, revision, layers](const Label& label) {
+    const auto current = anchor.layer.isValid() ? labelOf(session, anchor.layer) : Label{};
+    const auto apply = [&session, compositionId, revision, targets](const Label& label) {
         commands::Transaction transaction("Set Layer Label Color", revision);
-        for (const auto layer : layers)
-            transaction.emplace<commands::SetLayerLabelColor>(compositionId, layer, label);
+        appendLayerEdits(transaction, compositionId, targets,
+                         [compositionId, label](const document::LayerId layer) {
+                             return std::make_unique<commands::SetLayerLabelColor>(compositionId,
+                                                                                   layer, label);
+                         });
         (void)session.executeTransaction(std::move(transaction));
     };
     auto* kindDefault = menu.addAction(tr("Default"));
@@ -107,8 +149,12 @@ void populateLabelMenu(QMenu& menu, CompositionSession& session,
     menu.addSeparator();
     auto* group = menu.addAction(tr("Select Label Group"));
     group->setObjectName(QStringLiteral("timelineSelectLabelGroupAction"));
-    QObject::connect(group, &QAction::triggered, &menu,
-                     [&session, anchor] { selectLabelGroup(session, anchor); });
+    QObject::connect(group, &QAction::triggered, &menu, [&session, anchor] {
+        if (anchor.entry.merge.isValid())
+            selectLabelGroup(session, anchor);
+        else
+            selectLabelGroup(session, anchor.layer);
+    });
 }
 
 void populateLabelFilterMenu(QMenu& menu, const std::set<int>& active,

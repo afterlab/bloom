@@ -8,6 +8,7 @@
 // labels by their menu entry: Default, Label 1 to Label 8, and Custom for any other colour.
 
 #include <bloom/document/ids.hpp>
+#include <bloom/ui/composition_session.hpp>
 
 #include <QColor>
 #include <QString>
@@ -40,12 +41,19 @@ inline constexpr int kCustom = kPresetCount + 1;
 
 // Every layer of the composition storing `layer`'s label, selected; `layer` stays primary.
 void selectLabelGroup(CompositionSession& session, document::LayerId layer);
+// #502: every Merge entry whose layer stores `anchor`'s label (a plain entry has none), selected;
+// `anchor` stays primary.
+void selectLabelGroup(CompositionSession& session, const LayerTarget& anchor);
 
 // The label menu for `layers` (one undoable step for all of them), with `anchor`'s label checked:
 // Default, Label 1 to Label 8, Custom… (which calls `custom`), then Select Label Group for
 // `anchor`'s label.
 void populateLabelMenu(QMenu& menu, CompositionSession& session,
                        const std::vector<document::LayerId>& layers, document::LayerId anchor,
+                       std::function<void()> custom);
+// #502: the same for Merge entries; a plain entry gains its layer in the same step.
+void populateLabelMenu(QMenu& menu, CompositionSession& session,
+                       const std::vector<LayerTarget>& targets, const LayerTarget& anchor,
                        std::function<void()> custom);
 
 // The header's label filter menu: All Labels, then one checkable entry per filter key. Choosing an

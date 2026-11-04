@@ -3,6 +3,7 @@
 
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/editor_area.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/ui/preferences_aware.hpp>
 
 #include <bloom/document/animation.hpp>
@@ -86,9 +87,26 @@ struct TimelineLayerEntry final {
     QString group{};
     // ADR 0028: the layer mask a Masks-group row belongs to (invalid elsewhere).
     document::LayerMaskId maskId{};
+    // The node feeding the entry's image (informational; every layer row is live, #502).
     document::NodeId imageNodeId{};
     document::NodeId audioNodeId{};
     std::shared_ptr<const media::audio::WaveformSummary> waveform{};
+    // #502: the Merge entry this row is -- every layer row is one, and so is each of its property
+    // rows -- and how deep that Merge sits below the timeline Merge (0: the timeline Merge's own
+    // entries). `layerId` is the entry's layer, invalid for a plain entry until its first edit.
+    document::NodeId mergeNodeId{};
+    int nesting = 0;
+    // The entry is fed by a nested Merge (a group row): that Merge. Its twirl shows a Contents
+    // group holding the Merge's own entries, in place.
+    document::NodeId groupMerge{};
+    // An Adjustment node serves the entry (an adjustment row).
+    bool adjustment = false;
+    // The entry's layer is a Layer node reaching other entries too: their names (the shared
+    // marker's tooltip); empty otherwise.
+    QString sharedWith{};
+    // The entry's layer is a Layer node feeding its slot directly (Remove Layer Node dissolves it).
+    document::NodeId directLayerNode{};
+    [[nodiscard]] document::MergeEntryRef entry() const noexcept { return {mergeNodeId, slotId}; }
 };
 
 // Layer stack and lanes share one vertical scroll. EditorArea hosts the split header's name,
@@ -183,6 +201,15 @@ class TimelineEditor final : public QWidget, public EditorChromeProvider, public
     void indicateLayerDrop(const std::optional<LayerDropHit>& hit);
 
     std::set<document::LayerId> expandedLayers_;
+    // #502: rows expanded by their own twirl, by entry (a slot is unique in the graph).
+    std::set<document::LayerSlotId> expandedEntries_;
+    // Appends the rows of `merge`'s entries, topmost first, `nesting` levels deep, each followed by
+    // its property rows and (for an open group row) its own entries.
+    void appendMergeRows(document::NodeId merge, int nesting, std::vector<TimelineLayerEntry>& rows,
+                         std::set<document::NodeId>& visiting);
+    // Add > Adjustment Layer: into the Merge of the selected row, above it, else at the top of the
+    // timeline Merge.
+    void addAdjustmentLayer();
     // A layer with a reveal shows only these parameters (A, P, S, R, T, U, UU, M, E).
     std::map<document::LayerId, std::set<document::ParameterId>> revealed_;
     std::set<int> labelFilter_;
@@ -304,6 +331,8 @@ class TimelineLayerStack final : public kit::KListSurface {
     void viewportResized();
     void blankContextMenuRequested(QPoint globalPosition);
     void expansionRequested(document::LayerId layer);
+    // #502: one row's twirl (its entry).
+    void entryExpansionRequested(document::LayerSlotId slot);
     void groupExpansionRequested(document::LayerId layer, QString group);
     void parameterExpansionRequested(document::ParameterId parameter);
     void rowHighlightsChanged();
@@ -324,6 +353,8 @@ class TimelineLayerStack final : public kit::KListSurface {
   private:
     void relayoutRows();
     void renameLayer(document::LayerId layer);
+    // #502: renames the entry of `row` (a plain entry gains its layer in the same step).
+    void renameRow(int row);
     void updateRenameGeometry();
     // Label Color > Custom…: the kit colour picker popup under the row, committing one "Set Layer
     // Label Color" step when it closes with a different colour (Escape keeps the old one).
@@ -331,6 +362,12 @@ class TimelineLayerStack final : public kit::KListSurface {
     void commitLabelColor();
     [[nodiscard]] std::vector<document::LayerId> actionLayers(document::LayerId layer) const;
     void toggleShy(document::LayerId layer);
+    // #502: the entries a switch or label edit on `entry`'s row applies to (the selected rows when
+    // it is one of them), and the row forms of the label menu and the Shy switch.
+    [[nodiscard]] std::vector<LayerTarget> actionTargets(const TimelineLayerEntry& entry) const;
+    void openRowLabelMenu(const TimelineLayerEntry& entry, QWidget* anchor);
+    void toggleRowShy(const TimelineLayerEntry& entry);
+    void openLabelColorPicker(int row, std::vector<LayerTarget> targets);
     void setHoveredRow(int row);
     void updateRowStates();
     struct RowKey final {
@@ -351,11 +388,12 @@ class TimelineLayerStack final : public kit::KListSurface {
     kit::KColorPicker* labelPicker_ = nullptr;
     QWidget* labelPickerAnchor_ = nullptr;
     document::CompositionId labelPickerComposition_{};
-    std::vector<document::LayerId> labelPickerLayers_{};
+    std::vector<LayerTarget> labelPickerTargets_{};
     QColor labelPickerInitial_;
     bool labelPickerOpen_ = false;
     bool labelPickerCancelled_ = false;
     document::LayerId renamingLayer_{};
+    document::LayerSlotId renamingSlot_{};
     int anchorRow_ = -1;
     int dragRow_ = -1;
     int insertionRow_ = -1;
@@ -434,6 +472,7 @@ class TimelineLaneRegion final : public QWidget {
 
   Q_SIGNALS:
     void expansionRequested(document::LayerId layer);
+    void entryExpansionRequested(document::LayerSlotId slot);
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -462,6 +501,8 @@ class TimelineLaneRegion final : public QWidget {
     std::array<QAction*, 3> graphEaseActions_{};
     struct RangeDrag {
         document::LayerId layer;
+        // #502: the row's entry; a plain entry (invalid `layer`) gains its layer on commit.
+        document::MergeEntryRef entry{};
         document::Revision revision;
         document::WorkArea original, preview;
         double pressSeconds;

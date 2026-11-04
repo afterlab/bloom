@@ -229,6 +229,13 @@ void KeyframeDiamond::setParameterId(const document::ParameterId parameterId) {
     refresh();
 }
 
+void KeyframeDiamond::setEntry(std::optional<document::MergeEntryRef> entry) {
+    if (entry_ == entry)
+        return;
+    entry_ = entry;
+    refresh();
+}
+
 void KeyframeDiamond::setComponent(std::optional<document::AnimationComponent> component) {
     if (component_ == component)
         return;
@@ -237,7 +244,14 @@ void KeyframeDiamond::setComponent(std::optional<document::AnimationComponent> c
 }
 
 void KeyframeDiamond::refresh() {
+    // #502: a plain entry's role is its default layer's constant until it is keyed.
+    const bool plainEntry = entry_.has_value() && !parameterId_.has_value() && !component_;
     const auto next =
+        plainEntry ? (session_.entryLayerDefault(role_) &&
+                              role_ != document::kBlendModeParameterRole
+                          ? KeyframeDiamondState::Constant
+                          : KeyframeDiamondState::Unsupported)
+        :
         component_ ? (parameterId_ ? session_.keyframeDiamondState(
                                          *parameterId_, *component_,
                                          session_.keyTimeAtPlayhead(*parameterId_))
@@ -266,7 +280,7 @@ void KeyframeDiamond::refresh() {
     }
     state_ = next;
     auto fill = next == KeyframeDiamondState::AnimatedWithKey ? Fill::Full : Fill::None;
-    if (!component_) {
+    if (!component_ && !plainEntry) {
         const auto aggregate =
             parameterId_ ? session_.keyframeParameterState(*parameterId_,
                                             session_.keyTimeAtPlayhead(*parameterId_))
@@ -291,7 +305,9 @@ void KeyframeDiamond::mousePressEvent(QMouseEvent* event) {
     // surface rebuilds off snapshotChanged() and calls refresh() again. A parameter-bound diamond
     // deliberately does NOT select its node first -- the gesture needs no selection, so clicking a
     // key on one card cannot silently retarget the Properties panel.
-    if (component_)
+    if (entry_ && !parameterId_ && !component_)
+        (void)session_.toggleEntryKeyframe(*entry_, role_);
+    else if (component_)
         (void)(parameterId_
                    ? session_.toggleKeyframe(*parameterId_, *component_,
                                            session_.keyTimeAtPlayhead(*parameterId_))

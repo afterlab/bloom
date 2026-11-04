@@ -271,7 +271,7 @@ void NodeGraphEditor::renameSelectedLayer() {
     }
     const auto id = *nodes.begin();
     for (const auto& boundary : session_.composition()->graph().layerOutputs()) {
-        if (boundary.nodeId != id)
+        if (boundary.entryOwned() || boundary.nodeId != id)
             continue;
         if (auto* card = dynamic_cast<NodeItem*>(scene_->findNodeItem(id)))
             card->startRename();
@@ -653,7 +653,7 @@ QMenu* NodeGraphEditor::buildContextMenu(QWidget* parent, const bool nodeMenu,
                    QStringLiteral("nodeCollapseAction"), [this] { toggleSelectedMuted(false); });
         if (nodes.size() == 1) {
             for (const auto& boundary : session_.composition()->graph().layerOutputs()) {
-                if (boundary.nodeId == *nodes.begin() &&
+                if (!boundary.entryOwned() && boundary.nodeId == *nodes.begin() &&
                     commands::canRenameLayer(graphComposition, boundary.layerId, boundary.name))
                     action(tr("Rename"), QStringLiteral("nodeRenameAction"),
                            [this, id = boundary.nodeId] {
@@ -1203,7 +1203,7 @@ void NodeGraphEditor::refreshNodeMenuState() {
     bool canRename = false;
     if (nodes.size() == 1) {
         for (const auto& boundary : session_.composition()->graph().layerOutputs()) {
-            if (boundary.nodeId == *nodes.begin() &&
+            if (!boundary.entryOwned() && boundary.nodeId == *nodes.begin() &&
                 commands::canRenameLayer(graphComposition, boundary.layerId, boundary.name)) {
                 canRename = true;
             }

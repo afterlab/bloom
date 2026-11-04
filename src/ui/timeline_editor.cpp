@@ -19,6 +19,7 @@
 #include "timeline_matte_cell.hpp"
 #include "timeline_property_rows.hpp"
 #include "timeline_reveal.hpp"
+#include "entry_layer_session_operations.hpp"
 
 #include <bloom/runtime/layer_time_projection.hpp>
 #include <bloom/ui/composition_authoring.hpp>
@@ -35,11 +36,17 @@
 #include <bloom/ui/kit/swatch_button.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
+#include <bloom/commands/layer_operations.hpp>
+#include <bloom/commands/layer_stack_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
 
 #include <QAction>
@@ -177,9 +184,7 @@ QString shyToolTip() {
 
 // ---------------------------------------------------------------------------------------------
 
-[[nodiscard]] QString layerKind(const CompositionSession& session,
-                                const document::LayerId layerId) {
-    const auto* sourceNode = directSourceNode(session, layerId);
+[[nodiscard]] QString sourceKind(const document::NodeRecord* sourceNode) {
     if (isKnownSource(sourceNode, document::kSolidSourceNodeType,
                       document::kSolidSourceNodeSchemaVersion)) {
         return TimelineEditor::tr("Solid");
@@ -196,8 +201,13 @@ QString shyToolTip() {
         return TimelineEditor::tr("Video");
     if (sourceNode && sourceNode->typeId == document::kCompositionSourceNodeType)
         return TimelineEditor::tr("Composition");
+    if (sourceNode && sourceNode->typeId == document::kLayerStackNodeType)
+        return TimelineEditor::tr("Group");
+    if (sourceNode && sourceNode->typeId == document::kAdjustmentNodeType)
+        return TimelineEditor::tr("Adjustment");
     return TimelineEditor::tr("Layer");
 }
+
 
 // The clip bar's fill, from the data-type palette (task T1).
 //
@@ -228,10 +238,10 @@ QString shyToolTip() {
 // the color is a second channel rather than the only one. An unrecognized layer kind takes Muted,
 // because there is no honest data-type color for "kind unknown". A future media-backed or
 // pre-composition layer kind takes its own role here on the day it ships.
-[[nodiscard]] kit::Color layerClipColorToken(const CompositionSession& session,
-                                             const document::LayerId layerId) {
-    const auto* sourceNode = directSourceNode(session, layerId);
-    if (sourceNode && sourceNode->typeId == document::kCompositionSourceNodeType)
+[[nodiscard]] kit::Color sourceClipColorToken(const CompositionSession& session,
+                                              const document::NodeRecord* sourceNode) {
+    if (sourceNode && (sourceNode->typeId == document::kCompositionSourceNodeType ||
+                       sourceNode->typeId == document::kLayerStackNodeType))
         return kit::Color::DataComposition;
     if (sourceNode && (sourceNode->typeId == "bloom.image-source" ||
                        sourceNode->typeId == "bloom.video-source")) {
@@ -259,8 +269,11 @@ QString shyToolTip() {
                       document::kAudioSourceNodeSchemaVersion)) {
         return kit::Color::DataAudio;
     }
+    // #502: an Adjustment has no pixels of its own (it processes the stack below), so its bar is
+    // the neutral Muted grey; the row's adjustment marker names the kind.
     return kit::Color::Muted;
 }
+
 
 // The layer the session currently points at: the primary selection when it IS a layer, otherwise
 // the contextual layer a node/parameter selection carries. Exactly the resolution order the
@@ -277,6 +290,35 @@ QString shyToolTip() {
     return (boundary.has_value() && session.selectedNodes().contains(*boundary)) ||
            selectedLayer(session) == layer;
 }
+
+// #502: a row is selected when its Merge entry is (every layer row is a Merge entry).
+[[nodiscard]] bool isRowSelected(const CompositionSession& session,
+                                 const TimelineLayerEntry& entry) {
+    if (entry.mergeNodeId.isValid())
+        return session.isEntrySelected(entry.entry());
+    return entry.layerId.isValid() && isLayerSelected(session, entry.layerId);
+}
+
+[[nodiscard]] LayerTarget rowTarget(const TimelineLayerEntry& entry) {
+    return {entry.entry(), entry.layerId};
+}
+
+// One undoable step applying `build` to every target's layer (a plain entry gains its layer in the
+// same step). Returns whether the document changed.
+bool editTargets(CompositionSession& session, const char* label,
+                 const std::vector<LayerTarget>& targets,
+                 const commands::EntryLayerOperationBuilder& build) {
+    if (targets.empty())
+        return false;
+    commands::Transaction transaction(label, session.snapshot().revision());
+    appendLayerEdits(transaction, session.compositionId(), targets, build);
+    if (transaction.empty())
+        return false;
+    return session.executeTransaction(std::move(transaction)).changed();
+}
+
+// The step one name-cell nesting level indents a nested Merge's rows by.
+constexpr int kNestingIndentStep = kit::px(kit::Spacing::M);
 
 // The Blending dropdown: every implemented blend mode, in core::kBlendModes order, named by the one
 // shared vocabulary blendModeDisplayName() owns. The item DATA is the mode's stored integer rather
@@ -334,14 +376,23 @@ class TimelineLayerRow final : public kit::KRow {
         parentDropdown_->setAccessibleName(TimelineEditor::tr("Parent"));
         parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
         connect(parentDropdown_, &kit::KDropdown::activated, this, [this](int index) {
-            if (binding_ || !layerId_ || index < 0)
+            if (binding_ || !bound_ || index < 0)
                 return;
-            const auto layer = *layerId_;
             const auto raw = parentDropdown_->itemData(index).toULongLong();
             const auto parent = raw ? std::optional(document::LayerId::fromRaw(raw)) : std::nullopt;
-            if (!session_->setLayerParent(layer, parent)) {
+            const auto compositionId = session_->compositionId();
+            const bool changed =
+                entry_.layerId.isValid()
+                    ? session_->setLayerParent(entry_.layerId, parent)
+                    : editTargets(*session_, "Set Layer Parent", {rowTarget(entry_)},
+                                  [compositionId, parent](const document::LayerId layer) {
+                                      return std::make_unique<commands::SetLayerParent>(
+                                          compositionId, layer, parent);
+                                  });
+            if (!changed) {
                 const QSignalBlocker blocker(parentDropdown_);
-                const auto current = session_->parentOf(layer);
+                const auto current = entry_.layerId.isValid() ? session_->parentOf(entry_.layerId)
+                                                              : std::nullopt;
                 parentDropdown_->setCurrentIndex(parentDropdown_->findData(
                     QVariant::fromValue(static_cast<qulonglong>(current ? current->value() : 0))));
             }
@@ -351,13 +402,13 @@ class TimelineLayerRow final : public kit::KRow {
         matteDropdown_->setControlSize(kit::KDropdown::ControlSize::Dense);
         matteDropdown_->setAccessibleName(TimelineEditor::tr("Track Matte"));
         connect(matteDropdown_, &kit::KDropdown::activated, this, [this](int index) {
-            if (binding_ || !layerId_ || index < 0)
+            if (binding_ || !bound_ || index < 0)
                 return;
-            const auto layer = *layerId_;
-            (void)matte_cell::activate(*session_, layer,
+            const auto target = rowTarget(entry_);
+            (void)matte_cell::activate(*session_, target,
                                        matteDropdown_->itemData(index).toLongLong());
             const QSignalBlocker blocker(matteDropdown_);
-            matte_cell::populate(*matteDropdown_, *session_, layer);
+            matte_cell::populate(*matteDropdown_, *session_, target);
         });
         QList<QWidget*> cells;
         for (int index = 0; index < kToggleCellCount; ++index) {
@@ -387,8 +438,8 @@ class TimelineLayerRow final : public kit::KRow {
         retainSize(*label_);
         cells.append(label_);
         connect(label_, &QToolButton::clicked, this, [this] {
-            if (!binding_ && layerId_ && openLabelMenu)
-                openLabelMenu(*layerId_, label_);
+            if (!binding_ && bound_ && openLabelMenu)
+                openLabelMenu(entry_, label_);
         });
         shy_ = new kit::KIconToggle(kit::IconId::Shy, this);
         shy_->setProperty("layerSwitch", true);
@@ -397,92 +448,134 @@ class TimelineLayerRow final : public kit::KRow {
         shy_->setAccessibleName(TimelineEditor::tr("Shy"));
         retainSize(*shy_);
         connect(shy_, &QToolButton::clicked, this, [this] {
-            if (!binding_ && layerId_ && toggleShy)
-                toggleShy(*layerId_);
+            if (!binding_ && bound_ && toggleShy)
+                toggleShy(entry_);
         });
         setCells(cells, nullptr, {blending_, parentDropdown_, matteDropdown_}, nullptr, kCellGap,
                  {shy_});
+        // #502 markers after the name: the adjustment row and the shared Layer node.
+        auto* nameLayout = qobject_cast<QHBoxLayout*>(nameLabel()->parentWidget()->layout());
+        const auto marker = [&](const QString& name, const kit::IconId icon,
+                                const kit::Color tone) {
+            auto* label = new kit::KLabel(nameLabel()->parentWidget());
+            label->setObjectName(name);
+            label->setPixmap(kit::iconPixmap(icon, kit::Size::IconSmall, tone, kit::State::Normal,
+                                             kit::IconWeight::Bold));
+            label->setFixedSize(kit::px(kit::Size::ToggleCell), kit::px(kit::Size::ToggleCell));
+            label->setAlignment(Qt::AlignCenter);
+            label->hide();
+            if (nameLayout != nullptr)
+                nameLayout->addWidget(label, 0, Qt::AlignVCenter);
+            return label;
+        };
+        adjustmentMarker_ = marker(QStringLiteral("timelineAdjustmentMarker"),
+                                   kit::IconId::SlidersHorizontal, kit::Color::Muted);
+        adjustmentMarker_->setToolTip(
+            TimelineEditor::tr("Adjustment layer: processes the layers below it in its Merge"));
+        adjustmentMarker_->setAccessibleName(TimelineEditor::tr("Adjustment layer"));
+        sharedMarker_ =
+            marker(QStringLiteral("timelineSharedMarker"), kit::IconId::Link, kit::Color::Muted);
+        sharedMarker_->setAccessibleName(TimelineEditor::tr("Shared Layer node"));
         disclosureButton()->setAccessibleName(TimelineEditor::tr("Expand layer properties"));
         connect(disclosureButton(), &QToolButton::clicked, this,
-                [this] { activateAt(kNameCellX + kit::px(kit::Spacing::S) + kCellGap); });
-        // The connection is made once, for the life of the pooled row, and reads whichever layer
+                [this] { activateAt(chevronX(entry_.nesting) + kCellGap); });
+        // The connection is made once, for the life of the pooled row, and reads whichever entry
         // the row is bound to AT THE MOMENT the artist picks a mode -- a pooled row is re-pointed
         // on every scroll step, so capturing a layer id here would author the wrong layer.
         connect(blending_, &kit::KDropdown::activated, this, [this](const int index) {
-            if (binding_ || !layerId_.has_value() || index < 0) {
+            if (binding_ || !bound_ || index < 0) {
                 return;
             }
             const auto mode = blendModeFromDropdownIndex(*blending_, index);
             if (!mode.has_value()) {
                 return;
             }
-            (void)session_->setLayerBlendMode(*layerId_, *mode);
+            if (entry_.layerId.isValid())
+                (void)session_->setLayerBlendMode(entry_.layerId, *mode);
+            else if (entry_.mergeNodeId.isValid())
+                (void)session_->setEntryParameterValue(
+                    entry_.entry(), document::kBlendModeParameterRole,
+                    document::ParameterValue{
+                        static_cast<std::int64_t>(core::blendModeStoredValue(*mode))},
+                    TimelineEditor::tr("Set Blend Mode"));
         });
     }
 
-    // The stack's label menu and Shy commands, called with the layer the row is bound to now.
-    std::function<void(document::LayerId, QWidget*)> openLabelMenu;
-    std::function<void(document::LayerId)> toggleShy;
+    // The stack's label menu and Shy commands, called with the entry the row is bound to now.
+    std::function<void(const TimelineLayerEntry&, QWidget*)> openLabelMenu;
+    std::function<void(const TimelineLayerEntry&)> toggleShy;
+
+    // The x where a row's twirl caret starts: the name cell, indented by its Merge's nesting.
+    [[nodiscard]] static int chevronX(const int nesting) {
+        return kNameCellX + kit::px(kit::Spacing::S) + nesting * kNestingIndentStep;
+    }
 
     // Rebind the same controls when scrolling; signal-blocked projection never authors edits.
     void bind(const TimelineLayerEntry& entry, const bool selected, const int rowIndex) {
-        setName(entry.name, entry.imageNodeId.isValid()
-                                ? std::nullopt
-                                : std::optional(entry.expanded ? kit::IconId::CaretDown
-                                                               : kit::IconId::CaretRight));
+        setName(entry.name, entry.expanded ? kit::IconId::CaretDown : kit::IconId::CaretRight);
         setRowState(rowIndex, selected);
-        layerId_ = entry.layerId;
-        collapsedImage_ = entry.imageNodeId.isValid();
+        entry_ = entry;
+        bound_ = true;
         audioLayer_ = entry.kind == TimelineEditor::tr("Audio");
+        if (auto* nameLayout = nameLabel()->parentWidget()->layout()) {
+            const int inset = kit::px(kit::Spacing::XS) + entry.nesting * kNestingIndentStep;
+            if (nameLayout->contentsMargins().left() != inset)
+                nameLayout->setContentsMargins(inset, 0, kit::px(kit::Spacing::XS), 0);
+        }
         // `binding_` (not just a QSignalBlocker) because setCurrentIndex() is a projection of
         // document truth, never an edit: a blocked signal would still leave the lambda armed for a
         // nested change, and a row re-pointed during a scroll must author nothing at all.
         binding_ = true;
-        const auto mode = session_->blendModeForLayer(entry.layerId);
-        const int row = mode.has_value() ? blendingDropdownIndex(*blending_, *mode) : -1;
         const auto* composition = session_->composition();
-        const auto* layer = composition ? composition->graph().findLayer(entry.layerId) : nullptr;
-        enabled_ = layer && layer->enabled;
-        if (collapsedImage_ && composition) {
-            const auto* merge = composition->graph().merge(entry.imageNodeId);
-            enabled_ = merge ? merge->enabled() : true;
-        }
-        if (layer) {
+        const auto* layer = composition && entry.layerId.isValid()
+                                ? composition->graph().findLayer(entry.layerId)
+                                : nullptr;
+        // #502: a plain entry is an entry layer at its defaults: Normal, visible, not solo or
+        // locked. Every control is live and creates the entry's layer on its first edit.
+        const auto mode = layer ? session_->blendModeForLayer(entry.layerId)
+                                : std::optional(core::BlendMode::Normal);
+        const int row = mode.has_value() ? blendingDropdownIndex(*blending_, *mode) : -1;
+        enabled_ = layer == nullptr || layer->enabled;
+        if (layer && !layer->entryOwned()) {
             const auto layout = composition->nodeLayout().find(layer->nodeId);
             enabled_ =
                 enabled_ && (layout == composition->nodeLayout().end() || !layout->second.muted);
         }
+        if (entry.groupMerge.isValid() && composition) {
+            const auto* merge = composition->graph().merge(entry.groupMerge);
+            enabled_ = enabled_ && (merge == nullptr || merge->enabled());
+        }
         solo_ = layer && layer->solo;
         locked_ = layer && layer->locked;
         const bool hasAudio = entry.audioNodeId.isValid();
-        const bool audioConnected =
-            layer && composition &&
-            std::ranges::any_of(composition->graph().edges(), [&](const auto& edge) {
-                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
-                return input && input->nodeId == layer->nodeId &&
-                       input->port == document::kLayerOutputAudioInputPort;
-            });
+        const bool audioConnected = composition && audioConnectedFor(*composition, entry, layer);
         blending_->setEnabled(mode.has_value() && !locked_);
         parentDropdown_->clearItems();
         parentDropdown_->addItem(TimelineEditor::tr("None"), QVariant::fromValue(qulonglong{0}));
-        for (const auto candidate : session_->candidateParents(entry.layerId)) {
+        std::vector<document::LayerId> candidates;
+        if (layer)
+            candidates = session_->candidateParents(entry.layerId);
+        else if (composition)
+            for (const auto& other : composition->graph().layerOutputs())
+                candidates.push_back(other.layerId);
+        for (const auto candidate : candidates) {
             const auto boundary = session_->boundaryNodeForLayer(candidate);
             const auto* node =
                 composition && boundary ? composition->graph().findNode(*boundary) : nullptr;
-            if (node)
-                parentDropdown_->addItem(
-                    node_editor::nodeDisplayName(*composition, *node),
-                    QVariant::fromValue(static_cast<qulonglong>(candidate.value())));
+            parentDropdown_->addItem(
+                node ? node_editor::nodeDisplayName(*composition, *node)
+                     : layer_fields::displayName(*session_, candidate),
+                QVariant::fromValue(static_cast<qulonglong>(candidate.value())));
         }
-        const auto parent = session_->parentOf(entry.layerId);
+        const auto parent = layer ? session_->parentOf(entry.layerId) : std::nullopt;
         parentDropdown_->setCurrentIndex(parentDropdown_->findData(
             QVariant::fromValue(static_cast<qulonglong>(parent ? parent->value() : 0))));
-        parentDropdown_->setEnabled(layer && !locked_);
+        parentDropdown_->setEnabled(!locked_);
         parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
         parentDropdown_->show();
         // ADR 0028 Track Matte column.
-        matte_cell::populate(*matteDropdown_, *session_, entry.layerId);
-        matteDropdown_->setEnabled(layer && !locked_ && !collapsedImage_);
+        matte_cell::populate(*matteDropdown_, *session_, rowTarget(entry));
+        matteDropdown_->setEnabled(!locked_);
         blending_->setCurrentIndex(row >= 0 ? row : 0);
         blending_->setToolTip(mode.has_value()
                                   ? TimelineEditor::tr("How this layer combines with the layers "
@@ -497,22 +590,45 @@ class TimelineLayerRow final : public kit::KRow {
                                : index == 2 ? solo_
                                             : index == 3 && locked_);
             toggle->setEnabled(index == 1   ? hasAudio && !locked_
-                               : index == 0 ? !audioLayer_ && (!collapsedImage_ || index == 0)
-                                            : index != 1 && !collapsedImage_);
+                               : index == 0 ? !audioLayer_
+                                            : true);
             toggle->setGlyph(toggleIcon(index));
         }
-        label_->setVisible(!collapsedImage_);
+        label_->setVisible(true);
         label_->setSwatch(entry.labelColor.isValid() ? entry.labelColor
                                                      : kit::color(entry.clipColor));
-        label_->setEnabled(layer != nullptr);
+        label_->setEnabled(true);
         {
             const QSignalBlocker blocker(shy_);
-            shy_->setVisible(!collapsedImage_);
+            shy_->setVisible(true);
             shy_->setChecked(layer && layer_fields::shy(*session_, entry.layerId));
-            shy_->setEnabled(layer != nullptr);
+            shy_->setEnabled(true);
         }
+        adjustmentMarker_->setVisible(entry.adjustment);
+        sharedMarker_->setVisible(!entry.sharedWith.isEmpty());
+        sharedMarker_->setToolTip(
+            entry.sharedWith.isEmpty()
+                ? QString{}
+                : TimelineEditor::tr("Shared Layer node: also in %1").arg(entry.sharedWith));
         binding_ = false;
         update();
+    }
+
+    // Whether the entry's audio is connected: its Layer node's audio input, or (an entry layer or a
+    // plain entry) its slot's own audio content.
+    [[nodiscard]] static bool audioConnectedFor(const document::Composition& composition,
+                                                const TimelineLayerEntry& entry,
+                                                const document::LayerOutputBoundary* layer) {
+        return std::ranges::any_of(composition.graph().edges(), [&](const auto& edge) {
+            if (layer && !layer->entryOwned()) {
+                const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+                return input && input->nodeId == layer->nodeId &&
+                       input->port == document::kLayerOutputAudioInputPort;
+            }
+            const auto* slot = std::get_if<document::LayerStackInputRef>(&edge.destination);
+            return slot && slot->stackNodeId == entry.mergeNodeId && slot->slotId == entry.slotId &&
+                   slot->role == document::kLayerStackAudioInputRole;
+        });
     }
 
   protected:
@@ -552,10 +668,12 @@ class TimelineLayerRow final : public kit::KRow {
     std::array<kit::KIconToggle*, kToggleCellCount> toggles_{};
     kit::KSwatchButton* label_ = nullptr;
     kit::KIconToggle* shy_ = nullptr;
+    kit::KLabel* adjustmentMarker_ = nullptr;
+    kit::KLabel* sharedMarker_ = nullptr;
     CompositionSession* session_ = nullptr;
-    std::optional<document::LayerId> layerId_;
+    TimelineLayerEntry entry_{};
+    bool bound_ = false;
     bool enabled_ = true, solo_ = false, locked_ = false;
-    bool collapsedImage_ = false;
     bool audioLayer_ = false;
     bool binding_ = false;
     kit::KDropdown* blending_ = nullptr;
@@ -680,21 +798,25 @@ TimelineLayerStack::TimelineLayerStack(CompositionSession& session, QScrollBar& 
 
 void TimelineLayerStack::syncCurrentRowFromSelection() {
     const auto selected = selectedLayer(session_);
+    // #502: the selected row is the selected entry's (a shared Layer node has several rows).
+    const auto selectedEntry = session_.selectedEntry();
     int resolved = -1;
-    if (selected.has_value()) {
+    if (selectedEntry.has_value())
+        for (int index = 0; index < rowCount(); ++index) {
+            const auto& entry = entries_[static_cast<std::size_t>(index)];
+            if (entry.rowKind == TimelineLayerEntry::Kind::Layer &&
+                entry.entry() == *selectedEntry) {
+                resolved = index;
+                break;
+            }
+        }
+    if (resolved < 0 && selected.has_value()) {
         for (int index = 0; index < rowCount(); ++index) {
             if (entries_[static_cast<std::size_t>(index)].layerId == *selected) {
                 resolved = index;
                 break;
             }
         }
-    }
-    for (int index = 0; index < rowCount(); ++index) {
-        const auto& entry = entries_[static_cast<std::size_t>(index)];
-        const auto sourceNodeId =
-            entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
-        if (sourceNodeId.isValid() && session_.selectedNodes().contains(sourceNodeId))
-            resolved = index;
     }
     if (resolved == currentRow_) {
         // Still worth repainting: the row whose FILL changed may not be the current row at all (a
@@ -741,8 +863,8 @@ void TimelineLayerStack::setCurrentRow(const int row) {
     // Navigation IS selection here (single-selection, exactly like the QTreeWidget before it): the
     // session owns selection truth, and every other editor follows it from selectionChanged.
     const auto& entry = entries_[static_cast<std::size_t>(row)];
-    if (!entry.layerId.isValid() && (entry.imageNodeId.isValid() || entry.audioNodeId.isValid()))
-        session_.selectNode(entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId);
+    if (entry.mergeNodeId.isValid())
+        session_.selectEntry(entry.entry());
     else
         session_.selectLayer(entry.layerId);
     relayoutRows();
@@ -778,10 +900,10 @@ void TimelineLayerStack::relayoutRows() {
     const int needed = std::clamp(rowCount() - first, 0, viewportRows);
     while (static_cast<int>(rowPool_.size()) < needed) {
         auto* row = new TimelineLayerRow(session_, this);
-        row->openLabelMenu = [this](document::LayerId layer, QWidget* anchor) {
-            openLabelMenu(layer, anchor);
+        row->openLabelMenu = [this](const TimelineLayerEntry& entry, QWidget* anchor) {
+            openRowLabelMenu(entry, anchor);
         };
-        row->toggleShy = [this](document::LayerId layer) { toggleShy(layer); };
+        row->toggleShy = [this](const TimelineLayerEntry& entry) { toggleRowShy(entry); };
         row->installEventFilter(this);
         rowPool_.push_back(row);
     }
@@ -803,11 +925,7 @@ void TimelineLayerStack::relayoutRows() {
             if (property)
                 property->hide();
             ++work_.layerRowBinds;
-            row->bind(entry,
-                      entry.imageNodeId.isValid()
-                          ? session_.selectedNodes().contains(entry.imageNodeId)
-                          : isLayerSelected(session_, entry.layerId),
-                      index);
+            row->bind(entry, isRowSelected(session_, entry), index);
             row->setGeometry(0, rowTop(index), width(), kTimelineRowHeight);
             row->show();
         } else {
@@ -858,8 +976,15 @@ void TimelineLayerStack::selectRow(const int row) {
     if (entry.maskId.isValid())
         session_.selectMask(entry.layerId, entry.maskId);
     if (entry.rowKind == TimelineLayerEntry::Kind::Group) {
-        if (!entry.maskId.isValid())
-            session_.selectLayer(entry.layerId);
+        if (!entry.maskId.isValid()) {
+            if (entry.mergeNodeId.isValid())
+                session_.selectEntry(entry.entry());
+            else
+                session_.selectLayer(entry.layerId);
+        }
+    } else if (!entry.parameterId.isValid()) {
+        // #502: a plain entry's property row (its layer is not created yet) selects the entry.
+        session_.selectEntry(entry.entry());
     } else {
         // A property row selects itself and every key it shows (all of a vector's components on
         // its parameter row, the one component on a component row).
@@ -931,7 +1056,7 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
         session_.clearSelection();
         return;
     }
-    const auto& entry = entries_[static_cast<std::size_t>(index)];
+    const auto entry = entries_[static_cast<std::size_t>(index)];
     const auto id = entry.layerId;
     if (entry.rowKind != TimelineLayerEntry::Kind::Layer) {
         selectRow(index);
@@ -939,92 +1064,126 @@ void TimelineLayerStack::mousePressEvent(QMouseEvent* event) {
         return;
     }
     selectedRow_.reset();
-    if (entry.imageNodeId.isValid()) {
-        const auto* merge = session_.composition()->graph().merge(entry.imageNodeId);
-        if (merge && event->position().x() >= kToggleStripX &&
-            event->position().x() < kToggleStripX + kToggleCellWidth) {
-            commands::Transaction transaction("Toggle Merge", session_.snapshot().revision());
-            transaction.emplace<commands::SetMergeEnabled>(session_.compositionId(),
-                                                           entry.imageNodeId, !merge->enabled());
-            (void)session_.executeTransaction(std::move(transaction));
-        } else
-            session_.selectNode(entry.imageNodeId);
-        return;
-    }
-    const int chevronX = kNameCellX + kit::px(kit::Spacing::S) + kCellGap;
+    const int chevronX = TimelineLayerRow::chevronX(entry.nesting) + kCellGap;
     if (event->position().x() >= chevronX &&
         event->position().x() < chevronX + kit::px(kit::Size::IconMedium)) {
-        Q_EMIT expansionRequested(id);
+        if (entry.mergeNodeId.isValid())
+            Q_EMIT entryExpansionRequested(entry.slotId);
+        else
+            Q_EMIT expansionRequested(id);
         return;
     }
     const auto* composition = session_.composition();
-    const auto* layer = composition ? composition->graph().findLayer(id) : nullptr;
-    if (!layer)
+    if (composition == nullptr)
         return;
+    // #502: every row is live. A plain entry (no layer yet) is an entry layer at its defaults; a
+    // switch on it creates its layer in the same undo step.
+    const auto* layer = id.isValid() ? composition->graph().findLayer(id) : nullptr;
+    if (layer == nullptr && !entry.mergeNodeId.isValid())
+        return;
+    const bool locked = layer && layer->locked;
     const int toggleX = static_cast<int>(event->position().x()) - kToggleStripX;
     const int togglePitch = kToggleCellWidth + kCellGap;
     const int toggle = toggleX / togglePitch;
+    const auto compositionId = session_.compositionId();
     if (toggleX >= 0 && toggle < kToggleCellCount && toggleX % togglePitch < kToggleCellWidth) {
         if (toggle == static_cast<int>(ToggleCell::Audio)) {
-            if (!entry.audioNodeId.isValid() || layer->locked)
+            if (!entry.audioNodeId.isValid() || locked)
                 return;
-            commands::Transaction transaction("Toggle Audio", session_.snapshot().revision());
             if (entry.kind == tr("Audio")) {
-                transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id,
-                                                               !layer->enabled);
-            } else {
-                const document::NodeInputRef input{
-                    layer->nodeId, std::string(document::kLayerOutputAudioInputPort)};
-                const bool connected =
-                    std::ranges::any_of(composition->graph().edges(), [&](const auto& edge) {
-                        return edge.destination == document::InputPortRef{input};
-                    });
-                if (connected)
-                    transaction.emplace<commands::DisconnectInput>(session_.compositionId(), input);
-                else
-                    transaction.emplace<commands::ConnectPorts>(
-                        session_.compositionId(),
-                        document::OutputPortRef{entry.audioNodeId, "audio"}, input);
+                const bool enabled = layer == nullptr || layer->enabled;
+                (void)editTargets(session_, "Toggle Audio", {rowTarget(entry)},
+                                  [compositionId, enabled](const document::LayerId target) {
+                                      return std::make_unique<commands::SetLayerEnabled>(
+                                          compositionId, target, !enabled);
+                                  });
+                return;
             }
+            commands::Transaction transaction("Toggle Audio", session_.snapshot().revision());
+            const document::InputPortRef input =
+                layer && !layer->entryOwned()
+                    ? document::InputPortRef{document::NodeInputRef{
+                          layer->nodeId, std::string(document::kLayerOutputAudioInputPort)}}
+                    : document::InputPortRef{document::LayerStackInputRef{
+                          entry.mergeNodeId, entry.slotId,
+                          std::string(document::kLayerStackAudioInputRole)}};
+            const bool connected =
+                std::ranges::any_of(composition->graph().edges(),
+                                    [&](const auto& edge) { return edge.destination == input; });
+            if (connected)
+                transaction.emplace<commands::DisconnectInput>(compositionId, input);
+            else
+                transaction.emplace<commands::ConnectPorts>(
+                    compositionId, document::OutputPortRef{entry.audioNodeId, "audio"}, input);
             (void)session_.executeTransaction(std::move(transaction));
             return;
         }
-        commands::Transaction transaction("Toggle Layer", session_.snapshot().revision());
         if (toggle == 0) {
-            const auto layout = composition->nodeLayout().find(layer->nodeId);
-            const bool visible = layer->enabled && (layout == composition->nodeLayout().end() ||
-                                                    !layout->second.muted);
-            transaction.emplace<commands::SetLayerEnabled>(session_.compositionId(), id, !visible);
+            bool visible = layer == nullptr || layer->enabled;
+            if (layer && !layer->entryOwned()) {
+                const auto layout = composition->nodeLayout().find(layer->nodeId);
+                visible = visible &&
+                          (layout == composition->nodeLayout().end() || !layout->second.muted);
+            }
+            const auto* group =
+                entry.groupMerge.isValid() ? composition->graph().merge(entry.groupMerge) : nullptr;
+            const bool groupOff = group != nullptr && !group->enabled();
+            visible = visible && !groupOff;
+            commands::Transaction transaction("Toggle Layer", session_.snapshot().revision());
+            appendLayerEdits(transaction, compositionId, {rowTarget(entry)},
+                             [compositionId, visible](const document::LayerId target) {
+                                 return std::make_unique<commands::SetLayerEnabled>(
+                                     compositionId, target, !visible);
+                             });
+            // A group row shows its Merge's own enabled flag too: turning the row on turns both on.
+            if (!visible && groupOff)
+                transaction.emplace<commands::SetMergeEnabled>(compositionId, entry.groupMerge,
+                                                               true);
+            (void)session_.executeTransaction(std::move(transaction));
+            return;
         }
-        if (toggle == static_cast<int>(ToggleCell::Solo))
-            transaction.emplace<commands::SetLayerSolo>(session_.compositionId(), id, !layer->solo);
+        if (toggle == static_cast<int>(ToggleCell::Solo)) {
+            const bool solo = layer && layer->solo;
+            (void)editTargets(session_, "Toggle Layer", {rowTarget(entry)},
+                              [compositionId, solo](const document::LayerId target) {
+                                  return std::make_unique<commands::SetLayerSolo>(compositionId,
+                                                                                  target, !solo);
+                              });
+        }
         if (toggle == static_cast<int>(ToggleCell::Lock))
-            transaction.emplace<commands::SetLayerLocked>(session_.compositionId(), id,
-                                                          !layer->locked);
-        (void)session_.executeTransaction(std::move(transaction));
+            (void)editTargets(session_, "Toggle Layer", {rowTarget(entry)},
+                              [compositionId, locked](const document::LayerId target) {
+                                  return std::make_unique<commands::SetLayerLocked>(
+                                      compositionId, target, !locked);
+                              });
         return;
     }
-    const auto node = layer->nodeId;
-    auto nodes = session_.selectedNodes();
     if (event->modifiers().testFlag(Qt::ShiftModifier) && anchorRow_ >= 0) {
+        auto entries = session_.selectedEntries();
         for (int row = std::min(anchorRow_, index);
-             row <= std::max(anchorRow_, index) && row < rowCount(); ++row)
-            if (const auto boundary =
-                    session_.boundaryNodeForLayer(entries_[static_cast<std::size_t>(row)].layerId))
-                nodes.insert(*boundary);
-        session_.selectNodes(nodes, node);
+             row <= std::max(anchorRow_, index) && row < rowCount(); ++row) {
+            const auto& candidate = entries_[static_cast<std::size_t>(row)];
+            if (candidate.rowKind == TimelineLayerEntry::Kind::Layer &&
+                candidate.mergeNodeId.isValid() &&
+                std::ranges::find(entries, candidate.entry()) == entries.end())
+                entries.push_back(candidate.entry());
+        }
+        session_.selectEntries(entries, entry.entry());
     } else if (event->modifiers().testFlag(Qt::ControlModifier)) {
-        if (nodes.contains(node))
-            nodes.erase(node);
-        else
-            nodes.insert(node);
-        if (nodes.empty())
-            session_.clearSelection();
-        else
-            session_.selectNodes(nodes, nodes.contains(node) ? node : *nodes.begin());
+        auto entries = session_.selectedEntries();
+        if (std::ranges::find(entries, entry.entry()) != entries.end()) {
+            std::erase(entries, entry.entry());
+            if (entries.empty())
+                session_.clearSelection();
+            else
+                session_.selectEntries(entries, entries.front());
+        } else {
+            entries.push_back(entry.entry());
+            session_.selectEntries(entries, entry.entry());
+        }
         anchorRow_ = index;
     } else {
-        session_.selectLayer(id);
+        session_.selectEntry(entry.entry());
         anchorRow_ = index;
     }
     dragRow_ = index;
@@ -1073,11 +1232,26 @@ void TimelineLayerStack::mouseReleaseEvent(QMouseEvent* event) {
         insertion_->hide();
     if (from < 0 || from >= rowCount() || to < 0 || to > rowCount())
         return;
+    // #502: a row reorders within its own Merge. The drop lands before the next row of that Merge
+    // at or below the line, or at the Merge's bottom once the line leaves its rows.
+    const auto& moving = entries_[static_cast<std::size_t>(from)];
+    std::optional<document::LayerSlotId> before;
+    std::vector<int> block;
+    for (int row = 0; row < rowCount(); ++row) {
+        const auto& candidate = entries_[static_cast<std::size_t>(row)];
+        if (candidate.rowKind == TimelineLayerEntry::Kind::Layer &&
+            candidate.mergeNodeId == moving.mergeNodeId && candidate.nesting == moving.nesting)
+            block.push_back(row);
+    }
+    // The first row of the Merge at or below the line (a line above them lands at the top);
+    // none, the bottom.
+    for (const int row : block)
+        if (row >= to) {
+            before = entries_[static_cast<std::size_t>(row)].slotId;
+            break;
+        }
     commands::Transaction transaction("Reorder Layer", dragRevision_);
-    transaction.emplace<commands::MoveLayerBefore>(
-        session_.compositionId(), entries_[static_cast<std::size_t>(from)].slotId,
-        to == rowCount() ? std::nullopt
-                         : std::optional(entries_[static_cast<std::size_t>(to)].slotId));
+    transaction.emplace<commands::MoveLayerBefore>(session_.compositionId(), moving.slotId, before);
     (void)session_.executeTransaction(std::move(transaction));
 }
 bool TimelineLayerStack::eventFilter(QObject* watched, QEvent* event) {
@@ -1107,7 +1281,12 @@ bool TimelineLayerStack::eventFilter(QObject* watched, QEvent* event) {
 void TimelineLayerStack::updateRenameGeometry() {
     if (!renameEditor_)
         return;
-    const auto found = std::ranges::find(entries_, renamingLayer_, &TimelineLayerEntry::layerId);
+    // #502: the row being renamed is its entry's (a shared Layer node has several rows).
+    const auto found = std::ranges::find_if(entries_, [this](const auto& entry) {
+        return entry.rowKind == TimelineLayerEntry::Kind::Layer &&
+               (renamingSlot_.isValid() ? entry.slotId == renamingSlot_
+                                        : entry.layerId == renamingLayer_);
+    });
     const int first = scrollOffset_ / kTimelineRowHeight;
     const int slot = static_cast<int>(found - entries_.begin()) - first;
     if (found == entries_.end() || slot < 0 || slot >= static_cast<int>(rowPool_.size()) ||
@@ -1126,25 +1305,37 @@ void TimelineLayerStack::updateRenameGeometry() {
 }
 
 void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
+    const auto found = std::ranges::find_if(entries_, [layerId](const auto& entry) {
+        return entry.rowKind == TimelineLayerEntry::Kind::Layer && entry.layerId == layerId;
+    });
+    if (found != entries_.end())
+        renameRow(static_cast<int>(found - entries_.begin()));
+}
+
+void TimelineLayerStack::renameRow(const int index) {
     if (renameEditor_)
         renameEditor_->clearFocus();
+    if (index < 0 || index >= rowCount())
+        return;
+    const auto entry = entries_[static_cast<std::size_t>(index)];
     const auto* composition = session_.composition();
-    const auto* layer = composition ? composition->graph().findLayer(layerId) : nullptr;
-    if (!layer)
+    const auto* layer = composition && entry.layerId.isValid()
+                            ? composition->graph().findLayer(entry.layerId)
+                            : nullptr;
+    if (!layer && !entry.mergeNodeId.isValid())
         return;
-    const auto found = std::ranges::find(entries_, layerId, &TimelineLayerEntry::layerId);
-    if (found == entries_.end())
-        return;
-    const auto originalName = layer_fields::displayName(session_, layerId);
+    const auto originalName = layer ? layer_fields::displayName(session_, entry.layerId) : entry.name;
     auto* field = new kit::KLineEdit(originalName, this);
     renameEditor_ = field;
-    renamingLayer_ = layerId;
+    renamingLayer_ = entry.layerId;
+    renamingSlot_ = entry.mergeNodeId.isValid() ? entry.slotId : document::LayerSlotId{};
     field->setObjectName("timelineLayerRenameEditor");
     field->setMinimumWidth(0);
     updateRenameGeometry();
     const auto revision = session_.snapshot().revision();
     const auto compositionId = session_.compositionId();
-    const auto finish = [this, field, layerId, revision, compositionId, originalName](bool cancel) {
+    const auto target = rowTarget(entry);
+    const auto finish = [this, field, target, revision, compositionId, originalName](bool cancel) {
         // Return, focus loss and hiding the field may all finish the same edit. Retire it first
         // so a focus signal or synchronous session refresh cannot submit a second transaction.
         if (renameEditor_ != field)
@@ -1156,7 +1347,11 @@ void TimelineLayerStack::renameLayer(const document::LayerId layerId) {
         field->deleteLater();
         if (!cancel && name != originalName) {
             commands::Transaction transaction("Rename Layer", revision);
-            transaction.emplace<commands::RenameLayer>(compositionId, layerId, name.toStdString());
+            appendLayerEdits(transaction, compositionId, {target},
+                             [compositionId, name = name.toStdString()](const document::LayerId l) {
+                                 return std::make_unique<commands::RenameLayer>(compositionId, l,
+                                                                                name);
+                             });
             (void)session_.executeTransaction(std::move(transaction));
         }
     };
@@ -1189,10 +1384,19 @@ void TimelineLayerStack::mouseDoubleClickEvent(QMouseEvent* event) {
         entries_[static_cast<std::size_t>(row)].rowKind == TimelineLayerEntry::Kind::Layer &&
         event->position().x() >= kNameCellX &&
         event->position().x() < kNameCellX + nameCellWidth(width()))
-        renameLayer(entries_[static_cast<std::size_t>(row)].layerId);
+        renameRow(row);
 }
 void TimelineLayerStack::openLabelColorPicker(const int row,
                                               std::vector<document::LayerId> layers) {
+    std::vector<LayerTarget> targets;
+    for (const auto layer : layers) {
+        const auto entries = session_.entriesOfLayer(layer);
+        targets.push_back({entries.empty() ? document::MergeEntryRef{} : entries.front(), layer});
+    }
+    openLabelColorPicker(row, std::move(targets));
+}
+
+void TimelineLayerStack::openLabelColorPicker(const int row, std::vector<LayerTarget> targets) {
     if (row < 0 || row >= rowCount())
         return;
     const auto& entry = entries_[static_cast<std::size_t>(row)];
@@ -1207,7 +1411,7 @@ void TimelineLayerStack::openLabelColorPicker(const int row,
         labelPickerAnchor_->setAttribute(Qt::WA_TransparentForMouseEvents);
     }
     labelPickerComposition_ = session_.compositionId();
-    labelPickerLayers_ = std::move(layers);
+    labelPickerTargets_ = std::move(targets);
     labelPickerInitial_ =
         entry.labelColor.isValid() ? entry.labelColor : kit::color(entry.clipColor);
     labelPickerCancelled_ = false;
@@ -1226,14 +1430,15 @@ void TimelineLayerStack::commitLabelColor() {
     const auto chosen = labelPicker_->color().toQColor();
     if (chosen.rgb() == labelPickerInitial_.rgb())
         return;
-    commands::Transaction transaction("Set Layer Label Color", session_.snapshot().revision());
-    for (const auto layer : labelPickerLayers_)
-        transaction.emplace<commands::SetLayerLabelColor>(
-            labelPickerComposition_, layer,
-            std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(chosen.red()),
-                                        static_cast<std::uint8_t>(chosen.green()),
-                                        static_cast<std::uint8_t>(chosen.blue())});
-    (void)session_.executeTransaction(std::move(transaction));
+    const auto compositionId = labelPickerComposition_;
+    const std::array<std::uint8_t, 3> rgb{static_cast<std::uint8_t>(chosen.red()),
+                                          static_cast<std::uint8_t>(chosen.green()),
+                                          static_cast<std::uint8_t>(chosen.blue())};
+    (void)editTargets(session_, "Set Layer Label Color", labelPickerTargets_,
+                      [compositionId, rgb](const document::LayerId layer) {
+                          return std::make_unique<commands::SetLayerLabelColor>(compositionId,
+                                                                                layer, rgb);
+                      });
 }
 
 // A switch or label edit on a selected layer applies to the whole selection, as in a
@@ -1245,28 +1450,63 @@ TimelineLayerStack::actionLayers(const document::LayerId layer) const {
     std::vector<document::LayerId> layers;
     for (const auto& entry : entries_)
         if (entry.rowKind == TimelineLayerEntry::Kind::Layer && entry.layerId.isValid() &&
-            isLayerSelected(session_, entry.layerId))
+            isLayerSelected(session_, entry.layerId) &&
+            std::ranges::find(layers, entry.layerId) == layers.end())
             layers.push_back(entry.layerId);
     return layers;
+}
+
+std::vector<LayerTarget> TimelineLayerStack::actionTargets(const TimelineLayerEntry& row) const {
+    if (!isRowSelected(session_, row))
+        return {rowTarget(row)};
+    std::vector<LayerTarget> targets;
+    for (const auto& entry : entries_)
+        if (entry.rowKind == TimelineLayerEntry::Kind::Layer && isRowSelected(session_, entry))
+            targets.push_back(rowTarget(entry));
+    return targets;
 }
 
 void TimelineLayerStack::openLabelMenu(const document::LayerId layer, QWidget* anchor) {
     const auto found = std::ranges::find(entries_, layer, &TimelineLayerEntry::layerId);
     if (found == entries_.end())
         return;
+    openRowLabelMenu(*found, anchor);
+}
+
+void TimelineLayerStack::openRowLabelMenu(const TimelineLayerEntry& entry, QWidget* anchor) {
+    const auto found = std::ranges::find_if(entries_, [&](const auto& candidate) {
+        return candidate.rowKind == TimelineLayerEntry::Kind::Layer &&
+               candidate.slotId == entry.slotId && candidate.layerId == entry.layerId;
+    });
+    if (found == entries_.end())
+        return;
     const int row = static_cast<int>(found - entries_.begin());
-    const auto layers = actionLayers(layer);
+    const auto targets = actionTargets(*found);
     auto* menu = kit::makeMenu(this);
     menu->setObjectName(QStringLiteral("timelineLayerLabelMenu"));
     menu->setAttribute(Qt::WA_DeleteOnClose);
-    layer_labels::populateLabelMenu(*menu, session_, layers, layer,
-                                    [this, row, layers] { openLabelColorPicker(row, layers); });
+    layer_labels::populateLabelMenu(*menu, session_, targets, rowTarget(*found),
+                                    [this, row, targets] { openLabelColorPicker(row, targets); });
     QWidget* origin = anchor != nullptr ? anchor : this;
     menu->popup(origin->mapToGlobal(QPoint(0, origin->height())));
 }
 
 void TimelineLayerStack::toggleShy(const document::LayerId layer) {
-    (void)layer_fields::setShy(session_, actionLayers(layer), !layer_fields::shy(session_, layer));
+    const auto found = std::ranges::find(entries_, layer, &TimelineLayerEntry::layerId);
+    if (found != entries_.end())
+        toggleRowShy(*found);
+    else
+        (void)layer_fields::setShy(session_, {layer}, !layer_fields::shy(session_, layer));
+}
+
+void TimelineLayerStack::toggleRowShy(const TimelineLayerEntry& entry) {
+    const bool shy = entry.layerId.isValid() && layer_fields::shy(session_, entry.layerId);
+    const auto compositionId = session_.compositionId();
+    (void)editTargets(session_, "Set Layer Shy", actionTargets(entry),
+                      [compositionId, shy](const document::LayerId layer) {
+                          return std::make_unique<commands::SetLayerShy>(compositionId, layer,
+                                                                         !shy);
+                      });
 }
 
 void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
@@ -1276,38 +1516,63 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
         event->accept();
         return;
     }
-    if (entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
+    const auto entry = entries_[static_cast<std::size_t>(row)];
+    if (entry.rowKind != TimelineLayerEntry::Kind::Layer)
         return;
-    const auto layerId = entries_[static_cast<std::size_t>(row)].layerId;
-    if (!isLayerSelected(session_, layerId))
-        session_.selectLayer(layerId);
+    if (!isRowSelected(session_, entry)) {
+        if (entry.mergeNodeId.isValid())
+            session_.selectEntry(entry.entry());
+        else
+            session_.selectLayer(entry.layerId);
+    }
     const auto compositionId = session_.compositionId();
-    const auto revision = session_.snapshot().revision();
-    std::set<document::NodeId> nodes;
-    for (const auto& entry : entries_)
-        if (isLayerSelected(session_, entry.layerId))
-            if (const auto node = session_.boundaryNodeForLayer(entry.layerId))
-                nodes.insert(*node);
+    const auto targets = actionTargets(entry);
     auto* menu = kit::makeMenu(this);
     menu->setObjectName("timelineLayerContextMenu");
     menu->setAttribute(Qt::WA_DeleteOnClose);
+    // #502: Duplicate and Delete act on the rows' layers (a plain entry gains its layer in the same
+    // step), so an entry layer duplicates or leaves with its own Merge entry.
     connect(menu->addAction(tr("Duplicate")), &QAction::triggered, this,
-            [this, compositionId, revision, nodes] {
-                commands::Transaction transaction("Duplicate Layers", revision);
-                transaction.emplace<commands::DuplicateNodes>(compositionId, nodes,
-                                                              document::Vec2d{0, 0});
+            [this, compositionId, targets] {
+                std::vector<document::LayerId> layers;
+                std::vector<LayerTarget> plain;
+                for (const auto& target : targets)
+                    (target.layer.isValid() ? (void)layers.push_back(target.layer)
+                                            : (void)plain.push_back(target));
+                commands::Transaction transaction("Duplicate Layers",
+                                                  session_.snapshot().revision());
+                if (!layers.empty())
+                    transaction.emplace<commands::DuplicateLayers>(compositionId, layers);
+                appendLayerEdits(transaction, compositionId, plain,
+                                 [compositionId](const document::LayerId layer) {
+                                     return std::make_unique<commands::DuplicateLayers>(
+                                         compositionId, std::vector{layer});
+                                 });
                 (void)session_.executeTransaction(std::move(transaction));
             });
     connect(menu->addAction(tr("Delete")), &QAction::triggered, this,
-            [this, compositionId, revision, nodes] {
-                commands::Transaction transaction("Delete Layers", revision);
-                transaction.emplace<commands::RemoveNodes>(compositionId, nodes);
+            [this, compositionId, targets] {
+                std::vector<document::LayerId> layers;
+                std::vector<LayerTarget> plain;
+                for (const auto& target : targets)
+                    (target.layer.isValid() ? (void)layers.push_back(target.layer)
+                                            : (void)plain.push_back(target));
+                commands::Transaction transaction("Delete Layers", session_.snapshot().revision());
+                appendLayerEdits(transaction, compositionId, plain,
+                                 [compositionId](const document::LayerId layer) {
+                                     return std::make_unique<commands::DeleteLayers>(
+                                         compositionId, std::vector{layer});
+                                 });
+                if (!layers.empty())
+                    transaction.emplace<commands::DeleteLayers>(compositionId, layers);
                 (void)session_.executeTransaction(std::move(transaction));
             });
     connect(menu->addAction(tr("Rename")), &QAction::triggered, this,
-            [this, layerId] { renameLayer(layerId); });
+            [this, row] { renameRow(row); });
     auto* blending = menu->addMenu(tr("Blending"));
     std::optional<core::BlendModeGroup> previousGroup;
+    const auto currentMode = entry.layerId.isValid() ? session_.blendModeForLayer(entry.layerId)
+                                                     : std::optional(core::BlendMode::Normal);
     for (const auto mode : core::kBlendModes) {
         // The same groups the Blending dropdowns separate.
         if (previousGroup.has_value() && *previousGroup != core::blendModeGroup(mode))
@@ -1315,22 +1580,58 @@ void TimelineLayerStack::contextMenuEvent(QContextMenuEvent* event) {
         previousGroup = core::blendModeGroup(mode);
         auto* action = blending->addAction(blendModeDisplayName(mode));
         action->setCheckable(true);
-        action->setChecked(session_.blendModeForLayer(layerId) == mode);
-        connect(action, &QAction::triggered, this,
-                [this, layerId, mode] { (void)session_.setLayerBlendMode(layerId, mode); });
+        action->setChecked(currentMode == mode);
+        connect(action, &QAction::triggered, this, [this, entry, mode] {
+            if (entry.layerId.isValid())
+                (void)session_.setLayerBlendMode(entry.layerId, mode);
+            else
+                (void)session_.setEntryParameterValue(
+                    entry.entry(), document::kBlendModeParameterRole,
+                    document::ParameterValue{
+                        static_cast<std::int64_t>(core::blendModeStoredValue(mode))},
+                    tr("Set Blend Mode"));
+        });
     }
     auto* colors = menu->addMenu(tr("Label Color"));
-    const auto labelLayers = actionLayers(layerId);
-    layer_labels::populateLabelMenu(
-        *colors, session_, labelLayers, layerId,
-        [this, row, labelLayers] { openLabelColorPicker(row, labelLayers); });
+    layer_labels::populateLabelMenu(*colors, session_, targets, rowTarget(entry),
+                                    [this, row, targets] { openLabelColorPicker(row, targets); });
     connect(menu->addAction(tr("Split at Playhead")), &QAction::triggered, this,
-            [this, compositionId, layerId, revision] {
-                commands::Transaction transaction("Split Layer at Playhead", revision);
-                transaction.emplace<commands::SplitLayerAtTime>(compositionId, layerId,
-                                                                session_.currentTime());
+            [this, compositionId, targets] {
+                const auto time = session_.currentTime();
+                (void)editTargets(session_, "Split Layer at Playhead", targets,
+                                  [compositionId, time](const document::LayerId layer) {
+                                      return std::make_unique<commands::SplitLayerAtTime>(
+                                          compositionId, layer, time);
+                                  });
+            });
+    // #502: the entry's Layer node. Inserting one adopts the entry's values and removing it returns
+    // them to the entry, so neither changes the picture.
+    if (entry.mergeNodeId.isValid()) {
+        menu->addSeparator();
+        if (entry.directLayerNode.isValid()) {
+            auto* remove = menu->addAction(tr("Remove Layer Node"));
+            remove->setObjectName(QStringLiteral("timelineRemoveLayerNodeAction"));
+            connect(remove, &QAction::triggered, this, [this, compositionId, entry] {
+                commands::Transaction transaction("Remove Layer Node",
+                                                  session_.snapshot().revision());
+                transaction.emplace<commands::DissolveNode>(compositionId, entry.directLayerNode);
                 (void)session_.executeTransaction(std::move(transaction));
             });
+        } else {
+            auto* insert = menu->addAction(tr("Insert Layer Node"));
+            insert->setObjectName(QStringLiteral("timelineInsertLayerNodeAction"));
+            const bool hasLayerNode =
+                entry.layerId.isValid() && !session_.isEntryLayer(entry.layerId);
+            insert->setEnabled(!hasLayerNode && entry.imageNodeId.isValid());
+            connect(insert, &QAction::triggered, this, [this, compositionId, entry] {
+                commands::Transaction transaction("Insert Layer Node",
+                                                  session_.snapshot().revision());
+                transaction.emplace<commands::InsertLayerNode>(compositionId, entry.mergeNodeId,
+                                                               entry.slotId);
+                (void)session_.executeTransaction(std::move(transaction));
+            });
+        }
+    }
     menu->popup(event->globalPos());
 }
 
@@ -1393,10 +1694,13 @@ QString TimelineLayerStack::toolTipAt(const QPoint position) const {
     // The row's kind lives here: task T1 removes the Kind COLUMN, and this is where that
     // information keeps reaching the artist rather than being silently dropped with the column.
     const auto& entry = entries_[static_cast<std::size_t>(index)];
-    return tr("%1 · Layer %2 · Slot %3")
-        .arg(entry.kind)
-        .arg(entry.layerId.value())
-        .arg(entry.slotId.value());
+    auto text = tr("%1 · Layer %2 · Slot %3")
+                    .arg(entry.kind)
+                    .arg(entry.layerId.value())
+                    .arg(entry.slotId.value());
+    if (!entry.sharedWith.isEmpty())
+        text += QLatin1Char('\n') + tr("Shared Layer node: also in %1").arg(entry.sharedWith);
+    return text;
 }
 
 bool TimelineLayerStack::event(QEvent* event) {
@@ -1648,13 +1952,18 @@ std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     if (!axis.has_value()) {
         return std::nullopt;
     }
+    const auto& rowEntry = entries_[static_cast<std::size_t>(row)];
     const auto* layer =
-        composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId);
-    if ((!layer && !entries_[static_cast<std::size_t>(row)].imageNodeId.isValid()) ||
-        entries_[static_cast<std::size_t>(row)].rowKind != TimelineLayerEntry::Kind::Layer)
+        rowEntry.layerId.isValid() ? composition->graph().findLayer(rowEntry.layerId) : nullptr;
+    // #502: a plain entry spans the composition, as its default layer does.
+    if ((!layer && !rowEntry.mergeNodeId.isValid()) ||
+        rowEntry.rowKind != TimelineLayerEntry::Kind::Layer)
         return std::nullopt;
+    const bool dragged = drag_ && (layer ? drag_->layer == layer->layerId
+                                         : !drag_->layer.isValid() &&
+                                               drag_->entry == rowEntry.entry());
     const auto range =
-        layer && drag_ && drag_->layer == layer->layerId ? drag_->preview
+        dragged ? drag_->preview
         : layer ? document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())}
                 : document::WorkArea{core::RationalTime{}, composition->duration()};
     const qreal mappedLeft = axis->pixelForTime(range.start);
@@ -1731,6 +2040,7 @@ std::vector<core::RationalTime> TimelineLaneRegion::keySummaryTimes(int row) con
         keySummaryProject_ = &snapshot.project();
         keySummaryComposition_ = session_.compositionId();
     }
+    // A shared Layer node's rows summarise the same keys; a plain entry has none.
     const auto [found, inserted] = keySummaryCache_.try_emplace(entry.layerId.value());
     if (inserted) {
         ++work_.keySummaryBuilds;
@@ -1748,7 +2058,8 @@ std::vector<core::RationalTime> TimelineLaneRegion::computeKeySummaryTimes(int r
         return {};
     const auto& entry = entries_[static_cast<std::size_t>(row)];
     const auto* composition = session_.composition();
-    if (!composition || entry.rowKind != TimelineLayerEntry::Kind::Layer || entry.expanded)
+    if (!composition || entry.rowKind != TimelineLayerEntry::Kind::Layer || entry.expanded ||
+        !entry.layerId.isValid())
         return {};
     std::vector<document::NodeId> nodes;
     for (const auto nodeId : {session_.boundaryNodeForLayer(entry.layerId),
@@ -1765,11 +2076,15 @@ std::vector<core::RationalTime> TimelineLaneRegion::computeKeySummaryTimes(int r
     // (ADR 0024) and summarised at its placement time startTime + tau / speed.
     const auto* layerRecord = composition->graph().findLayer(entry.layerId);
     const KeyClock clock = layerRecord ? KeyClock(layerRecord->timing) : std::nullopt;
-    for (const auto nodeId : nodes) {
-        const auto* node = composition->graph().findNode(nodeId);
-        if (!node)
-            continue;
-        for (const auto& binding : node->parameters) {
+    // #502: an entry layer's own parameters are bound on the layer, not on a node.
+    std::vector<std::span<const document::ParameterBinding>> bindings;
+    if (layerRecord && layerRecord->entryOwned())
+        bindings.emplace_back(layerRecord->parameters);
+    for (const auto nodeId : nodes)
+        if (const auto* node = composition->graph().findNode(nodeId))
+            bindings.emplace_back(node->parameters);
+    for (const auto parameters : bindings) {
+        for (const auto& binding : parameters) {
             const auto* parameter = composition->parameters().find(binding.parameterId);
             const auto* source =
                 parameter ? std::get_if<document::AnimationCurveSource>(&parameter->source)
@@ -1847,11 +2162,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
         painter.setRenderHint(QPainter::Antialiasing, false);
         painter.fillRect(QRect(0, top, width(), kTimelineRowHeight),
                          kit::color(kit::Color::Surface));
-        const auto sourceNodeId =
-            entry.imageNodeId.isValid() ? entry.imageNodeId : entry.audioNodeId;
-        const bool selected = entry.layerId.isValid()
-                                  ? isLayerSelected(session_, entry.layerId)
-                                  : session_.selectedNodes().contains(sourceNodeId);
+        const bool selected = isRowSelected(session_, entry);
         if ((selected && entry.rowKind == TimelineLayerEntry::Kind::Layer) ||
             (rowHighlighted_ && rowHighlighted_(row))) {
             paintSelectedRowFill(painter, top, width());
@@ -1990,7 +2301,11 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
                     continue;
                 if (std::abs(axis->pixelForTime(time) - event->position().x()) <=
                     kit::px(kit::Spacing::S)) {
-                    Q_EMIT expansionRequested(entries_[static_cast<std::size_t>(row)].layerId);
+                    const auto& summaryRow = entries_[static_cast<std::size_t>(row)];
+                    if (summaryRow.mergeNodeId.isValid())
+                        Q_EMIT entryExpansionRequested(summaryRow.slotId);
+                    else
+                        Q_EMIT expansionRequested(summaryRow.layerId);
                     event->accept();
                     return;
                 }
@@ -2000,35 +2315,38 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
     const auto* composition = session_.composition();
     const auto mapping = ruler_.axisForWidth(width());
     if (bar && bar->contains(event->position().toPoint()) && composition && mapping) {
-        const auto layerId = entries_[static_cast<std::size_t>(row)].layerId;
-        const auto* layer = composition->graph().findLayer(layerId);
-        if (!layer) {
-            session_.selectNode(entries_[static_cast<std::size_t>(row)].imageNodeId);
-            return;
-        }
+        const auto rowEntry = entries_[static_cast<std::size_t>(row)];
+        const auto layerId = rowEntry.layerId;
+        const auto* layer = layerId.isValid() ? composition->graph().findLayer(layerId) : nullptr;
+        // #502: a plain entry's bar is its default layer's: the whole composition, identity time.
         const auto range =
-            document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())};
-        const bool locked = layer->locked;
+            layer ? document::WorkArea{layer->inPoint, layer->endPoint(composition->duration())}
+                  : document::WorkArea{core::RationalTime{}, composition->duration()};
+        const document::LayerTiming timing = layer ? layer->timing : document::LayerTiming{};
+        const bool locked = layer && layer->locked;
         const int hit = kit::px(kit::Spacing::S);
         const auto x = event->position().x();
         const int handle = std::abs(x - bar->left()) <= hit    ? -1
                            : std::abs(x - bar->right()) <= hit ? 1
                                                                : 0;
-        session_.selectLayer(layerId);
+        if (rowEntry.mergeNodeId.isValid())
+            session_.selectEntry(rowEntry.entry());
+        else
+            session_.selectLayer(layerId);
         if (!locked) {
-            drag_ = RangeDrag{layerId, session_.snapshot().revision(), range,
-                              range,   mapping->secondsForPixel(x),    handle};
+            drag_ = RangeDrag{layerId, rowEntry.entry(), session_.snapshot().revision(), range,
+                              range,   mapping->secondsForPixel(x),     handle};
             drag_->alt = event->modifiers().testFlag(Qt::AltModifier);
-            drag_->startTime = drag_->previewStart = layer->timing.startTime;
-            drag_->speed = drag_->previewSpeed = layer->timing.speed;
+            drag_->startTime = drag_->previewStart = timing.startTime;
+            drag_->speed = drag_->previewSpeed = timing.speed;
             // The content extent in placement time bounds how far a trim may leave the
             // composition (ADR 0024).
-            if (const auto extent = runtime::resolveLayerExtent(session_.snapshot().project(),
-                                                                *composition, layer->timing)) {
-                drag_->extentStart = runtime::placementTimeOfLayerTime(layer->timing, {});
-                drag_->extentEnd =
-                    runtime::placementTimeOfLayerTime(layer->timing, extent->duration);
-            }
+            if (layer)
+                if (const auto extent = runtime::resolveLayerExtent(session_.snapshot().project(),
+                                                                    *composition, timing)) {
+                    drag_->extentStart = runtime::placementTimeOfLayerTime(timing, {});
+                    drag_->extentEnd = runtime::placementTimeOfLayerTime(timing, extent->duration);
+                }
         }
         update();
         event->accept();
@@ -2047,8 +2365,11 @@ void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
             composition && row >= 0 && row < static_cast<int>(entries_.size())
                 ? composition->graph().findLayer(entries_[static_cast<std::size_t>(row)].layerId)
                 : nullptr;
+        const bool plain = row >= 0 && row < static_cast<int>(entries_.size()) && !layer &&
+                           entries_[static_cast<std::size_t>(row)].mergeNodeId.isValid();
         const bool edge =
-            bar && layer && !layer->locked && bar->contains(event->position().toPoint()) &&
+            bar && (plain || (layer && !layer->locked)) &&
+            bar->contains(event->position().toPoint()) &&
             (std::abs(event->position().x() - bar->left()) <= kit::px(kit::Spacing::S) ||
              std::abs(event->position().x() - bar->right()) <= kit::px(kit::Spacing::S));
         setCursor(edge ? Qt::SizeHorCursor : Qt::ArrowCursor);
@@ -2127,17 +2448,27 @@ void TimelineLaneRegion::mouseReleaseEvent(QMouseEvent* event) {
         drag_.reset();
         guide_.reset();
         const auto* composition = session_.composition();
-        const auto* boundary =
-            composition ? composition->graph().findLayer(completed.layer) : nullptr;
-        if (boundary == nullptr)
+        const auto* boundary = composition && completed.layer.isValid()
+                                   ? composition->graph().findLayer(completed.layer)
+                                   : nullptr;
+        if (boundary == nullptr && !completed.entry.merge.isValid())
+            return;
+        if (completed.preview == completed.original && completed.previewStart == completed.startTime &&
+            completed.previewSpeed == completed.speed)
             return;
         // ADR 0024: every bar gesture commits one SetLayerTiming (move, slip, trim or stretch).
+        // #502: a plain entry's first bar edit creates its layer in the same step.
         const char* name = completed.handle == 0 ? (completed.alt ? "Slip Layer" : "Move Layer")
                                                  : (completed.alt ? "Stretch Layer" : "Trim Layer");
         commands::Transaction transaction(name, completed.revision);
-        transaction.emplace<commands::SetLayerTiming>(
-            session_.compositionId(), completed.layer, completed.previewStart,
-            completed.preview.start, completed.preview.end, completed.previewSpeed);
+        const auto compositionId = session_.compositionId();
+        appendLayerEdits(transaction, compositionId, {LayerTarget{completed.entry, completed.layer}},
+                         [compositionId, completed](const document::LayerId layer) {
+                             return std::make_unique<commands::SetLayerTiming>(
+                                 compositionId, layer, completed.previewStart,
+                                 completed.preview.start, completed.preview.end,
+                                 completed.previewSpeed);
+                         });
         (void)session_.executeTransaction(std::move(transaction));
         update();
         event->accept();
@@ -2336,14 +2667,44 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
     const auto toggleExpansion = [this](document::LayerId layer) {
         // A revealed layer's twirl closes it and drops the reveal, as in a layer-based compositor;
         // the next twirl shows every property again.
-        if (revealed_.erase(layer) > 0)
-            expandedLayers_.erase(layer);
-        else if (!expandedLayers_.erase(layer))
+        const bool open = revealed_.contains(layer) || expandedLayers_.contains(layer) ||
+                          std::ranges::any_of(stack_->entries(), [&](const auto& row) {
+                              return row.layerId == layer &&
+                                     expandedEntries_.contains(row.slotId);
+                          });
+        revealed_.erase(layer);
+        expandedLayers_.erase(layer);
+        for (const auto& row : stack_->entries())
+            if (row.layerId == layer)
+                expandedEntries_.erase(row.slotId);
+        if (!open)
             expandedLayers_.insert(layer);
+        rebuild();
+    };
+    // #502: a row's own twirl opens that row (its entry) only: a shared Layer node's other rows and
+    // the entries of a plain row's future layer keep their own state.
+    const auto toggleEntryExpansion = [this](document::LayerSlotId slot) {
+        const auto& rows = stack_->entries();
+        const auto found = std::ranges::find_if(rows, [&](const auto& row) {
+            return row.rowKind == TimelineLayerEntry::Kind::Layer && row.slotId == slot;
+        });
+        if (found == rows.end())
+            return;
+        if (found->expanded) {
+            expandedEntries_.erase(slot);
+            if (found->layerId.isValid()) {
+                expandedLayers_.erase(found->layerId);
+                revealed_.erase(found->layerId);
+            }
+        } else {
+            expandedEntries_.insert(slot);
+        }
         rebuild();
     };
     connect(stack_, &TimelineLayerStack::expansionRequested, this, toggleExpansion);
     connect(lanes_, &TimelineLaneRegion::expansionRequested, this, toggleExpansion);
+    connect(stack_, &TimelineLayerStack::entryExpansionRequested, this, toggleEntryExpansion);
+    connect(lanes_, &TimelineLaneRegion::entryExpansionRequested, this, toggleEntryExpansion);
     connect(stack_, &TimelineLayerStack::groupExpansionRequested, this,
             [this](document::LayerId layer, const QString& group) {
                 if (!collapsedGroups_.erase({layer, group}))
@@ -2358,6 +2719,7 @@ TimelineEditor::TimelineEditor(CompositionSession& session,
             });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
         expandedLayers_.clear();
+        expandedEntries_.clear();
         expandedParameters_.clear();
         collapsedGroups_.clear();
         revealed_.clear();
@@ -2526,97 +2888,188 @@ void TimelineEditor::setLayerColumnWidth(const int width, const bool persist) {
     }
 }
 
-void TimelineEditor::rebuild() {
-    std::vector<TimelineLayerEntry> entries;
+void TimelineEditor::appendMergeRows(const document::NodeId mergeId, const int nesting,
+                                     std::vector<TimelineLayerEntry>& rows,
+                                     std::set<document::NodeId>& visiting) {
     const auto* composition = session_.composition();
-    if (composition != nullptr && session_.timelineMerge()) {
-        const auto stackEntries = session_.timelineMerge()->entries();
-        entries.reserve(stackEntries.size());
-        for (const auto& entry : stackEntries) {
-            if (!entry.layerId.isValid()) {
-                const auto edges = composition->graph().edges();
-                const auto edge = std::ranges::find_if(edges, [&](const auto& candidate) {
-                    const auto* input =
-                        std::get_if<document::LayerStackInputRef>(&candidate.destination);
-                    return input && input->stackNodeId == session_.timelineMerge()->nodeId() &&
-                           input->slotId == entry.slotId;
-                });
-                if (edge == edges.end() ||
-                    (!labelFilter_.empty() && !labelFilter_.contains(layer_labels::kKindDefault)))
-                    continue;
-                const auto* node = composition->graph().findNode(edge->source.nodeId);
-                if (!node)
-                    continue;
-                const bool merge = node->typeId == document::kLayerStackNodeType;
-                entries.push_back(
-                    {.layerId = {},
-                     .slotId = entry.slotId,
-                     .name = node_editor::nodeDisplayName(*composition, *node),
-                     .kind = node_editor::nodeTypeDisplayName(node->typeId),
-                     .clipColor = merge ? kit::Color::DataComposition : kit::Color::DataImage,
-                     .imageNodeId = node->id});
-                continue;
-            }
-            // The master Shy toggle and the label filter take rows out of the list only; the
-            // layers still render (layout state, never part of the render).
-            if (hideShyLayers_ && layer_fields::shy(session_, entry.layerId))
-                continue;
-            if (!labelFilter_.empty() && !labelFilter_.contains(layer_labels::filterKey(
-                                             layer_labels::labelOf(session_, entry.layerId))))
-                continue;
-            entries.push_back({.layerId = entry.layerId,
-                               .slotId = entry.slotId,
-                               .name = layer_fields::displayName(session_, entry.layerId),
-                               .kind = layerKind(session_, entry.layerId),
-                               .clipColor = layerClipColorToken(session_, entry.layerId)});
-            if (const auto* source = directSourceNode(session_, entry.layerId);
-                source != nullptr && (source->typeId == document::kAudioSourceNodeType ||
-                                      source->typeId == "bloom.video-source")) {
-                const bool audioOnly = source->typeId == document::kAudioSourceNodeType;
-                bool hasAudio = audioOnly;
-                for (const auto& binding : source->parameters) {
-                    if (binding.role != "asset")
+    const auto* merge = composition ? composition->graph().merge(mergeId) : nullptr;
+    if (merge == nullptr || !visiting.insert(mergeId).second)
+        return;
+    const auto& graph = composition->graph();
+    const auto edges = graph.edges();
+    for (const auto& slot : merge->entries()) {
+        const document::MergeEntryRef ref{mergeId, slot.slotId};
+        const auto* imageEdge = document::mergeSlotImageEdge(graph, mergeId, slot.slotId);
+        const auto audioEdge = std::ranges::find_if(edges, [&](const auto& candidate) {
+            const auto* input = std::get_if<document::LayerStackInputRef>(&candidate.destination);
+            return input && input->stackNodeId == mergeId && input->slotId == slot.slotId &&
+                   input->role == document::kLayerStackAudioInputRole;
+        });
+        if (imageEdge == nullptr && audioEdge == edges.end())
+            continue;
+        const auto* imageSource = imageEdge ? graph.findNode(imageEdge->source.nodeId) : nullptr;
+        const auto* audioSource =
+            audioEdge != edges.end() ? graph.findNode(audioEdge->source.nodeId) : nullptr;
+        const auto* layer = document::mergeEntryLayer(graph, mergeId, slot.slotId);
+        const auto layerId = layer ? layer->layerId : document::LayerId{};
+        // The master Shy toggle and the label filter take rows out of the list only; the layers
+        // still render (layout state, never part of the render).
+        if (hideShyLayers_ && layer && layer_fields::shy(session_, layerId))
+            continue;
+        if (!labelFilter_.empty() &&
+            !labelFilter_.contains(layer ? layer_labels::filterKey(layer->labelColor)
+                                         : layer_labels::kKindDefault))
+            continue;
+        // What the entry shows: the content its layer composites (a Layer node's own content, or
+        // the slot's source).
+        const auto* content = layer ? directSourceNode(session_, layerId) : nullptr;
+        if (content == nullptr)
+            content = imageSource ? imageSource : audioSource;
+        const bool group = imageSource && imageSource->typeId == document::kLayerStackNodeType &&
+                           (!layer || layer->entryOwned());
+        const auto adjustment = document::mergeEntryAdjustment(graph, mergeId, slot.slotId);
+        TimelineLayerEntry row{
+            .layerId = layerId,
+            .slotId = slot.slotId,
+            .name = layer ? layer_fields::displayName(session_, layerId)
+                    : imageSource ? node_editor::nodeDisplayName(*composition, *imageSource)
+                    : audioSource ? node_editor::nodeDisplayName(*composition, *audioSource)
+                                  : QString{},
+            .kind = group        ? tr("Group")
+                    : adjustment ? tr("Adjustment")
+                                 : sourceKind(content),
+            .clipColor = group        ? kit::Color::DataComposition
+                         : adjustment ? kit::Color::Muted
+                                      : sourceClipColorToken(session_, content)};
+        row.imageNodeId = imageSource ? imageSource->id : document::NodeId{};
+        row.mergeNodeId = mergeId;
+        row.nesting = nesting;
+        row.groupMerge = group ? imageSource->id : document::NodeId{};
+        row.adjustment = adjustment.has_value();
+        if (layer && !layer->entryOwned()) {
+            if (imageSource && imageSource->id == layer->nodeId)
+                row.directLayerNode = layer->nodeId;
+            const auto others = document::mergeEntriesOfLayer(graph, layerId);
+            if (others.size() > 1) {
+                QStringList names;
+                for (const auto& other : others) {
+                    if (other == ref)
                         continue;
-                    const auto value = session_.constantStringValue(binding.parameterId);
-                    const auto* asset = value
-                                            ? session_.snapshot().project().findAsset(
-                                                  document::AssetId::fromRaw(value->toULongLong()))
-                                            : nullptr;
-                    hasAudio =
-                        hasAudio ||
-                        (asset && (asset->channels > 0 ||
-                                   std::ranges::any_of(asset->videoStreams, [](const auto& stream) {
-                                       return stream.kind == 2;
-                                   })));
+                    const auto* otherMerge = graph.findNode(other.merge);
+                    const auto position = [&] {
+                        const auto* stack = graph.merge(other.merge);
+                        if (stack == nullptr)
+                            return 0;
+                        const auto items = stack->entries();
+                        const auto found = std::ranges::find(items, other.slot,
+                                                             &document::LayerStackEntry::slotId);
+                        return static_cast<int>(found - items.begin()) + 1;
+                    }();
+                    names.push_back(
+                        tr("%1 entry %2")
+                            .arg(otherMerge ? node_editor::nodeDisplayName(*composition, *otherMerge)
+                                            : tr("Merge"))
+                            .arg(position));
                 }
-                if (hasAudio)
-                    entries.back().audioNodeId = source->id;
-                if (auto* controller = session_.assetController()) {
-                    for (const auto& binding : source->parameters) {
-                        if (binding.role != "asset")
-                            continue;
-                        const auto value = session_.constantStringValue(binding.parameterId);
-                        if (value.has_value()) {
-                            entries.back().waveform = controller->waveform(
-                                document::AssetId::fromRaw(value->toULongLong()));
-                        }
-                        break;
-                    }
-                }
-            }
-            if (const auto* layer = composition->graph().findLayer(entry.layerId);
-                layer && layer->labelColor) {
-                const auto rgb = *layer->labelColor;
-                entries.back().labelColor = QColor(rgb[0], rgb[1], rgb[2]);
+                row.sharedWith = names.join(QStringLiteral(", "));
             }
         }
+        if (layer && layer->labelColor) {
+            const auto rgb = *layer->labelColor;
+            row.labelColor = QColor(rgb[0], rgb[1], rgb[2]);
+        }
+        // Audio: the entry's audio source (a slot's audio content, or a Layer node's), and its
+        // waveform.
+        const auto mediaSource = [](const document::NodeRecord* node) {
+            return node != nullptr && (node->typeId == document::kAudioSourceNodeType ||
+                                       node->typeId == "bloom.video-source");
+        };
+        const auto* audioNode = mediaSource(audioSource) ? audioSource
+                                : mediaSource(content)   ? content
+                                                         : nullptr;
+        if (audioNode) {
+            bool hasAudio = audioNode->typeId == document::kAudioSourceNodeType;
+            for (const auto& binding : audioNode->parameters) {
+                if (binding.role != "asset")
+                    continue;
+                const auto value = session_.constantStringValue(binding.parameterId);
+                const auto* asset = value ? session_.snapshot().project().findAsset(
+                                                document::AssetId::fromRaw(value->toULongLong()))
+                                          : nullptr;
+                hasAudio = hasAudio ||
+                           (asset && (asset->channels > 0 ||
+                                      std::ranges::any_of(asset->videoStreams, [](const auto& s) {
+                                          return s.kind == 2;
+                                      })));
+                if (auto* controller = session_.assetController(); controller && value)
+                    row.waveform =
+                        controller->waveform(document::AssetId::fromRaw(value->toULongLong()));
+                break;
+            }
+            if (hasAudio)
+                row.audioNodeId = audioNode->id;
+            else
+                row.waveform.reset();
+        }
+        row.expanded = expandedEntries_.contains(slot.slotId) ||
+                       (layerId.isValid() && expandedLayers_.contains(layerId)) ||
+                       (layerId.isValid() && revealed_.contains(layerId));
+        auto block = timelinePropertyEntries(session_, {row}, {}, collapsedGroups_,
+                                             expandedParameters_, revealed_);
+        if (block.empty())
+            continue;
+        // A group row's twirl opens its Contents first: the nested Merge's own entries, in place,
+        // one level deeper, each just as live (#502).
+        if (group && block.front().expanded) {
+            auto contents = block.front();
+            contents.rowKind = TimelineLayerEntry::Kind::Group;
+            contents.depth = 1;
+            contents.name = tr("Contents");
+            contents.group = timelineGroupKey(contents, QStringLiteral("Contents"));
+            contents.parameterId = {};
+            contents.role.clear();
+            contents.expanded = !collapsedGroups_.contains({contents.layerId, contents.group});
+            std::vector<TimelineLayerEntry> nested;
+            nested.push_back(contents);
+            if (contents.expanded)
+                appendMergeRows(row.groupMerge, nesting + 1, nested, visiting);
+            block.insert(block.begin() + 1, nested.begin(), nested.end());
+        }
+        rows.insert(rows.end(), std::make_move_iterator(block.begin()),
+                    std::make_move_iterator(block.end()));
     }
-    entries = timelinePropertyEntries(session_, entries, expandedLayers_, collapsedGroups_,
-                                      expandedParameters_, revealed_);
+    visiting.erase(mergeId);
+}
+
+void TimelineEditor::rebuild() {
+    std::vector<TimelineLayerEntry> entries;
+    if (session_.composition() != nullptr && session_.timelineMerge()) {
+        std::set<document::NodeId> visiting;
+        appendMergeRows(session_.timelineMerge()->nodeId(), 0, entries, visiting);
+    }
     stack_->setEntries(entries);
     lanes_->setEntries(std::move(entries));
     updateScrollRange();
     updateSelection();
+}
+
+void TimelineEditor::addAdjustmentLayer() {
+    const auto* composition = session_.composition();
+    const auto* timeline = session_.timelineMerge();
+    if (composition == nullptr || timeline == nullptr)
+        return;
+    // Into the Merge of the selected row, directly above it; else the top of the timeline Merge.
+    auto merge = timeline->nodeId();
+    std::optional<document::LayerSlotId> above;
+    if (const auto entry = session_.selectedEntry()) {
+        merge = entry->merge;
+        above = entry->slot;
+    }
+    commands::Transaction transaction("Add Adjustment Layer", session_.snapshot().revision());
+    transaction.emplace<commands::AddAdjustmentLayer>(session_.compositionId(), merge, above);
+    const auto result = session_.executeTransaction(std::move(transaction));
+    if (const auto slot = result.outputId<document::LayerSlotId>(commands::kEntryLayerSlotOutput))
+        session_.selectEntry({merge, *slot});
 }
 
 void TimelineEditor::updateScrollRange() {

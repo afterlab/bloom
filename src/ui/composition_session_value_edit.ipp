@@ -298,6 +298,8 @@ void CompositionSession::cancelValueEdit() {
     Q_ASSERT(QThread::currentThread() == thread());
     if (valueEdit_) {
         valueEdit_.reset();
+        // #502: a cancelled gesture on a plain entry leaves no layer behind it.
+        withdrawPendingEntryLayer();
         emit liveValueChanged();
     }
 }
@@ -341,6 +343,8 @@ bool CompositionSession::commitValueEdit() {
         if (result)
             result = executeTransaction(std::move(transaction)).succeeded();
     }
+    // #502: a gesture on a plain entry that committed nothing leaves no layer behind it.
+    withdrawPendingEntryLayer();
     emit liveValueChanged();
     return result;
 }
