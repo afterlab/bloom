@@ -607,7 +607,8 @@ void testSequenceReadAheadClaim(Expectations& expectations, const MediaFixture& 
             .recordedDigest = std::nullopt,
             .revisionKey = std::move(key),
             .byteBudget = std::size_t{1} << 30,
-            .use = {}};
+            .use = {},
+            .decode = std::nullopt};
     };
     const auto waitStarted = [&](const std::uint64_t count) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);

@@ -34,6 +34,10 @@
 #include <bloom/runtime/input_color_context.hpp>
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/gpu_scene_executor.hpp>
+#include <bloom/runtime/image_sequence_read_ahead.hpp>
+#include <bloom/runtime/operation_cache.hpp>
+#include <bloom/runtime/source_working_set.hpp>
+#include <Imath/half.h>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <tuple>
 
@@ -100,6 +104,7 @@ int main(const int argc, char** argv) {
         testMissingAndCorruptMedia(expectations, fixture, ocioContext);
         testProxyCancellation(expectations, evaluator, fixture, ocioContext);
         testVideoCancellation(expectations, options.fixtures, ocioContext);
+        testSequenceDecodeAhead(expectations, fixture, ocioContext);
 
         bloom::render::GpuDeviceCreationOptions createOptions;
         createOptions.loader_path = options.loader_path;

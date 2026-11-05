@@ -3,6 +3,8 @@
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/operation_cache.hpp>
 
+#include "image_source.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -36,6 +38,8 @@ struct ImageSequenceReadAheadState final {
     std::atomic<bool> stopping{false};
     // Frames reading their own source file now; no capture starts while any is.
     std::size_t foregroundReads = 0;
+    // The transport's position: the tracked frame of the latest request (#386).
+    SourceUse transport{};
     ImageSequenceReadAhead::Statistics statistics;
 
     void run() {
@@ -64,41 +68,99 @@ struct ImageSequenceReadAheadState final {
                 capturing.insert(job.request.revisionKey);
                 ++statistics.started;
             }
-            const bool stored = capture(job);
+            auto revision = capture(job);
+            const bool stored = revision != nullptr;
+            bool decoded = false;
+            bool decodeSkipped = false;
+            if (stored && job.request.decode) {
+                if (decodeWanted(job.request.use))
+                    decoded = decode(job, *revision);
+                else
+                    decodeSkipped = true;
+            }
+            revision.reset();
             {
                 const std::lock_guard lock(mutex);
                 pending.erase(job.request.revisionKey);
                 capturing.erase(job.request.revisionKey);
                 ++(stored ? statistics.captured : statistics.failed);
+                statistics.decoded += decoded ? 1U : 0U;
+                statistics.decodesSkipped += decodeSkipped ? 1U : 0U;
             }
             captured.notify_all();
         }
     }
 
-    [[nodiscard]] bool capture(const Job& job) const {
+    // The captured (or already cached) revision, or null when it was not captured.
+    [[nodiscard]] std::shared_ptr<const media::ImageSourceRevision> capture(const Job& job) const {
         const auto cache = job.cache.lock();
         if (!cache || stopping.load())
-            return false;
+            return nullptr;
         const SourceWorkingSet::UseScope use(job.request.use);
-        if (cache->find(job.request.revisionKey, document::Revision{},
-                        OperationCacheEntryKind::DecodedMedia))
-            return true;
+        if (auto cached = cache->find(job.request.revisionKey, document::Revision{},
+                                      OperationCacheEntryKind::DecodedMedia))
+            return cached->sourceRevision;
         // Never evict for a guess: the file must fit the cache's free budget as it stands.
         std::error_code error;
         const auto size = std::filesystem::file_size(job.request.path, error);
         if (error || size > job.request.byteBudget ||
             cache->retainedBytes() + size > cache->byteBudget())
-            return false;
+            return nullptr;
         const auto generation = cache->decodedMediaGeneration();
         auto revision = media::captureImageSourceRevision(
             job.request.path, job.request.byteBudget, [this] { return stopping.load(); },
             job.request.recordedDigest, job.request.stamp);
         if (!revision.value || !*revision.value ||
             (!job.request.stamp && (*revision.value)->probe().contentDigest != job.request.digest))
-            return false;
+            return nullptr;
         cache->store(job.request.revisionKey, document::Revision{},
                      {.image = {}, .values = {}, .bounds = {}, .sourceRevision = *revision.value},
                      OperationCacheEntryKind::DecodedMedia, generation);
+        return *revision.value;
+    }
+
+    // #386: a decode is for a frame the transport has not reached yet and that is still inside the
+    // read-ahead window from where it is; any other frame was skipped (or is being prepared
+    // already, and decodes its own samples).
+    [[nodiscard]] bool decodeWanted(const SourceUse& use) const {
+        const std::lock_guard lock(mutex);
+        if (stopping.load())
+            return false;
+        if (!use.tracked || !transport.tracked || use.composition != transport.composition)
+            return true;
+        return use.frame > transport.frame &&
+               use.frame - transport.frame <= SourceWorkingSet::kReadAheadFrames;
+    }
+
+    // Decodes the member's native samples into the cache under the key the frame's upload looks
+    // for. Returns true when the samples were stored (or were already cached).
+    [[nodiscard]] bool decode(const Job& job, const media::ImageSourceRevision& revision) const {
+        const auto cache = job.cache.lock();
+        if (!cache || stopping.load())
+            return false;
+        auto interpretation = *job.request.decode;
+        // #478: the frame keys and decodes its part's resolved colour layer.
+        if (const auto* part = revision.probe().findPart(interpretation.part); part != nullptr)
+            interpretation.layer = part->resolveColourLayer(interpretation.layer);
+        const auto key = detail::decodedImageSamplesKey(detail::imageDecodeKey(
+            job.request.digest, interpretation.storedSamples, interpretation.alphaAssociation,
+            interpretation.part, interpretation.layer));
+        const SourceWorkingSet::UseScope use(job.request.use);
+        if (cache->find(key, document::Revision{}, OperationCacheEntryKind::DecodedMedia))
+            return true;
+        // Never evict for a guess: an upper bound of the samples (four 32-bit channels) must fit
+        // the cache's free budget as it stands, and the decode its own budget.
+        const auto& probe = revision.probe();
+        const auto bound = static_cast<std::uint64_t>(probe.width) * probe.height * 16U;
+        if (bound > job.request.byteBudget || cache->retainedBytes() + bound > cache->byteBudget())
+            return false;
+        auto samples = media::decodeImageSamples(
+            revision, interpretation, [this] { return stopping.load(); }, job.request.byteBudget);
+        if (!samples.value || !*samples.value || stopping.load())
+            return false;
+        cache->store(key, document::Revision{},
+                     {.image = {}, .values = {}, .bounds = {}, .samples = *samples.value},
+                     OperationCacheEntryKind::DecodedMedia);
         return true;
     }
 };
@@ -132,6 +194,8 @@ void ImageSequenceReadAhead::request(const std::shared_ptr<OperationCache>& cach
         const std::lock_guard lock(state_->mutex);
         if (state_->stopping.load())
             return;
+        if (const auto current = SourceWorkingSet::current(); current.tracked)
+            state_->transport = current;
         for (auto& request : requests) {
             // A probe that finds the file re-tags it for the frame it is captured for.
             const SourceWorkingSet::UseScope use(request.use);

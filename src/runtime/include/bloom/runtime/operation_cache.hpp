@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/render/image.hpp>
+#include <bloom/render/native_samples.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
@@ -81,6 +82,9 @@ struct OperationCacheValue final {
     // Immutable encoded revision retained under the SAME decoded-media LRU/ledger. No pathname or
     // metadata-only entry can authorize hash elision; the actual verified decoder bytes are owned.
     std::shared_ptr<const media::ImageSourceRevision> sourceRevision{};
+    // #386: a sequence member's decoded native samples, decoded ahead of the frame that uses them
+    // and keyed by the decode-only identity, so a later frame uploads them without decoding.
+    std::shared_ptr<const render::NativeSampleImage> samples{};
 };
 
 // Owned by one linear pass over a range (an export run) and carried by every frame it evaluates
@@ -202,7 +206,7 @@ class OperationCache final {
         OperationCacheValue value;
         // Charged per entry: the entry, its key and its values. Storage is charged once.
         std::size_t metadataBytes = 0;
-        std::array<StorageReference, 2> storage{};
+        std::array<StorageReference, 3> storage{};
         // What this entry would cost alone: metadata plus every storage it references.
         [[nodiscard]] std::size_t standaloneBytes() const noexcept;
         OperationCacheEntryKind kind = OperationCacheEntryKind::Operation;

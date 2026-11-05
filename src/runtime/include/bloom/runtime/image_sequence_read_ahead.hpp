@@ -23,7 +23,9 @@ struct ImageSequenceReadAheadState;
 // frame's scene preparation, and several reads stay outstanding so a network share overlaps its
 // latency. Captures are the same source revisions selection makes (exact bytes admitted by the file
 // identity, ADR 0025), stored under the same keys, so a later selection finds them like any
-// other cached revision. Read-ahead never evicts: a file that would not fit the cache's free
+// other cached revision. A request may also decode the member's native samples (#386), so the
+// frame's own preparation neither reads nor decodes it; a decode whose frame the transport has
+// passed is not run. Read-ahead never evicts: a file or decode that would not fit the cache's free
 // budget is skipped. Thread-safe; request() never blocks.
 class ImageSequenceReadAhead final {
   public:
@@ -39,6 +41,10 @@ class ImageSequenceReadAhead final {
         // The composition frame the capture is for (ADR 0037): its entry is tagged with it, so it
         // stays while that frame is in the playback window.
         SourceUse use{};
+        // #386: also decode the captured member's native samples into the cache, with the raw
+        // interpretation the frame's GPU upload decodes with. `layer` is the requested layer; it is
+        // resolved against the member's own part, as selection resolves it.
+        std::optional<media::ImageInterpretation> decode;
     };
     struct Statistics final {
         std::uint64_t queued = 0;
@@ -52,6 +58,10 @@ class ImageSequenceReadAhead final {
         std::uint64_t awaited = 0;
         // Times a worker with queued captures waited for frames' own source reads to finish.
         std::uint64_t deferred = 0;
+        // #386: native-sample decodes stored ahead of their frame, and decodes not run because
+        // the transport had already passed (or jumped away from) their frame.
+        std::uint64_t decoded = 0;
+        std::uint64_t decodesSkipped = 0;
     };
 
     // A frame reading its own source file (#477). While any is held, workers start no capture
@@ -81,10 +91,13 @@ class ImageSequenceReadAhead final {
 
     // Queues captures into `cache`, skipping files already cached, queued or in flight, and any
     // beyond the queue bound. The cache is held weakly; a cache that is gone skips its captures.
+    // The calling thread's tracked frame (SourceWorkingSet::current()) is the transport's position:
+    // a queued decode for a frame at or before it, or beyond its read-ahead window, is not run.
     void request(const std::shared_ptr<OperationCache>& cache, std::vector<Request> requests);
     // A frame that needs `revisionKey` now must not read it a second time beside a capture: a
     // queued capture of it is withdrawn (the frame reads the file itself, now), and a capture in
-    // flight is waited for, so the file is read once and that read finishes first. Returns true
+    // flight (with its decode) is waited for, so the file is read once and that read finishes
+    // first. Returns true
     // after waiting for a capture (its revision is then in the cache unless it failed).
     // `cancelled` is polled while waiting.
     [[nodiscard]] bool claim(const std::string& revisionKey,

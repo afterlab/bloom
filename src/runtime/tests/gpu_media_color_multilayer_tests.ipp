@@ -230,3 +230,143 @@ void testSharedFootagePreparedOnce(Expectations& expectations, bloom::render::Gp
                             label + ": the native frame matches the CPU reference");
     }
 }
+
+// #386: an all-HALF OpenEXR sequence member's native samples are decoded by the read-ahead before
+// the frame that uses them. That frame neither reads nor decodes its member, and uploads exactly
+// the samples (same backing identity, same bytes) a frame decoding its own member uploads.
+void writeHalfExrMember(const std::filesystem::path& path, const float shift) {
+    auto pixels = signedHdrPixels();
+    const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(2, 1));
+    Imf::Header header(window, window);
+    header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+    header.insert("alphaAssociation", Imf::StringAttribute("premultiplied"));
+    std::array<std::vector<Imath::half>, 4> lanes;
+    Imf::FrameBuffer frameBuffer;
+    constexpr std::array<const char*, 4> kNames{"R", "G", "B", "A"};
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+        header.channels().insert(kNames[lane], Imf::Channel(Imf::HALF));
+        for (const auto& pixel : pixels)
+            lanes[lane].emplace_back(lane == 0   ? pixel.red + shift
+                                     : lane == 1 ? pixel.green
+                                     : lane == 2 ? pixel.blue
+                                                 : pixel.alpha);
+        frameBuffer.insert(kNames[lane],
+                           Imf::Slice(Imf::HALF, reinterpret_cast<char*>(lanes[lane].data()),
+                                      sizeof(Imath::half), 3 * sizeof(Imath::half)));
+    }
+    Imf::OutputFile file(path.string().c_str(), header);
+    file.setFrameBuffer(frameBuffer);
+    file.writePixels(2);
+}
+
+void testSequenceDecodeAhead(Expectations& expectations, const Fixture& fixture,
+                             const GpuSceneOcioContext& ocioContext) {
+    std::vector<document::AssetSequenceMember> members;
+    for (int frame = 0; frame < 4; ++frame) {
+        const auto path = fixture.directory / ("decode_ahead." + std::to_string(frame) + ".exr");
+        writeHalfExrMember(path, static_cast<float>(frame));
+        members.push_back(sequenceMember(path, frame, static_cast<std::uint64_t>(frame) + 40));
+    }
+    document::AssetRecord asset = fixture.asset;
+    asset.id = bloom::document::AssetId::fromRaw(931);
+    asset.kind = document::AssetKind::Sequence;
+    asset.manifest.pattern = "decode_ahead.#.exr";
+    asset.manifest.padding = 1;
+    asset.manifest.first = 0;
+    asset.manifest.last = 3;
+    asset.manifest.members = members;
+    const auto plan = mediaPlan(format(8, 8), asset, LayerValues{}, 4600);
+    const auto frameRequest = [&](const int frame) {
+        auto request = acesRequest(*plan, kAcesWorking);
+        request.time = rationalTime(frame, 24);
+        request.mediaSourceRevisionPolicy = bloom::runtime::MediaSourceRevisionPolicy::Revalidate;
+        request.requireVerifiedMediaSources = true;
+        return request;
+    };
+    CpuCompositionEvaluator evaluator;
+    evaluator.setAssetBaseDirectory(fixture.directory);
+    const auto context = GpuSceneMediaContext::fromEvaluator(evaluator);
+    const CpuGpuSceneBuilder builder(nullptr, context, ocioContext);
+    const auto first = builder.build(plan, frameRequest(0));
+    expectations.expect(first.hasValue() && first.scene->mediaStatistics().imageConversions == 1 &&
+                            first.scene->mediaStatistics().imageDecodedAhead == 0,
+                        "decode ahead: frame 0 decodes its own member");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (context.sequenceReadAhead->statistics().decoded +
+                   context.sequenceReadAhead->statistics().failed <
+               3 &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const auto statistics = context.sequenceReadAhead->statistics();
+    expectations.expect(statistics.captured == 3 && statistics.decoded == 3 &&
+                            statistics.decodesSkipped == 0,
+                        "decode ahead: the three following members are captured and decoded");
+    // The oracle: an evaluator without read-ahead, whose frames decode their own members.
+    CpuCompositionEvaluator reference;
+    reference.setAssetBaseDirectory(fixture.directory);
+    const CpuGpuSceneBuilder referenceBuilder(nullptr, deterministicMediaContext(reference),
+                                              ocioContext);
+    for (int frame = 1; frame < 4; ++frame) {
+        const auto label = "decode ahead frame " + std::to_string(frame);
+        const auto built = builder.build(plan, frameRequest(frame));
+        const auto oracle = referenceBuilder.build(plan, frameRequest(frame));
+        expectations.expect(built.hasValue() && oracle.hasValue(), label + ": both prepare");
+        if (!built || !oracle)
+            continue;
+        const auto& media = built.scene->mediaStatistics();
+        expectations.expect(media.imageDecodedAhead == 1 && media.imageConversions == 0 &&
+                                media.imageDecodeNanoseconds == 0 && media.sourceBytesRead == 0,
+                            label + ": the member was read and decoded ahead of the frame");
+        const auto* upload = firstUpload(*built.scene);
+        const auto* oracleUpload = firstUpload(*oracle.scene);
+        const bool samples = upload != nullptr && oracleUpload != nullptr && upload->samples &&
+                             oracleUpload->samples;
+        expectations.expect(samples && upload->semanticKey == oracleUpload->semanticKey,
+                            label + ": the upload keeps the identity of a frame's own decode");
+        if (!samples)
+            continue;
+        const auto planes = upload->samples->planes();
+        const auto oraclePlanes = oracleUpload->samples->planes();
+        bool equal = planes.size() == oraclePlanes.size();
+        for (std::size_t index = 0; equal && index < planes.size(); ++index)
+            equal = std::ranges::equal(planes[index].bytes, oraclePlanes[index].bytes);
+        expectations.expect(equal, label + ": the decoded-ahead samples are the frame's samples");
+    }
+    // The transport stands at frame 10: a member for frame 9 (passed) or frame 19 (beyond the
+    // read-ahead window after a jump) is captured but not decoded; frame 11's member is decoded.
+    using bloom::runtime::ImageSequenceReadAhead;
+    using bloom::runtime::SourceUse;
+    using bloom::runtime::SourceWorkingSet;
+    const auto cache = std::make_shared<bloom::runtime::OperationCache>(std::size_t{1} << 30);
+    ImageSequenceReadAhead readAhead(1);
+    std::vector<ImageSequenceReadAhead::Request> requests;
+    const std::array<std::int64_t, 3> useFrames{9, 19, 11};
+    bloom::media::ImageInterpretation raw;
+    raw.colorSpace = bloom::media::ImageColorSpace::Raw;
+    raw.alphaAssociation = bloom::media::ImageAlphaAssociation::Premultiplied;
+    for (std::size_t index = 0; index < useFrames.size(); ++index) {
+        const auto& member = members[index + 1];
+        requests.push_back({.path = fixture.directory / member.locator.path,
+                            .digest = bloom::document::sequenceMemberIdentity(member),
+                            .stamp = std::nullopt,
+                            .recordedDigest = member.contentDigest,
+                            .revisionKey = "transport-" + std::to_string(index),
+                            .byteBudget = std::size_t{1} << 30,
+                            .use = {.composition = 1, .frame = useFrames[index], .tracked = true},
+                            .decode = raw});
+    }
+    {
+        const SourceWorkingSet::UseScope transport(
+            SourceUse{.composition = 1, .frame = 10, .tracked = true});
+        readAhead.request(cache, std::move(requests));
+    }
+    const auto transportDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (readAhead.statistics().captured + readAhead.statistics().failed < 3 &&
+           std::chrono::steady_clock::now() < transportDeadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const auto transport = readAhead.statistics();
+    expectations.expect(transport.captured == 3 && transport.decoded == 1 &&
+                            transport.decodesSkipped == 2,
+                        "decode ahead: frames the transport passed or jumped away from are not "
+                        "decoded");
+}

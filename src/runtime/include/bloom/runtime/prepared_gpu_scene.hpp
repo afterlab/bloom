@@ -131,6 +131,8 @@ struct GpuSceneMediaStatistics final {
     // Actual image decoder call, including image construction/input processing when requested;
     // excludes source capture/hash/probe, cache lookup and proxy rebasing.
     std::uint64_t imageDecodeNanoseconds = 0;
+    // #386: image-sequence members whose native samples the read-ahead had already decoded.
+    std::uint64_t imageDecodedAhead = 0;
     friend bool operator==(const GpuSceneMediaStatistics&,
                            const GpuSceneMediaStatistics&) = default;
 };

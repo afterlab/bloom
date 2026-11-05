@@ -178,6 +178,7 @@ OperationCache::Entry::~Entry() {
     // Rejected insertion also drops refs before its registration can permit owner exit.
     value.image.reset();
     value.sourceRevision.reset();
+    value.samples.reset();
     value.values.clear();
     if (registered)
         render::detail::releasePackedHostRegistration(retirement);
@@ -404,6 +405,15 @@ void OperationCache::store(std::string content, const document::Revision revisio
     if (entry->value.sourceRevision)
         entry->storage[1] = {entry->value.sourceRevision.get(),
                              entry->value.sourceRevision->retainedBytes()};
+    if (entry->value.samples) {
+        // Keyed by the sample bytes: entries that publish the same decode share them.
+        const auto bytes = addCharge(sizeof(render::NativeSampleImage),
+                                     static_cast<std::size_t>(entry->value.samples->byteCount()));
+        if (const auto* backing = entry->value.samples->backingIdentity(); backing != nullptr)
+            entry->storage[2] = {backing, bytes};
+        else
+            entry->metadataBytes = addCharge(entry->metadataBytes, bytes);
+    }
     for (const auto& item : entry->value.values)
         if (const auto* string = std::get_if<std::string>(&item))
             entry->metadataBytes = addCharge(entry->metadataBytes, string->capacity());

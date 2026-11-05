@@ -233,7 +233,7 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                               const CompiledCompositionPlan& plan,
                               const GpuSceneMediaContext& context,
                               const ImageSourceSelection& selection, const bool explicitBypass,
-                              const bool planBypass) {
+                              const bool planBypass, const bool decodeSamples) {
     // A linear pass does not read ahead into the cache: its frames are used once, and its own
     // frames in flight already overlap decode with evaluation.
     if (request.linearPass || !context.sequenceReadAhead || !context.operationCache ||
@@ -245,6 +245,18 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                                       context.assetBaseDirectory, kSequenceReadAheadFrames);
     std::vector<ImageSequenceReadAhead::Request> requests;
     requests.reserve(targets.size());
+    // #386: a GPU colour leaf uploads native samples, so the members are decoded ahead too, with
+    // the raw interpretation decodeRawImageSamples() uses (the requested layer is resolved per
+    // member).
+    std::optional<media::ImageInterpretation> decode;
+    if (decodeSamples) {
+        decode.emplace();
+        decode->colorSpace = media::ImageColorSpace::Raw;
+        decode->alphaAssociation = selection.interpretation.alphaAssociation;
+        decode->storedSamples = selection.footagePass.has_value();
+        decode->part = selection.interpretation.part;
+        decode->layer = source.layer;
+    }
     // Target i is the composition frame i + 1 after this request's.
     auto use = SourceWorkingSet::current();
     for (auto& target : targets) {
@@ -256,7 +268,8 @@ void requestSequenceReadAhead(const CompiledImageSource& source, const Evaluatio
                             .recordedDigest = target.recordedDigest,
                             .revisionKey = std::move(target.revisionKey),
                             .byteBudget = byteBudget(request.pixelStorageByteLimit),
-                            .use = use});
+                            .use = use,
+                            .decode = decode});
     }
     context.sequenceReadAhead->request(context.operationCache, std::move(requests));
 }
@@ -569,7 +582,8 @@ prepareImageUpload(const CompiledImageSource& source, const EvaluationRequest& r
         context.buildUploads ? &context.buildUploads->revisions() : nullptr,
         explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
     recordSourceRevisionWork(selection, statistics);
-    requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
+    requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass,
+                             false);
     if (selection.cancelled) {
         MediaUploadOutcome outcome;
         outcome.cancelled = true;
@@ -645,7 +659,8 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
         context.buildUploads ? &context.buildUploads->revisions() : nullptr,
         explicitBypass || request.linearPass ? nullptr : context.sequenceReadAhead.get());
     recordSourceRevisionWork(selection, statistics);
-    requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass);
+    requestSequenceReadAhead(source, request, plan, context, selection, explicitBypass, planBypass,
+                             ocioContext.preparer != nullptr);
     if (selection.cancelled) {
         ++statistics.imageSources;
         MediaUploadOutcome outcome;
@@ -701,6 +716,19 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
     const auto samplesKey = rawDecodeUploadKey("image-samples", selection.decodeKey);
     ++statistics.uploadKeyConstructions;
     outcome.samples = findSharedSamples(context, samplesKey);
+    // #386: a sequence member the read-ahead decoded before this frame needed it.
+    if (outcome.samples == nullptr && !selection.missingFrame && !explicitBypass &&
+        !planBypass && !request.linearPass && context.sequenceReadAhead &&
+        selection.sourceRevision != nullptr && source.asset &&
+        source.asset->kind == document::AssetKind::Sequence)
+        if (auto cached = context.operationCache->find(
+                decodedImageSamplesKey(selection.decodeKey), document::Revision{},
+                OperationCacheEntryKind::DecodedMedia);
+            cached && cached->samples) {
+            ++statistics.imageDecodedAhead;
+            outcome.samples = std::move(cached->samples);
+            shareSamples(context, samplesKey, outcome.samples);
+        }
     if (outcome.samples == nullptr && !selection.missingFrame) {
         if (pixelBudget == 0) {
             outcome.failureCode = PreparedGpuSceneDiagnosticCode::PixelStorageBudgetExceeded;

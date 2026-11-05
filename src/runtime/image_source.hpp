@@ -103,6 +103,15 @@ struct ImageSourceReadAheadTarget final {
     std::optional<core::Sha256Digest> recordedDigest;
     std::string revisionKey;
 };
+// The decode-only identity of a selected image: its content digest, the stored samples (a footage
+// pass) or the alpha association it decodes with, and its part and resolved colour layer. Colour
+// interpretation, proxy and path fields are deliberately absent.
+[[nodiscard]] std::string imageDecodeKey(const core::Sha256Digest& digest, bool storedSamples,
+                                         media::ImageAlphaAssociation alphaAssociation,
+                                         const std::string& part, const std::string& layer);
+// #386: the operation-cache key of an image's decoded native samples (decodeRawImageSamples()),
+// which the sequence read-ahead decodes ahead of the frame that uses them.
+[[nodiscard]] std::string decodedImageSamplesKey(const std::string& decodeKey);
 // The distinct sequence members the next `frames` composition frames after `time` select (start
 // frame, loop mode and gap hold included), excluding the member `time` itself selects.
 [[nodiscard]] std::vector<ImageSourceReadAheadTarget>

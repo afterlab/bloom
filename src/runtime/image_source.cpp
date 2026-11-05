@@ -128,6 +128,30 @@ std::string imageSourceRevisionKey(const core::Sha256Digest& digest,
     return revisionKey.bytes();
 }
 
+std::string imageDecodeKey(const core::Sha256Digest& digest, const bool storedSamples,
+                           const media::ImageAlphaAssociation alphaAssociation,
+                           const std::string& part, const std::string& layer) {
+    OperationKey decodeKey;
+    decodeKey.add(std::string{"gpu-raw-decode-v2"});
+    const auto hex = digest.toLowercaseHex();
+    decodeKey.add(std::string(hex.begin(), hex.end()));
+    // A footage pass decodes the stored samples, which no association changes.
+    if (storedSamples)
+        decodeKey.add(std::string{"stored-samples-v1"});
+    else
+        decodeKey.add(alphaAssociation);
+    decodeKey.add(part);
+    decodeKey.add(layer);
+    return decodeKey.digest();
+}
+
+std::string decodedImageSamplesKey(const std::string& decodeKey) {
+    OperationKey key;
+    key.add(std::string{"decoded-image-samples-v1"});
+    key.add(decodeKey);
+    return key.bytes();
+}
+
 std::vector<ImageSourceReadAheadTarget>
 imageSequenceReadAheadTargets(const CompiledImageSource& source, const core::RationalTime time,
                               const document::FrameRate rate, const std::filesystem::path& base,
@@ -489,17 +513,10 @@ ImageSourceSelection selectImageSource(
     // association. Colour interpretation, input/working colour space, config revision, proxy and
     // path/relink fields are deliberately absent, so a changed working space or display keeps the
     // same decoded upload while a changed frame or alpha association is a miss.
-    OperationKey decodeKey;
-    decodeKey.add(std::string{"gpu-raw-decode-v2"});
-    decodeKey.add(std::string(digest.begin(), digest.end()));
-    // A footage pass decodes the stored samples, which no association changes.
-    if (selected.footagePass)
-        decodeKey.add(std::string{"stored-samples-v1"});
-    else
-        decodeKey.add(selected.interpretation.alphaAssociation);
-    decodeKey.add(selected.interpretation.part);
-    decodeKey.add(selected.interpretation.layer);
-    selected.decodeKey = decodeKey.digest();
+    selected.decodeKey = imageDecodeKey(selected.digest, selected.footagePass.has_value(),
+                                        selected.interpretation.alphaAssociation,
+                                        selected.interpretation.part,
+                                        selected.interpretation.layer);
     // Content-addressed and restart-stable (docs/architecture/media-io.md "Disk cache"): asset
     // digest + member frame + interpretation + Bloom Neutral config digest + decoder identity, so
     // it deliberately omits `path`/`relinkHint`/`available` -- a relink of the same content should

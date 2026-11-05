@@ -851,6 +851,18 @@ for example while they decode. Measured on 2026-11-04 (cold 2160p multilayer EXR
 frames on local NVMe, six interleaved runs each), first motion came at 1.22 s instead of 1.97 s.
 Captures still cost that shot cold frame rate on local storage: 6.1 frames/s against 7.0 with
 captures off.
+Decode ahead (#386): when the frame that queues the captures is a GPU colour leaf (its upload
+carries native samples: PNG, JPEG and all-half OpenEXR), the worker that captured a member also
+decodes its native samples, with the raw interpretation and resolved colour layer the frame's own
+upload uses, and stores them in the operation cache as a decoded-media entry under the member's
+decode-only identity. The frame then finds them there and neither reads nor decodes its member
+(`imageDecodedAhead` in its media statistics); the upload identity is unchanged, so the samples
+are exactly the ones its own decode would produce. A frame that claims a member still decoding
+waits for that decode instead of decoding the member a second time. The latest frame that queued
+captures is the transport's position: a decode whose frame is at or behind it, or more than eight
+frames ahead of it (the transport jumped away), is not run, so frames the transport skips are never
+decoded. A decode must fit the cache's free budget at an upper bound of 16 bytes a pixel; like
+captures, decodes never evict.
 Destroying the evaluator cancels outstanding captures and joins the workers. Export frames do not
 read ahead (see the linear-pass retention below).
 
