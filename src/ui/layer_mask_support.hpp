@@ -58,4 +58,15 @@ maskPathAt(const document::Composition& composition, const document::LayerMask& 
 [[nodiscard]] std::vector<document::LayerId>
 matteSourceCandidates(const document::Composition& composition, document::LayerId layer);
 
+// #383: the node Mask outputs `layer` may read as a matte (its track matte or a matte mask): every
+// Mask output in the composition whose node does not depend on the layer, in node order.
+[[nodiscard]] std::vector<document::OutputPortRef>
+matteNodeCandidates(const document::Composition& composition, document::LayerId layer);
+// The same for a reader node: a Layer node, or the Merge of an entry that has no layer yet.
+[[nodiscard]] std::vector<document::OutputPortRef>
+matteNodeCandidatesFor(const document::Composition& composition, document::NodeId reader);
+// A node Mask output as a choice: the node's name, then the port when the node has several Masks.
+[[nodiscard]] QString matteNodeText(const document::Composition& composition,
+                                    const document::OutputPortRef& matte);
+
 } // namespace bloom::ui::masks

@@ -35,6 +35,7 @@
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <QApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QTest>
 #include <QToolButton>
@@ -350,6 +351,10 @@ void testPropertiesAndViewer() {
         }
         expect(exact, "the matte preview equals the sphere + sky coverage");
     }
+    // With BLOOM_MATTE_CAPTURE_DIR set, the Viewer and Properties after the picks (#383 review).
+    if (const auto capture = qEnvironmentVariable("BLOOM_MATTE_CAPTURE_DIR"); !capture.isEmpty())
+        expect(window.grab().save(QDir(capture).filePath("cryptomatte-pick.png")),
+               "save the Cryptomatte pick capture");
 
     shutdown(scheduler, bridge, &preview);
 }

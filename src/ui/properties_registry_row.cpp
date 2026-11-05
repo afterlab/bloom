@@ -22,6 +22,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
@@ -174,8 +175,12 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         : schemaKey == "bloom.image-mix.factor"          ? QObject::tr("Mix factor")
         : schemaKey == "bloom.multiply-alpha.factor"     ? QObject::tr("Alpha factor")
         : schemaKey == "bloom.multiply-alpha.channel" ||
-                schemaKey == "bloom.set-alpha.channel"
+                schemaKey == "bloom.set-alpha.channel" ||
+                schemaKey == document::kImageToMaskChannelSchemaKey
             ? QObject::tr("Matte channel")
+        // #383: the effect mask's selector and Mask Combine's mode.
+        : schemaKey == document::kEffectMaskChannelSchemaKey ? QObject::tr("Mask channel")
+        : schemaKey == document::kMaskCombineModeSchemaKey   ? QObject::tr("Combine")
         // #503: Unmult's backing and Remove Color Matting's colour.
         : schemaKey == document::kAlphaAssociationWhiteSchemaKey
             ? QObject::tr("White background")

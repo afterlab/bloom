@@ -302,6 +302,9 @@ class SocketItem final : public QGraphicsItem {
     // #525: an any-field input that also takes the other field kinds.
     void setAcceptsFieldKinds(const bool fields) { acceptsFieldKinds_ = fields; }
     [[nodiscard]] bool acceptsFieldKinds() const noexcept { return acceptsFieldKinds_; }
+    // #383: an effect's mask also takes an Image.
+    void setAcceptsImageMatte(const bool image) { acceptsImageMatte_ = image; }
+    [[nodiscard]] bool acceptsImageMatte() const noexcept { return acceptsImageMatte_; }
     void setAuthoringEnabled(bool enabled);
 
     // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
@@ -336,6 +339,7 @@ class SocketItem final : public QGraphicsItem {
     bool acceptsAnyKind_ = false;
     bool acceptsPixelKinds_ = false;
     bool acceptsFieldKinds_ = false;
+    bool acceptsImageMatte_ = false;
     DragAffinity affinity_ = DragAffinity::Idle;
     std::vector<document::InputPortRef> orderedInputs_;
     bool stackPill_ = false;

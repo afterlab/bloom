@@ -11,7 +11,8 @@ class KDropdown;
 }
 
 // ADR 0028: the Timeline's Track Matte column. One compact dropdown per layer row listing
-// None, the other layers of the same Merge, then Alpha / Luma / Inverted for the current matte.
+// None, the other layers of the same Merge, then (#383) every node Mask output the layer may read,
+// then Alpha / Luma / Inverted for the current matte.
 // Items carry a signed code: >= 0 is a source layer id (0 is None); the negatives are the
 // channel and invert actions, which edit the existing matte and are disabled without one.
 namespace matte_cell {
@@ -19,6 +20,8 @@ namespace matte_cell {
 inline constexpr long long kActionAlpha = -1;
 inline constexpr long long kActionLuma = -2;
 inline constexpr long long kActionInverted = -3;
+// #383: a node Mask output, the i-th of masks::matteNodeCandidates(), is kNodeMatteBase - i.
+inline constexpr long long kNodeMatteBase = -1000;
 
 // Rebuilds the items from the document and selects the current source. Never authors anything.
 void populate(kit::KDropdown& dropdown, const CompositionSession& session, document::LayerId layer);

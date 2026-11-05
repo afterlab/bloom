@@ -6,8 +6,10 @@
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/ui/composition_authoring.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 
+#include <QDir>
 #include <QFontMetricsF>
 #include <QGraphicsProxyWidget>
 #include <QVariant>
@@ -454,6 +456,56 @@ void testEnterAndDoubleClickRenameALayerCard() {
 }
 } // namespace bloom::ui::test
 
+namespace bloom::ui::test {
+// #383: the matte workflow cards. Mask Combine takes two Masks and gives one; Image to Mask takes
+// an Image; a grade effect carries an optional Mask input that also lands an Image, and its link
+// drag connects. With BLOOM_MATTE_CAPTURE_DIR set the canvas is saved for review.
+void testMatteWorkflowCards() {
+    Fixture f;
+    const auto solid = f.add(document::kSolidSourceNodeType, {0, 0});
+    const auto exposure = f.add("bloom.exposure", {320, 0});
+    const auto combine = f.add(document::kMaskCombineNodeType, {0, 300});
+    const auto toMask = f.add(document::kImageToMaskNodeType, {320, 300});
+    const auto find = [&](const document::NodeId node, const QString& name, const bool input) {
+        node_editor::SocketItem* found = nullptr;
+        for (auto* socket : f.card(node)->sockets())
+            if (socket->name == name && socket->input.has_value() == input)
+                found = socket;
+        return found;
+    };
+    auto* mask = find(exposure, QStringLiteral("mask"), true);
+    expect(mask != nullptr && mask->kind == document::SocketValueKind::Mask &&
+               mask->acceptsImageMatte(),
+           "a grade effect's mask input is a Mask socket that also lands an Image");
+    expect(find(combine, QStringLiteral("a"), true) != nullptr &&
+               find(combine, QStringLiteral("b"), true) != nullptr &&
+               find(combine, QStringLiteral("mask"), false) != nullptr,
+           "Mask Combine has inputs A and B and a Mask output");
+    expect(find(toMask, QStringLiteral("input"), true) != nullptr &&
+               find(toMask, QStringLiteral("mask"), false) != nullptr,
+           "Image to Mask takes an Image and gives a Mask");
+    expect(f.card(combine)->title() == QStringLiteral("Mask Combine") &&
+               f.card(toMask)->title() == QStringLiteral("Image to Mask"),
+           "the new cards are named for what they are");
+    auto* image = find(solid, QStringLiteral("image"), false);
+    if (image != nullptr && mask != nullptr) {
+        f.drag(image->scenePos(), mask->scenePos());
+        const auto& edges = f.session.composition()->graph().edges();
+        expect(std::ranges::any_of(edges,
+                                   [&](const auto& edge) {
+                                       return edge.source.nodeId == solid &&
+                                              edge.destination ==
+                                                  document::InputPortRef{document::NodeInputRef{
+                                                      exposure, "mask"}};
+                                   }),
+               "an Image dragged onto the effect's mask input connects");
+    }
+    if (const auto capture = qEnvironmentVariable("BLOOM_MATTE_CAPTURE_DIR"); !capture.isEmpty())
+        expect(f.editor.grab().save(QDir(capture).filePath("matte-node-cards.png")),
+               "save the node card capture");
+}
+} // namespace bloom::ui::test
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     try {
@@ -465,6 +517,7 @@ int main(int argc, char** argv) {
         bloom::ui::test::testFontDropdownOnATextCardUsesTheGenericSelector();
         bloom::ui::test::testMergeRendersOneOrderedMultiInput();
         bloom::ui::test::testEnterAndDoubleClickRenameALayerCard();
+        bloom::ui::test::testMatteWorkflowCards();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

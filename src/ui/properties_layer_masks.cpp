@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 
 namespace bloom::ui::properties {
@@ -40,6 +41,32 @@ const document::LayerOutputBoundary* contextLayer(const CompositionSession& sess
     const auto* composition = session.composition();
     const auto id = layerInContext(session);
     return composition && id ? composition->graph().findLayer(*id) : nullptr;
+}
+
+// #383: a matte choice as dropdown data: "" none, "layer:<id>", or "node:<id>:<port>".
+QString matteChoiceKey(const document::LayerId layer) {
+    return QStringLiteral("layer:%1").arg(static_cast<qulonglong>(layer.value()));
+}
+QString matteChoiceKey(const document::OutputPortRef& node) {
+    return QStringLiteral("node:%1:%2")
+        .arg(static_cast<qulonglong>(node.nodeId.value()))
+        .arg(QString::fromStdString(node.port));
+}
+std::variant<std::monostate, document::LayerId, document::OutputPortRef>
+parseMatteChoice(const QString& key) {
+    const auto parts = key.split(QLatin1Char(':'));
+    bool ok = false;
+    if (parts.size() == 2 && parts[0] == QLatin1String("layer")) {
+        const auto id = parts[1].toULongLong(&ok);
+        if (ok)
+            return document::LayerId::fromRaw(id);
+    } else if (parts.size() >= 3 && parts[0] == QLatin1String("node")) {
+        const auto id = parts[1].toULongLong(&ok);
+        if (ok)
+            return document::OutputPortRef{document::NodeId::fromRaw(id),
+                                           parts.mid(2).join(QLatin1Char(':')).toStdString()};
+    }
+    return std::monostate{};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -72,17 +99,23 @@ struct MaskGroup final {
     kit::KButton* remove = nullptr;
     kit::KDropdown* mode = nullptr;
     kit::KSwitch* inverted = nullptr;
+    // #383: Path, or a node's Mask output (a matte mask).
+    kit::KDropdown* shape = nullptr;
+    QWidget* pathRow = nullptr;
     kit::KLabel* pathSummary = nullptr;
     KeyframeDiamond* pathDiamond = nullptr;
     struct Scalar final {
         kit::KValueField* field = nullptr;
         KeyframeDiamond* diamond = nullptr;
+        QWidget* row = nullptr;
     };
     Scalar feather, expansion, opacity;
 };
 
 struct MasksState final {
     kit::KSection* section = nullptr;
+    // #383: adds a matte mask reading the first node Mask output the layer may read.
+    kit::KButton* addMatte = nullptr;
     std::optional<document::LayerId> layer;
     std::vector<document::LayerMaskId> ids;
     bool locked = false;
@@ -92,7 +125,10 @@ struct MasksState final {
 void clearBody(MasksState& state) {
     auto* layout = state.section->bodyLayout();
     while (auto* item = layout->takeAt(0)) {
-        if (auto* widget = item->widget()) {
+        if (auto* widget = item->widget(); widget == state.addMatte) {
+            delete item;
+            continue;
+        } else if (widget != nullptr) {
             widget->hide();
             widget->setParent(nullptr);
             widget->deleteLater();
@@ -127,7 +163,7 @@ MaskGroup::Scalar makeScalar(CompositionSession& session, MasksState& state, QWi
                                  box);
     scalar.diamond = makeKeyframeDiamond(session, "mask", box);
     scalar.diamond->setParameterId(parameter);
-    (void)addRow(rows, box, makeRowLabel(label, box), scalar.diamond, scalar.field);
+    scalar.row = addRow(rows, box, makeRowLabel(label, box), scalar.diamond, scalar.field);
     bindValueEdit(session, *scalar.field, [parameter] { return parameter; });
     auto* field = scalar.field;
     QObject::connect(field, &kit::KValueField::valueChanged, field,
@@ -153,6 +189,23 @@ void refreshGroup(CompositionSession& session, const document::LayerOutputBounda
         const QSignalBlocker blocker(group.inverted);
         group.inverted->setChecked(mask.inverted);
     }
+    {
+        // #383: the shape choices are every node Mask output the layer may read.
+        const QSignalBlocker blocker(group.shape);
+        group.shape->clearItems();
+        group.shape->addItem(QObject::tr("Path"), QString());
+        for (const auto& output : masks::matteNodeCandidates(*composition, layer.layerId))
+            group.shape->addItem(masks::matteNodeText(*composition, output),
+                                 matteChoiceKey(output));
+        group.shape->setCurrentIndex(
+            group.shape->findData(mask.matte ? matteChoiceKey(*mask.matte) : QString()));
+        group.shape->setEnabled(!layer.locked);
+    }
+    // A matte mask's shape is its node's Mask: the path, feather and expansion do not apply.
+    const bool drawn = !mask.matte.has_value();
+    group.pathRow->setVisible(drawn);
+    group.feather.row->setVisible(drawn);
+    group.expansion.row->setVisible(drawn);
     const auto keyTime = session.keyTimeAtPlayhead(mask.path);
     if (const auto path = masks::maskPathAt(*composition, mask, keyTime))
         group.pathSummary->setText(
@@ -248,12 +301,18 @@ void buildGroup(CompositionSession& session, MasksState& state, const document::
     group.inverted->setAccessibleName(QObject::tr("Inverted"));
     (void)addRow(rows, box, makeRowLabel(QObject::tr("Inverted"), box), nullptr, group.inverted);
 
+    group.shape = new kit::KDropdown(box);
+    group.shape->setObjectName(QStringLiteral("layerMaskShapeDropdown"));
+    group.shape->setAccessibleName(QObject::tr("Mask shape"));
+    group.shape->setToolTip(QObject::tr("Draw the mask as a path, or take it from a node's Mask "
+                                        "output, such as a Cryptomatte selection"));
+    (void)addRow(rows, box, makeRowLabel(QObject::tr("Shape from"), box), nullptr, group.shape);
     group.pathSummary = new kit::KLabel(box);
     group.pathSummary->setObjectName(QStringLiteral("layerMaskPathSummary"));
     group.pathDiamond = makeKeyframeDiamond(session, "mask", box);
     group.pathDiamond->setParameterId(mask.path);
-    (void)addRow(rows, box, makeRowLabel(QObject::tr("Path"), box), group.pathDiamond,
-                 group.pathSummary);
+    group.pathRow = addRow(rows, box, makeRowLabel(QObject::tr("Path"), box), group.pathDiamond,
+                           group.pathSummary);
     group.feather = makeScalar(session, state, box, rows, QObject::tr("Feather"),
                                QStringLiteral("layerMaskFeatherField"), mask.feather, 0.0, 1000.0,
                                1.0, QStringLiteral("px"), QObject::tr("Set Mask Feather"));
@@ -276,6 +335,14 @@ void buildGroup(CompositionSession& session, MasksState& state, const document::
                          runMaskCommand<commands::SetLayerMaskMode>(
                              session, "Set Mask Mode", layerId, maskId,
                              static_cast<document::LayerMaskMode>(dropdown->currentData().toInt()));
+                     });
+    QObject::connect(group.shape, &kit::KDropdown::activated, group.shape,
+                     [&session, layerId, maskId, dropdown = group.shape](int) {
+                         const auto choice = parseMatteChoice(dropdown->currentData().toString());
+                         const auto* node = std::get_if<document::OutputPortRef>(&choice);
+                         runMaskCommand<commands::SetLayerMaskMatte>(
+                             session, "Set Mask Shape", layerId, maskId,
+                             node ? std::optional(*node) : std::nullopt);
                      });
     QObject::connect(group.inverted, &kit::KSwitch::toggled, group.inverted,
                      [&session, layerId, maskId](const bool on) {
@@ -336,7 +403,17 @@ void rebuildMasks(CompositionSession& session, const std::shared_ptr<MasksState>
         std::size_t number = 0;
         for (const auto& mask : layer->masks)
             buildGroup(session, *state, layer->layerId, mask, ++number);
+        state->section->bodyLayout()->addWidget(state->addMatte);
     }
+    const auto candidates = masks::matteNodeCandidates(*session.composition(), layer->layerId);
+    state->addMatte->setEnabled(!layer->locked && !candidates.empty() &&
+                                layer->masks.size() < document::kMaximumLayerMasks);
+    state->addMatte->setToolTip(
+        candidates.empty()
+            ? QObject::tr("Add a Cryptomatte, Mask or another node with a Mask output first")
+            : QObject::tr("Add a mask whose shape is %1's Mask; choose another node in its "
+                          "Shape from list")
+                  .arg(masks::matteNodeText(*session.composition(), candidates.front())));
     refreshValues(session, *state);
 }
 
@@ -360,14 +437,19 @@ void refreshMatte(CompositionSession& session, const MatteFields& fields) {
     const auto candidates = masks::matteSourceCandidates(*composition, layer->layerId);
     const QSignalBlocker sourceBlocker(fields.source);
     fields.source->clearItems();
-    fields.source->addItem(QObject::tr("None"), QVariant::fromValue(qulonglong{0}));
+    fields.source->addItem(QObject::tr("None"), QString());
     for (const auto id : candidates)
         if (const auto* other = composition->graph().findLayer(id))
-            fields.source->addItem(QString::fromStdString(other->name),
-                                   QVariant::fromValue(static_cast<qulonglong>(id.value())));
+            fields.source->addItem(QObject::tr("Layer: %1").arg(QString::fromStdString(other->name)),
+                                   matteChoiceKey(id));
+    // #383: any node's Mask output (a Cryptomatte selection, a Mask, a combined matte).
+    for (const auto& output : masks::matteNodeCandidates(*composition, layer->layerId))
+        fields.source->addItem(
+            QObject::tr("Node: %1").arg(masks::matteNodeText(*composition, output)),
+            matteChoiceKey(output));
     const auto matte = layer->trackMatte;
     fields.source->setCurrentIndex(fields.source->findData(
-        QVariant::fromValue(static_cast<qulonglong>(matte ? matte->source.value() : 0))));
+        !matte ? QString() : matte->node ? matteChoiceKey(*matte->node) : matteChoiceKey(matte->source)));
     {
         const QSignalBlocker blocker(fields.channel);
         fields.channel->setCurrentIndex(fields.channel->findData(
@@ -386,13 +468,15 @@ void commitMatte(CompositionSession& session, const MatteFields& fields) {
     const auto* layer = contextLayer(session);
     if (layer == nullptr)
         return;
-    const auto source = fields.source->currentData().toULongLong();
+    const auto choice = parseMatteChoice(fields.source->currentData().toString());
     std::optional<document::TrackMatte> matte;
-    if (source != 0)
-        matte = document::TrackMatte{
-            document::LayerId::fromRaw(source),
-            static_cast<document::TrackMatteChannel>(fields.channel->currentData().toInt()),
-            fields.inverted->isChecked()};
+    const auto channel =
+        static_cast<document::TrackMatteChannel>(fields.channel->currentData().toInt());
+    if (const auto* source = std::get_if<document::LayerId>(&choice))
+        matte = document::TrackMatte{*source, channel, fields.inverted->isChecked()};
+    else if (const auto* node = std::get_if<document::OutputPortRef>(&choice))
+        matte = document::TrackMatte{document::LayerId{}, channel, fields.inverted->isChecked(),
+                                     *node};
     (void)session.setTrackMatte(layer->layerId, matte);
     refreshMatte(session, fields);
 }
@@ -404,6 +488,23 @@ void addLayerMasksSection(CompositionSession& session, QVBoxLayout* layout, QWid
     state->section =
         addSection(layout, parent, QStringLiteral("layer-masks"), QObject::tr("Masks"));
     state->section->setResetEnabled(false);
+    state->addMatte = new kit::KButton(QObject::tr("Add Mask from Node"), state->section->body());
+    state->addMatte->setObjectName(QStringLiteral("layerMaskAddMatteButton"));
+    state->addMatte->setAccessibleName(QObject::tr("Add mask from node"));
+    state->section->bodyLayout()->addWidget(state->addMatte);
+    QObject::connect(state->addMatte, &QAbstractButton::clicked, state->addMatte,
+                     [&session] {
+                         const auto* layer = contextLayer(session);
+                         if (layer == nullptr)
+                             return;
+                         const auto candidates =
+                             masks::matteNodeCandidates(*session.composition(), layer->layerId);
+                         if (candidates.empty())
+                             return;
+                         runMaskCommand<commands::AddLayerMask>(
+                             session, "Add Mask from Node", layer->layerId, document::PathValue{},
+                             document::LayerMaskMode::Add, std::string{}, candidates.front());
+                     });
     const auto update = [&session, state] { rebuildMasks(session, state); };
     QObject::connect(&session, &CompositionSession::snapshotChanged, state->section, update);
     QObject::connect(&session, &CompositionSession::selectionChanged, state->section, update);
@@ -423,7 +524,7 @@ void addTrackMatteSection(CompositionSession& session, QVBoxLayout* layout, QWid
     auto* rows = fields.section->bodyLayout();
     fields.source = new kit::KDropdown(body);
     fields.source->setObjectName(QStringLiteral("layerTrackMatteSourceDropdown"));
-    fields.source->setAccessibleName(QObject::tr("Matte layer"));
+    fields.source->setAccessibleName(QObject::tr("Matte source"));
     fields.channel = new kit::KDropdown(body);
     fields.channel->setObjectName(QStringLiteral("layerTrackMatteChannelDropdown"));
     fields.channel->setAccessibleName(QObject::tr("Matte channel"));
@@ -434,7 +535,7 @@ void addTrackMatteSection(CompositionSession& session, QVBoxLayout* layout, QWid
     fields.inverted = new kit::KSwitch(body);
     fields.inverted->setObjectName(QStringLiteral("layerTrackMatteInvertedSwitch"));
     fields.inverted->setAccessibleName(QObject::tr("Invert matte"));
-    (void)addRow(rows, body, makeRowLabel(QObject::tr("Layer"), body), nullptr, fields.source);
+    (void)addRow(rows, body, makeRowLabel(QObject::tr("Source"), body), nullptr, fields.source);
     (void)addRow(rows, body, makeRowLabel(QObject::tr("Channel"), body), nullptr, fields.channel);
     (void)addRow(rows, body, makeRowLabel(QObject::tr("Inverted"), body), nullptr, fields.inverted);
     QObject::connect(fields.source, &kit::KDropdown::activated, fields.section,

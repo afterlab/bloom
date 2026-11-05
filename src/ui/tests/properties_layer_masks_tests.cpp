@@ -3,10 +3,12 @@
 #include <QApplication>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -16,6 +18,8 @@
 #include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/properties_editor.hpp>
+
+#include <QDir>
 
 #include <iostream>
 
@@ -145,6 +149,63 @@ int main(int argc, char** argv) {
            "channel and invert commit");
     source->chooseIndex(0);
     expect(!layerOf(session, *first)->trackMatte, "None clears the matte");
+
+    // #383: a node's Mask output as the track matte and as a mask's shape.
+    expect(!properties.findChild<ui::kit::KButton*>("layerMaskAddMatteButton")->isEnabled(),
+           "Add Mask from Node waits for a node with a Mask output");
+    commands::Transaction addNode("Add Node", session.snapshot().revision());
+    addNode.emplace<commands::AddNode>(project.initialCompositionId,
+                                       std::string(document::kMaskCombineNodeType),
+                                       document::Vec2d{});
+    const auto combine = session.executeTransaction(std::move(addNode))
+                             .outputId<document::NodeId>(commands::kAddNodeOutput);
+    expect(combine.has_value(), "Mask Combine added");
+    QApplication::processEvents();
+    const document::OutputPortRef combined{combine.value_or(document::NodeId{}),
+                                           std::string(document::kMaskCombineOutputPort)};
+    expect(source->count() == 3 && source->itemText(1) == "Layer: Solid" &&
+               source->itemText(2) == "Node: Mask Combine",
+           "the matte source lists the layer and the node Mask, each named for its kind");
+    source->chooseIndex(2);
+    expect(layerOf(session, *first)->trackMatte &&
+               layerOf(session, *first)->trackMatte->node == combined &&
+               !layerOf(session, *first)->trackMatte->source,
+           "choosing the node mattes the layer by its Mask");
+    expect(source->currentIndex() == 2, "the dropdown shows the node matte");
+    auto* addMatte = properties.findChild<ui::kit::KButton*>("layerMaskAddMatteButton");
+    expect(addMatte != nullptr && addMatte->isEnabled() && addMatte->isVisible(),
+           "Add Mask from Node is offered");
+    if (addMatte != nullptr)
+        addMatte->click();
+    QApplication::processEvents();
+    expect(layerOf(session, *first)->masks.size() == 3 &&
+               layerOf(session, *first)->masks[2].matte == combined,
+           "Add Mask from Node adds a mask shaped by the node");
+    auto shapes = properties.findChildren<ui::kit::KDropdown*>("layerMaskShapeDropdown");
+    expect(shapes.size() == 3 && shapes.at(2)->currentText() == "Mask Combine" &&
+               shapes.at(0)->currentText() == "Path",
+           "each mask's Shape from shows Path or its node");
+    auto feathers = properties.findChildren<ui::kit::KValueField*>("layerMaskFeatherField");
+    expect(feathers.size() == 3 && feathers.at(0)->isVisible() && !feathers.at(2)->isVisible(),
+           "a matte mask hides its feather");
+    if (const auto capture = qEnvironmentVariable("BLOOM_MATTE_CAPTURE_DIR"); !capture.isEmpty()) {
+        properties.resize(420, 1400);
+        QApplication::processEvents();
+        expect(properties.grab().save(QDir(capture).filePath("properties-node-mattes.png")),
+               "save the Properties capture");
+    }
+    if (shapes.size() == 3) {
+        shapes.at(0)->chooseIndex(1);
+        expect(layerOf(session, *first)->masks[0].matte == combined,
+               "Shape from reshapes a path mask by the node");
+        QApplication::processEvents();
+        shapes = properties.findChildren<ui::kit::KDropdown*>("layerMaskShapeDropdown");
+        shapes.at(0)->chooseIndex(0);
+        expect(!layerOf(session, *first)->masks[0].matte, "Path returns the mask to its path");
+    }
+    expect(session.undo() && session.undo() && layerOf(session, *first)->masks.size() == 3 &&
+               !layerOf(session, *first)->masks[0].matte,
+           "each shape change is one undoable edit");
 
     commands::Transaction lock("Lock", session.snapshot().revision());
     lock.emplace<commands::SetLayerLocked>(project.initialCompositionId, *first, true);

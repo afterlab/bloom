@@ -7,6 +7,7 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -294,6 +295,11 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         return QCoreApplication::translate("node_editor", "Select Channels");
     if (typeId == document::kCryptomatteNodeType)
         return QCoreApplication::translate("node_editor", "Cryptomatte");
+    // #383 matte workflow.
+    if (typeId == document::kMaskCombineNodeType)
+        return QCoreApplication::translate("node_editor", "Mask Combine");
+    if (typeId == document::kImageToMaskNodeType)
+        return QCoreApplication::translate("node_editor", "Image to Mask");
     if (typeId == "bloom.audio-source")
         return QCoreApplication::translate("node_editor", "Audio");
     if (typeId == document::kSolidSourceNodeType)
@@ -1016,6 +1022,7 @@ struct SocketSpec final {
     bool linked = false;
     bool pixelKinds = false;
     bool fieldKinds = false;
+    bool imageMatte = false;
 };
 // The fields a SocketItem fixes at construction. Everything else a spec carries is updated on the
 // kept item in place.
@@ -1070,7 +1077,8 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                              kindless,
                              linked,
                              port.acceptsPixelKinds,
-                             port.acceptsFieldKinds});
+                             port.acceptsFieldKinds,
+                             port.acceptsImageMatte});
         }
         // #543: each stop of a bound gradient has a colour and a position socket, which the card
         // puts beside the stop's rows; a linked one always shows.
@@ -1177,6 +1185,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         socket->setAcceptsAnyKind(spec.anyKind);
         socket->setAcceptsPixelKinds(spec.pixelKinds);
         socket->setAcceptsFieldKinds(spec.fieldKinds);
+        socket->setAcceptsImageMatte(spec.imageMatte);
         socket->linked = spec.linked;
         if (spec.pill && (!socket->multiInput() || socket->orderedInputs() != spec.ordered))
             socket->setOrderedInputs(std::move(spec.ordered));

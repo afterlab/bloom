@@ -33,6 +33,7 @@ struct NodeInteraction final {
     bool linkAcceptsPixelKinds = false;
     // #525: the drag started on an any-field input that also takes the other field kinds.
     bool linkAcceptsFieldKinds = false;
+    bool linkAcceptsImageMatte = false;
     QGraphicsPathItem* line = nullptr;
     QGraphicsRectItem* box = nullptr;
     node_editor::NodeEdgeItem* insertEdge = nullptr;
@@ -49,9 +50,11 @@ struct NodeInteraction final {
     if (gesture.output.has_value())
         return document::isAcceptedSocketConnection(gesture.linkKind, target.kind) ||
                (target.acceptsPixelKinds() && document::isPixelSocketKind(gesture.linkKind)) ||
-               (target.acceptsFieldKinds() && document::isFieldSocketKind(gesture.linkKind));
+               (target.acceptsFieldKinds() && document::isFieldSocketKind(gesture.linkKind)) ||
+               (target.acceptsImageMatte() && gesture.linkKind == document::SocketValueKind::Image);
     return document::isAcceptedSocketConnection(target.kind, gesture.linkKind) ||
            (gesture.linkAcceptsPixelKinds && document::isPixelSocketKind(target.kind)) ||
-           (gesture.linkAcceptsFieldKinds && document::isFieldSocketKind(target.kind));
+           (gesture.linkAcceptsFieldKinds && document::isFieldSocketKind(target.kind)) ||
+           (gesture.linkAcceptsImageMatte && target.kind == document::SocketValueKind::Image);
 }
 } // namespace bloom::ui

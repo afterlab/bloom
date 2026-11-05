@@ -1,5 +1,7 @@
 #include "layer_mask_support.hpp"
 
+#include "node_editor_items.hpp"
+
 #include <bloom/document/merge_entries.hpp>
 
 #include <QCoreApplication>
@@ -230,6 +232,46 @@ std::vector<document::LayerId> matteSourceCandidates(const document::Composition
                 result.push_back(id);
     }
     return result;
+}
+
+std::vector<document::OutputPortRef>
+matteNodeCandidates(const document::Composition& composition, const document::LayerId layer) {
+    const auto* boundary = composition.graph().findLayer(layer);
+    return boundary == nullptr ? std::vector<document::OutputPortRef>{}
+                               : matteNodeCandidatesFor(composition, boundary->nodeId);
+}
+
+std::vector<document::OutputPortRef>
+matteNodeCandidatesFor(const document::Composition& composition, const document::NodeId reader) {
+    std::vector<document::OutputPortRef> result;
+    const auto& graph = composition.graph();
+    const auto& registry = document::builtInNodeDefinitions();
+    for (const auto& node : graph.nodes()) {
+        const auto* definition = registry.find(node.typeId, node.schemaVersion);
+        if (definition == nullptr || document::dependsOnNode(graph, node.id, reader))
+            continue;
+        for (const auto& output : definition->outputs)
+            if (output.valueKind == document::SocketValueKind::Mask)
+                result.push_back({node.id, output.name});
+    }
+    return result;
+}
+
+QString matteNodeText(const document::Composition& composition,
+                      const document::OutputPortRef& matte) {
+    const auto* node = composition.graph().findNode(matte.nodeId);
+    if (node == nullptr)
+        return QCoreApplication::translate("LayerMasks", "Missing node");
+    const auto name = node_editor::nodeDisplayName(composition, *node);
+    const auto* definition =
+        document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+    const auto masks = definition == nullptr
+                           ? 0
+                           : std::ranges::count_if(definition->outputs, [](const auto& output) {
+                                 return output.valueKind == document::SocketValueKind::Mask;
+                             });
+    return masks > 1 ? QStringLiteral("%1 \u00b7 %2").arg(name, QString::fromStdString(matte.port))
+                     : name;
 }
 
 } // namespace bloom::ui::masks

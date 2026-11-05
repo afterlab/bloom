@@ -30,6 +30,16 @@ void populate(kit::KDropdown& dropdown, const CompositionSession& session,
             dropdown.addItem(QString::fromStdString(other->name),
                              QVariant::fromValue(static_cast<long long>(id.value())));
     const auto matte = boundary->trackMatte;
+    // #383: node Mask outputs.
+    long long current = matte ? static_cast<long long>(matte->source.value()) : 0LL;
+    const auto nodes = masks::matteNodeCandidates(*composition, layer);
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        const auto code = kNodeMatteBase - static_cast<long long>(index);
+        dropdown.addItem(text("Node: %1").arg(masks::matteNodeText(*composition, nodes[index])),
+                         QVariant::fromValue(code));
+        if (matte && matte->node == nodes[index])
+            current = code;
+    }
     const bool luma = matte && matte->channel == document::TrackMatteChannel::Luma;
     const auto action = [&](const QString& label, const long long code) {
         const int index = dropdown.addItem(label, QVariant::fromValue(code));
@@ -38,8 +48,7 @@ void populate(kit::KDropdown& dropdown, const CompositionSession& session,
     action(luma ? text("Use Alpha") : text("Alpha (current)"), kActionAlpha);
     action(luma ? text("Luma (current)") : text("Use Luma"), kActionLuma);
     action(matte && matte->inverted ? text("Inverted (on)") : text("Inverted"), kActionInverted);
-    dropdown.setCurrentIndex(dropdown.findData(
-        QVariant::fromValue(matte ? static_cast<long long>(matte->source.value()) : 0LL)));
+    dropdown.setCurrentIndex(dropdown.findData(QVariant::fromValue(current)));
     dropdown.setToolTip(matte ? text("Track matte: %1%2")
                                     .arg(masks::channelText(matte->channel),
                                          matte->inverted ? text(", inverted") : QString())
@@ -52,11 +61,22 @@ bool activate(CompositionSession& session, const document::LayerId layer, const 
     if (boundary == nullptr)
         return false;
     auto matte = boundary->trackMatte;
-    if (code >= 0) {
+    if (code <= kNodeMatteBase) {
+        // #383: a node Mask output.
+        const auto nodes = masks::matteNodeCandidates(*composition, layer);
+        const auto index = static_cast<std::size_t>(kNodeMatteBase - code);
+        if (index >= nodes.size())
+            return false;
+        matte = document::TrackMatte{document::LayerId{},
+                                     matte ? matte->channel : document::TrackMatteChannel::Alpha,
+                                     matte && matte->inverted, nodes[index]};
+    } else if (code >= 0) {
         if (code == 0)
             matte.reset();
-        else if (matte)
+        else if (matte) {
             matte->source = document::LayerId::fromRaw(static_cast<std::uint64_t>(code));
+            matte->node.reset();
+        }
         else
             matte =
                 document::TrackMatte{document::LayerId::fromRaw(static_cast<std::uint64_t>(code)),
@@ -96,6 +116,11 @@ void populate(kit::KDropdown& dropdown, const CompositionSession& session,
             dropdown.addItem(QString::fromStdString(layer->name),
                              QVariant::fromValue(static_cast<long long>(layer->layerId.value())));
     }
+    // #383: node Mask outputs; the entry's layer would be its Merge's.
+    const auto nodes = masks::matteNodeCandidatesFor(*composition, target.entry.merge);
+    for (std::size_t index = 0; index < nodes.size(); ++index)
+        dropdown.addItem(text("Node: %1").arg(masks::matteNodeText(*composition, nodes[index])),
+                         QVariant::fromValue(kNodeMatteBase - static_cast<long long>(index)));
     for (const auto& [label, code] :
          {std::pair{text("Alpha (current)"), kActionAlpha}, std::pair{text("Use Luma"), kActionLuma},
           std::pair{text("Inverted"), kActionInverted}}) {
@@ -109,11 +134,23 @@ void populate(kit::KDropdown& dropdown, const CompositionSession& session,
 bool activate(CompositionSession& session, const LayerTarget& target, const long long code) {
     if (target.layer.isValid())
         return activate(session, target.layer, code);
-    if (code <= 0)
+    if (code == 0 || (code < 0 && code > kNodeMatteBase))
         return false;
     const auto compositionId = session.compositionId();
-    const document::TrackMatte matte{document::LayerId::fromRaw(static_cast<std::uint64_t>(code)),
-                                     document::TrackMatteChannel::Alpha, false};
+    document::TrackMatte matte{document::LayerId::fromRaw(static_cast<std::uint64_t>(code)),
+                               document::TrackMatteChannel::Alpha, false};
+    if (code <= kNodeMatteBase) {
+        // #383: a node Mask output.
+        const auto* composition = session.composition();
+        const auto nodes = composition == nullptr
+                               ? std::vector<document::OutputPortRef>{}
+                               : masks::matteNodeCandidatesFor(*composition, target.entry.merge);
+        const auto index = static_cast<std::size_t>(kNodeMatteBase - code);
+        if (index >= nodes.size())
+            return false;
+        matte = document::TrackMatte{document::LayerId{}, document::TrackMatteChannel::Alpha, false,
+                                     nodes[index]};
+    }
     return session
         .editEntry(target.entry, text("Set Track Matte"),
                    [compositionId, matte](const document::LayerId layer) {
