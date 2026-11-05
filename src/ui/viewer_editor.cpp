@@ -463,8 +463,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     });
     // #536: a pin whose composition or node went away falls back to following.
     connect(&session_, &CompositionSession::snapshotChanged, this, &ViewerEditor::dropStalePin);
-    connect(&session_, &CompositionSession::documentRebound, this,
-            [this] { followActiveComposition(); });
+    // #550: another project was installed; restore this Viewer's own pin in it, or follow.
+    connect(&session_, &CompositionSession::documentRebound, this, [this] { restoreProjectPin(); });
     connect(&session_, &CompositionSession::compositionChanged, this,
             [this] { updatePinControl(); });
     connect(&session_, &CompositionSession::selectionChanged, this,

@@ -1,15 +1,17 @@
 // Multi-monitor workspace windows (#536, docs/architecture/workspace-layout.md "Secondary
 // windows"): Window > New Window, shortcuts from a secondary window, one active highlight across
 // windows, persistence with the missing-monitor rule, tear-off and re-dock, pinned and following
-// Viewers, a window's own display transform in the preview cache key, and Fit without padding.
+// Viewers, a window's own display transform in the preview cache key, Fit without padding, and
+// (#550) reopening a project on its last viewed composition and pinned targets.
 
 #include "window_fixture.hpp"
 
-#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/context_bar.hpp>
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/main_window.hpp>
+#include <bloom/ui/project_view_memory.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/workspace_host.hpp>
 #include <bloom/ui/workspace_window.hpp>
@@ -18,6 +20,7 @@
 
 #include <QAction>
 #include <QDropEvent>
+#include <QFile>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -30,6 +33,7 @@
 #include <QTest>
 
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <source_location>
@@ -602,6 +606,157 @@ void testFitHasNoPadding(Expectations& expectations, test::WindowFixture& fixtur
     settle();
 }
 
+// #550: a project reopens on the composition last viewed in it, and each pinned Viewer on its own
+// target, as session state that never dirties the project or touches its file.
+void testReopenLastViewedComposition(Expectations& expectations, test::WindowFixture& fixture) {
+    auto& host = fixture.projectHost;
+    auto& session = fixture.session;
+    // The application's own wiring (apps/bloom/main.cpp).
+    const auto replaced = QObject::connect(&host, &ProjectHost::sessionReplaced, &session, [&] {
+        auto [document, stack] = host.liveDocumentAndStack();
+        if (document == nullptr || stack == nullptr)
+            return;
+        session.projectViewMemory().beginProject(host.displayPath());
+        session.rebindToRememberedComposition(*document, *stack, host.lowestCompositionId());
+    });
+    int saves = 0;
+    int opens = 0;
+    const auto savedConnection =
+        QObject::connect(&host, &ProjectHost::saveFinished, &session,
+                         [&](const ProjectHostOperationOutcome outcome, const QString&) {
+                             ++saves;
+                             if (outcome == ProjectHostOperationOutcome::Published ||
+                                 outcome == ProjectHostOperationOutcome::PublishedWithWarning)
+                                 session.projectViewMemory().moveProject(host.displayPath());
+                         });
+    const auto openedConnection =
+        QObject::connect(&host, &ProjectHost::openFinished, &session,
+                         [&](const ProjectHostOperationOutcome, const QString&) { ++opens; });
+    const auto open = [&](const std::filesystem::path& path) {
+        const int before = opens;
+        host.beginOpen(path);
+        return waitFor([&] { return opens > before && !host.isBusy(); }) &&
+               session.composition() != nullptr;
+    };
+    const auto fileBytes = [](const QString& path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
+    };
+
+    auto& window = *fixture.window;
+    const auto first = session.compositionId();
+    const auto second = addComposition(fixture, "Reopen Second");
+    expectations.expect(second.isValid() && session.setComposition(first),
+                        "reopen: a second composition exists");
+    auto* secondary = window.openWorkspaceWindow();
+    settle();
+    auto* windowViewer = viewerIn(*secondary->workspaceHost());
+    auto* mainViewer = viewerIn(*window.workspaceHost());
+    if (windowViewer == nullptr || mainViewer == nullptr) {
+        expectations.expect(false, "reopen: both windows have a Viewer");
+        return;
+    }
+    const auto windowArea = areaFor(*secondary->workspaceHost(), "bloom.viewer")->areaId();
+    expectations.expect(windowViewer->pinToActiveComposition(),
+                        "reopen: the secondary window's Viewer pins to the first composition");
+    expectations.expect(session.setComposition(second), "reopen: the artist views the second one");
+
+    const auto path = fixture.settingsDirectory.filePath(QStringLiteral("reopen-last.bloom"));
+    host.beginSaveAs(path.toStdString());
+    expectations.expect(waitFor([&] { return saves == 1 && !host.isBusy(); }) && !host.isDirty(),
+                        "reopen: the project is saved");
+    const auto savedBytes = fileBytes(path);
+    const auto savedRevision = session.snapshot().revision();
+    expectations.expect(session.setComposition(first) && session.setComposition(second) &&
+                            !host.isDirty() && session.snapshot().revision() == savedRevision,
+                        "reopen: switching compositions never dirties the project");
+
+    // Close it (a blank project replaces it), then open it again.
+    expectations.expect(host.replaceWithBlankProject() && session.composition() == nullptr &&
+                            windowViewer->pin().mode == ViewerPinMode::Follow,
+                        "reopen: the blank project has no composition and nothing pinned");
+    expectations.expect(open(path.toStdString()), "reopen: the project opens again");
+    expectations.expect(session.compositionId() == second,
+                        "reopen: it opens on the composition last viewed, not the first");
+    expectations.expect(mainViewer->boundPreviewForTest().targetCompositionId() == second,
+                        "reopen: the main Viewer shows that composition");
+    expectations.expect(windowViewer->pin().mode == ViewerPinMode::Composition &&
+                            windowViewer->pin().composition == first &&
+                            windowViewer->boundPreviewForTest().targetCompositionId() == first,
+                        "reopen: the pinned Viewer in the other window restores its own target");
+    expectations.expect(!host.isDirty() && fileBytes(path) == savedBytes,
+                        "reopen: remembering changes neither the document nor the saved file");
+
+    // A relaunch: nothing in memory, everything read back from the application settings.
+    {
+        ProjectViewMemory relaunched;
+        relaunched.beginProject(std::filesystem::path(path.toStdString()));
+        expectations.expect(relaunched.recallComposition() == second,
+                            "relaunch: the last viewed composition comes from the settings");
+        const auto pin = relaunched.recallViewerPin(windowArea);
+        expectations.expect(pin && pin->value("composition").toString() ==
+                                       QString::number(first.value()),
+                            "relaunch: so does the pinned Viewer's target");
+        ProjectViewMemory other;
+        other.beginProject(std::filesystem::path(
+            fixture.settingsDirectory.filePath(QStringLiteral("other.bloom")).toStdString()));
+        expectations.expect(!other.recallComposition() && !other.recallViewerPin(windowArea),
+                            "relaunch: another project remembers nothing of it");
+    }
+    // A relaunch with the last project: the windows come back from the saved layout before the
+    // project opens, and opening it restores each window's target.
+    const QString settingsPath = fixture.settingsDirectory.filePath(QStringLiteral("reopen.ini"));
+    {
+        QSettings settings(settingsPath, QSettings::IniFormat);
+        window.saveApplicationState(settings);
+        settings.sync();
+    }
+    secondary->close();
+    settle();
+    expectations.expect(host.replaceWithBlankProject(), "relaunch: Bloom starts blank");
+    {
+        MainWindow restored(fixture.registry, session, host, nullptr, fixture.preview.get());
+        restored.resize(1600, 1000);
+        restored.show();
+        QSettings settings(settingsPath, QSettings::IniFormat);
+        (void)restored.restoreApplicationState(settings);
+        settle();
+        const auto windows = restored.workspaceWindows();
+        auto* restoredViewer =
+            windows.size() == 1 ? viewerIn(*windows.front()->workspaceHost()) : nullptr;
+        expectations.expect(restoredViewer != nullptr,
+                            "relaunch: the secondary window and its Viewer are restored");
+        expectations.expect(open(path.toStdString()) && session.compositionId() == second,
+                            "relaunch: opening the last project shows its last viewed composition");
+        if (restoredViewer != nullptr)
+            expectations.expect(restoredViewer->pin().mode == ViewerPinMode::Composition &&
+                                    restoredViewer->pin().composition == first,
+                                "relaunch: the restored window's Viewer is pinned to its target");
+
+        // The remembered composition and pin no longer exist: an unsaved composition is viewed
+        // and pinned, then discarded with the project.
+        const auto discarded = addComposition(fixture, "Reopen Discarded");
+        expectations.expect(discarded.isValid() && session.setComposition(discarded) &&
+                                restoredViewer != nullptr &&
+                                restoredViewer->pinToActiveComposition(),
+                            "fallback: an unsaved composition is viewed and pinned");
+        expectations.expect(host.replaceWithBlankProject() && open(path.toStdString()),
+                            "fallback: the project opens again without it");
+        expectations.expect(session.compositionId() == host.lowestCompositionId(),
+                            "fallback: a composition that is gone falls back to the first one");
+        if (restoredViewer != nullptr)
+            expectations.expect(restoredViewer->pin().mode == ViewerPinMode::Follow,
+                                "fallback: a pin whose composition is gone follows");
+        for (auto* opened : restored.workspaceWindows())
+            opened->close();
+        settle();
+        restored.hide();
+    }
+    QObject::disconnect(replaced);
+    QObject::disconnect(savedConnection);
+    QObject::disconnect(openedConnection);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -619,6 +774,7 @@ int main(int argc, char** argv) {
         testDisplayTransformIdentity(expectations, fixture);
         testFitHasNoPadding(expectations, fixture);
         testPinnedAndFollowingViewers(expectations, fixture);
+        testReopenLastViewedComposition(expectations, fixture);
     } catch (const std::exception& error) {
         std::cerr << "fixture failed: " << error.what() << '\n';
         return 2;

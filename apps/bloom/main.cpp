@@ -133,16 +133,17 @@ int main(int argc, char* argv[]) try {
     if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
         compositionSession.setColorSettings(*settings);
     }
-    // The Viewer's Display / View is remembered per project file (session state). Save As moves the
-    // open project's choice to its new file; New and Open begin the installed project's below.
-    compositionSession.viewerDisplayViewMemory().beginProject(projectHost.displayPath());
+    // What the artist was viewing (the Viewer's Display / View, the last active composition and
+    // pinned Viewers) is remembered per project file (session state). Save As moves the open
+    // project's memory to its new file; New and Open begin the installed project's below.
+    compositionSession.projectViewMemory().beginProject(projectHost.displayPath());
     QObject::connect(
         &projectHost, &bloom::ui::ProjectHost::saveFinished, &compositionSession,
         [&projectHost, &compositionSession](const bloom::ui::ProjectHostOperationOutcome outcome,
                                             const QString&) {
             if (outcome == bloom::ui::ProjectHostOperationOutcome::Published ||
                 outcome == bloom::ui::ProjectHostOperationOutcome::PublishedWithWarning)
-                compositionSession.viewerDisplayViewMemory().moveProject(projectHost.displayPath());
+                compositionSession.projectViewMemory().moveProject(projectHost.displayPath());
         });
 
     // Projection rebinding (decision 2): every time ProjectHost replaces the live session content
@@ -184,8 +185,10 @@ int main(int argc, char* argv[]) try {
             if (document == nullptr || commandStack == nullptr) {
                 return;
             }
-            compositionSession.viewerDisplayViewMemory().beginProject(path);
-            compositionSession.rebind(*document, *commandStack, projectHost.lowestCompositionId());
+            compositionSession.projectViewMemory().beginProject(path);
+            // #550: reopen on the composition last viewed in this project, if it still exists.
+            compositionSession.rebindToRememberedComposition(*document, *commandStack,
+                                                             projectHost.lowestCompositionId());
             if (const auto* settings = projectHost.colorSettings(); settings != nullptr) {
                 compositionSession.setColorSettings(*settings);
             }

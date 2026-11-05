@@ -693,6 +693,11 @@ class ViewerEditor final : public QWidget,
     void applyViewerChoicesToPreview();
     void resetPreviewDerivedState();
     void dropStalePin();
+    // #550: the pin is also remembered per project under this Viewer's workspace area, so a
+    // project opened again restores each Viewer's own target.
+    [[nodiscard]] QString workspaceAreaId() const;
+    void rememberPinForProject();
+    void restoreProjectPin();
     [[nodiscard]] const document::Composition* shownComposition() const;
     bool dragActive_ = false;
     QPointF dragPointer_;

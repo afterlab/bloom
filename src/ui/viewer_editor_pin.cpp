@@ -4,6 +4,8 @@
 #include "node_editor_items.hpp"
 #include "viewer_editor_internal.hpp"
 
+#include <bloom/ui/editor_area.hpp>
+
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -39,6 +41,45 @@ std::optional<std::string> pixelOutputOf(const document::NodeRecord& node) {
 
 QString compositionName(const document::Composition* composition) {
     return composition != nullptr ? QString::fromStdString(composition->name()) : QString{};
+}
+
+// A pin as session JSON: {mode, composition, node?, port?}; empty while the Viewer follows.
+QJsonObject pinObject(const ViewerPin& pin) {
+    if (pin.mode == ViewerPinMode::Follow)
+        return {};
+    QJsonObject object{
+        {"mode", pin.mode == ViewerPinMode::Node ? "node" : "composition"},
+        {"composition", QString::number(pin.composition.value())},
+    };
+    if (pin.mode == ViewerPinMode::Node) {
+        object.insert("node", QString::number(pin.node.value()));
+        object.insert("port", QString::fromStdString(pin.port));
+    }
+    return object;
+}
+
+std::optional<ViewerPin> pinFromObject(const QJsonObject& object) {
+    bool compositionOk = false;
+    const auto composition = object.value("composition").toString().toULongLong(&compositionOk);
+    if (!compositionOk)
+        return std::nullopt;
+    ViewerPin pin{.mode = ViewerPinMode::Composition,
+                  .composition = document::CompositionId::fromRaw(composition),
+                  .node = {},
+                  .port = {}};
+    const auto mode = object.value("mode").toString();
+    if (mode == QStringLiteral("node")) {
+        bool nodeOk = false;
+        const auto node = object.value("node").toString().toULongLong(&nodeOk);
+        if (!nodeOk)
+            return std::nullopt;
+        pin.mode = ViewerPinMode::Node;
+        pin.node = document::NodeId::fromRaw(node);
+        pin.port = object.value("port").toString().toStdString();
+    } else if (mode != QStringLiteral("composition")) {
+        return std::nullopt;
+    }
+    return pin;
 }
 
 } // namespace
@@ -89,6 +130,7 @@ bool ViewerEditor::setPin(ViewerPin pin) {
         updatePinControl();
         return false;
     }
+    rememberPinForProject();
     return true;
 }
 
@@ -119,6 +161,31 @@ void ViewerEditor::followActiveComposition() {
         return;
     pin_ = {};
     refreshPreviewBinding();
+    rememberPinForProject();
+}
+
+QString ViewerEditor::workspaceAreaId() const {
+    for (const auto* widget = parentWidget(); widget != nullptr; widget = widget->parentWidget())
+        if (const auto* area = qobject_cast<const EditorArea*>(widget))
+            return area->areaId();
+    return {};
+}
+
+void ViewerEditor::rememberPinForProject() {
+    session_.projectViewMemory().rememberViewerPin(workspaceAreaId(), pinObject(pin_));
+}
+
+void ViewerEditor::restoreProjectPin() {
+    // Another project is bound: the old project's pin never applies to it. This project's own
+    // remembered pin does, while its composition and node still exist; otherwise follow.
+    const auto areaId = workspaceAreaId();
+    const auto remembered = session_.projectViewMemory().recallViewerPin(areaId);
+    const auto pin = remembered ? pinFromObject(*remembered) : std::nullopt;
+    if (pin && setPin(*pin))
+        return;
+    followActiveComposition();
+    if (remembered)
+        session_.projectViewMemory().rememberViewerPin(areaId, {});
 }
 
 bool ViewerEditor::isReferenceOnly() const {
@@ -411,17 +478,9 @@ void ViewerEditor::updatePinControl() {
 
 QJsonObject ViewerEditor::saveEditorSessionState() const {
     QJsonObject state;
-    if (pin_.mode != ViewerPinMode::Follow) {
-        QJsonObject pin{
-            {"mode", pin_.mode == ViewerPinMode::Node ? "node" : "composition"},
-            // A pin names this project's composition and node; another project ignores it.
-            {"project", QString::number(session_.snapshot().project().id().value())},
-            {"composition", QString::number(pin_.composition.value())},
-        };
-        if (pin_.mode == ViewerPinMode::Node) {
-            pin.insert("node", QString::number(pin_.node.value()));
-            pin.insert("port", QString::fromStdString(pin_.port));
-        }
+    if (auto pin = pinObject(pin_); !pin.isEmpty()) {
+        // A pin names this project's composition and node; another project ignores it.
+        pin.insert("project", QString::number(session_.snapshot().project().id().value()));
         state.insert("pin", pin);
     }
     if (ownPreview_ != nullptr && ownDisplayView_ && ownDisplayView_->size() == 2)
@@ -435,31 +494,12 @@ void ViewerEditor::restoreEditorSessionState(const QJsonObject& state) {
                                                                        displayView[1].isString())
         ownDisplayView_ = QStringList{displayView[0].toString(), displayView[1].toString()};
     const auto pin = state.value("pin").toObject();
-    const auto mode = pin.value("mode").toString();
     bool projectOk = false;
     const auto project = pin.value("project").toString().toULongLong(&projectOk);
     if (pin.isEmpty() || !projectOk || project != session_.snapshot().project().id().value())
         return;
-    bool compositionOk = false;
-    const auto composition = pin.value("composition").toString().toULongLong(&compositionOk);
-    if (!compositionOk)
-        return;
-    ViewerPin restored{.mode = ViewerPinMode::Composition,
-                       .composition = document::CompositionId::fromRaw(composition),
-                       .node = {},
-                       .port = {}};
-    if (mode == QStringLiteral("node")) {
-        bool nodeOk = false;
-        const auto node = pin.value("node").toString().toULongLong(&nodeOk);
-        if (!nodeOk)
-            return;
-        restored.mode = ViewerPinMode::Node;
-        restored.node = document::NodeId::fromRaw(node);
-        restored.port = pin.value("port").toString().toStdString();
-    } else if (mode != QStringLiteral("composition")) {
-        return;
-    }
-    (void)setPin(std::move(restored));
+    if (auto restored = pinFromObject(pin))
+        (void)setPin(std::move(*restored));
 }
 
 } // namespace bloom::ui

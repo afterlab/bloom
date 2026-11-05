@@ -156,7 +156,7 @@ void testNeutralStartsOnSrgb() {
 
 void testAcesStartsUntoneMappedAndRemembersInSession() {
     Fixture fixture(makeProject());
-    fixture.session.viewerDisplayViewMemory().beginProject(std::nullopt);
+    fixture.session.projectViewMemory().beginProject(std::nullopt);
     fixture.session.setColorSettings(acesSettings(fixture.session.colorSettings()));
     auto viewer = std::make_unique<ui::ViewerEditor>(fixture.session, fixture.controller);
     expect(shown(*viewer) == kUntoneMapped && controllerShows(fixture, kUntoneMapped),
@@ -190,7 +190,7 @@ void testSavedProjectRemembersAcrossReopen(const std::filesystem::path& director
     const auto older = directory / "older.bloom";
     {
         Fixture fixture(makeProject());
-        fixture.session.viewerDisplayViewMemory().beginProject(saved);
+        fixture.session.projectViewMemory().beginProject(saved);
         fixture.session.setColorSettings(acesSettings(fixture.session.colorSettings()));
         ui::ViewerEditor viewer(fixture.session, fixture.controller);
         expect(choose(viewer, kSdrVideo), "the artist chooses SDR Video in a saved project");
@@ -200,11 +200,11 @@ void testSavedProjectRemembersAcrossReopen(const std::filesystem::path& director
         auto other = makeProject();
         document::Document otherDocument(std::move(other.project));
         commands::CommandStack otherCommands(otherDocument);
-        fixture.session.viewerDisplayViewMemory().beginProject(older);
+        fixture.session.projectViewMemory().beginProject(older);
         fixture.session.rebind(otherDocument, otherCommands, other.initialCompositionId);
         expect(shown(viewer) == kUntoneMapped && controllerShows(fixture, kUntoneMapped),
                "opening a project with no remembered choice shows Un-tone-mapped");
-        fixture.session.viewerDisplayViewMemory().beginProject(saved);
+        fixture.session.projectViewMemory().beginProject(saved);
         const auto snapshot = fixture.document.snapshot();
         fixture.session.rebind(fixture.document, fixture.commands,
                                snapshot.project().compositions().front().id());
@@ -214,7 +214,7 @@ void testSavedProjectRemembersAcrossReopen(const std::filesystem::path& director
     // A new application run: nothing in memory, the choice comes back from the saved settings.
     {
         Fixture fixture(makeProject());
-        fixture.session.viewerDisplayViewMemory().beginProject(saved);
+        fixture.session.projectViewMemory().beginProject(saved);
         fixture.session.setColorSettings(acesSettings(fixture.session.colorSettings()));
         ui::ViewerEditor viewer(fixture.session, fixture.controller);
         expect(shown(viewer) == kSdrVideo,
@@ -222,7 +222,7 @@ void testSavedProjectRemembersAcrossReopen(const std::filesystem::path& director
     }
     {
         Fixture fixture(makeProject());
-        fixture.session.viewerDisplayViewMemory().beginProject(older);
+        fixture.session.projectViewMemory().beginProject(older);
         fixture.session.setColorSettings(acesSettings(fixture.session.colorSettings()));
         ui::ViewerEditor viewer(fixture.session, fixture.controller);
         expect(shown(viewer) == kUntoneMapped,
@@ -234,14 +234,14 @@ void testSaveAsCarriesTheChoice(const std::filesystem::path& directory) {
     const auto target = directory / "saved-as.bloom";
     {
         Fixture fixture(makeProject());
-        fixture.session.viewerDisplayViewMemory().beginProject(std::nullopt);
+        fixture.session.projectViewMemory().beginProject(std::nullopt);
         fixture.session.setColorSettings(acesSettings(fixture.session.colorSettings()));
         ui::ViewerEditor viewer(fixture.session, fixture.controller);
         expect(choose(viewer, kSdrVideo), "the artist chooses SDR Video before the first save");
-        fixture.session.viewerDisplayViewMemory().moveProject(target);
+        fixture.session.projectViewMemory().moveProject(target);
     }
     Fixture fixture(makeProject());
-    fixture.session.viewerDisplayViewMemory().beginProject(target);
+    fixture.session.projectViewMemory().beginProject(target);
     fixture.session.setColorSettings(acesSettings(fixture.session.colorSettings()));
     ui::ViewerEditor viewer(fixture.session, fixture.controller);
     expect(shown(viewer) == kSdrVideo, "Save As keeps the unsaved project's chosen view");

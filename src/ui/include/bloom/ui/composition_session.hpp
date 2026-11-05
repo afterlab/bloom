@@ -21,7 +21,7 @@
 #include <bloom/runtime/evaluation.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/ui/kit/color.hpp>
-#include <bloom/ui/viewer_display_view_memory.hpp>
+#include <bloom/ui/project_view_memory.hpp>
 #include <bloom/ui/viewer_overlays.hpp>
 
 #include <QObject>
@@ -214,12 +214,11 @@ class CompositionSession final : public QObject {
     [[nodiscard]] runtime::EvaluationColorIntent colorIntent() const noexcept;
     void setColorSettings(document::ColorSettings settings);
     [[nodiscard]] bool setWorkingColorSpaceOverride(std::optional<std::string> colorSpaceId);
-    // The Viewer's remembered Display / View per project (session state, never document truth).
-    // The application begins it for every installed project before rebind() and moves it on Save
-    // As; Viewers read and write it.
-    [[nodiscard]] ViewerDisplayViewMemory& viewerDisplayViewMemory() noexcept {
-        return viewerDisplayViewMemory_;
-    }
+    // What the artist was looking at in this project (session state, never document truth): the
+    // Viewer's Display / View, the last active composition and pinned Viewers' targets. The
+    // application begins it for every installed project before rebind() and moves it on Save As;
+    // setComposition() and Viewers write it.
+    [[nodiscard]] ProjectViewMemory& projectViewMemory() noexcept { return projectViewMemory_; }
 
     void setAssetController(AssetController* controller) noexcept { assetController_ = controller; }
     [[nodiscard]] AssetController* assetController() const noexcept { return assetController_; }
@@ -803,6 +802,12 @@ class CompositionSession final : public QObject {
     // OLD document/command-stack are left completely untouched by this call.
     void rebind(document::Document& document, commands::CommandStack& commandStack,
                 document::CompositionId compositionId);
+    // #550: rebind() to a project New or Open just installed, on the composition its
+    // projectViewMemory() remembers when the document still has it, else on `fallback` (the
+    // lowest valid CompositionId). Call projectViewMemory().beginProject() first.
+    void rebindToRememberedComposition(document::Document& document,
+                                       commands::CommandStack& commandStack,
+                                       document::CompositionId fallback);
 
     // The retained evaluation snapshot: the genuine document snapshot whose render-relevant
     // content the prepared frames, compiled plans and cache keys represent. It is normally the live
@@ -1120,7 +1125,7 @@ class CompositionSession final : public QObject {
     // and by rebind(), and are never null while this object is alive.
     std::shared_ptr<SessionColorConverterState> colorConverterState_;
     document::ColorSettings colorSettings_;
-    ViewerDisplayViewMemory viewerDisplayViewMemory_;
+    ProjectViewMemory projectViewMemory_;
     document::Document* document_;
     commands::CommandStack* commandStack_;
     commands::CommandObserverId commandObserverId_ = 0;

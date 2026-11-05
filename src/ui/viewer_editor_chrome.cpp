@@ -335,10 +335,11 @@ void ViewerEditor::rebuildDisplayViewControl() {
                    kit::px(kit::Size::ViewerDisplayViewWidth)));
     // A Viewer with its own preview shows its own choice; in a secondary window it starts on the
     // project's default display (#536). The shared Viewers show the project's remembered choice.
-    const auto saved = ownDisplayView_ ? ownDisplayView_
-                       : ownPreview_ != nullptr && independentDisplay_
-                           ? std::nullopt
-                           : session_.viewerDisplayViewMemory().recall(displayViewConfigRevision());
+    const auto saved =
+        ownDisplayView_ ? ownDisplayView_
+        : ownPreview_ != nullptr && independentDisplay_
+            ? std::nullopt
+            : session_.projectViewMemory().recallDisplayView(displayViewConfigRevision());
     int selectedIndex = defaultIndex;
     if (saved) {
         for (int index = 0; index < viewerDisplayView_->count(); ++index) {
@@ -546,8 +547,8 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
                 if (ownPreview_ != nullptr)
                     ownDisplayView_ = selected;
                 else
-                    session_.viewerDisplayViewMemory().remember(displayViewConfigRevision(),
-                                                                selected);
+                    session_.projectViewMemory().rememberDisplayView(displayViewConfigRevision(),
+                                                                     selected);
                 previewController_->setViewerDisplayView(selected[0].toStdString(),
                                                         selected[1].toStdString());
             });

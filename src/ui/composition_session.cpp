@@ -459,6 +459,14 @@ void CompositionSession::rebind(document::Document& document, commands::CommandS
     emit historyChanged();
 }
 
+void CompositionSession::rebindToRememberedComposition(document::Document& document,
+                                                       commands::CommandStack& commandStack,
+                                                       const document::CompositionId fallback) {
+    const auto snapshot = document.snapshot();
+    rebind(document, commandStack,
+           projectViewMemory_.reopenedComposition(snapshot.project(), fallback));
+}
+
 const document::Snapshot& CompositionSession::snapshot() const noexcept { return snapshot_; }
 
 namespace {
@@ -972,6 +980,8 @@ bool CompositionSession::setComposition(const document::CompositionId compositio
     // retained spans when they are still consistent with the live composition.
     retainActiveRanges();
     compositionId_ = compositionId;
+    // #550: reopening this project starts on the composition the artist was viewing.
+    projectViewMemory_.rememberComposition(compositionId);
     if (!restoreRetainedRanges(compositionId))
         static_cast<void>(resetEvaluationRangesToLive());
     cancelValueEdit();
