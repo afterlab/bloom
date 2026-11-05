@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-05
+Updated: 2026-11-06
 
 ## Purpose
 
@@ -227,6 +227,14 @@ composition from the live document snapshot. Pinned to another composition, it i
 view: no layer bounds, overlays or direct manipulation, only pan, zoom and ROI. A pin whose
 composition or node is deleted falls back to Follow, and a pin is restored only for the same
 project.
+
+Each Viewer's pin is also remembered per project (#550), under its area ID, in the project's
+`ProjectViewMemory` (see [Project session](project-session.md#recent-paths-and-presentation-state)).
+When New or Open installs a project, every Viewer in every window restores the pin it had in that
+project, or follows when it had none or its composition or node is gone. So a project closed and
+opened again, or opened after a relaunch whose windows came back from the saved layout, shows each
+pinned Viewer's own target again; areas keep their IDs across the layout save, which is what ties a
+remembered pin to its Viewer.
 
 A pinned Viewer and every Viewer in a secondary window get their own `CompositionPreviewController`
 from the application's `ViewerPreviewPool`. Each controller shares the one preview pipeline, frame

@@ -12,7 +12,7 @@ BlendV1 kernels and qualified by per-mode goldens and CPU/GPU parity. The
 supervised helper, the archive and loose locator kinds, staged-graph integration, and the
 processor cache remain pending.
 
-Updated: 2026-11-04
+Updated: 2026-11-06
 
 ## Version 1.20 Decisions — Asset Input Transforms
 
@@ -390,7 +390,7 @@ The Viewer includes the selected pair in `PreviewRequestIdentity`, the RAM-previ
 display-preparation identities. Changing it therefore re-prepares display pixels without
 invalidating the working-space process cache. The choice is session state, never document truth
 (it changes no revision, history entry or export): `CompositionSession` owns a
-`ViewerDisplayViewMemory` that remembers the last chosen pair per project and per config revision.
+`ProjectViewMemory` that remembers the last chosen pair per project and per config revision.
 It survives composition switches and Viewer re-creation; for a saved project it is also stored in
 QSettings under `viewer/project-display-view/<SHA-256 of the project path>/<config revision>`, so it
 returns when the project is reopened. The application begins the memory for each installed project

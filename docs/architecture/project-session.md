@@ -10,7 +10,7 @@ Save-As path authority is exclusive and supports typed abandonment. Asynchronous
 content installation, round-trip state, unsaved continuations, and complete result handling remain
 pending.
 
-Updated: 2026-08-25
+Updated: 2026-11-06
 
 ## Purpose
 
@@ -139,9 +139,11 @@ step:
 2. installs the new decoded content, path state, round-trip state, diagnostics, and clean revision
 3. constructs a fresh command stack for an editable document
 4. clears project-specific selection, hover, interaction overrides, and history
-5. for a decoded document, selects the lowest valid `CompositionId` as the initial composition and
-   sets exact current time to zero; a project with no composition or preserved read-only content
-   exposes no active composition
+5. for a decoded document, selects the composition last active in that project when the
+   application's per-project view memory remembers one and the document still has it (#550),
+   otherwise the lowest valid `CompositionId`, as the initial composition, and sets exact current
+   time to zero; a project with no composition or preserved read-only content exposes no active
+   composition
 6. advances preview intent so no old frame can appear
 7. publishes one coherent project-changed notification to application projections
 
@@ -413,6 +415,23 @@ chooses to forget it or a later open diagnoses it.
 File-dialog directory, window title decoration, workspace layout, editor context, selection, and
 current time remain UI/session concerns. They consume project-session state but never enter
 `document.json`.
+
+What the artist was looking at in a project is remembered per project file by the session's
+`ProjectViewMemory` (#550): the Viewer's Display / View choice
+([Color management](color-management.md)), the last active composition and each pinned Viewer's
+target ([Workspace layout](workspace-layout.md)). It is session state: choosing a composition or a
+pin never changes the document, its revision or dirty state, history, the saved file, cache keys
+or exports. A saved project's memory lives in the application settings (QSettings, so the
+platform's own settings location on Linux, macOS and Windows) under the SHA-256 of its normalized
+file path: `workspace/project-view/<digest>/composition` holds the composition ID and
+`workspace/project-view/<digest>/viewer-pins` a JSON object of pins by Viewer area ID. An unsaved
+project keeps its memory in memory only. The application begins the memory for every project New
+or Open installs before rebinding the session, and moves it to the new file after a successful
+Save As. Opening a project, including the first Open after a relaunch, therefore returns to the
+composition last viewed in it, with the Viewer, Timeline and Nodes on it; the first composition is
+used only when the remembered one no longer exists (deleted, or never saved). The current time is
+not remembered and starts at zero. Bloom still starts blank: it does not reopen the last project on
+its own.
 
 ## Required Verification
 
