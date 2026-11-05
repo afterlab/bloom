@@ -57,6 +57,7 @@ int serve(scripting::Session& session) {
         mediaEvaluator.setAssetBaseDirectory(session.displayPath().parent_path());
     runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
     gpuOptions.ocioResolver = host::makePackagedGpuOcioResolver(host::currentExecutablePath());
+    gpuOptions.pipelineCacheDirectory = platform::gpuPipelineCacheDirectory();
     gpuOptions.mediaContextProvider = [&mediaEvaluator] {
         return runtime::GpuSceneMediaContext::fromEvaluator(mediaEvaluator);
     };

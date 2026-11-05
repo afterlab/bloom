@@ -1,4 +1,5 @@
 #include "gpu_initialization_observation.hpp"
+#include "gpu_pipeline_cache_private.hpp"
 #include "gpu_solid_private.hpp"
 #include "shaders/solid_spirv.inc"
 #include <cassert>
@@ -177,7 +178,7 @@ bool GpuSolid::Impl::createPipeline() {
         return false;
     }
     if (dispatcher->vkCreateComputePipelines(
-            rawDevice, VK_NULL_HANDLE, 1,
+            rawDevice, vulkan_detail::pipelineCacheForCreation(*control), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
         createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,

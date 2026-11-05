@@ -29,4 +29,10 @@ std::optional<std::filesystem::path> userCacheDirectory(const std::string_view a
 #endif
 }
 
+std::filesystem::path gpuPipelineCacheDirectory() {
+    if (const auto root = userCacheDirectory("bloom"))
+        return *root / "gpu-pipeline-cache";
+    return {};
+}
+
 } // namespace bloom::platform

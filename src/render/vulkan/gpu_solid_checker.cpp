@@ -1,3 +1,4 @@
+#include "gpu_pipeline_cache_private.hpp"
 #include "gpu_solid_private.hpp"
 #include "shaders/checker_spirv.inc"
 
@@ -49,7 +50,7 @@ bool GpuSolid::Impl::createCheckerPipeline() {
     pipelineInfo.layout = *checkerPipelineLayout;
     VkPipeline createdPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
-            device, VK_NULL_HANDLE, 1,
+            device, vulkan_detail::pipelineCacheForCreation(*control), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &createdPipeline) != VK_SUCCESS) {
         createDiagnostic = gpuSolidDiagnostic(GpuSolidDiagnosticCode::ShaderRejected,

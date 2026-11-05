@@ -35,6 +35,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -145,6 +146,37 @@ struct NativeStorageReuse final {
     std::uint64_t evictedBytes = 0;
 };
 
+// #457: one primary command buffer with its pool and fence. Single-submission native jobs (the
+// packed display transfer, path coverage, OCIO LUT uploads) take one from the device instead of
+// creating a pool, buffer and fence per job, and give it back once its fence proved the
+// submission retired. See gpu_command_reuse_private.hpp.
+struct ReusableCommands final {
+    vk::raii::CommandPool pool{nullptr};
+    vk::raii::CommandBuffer buffer{nullptr};
+    vk::raii::Fence fence{nullptr};
+};
+
+// #457: the generation's VkPipelineCache and its on-disk identity. See
+// gpu_pipeline_cache_private.hpp.
+struct PipelineCacheState final {
+    vk::raii::PipelineCache cache{nullptr};
+    // Empty when the cache is not persisted.
+    std::filesystem::path file;
+    GpuPipelineCacheLoad load = GpuPipelineCacheLoad::NotPersistent;
+    std::string detail;
+    std::uint64_t loadedBytes = 0;
+    std::uint64_t writes = 0;
+    std::uint64_t lastWriteBytes = 0;
+    // Bumped by every pipeline creation (any thread); a write records the value it saved.
+    std::atomic<std::uint64_t> pipelinesCreated{0};
+    std::uint64_t pipelinesAtLastWrite = 0;
+    std::uint32_t vendorId = 0;
+    std::uint32_t deviceId = 0;
+    std::uint32_t driverVersion = 0;
+    std::array<std::uint8_t, 16> deviceUuid{};
+    std::array<std::uint8_t, 16> pipelineCacheUuid{};
+};
+
 struct DeviceAllocatorState final {
     DeviceAllocatorState() = default;
     DeviceAllocatorState(const DeviceAllocatorState&) = delete;
@@ -223,6 +255,14 @@ struct DeviceAllocatorState final {
     // every batch owner it creates (an executor releases its owner after each scene). The
     // destructor releases them before it clears `device`. Owner thread only.
     std::shared_ptr<operation_batch_detail::Pipelines> operationBatchPipelines;
+    // #457: every pipeline creation of this generation passes `pipelineCache.cache`. The
+    // destructor writes it (when persisted) and releases it before it clears `device`.
+    PipelineCacheState pipelineCache;
+    // #457: retired single-submission command sets, owner thread only, at most
+    // kMaxRecycledCommandSets. Released by the destructor before it clears `device`.
+    std::vector<ReusableCommands> recycledCommands;
+    std::uint64_t commandSetsCreated = 0;
+    std::uint64_t commandSetsReused = 0;
 
     // Nonzero private domain-control mask intersects real image requirements; 0 is unmodified.
     std::uint32_t nativeImageMemoryTypeMaskForTests = 0;

@@ -1,5 +1,6 @@
 #include "gpu_fence_wait_private.hpp"
 #include "gpu_native_buffer_allocation_private.hpp"
+#include "gpu_command_reuse_private.hpp"
 #include "gpu_path_coverage_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 
@@ -417,40 +418,15 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
     const VkDevice rawDevice = static_cast<VkDevice>(*impl.control->device);
     const auto* dispatcher = impl.control->device.getDispatcher();
     {
-        VkCommandPoolCreateInfo poolInfo{};
-        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        poolInfo.queueFamilyIndex = impl.control->computeQueueFamily;
-        VkCommandPool rawPool = VK_NULL_HANDLE;
-        if (dispatcher->vkCreateCommandPool(rawDevice, &poolInfo, nullptr, &rawPool) !=
-            VK_SUCCESS) {
+        // #457: the device's recycled command set; a new one only when none is parked.
+        vulkan_detail::ReusableCommands commands;
+        if (!vulkan_detail::acquireCommands(*impl.control, commands)) {
             return failJob(GpuPathCoverageDiagnosticCode::AllocationFailed,
-                           "the coverage command pool could not be created");
+                           "the coverage command buffer could not be created");
         }
-        impl.jobPool = vk::raii::CommandPool(impl.control->device, rawPool);
-    }
-    {
-        VkCommandBufferAllocateInfo allocateInfo{};
-        allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocateInfo.commandPool = *impl.jobPool;
-        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocateInfo.commandBufferCount = 1;
-        VkCommandBuffer raw = VK_NULL_HANDLE;
-        if (dispatcher->vkAllocateCommandBuffers(rawDevice, &allocateInfo, &raw) != VK_SUCCESS) {
-            return failJob(GpuPathCoverageDiagnosticCode::AllocationFailed,
-                           "the coverage command buffer could not be allocated");
-        }
-        impl.jobBuffer = vk::raii::CommandBuffer(impl.control->device, raw, *impl.jobPool);
-    }
-    {
-        VkFenceCreateInfo fenceInfo{};
-        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        VkFence raw = VK_NULL_HANDLE;
-        if (dispatcher->vkCreateFence(rawDevice, &fenceInfo, nullptr, &raw) != VK_SUCCESS) {
-            return failJob(GpuPathCoverageDiagnosticCode::AllocationFailed,
-                           "the coverage fence could not be created");
-        }
-        impl.jobFence = vk::raii::Fence(impl.control->device, raw);
+        impl.jobPool = std::move(commands.pool);
+        impl.jobBuffer = std::move(commands.buffer);
+        impl.jobFence = std::move(commands.fence);
     }
 
     vk::DescriptorBufferInfo rangeDescriptor{};

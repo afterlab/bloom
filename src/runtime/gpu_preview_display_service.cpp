@@ -250,6 +250,8 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
             } else {
                 bool waited = false;
                 try {
+                    // #457: no step to start, so a pipeline-cache write delays no frame.
+                    detail::persistServicePipelineCache(core);
                     waited = waitForResidentFence(core, observed, fenceStalled);
                 } catch (...) { // NOLINT(bugprone-empty-catch)
                     // A failed wait falls back to the condition wait below.

@@ -1,4 +1,5 @@
 #include "gpu_device_private.hpp"
+#include "gpu_pipeline_cache_private.hpp"
 
 #include <bloom/core/telemetry_counters.hpp>
 
@@ -631,6 +632,10 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
     control->deviceUuid = selection->deviceUuid;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;
     control->calibratedTimestampsEnabled = calibratedExtension != nullptr;
+    // #457: one pipeline cache for every pipeline this generation creates, seeded from the
+    // validated per-user file when a directory was given.
+    vulkan_detail::createPipelineCache(*control, selection->properties, selection->deviceUuid,
+                                       options.pipeline_cache_directory);
 
     VmaVulkanFunctions vmaFunctions{};
     vmaFunctions.vkGetInstanceProcAddr = getInstanceProcAddr;

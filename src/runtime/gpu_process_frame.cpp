@@ -633,6 +633,7 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     try {
         render::GpuDeviceCreationOptions creation;
         creation.loader_path = options.loaderPath;
+        creation.pipeline_cache_directory = options.pipelineCacheDirectory;
         auto created = render::GpuDevice::create(creation);
         if (created) {
             device = std::move(created.device);
@@ -724,6 +725,9 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                 lock.unlock();
                 reportDevice();
                 trimIdleRetention(preparing);
+                // #457: an idle owner writes pipelines created since the last write.
+                if (device)
+                    static_cast<void>(device->persistPipelineCache());
                 continue;
             }
             // Shutdown drains every queued request as a typed cancellation, then exits. A request

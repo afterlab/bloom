@@ -90,5 +90,16 @@ int main() {
     const auto emptySubdirectory = platform::userCacheDirectory("");
     check.expect(!emptySubdirectory.has_value(), "an empty app subdirectory is refused");
 
+    // #457: the GPU pipeline cache lives under the same per-user root.
+    xdg.set("/tmp/bloom-cache-directory-test-xdg");
+    check.expect(
+        platform::gpuPipelineCacheDirectory() ==
+            std::filesystem::path("/tmp/bloom-cache-directory-test-xdg/bloom/gpu-pipeline-cache"),
+        "the pipeline cache directory is a leaf of the Bloom cache root");
+    xdg.unset();
+    home.unset();
+    check.expect(platform::gpuPipelineCacheDirectory().empty(),
+                 "no cache root leaves the pipeline cache in memory");
+
     return check.failures() == 0 ? 0 : 1;
 }

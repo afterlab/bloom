@@ -241,6 +241,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             if (++index >= argc)
                 return 2;
             gBenchProject = argv[index];
+        } else if (argument == "--bench-pipeline-cache") {
+            if (++index >= argc)
+                return 2;
+            gBenchPipelineCache = argv[index];
         } else if (argument == "--bench-workspace") {
             gBenchWorkspace = true;
         } else if (argument == "--bench-workspace-no-assets") {

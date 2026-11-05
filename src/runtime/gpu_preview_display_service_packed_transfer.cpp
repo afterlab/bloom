@@ -62,6 +62,16 @@ void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& c
     core->publishedPackedQueueTiming = transfer;
 }
 
+void persistServicePipelineCache(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
+    if (!core->device)
+        return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - core->pipelineCachePersistedAt < std::chrono::seconds(2))
+        return;
+    core->pipelineCachePersistedAt = now;
+    static_cast<void>(core->device->persistPipelineCache());
+}
+
 bool residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                                  const std::shared_ptr<PreviewDisplayStageRecord>& stage,
                                  std::string& reason) noexcept {
@@ -112,7 +122,12 @@ bool residentPackedTransferBegin(const std::shared_ptr<PreviewDisplayServiceCore
             core->packedQueueTimingSample.status = started;
         }
         stage->packedTransferStartedAt = std::chrono::steady_clock::now();
-        core->packedTransfer = std::make_unique<render::GpuDisplayTransfer>();
+        // #457: the previous frame's transfer object serves this one once it is idle and
+        // retired; a transfer that still owns a submission is replaced (its destructor
+        // quarantines that submission) as before.
+        if (!core->packedTransfer || core->packedTransfer->hasUnretiredSubmission() ||
+            !core->packedTransfer->reset())
+            core->packedTransfer = std::make_unique<render::GpuDisplayTransfer>();
         // The host storage the GPU-scene child already created and touched off this thread.
         auto* preparedHost = stage->preparedPackedHost ? &*stage->preparedPackedHost : nullptr;
         const bool begun = core->packedTransfer->begin(

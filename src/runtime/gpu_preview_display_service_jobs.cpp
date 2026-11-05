@@ -248,6 +248,7 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
 
     render::GpuDeviceCreationOptions deviceOptions;
     deviceOptions.loader_path = core->options.loaderPath;
+    deviceOptions.pipeline_cache_directory = core->options.pipelineCacheDirectory;
     if (core->options.presentation == GpuPreviewDisplayServicePresentationMode::Wayland) {
         deviceOptions.request_presentation = true;
         deviceOptions.presentation_platform = render::GpuPresentationPlatform::Wayland;

@@ -310,6 +310,9 @@ struct GpuPreviewDisplayServiceOptions final {
     bool enabled = false;
     GpuPreviewDisplayProductMode product = GpuPreviewDisplayProductMode::NativeResident;
     std::filesystem::path loaderPath;
+    // Per-user directory for the device's persisted pipeline cache (#457); empty keeps it in
+    // memory. Hosts pass platform::gpuPipelineCacheDirectory().
+    std::filesystem::path pipelineCacheDirectory{};
     // Presentation ownership. Default Disabled keeps the compute-only device exactly as before.
     GpuPreviewDisplayServicePresentationMode presentation =
         GpuPreviewDisplayServicePresentationMode::Disabled;

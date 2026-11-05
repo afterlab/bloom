@@ -60,6 +60,8 @@ GpuNativeStorageReuseStats GpuDevice::nativeStorageReuseStats() const noexcept {
 std::uint64_t GpuDevice::releaseReusableNativeStorage(std::uint64_t, bool) noexcept { return 0; }
 void GpuDevice::setDeviceRoomReclaimer(std::function<std::uint64_t(std::uint64_t)>) noexcept {}
 GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noexcept { return {}; }
+GpuPipelineCacheStats GpuDevice::pipelineCacheStats() const noexcept { return {}; }
+bool GpuDevice::persistPipelineCache() noexcept { return false; }
 GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept { return {}; }
 
 // Inert portable implementation preserves the owning native API without retaining a lease.

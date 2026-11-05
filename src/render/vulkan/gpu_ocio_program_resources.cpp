@@ -1,3 +1,5 @@
+#include "gpu_command_reuse_private.hpp"
+#include "gpu_fence_wait_private.hpp"
 #include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_ocio_program_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
@@ -40,6 +42,9 @@ void releaseReservationIfReserved() noexcept;
 }
 
 namespace {
+
+// Bound on the LUT upload's fence wait: only reached by a queue that does not retire.
+constexpr std::uint64_t kLutUploadWaitNanoseconds = 2ULL * 1000ULL * 1000ULL * 1000ULL;
 
 std::atomic<std::uint32_t> g_quarantineCount{0};
 std::atomic<bool> g_teardownIncomplete{false};
@@ -308,41 +313,15 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
         return UploadOutcome::OverBudget;
     }
 
-    vk::raii::CommandPool pool{nullptr};
-    vk::raii::CommandBuffer command{nullptr};
-    vk::raii::Fence fence{nullptr};
-    {
-        VkCommandPoolCreateInfo poolInfo{};
-        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        poolInfo.queueFamilyIndex = state.computeQueueFamily;
-        VkCommandPool rawPool = VK_NULL_HANDLE;
-        if (dispatcher->vkCreateCommandPool(device, &poolInfo, nullptr, &rawPool) != VK_SUCCESS) {
-            setReasonNoThrow(reason, "the LUT upload command pool could not be created");
-            return UploadOutcome::Failed;
-        }
-        pool = vk::raii::CommandPool(state.device, rawPool);
-        VkCommandBufferAllocateInfo allocateInfo{};
-        allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocateInfo.commandPool = rawPool;
-        allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocateInfo.commandBufferCount = 1;
-        VkCommandBuffer rawCommand = VK_NULL_HANDLE;
-        if (dispatcher->vkAllocateCommandBuffers(device, &allocateInfo, &rawCommand) !=
-            VK_SUCCESS) {
-            setReasonNoThrow(reason, "the LUT upload command buffer could not be allocated");
-            return UploadOutcome::Failed;
-        }
-        command = vk::raii::CommandBuffer(state.device, rawCommand, rawPool);
-        VkFenceCreateInfo fenceInfo{};
-        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        VkFence rawFence = VK_NULL_HANDLE;
-        if (dispatcher->vkCreateFence(device, &fenceInfo, nullptr, &rawFence) != VK_SUCCESS) {
-            setReasonNoThrow(reason, "the LUT upload fence could not be created");
-            return UploadOutcome::Failed;
-        }
-        fence = vk::raii::Fence(state.device, rawFence);
+    // #457: the device's recycled command set; a new one only when none is parked.
+    vulkan_detail::ReusableCommands commands;
+    if (!vulkan_detail::acquireCommands(state, commands)) {
+        setReasonNoThrow(reason, "the LUT upload command buffer could not be created");
+        return UploadOutcome::Failed;
     }
+    vk::raii::CommandPool pool = std::move(commands.pool);
+    vk::raii::CommandBuffer command = std::move(commands.buffer);
+    vk::raii::Fence fence = std::move(commands.fence);
     const VkCommandBuffer raw = static_cast<VkCommandBuffer>(*command);
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -402,23 +381,23 @@ uploadImage(vulkan_detail::DeviceAllocatorState& state,
         setReasonNoThrow(reason, "the LUT upload completion is unproven (fault-injected)");
         return UploadOutcome::Quarantined;
     }
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    VkResult waited = VK_NOT_READY;
-    while (true) {
-        if (g_faultCancelAfterSubmit.load() || cancellationRequested(cancellation)) {
-            quarantineUpload(image, staging, pool, command, fence, owner, false);
-            setReasonNoThrow(reason, "the LUT upload was cancelled after submission");
-            return UploadOutcome::Cancelled;
-        }
-        waited = dispatcher->vkWaitForFences(device, 1, &rawFence, VK_TRUE, 1000000ULL);
-        if (waited == VK_SUCCESS || waited == VK_ERROR_DEVICE_LOST) {
-            break;
-        }
-        if (std::chrono::steady_clock::now() >= deadline) {
-            break;
-        }
+    if (g_faultCancelAfterSubmit.load() || cancellationRequested(cancellation)) {
+        quarantineUpload(image, staging, pool, command, fence, owner, false);
+        setReasonNoThrow(reason, "the LUT upload was cancelled after submission");
+        return UploadOutcome::Cancelled;
     }
+    // #457, in the #386 style: one event-driven wait on the upload's own fence, which returns
+    // when the copy retires (microseconds for a LUT), instead of a 1 ms polling loop. The bound
+    // only covers a queue that never retires; the upload is then quarantined as before.
+    const bool signalled =
+        fence_wait_detail::waitForNativeFence(state, rawFence, kLutUploadWaitNanoseconds);
+    const VkResult waited =
+        signalled ? dispatcher->vkGetFenceStatus(device, rawFence) : VK_NOT_READY;
     if (waited == VK_SUCCESS) {
+        // The fence proved the copy retired: its command set serves the next upload.
+        vulkan_detail::ReusableCommands retired{std::move(pool), std::move(command),
+                                                std::move(fence)};
+        vulkan_detail::recycleCommands(state, retired);
         return UploadOutcome::Retired;
     }
     quarantineUpload(image, staging, pool, command, fence, owner, true);

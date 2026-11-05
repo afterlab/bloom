@@ -323,6 +323,8 @@ int main(int argc, char* argv[]) try {
     // Ordinary widget composition provides panel/window clipping. Scene/display preparation
     // remains genuinely GPU; one asynchronous final transfer supplies immutable painted pixels.
     // The independently qualified NativeResident route remains available to its required fixtures.
+    // Derived per-user cache state (#457): compiled pipelines survive a relaunch.
+    gpuPreviewDisplayOptions.pipelineCacheDirectory = bloom::platform::gpuPipelineCacheDirectory();
     gpuPreviewDisplayOptions.product =
         bloom::runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
     gpuPreviewDisplayOptions.presentation =
@@ -522,6 +524,7 @@ int main(int argc, char* argv[]) try {
     if (bundledNativeLoader) {
         gpuExportOptions.loaderPath = gpuPreviewDisplayOptions.loaderPath;
     }
+    gpuExportOptions.pipelineCacheDirectory = gpuPreviewDisplayOptions.pipelineCacheDirectory;
     // Reuse the ONE shared app OCIO context resolver built above from THIS target's own packaging
     // definitions: the provider's CPU-worker bootstrap qualifies the tools once and publishes the
     // same shared context for the export evaluator's media/effect transforms and output display, so

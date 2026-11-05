@@ -1,6 +1,7 @@
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_display_transfer.hpp>
 
+#include "gpu_command_reuse_private.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_display_transfer_fault.hpp"
 #include "gpu_display_transfer_retirement_private.hpp"
@@ -527,7 +528,6 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
         }
 
         auto state = source->state;
-        const VkDevice device = static_cast<VkDevice>(*state->device);
         const auto* dispatcher = state->device.getDispatcher();
 
         StagingBuffer staging;
@@ -616,47 +616,16 @@ bool GpuDisplayTransfer::begin(GpuDevice& expectedDevice,
                         "controlled command setup rejection after staging allocation");
             return false;
         }
-        vk::raii::CommandPool pool{nullptr};
-        {
-            VkCommandPoolCreateInfo poolInfo{};
-            poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-            poolInfo.queueFamilyIndex = state->computeQueueFamily;
-            VkCommandPool raw = VK_NULL_HANDLE;
-            if (dispatcher->vkCreateCommandPool(device, &poolInfo, nullptr, &raw) != VK_SUCCESS) {
-                impl_->fail(GpuDisplayTransferCode::TransferFailed,
-                            "the display transfer command pool could not be created");
-                return false;
-            }
-            pool = vk::raii::CommandPool(state->device, raw);
+        // #457: the device's recycled command set; a new one only when none is parked.
+        vulkan_detail::ReusableCommands commands;
+        if (!vulkan_detail::acquireCommands(*state, commands)) {
+            impl_->fail(GpuDisplayTransferCode::TransferFailed,
+                        "the display transfer command buffer could not be created");
+            return false;
         }
-        vk::raii::CommandBuffer commandBuffer{nullptr};
-        {
-            VkCommandBufferAllocateInfo allocateInfo{};
-            allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            allocateInfo.commandPool = *pool;
-            allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            allocateInfo.commandBufferCount = 1;
-            VkCommandBuffer raw = VK_NULL_HANDLE;
-            if (dispatcher->vkAllocateCommandBuffers(device, &allocateInfo, &raw) != VK_SUCCESS) {
-                impl_->fail(GpuDisplayTransferCode::TransferFailed,
-                            "the display transfer command buffer could not be allocated");
-                return false;
-            }
-            commandBuffer = vk::raii::CommandBuffer(state->device, raw, *pool);
-        }
-        vk::raii::Fence fence{nullptr};
-        {
-            VkFenceCreateInfo fenceInfo{};
-            fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VkFence raw = VK_NULL_HANDLE;
-            if (dispatcher->vkCreateFence(device, &fenceInfo, nullptr, &raw) != VK_SUCCESS) {
-                impl_->fail(GpuDisplayTransferCode::TransferFailed,
-                            "the display transfer fence could not be created");
-                return false;
-            }
-            fence = vk::raii::Fence(state->device, raw);
-        }
+        vk::raii::CommandPool pool = std::move(commands.pool);
+        vk::raii::CommandBuffer commandBuffer = std::move(commands.buffer);
+        vk::raii::Fence fence = std::move(commands.fence);
 
         const VkCommandBuffer rawCommandBuffer = static_cast<VkCommandBuffer>(*commandBuffer);
         VkCommandBufferBeginInfo beginInfo{};
@@ -847,6 +816,12 @@ GpuDisplayTransferState GpuDisplayTransfer::poll() noexcept {
         return impl.state;
     }
 
+    // The fence proved the submission retired: its command set serves the next transfer (#457).
+    {
+        vulkan_detail::ReusableCommands commands{std::move(impl.pool), std::move(impl.buffer),
+                                                 std::move(impl.fence)};
+        vulkan_detail::recycleCommands(*impl.deviceState, commands);
+    }
     const bool cancelled = impl.cancelRequested;
     if (!cancelled) {
         if (display_transfer_detail::transferFault().load() ==

@@ -265,6 +265,31 @@ struct GpuDeviceCreationOptions final {
     // status.
     bool request_presentation = false;
     GpuPresentationPlatform presentation_platform = GpuPresentationPlatform::None;
+    // Per-user directory for the persisted pipeline cache (#457): derived runtime cache state,
+    // never project state. Empty keeps the device's pipeline cache in memory only (tests, tools).
+    // The directory is created on the first write.
+    std::filesystem::path pipeline_cache_directory{};
+};
+
+// What the device's pipeline cache started from (#457). `NotPersistent`: no cache directory was
+// given, so the cache lives in memory for this device generation only. `Missing`: no cache file for
+// this device yet. `Loaded`: a file whose Bloom header, checksum, device, driver and Vulkan
+// pipeline-cache header all matched seeded the cache. `Rejected`: a file existed but was stale,
+// foreign, truncated or corrupt; the cache started empty and the next write replaces the file.
+enum class GpuPipelineCacheLoad : std::uint8_t { NotPersistent, Missing, Loaded, Rejected };
+
+struct GpuPipelineCacheStats final {
+    // A native VkPipelineCache exists and every pipeline creation of this generation uses it.
+    bool active = false;
+    GpuPipelineCacheLoad load = GpuPipelineCacheLoad::NotPersistent;
+    // Why a file was rejected, or why the last write was skipped; empty otherwise.
+    std::string detail;
+    std::uint64_t loadedBytes = 0;
+    // Pipelines this generation created through the cache.
+    std::uint64_t pipelinesCreated = 0;
+    std::uint64_t writes = 0;
+    std::uint64_t lastWriteBytes = 0;
+    std::filesystem::path file;
 };
 
 struct GpuDeviceCreationResult;
@@ -309,6 +334,12 @@ class GpuDevice final {
     // once more if it released anything. It runs on the owner thread inside the allocation, must
     // not allocate native storage itself, and returns the bytes it released. Empty clears it.
     void setDeviceRoomReclaimer(std::function<std::uint64_t(std::uint64_t)> reclaimer) noexcept;
+    // Pipeline cache (#457). `persistPipelineCache` is owner-thread only and writes the cache file
+    // when this generation created pipelines since the last write (the device also writes it when
+    // it is destroyed); it never runs on the UI thread because only the device owner may call it.
+    // Returns true when a file was written.
+    [[nodiscard]] GpuPipelineCacheStats pipelineCacheStats() const noexcept;
+    bool persistPipelineCache() noexcept;
     // Includes closed generations after their GpuDevice facade has been destroyed.
     [[nodiscard]] static GpuImageReclamationStats processImageReclamationStats() noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;

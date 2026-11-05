@@ -1,5 +1,6 @@
 #include <bloom/render/gpu_device.hpp>
 
+#include "gpu_command_reuse_private.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_display_transfer_retirement_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
@@ -8,6 +9,7 @@
 #include "gpu_ocio_program_private.hpp"
 #include "gpu_operation_batch_private.hpp"
 #include "gpu_output_color_readback_retirement_private.hpp"
+#include "gpu_pipeline_cache_private.hpp"
 #include "gpu_queue_timing_private.hpp"
 
 #include <array>
@@ -131,6 +133,28 @@ std::uint64_t GpuDevice::releaseReusableNativeStorage(const std::uint64_t bytes,
     if (!isOwnerThread() || impl_->control == nullptr || bytes == 0)
         return 0;
     return vulkan_detail::releaseParkedStorage(*impl_->control, bytes, deviceLocal);
+}
+GpuPipelineCacheStats GpuDevice::pipelineCacheStats() const noexcept {
+    if (impl_ == nullptr || impl_->control == nullptr)
+        return {};
+    const auto& cache = impl_->control->pipelineCache;
+    try {
+        return {.active = *cache.cache != vk::PipelineCache{},
+                .load = cache.load,
+                .detail = cache.detail,
+                .loadedBytes = cache.loadedBytes,
+                .pipelinesCreated = cache.pipelinesCreated.load(std::memory_order_relaxed),
+                .writes = cache.writes,
+                .lastWriteBytes = cache.lastWriteBytes,
+                .file = cache.file};
+    } catch (...) {
+        return {};
+    }
+}
+bool GpuDevice::persistPipelineCache() noexcept {
+    if (!isOwnerThread() || impl_->control == nullptr)
+        return false;
+    return vulkan_detail::persistPipelineCache(*impl_->control);
 }
 GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noexcept {
     if (!impl_ || !impl_->control) {
@@ -576,6 +600,9 @@ DeviceAllocatorState::~DeviceAllocatorState() {
         parkedProcessingPhase->markUnproven();
     // The batch pipelines belong to `device`, which is cleared below.
     operationBatchPipelines.reset();
+    // So do the recycled command sets and the pipeline cache (#457), written here a last time.
+    releaseRecycledCommands(*this);
+    closePipelineCache(*this);
     if (allocator != VK_NULL_HANDLE) {
         closeStorageReuse(*this);
         vmaDestroyAllocator(allocator);

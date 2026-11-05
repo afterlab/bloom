@@ -1306,6 +1306,10 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_operation_batch_private.hpp
         vulkan/gpu_device.cpp
         vulkan/gpu_native_storage_reuse.cpp
+        vulkan/gpu_command_reuse.cpp
+        vulkan/gpu_command_reuse_private.hpp
+        vulkan/gpu_pipeline_cache.cpp
+        vulkan/gpu_pipeline_cache_private.hpp
         vulkan/gpu_device_bootstrap.cpp
         vulkan/gpu_device_private.hpp
         vulkan/gpu_display_transfer.cpp

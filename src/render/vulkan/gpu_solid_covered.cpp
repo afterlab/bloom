@@ -1,3 +1,4 @@
+#include "gpu_pipeline_cache_private.hpp"
 #include "gpu_solid_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 
@@ -218,7 +219,7 @@ bool GpuSolid::Impl::createCoveredPipeline() {
     pipelineInfo.layout = *covered.pipelineLayout;
     VkPipeline rawPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
-            rawDevice, VK_NULL_HANDLE, 1,
+            rawDevice, vulkan_detail::pipelineCacheForCreation(*control), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
         covered.reason = "the embedded CoveredSolidV1 compute pipeline was rejected";

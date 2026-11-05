@@ -164,6 +164,9 @@ struct GpuProcessFrameEvaluatorOptions final {
     // Explicit native loader override (empty means the platform loader). No workspace/build path is
     // ever hardcoded. This is the same field `GpuDeviceCreationOptions::loader_path` uses.
     std::filesystem::path loaderPath;
+    // Per-user directory for the device's persisted pipeline cache (#457); empty keeps it in
+    // memory. Hosts pass platform::gpuPipelineCacheDirectory().
+    std::filesystem::path pipelineCacheDirectory{};
     // Explicit ceilings are honored, including zero. Omission derives the request's executor
     // ceiling from the sampled processing root's device capacity and the readback ceiling from its
     // sampled host capacity on the calling worker. The paired phase still admits the actual peak.

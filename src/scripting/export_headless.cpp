@@ -7,6 +7,7 @@
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/platform/cache_directory.hpp>
 #include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/platform/user_data_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -63,6 +64,7 @@ HeadlessExportQueue::HeadlessExportQueue(
     // would always be null and leave every display-referred output on the CPU reference path.
     gpuOptions.ocioResolver = std::move(ocioResolver);
     gpuOptions.loaderPath = std::move(vulkanLoader);
+    gpuOptions.pipelineCacheDirectory = platform::gpuPipelineCacheDirectory();
     gpuOptions.mediaContextProvider = [state = state_.get()] {
         return runtime::GpuSceneMediaContext::fromEvaluator(state->media);
     };

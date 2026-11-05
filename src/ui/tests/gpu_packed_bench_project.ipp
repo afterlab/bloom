@@ -48,6 +48,9 @@
 
 namespace {
 std::string gBenchProject;
+// #457: the device's persisted pipeline cache directory (empty: memory only), so a run can
+// measure the first frame after launch with a cold or a warm cache.
+std::string gBenchPipelineCache;
 bool gBenchPlayback = false;          // playback-only run: no RAM fill, read-ahead from cold
 double gBenchPlaySeconds = 6.0;       // transport run length for either playback measurement
 bool gBenchWorkspace = false;         // the application's window and editors, not a bare Viewer
@@ -611,6 +614,7 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     runtime::GpuPreviewDisplayServiceOptions serviceOptionsApp;
     serviceOptionsApp.enabled = true;
     serviceOptionsApp.loaderPath = options.loader_path;
+    serviceOptionsApp.pipelineCacheDirectory = gBenchPipelineCache;
     serviceOptionsApp.product = runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
     serviceOptionsApp.presentation = runtime::GpuPreviewDisplayServicePresentationMode::Disabled;
     const auto residentPlan = ui::gpuResidentBudgetPlanFor(cacheBudgets.previewFrameCacheByteBudget);

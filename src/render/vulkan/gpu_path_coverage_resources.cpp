@@ -1,4 +1,5 @@
 #include "gpu_path_coverage_private.hpp"
+#include "gpu_pipeline_cache_private.hpp"
 
 #include "shaders/path_coverage_spirv.inc"
 
@@ -79,7 +80,7 @@ bool GpuPathCoverageImpl::createPipeline() {
     pipelineInfo.layout = *pipelineLayout;
     VkPipeline rawPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
-            rawDevice, VK_NULL_HANDLE, 1,
+            rawDevice, vulkan_detail::pipelineCacheForCreation(*control), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
         createDiagnostic = {GpuPathCoverageDiagnosticCode::ShaderRejected,

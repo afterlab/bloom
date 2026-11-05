@@ -369,6 +369,37 @@ void nonlocalFreshness(GpuDevice& device) {
     std::cout << "PASS: actual nonlocal LUT overlapping host claim and freshness recovery\n";
 }
 } // namespace
+// #457: consecutive LUT uploads share one command pool, buffer and fence instead of creating them
+// per upload.
+void uploadCommandReuse(GpuDevice& device) {
+    auto state = GpuRendererAccess::state(device);
+    require(bool(state), "the real LUT allocator exists");
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(kCapacity, true);
+    budget.setDeviceCapacity(kCapacity, true);
+    ocioFaultLutRgbaFormat().store(false);
+    std::uint64_t createdBefore = 0;
+    std::uint64_t reusedBefore = 0;
+    for (int upload = 0; upload < 5; ++upload) {
+        auto phase = retain(device, budget, kEnvelope);
+        SampledResource resource;
+        const SampledGuard resourceGuard{*state, resource};
+        require(createSampledResource(state, texture(OcioGpuTextureDimensions::ThreeD), kEnvelope,
+                                      {}, resource) == UploadOutcome::Retired,
+                "a LUT upload retires");
+        destroySampledResource(*state, resource);
+        finish(device, phase, budget);
+        if (upload == 0) {
+            createdBefore = state->commandSetsCreated;
+            reusedBefore = state->commandSetsReused;
+        }
+    }
+    require(state->commandSetsCreated == createdBefore &&
+                state->commandSetsReused == reusedBefore + 4,
+            "consecutive LUT uploads reuse one command set");
+    std::cout << "PASS: LUT uploads reuse one command set\n";
+}
+
 int main(int argc, char** argv) {
     GpuDeviceCreationOptions options;
     bool required = false;
@@ -387,6 +418,7 @@ int main(int argc, char** argv) {
         dimensionalAndFaults(*made.device);
         stagingOwnership(*made.device);
         nonlocalFreshness(*made.device);
+        uploadCommandReuse(*made.device);
         stagingQuarantine(options);
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

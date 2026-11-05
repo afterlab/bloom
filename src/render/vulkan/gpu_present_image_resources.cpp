@@ -1,3 +1,4 @@
+#include "gpu_pipeline_cache_private.hpp"
 #include "gpu_present_image_private.hpp"
 
 #include "gpu_native_buffer_allocation_private.hpp"
@@ -435,9 +436,9 @@ bool PresentImagePipeline::ensureSwapchainResources(
         pipelineInfo.renderPass = rawRenderPass;
         pipelineInfo.subpass = 0;
         VkPipeline rawPipeline = VK_NULL_HANDLE;
-        if (dispatcher->vkCreateGraphicsPipelines(*control->device, VK_NULL_HANDLE, 1,
-                                                  &pipelineInfo, nullptr,
-                                                  &rawPipeline) != VK_SUCCESS) {
+        if (dispatcher->vkCreateGraphicsPipelines(
+                *control->device, vulkan_detail::pipelineCacheForCreation(*control), 1,
+                &pipelineInfo, nullptr, &rawPipeline) != VK_SUCCESS) {
             message = "the viewer present graphics pipeline could not be created";
             return false;
         }

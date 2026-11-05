@@ -6,6 +6,7 @@
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/output/output_analysis.hpp>
+#include <bloom/platform/cache_directory.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -455,6 +456,7 @@ frameRange(std::string_view value) {
     runtime::GpuProcessFrameEvaluatorOptions gpuOptions;
     gpuOptions.ocioResolver =
         bloom::host::makePackagedGpuOcioResolver(bloom::host::currentExecutablePath());
+    gpuOptions.pipelineCacheDirectory = bloom::platform::gpuPipelineCacheDirectory();
     gpuOptions.mediaContextProvider = [&gpuMediaEvaluator] {
         return runtime::GpuSceneMediaContext::fromEvaluator(gpuMediaEvaluator);
     };

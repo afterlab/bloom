@@ -1,4 +1,5 @@
 #include "gpu_composite_private.hpp"
+#include "gpu_pipeline_cache_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 
 #include "gpu_composite_fault.hpp"
@@ -83,7 +84,7 @@ bool createCompositePipeline(DeviceAllocatorState& state, const std::uint32_t* c
     pipelineInfo.layout = *out.pipelineLayout;
     VkPipeline rawPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
-            rawDevice, VK_NULL_HANDLE, 1,
+            rawDevice, vulkan_detail::pipelineCacheForCreation(state), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
         reason = "the composite compute pipeline was rejected";

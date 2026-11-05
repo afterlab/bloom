@@ -52,6 +52,9 @@ void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core)
 // native storage (#544), measures the device memory that went back, and publishes completion. A
 // withdrawn (timed-out) request is never cleared.
 void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+// #457: owner thread, idle points only: writes pipelines created since the last write, at most
+// every two seconds.
+void persistServicePipelineCache(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 void processServiceCachePurge(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 // Defined in gpu_preview_display_service_cache_purge.cpp. Worker-thread side: queues a purge and
 // waits, bounded by `timeout`, for the owner to claim and clear it. A timeout withdraws the still-
@@ -187,6 +190,8 @@ struct PreviewDisplayServiceCore final {
     render::GpuQueueTimingSample publishedGraphQueueTiming, publishedPackedQueueTiming;
     render::GpuAllocatorMemorySnapshot publishedAllocatorMemory;
     std::chrono::steady_clock::time_point allocatorMemorySampledAt{};
+    // #457: when the owner last offered the device's pipeline cache a write.
+    std::chrono::steady_clock::time_point pipelineCachePersistedAt{};
     std::shared_ptr<const render::GpuDisplayTransferRetention> packedRetention;
     bool packedTransferLate = false;
     // Owner-thread effective budgets after the device capacity was resolved and clamped. Seeded

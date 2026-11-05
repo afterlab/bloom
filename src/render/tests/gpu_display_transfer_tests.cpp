@@ -254,6 +254,55 @@ void quarantine(Expectations& checks, GpuDevice& device,
                       destroyedReservation->snapshot().stagingBytes == 0,
                   "only genuine fence retirement releases orphaned reservation");
 }
+// #457: one transfer object serves consecutive frames, and every retired submission's command
+// pool, buffer and fence serve the next one instead of new native objects per frame. A submission
+// whose retirement is unproven keeps its set in the quarantine, never in the device's park.
+void commandReuse(Expectations& checks, GpuDevice& device,
+                  const std::shared_ptr<const GpuDisplayImage>& source) {
+    using namespace display_transfer_detail;
+    auto state = GpuRendererAccess::state(device);
+    checks.expect(state != nullptr, "the device state is reachable");
+    if (!state)
+        return;
+    GpuDisplayTransfer transfer;
+    checks.expect(transfer.begin(device, source, kBudget) &&
+                      complete(transfer) == GpuDisplayTransferState::Ready,
+                  "the first reused-object transfer completes");
+    const auto first = transfer.take();
+    const auto createdBefore = state->commandSetsCreated;
+    const auto reusedBefore = state->commandSetsReused;
+    std::size_t frames = 0;
+    for (; frames < 4; ++frames) {
+        if (!transfer.reset() || !transfer.begin(device, source, kBudget) ||
+            complete(transfer) != GpuDisplayTransferState::Ready)
+            break;
+        const auto again = transfer.take();
+        checks.expect(first && again && std::ranges::equal(first->pixels(), again->pixels()),
+                      "a reused transfer object reads back the same bytes");
+    }
+    checks.expect(frames == 4, "one transfer object serves consecutive frames");
+    checks.expect(state->commandSetsCreated == createdBefore &&
+                      state->commandSetsReused == reusedBefore + frames,
+                  "consecutive transfers reuse one command set instead of creating new ones");
+    // An unproven retirement: the set follows the submission into the quarantine.
+    checks.expect(transfer.reset() && transfer.begin(device, source, kBudget),
+                  "the quarantine case is admitted");
+    const auto parkedBefore = state->recycledCommands.size();
+    setTransferFaultForTest(TransferFault::ForceFenceTimeout);
+    checks.expect(transfer.poll() == GpuDisplayTransferState::Failure &&
+                      transfer.hasUnretiredSubmission(),
+                  "a forced timeout quarantines the submission");
+    setTransferFaultForTest(TransferFault::None);
+    checks.expect(state->recycledCommands.size() == parkedBefore,
+                  "an unproven submission's command set is not parked for reuse");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (transfer.hasUnretiredSubmission() && std::chrono::steady_clock::now() < deadline) {
+        static_cast<void>(transfer.poll());
+        std::this_thread::yield();
+    }
+    checks.expect(!transfer.hasUnretiredSubmission() && transfer.reset(),
+                  "the quarantine retires on a real fence observation");
+}
 #include "gpu_display_transfer_storage_tests.ipp"
 } // namespace
 
@@ -276,6 +325,7 @@ int main(int argc, char** argv) {
             roundTrip(checks, *device.device, source, creation);
             ownerAndCancellation(checks, *device.device, source);
             quarantine(checks, *device.device, source);
+            commandReuse(checks, *device.device, source);
         }
         actualBufferStorage(*device.device);
         rootedBufferTransfers(checks, *device.device, creation);

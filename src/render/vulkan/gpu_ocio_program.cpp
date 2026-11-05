@@ -1,4 +1,5 @@
 #include "gpu_ocio_program_private.hpp"
+#include "gpu_pipeline_cache_private.hpp"
 
 #include "gpu_ocio_program_reflection_validate.hpp"
 
@@ -333,7 +334,7 @@ bool GpuOcioProgram::Impl::createPipeline() {
     pipelineInfo.layout = *pipelineLayout;
     VkPipeline rawPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
-            device, VK_NULL_HANDLE, 1,
+            device, vulkan_detail::pipelineCacheForCreation(*control), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
         createDiagnostic = makeDiagnostic(GpuOcioProgramDiagnosticCode::ShaderRejected,

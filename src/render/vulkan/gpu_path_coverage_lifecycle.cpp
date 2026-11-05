@@ -1,3 +1,4 @@
+#include "gpu_command_reuse_private.hpp"
 #include "gpu_native_storage_reuse_private.hpp"
 #include "gpu_path_coverage_private.hpp"
 
@@ -525,8 +526,13 @@ GpuPathCoveragePollResult GpuPathCoverage::poll() {
                   "the coverage completion is unknown; the submission was retained");
         return GpuPathCoveragePollResult::Failure;
     }
-    // The dispatch is proved complete: free the in-flight geometry and command resources, keep the
-    // resident mask, and return the reservation to Free.
+    // The dispatch is proved complete: its command set serves the next shape (#457); free the
+    // in-flight geometry, keep the resident mask, and return the reservation to Free.
+    {
+        vulkan_detail::ReusableCommands commands{std::move(impl.jobPool), std::move(impl.jobBuffer),
+                                                 std::move(impl.jobFence)};
+        vulkan_detail::recycleCommands(*impl.control, commands);
+    }
     impl.releaseRetired(true);
     if (impl.discardRequested.load()) {
         impl.clearJob();

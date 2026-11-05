@@ -1,5 +1,6 @@
 #include "root_retirements_private.hpp"
 
+#include <bloom/platform/cache_directory.hpp>
 #include <bloom/runtime/packed_host_retirement.hpp>
 
 #include <stdexcept>
@@ -78,8 +79,12 @@ std::shared_ptr<host::GpuExportProvider> PythonRootRetirements::sharedProvider()
     const std::lock_guard lock(impl_->mutex);
     if (impl_->closing)
         throw std::runtime_error("Bloom Python rendering is shutting down");
-    if (!impl_->sharedProvider)
-        impl_->sharedProvider = host::GpuExportProvider::create({}, impl_->bootstrapGate);
+    if (!impl_->sharedProvider) {
+        runtime::GpuProcessFrameEvaluatorOptions options;
+        options.pipelineCacheDirectory = platform::gpuPipelineCacheDirectory();
+        impl_->sharedProvider =
+            host::GpuExportProvider::create(std::move(options), impl_->bootstrapGate);
+    }
     return impl_->sharedProvider;
 }
 std::shared_ptr<PythonHostRetirement>

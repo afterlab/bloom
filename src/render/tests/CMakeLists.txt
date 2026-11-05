@@ -172,6 +172,17 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     bloom_add_test(NAME bloom.render.native_storage_reuse
         COMMAND bloom_render_native_storage_reuse_test LABELS unit gpu memory)
     set_tests_properties(bloom.render.native_storage_reuse PROPERTIES SKIP_RETURN_CODE 77)
+    # #457: the pipeline cache's file format, persistence, rejection and directory bound, and
+    # command-set reuse across path-coverage shapes.
+    add_executable(bloom_render_gpu_pipeline_cache_test gpu_pipeline_cache_tests.cpp)
+    target_link_libraries(bloom_render_gpu_pipeline_cache_test PRIVATE
+        bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+    target_include_directories(bloom_render_gpu_pipeline_cache_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
+    bloom_enable_warnings(bloom_render_gpu_pipeline_cache_test)
+    bloom_add_test(NAME bloom.render.gpu_pipeline_cache
+        COMMAND bloom_render_gpu_pipeline_cache_test LABELS unit gpu render)
+    set_tests_properties(bloom.render.gpu_pipeline_cache PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(bloom_render_native_ocio_image_storage_test native_ocio_image_storage_tests.cpp)
     target_link_libraries(bloom_render_native_ocio_image_storage_test PRIVATE
         bloom_render Vulkan::Headers GPUOpen::VulkanMemoryAllocator)

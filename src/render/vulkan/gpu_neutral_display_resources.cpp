@@ -3,6 +3,7 @@
 // within the repository's source-size budget; both share Impl through the private header.
 
 #include "gpu_neutral_display_private.hpp"
+#include "gpu_pipeline_cache_private.hpp"
 #include "shaders/neutral_display_spirv.inc"
 
 #include <array>
@@ -187,7 +188,7 @@ bool GpuNeutralDisplay::Impl::createPipeline() noexcept {
     pipelineInfo.layout = *pipelineLayout;
     VkPipeline rawPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
-            rawDevice, VK_NULL_HANDLE, 1,
+            rawDevice, vulkan_detail::pipelineCacheForCreation(*state), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
         createDiagnostic = {GpuNeutralDisplayDiagnosticCode::ShaderRejected,
