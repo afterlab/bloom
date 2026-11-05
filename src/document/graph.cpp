@@ -164,7 +164,9 @@ void validateExpectedBindings(const bloom::document::NodeRecord& node,
     if (fixed == nullptr) {
         return false;
     }
-    return std::ranges::any_of(node.parameters,
+    // #543: a gradient stop's socket is linked by a driver record too, bound or not yet.
+    return bloom::document::parseGradientStopPort(fixed->port).has_value() ||
+           std::ranges::any_of(node.parameters,
                                [&](const auto& binding) { return binding.role == fixed->port; });
 }
 
@@ -726,6 +728,14 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         const auto* definition = registry.find(node.typeId, node.schemaVersion);
         for (const auto& binding : node.parameters) {
             const auto* parameter = parameters.find(binding.parameterId);
+            // #543: a stop's socket holds a stop link and nothing else.
+            if (parameter != nullptr && parseGradientStopPort(binding.role).has_value() !=
+                                            isGradientStopSchemaKey(parameter->schemaKey))
+                result.add(
+                    ValidationCode::InvalidValue,
+                    "nodes[" + std::to_string(node.id.value()) + "].parameters[" + binding.role +
+                        "]",
+                    "A gradient stop link binds a stop socket, and a stop socket only a stop link");
             const auto* driver = parameter == nullptr
                                      ? nullptr
                                      : std::get_if<DriverBindingSource>(&parameter->source);
@@ -756,19 +766,25 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
                 result.add(ValidationCode::MissingReference, path + ".outputPort",
                            "Driver binding references an undeclared output port");
             }
-            const InputPortDefinition* socket = nullptr;
-            if (definition != nullptr) {
-                const auto match =
-                    std::ranges::find(definition->inputs, binding.role, &InputPortDefinition::name);
-                socket = match == definition->inputs.end() ? nullptr : &*match;
-            }
-            if (definition != nullptr && socket == nullptr) {
+            std::optional<InputPortDefinition> socket;
+            if (definition != nullptr)
+                socket = findInputPort(*definition, binding.role);
+            // #543: a stop link names its component in its schema key and needs its gradient bound.
+            if (const auto stop = parseGradientStopPort(binding.role);
+                stop && socket &&
+                (parameter->schemaKey != gradientStopSchemaKey(stop->component) ||
+                 std::ranges::none_of(node.parameters, [&](const ParameterBinding& other) {
+                     return other.role == stop->role;
+                 })))
+                result.add(ValidationCode::InvalidValue, path,
+                           "A gradient stop link needs its gradient bound and its stop's schema");
+            if (definition != nullptr && !socket) {
                 // An inline selector decides which kernel the plan compiles, so it cannot be
                 // delivered per frame; it declares no socket, and a driver on it is not a link the
                 // editor could have made.
                 result.add(ValidationCode::InvalidValue, path,
                            "This parameter role has no linkable socket to drive");
-            } else if (sourceKind.has_value() && socket != nullptr &&
+            } else if (sourceKind.has_value() && socket &&
                        !isAcceptedSocketConnection(*sourceKind, socket->valueKind)) {
                 result.add(ValidationCode::SocketKindMismatch, path,
                            "Driver binding socket kinds do not match");
@@ -926,10 +942,8 @@ CanonicalGraph::inputKind(const InputPortRef& input, const NodeDefinitionRegistr
     if (definition == nullptr)
         return std::nullopt;
     if (const auto* fixed = std::get_if<NodeInputRef>(&input)) {
-        for (const auto& port : definition->inputs) {
-            if (port.name == fixed->port)
-                return port.valueKind;
-        }
+        if (const auto port = findInputPort(*definition, fixed->port))
+            return port->valueKind;
     } else {
         const auto& layerInput = std::get<LayerStackInputRef>(input);
         if (definition->layerSlotInput && definition->layerSlotInput->role == layerInput.role)
@@ -951,9 +965,8 @@ bool CanonicalGraph::acceptsConnection(const SocketValueKind source, const Input
     const auto* definition = node ? registry.find(node->typeId, node->schemaVersion) : nullptr;
     if (definition == nullptr)
         return false;
-    const auto port =
-        std::ranges::find(definition->inputs, fixed->port, &InputPortDefinition::name);
-    return port != definition->inputs.end() && isAcceptedInputConnection(source, *port);
+    const auto port = findInputPort(*definition, fixed->port);
+    return port && isAcceptedInputConnection(source, *port);
 }
 
 } // namespace bloom::document

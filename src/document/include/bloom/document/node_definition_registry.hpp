@@ -428,6 +428,16 @@ struct NodeDefinition {
     friend bool operator==(const NodeDefinition&, const NodeDefinition&) = default;
 };
 
+// #543: the gradient parameter of `definition` whose stop `port` names (gradientStopPortName), or
+// null when `port` is not a stop socket of one of its gradient parameters.
+[[nodiscard]] const ParameterDefinition*
+gradientParameterOfStopPort(const NodeDefinition& definition, std::string_view port);
+// The input `definition` declares under `port`: one of its inputs or, #543, the colour (Color) or
+// position (Scalar) socket of a stop of one of its gradient parameters. Every connect and
+// validation path that asks for a port's declaration asks this.
+[[nodiscard]] std::optional<InputPortDefinition> findInputPort(const NodeDefinition& definition,
+                                                               std::string_view port);
+
 enum class NodeRegistrationStatus {
     Registered,
     InvalidDefinition,

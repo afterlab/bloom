@@ -1613,6 +1613,33 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
     return true;
 }
 
+const ParameterDefinition* gradientParameterOfStopPort(const NodeDefinition& definition,
+                                                       const std::string_view port) {
+    const auto stop = parseGradientStopPort(port);
+    if (!stop)
+        return nullptr;
+    const auto found =
+        std::ranges::find(definition.parameters, stop->role, &ParameterDefinition::role);
+    return found != definition.parameters.end() && found->valueKind == ParameterValueKind::Gradient
+               ? &*found
+               : nullptr;
+}
+
+std::optional<InputPortDefinition> findInputPort(const NodeDefinition& definition,
+                                                 const std::string_view port) {
+    const auto declared = std::ranges::find(definition.inputs, port, &InputPortDefinition::name);
+    if (declared != definition.inputs.end())
+        return *declared;
+    if (gradientParameterOfStopPort(definition, port) == nullptr)
+        return std::nullopt;
+    const auto stop = parseGradientStopPort(port);
+    return InputPortDefinition{std::string(port),
+                               stop->component == GradientStopComponent::Color
+                                   ? SocketValueKind::Color
+                                   : SocketValueKind::Scalar,
+                               false};
+}
+
 bool isSupportedNodeVersion(const std::string_view typeId, const std::uint32_t version) {
     const auto& registry = builtInNodeDefinitions();
     return !typeId.starts_with("bloom.reroute-") &&

@@ -535,6 +535,10 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;
+    // #543: a stop link holds its driver and nothing else.
+    if (bloom::document::isGradientStopSchemaKey(schemaKey))
+        return std::holds_alternative<bloom::document::DriverBindingSource>(source) &&
+               isGenericallyValidSource(source);
     if (!isGenericallyValidSource(source)) {
         return false;
     }
@@ -646,6 +650,61 @@ bool isBoundedGradient(const GradientValue& value) noexcept {
                       std::abs(stop.color.green) <= kMaximumColorizeColor &&
                       std::abs(stop.color.blue) <= kMaximumColorizeColor;
            });
+}
+
+std::string gradientStopPortName(const std::string_view gradientRole, const std::uint32_t stop,
+                                 const GradientStopComponent component) {
+    return std::string(gradientRole) + ".stops[" + std::to_string(stop) + "]." +
+           (component == GradientStopComponent::Color ? "color" : "position");
+}
+
+std::optional<GradientStopPort> parseGradientStopPort(const std::string_view port) {
+    constexpr std::string_view marker = ".stops[";
+    const auto at = port.rfind(marker);
+    if (at == std::string_view::npos || at == 0)
+        return std::nullopt;
+    const auto digits = port.substr(at + marker.size());
+    const auto close = digits.find(']');
+    if (close == std::string_view::npos || close == 0 || close > 2 ||
+        (close > 1 && digits.front() == '0'))
+        return std::nullopt;
+    std::uint32_t stop = 0;
+    for (const char digit : digits.substr(0, close)) {
+        if (digit < '0' || digit > '9')
+            return std::nullopt;
+        stop = stop * 10U + static_cast<std::uint32_t>(digit - '0');
+    }
+    if (stop >= kMaximumGradientStops)
+        return std::nullopt;
+    const auto suffix = digits.substr(close + 1);
+    GradientStopComponent component{};
+    if (suffix == ".color")
+        component = GradientStopComponent::Color;
+    else if (suffix == ".position")
+        component = GradientStopComponent::Position;
+    else
+        return std::nullopt;
+    return GradientStopPort{std::string(port.substr(0, at)), stop, component};
+}
+
+std::optional<GradientValue>
+applyGradientStopValues(GradientValue value, const std::span<const GradientStopValue> values) {
+    for (const auto& driven : values) {
+        if (driven.stop >= value.stops.size())
+            continue;
+        auto& stop = value.stops[driven.stop];
+        if (const auto* color = std::get_if<core::Color4d>(&driven.value)) {
+            stop.color = *color;
+        } else {
+            const auto position = std::get<double>(driven.value);
+            if (!std::isfinite(position))
+                return std::nullopt;
+            stop.position = std::clamp(position, 0.0, 1.0);
+        }
+    }
+    if (!value.isValid())
+        return std::nullopt;
+    return value;
 }
 
 std::vector<GradientStop> sortedGradientStops(const GradientValue& value) {

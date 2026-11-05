@@ -275,6 +275,48 @@ struct GradientValue {
 // #541: a gradient whose stops are valid and within Colorize's +-1e6 colour bound.
 [[nodiscard]] bool isBoundedGradient(const GradientValue& value) noexcept;
 
+// #543: a gradient stop's colour or position driven by a value node. Each driven component is its
+// own parameter record, bound on the gradient's node under the stop's socket name
+// (`<gradient role>.stops[<index>].color` or `.position`) and holding nothing but the driver
+// binding, so every walk over a node's drivers (reachability, ordering, cycles, removal) sees it
+// as it sees any other driven parameter. `stop` is the stop's stored index in the gradient (the
+// stop of that index in every key of an animated gradient); at a time the gradient has no such
+// stop, the link changes nothing. The authored stop keeps its own colour and position under it.
+enum class GradientStopComponent : std::uint8_t { Color = 0, Position = 1 };
+inline constexpr std::string_view kGradientStopColorSchemaKey = "bloom.gradient.stop-color";
+inline constexpr std::string_view kGradientStopPositionSchemaKey = "bloom.gradient.stop-position";
+struct GradientStopPort final {
+    std::string role;
+    std::uint32_t stop = 0;
+    GradientStopComponent component = GradientStopComponent::Color;
+    friend bool operator==(const GradientStopPort&, const GradientStopPort&) = default;
+};
+[[nodiscard]] constexpr bool isGradientStopSchemaKey(const std::string_view schemaKey) noexcept {
+    return schemaKey == kGradientStopColorSchemaKey || schemaKey == kGradientStopPositionSchemaKey;
+}
+[[nodiscard]] constexpr std::string_view
+gradientStopSchemaKey(const GradientStopComponent component) noexcept {
+    return component == GradientStopComponent::Color ? kGradientStopColorSchemaKey
+                                                     : kGradientStopPositionSchemaKey;
+}
+// The socket name of one stop component, and its inverse: nullopt for any other port, including
+// an index of kMaximumGradientStops or more, a leading zero or a sign.
+[[nodiscard]] std::string gradientStopPortName(std::string_view gradientRole, std::uint32_t stop,
+                                               GradientStopComponent component);
+[[nodiscard]] std::optional<GradientStopPort> parseGradientStopPort(std::string_view port);
+// One driven stop component's value this frame.
+struct GradientStopValue final {
+    std::uint32_t stop = 0;
+    GradientStopComponent component = GradientStopComponent::Color;
+    std::variant<core::Color4d, double> value;
+    friend bool operator==(const GradientStopValue&, const GradientStopValue&) = default;
+};
+// `value` with each driven value applied: a colour replaces its stop's colour, a position (clamped
+// to [0, 1]) its stop's position; one whose stop the gradient does not have changes nothing.
+// nullopt when a driven value is not finite or leaves the gradient invalid.
+[[nodiscard]] std::optional<GradientValue>
+applyGradientStopValues(GradientValue value, std::span<const GradientStopValue> values);
+
 // The third authoring vector width (task S7). A genuinely new authoring type rather than a reuse of
 // Vec2d or Color4d: a Color is not a Vec4 under
 // docs/architecture/evaluation-primitives.md's Type Binding rule, and by the same reasoning a
