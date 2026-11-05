@@ -716,6 +716,40 @@ QPainterPath linkPath(const QPointF start, const QPointF end, const LinkStyle st
     return path;
 }
 
+namespace {
+// #543: a gradient stop's socket reads as its row does ("Gradient stop 2 color"); every other
+// socket by its port name.
+[[nodiscard]] QString socketDisplayName(const QString& name) {
+    const auto stop = document::parseGradientStopPort(name.toStdString());
+    if (!stop)
+        return name;
+    return stop->component == document::GradientStopComponent::Color
+               ? QCoreApplication::translate("node_editor", "%1 stop %2 color")
+                     .arg(QString::fromStdString(stop->role))
+                     .arg(stop->stop + 1)
+               : QCoreApplication::translate("node_editor", "%1 stop %2 position")
+                     .arg(QString::fromStdString(stop->role))
+                     .arg(stop->stop + 1);
+}
+
+// #543: how many stops a gradient parameter has, the most of any key when it is animated.
+[[nodiscard]] std::size_t gradientStopCount(const document::Composition& composition,
+                                            const document::ParameterId id) {
+    const auto* record = composition.parameters().find(id);
+    if (record == nullptr)
+        return 0;
+    if (const auto* constant = std::get_if<document::ConstantValueSource>(&record->source))
+        if (const auto* gradient = std::get_if<document::GradientValue>(&constant->value))
+            return gradient->stops.size();
+    std::size_t count = 0;
+    if (const auto* animated = std::get_if<document::AnimationCurveSource>(&record->source))
+        if (const auto* curve = composition.animationCurves().findGradient(animated->curveId))
+            for (const auto& key : curve->keyframes)
+                count = std::max(count, key.value.stops.size());
+    return count;
+}
+} // namespace
+
 SocketItem::SocketItem(const document::NodeId node, QString portName,
                        const document::SocketValueKind valueKind,
                        std::optional<document::InputPortRef> inputRef,
@@ -731,7 +765,7 @@ SocketItem::SocketItem(const document::NodeId node, QString portName,
     setAcceptedMouseButtons(Qt::LeftButton);
     setZValue(2);
     setCursor(draggable() ? Qt::CrossCursor : Qt::ForbiddenCursor);
-    description_ = name + QStringLiteral(" · ") + socketKindName(kind);
+    description_ = socketDisplayName(name) + QStringLiteral(" · ") + socketKindName(kind);
     setAuthoringEnabled(true);
 }
 
@@ -989,6 +1023,49 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                              linked,
                              port.acceptsPixelKinds});
         }
+        // #543: each stop of a bound gradient has a colour and a position socket, which the card
+        // puts beside the stop's rows; a linked one always shows.
+        for (const auto& parameter : definition->parameters) {
+            if (parameter.valueKind != document::ParameterValueKind::Gradient)
+                continue;
+            const auto gradient = std::ranges::find(node.parameters, parameter.role,
+                                                    &document::ParameterBinding::role);
+            if (gradient == node.parameters.end())
+                continue;
+            auto count = gradientStopCount(composition, gradient->parameterId);
+            for (const auto& binding : node.parameters)
+                if (const auto stop = document::parseGradientStopPort(binding.role);
+                    stop && stop->role == parameter.role)
+                    count = std::max<std::size_t>(count, stop->stop + 1U);
+            for (std::uint32_t stop = 0; stop < count && stop < document::kMaximumGradientStops;
+                 ++stop)
+                for (const auto component : {document::GradientStopComponent::Color,
+                                             document::GradientStopComponent::Position}) {
+                    const auto port =
+                        document::gradientStopPortName(parameter.role, stop, component);
+                    const auto binding =
+                        std::ranges::find(node.parameters, port, &document::ParameterBinding::role);
+                    const auto* link = binding == node.parameters.end()
+                                           ? nullptr
+                                           : composition.parameters().find(binding->parameterId);
+                    const bool linked =
+                        link != nullptr &&
+                        std::holds_alternative<document::DriverBindingSource>(link->source);
+                    if (linked)
+                        linkedInputs_.insert(QString::fromStdString(port));
+                    specs.push_back({QString::fromStdString(port),
+                                     component == document::GradientStopComponent::Color
+                                         ? document::SocketValueKind::Color
+                                         : document::SocketValueKind::Scalar,
+                                     document::NodeInputRef{node.id, port},
+                                     std::nullopt,
+                                     false,
+                                     {},
+                                     false,
+                                     linked,
+                                     false});
+                }
+        }
         const auto* merge = composition.graph().merge(node.id);
         if (definition->layerSlotInput && merge) {
             // Task S1, item 7: ONE ordered multi-input for the whole stack, not one repeated row
@@ -1076,7 +1153,8 @@ void NodeEdgeItem::reattach() {
     // Every link names both of its ends (task FIX1, item C), so hovering a wire in a dense graph
     // says what it connects instead of leaving the artist to trace it.
     const QString tip = QCoreApplication::translate("node_editor", "%1 · %2  →  %3 · %4")
-                            .arg(source_.title(), output_.name, destination_.title(), input_.name);
+                            .arg(source_.title(), output_.name, destination_.title(),
+                                 socketDisplayName(input_.name));
     if (toolTip() != tip)
         setToolTip(tip);
     source_.addEdge(*this);

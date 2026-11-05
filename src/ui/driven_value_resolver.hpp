@@ -4,6 +4,7 @@
 #include <atomic>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/runtime/compiled_value_graph.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <functional>
 #include <map>
@@ -23,6 +24,8 @@ class DrivenValueResolver final : public QObject {
     struct Values final {
         std::map<document::ParameterId, QString> parameters;
         std::map<ValueOutputKey, QString> outputs;
+        // #543: the same driven values, typed, for a surface that draws one (a gradient stop).
+        std::map<document::ParameterId, runtime::CompiledValue> values;
     };
     // #358 work counters, shared with the worker task.
     struct Work final {

@@ -65,6 +65,8 @@ void KGradientEditor::setColorConverter(KColorConverter converter) {
 void KGradientEditor::setStops(std::vector<Stop> stops) {
     if (interactionActive_)
         return;
+    for (std::size_t index = 0; index < stops.size(); ++index)
+        stops[index].origin = index;
     std::ranges::stable_sort(stops, {}, &Stop::position);
     if (stops == stops_)
         return;
@@ -234,6 +236,27 @@ std::size_t KGradientEditor::moveStop(std::size_t index, const double position) 
     return index;
 }
 
+void KGradientEditor::resort() {
+    std::vector<std::size_t> order(stops_.size());
+    for (std::size_t index = 0; index < order.size(); ++index)
+        order[index] = index;
+    std::ranges::stable_sort(order, {},
+                             [this](const std::size_t index) { return stops_[index].position; });
+    std::vector<Stop> sorted;
+    sorted.reserve(stops_.size());
+    std::optional<std::size_t> selected;
+    for (std::size_t index = 0; index < order.size(); ++index) {
+        if (selected_ == order[index])
+            selected = index;
+        sorted.push_back(stops_[order[index]]);
+    }
+    stops_ = std::move(sorted);
+    if (selected != selected_) {
+        selected_ = selected;
+        Q_EMIT selectedStopChanged();
+    }
+}
+
 bool KGradientEditor::addStop(const double position) {
     if (!isEnabled() || stops_.size() >= maximumStops_ || !std::isfinite(position))
         return false;
@@ -264,7 +287,8 @@ bool KGradientEditor::removeStop(const std::size_t index) {
 }
 
 bool KGradientEditor::setStopPosition(const std::size_t index, const double position) {
-    if (!isEnabled() || index >= stops_.size() || !std::isfinite(position))
+    if (!isEnabled() || index >= stops_.size() || !std::isfinite(position) ||
+        stops_[index].positionLinked)
         return false;
     beginInteraction();
     moveStop(index, position);
@@ -274,7 +298,7 @@ bool KGradientEditor::setStopPosition(const std::size_t index, const double posi
 }
 
 bool KGradientEditor::setStopColor(const std::size_t index, const KColor& color) {
-    if (index >= stops_.size())
+    if (index >= stops_.size() || stops_[index].colorLinked)
         return false;
     auto reference = color;
     if (reference.space != ColorSpace::Reference) {
@@ -295,9 +319,12 @@ void KGradientEditor::distributeStops() {
     if (!isEnabled() || stops_.size() < 2)
         return;
     beginInteraction();
+    // A linked position stays where its link puts it.
     for (std::size_t index = 0; index < stops_.size(); ++index)
-        stops_[index].position =
-            static_cast<double>(index) / static_cast<double>(stops_.size() - 1);
+        if (!stops_[index].positionLinked)
+            stops_[index].position =
+                static_cast<double>(index) / static_cast<double>(stops_.size() - 1);
+    resort();
     emitChanged();
     finishInteraction(true);
 }
@@ -308,11 +335,13 @@ void KGradientEditor::reverseStops() {
     beginInteraction();
     std::ranges::reverse(stops_);
     for (auto& stop : stops_)
-        stop.position = 1.0 - stop.position;
+        if (!stop.positionLinked)
+            stop.position = 1.0 - stop.position;
     if (selected_) {
         selected_ = stops_.size() - 1 - *selected_;
         Q_EMIT selectedStopChanged();
     }
+    resort();
     emitChanged();
     finishInteraction(true);
 }
@@ -343,6 +372,10 @@ void KGradientEditor::mousePressEvent(QMouseEvent* event) {
         stops_.insert(insert, Stop{at, colorAt(at)});
         moved_ = true;
         emitChanged();
+    } else if (stops_[*index].positionLinked) {
+        // A linked position is not dragged: the press selects the stop.
+        setSelectedStop(index);
+        return;
     } else {
         beginInteraction();
     }
@@ -431,7 +464,8 @@ void KGradientEditor::mouseDoubleClickEvent(QMouseEvent* event) {
     if (const auto index = stopAt(event->position())) {
         finishInteraction(true);
         setSelectedStop(index);
-        Q_EMIT stopColorRequested(*index);
+        if (!stops_[*index].colorLinked)
+            Q_EMIT stopColorRequested(*index);
         event->accept();
         return;
     }
@@ -516,11 +550,16 @@ void KGradientEditor::keyPressEvent(QKeyEvent* event) {
         return;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-        Q_EMIT stopColorRequested(*selected_);
+        if (!stops_[*selected_].colorLinked)
+            Q_EMIT stopColorRequested(*selected_);
         event->accept();
         return;
     default:
         break;
+    }
+    if (target && stops_[*selected_].positionLinked) {
+        event->accept();
+        return;
     }
     if (!target) {
         QWidget::keyPressEvent(event);
@@ -669,6 +708,7 @@ void KGradientEditor::paintEvent(QPaintEvent*) {
         handle.lineTo(centre.x() - half, centre.y() - half / 2.0);
         handle.closeSubpath();
         painter.setBrush(displayed(stops_[index].color));
+        const auto& stop = stops_[index];
         if (selected) {
             QPen pen(color(dragged_ ? Color::AccentPressed : Color::Accent));
             pen.setWidthF(kEmphasisStroke);
@@ -677,6 +717,25 @@ void KGradientEditor::paintEvent(QPaintEvent*) {
             applyHairlinePen(painter, color(Color::Foreground));
         }
         painter.drawPath(handle);
+        if (stop.colorLinked || stop.positionLinked) {
+            // #543: a linked stop: a dashed ring in its link's socket colour around the handle and
+            // a dot of that colour where the handle meets the bar.
+            const auto linkColor =
+                color(stop.colorLinked ? Color::SocketColor : Color::SocketScalar);
+            QPen dashed(linkColor);
+            dashed.setWidthF(kEmphasisStroke);
+            dashed.setDashPattern({2.0, 1.5});
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(dashed);
+            const qreal ring = kEmphasisStroke + 1.0;
+            painter.drawRoundedRect(handle.boundingRect().adjusted(-ring, -ring, ring, ring),
+                                    static_cast<qreal>(Radius::Small),
+                                    static_cast<qreal>(Radius::Small));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(linkColor);
+            const qreal dot = px(Spacing::XXS);
+            painter.drawEllipse(QPointF(centre.x(), bar.bottom() - dot), dot, dot);
+        }
         if (selected && hasKeyboardFocus(*this) && state != State::Disabled)
             drawFocusRing(painter, handle.boundingRect(), Radius::Small);
     }

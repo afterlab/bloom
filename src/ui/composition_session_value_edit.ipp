@@ -354,6 +354,11 @@ bool CompositionSession::commitValueEdit() {
             if (result && linked.value != linked.base)
                 result = appendParameterEdit(transaction, linked.parameter, edit.time,
                                              linked.value);
+        // #543: the gradient's stop links follow their stops in the same step.
+        if (result && edit.stopLinks && edit.value != edit.base)
+            transaction.emplace<commands::RemapGradientStopLinks>(
+                compositionId_, edit.stopLinks->node, edit.stopLinks->role,
+                edit.stopLinks->newIndexOfOld);
         if (result)
             result = executeTransaction(std::move(transaction)).succeeded();
     }

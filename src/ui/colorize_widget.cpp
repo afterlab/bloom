@@ -623,6 +623,11 @@ ColorizeCardWidget::ColorizeCardWidget(CompositionSession& session, const docume
                                         {1.0, *highlights}}};
     };
     gradient_ = new GradientParameterRow(session_, node_, std::move(gradient), this);
+    // #543: the stops' rows open, close and follow their links.
+    connect(gradient_, &GradientParameterRow::layoutChanged, this, [this] {
+        place();
+        emit rowsChanged();
+    });
     ramp_->setStopClicked([this](const std::string& role) {
         if (auto* row = colorRow(role); row && row->chip()->isEnabled())
             row->chip()->openPicker();
@@ -767,6 +772,10 @@ bool ColorizeCardWidget::showsRole(const std::string_view role) const {
 
 std::optional<int> ColorizeCardWidget::socketY(const std::string_view role) const {
     for (auto* row : shownRows()) {
+        // #543: a gradient stop's colour or position row.
+        if (row == gradient_)
+            if (const auto at = gradient_->socketY(role))
+                return gradient_->y() + *at;
         if (const auto* value = qobject_cast<const GradingValueRow*>(row);
             value && value->role() == role)
             return value->y() + value->socketY();

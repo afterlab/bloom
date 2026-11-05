@@ -136,6 +136,12 @@ QString CompositionSession::drivenValueText(const document::ParameterId paramete
     return found == drivenText_.end() ? QString{} : found->second;
 }
 
+const runtime::CompiledValue*
+CompositionSession::drivenValue(const document::ParameterId parameterId) const {
+    const auto found = drivenTyped_.find(parameterId);
+    return found == drivenTyped_.end() ? nullptr : &found->second;
+}
+
 QString CompositionSession::valueOutputText(const document::NodeId nodeId,
                                             const std::string_view outputPort) const {
     const auto found = valueOutputText_.find({nodeId, std::string(outputPort)});
@@ -185,6 +191,7 @@ void CompositionSession::refreshDrivenValues() {
     if (driven.empty() && !hasBoundsReadout) {
         if (!drivenText_.empty() || !valueOutputText_.empty()) {
             drivenText_.clear();
+            drivenTyped_.clear();
             valueOutputText_.clear();
             Q_EMIT drivenValuesChanged();
         }
@@ -194,6 +201,7 @@ void CompositionSession::refreshDrivenValues() {
         drivenValues_ = new DrivenValueResolver(*this, this);
         drivenValues_->ready = [this](const DrivenValueResolver::Values& values) {
             drivenText_ = values.parameters;
+            drivenTyped_ = values.values;
             valueOutputText_ = values.outputs;
             Q_EMIT drivenValuesChanged();
         };

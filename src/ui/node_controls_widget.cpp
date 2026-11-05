@@ -520,8 +520,14 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
             spec.frame = [this] { return compositionFrame(session_); };
         pad_ = new PointPadRow(session_, node_, std::move(spec), this);
     }
-    for (auto& gradient : controls.gradients)
+    for (auto& gradient : controls.gradients) {
         gradients_.push_back(new GradientParameterRow(session_, node_, std::move(gradient), this));
+        // #543: the stops' rows open, close and follow their links.
+        connect(gradients_.back(), &GradientParameterRow::layoutChanged, this, [this] {
+            place();
+            emit rowsChanged();
+        });
+    }
     for (auto& range : controls.ranges)
         ranges_.push_back(new RangeRow(session_, node_, std::move(range), this));
     for (auto& angle : controls.angles) {
@@ -551,6 +557,9 @@ bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
 }
 
 std::optional<int> NodeControlsCardWidget::socketY(const std::string_view role) const {
+    for (const auto* gradient : gradients_)
+        if (const auto at = gradient->socketY(role))
+            return gradient->y() + *at;
     for (const auto* range : ranges_)
         if (const auto at = range->socketY(role))
             return range->y() + *at;

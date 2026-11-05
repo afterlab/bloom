@@ -627,6 +627,10 @@ class CompositionSession final : public QObject {
     // ONE evaluation answers every surface: the Properties row and the timeline row for the same
     // parameter read the same string by construction.
     [[nodiscard]] QString drivenValueText(document::ParameterId parameterId) const;
+    // #543: the same newest resolution, typed (a driven gradient stop's colour or position), or
+    // null while nothing has been resolved for it.
+    [[nodiscard]] const runtime::CompiledValue*
+    drivenValue(document::ParameterId parameterId) const;
     // The evaluated value of a named value-node output, or an empty string while the worker has
     // not published a frame for it. Layer Bounds uses the same readback as driven parameters, so
     // Properties and node cards never evaluate the graph on the UI thread.
@@ -669,6 +673,15 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setParameterValue(document::ParameterId parameterId,
                                          document::ParameterValue value,
                                          const QString& commandLabel);
+    // #543: setParameterValue() for a gradient of `node` bound as `role`, which also moves the
+    // stops' links with their stops: `newIndexOfOld[i]` is the stored index stop `i` has in
+    // `value`, or none when it was removed (its links go too; commands::RemapGradientStopLinks).
+    // One undo step; during a value edit on `parameterId` both wait for its commit.
+    [[nodiscard]] bool setGradientValue(document::ParameterId parameterId,
+                                        document::GradientValue value, document::NodeId node,
+                                        std::string role,
+                                        std::vector<std::optional<std::uint32_t>> newIndexOfOld,
+                                        const QString& commandLabel);
 
     // Unfinished edits belong to the session. Matching setters update this live value until
     // commit; no command, revision or key is created by begin/update/cancel.
@@ -1141,6 +1154,13 @@ class CompositionSession final : public QObject {
         };
         std::vector<LinkedEdit> linked{};
         QString label{};
+        // #543: the gradient stop links the commit moves with their stops (setGradientValue).
+        struct StopLinkRemap {
+            document::NodeId node;
+            std::string role;
+            std::vector<std::optional<std::uint32_t>> newIndexOfOld;
+        };
+        std::optional<StopLinkRemap> stopLinks{};
     };
     std::optional<ValueEdit> valueEdit_;
     struct KeyframePreview final {
@@ -1162,6 +1182,7 @@ class CompositionSession final : public QObject {
     class DrivenValueResolver* drivenValues_ = nullptr;
     QString drivenRequest_;
     std::map<document::ParameterId, QString> drivenText_;
+    std::map<document::ParameterId, runtime::CompiledValue> drivenTyped_;
     std::map<std::pair<document::NodeId, std::string>, QString> valueOutputText_;
 };
 

@@ -1759,6 +1759,47 @@ bool CompositionSession::setParameterValue(const document::ParameterId parameter
            executeTransaction(std::move(transaction)).succeeded();
 }
 
+namespace {
+// #543: whether a stop remap moves or removes a link of `node`'s gradient `role`.
+[[nodiscard]] bool movesStopLinks(const document::Composition* composition,
+                                  const document::NodeId node, const std::string_view role,
+                                  const std::vector<std::optional<std::uint32_t>>& newIndexOfOld) {
+    const auto* record = composition ? composition->graph().findNode(node) : nullptr;
+    if (record == nullptr)
+        return false;
+    return std::ranges::any_of(record->parameters, [&](const document::ParameterBinding& binding) {
+        const auto stop = document::parseGradientStopPort(binding.role);
+        return stop && stop->role == role && stop->stop < newIndexOfOld.size() &&
+               newIndexOfOld[stop->stop] != std::optional<std::uint32_t>(stop->stop);
+    });
+}
+} // namespace
+
+bool CompositionSession::setGradientValue(const document::ParameterId parameterId,
+                                          document::GradientValue value,
+                                          const document::NodeId node, std::string role,
+                                          std::vector<std::optional<std::uint32_t>> newIndexOfOld,
+                                          const QString& commandLabel) {
+    const bool moves = movesStopLinks(composition(), node, role, newIndexOfOld);
+    if (isValueEditing(parameterId)) {
+        if (!updateValueEdit(std::move(value)) || !valueEdit_)
+            return false;
+        if (moves)
+            valueEdit_->stopLinks =
+                ValueEdit::StopLinkRemap{node, std::move(role), std::move(newIndexOfOld)};
+        else
+            valueEdit_->stopLinks.reset();
+        return true;
+    }
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    if (!appendParameterEdit(transaction, parameterId, currentTime_, std::move(value)))
+        return false;
+    if (moves)
+        transaction.emplace<commands::RemapGradientStopLinks>(compositionId_, node, std::move(role),
+                                                              std::move(newIndexOfOld));
+    return executeTransaction(std::move(transaction)).succeeded();
+}
+
 bool CompositionSession::setSelectedAnchor(const double x, const double y,
                                            const AuthoringTarget target) {
     return setSelectionVec2Parameter(document::kAnchorParameterRole, x, y,

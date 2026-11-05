@@ -29,8 +29,9 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
-#include <bloom/ui/composition_authoring.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/colorize_widget.hpp>
+#include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/gradient_parameter_row.hpp>
@@ -47,6 +48,7 @@
 #include <bloom/ui/kit/value_field.hpp>
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/scalar_slider_widget.hpp>
 
 #include <cmath>
@@ -516,8 +518,9 @@ void colorizeGradientMap() {
     mouse(editor, QEvent::MouseButtonRelease, at);
     gradient = storedGradient(fixture.session, fixture.node);
     expect(fixture.stack.size() == commands + 1 && gradient && gradient->stops.size() == 4 &&
-               std::abs(gradient->stops[2].position - 0.7) < 1e-6,
-           "a press on the bar adds a stop as one command");
+               std::abs(gradient->stops.back().position - 0.7) < 1e-6,
+           "a press on the bar adds a stop as one command, after the stored stops so each "
+           "stop keeps its index");
     QApplication::processEvents();
     commands = fixture.stack.size();
     const QPointF added = editor.stopCentre(2);
@@ -723,7 +726,7 @@ void nodeControlCards() {
         mouse(editor, QEvent::MouseButtonRelease, at);
         const auto gradient = storedGradient(fixture.session, fixture.node, role);
         expect(fixture.stack.size() == commands + 1 && gradient && gradient->stops.size() == 3 &&
-                   std::abs(gradient->stops[1].position - 0.5) < 1e-6,
+                   std::abs(gradient->stops.back().position - 0.5) < 1e-6,
                "a press on the gradient bar adds a stop as one command");
         expect(fixture.session.undo() &&
                    storedGradient(fixture.session, fixture.node, role) == initial,
@@ -731,6 +734,165 @@ void nodeControlCards() {
         QApplication::processEvents();
         expect(row->reset(), "the gradient row resets to the node's default");
     }
+}
+
+// #543: a Colour node linked to a gradient's second stop colour. The card draws a socket per stop
+// colour and position with the link's wire, the stop's Values row reads "Linked to <node>", the
+// stop's handle shows the driven colour and is marked linked, and the Stop row's chip is disabled.
+// Properties draws the same rows. Moving the stop past another keeps its link; removing it removes
+// the link in the same undo step.
+void linkedGradientStop() {
+    CardFixture fixture(document::kLinearGradientNodeType);
+    auto* card = fixture.item
+                     ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                     : nullptr;
+    if (card == nullptr || card->gradientRows().size() != 1)
+        return expect(false, "the Linear Gradient card draws its gradient row");
+    auto* row = card->gradientRows().front();
+    const auto colour = addNode(fixture.session, document::kColorValueNodeType);
+    const auto value = ui::nodeRoleParameter(fixture.session, colour, "value");
+    constexpr core::Color4d kDriven{0.9, 0.35, 0.05, 1.0};
+    const auto driven = [&](const ui::kit::KColor& shown) {
+        return std::abs(static_cast<double>(shown.red) - kDriven.red) < 1e-6 &&
+               std::abs(static_cast<double>(shown.green) - kDriven.green) < 1e-6 &&
+               std::abs(static_cast<double>(shown.blue) - kDriven.blue) < 1e-6;
+    };
+    {
+        commands::Transaction transaction("Colour", fixture.session.snapshot().revision());
+        transaction.emplace<commands::SetParameterSource>(fixture.session.compositionId(),
+                                                          value.value_or(document::ParameterId{}),
+                                                          document::ConstantValueSource{kDriven});
+        expect(value && fixture.session.executeNodeTransaction(std::move(transaction)).succeeded(),
+               "the Colour node takes an orange");
+    }
+    const auto port =
+        document::gradientStopPortName("gradient", 1, document::GradientStopComponent::Color);
+    {
+        commands::Transaction transaction("Link", fixture.session.snapshot().revision());
+        transaction.emplace<commands::ConnectPorts>(fixture.session.compositionId(),
+                                                    document::OutputPortRef{colour, "value"},
+                                                    document::NodeInputRef{fixture.node, port});
+        expect(fixture.session.executeNodeTransaction(std::move(transaction)).succeeded(),
+               "a Colour output links to a gradient stop colour");
+    }
+    // The card and Properties refresh, and the driven value resolves.
+    QElapsedTimer settle;
+    settle.start();
+    const auto linkRow = [&]() -> const ui::GradientParameterRow::StopRow* {
+        for (const auto& candidate : row->stopRows())
+            if (candidate.stop == 1 &&
+                candidate.component == document::GradientStopComponent::Color)
+                return &candidate;
+        return nullptr;
+    };
+    while (settle.elapsed() < 5'000 &&
+           !(row->editor()->stops().size() == 2 && driven(row->editor()->stops()[1].color)))
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    fixture.item =
+        ui::node_editor::nodeItemAncestor(fixture.editor->graphScene()->findNodeItem(fixture.node));
+    card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                        : nullptr;
+    if (card == nullptr || card->gradientRows().size() != 1)
+        return expect(false, "the card still draws its gradient row after the link");
+    row = card->gradientRows().front();
+    QApplication::processEvents();
+    const auto* stopRow = linkRow();
+    expect(row->stopLink(1, document::GradientStopComponent::Color).has_value() && stopRow &&
+               stopRow->shown && stopRow->link && stopRow->link->isVisible() &&
+               stopRow->link->text() == QStringLiteral("Linked to Color") && stopRow->chip &&
+               !stopRow->chip->isVisible(),
+           "the linked stop's colour row reads Linked to Colour in place of its chip");
+    const auto stops = row->editor()->stops();
+    expect(stops.size() == 2 && stops[1].colorLinked && !stops[1].positionLinked &&
+               driven(stops[1].color) && !stops[0].colorLinked,
+           "the editor shows the driven colour on the linked stop and marks it linked");
+    row->editor()->setSelectedStop(1);
+    QApplication::processEvents();
+    expect(!row->stopChip()->isEnabled() && row->stopPosition()->isEnabled(),
+           "the selected linked stop's chip is disabled while its position stays editable");
+    bool socket = false;
+    for (const auto* item : fixture.item->sockets())
+        socket = socket ||
+                 item->accepts(document::InputPortRef{document::NodeInputRef{fixture.node, port}});
+    expect(socket, "the card draws the stop colour's socket");
+
+    QWidget panel;
+    auto* properties = new ui::PropertiesEditor(fixture.session, &panel);
+    properties->setGeometry(0, 0, 420, 900);
+    panel.resize(420, 900);
+    panel.show();
+    fixture.session.selectNode(fixture.node);
+    QApplication::processEvents();
+    const ui::GradientParameterRow* inProperties = nullptr;
+    for (auto* candidate : properties->findChildren<ui::GradientParameterRow*>())
+        inProperties = candidate;
+    settle.restart();
+    while (settle.elapsed() < 5'000 && inProperties &&
+           !(inProperties->editor()->stops().size() == 2 &&
+             driven(inProperties->editor()->stops()[1].color)))
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    bool propertiesLinked = false;
+    if (inProperties)
+        for (const auto& candidate : inProperties->stopRows())
+            propertiesLinked =
+                propertiesLinked ||
+                (candidate.stop == 1 && candidate.link && candidate.link->isVisible() &&
+                 candidate.link->text() == QStringLiteral("Linked to Color"));
+    expect(propertiesLinked && inProperties->editor()->stops()[1].colorLinked,
+           "Properties shows the same linked stop row");
+    capture(fixture, QStringLiteral("gradient-stop-linked"));
+    row->setValuesShown(true);
+    QApplication::processEvents();
+    std::size_t shownRows = 0;
+    for (const auto& candidate : row->stopRows())
+        shownRows += candidate.shown ? 1U : 0U;
+    expect(shownRows == 4, "the Values disclosure shows a colour and a position row per stop");
+    capture(fixture, QStringLiteral("gradient-stop-values"));
+    row->setValuesShown(false);
+    QApplication::processEvents();
+    if (const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        !directory.isEmpty())
+        properties->grab().save(directory + QStringLiteral("/gradient-stop-linked-properties.png"));
+
+    // The linked stop moves to a quarter, then the other stop moves past it to three quarters:
+    // each keeps its stored index, so the link stays on the orange stop.
+    auto& editor = *row->editor();
+    const auto bar = editor.barRect();
+    const auto drag = [&](const std::size_t shown, const double to) {
+        const QPointF from = editor.stopCentre(shown);
+        const QPointF target(bar.left() + bar.width() * to, from.y());
+        mouse(editor, QEvent::MouseButtonPress, from);
+        mouse(editor, QEvent::MouseMove, target);
+        mouse(editor, QEvent::MouseButtonRelease, target);
+        QApplication::processEvents();
+    };
+    drag(1, 0.25);
+    drag(0, 0.75);
+    const auto link = ui::nodeRoleParameter(fixture.session, fixture.node, port);
+    const auto moved = storedGradient(fixture.session, fixture.node);
+    expect(link && moved && moved->stops.size() == 2 &&
+               std::abs(moved->stops[0].position - 0.75) < 0.02 &&
+               std::abs(moved->stops[1].position - 0.25) < 0.02 && editor.stops()[0].colorLinked,
+           "stops moving past each other keep their stored indices and the link stays on its "
+           "stop");
+    // A third stop, then the linked one pulled off the bar: it goes with its link in one command.
+    const QPointF at(bar.left() + bar.width() * 0.5, bar.center().y());
+    mouse(editor, QEvent::MouseButtonPress, at);
+    mouse(editor, QEvent::MouseButtonRelease, at);
+    QApplication::processEvents();
+    // Pulling it off the bar removes it and its link as one command.
+    const auto commands = fixture.stack.size();
+    const auto linked = editor.stopCentre(0);
+    mouse(editor, QEvent::MouseButtonPress, linked);
+    const auto away = linked + QPointF(0.0, ui::kit::px(ui::kit::Size::DropdownWidth));
+    mouse(editor, QEvent::MouseMove, away);
+    mouse(editor, QEvent::MouseButtonRelease, away);
+    QApplication::processEvents();
+    expect(fixture.stack.size() == commands + 1 &&
+               !ui::nodeRoleParameter(fixture.session, fixture.node, port),
+           "removing the linked stop removes its link in the same command");
+    expect(fixture.session.undo() && ui::nodeRoleParameter(fixture.session, fixture.node, port),
+           "one undo brings the stop back with its link");
 }
 
 // A group diamond keys every value of the group as one command, and unkeys them as one.
@@ -768,6 +930,7 @@ int main(int argc, char** argv) {
     colorizeCard();
     colorizeGradientMap();
     nodeControlCards();
+    linkedGradientStop();
     if (failures != 0)
         return 1;
     std::cout << "PASS: grading cards\n";

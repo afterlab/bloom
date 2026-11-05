@@ -2182,6 +2182,9 @@ class NodeItem final : public QGraphicsObject {
         // no proxy below needs scaling down any more.
         qreal socketColumn = 0.0;
         for (const auto* socket : sockets_) {
+            // #543: a gradient stop's socket sits beside its row and draws no name.
+            if (document::parseGradientStopPort(socket->name.toStdString()))
+                continue;
             socketColumn = std::max(socketColumn, rowMetrics.horizontalAdvance(socket->name));
         }
         minimumWidth_ = kCardMinimumWidth;
@@ -2218,6 +2221,10 @@ class NodeItem final : public QGraphicsObject {
         if (colorChip_)
             if (const auto role = controlRoles_.find(colorChip_); role != controlRoles_.end())
                 parameterRoles.insert(role->second);
+        // #543: a gradient stop's socket waits with its row, like a row a card widget keeps.
+        for (const auto* socket : sockets_)
+            if (socket->input && document::parseGradientStopPort(socket->name.toStdString()))
+                parameterRoles.insert(socket->name);
         qreal socketHeight = 0.0, outputHeight = 0.0;
         for (const auto* socket : sockets_)
             if (!parameterRoles.contains(socket->name)) {
@@ -2282,6 +2289,11 @@ class NodeItem final : public QGraphicsObject {
                 if (const auto role = controlRoles_.find(row.widget); role != controlRoles_.end())
                     if (const auto at = cardWidget_->socketY(role->second.toStdString()))
                         parameterSocketY_.try_emplace(role->second, y + *at);
+            // #543: and so does a gradient stop's socket, while the widget shows its row.
+            for (const auto* socket : sockets_)
+                if (socket->input && document::parseGradientStopPort(socket->name.toStdString()))
+                    if (const auto at = cardWidget_->socketY(socket->name.toStdString()))
+                        parameterSocketY_.try_emplace(socket->name, y + *at);
             y += widgetHeight;
         }
         const auto placeRow = [this, rowHeight, labelColumn](QWidget* field, qreal top) {

@@ -6,19 +6,30 @@
 // drag on the bar, a colour pick or a position scrub is one session value edit (one undo step; a
 // key at the playhead when animated, the whole gradient as one key).
 //
+// #543: under them a Values disclosure shows a row for each stop's colour and position, each with
+// its socket on a node card, so a value node can drive a stop as it drives any other value. A
+// linked row always shows; it reads "Linked to <node>" in place of its control, and the stop's
+// handle on the bar is drawn linked (the editor shows the driven colour and position). Editing the
+// gradient keeps each link on its stop: a stop keeps its stored index through moves, and removing
+// one removes its links (CompositionSession::setGradientValue).
+//
 // Colorize's Gradient Map, the Linear and Radial Gradient generators' colours and Glow's tint
 // gradient draw this row. A node saved without its gradient bound shows what it renders with (the
 // spec's fallback, else the node's default) and binds the gradient on its first edit.
 
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/ui/kit/gradient_editor.hpp>
 
 #include <QString>
 #include <QWidget>
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 class QAction;
 class QMenu;
@@ -28,6 +39,7 @@ namespace bloom::ui {
 class CompositionSession;
 class KeyframeDiamond;
 namespace kit {
+class KButton;
 class KColorChip;
 class KGradientEditor;
 class KLabel;
@@ -51,6 +63,19 @@ class GradientParameterRow final : public QWidget {
         std::function<std::optional<document::GradientValue>()> fallback;
     };
 
+    // #543: one stop component's row: "Stop 2 color" with its chip, or "Stop 2 position" with
+    // its field, and the label that replaces the control while it is linked.
+    struct StopRow final {
+        std::uint32_t stop = 0;
+        document::GradientStopComponent component = document::GradientStopComponent::Color;
+        kit::KLabel* label = nullptr;
+        kit::KColorChip* chip = nullptr;
+        kit::KValueField* field = nullptr;
+        kit::KLabel* link = nullptr;
+        int y = 0;
+        bool shown = false;
+    };
+
     GradientParameterRow(CompositionSession& session, document::NodeId node, Spec spec,
                          QWidget* parent = nullptr);
 
@@ -59,6 +84,16 @@ class GradientParameterRow final : public QWidget {
     [[nodiscard]] kit::KColorChip* stopChip() const noexcept { return chip_; }
     [[nodiscard]] kit::KValueField* stopPosition() const noexcept { return position_; }
     [[nodiscard]] kit::KLabel* label() const noexcept { return label_; }
+    [[nodiscard]] kit::KButton* valuesButton() const noexcept { return disclosure_; }
+    [[nodiscard]] bool valuesShown() const noexcept { return expanded_; }
+    void setValuesShown(bool shown);
+    [[nodiscard]] const std::vector<StopRow>& stopRows() const noexcept { return stopRows_; }
+    // Where the socket of stop port `port` (document::gradientStopPortName) sits in the row, while
+    // its stop row shows.
+    [[nodiscard]] std::optional<int> socketY(std::string_view port) const;
+    // The link record of a stop component, when a value node drives it.
+    [[nodiscard]] std::optional<document::ParameterId>
+    stopLink(std::uint32_t stop, document::GradientStopComponent component) const;
     [[nodiscard]] std::optional<document::ParameterId> parameter() const;
     // The gradient now: the bound parameter's live value, or what an unbound one renders with.
     [[nodiscard]] std::optional<document::GradientValue> value() const;
@@ -71,16 +106,27 @@ class GradientParameterRow final : public QWidget {
     [[nodiscard]] QMenu* makeContextMenu();
     void refresh(bool locked);
 
+  Q_SIGNALS:
+    // The row's height changed (the Values rows opened or closed, a stop or a link came or went).
+    void layoutChanged();
+
   protected:
     void resizeEvent(QResizeEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
+    // The gradient as it renders now: value() with each link's driven value over its stop.
+    [[nodiscard]] std::optional<document::GradientValue> shownValue() const;
+    // Writes stops shaped as the editor's (each with its origin), kept in their stored order.
+    void writeStops(std::vector<kit::KGradientEditor::Stop> stops);
+    // Writes a gradient in stored order whose stop `i` was stored stop `newIndexOfOld^-1(i)`.
+    void writeStored(document::GradientValue value,
+                     std::vector<std::optional<std::uint32_t>> newIndexOfOld);
+    void rebuildStopRows(std::size_t stops);
+    [[nodiscard]] int stopRowsTop() const;
     // The bound parameter, binding the gradient first on a node saved without it.
     [[nodiscard]] std::optional<document::ParameterId> ensureParameter();
     [[nodiscard]] std::optional<document::GradientValue> defaultValue() const;
-    [[nodiscard]] document::GradientValue editorValue() const;
-    void write(document::GradientValue value);
     void place();
     CompositionSession& session_;
     document::NodeId node_;
@@ -92,7 +138,13 @@ class GradientParameterRow final : public QWidget {
     kit::KColorChip* chip_ = nullptr;
     kit::KValueField* position_ = nullptr;
     QAction* keyAction_ = nullptr;
+    kit::KButton* disclosure_ = nullptr;
+    std::vector<StopRow> stopRows_;
+    // The authored gradient the editor's stops were last set from (their origins index it).
+    std::optional<document::GradientValue> projected_;
     int labelWidth_ = 0;
+    int lastHeight_ = 0;
+    bool expanded_ = false;
     bool refreshing_ = false;
 };
 

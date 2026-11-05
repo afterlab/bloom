@@ -233,9 +233,12 @@ void DrivenValueResolver::start() {
                         const auto index =
                             operation.firstOutput.value() +
                             static_cast<std::size_t>(output - definition->outputs.begin());
-                        if (index < evaluatedOutputs.size())
-                            values->parameters[id] = valueText(
-                                promotedValue(evaluatedOutputs[index], parameter->schemaKey));
+                        if (index < evaluatedOutputs.size()) {
+                            auto value =
+                                promotedValue(evaluatedOutputs[index], parameter->schemaKey);
+                            values->parameters[id] = valueText(value);
+                            values->values[id] = std::move(value);
+                        }
                     }
                     for (const auto& diagnostic : valueDiagnostics)
                         if (diagnostic.nodeId == driver->sourceNodeId)
