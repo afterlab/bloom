@@ -824,11 +824,13 @@ set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
 # the production compiler, scene builder and executor, timed cold, warm and per frame. The CTest is
 # a 64x64 smoke run of every non-media case so the benchmark keeps building and running; it skips
 # (77) without a device or the packaged shader tools.
-add_executable(bloom_runtime_gpu_matte_node_bench gpu_matte_node_bench.cpp)
+add_executable(bloom_runtime_gpu_matte_node_bench
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_matte_node_bench.cpp)
 target_link_libraries(bloom_runtime_gpu_matte_node_bench
     PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_render)
 target_include_directories(bloom_runtime_gpu_matte_node_bench
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${PROJECT_SOURCE_DIR}/tests/support")
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "${PROJECT_SOURCE_DIR}/tests/support")
 target_compile_definitions(bloom_runtime_gpu_matte_node_bench PRIVATE
     "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_matte_node_bench>\"")
 bloom_package_gpu_shader_tools(bloom_runtime_gpu_matte_node_bench)
