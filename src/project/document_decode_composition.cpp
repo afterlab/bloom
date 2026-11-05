@@ -519,6 +519,11 @@ using document::Vec3d;
     if (!decodeStringMember(*members[1], state, joinPath(path, "schemaKey"), schemaKeyText)) {
         return false;
     }
+    if (document::isGradientStopSchemaKey(schemaKeyText) &&
+        state.documentMinor < kGradientStopLinksMinor) {
+        state.fail(DocumentDecodeError::UnsupportedParameterSource, joinPath(path, "schemaKey"));
+        return false;
+    }
     document::ParameterSource source;
     {
         const AttachmentScope sourceScope(state, "source");

@@ -76,6 +76,8 @@ void validateDocumentSchemaV1_38(const json::Value& schema);
 void validateManifestSchemaV1_38(const json::Value& schema);
 void validateDocumentSchemaV1_39(const json::Value& schema);
 void validateManifestSchemaV1_39(const json::Value& schema);
+void validateDocumentSchemaV1_40(const json::Value& schema);
+void validateManifestSchemaV1_40(const json::Value& schema);
 void validateManifestSchemaV1_20(const json::Value& schema);
 void validateDocumentSchemaV1_16(const json::Value& schema);
 void validateManifestSchemaV1_16(const json::Value& schema);

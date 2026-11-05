@@ -292,6 +292,11 @@ migrateGradientValuesV1_37(const JsonValue& root, std::pmr::memory_resource* res
 [[nodiscard]] MigrationStepOutcome
 migrateGradientColorPairsV1_38(const JsonValue& root, std::pmr::memory_resource* resource,
                                std::pmr::vector<char>& output);
+// Gradient stop links, document 1.39 -> 1.40 (#543): version-only. A stop link is an ordinary
+// driver-only parameter bound under the stop's socket name, which no older document carries.
+[[nodiscard]] MigrationStepOutcome
+migrateGradientStopLinksV1_39(const JsonValue& root, std::pmr::memory_resource* resource,
+                              std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -331,7 +336,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 35}, {1, 36}, migrateVerifiedMemberDigestsV1_35},
     MigrationStepDescriptor{{1, 36}, {1, 37}, migrateEntryLayersV1_36},
     MigrationStepDescriptor{{1, 37}, {1, 38}, migrateGradientValuesV1_37},
-    MigrationStepDescriptor{{1, 38}, {1, 39}, migrateGradientColorPairsV1_38}};
+    MigrationStepDescriptor{{1, 38}, {1, 39}, migrateGradientColorPairsV1_38},
+    MigrationStepDescriptor{{1, 39}, {1, 40}, migrateGradientStopLinksV1_39}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

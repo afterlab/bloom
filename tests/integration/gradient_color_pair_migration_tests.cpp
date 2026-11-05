@@ -2,7 +2,8 @@
 // Radial Gradient's start and end colours become its two-stop `gradient`, and a Glow's tint and
 // outer tint its `tintGradient`; constant colours convert to exactly the gradient a new node with
 // those colours holds, and keyed colours to a whole-value gradient curve that samples as they did.
-// A 1.39 document cannot carry a schema 1 node.
+// A 1.39 document cannot carry a schema 1 node. #543: a colour a value node drives stays driven, as
+// a link on its stop.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -15,6 +16,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
+#include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/curve_compilation.hpp>
@@ -270,6 +272,61 @@ void keyedPairsKeepTheirMotion() {
     expect(matches, "the gradient samples every time as the keyed colours did");
 }
 
+// #543: a start colour and an end colour a Colour node drives, and a Glow tint it drives: each
+// opens as a link on its stop (the generator's stops 0 and 1, the Glow gradient's stop 0) with the
+// colour's driver, beside the Glow's own driven tint, and the document validates and compiles.
+void drivenPairsStayDriven() {
+    Fixture fixture;
+    const auto value = *fixture
+                            .run<commands::AddNode>(fixture.composition,
+                                                    std::string(document::kColorValueNodeType),
+                                                    document::Vec2d{-300.0, 0.0})
+                            .outputId<document::NodeId>(commands::kAddNodeOutput);
+    const auto current = decodeText(encode(fixture.document));
+    if (!current)
+        return expect(false, "the current document decodes");
+    auto legacy = *current.value();
+    const document::DriverBindingSource driver{value, std::string(document::kValuePortName)};
+    makeLegacy(legacy, fixture, driver, driver);
+    auto& composition = legacy.compositions.front();
+    recordOf(composition, bindingOf(nodeOf(composition, fixture.glow), "tint").parameterId).source =
+        driver;
+    project::migrateLegacyGradientColorPairs(legacy);
+    project::migrateLegacyGlowNodes(legacy);
+    auto& migrated = legacy.compositions.front();
+    const auto linkOf = [&](const document::NodeId node,
+                            const std::string_view port) -> const document::ParameterRecord* {
+        auto& record = nodeOf(migrated, node);
+        const auto binding =
+            std::ranges::find(record.parameters, port, &document::ParameterBinding::role);
+        if (binding == record.parameters.end())
+            return nullptr;
+        return &recordOf(migrated, binding->parameterId);
+    };
+    for (const auto* port : {"gradient.stops[0].color", "gradient.stops[1].color"}) {
+        const auto* link = linkOf(fixture.linear, port);
+        expect(link && link->schemaKey == document::kGradientStopColorSchemaKey &&
+                   link->source == document::ParameterSource{driver},
+               "a driven generator colour opens as a link on its stop with the colour's driver");
+    }
+    const auto* tintLink = linkOf(fixture.glow, "tintGradient.stops[0].color");
+    expect(tintLink && tintLink->source == document::ParameterSource{driver},
+           "a driven Glow tint drives the tint gradient's first stop too");
+    expect(linkOf(fixture.glow, "tintGradient.stops[1].color") == nullptr,
+           "a constant outer tint opens without a link");
+    const auto* tint = linkOf(fixture.glow, "tint");
+    expect(tint && tint->source == document::ParameterSource{driver},
+           "the Glow keeps its own driven tint");
+    expect(legacy.highWater.parameter >=
+               std::ranges::max(migrated.parameters, {}, &document::ParameterRecord::id).id.value(),
+           "the parameter high water covers the new links");
+    expect(std::ranges::is_sorted(migrated.parameters, {}, &document::ParameterRecord::id),
+           "the links keep the parameters in id order");
+    // The migrated document, stop links and all, passes the document model's validation.
+    expect(static_cast<bool>(project::reconstructDocument(legacy)),
+           "the migrated document with its stop links reconstructs");
+}
+
 // The schema 1 nodes are admitted only in a document older than 1.39.
 void legacyNodesNeedAnOlderDocument() {
     Fixture fixture;
@@ -282,7 +339,7 @@ void legacyNodesNeedAnOlderDocument() {
     expect(!current && current.error() == project::DocumentDecodeError::UnsupportedNodeVersion,
            "a 1.39 document carrying a schema 1 gradient or Glow is refused");
     auto older = text;
-    replaceAfter(older, "\"schemaVersion\": {", "\"minor\": 39", "\"minor\": 38");
+    replaceAfter(older, "\"schemaVersion\": {", "\"minor\": 40", "\"minor\": 38");
     expect(static_cast<bool>(decodeText(older)),
            "a 1.38 document's schema 1 gradient and Glow decode for the migration");
 }
@@ -293,6 +350,7 @@ int main() {
     try {
         constantPairsConvertExactly();
         keyedPairsKeepTheirMotion();
+        drivenPairsStayDriven();
         legacyNodesNeedAnOlderDocument();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

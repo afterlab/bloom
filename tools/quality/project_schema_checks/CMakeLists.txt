@@ -22,6 +22,7 @@ add_library(
     entry_layer_schema_checks.cpp
     gradient_schema_checks.cpp
     gradient_color_pair_schema_checks.cpp
+    gradient_stop_link_schema_checks.cpp
     video_schema_checks.cpp
     node_layout_schema_checks.cpp
     schema_check_helpers.cpp

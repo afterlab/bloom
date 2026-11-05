@@ -479,6 +479,9 @@ void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope);
 // #541: the first document minor whose Linear and Radial Gradients and Glows are at schema 2. An
 // older document's schema 1 nodes open through migrateLegacyGradientColorPairs.
 inline constexpr std::uint32_t kGradientColorPairsMinor = 39;
+// #543: the first document minor that may carry a gradient stop link (a parameter under
+// bloom.gradient.stop-color or bloom.gradient.stop-position); an older one is refused at its key.
+inline constexpr std::uint32_t kGradientStopLinksMinor = 40;
 [[nodiscard]] bool isLegacyGradientColorPairNode(std::string_view typeId,
                                                  std::uint32_t schemaVersion) noexcept;
 // #541: opening a document older than 1.39 turns each schema 1 colour pair that makes up a ramp

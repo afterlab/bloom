@@ -217,7 +217,8 @@ convertPair(DecodedComposition& composition, const std::array<PairColor, 2>& col
 
 // One node: `first` and `second` (by role) become one gradient record bound as `target`. The
 // gradient reuses the first record that `reuse` names, or a new id; the pair's other record, its
-// colour curves and the edges into a removed role are dropped. Returns false (the node left as
+// colour curves and the edges into a removed role are dropped; a driven colour's driver moves to a
+// link on its stop (#543). Returns false (the node left as
 // saved, so it fails as an unsupported version) when a required role is missing or ids run out.
 bool migrateNode(DecodedComposition& composition, document::NodeRecord& node,
                  const std::string_view first, const core::Color4d firstFallback,
@@ -231,6 +232,13 @@ bool migrateNode(DecodedComposition& composition, document::NodeRecord& node,
         return false;
     const std::array colors{pairColor(composition, firstRecord, firstFallback),
                             pairColor(composition, secondRecord, secondFallback)};
+    // #543: a colour a value node drives keeps its driver, as its stop's link (a Glow's driven
+    // tint keeps its own driver as well). Taken now: the records move below.
+    std::array<std::optional<document::DriverBindingSource>, 2> drivers;
+    for (std::size_t index = 0; index < drivers.size(); ++index)
+        if (const auto* record = index == 0 ? firstRecord : secondRecord)
+            if (const auto* driver = std::get_if<document::DriverBindingSource>(&record->source))
+                drivers[index] = *driver;
     // The gradient record: the first colour's own unless it stays (Glow keeps its tint), then the
     // second's, then a new one.
     std::optional<document::ParameterId> id;
@@ -259,6 +267,10 @@ bool migrateNode(DecodedComposition& composition, document::NodeRecord& node,
     auto source = convertPair(composition, colors, curveId, ids);
     if (!source)
         return false;
+    std::array<std::optional<document::ParameterId>, 2> links;
+    for (std::size_t index = 0; index < drivers.size(); ++index)
+        if (drivers[index] && !(links[index] = ids.allocateParameter()))
+            return false;
     std::set<document::ParameterId> removed;
     if (!keepFirst && secondRecord != nullptr)
         removed.insert(secondRecord->id);
@@ -276,6 +288,16 @@ bool migrateNode(DecodedComposition& composition, document::NodeRecord& node,
         return (!keepFirst && binding.role == first) || binding.role == second;
     });
     node.parameters.push_back({std::string(target), *id});
+    for (std::size_t index = 0; index < links.size(); ++index) {
+        if (!links[index])
+            continue;
+        composition.parameters.push_back(
+            {*links[index], std::string(document::kGradientStopColorSchemaKey), *drivers[index]});
+        node.parameters.push_back(
+            {document::gradientStopPortName(target, static_cast<std::uint32_t>(index),
+                                            document::GradientStopComponent::Color),
+             *links[index]});
+    }
     std::ranges::sort(node.parameters, {}, &document::ParameterBinding::role);
     std::erase_if(composition.graph.edges, [&](const document::EdgeRecord& edge) {
         const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
