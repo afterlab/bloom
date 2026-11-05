@@ -125,7 +125,8 @@ hashRecoveryArchive(const std::filesystem::path& path) {
             std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
             output << "BLOOM-RECOVERY-OWNER-1\n";
             output.write(hex.data(), hex.size());
-            output << '\n' << writtenAt.time_since_epoch().count() << '\n';
+            // Apple libc++'s file clock counts in __int128, which streams cannot print.
+            output << '\n' << static_cast<long long>(writtenAt.time_since_epoch().count()) << '\n';
             output.write(ownedPath.data(), static_cast<std::streamsize>(ownedPath.size()));
             output.flush();
             output.close();

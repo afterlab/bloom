@@ -10,6 +10,8 @@
 #include <random>
 #else
 #include <cstdlib>
+
+#include <unistd.h>
 #endif
 
 namespace bloom::platform {

@@ -213,6 +213,8 @@ class AudioEngine final {
 
     static void backendCallback(void* userData, std::span<float> output) noexcept;
     void mixerLoop() noexcept;
+    void publishClockState(std::shared_ptr<const ClockState> state) noexcept;
+    [[nodiscard]] std::shared_ptr<const ClockState> currentClockState() const noexcept;
     bool produceBlock(std::size_t frames) noexcept;
     // These require controlMutex_. requestRewindLocked asks a playing mixer to discard and re-mix
     // the audio queued for the device, and returns whether the mixer then needs wakeMixer().
@@ -260,7 +262,11 @@ class AudioEngine final {
     std::atomic<std::uint64_t> silenceState_{1};
     std::atomic<std::uint64_t> framesWritten_{0};
     std::atomic<std::uint64_t> ringWakeEpoch_{0};
-    std::atomic<std::shared_ptr<const ClockState>> clockState_;
+    // Mutex-guarded rather than std::atomic<std::shared_ptr<T>>, which Apple libc++ does not
+    // provide. Only control and UI threads touch the clock, never the mixer, and each access is a
+    // pointer copy or swap.
+    mutable std::mutex clockStateMutex_;
+    std::shared_ptr<const ClockState> clockState_;
     std::thread mixerThread_;
     std::uint64_t framesProduced_ = 0;
     std::uint64_t writtenAtOrigin_ = 0;

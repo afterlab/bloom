@@ -5,6 +5,8 @@
 #include <string>
 #include <utility>
 
+#include "vulkan/shaders/image_combine_spirv.inc"
+
 // Portable CPU-unavailable stub for the additive GPU blend operation. Carries the exact same public
 // API and includes no Vulkan header, so a build without GPU dependencies still links and the CPU
 // reference path (blendLinearRec709SceneRow) remains the oracle.
@@ -36,6 +38,10 @@ std::string_view gpuBlendShaderIdentity(const core::BlendMode mode,
     }
     return float64Selected ? std::string_view{"blend-v1-f64"}
                            : std::string_view{"blend-v1-f32-portable"};
+}
+
+std::string_view gpuImageCombineShaderIdentity() noexcept {
+    return vulkan_detail::kImageCombineSpirvDigest;
 }
 
 std::string_view GpuBlend::shaderIdentity(core::BlendMode mode) const noexcept {
