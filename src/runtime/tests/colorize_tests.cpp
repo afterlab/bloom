@@ -101,6 +101,10 @@ std::vector<double> operands(const ColorizeKernel& item) {
         for (const auto& stop : gradient.stops)
             values.insert(values.end(), {stop.position, stop.color.red, stop.color.green,
                                          stop.color.blue, stop.color.alpha});
+        // #546: then the blend's interpolation, colour mode and hue direction.
+        values.insert(values.end(), {static_cast<double>(gradient.modes.interpolation),
+                                     static_cast<double>(gradient.modes.colorMode),
+                                     static_cast<double>(gradient.modes.hueDirection)});
     }
     return values;
 }
@@ -165,7 +169,14 @@ std::array<double, 4> reference(const ColorizeKernel& item, const std::array<flo
         if (map && item.gradient) {
             // The stops by position, ties in stored order; the last stop at or before t blends
             // towards the next, and the ends hold.
-            auto stops = std::get<document::GradientValue>(item.gradient->source).stops;
+            const auto& value = std::get<document::GradientValue>(item.gradient->source);
+            if (!value.modes.isLinearRgb()) {
+                // #546: the other blends are the document's own evaluator.
+                const auto blended = document::gradientColorAt(value, t);
+                c = {blended.red, blended.green, blended.blue};
+                break;
+            }
+            auto stops = value.stops;
             std::ranges::stable_sort(stops, {}, &document::GradientStop::position);
             const auto colour = [](const document::GradientStop& stop) {
                 return std::array<double, 3>{stop.color.red, stop.color.green, stop.color.blue};
@@ -284,6 +295,30 @@ std::vector<std::pair<ColorizeKernel, std::string>> cases() {
     list.emplace_back(cycling, "repeating Gradient Map through five stops");
     list.emplace_back(gradientMap({{0.3, Color{0.4, 0.5, 0.6, 1.0}}}),
                       "Gradient Map through one stop");
+    // #546: every interpolation, and HSV and HSL in each hue direction.
+    const std::vector<document::GradientStop> blendStops{{0.1, Color{1.0, 0.1, 0.0, 1.0}},
+                                                         {0.55, Color{0.2, 0.9, 0.3, 1.0}},
+                                                         {0.95, Color{0.1, 0.2, 1.4, 1.0}}};
+    for (const auto interpolation : document::kGradientInterpolations) {
+        auto item = gradientMap(blendStops);
+        std::get<document::GradientValue>(item.gradient->source).modes.interpolation =
+            interpolation;
+        list.emplace_back(item,
+                          "Gradient Map with " +
+                              std::string(document::gradientInterpolationLabel(interpolation)) +
+                              " interpolation");
+    }
+    for (const auto mode : {document::GradientColorMode::Hsv, document::GradientColorMode::Hsl})
+        for (const auto hue : document::kGradientHueDirections) {
+            auto item = gradientMap(blendStops);
+            auto& modes = std::get<document::GradientValue>(item.gradient->source).modes;
+            modes.colorMode = mode;
+            modes.hueDirection = hue;
+            list.emplace_back(item,
+                              "Gradient Map in " +
+                                  std::string(document::gradientColorModeLabel(mode)) + " with " +
+                                  std::string(document::gradientHueDirectionLabel(hue)) + " hue");
+        }
     auto partial = kernel(ColorizeMode::Tritone);
     partial.amount.source = 0.35;
     list.emplace_back(partial, "Tritone at 35%");

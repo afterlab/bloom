@@ -336,6 +336,14 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         out.push_back(GpuFeatureCoverageEntry{id, "Glow mode (#506)",
                                               GpuCoverageDisposition::Required,
                                               "src/runtime compositing recipe tests"});
+    // #546 gradient blends: every interpolation (Constant, Ease, Cardinal, B-Spline, Exponential
+    // beside Linear) and the HSV and HSL colour modes with every hue direction are pixel semantics
+    // of native GradientV1 and the resident Colorize program, each with CPU parity through the
+    // production routes, never a CPU frame or a baked texture.
+    for (const auto* id : {"feature.gradient.interpolation", "feature.gradient.color_mode"})
+        out.push_back(
+            GpuFeatureCoverageEntry{id, "gradient blend (#546)", GpuCoverageDisposition::Required,
+                                    "src/runtime gradient native batch and colorize tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});

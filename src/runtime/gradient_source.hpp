@@ -8,6 +8,7 @@
 #include <bloom/runtime/compiled_plan.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -26,6 +27,14 @@ struct ResolvedGradientStop final {
     core::Color4d color;
 };
 
+// #546: the Float32 reciprocals of the spans before the first stop (from 0) and after the last
+// (to 1), 0 for an empty span, which the spline modes blend over.
+struct GradientLeads final {
+    float in = 0.0F;
+    float out = 0.0F;
+    friend bool operator==(const GradientLeads&, const GradientLeads&) = default;
+};
+
 struct ResolvedGradient final {
     std::vector<ResolvedGradientStop> stops;
     document::Vec2d start;
@@ -33,6 +42,9 @@ struct ResolvedGradient final {
     std::int64_t repeat = 0;
     bool radial = false;
     double aspect = 1.0;
+    // #546: how the colour blends between the stops.
+    document::GradientModes modes{};
+    GradientLeads leads{};
 };
 
 // #541: a gradient source (a constant or a whole-value curve) at `time`, or nullopt when its curve
@@ -114,6 +126,40 @@ resolveGradientStops(const document::GradientValue& value) {
     return stops;
 }
 
+[[nodiscard]] inline GradientLeads
+resolveGradientLeads(const std::span<const ResolvedGradientStop> stops) noexcept {
+    GradientLeads leads;
+    if (stops.empty())
+        return leads;
+    const float first = stops.front().position;
+    const float after = 1.0F - stops.back().position;
+    leads.in = first > 0.0F ? 1.0F / first : 0.0F;
+    leads.out = after > 0.0F ? 1.0F / after : 0.0F;
+    if (!std::isfinite(leads.in))
+        leads.in = 0.0F;
+    if (!std::isfinite(leads.out))
+        leads.out = 0.0F;
+    return leads;
+}
+
+// #546: the straight Float32 RGBA of resolved `stops` at `phase` in any mode, the operations
+// native GradientV1 performs (document::gradient_math::sample).
+[[nodiscard]] inline std::array<float, 4>
+sampleResolvedGradient(const std::span<const ResolvedGradientStop> stops, const GradientLeads leads,
+                       const document::GradientModes modes, const float phase) noexcept {
+    return document::gradient_math::sample<float>(
+        stops.size(),
+        [&](const std::size_t index) {
+            const auto& stop = stops[index];
+            return document::gradient_math::Stop<float>{
+                stop.position,
+                stop.inverseSpan,
+                {static_cast<float>(stop.color.red), static_cast<float>(stop.color.green),
+                 static_cast<float>(stop.color.blue), static_cast<float>(stop.color.alpha)}};
+        },
+        leads.in, leads.out, phase, modes);
+}
+
 // #541: Glow's octave tint, the colour of sorted `stops` at `t`: held before the first stop and
 // after the last, otherwise c + (next - c) * u with one fused multiply-add per channel in the
 // segment whose start is the last stop at or before `t` (the last segment includes its end). A
@@ -138,6 +184,16 @@ gradientTintAt(const std::vector<document::GradientStop>& stops, const double t)
     const auto mix = [u](const double a, const double b) { return std::fma(b - a, u, a); };
     return {mix(from.color.red, to.color.red), mix(from.color.green, to.color.green),
             mix(from.color.blue, to.color.blue), mix(from.color.alpha, to.color.alpha)};
+}
+
+// #546: Glow's octave tint from a whole gradient: Linear in RGB exactly as gradientTintAt, any
+// other mode through the document's binary64 definition (an octave's tint is one host-resolved
+// colour, not a pixel).
+[[nodiscard]] inline core::Color4d gradientValueTintAt(const document::GradientValue& value,
+                                                       const double t) {
+    if (value.modes.isLinearRgb())
+        return gradientTintAt(document::sortedGradientStops(value), t);
+    return document::gradientColorAt(value, t);
 }
 
 // Samples at the full-resolution pixel centre. Straight scene-linear colour and independent alpha
@@ -180,6 +236,13 @@ gradientPixel(const ResolvedGradient& gradient, const double authorX,
     } else
         phase = static_cast<float>(std::clamp(t, 0.0, 1.0));
     const auto& stops = gradient.stops;
+    if (!gradient.modes.isLinearRgb()) {
+        // #546: every other mode in Float32, premultiplied once as native GradientV1 does.
+        const auto straight = sampleResolvedGradient(stops, gradient.leads, gradient.modes, phase);
+        const float alpha = straight[3];
+        return render::Rgba32f::fromPremultiplied(straight[0] * alpha, straight[1] * alpha,
+                                                  straight[2] * alpha, alpha);
+    }
     const auto held = [](const core::Color4d& color) {
         const auto alpha = static_cast<float>(color.alpha);
         const auto a = static_cast<double>(alpha);

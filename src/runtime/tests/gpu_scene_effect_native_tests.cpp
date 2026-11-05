@@ -1176,7 +1176,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
              variant == 4 ? Color4d{0.25, 0.5, 1.5, 1.0} : Color4d{0.0, 0.0, 0.0, 1.0}}}};
     };
     // #504: every Colorize mode, a partial amount, both cycles and a channel source; #541 a
-    // Gradient Map through a bound multi-stop gradient with a hard edge.
+    // Gradient Map through a bound multi-stop gradient with a hard edge; #546 that gradient in
+    // every other interpolation (variants 7 to 11) and in HSV and HSL with every hue direction
+    // (variants 12 to 19).
     const auto colorize = [](const std::uint64_t id, const int variant) {
         using bloom::runtime::ColorizeCycle;
         using bloom::runtime::ColorizeMode;
@@ -1185,7 +1187,8 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
             ColorizeMode::Fill,        ColorizeMode::Tint,          ColorizeMode::Tritone,
             ColorizeMode::GradientMap, ColorizeMode::GradientMap,   ColorizeMode::BlackAndWhite,
             ColorizeMode::GradientMap};
-        kernel.mode = modes[static_cast<std::size_t>(variant)];
+        kernel.mode =
+            variant >= 6 ? ColorizeMode::GradientMap : modes[static_cast<std::size_t>(variant)];
         kernel.amount = {ParameterId::fromRaw(id), variant == 2 ? 0.6 : 1.0};
         kernel.color = {ParameterId::fromRaw(id + 1), Color4d{0.9, 0.3, 1.5, 1.0}};
         kernel.shadows = {ParameterId::fromRaw(id + 2), Color4d{0.05, -0.02, 0.2, 1.0}};
@@ -1200,14 +1203,33 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         const std::array<double, 6> weights{-1.5, 2.5, 0.1, 3.0, -2.0, 1.2};
         for (std::size_t i = 0; i < weights.size(); ++i)
             kernel.weights[i] = {ParameterId::fromRaw(id + 8 + i), weights[i]};
-        if (variant == 6)
-            kernel.gradient = bloom::runtime::CompiledGradientParameter{
-                ParameterId::fromRaw(id + 20),
-                bloom::document::GradientValue{{{0.8, Color4d{1.2, 0.9, 0.1, 1.0}},
-                                                {0.0, Color4d{0.0, -0.05, 0.3, 1.0}},
-                                                {0.5, Color4d{0.1, 0.6, 0.2, 1.0}},
-                                                {0.5, Color4d{0.9, 0.1, -0.2, 1.0}},
-                                                {1.0, Color4d{3.0, 2.0, 1.5, 1.0}}}}};
+        if (variant >= 6) {
+            bloom::document::GradientValue gradient{{{0.8, Color4d{1.2, 0.9, 0.1, 1.0}},
+                                                     {0.1, Color4d{0.0, -0.05, 0.3, 1.0}},
+                                                     {0.5, Color4d{0.1, 0.6, 0.2, 1.0}},
+                                                     {0.5, Color4d{0.9, 0.1, -0.2, 1.0}},
+                                                     {0.95, Color4d{3.0, 2.0, 1.5, 1.0}}}};
+            using bloom::document::GradientColorMode;
+            using bloom::document::GradientInterpolation;
+            if (variant >= 7 && variant <= 11) {
+                constexpr std::array<GradientInterpolation, 5> curves{
+                    GradientInterpolation::Constant, GradientInterpolation::Ease,
+                    GradientInterpolation::Cardinal, GradientInterpolation::BSpline,
+                    GradientInterpolation::Exponential};
+                gradient.modes.interpolation = curves[static_cast<std::size_t>(variant - 7)];
+            } else if (variant >= 12) {
+                gradient.modes.colorMode =
+                    variant < 16 ? GradientColorMode::Hsv : GradientColorMode::Hsl;
+                gradient.modes.hueDirection =
+                    static_cast<bloom::document::GradientHueDirection>((variant - 12) % 4);
+            } else {
+                gradient.stops.front().position = 0.8;
+                gradient.stops[1].position = 0.0;
+                gradient.stops.back().position = 1.0;
+            }
+            kernel.gradient =
+                bloom::runtime::CompiledGradientParameter{ParameterId::fromRaw(id + 20), gradient};
+        }
         return bloom::runtime::ImageEffectKernel{kernel};
     };
     // #505: both shapes and modes, roundness both ways, a moved centre and highlight protection.
@@ -1261,15 +1283,19 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
     for (const auto color : {Color4d{-0.25, 1.75, 0.5, 0.625}, Color4d{4.0, 3.0, 6.0, 1.0},
                              Color4d{0.3, 0.6, 0.2, 0.25}}) {
         for (const auto& kernel :
-             {levels(id + 50, false), levels(id + 50, true), curves(id + 50, false),
-              curves(id + 50, true), hueCurves(id + 50, false), hueCurves(id + 50, true),
-              hue(id + 50, false), hue(id + 50, true), grade(id + 50, false), grade(id + 50, true),
-              association(id + 50, 0), association(id + 50, 1), association(id + 50, 2),
-              association(id + 50, 3), association(id + 50, 4), colorize(id + 50, 0),
-              colorize(id + 50, 1), colorize(id + 50, 2), colorize(id + 50, 3),
-              colorize(id + 50, 4), colorize(id + 50, 5), colorize(id + 50, 6),
-              vignette(id + 50, 0), vignette(id + 50, 1), vignette(id + 50, 2),
-              vignette(id + 50, 3)}) {
+             {levels(id + 50, false),  levels(id + 50, true),     curves(id + 50, false),
+              curves(id + 50, true),   hueCurves(id + 50, false), hueCurves(id + 50, true),
+              hue(id + 50, false),     hue(id + 50, true),        grade(id + 50, false),
+              grade(id + 50, true),    association(id + 50, 0),   association(id + 50, 1),
+              association(id + 50, 2), association(id + 50, 3),   association(id + 50, 4),
+              colorize(id + 50, 0),    colorize(id + 50, 1),      colorize(id + 50, 2),
+              colorize(id + 50, 3),    colorize(id + 50, 4),      colorize(id + 50, 5),
+              colorize(id + 50, 6),    colorize(id + 50, 7),      colorize(id + 50, 8),
+              colorize(id + 50, 9),    colorize(id + 50, 10),     colorize(id + 50, 11),
+              colorize(id + 50, 12),   colorize(id + 50, 13),     colorize(id + 50, 14),
+              colorize(id + 50, 15),   colorize(id + 50, 16),     colorize(id + 50, 17),
+              colorize(id + 50, 18),   colorize(id + 50, 19),     vignette(id + 50, 0),
+              vignette(id + 50, 1),    vignette(id + 50, 2),      vignette(id + 50, 3)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

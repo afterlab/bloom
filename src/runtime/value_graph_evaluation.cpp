@@ -556,9 +556,7 @@ void Evaluator::evaluateGradientSample(const runtime::CompiledValueOperation& op
         write(operation, 0, core::Color4d{0.0, 0.0, 0.0, 1.0});
         return;
     }
-    write(operation, 0,
-          runtime::detail::gradientTintAt(document::sortedGradientStops(*sampled),
-                                          kernel.position));
+    write(operation, 0, runtime::detail::gradientValueTintAt(*sampled, kernel.position));
 }
 
 void Evaluator::evaluatePassthrough(const runtime::CompiledValueOperation& operation,

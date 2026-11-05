@@ -8,6 +8,8 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/grade_curve.hpp>
 
+#include <bloom/render/gradient_modes_glsl.hpp>
+
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
@@ -318,21 +320,32 @@ prepareAlphaAssociation(const AlphaAssociationKernel& kernel,
 [[nodiscard]] std::optional<PreparedColorGrade>
 prepareColorize(const ColorizeKernel& kernel, const std::span<const double> values) {
     // #541: a lowered gradient follows the fixed operands as its stop count, then (position, r,
-    // g, b, a) per stop.
+    // g, b, a) per stop, then (#546) its interpolation, colour mode and hue direction.
     std::vector<document::GradientStop> stops;
+    document::GradientModes modes;
     if (kernel.gradient) {
         if (values.size() <= kColorizeOperands)
             return std::nullopt;
         const double count = values[kColorizeOperands];
         if (!(count >= 1.0 && count <= static_cast<double>(document::kMaximumGradientStops)) ||
             count != std::floor(count) ||
-            values.size() != kColorizeOperands + 1 + 5 * static_cast<std::size_t>(count))
+            values.size() != kColorizeOperands + 1 + 5 * static_cast<std::size_t>(count) + 3)
             return std::nullopt;
         document::GradientValue gradient;
         for (std::size_t stop = 0; stop < static_cast<std::size_t>(count); ++stop) {
             const auto* v = &values[kColorizeOperands + 1 + 5 * stop];
             gradient.stops.push_back({v[0], core::Color4d{v[1], v[2], v[3], v[4]}});
         }
+        const auto* word = &values[values.size() - 3];
+        const auto closed = [](const double value, const double maximum) {
+            return value >= 0.0 && value <= maximum && value == std::floor(value);
+        };
+        if (!closed(word[0], 5.0) || !closed(word[1], 2.0) || !closed(word[2], 3.0))
+            return std::nullopt;
+        gradient.modes = {static_cast<document::GradientInterpolation>(word[0]),
+                          static_cast<document::GradientColorMode>(word[1]),
+                          static_cast<document::GradientHueDirection>(word[2])};
+        modes = document::effectiveGradientModes(gradient.modes);
         if (!gradient.isValid() ||
             !std::ranges::all_of(gradient.stops, [](const document::GradientStop& stop) {
                 return std::abs(stop.color.red) <= document::kMaximumColorizeColor &&
@@ -409,6 +422,19 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             d[4] = static_cast<float>(values[18]);
             d[5] = static_cast<float>(values[19]);
             d[7] = static_cast<float>(stops.size());
+            // #546: the blend as [interpolation, colour mode, hue, 0] [lead in, lead out, 0, 0]
+            // where the fixed table's colours would be (Gradient Map reads none of them).
+            d[16] = static_cast<float>(modes.interpolation);
+            d[17] = static_cast<float>(modes.colorMode);
+            d[18] = static_cast<float>(modes.hueDirection);
+            if (document::gradientModesReachPastEnds(modes)) {
+                const float first = static_cast<float>(stops.front().position);
+                const float after = 1.0F - static_cast<float>(stops.back().position);
+                const float in = first > 0.0F ? 1.0F / first : 0.0F;
+                const float out = after > 0.0F ? 1.0F / after : 0.0F;
+                d[20] = std::isfinite(in) ? in : 0.0F;
+                d[21] = std::isfinite(out) ? out : 0.0F;
+            }
             for (std::size_t index = 0; index < stops.size(); ++index) {
                 const auto& stop = stops[index];
                 const float position = static_cast<float>(stop.position);
@@ -514,7 +540,21 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             const auto stop = [&](const std::size_t index) {
                 return &k[kColorizeFloats + kColorizeStopFloats * index];
             };
-            if (!(t > stop(0)[0])) {
+            if (k[16] != 0.0F || k[17] != 0.0F) {
+                // #546: any other mode than Linear in RGB, as native Colorize does.
+                const auto sampled = document::gradient_math::sample<float>(
+                    n,
+                    [&](const std::size_t index) {
+                        const float* at = stop(index);
+                        return document::gradient_math::Stop<float>{
+                            at[0], at[4], {at[1], at[2], at[3], 1.0F}};
+                    },
+                    k[20], k[21], t,
+                    document::GradientModes{static_cast<document::GradientInterpolation>(k[16]),
+                                            static_cast<document::GradientColorMode>(k[17]),
+                                            static_cast<document::GradientHueDirection>(k[18])});
+                c = {sampled[0], sampled[1], sampled[2]};
+            } else if (!(t > stop(0)[0])) {
                 c = {stop(0)[1], stop(0)[2], stop(0)[3]};
             } else if (t >= stop(n - 1)[0]) {
                 c = {stop(n - 1)[1], stop(n - 1)[2], stop(n - 1)[3]};
@@ -594,6 +634,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
     // #541: table mode 4 carries one to 64 stops after the fixed table.
     if (d[0] == 4.0F)
         return closed(d[7], static_cast<float>(document::kMaximumGradientStops)) && d[7] >= 1.0F &&
+               closed(d[16], 5.0F) && closed(d[17], 2.0F) && closed(d[18], 3.0F) && d[20] >= 0.0F &&
+               d[21] >= 0.0F &&
                d.size() == kColorizeFloats + kColorizeStopFloats * static_cast<std::size_t>(d[7]);
     return d.size() == kColorizeFloats && (d[0] != 2.0F || (d[6] > 0.0F && d[6] < 1.0F));
 }
@@ -763,6 +805,15 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             "layout(set = 0, binding = 0, std430) readonly buffer BloomColorizeData { vec4 "
             "values[]; } bloom_colorize_data;\n" +
             straight + finite +
+            // #546: the Gradient Map's stops for the shared mode functions: [position, colour]
+            // then [reciprocal span, colour change].
+            "struct BloomGradientStop { float position; float inverseSpan; vec4 color; };\n"
+            "BloomGradientStop bloom_gradient_stop(int index) {\n"
+            " vec4 a = bloom_colorize_data.values[10 + 2 * index];\n"
+            " vec4 b = bloom_colorize_data.values[11 + 2 * index];\n"
+            " return BloomGradientStop(a.x, b.x, vec4(a.yzw, 1.0));\n"
+            "}\n" +
+            std::string(render::kGradientModesGlsl) +
             "vec4 bloom_colorize(ivec2 c) {\n"
             " vec4 p = imageLoad(bloom_ocio_input, c);\n"
             " float a = p.a;\n"
@@ -814,7 +865,10 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             "   int n = int(ramp.w);\n"
             "   vec4 first = bloom_colorize_data.values[10];\n"
             "   vec4 last = bloom_colorize_data.values[10 + 2 * (n - 1)];\n"
-            "   if (!(t > first.x)) {\n"
+            "   if (c0.x != 0.0 || c0.y != 0.0) {\n"
+            "    o = bloom_gradient_sample(n, t, c1.x, c1.y, int(c0.x), int(c0.y), "
+            "int(c0.z)).rgb;\n"
+            "   } else if (!(t > first.x)) {\n"
             "    o = first.yzw;\n"
             "   } else if (t >= last.x) {\n"
             "    o = last.yzw;\n"
@@ -940,6 +994,10 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
                 values.push_back(stop.color.blue);
                 values.push_back(stop.color.alpha);
             }
+            // #546: then its interpolation, colour mode and hue direction.
+            values.push_back(static_cast<double>(sampled->modes.interpolation));
+            values.push_back(static_cast<double>(sampled->modes.colorMode));
+            values.push_back(static_cast<double>(sampled->modes.hueDirection));
         } else {
             const auto sampled = resolveParameter(parameter, plan, resolved);
             if (!sampled) {

@@ -51,6 +51,15 @@ struct GpuBatchGradient final {
     float exactHeight = 0.0F;
     std::uint32_t repeat = 0; // clamp, repeat, mirror
     bool radial = false;
+    // #546: how the colour blends between stops (document::GradientModes' numbers): interpolation
+    // 0 Linear, 1 Constant, 2 Ease, 3 Cardinal, 4 B-Spline, 5 Exponential; colour mode 0 RGB,
+    // 1 HSV, 2 HSL; hue 0 Near, 1 Far, 2 Clockwise, 3 Counter-clockwise. leadIn and leadOut are the
+    // reciprocals of the spans from 0 to the first stop and from the last stop to 1 (0 when empty).
+    std::uint32_t interpolation = 0;
+    std::uint32_t colorMode = 0;
+    std::uint32_t hueDirection = 0;
+    float leadIn = 0.0F;
+    float leadOut = 0.0F;
     // Binary64 normalized coordinate metadata split into portable Float32 hi/lo pairs.
     // Linear: origin, column step, row step; radial: origin x/y, column/row step.
     std::optional<std::array<float, 8>> normalizedCoordinates;

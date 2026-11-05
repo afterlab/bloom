@@ -1397,7 +1397,7 @@ displayProofRunner(const bool customView) {
     // #504 Colorize: Fill, Tint, a partial Tritone, a mirrored and a repeating Gradient Map from
     // a channel and luma, and a custom Black & White mix; #541 a repeating Gradient Map through a
     // bound multi-stop gradient (unsorted stops, a hard edge, HDR and signed colours).
-    const auto colorize = [](const int variant) {
+    const auto colorize = [](const int variant, const bloom::document::GradientModes blend = {}) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {
             using bloom::runtime::ColorizeCycle;
             using bloom::runtime::ColorizeMode;
@@ -1437,7 +1437,8 @@ displayProofRunner(const bool customView) {
                          {0.0, bloom::core::Color4d{0.0, -0.05, 0.3, 1.0}},
                          {0.5, bloom::core::Color4d{0.1, 0.6, 0.2, 1.0}},
                          {0.5, bloom::core::Color4d{0.9, 0.1, -0.2, 1.0}},
-                         {1.0, bloom::core::Color4d{3.0, 2.0, 1.5, 1.0}}}}};
+                         {1.0, bloom::core::Color4d{3.0, 2.0, 1.5, 1.0}}},
+                        blend}};
             const std::array<double, 6> weights{-1.5, 2.5, 0.1, 3.0, -2.0, 1.2};
             if (variant == 5)
                 for (std::size_t i = 0; i < weights.size(); ++i)
@@ -1466,6 +1467,69 @@ displayProofRunner(const bool customView) {
                              "mix and a multi-stop Gradient Map, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #546: gradient blends through native GradientV1 (linear and radial generators) and the
+    // resident Colorize program.
+    {
+        using bloom::document::GradientColorMode;
+        using bloom::document::GradientHueDirection;
+        using bloom::document::GradientInterpolation;
+        using bloom::document::GradientModes;
+        const auto runBlends = [runGrades, colorize](const std::vector<GradientModes>& blends,
+                                                     const std::uint64_t idBase,
+                                                     std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            std::uint64_t id = idBase;
+            std::vector<std::function<ImageEffectKernel(std::uint64_t)>> maps;
+            for (const auto& blend : blends) {
+                for (const bool radial : {false, true}) {
+                    auto source = gradient(radial, id);
+                    std::get<bloom::document::GradientValue>(source.gradient->stops.source).modes =
+                        blend;
+                    auto frame = runBuilder(withSource(source, id));
+                    id += 100;
+                    combined.prepared = combined.prepared && frame.prepared;
+                    for (auto& value : frame.frames)
+                        combined.frames.push_back(std::move(value));
+                }
+                maps.push_back(colorize(6, blend));
+            }
+            auto mapped = runGrades(maps, id, {});
+            combined.prepared = combined.prepared && mapped.prepared;
+            for (auto& value : mapped.frames)
+                combined.frames.push_back(std::move(value));
+            combined.evidence = std::move(evidence);
+            return combined;
+        };
+        add(
+            "feature.gradient.interpolation", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime gradient native batch and colorize tests",
+            [runBlends] {
+                std::vector<GradientModes> blends;
+                for (const auto interpolation : bloom::document::kGradientInterpolations)
+                    blends.push_back(
+                        {interpolation, GradientColorMode::Rgb, GradientHueDirection::Near});
+                return runBlends(blends, 546000,
+                                 "production gradient interpolations: Constant, Linear, Ease, "
+                                 "Cardinal, B-Spline and Exponential on Linear and Radial "
+                                 "Gradient and a Colorize Gradient Map, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+        add(
+            "feature.gradient.color_mode", GpuCoverageFixtureCriterion::Prepared,
+            "src/runtime gradient native batch and colorize tests",
+            [runBlends] {
+                std::vector<GradientModes> blends;
+                for (const auto colorMode : {GradientColorMode::Hsv, GradientColorMode::Hsl})
+                    for (const auto hue : bloom::document::kGradientHueDirections)
+                        blends.push_back({GradientInterpolation::Linear, colorMode, hue});
+                return runBlends(blends, 550000,
+                                 "production gradient colour modes: HSV and HSL with Near, Far, "
+                                 "Clockwise and Counter-clockwise hues on Linear and Radial "
+                                 "Gradient and a Colorize Gradient Map, full frame and ROI");
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    }
     // #505 Vignette: both shapes, both modes, roundness both ways, a moved centre and highlight
     // protection.
     const auto vignette = [](const int variant) {

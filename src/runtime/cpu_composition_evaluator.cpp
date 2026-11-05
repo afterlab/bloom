@@ -2737,12 +2737,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 const auto sampled = detail::sampleGradientParameter(
                                     step.gradient->stops, *operandTime, resolved.valueOutputs);
                                 key.add(sampled.has_value());
-                                if (sampled)
+                                if (sampled) {
                                     for (const auto& stop : detail::resolveGradientStops(*sampled)) {
                                         key.add(std::bit_cast<std::uint32_t>(stop.position));
                                         key.add(std::bit_cast<std::uint32_t>(stop.inverseSpan));
                                         key.add(stop.color);
                                     }
+                                    // #546: and how the colour blends between them.
+                                    const auto modes =
+                                        document::effectiveGradientModes(sampled->modes);
+                                    key.add(modes.interpolation);
+                                    key.add(modes.colorMode);
+                                    key.add(modes.hueDirection);
+                                }
                                 parameter(step.gradient->start);
                                 parameter(step.gradient->end);
                                 key.add(step.gradient->repeat);
@@ -3030,6 +3037,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     solid.gradient->repeat,
                                     solid.gradient->radial,
                                     static_cast<double>(aspect.numerator()) / aspect.denominator()};
+                                gradient->modes = document::effectiveGradientModes(sampled->modes);
+                                if (document::gradientModesReachPastEnds(gradient->modes))
+                                    gradient->leads = detail::resolveGradientLeads(gradient->stops);
                             }
                             auto descriptor = fullDescriptor;
                             double exactWidth =

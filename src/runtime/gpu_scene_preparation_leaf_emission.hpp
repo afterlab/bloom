@@ -98,9 +98,20 @@ template <typename Emit, typename Charge>
             return std::array{static_cast<float>(value.red), static_cast<float>(value.green),
                               static_cast<float>(value.blue), static_cast<float>(value.alpha)};
         };
-        for (const auto& stop : resolveGradientStops(*sampled))
+        const auto resolvedStops = resolveGradientStops(*sampled);
+        for (const auto& stop : resolvedStops)
             gpuGradient->stops.push_back(
                 {stop.position, stop.inverseSpan, straight(stop.color)});
+        // #546: the blend, and the spans the spline modes reach past the end stops.
+        const auto modes = document::effectiveGradientModes(sampled->modes);
+        const auto leads = document::gradientModesReachPastEnds(modes)
+                               ? resolveGradientLeads(resolvedStops)
+                               : GradientLeads{};
+        gpuGradient->interpolation = static_cast<std::uint32_t>(modes.interpolation);
+        gpuGradient->colorMode = static_cast<std::uint32_t>(modes.colorMode);
+        gpuGradient->hueDirection = static_cast<std::uint32_t>(modes.hueDirection);
+        gpuGradient->leadIn = leads.in;
+        gpuGradient->leadOut = leads.out;
         gpuGradient->endpoints = {static_cast<float>(start->value.x),
                                   static_cast<float>(start->value.y),
                                   static_cast<float>(end->value.x),
@@ -190,6 +201,11 @@ template <typename Emit, typename Charge>
                 key.add(std::bit_cast<std::uint32_t>(component));
         key.add(gpuGradient->repeat);
         key.add(gpuGradient->radial);
+        key.add(gpuGradient->interpolation);
+        key.add(gpuGradient->colorMode);
+        key.add(gpuGradient->hueDirection);
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->leadIn));
+        key.add(std::bit_cast<std::uint32_t>(gpuGradient->leadOut));
     }
     key.add(std::string{gpuGradient ? kGpuGradientSpirvSha256 : kGpuSolidSpirvSha256});
     keyOf[index] = key.digest();

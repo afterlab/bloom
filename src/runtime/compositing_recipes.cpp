@@ -140,8 +140,7 @@ CompiledColorParameter RecipeEmitter::gradientColor(const CompiledGradientParame
     // samples per frame in the value graph.
     if (const auto* constant = std::get_if<document::GradientValue>(&gradient.source);
         constant != nullptr && gradient.drivers.empty())
-        return CompiledColorParameter{
-            {}, gradientTintAt(document::sortedGradientStops(*constant), position)};
+        return CompiledColorParameter{{}, gradientValueTintAt(*constant, position)};
     CompiledValueGradientSample sample{gradient.source, position};
     for (const auto& driver : gradient.drivers)
         sample.drivers.push_back(

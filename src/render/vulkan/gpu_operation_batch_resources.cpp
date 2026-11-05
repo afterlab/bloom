@@ -212,17 +212,18 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
             };
             if (!stopsValid() ||
                 (!gradient->normalizedCoordinates &&
-                 !std::ranges::all_of(gradient->endpoints, [](const float value) {
-                    return std::isfinite(value);
-                })) ||
+                 !std::ranges::all_of(gradient->endpoints,
+                                      [](const float value) { return std::isfinite(value); })) ||
                 !std::isfinite(gradient->inverseHorizontalScale) ||
                 !std::isfinite(gradient->inverseVerticalScale) ||
-                gradient->inverseHorizontalScale <= 0 ||
-                gradient->inverseVerticalScale <= 0 ||
+                gradient->inverseHorizontalScale <= 0 || gradient->inverseVerticalScale <= 0 ||
                 !std::isfinite(gradient->exactWidth) || gradient->exactWidth <= 0 ||
                 !std::isfinite(gradient->exactHeight) || gradient->exactHeight <= 0 ||
-                gradient->repeat > 2 ||
-                window->originX() != 0 || window->originY() != 0 || !safeGeometry()) {
+                gradient->repeat > 2 || gradient->interpolation > 5 || gradient->colorMode > 2 ||
+                gradient->hueDirection > 3 || !std::isfinite(gradient->leadIn) ||
+                gradient->leadIn < 0 || !std::isfinite(gradient->leadOut) ||
+                gradient->leadOut < 0 || window->originX() != 0 || window->originY() != 0 ||
+                !safeGeometry()) {
                 fail(GpuOperationBatchCode::Unsupported,
                      "gradient values exceed the native Float32 arithmetic capability");
                 return false;
@@ -235,14 +236,18 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 std::copy_n(gradient->normalizedCoordinates->begin(), 4, endpoints.begin());
                 std::copy_n(gradient->normalizedCoordinates->begin() + 4, 4, transform.begin());
             }
-            pack(job, GradientPush{endpoints, transform,
+            pack(job, GradientPush{endpoints,
+                                   transform,
                                    {static_cast<float>(window->extent().width()),
                                     static_cast<float>(window->extent().height()),
                                     gradient->exactWidth, gradient->exactHeight},
                                    {gradient->normalizedCoordinates ? (gradient->radial ? 3 : 2)
                                                                     : (gradient->radial ? 1 : 0),
                                     0, 0, static_cast<std::int32_t>(gradient->repeat)},
-                                   {static_cast<std::int32_t>(gradient->stops.size()), 0, 0, 0}});
+                                   {static_cast<std::int32_t>(gradient->stops.size()),
+                                    static_cast<std::int32_t>(gradient->interpolation),
+                                    static_cast<std::int32_t>(gradient->colorMode),
+                                    static_cast<std::int32_t>(gradient->hueDirection)}});
             requestedMetadata = gradient->stops.size() * 8 * sizeof(float);
             if (requestedMetadata > budgets.maxMetadataBytes) {
                 fail(GpuOperationBatchCode::OverBudget,
@@ -391,7 +396,11 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
             std::vector<float> table;
             table.reserve(gradient->stops.size() * 8);
             for (const auto& stop : gradient->stops) {
-                table.insert(table.end(), {stop.position, stop.inverseSpan, 0.0F, 0.0F});
+                // #546: the first stop's spare pair carries the spans before and after the table.
+                const bool first = table.empty();
+                table.insert(table.end(),
+                             {stop.position, stop.inverseSpan, first ? gradient->leadIn : 0.0F,
+                              first ? gradient->leadOut : 0.0F});
                 table.insert(table.end(), stop.color.begin(), stop.color.end());
             }
             if (!buffer(0, table.size() * sizeof(float), false, table.data())) {

@@ -1253,6 +1253,7 @@ target_sources(
             include/bloom/render/gpu_image_upload.hpp
             include/bloom/render/gpu_neutral_display.hpp
             include/bloom/render/gpu_ocio_program.hpp
+            include/bloom/render/gradient_modes_glsl.hpp
             include/bloom/render/gpu_output_color_readback.hpp
             include/bloom/render/gpu_path_coverage.hpp
             include/bloom/render/gpu_present_image.hpp
@@ -1480,12 +1481,29 @@ endif()
 set(BLOOM_GRADIENT_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gradient.comp")
 set(BLOOM_GRADIENT_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/gradient.manifest")
 set(BLOOM_GRADIENT_COMP_SHA256
-    "06d2c53903f162433b41eb4aa2cf32de6e36eef01e868475c523b0612f0d7800")
+    "607b485020b33505a4688c9a6030951d9a4d786679d86a918e5143a94a8e3590")
 set(BLOOM_GRADIENT_SPV_SHA256
-    "5cc7cae4cd5a0fc67f4e8524e099c74030b023ecc7e05fd5c5e677e1c76a8867")
+    "2a50b0dd883631fbe26e969659e7cefcc64a153bb8f31fb63135f3ff961704a3")
 file(SHA256 "${BLOOM_GRADIENT_COMP}" bloom_gradient_comp_sha256)
 if(NOT bloom_gradient_comp_sha256 STREQUAL BLOOM_GRADIENT_COMP_SHA256)
     message(FATAL_ERROR "gradient.comp source pin mismatch")
+endif()
+# #546: the mode functions in gradient.comp are exactly the text Colorize's program embeds.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/include/bloom/render/gradient_modes_glsl.hpp"
+     bloom_gradient_modes_header)
+string(FIND "${bloom_gradient_modes_header}" "R\"glsl(" bloom_gradient_modes_begin)
+string(FIND "${bloom_gradient_modes_header}" ")glsl\"" bloom_gradient_modes_end)
+if(bloom_gradient_modes_begin EQUAL -1 OR bloom_gradient_modes_end EQUAL -1)
+    message(FATAL_ERROR "gradient_modes_glsl.hpp has no GLSL raw string")
+endif()
+math(EXPR bloom_gradient_modes_begin "${bloom_gradient_modes_begin} + 7")
+math(EXPR bloom_gradient_modes_length "${bloom_gradient_modes_end} - ${bloom_gradient_modes_begin}")
+string(SUBSTRING "${bloom_gradient_modes_header}" ${bloom_gradient_modes_begin}
+       ${bloom_gradient_modes_length} bloom_gradient_modes_glsl)
+file(READ "${BLOOM_GRADIENT_COMP}" bloom_gradient_comp_text)
+string(FIND "${bloom_gradient_comp_text}" "${bloom_gradient_modes_glsl}" bloom_gradient_modes_found)
+if(bloom_gradient_modes_found EQUAL -1)
+    message(FATAL_ERROR "gradient.comp does not carry gradient_modes_glsl.hpp's mode functions")
 endif()
 file(READ "${BLOOM_GRADIENT_MANIFEST}" bloom_gradient_manifest)
 if(NOT bloom_gradient_manifest MATCHES "${BLOOM_GRADIENT_COMP_SHA256}" OR

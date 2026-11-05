@@ -91,6 +91,81 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
                                     keyOf(start.scene->commands().front()),
                             "gradient: a keyed stop table changes the source semantic key");
     }
+    // #546: the five-stop table in every other interpolation and in HSV and HSL with every hue
+    // direction, linear and radial; the spline modes reach past the end stops at 0.1 and 0.85.
+    // A different mode is a different source semantic key, and a mode the blend ignores is not.
+    {
+        using bloom::document::GradientColorMode;
+        using bloom::document::GradientHueDirection;
+        using bloom::document::GradientInterpolation;
+        std::vector<bloom::document::GradientModes> modes;
+        for (const auto interpolation :
+             {GradientInterpolation::Constant, GradientInterpolation::Ease,
+              GradientInterpolation::Cardinal, GradientInterpolation::BSpline,
+              GradientInterpolation::Exponential})
+            modes.push_back({interpolation, GradientColorMode::Rgb, GradientHueDirection::Near});
+        for (const auto colorMode : {GradientColorMode::Hsv, GradientColorMode::Hsl})
+            for (const auto hue : bloom::document::kGradientHueDirections)
+                modes.push_back({GradientInterpolation::Linear, colorMode, hue});
+        const auto modePlan = [](const bool radial, const bloom::document::GradientModes mode) {
+            auto definition = gradientPlan(radial)->copyDefinition();
+            auto stops = multiStop();
+            stops.modes = mode;
+            std::get<bloom::runtime::CompiledSolid>(definition.operations[0]).gradient->stops.source =
+                std::move(stops);
+            return publish(std::move(definition));
+        };
+        for (const auto& mode : modes)
+            for (const bool radial : {false, true}) {
+                const auto plan = modePlan(radial, mode);
+                expectParity(
+                    expectations, *executor.executor, oracle, plan, requestFor(*plan),
+                    std::string(radial ? "radial" : "linear") + " gradient " +
+                        std::string(bloom::document::gradientInterpolationName(mode.interpolation)) +
+                        " " + std::string(bloom::document::gradientColorModeName(mode.colorMode)) +
+                        " " +
+                        std::string(bloom::document::gradientHueDirectionName(mode.hueDirection)));
+            }
+        const auto keyFor = [&](const bloom::document::GradientModes mode) -> std::string {
+            const auto plan = modePlan(false, mode);
+            const auto built = CpuGpuSceneBuilder{}.build(plan, requestFor(*plan));
+            return built.hasValue() ? keyOf(built.scene->commands().front()) : std::string{};
+        };
+        const auto linear = keyFor({});
+        const auto ease = keyFor({GradientInterpolation::Ease, GradientColorMode::Rgb,
+                                  GradientHueDirection::Near});
+        const auto easeFar = keyFor({GradientInterpolation::Ease, GradientColorMode::Rgb,
+                                     GradientHueDirection::Far});
+        const auto hsv = keyFor({GradientInterpolation::Linear, GradientColorMode::Hsv,
+                                 GradientHueDirection::Near});
+        const auto hsvEase = keyFor({GradientInterpolation::Ease, GradientColorMode::Hsv,
+                                     GradientHueDirection::Near});
+        expectations.expect(linear != ease && linear != hsv && ease != hsv,
+                            "gradient: the interpolation and colour mode are in the semantic key");
+        expectations.expect(ease == easeFar && hsv == hsvEase,
+                            "gradient: a mode the blend ignores leaves the semantic key alone");
+        // A keyed gradient takes the earlier key's modes between its keys.
+        auto keyedDefinition = gradientPlan(true)->copyDefinition();
+        auto first = multiStop();
+        first.modes.interpolation = GradientInterpolation::Cardinal;
+        auto second = multiStop();
+        second.modes.colorMode = GradientColorMode::Hsl;
+        for (auto& stop : second.stops)
+            stop.position = 1.0 - stop.position;
+        bloom::runtime::CompiledGradientCurve keyed;
+        keyed.id = bloom::document::AnimationCurveId::fromRaw(180350);
+        keyed.keyframes = {{bloom::document::KeyframeId::fromRaw(180351),
+                            RationalTime::fromInteger(0), first},
+                           {bloom::document::KeyframeId::fromRaw(180352),
+                            RationalTime::fromInteger(2), second}};
+        std::get<bloom::runtime::CompiledSolid>(keyedDefinition.operations[0])
+            .gradient->stops.source = std::move(keyed);
+        const auto keyedPlan = publish(std::move(keyedDefinition));
+        for (const auto frame : {0, 1, 2})
+            expectParity(expectations, *executor.executor, oracle, keyedPlan,
+                         requestFor(*keyedPlan, RationalTime::fromInteger(frame)),
+                         "keyed Cardinal to HSL gradient at frame " + std::to_string(frame));
+    }
     // #543: stops a value node drives: stop 1's colour and stop 0's position from value outputs,
     // applied over the five-stop table before it is sorted, on the CPU reference and the native
     // kernel alike; a different driven colour is a different source semantic key.
