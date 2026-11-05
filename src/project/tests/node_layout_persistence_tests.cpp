@@ -177,7 +177,7 @@ void blurNodeReopen() {
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-          "bloom.alpha-association", "bloom.colorize"}) {
+          "bloom.alpha-association", "bloom.colorize", "bloom.vignette"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -247,6 +247,14 @@ void blurNodeReopen() {
                     ? document::ParameterValue{std::int64_t{3}}
                 : parameter.schemaKey == "bloom.colorize.cycle"
                     ? document::ParameterValue{std::int64_t{2}}
+                // #505 Vignette: a rectangle in Exposure, set values and a moved centre.
+                : parameter.schemaKey == "bloom.vignette.shape" ||
+                        parameter.schemaKey == "bloom.vignette.mode"
+                    ? document::ParameterValue{std::int64_t{1}}
+                : parameter.schemaKey == "bloom.vignette.center"
+                    ? document::ParameterValue{document::Vec2d{-120.5, 64.25}}
+                : parameter.schemaKey.starts_with("bloom.vignette.")
+                    ? document::ParameterValue{0.25}
                 // #541: a five-stop gradient with a hard edge and an HDR, signed stop.
                 : parameter.valueKind == document::ParameterValueKind::Gradient
                     ? document::ParameterValue{document::GradientValue{

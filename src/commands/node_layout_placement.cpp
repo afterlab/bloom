@@ -7,6 +7,7 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/project.hpp>
 
 #include <algorithm>
@@ -289,6 +290,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         thumbnail = 2.0 * (kControl + kSmall) + std::round(inner * kLevelsPlotAspect) +
                     2.0 * kLevelsHandle + kSmall + kPadding + kSmall + 2.0 * kControl + kSmall +
                     kPadding;
+    // #505: the Vignette card's point pad and its five slider rows, each a value over a slider.
+    if (node->typeId == document::kVignetteNodeType)
+        thumbnail = kPadMaxHeight + kSmall + 5.0 * (kControl + kSmall) + kPadding;
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +

@@ -488,7 +488,7 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                             progress);
     if (effect.colorGrade)
         return applyColorGrade(*effect.colorGrade, input, pixelBudget, cancellation, operation,
-                               progress);
+                               progress, horizontalScale, verticalScale);
     if (effect.channelSelect)
         return applyChannelSelect(*effect.channelSelect, input, pixelBudget, cancellation,
                                   operation, progress);

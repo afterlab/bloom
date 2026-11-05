@@ -479,6 +479,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     const auto* directionalKernel = std::get_if<DirectionalBlurKernel>(&effect.kernel);
     std::optional<PreparedSeparableBlur> blur;
     std::optional<PreparedDirectionalBlur> directional;
+    // #505: a vignette's table, whose geometry is the input's: its leg is prepared once the input's
+    // descriptor is known (below).
+    std::optional<PreparedColorGrade> vignette;
     if (cst == nullptr && file == nullptr && pointwise == nullptr && canvas == nullptr &&
         blurKernel == nullptr && masksKernel == nullptr && lumaKeyKernel == nullptr &&
         selectKernel == nullptr && directionalKernel == nullptr &&
@@ -619,11 +622,15 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                         "Color grade values are out of domain");
         if (grade->identity)
             return identity();
-        GpuOcioTransformSpec leg;
-        leg.kind = GpuOcioTransformKind::ColorGrade;
-        leg.gradeKind = static_cast<std::uint8_t>(grade->kind);
-        leg.gradeData = grade->data;
-        legs.push_back(std::move(leg));
+        if (grade->kind == ColorGradeKind::Vignette) {
+            vignette = std::move(*grade);
+        } else {
+            GpuOcioTransformSpec leg;
+            leg.kind = GpuOcioTransformKind::ColorGrade;
+            leg.gradeKind = static_cast<std::uint8_t>(grade->kind);
+            leg.gradeData = grade->data;
+            legs.push_back(std::move(leg));
+        }
     } else if (selectKernel != nullptr) {
         // #479: the CPU reference's prepared mapping as the one fixed program's data; the identity
         // mapping aliases its input exactly, as on the CPU.
@@ -793,8 +800,9 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         .width = static_cast<std::uint32_t>(filterWindow->extent().width()),
         .height = static_cast<std::uint32_t>(filterWindow->extent().height())};
     std::vector<std::shared_ptr<const PreparedGpuOcioCommand>> programs;
-    programs.reserve(legs.size());
-    for (const auto& leg : legs) {
+    programs.reserve(legs.size() + 1);
+    const auto prepareLeg =
+        [&](const GpuOcioTransformSpec& leg) -> std::optional<GpuSceneLeafFailure> {
         auto prepared = ocioContext.preparer->prepare(
             *config, leg, geometry, ocioContext.compileOptions, cancellationProbe);
         if (!prepared) {
@@ -814,8 +822,12 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                             std::string{gpuOcioPreparationErrorName(prepared.error)});
         }
         programs.push_back(std::move(prepared.command));
-    }
-    if (programs.empty()) {
+        return std::nullopt;
+    };
+    for (const auto& leg : legs)
+        if (const auto error = prepareLeg(leg))
+            return error;
+    if (programs.empty() && !vignette) {
         return identity();
     }
 
@@ -855,6 +867,24 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     if (!descriptor.has_value()) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "The image effect input descriptor is not derivable");
+    }
+    // #505: the vignette's table with the input's own display window, data origin and pixel aspect,
+    // exactly as the CPU reference reads them from its input image.
+    if (vignette) {
+        const auto aspect = descriptor->pixelAspect;
+        auto data = vignetteProgramData(
+            *vignette, descriptor->display, descriptor->data.originX(), descriptor->data.originY(),
+            static_cast<double>(aspect.numerator()) / static_cast<double>(aspect.denominator()),
+            ctx.hScale, ctx.vScale);
+        if (!data)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                        "Vignette geometry cannot be represented");
+        GpuOcioTransformSpec leg;
+        leg.kind = GpuOcioTransformKind::ColorGrade;
+        leg.gradeKind = static_cast<std::uint8_t>(ColorGradeKind::Vignette);
+        leg.gradeData = std::move(*data);
+        if (const auto error = prepareLeg(leg))
+            return error;
     }
     const auto outputWindow = grows ? *filterWindow : descriptor->data;
     if (grows && outputWindow != descriptor->data) {

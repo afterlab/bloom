@@ -2,6 +2,7 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -260,6 +261,43 @@ template <typename Definition>
     return definition;
 }
 
+// #505 Vignette: an Image in and out; the constant shape and mode (they choose the arithmetic, so
+// they have no socket), then one socket per animatable/drivable value in parameter order.
+[[nodiscard]] NodeDefinition vignetteDefinition() {
+    using namespace bloom::document;
+    NodeDefinition definition{{std::string(kVignetteNodeType), 1},
+                              NodeLoweringKind::ImageEffect,
+                              {{"input", SocketValueKind::Image}},
+                              {{"image", SocketValueKind::Image}},
+                              {},
+                              std::nullopt,
+                              NodeCardinality::Many,
+                              NodeCategory::Filters};
+    const auto integer = [&](std::string role, const std::string_view schemaKey) {
+        definition.parameters.push_back({std::move(role), std::string(schemaKey),
+                                         ParameterValueKind::Integer, true, false,
+                                         vignetteIntegerDomain(schemaKey)->defaultValue});
+    };
+    const auto scalar = [&](std::string role, const std::string_view schemaKey) {
+        definition.parameters.push_back({role, std::string(schemaKey), ParameterValueKind::Float64,
+                                         true, true,
+                                         vignetteScalarDomain(schemaKey)->defaultValue});
+        definition.inputs.push_back({std::move(role), SocketValueKind::Scalar, false});
+    };
+    integer("shape", kVignetteShapeSchemaKey);
+    integer("mode", kVignetteModeSchemaKey);
+    scalar("amount", kVignetteAmountSchemaKey);
+    scalar("exposure", kVignetteExposureSchemaKey);
+    scalar("midpoint", kVignetteMidpointSchemaKey);
+    scalar("roundness", kVignetteRoundnessSchemaKey);
+    scalar("feather", kVignetteFeatherSchemaKey);
+    scalar("highlightProtection", kVignetteHighlightProtectionSchemaKey);
+    definition.parameters.push_back({"center", std::string(kVignetteCenterSchemaKey),
+                                     ParameterValueKind::Vec2d, true, true, Vec2d{}});
+    definition.inputs.push_back({"center", SocketValueKind::Vector2, false});
+    return definition;
+}
+
 // #340 Hue/Saturation: animatable/drivable hue rotation (degrees) and saturation factor.
 [[nodiscard]] NodeDefinition hueSaturationDefinition() {
     using namespace bloom::document;
@@ -512,6 +550,8 @@ template <typename Definition>
             return definition == alphaAssociationDefinition();
         if (definition.key.typeId == kColorizeNodeType)
             return definition == colorizeDefinition();
+        if (definition.key.typeId == kVignetteNodeType)
+            return definition == vignetteDefinition();
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1579,6 +1619,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         hueSaturationDefinition(),
         gradeDefinition(),
         colorizeDefinition(),
+        vignetteDefinition(),
         separateChannelsDefinition(),
         combineChannelsDefinition(),
         recipeDefinition(kDropShadowNodeType),

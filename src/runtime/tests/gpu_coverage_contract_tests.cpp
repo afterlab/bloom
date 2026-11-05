@@ -1466,6 +1466,46 @@ displayProofRunner(const bool customView) {
                              "mix and a multi-stop Gradient Map, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #505 Vignette: both shapes, both modes, roundness both ways, a moved centre and highlight
+    // protection.
+    const auto vignette = [](const int variant) {
+        return [=](const std::uint64_t idBase) -> ImageEffectKernel {
+            using bloom::runtime::VignetteMode;
+            using bloom::runtime::VignetteShape;
+            bloom::runtime::VignetteKernel kernel;
+            kernel.shape = variant % 2 == 1 ? VignetteShape::Rectangular : VignetteShape::Elliptical;
+            kernel.mode = variant >= 2 ? VignetteMode::Exposure : VignetteMode::Multiply;
+            kernel.amount = {ParameterId::fromRaw(idBase + 60), variant == 1 ? -0.5 : 0.9};
+            kernel.exposure = {ParameterId::fromRaw(idBase + 61), variant == 3 ? 1.25 : -3.0};
+            kernel.midpoint = {ParameterId::fromRaw(idBase + 62), 0.25};
+            kernel.roundness = {ParameterId::fromRaw(idBase + 63), variant == 1 ? -0.4 : 0.7};
+            kernel.feather = {ParameterId::fromRaw(idBase + 64), 0.6};
+            kernel.highlightProtection = {ParameterId::fromRaw(idBase + 65),
+                                          variant == 2 ? 0.75 : 0.0};
+            kernel.center = {ParameterId::fromRaw(idBase + 66),
+                             bloom::document::Vec2d{variant == 0 ? 0.0 : 3.0, -2.0}};
+            return ImageEffectKernel{kernel};
+        };
+    };
+    add(
+        "effect.VignetteKernel", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime vignette tests",
+        [runGrades, vignette] {
+            return runGrades({vignette(0), vignette(1), vignette(2), vignette(3)}, 505000,
+                             "production Vignette: elliptical and rectangular, multiply and "
+                             "exposure, a moved centre and highlight protection over HDR and "
+                             "signed values, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "node.bloom.vignette", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime vignette tests",
+        [runGrades, vignette] {
+            return runGrades({vignette(0), vignette(2)}, 505600,
+                             "production Vignette node: an elliptical multiply and a protected "
+                             "exposure falloff, full frame and ROI");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     // #494 Grade: the wheels and primaries through the production builder's resident program.
     const auto grade = [](const std::array<double, 22> values) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {

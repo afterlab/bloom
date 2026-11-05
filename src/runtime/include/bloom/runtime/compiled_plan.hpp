@@ -493,13 +493,36 @@ struct ColorizeKernel final {
     std::optional<CompiledGradientParameter> gradient;
     friend bool operator==(const ColorizeKernel&, const ColorizeKernel&) = default;
 };
+// #505 Vignette over premultiplied (process) RGBA, alpha unchanged: every pixel's colour is scaled
+// by a gain from a mask of its distance from the vignette's centre, measured in the half-axes of
+// the input's display window (so the falloff follows the frame at any resolution). Multiply gives
+// 1 - amount * mask, Exposure 2^(exposure * mask); `highlightProtection` moves the gain back
+// towards 1 for straight luma from 0.18 up to 1.0. `center` is an offset in full-resolution pixels
+// from the display window's centre. The compiler lowers only the strength the mode reads (the
+// other is a constant without an identity). A grade kind whose prepared table gains the input's
+// geometry where it is applied (color_grade_image_effect.hpp); docs/architecture/image-filters.md,
+// "Vignette", has the formulas.
+enum class VignetteShape : std::uint8_t { Elliptical, Rectangular };
+enum class VignetteMode : std::uint8_t { Multiply, Exposure };
+struct VignetteKernel final {
+    VignetteShape shape = VignetteShape::Elliptical;
+    VignetteMode mode = VignetteMode::Multiply;
+    CompiledScalarParameter amount{{}, 0.5};
+    CompiledScalarParameter exposure{{}, -1.0};
+    CompiledScalarParameter midpoint{{}, 0.5};
+    CompiledScalarParameter roundness{{}, 0.0};
+    CompiledScalarParameter feather{{}, 0.5};
+    CompiledScalarParameter highlightProtection{{}, 0.0};
+    CompiledVec2Parameter center{{}, document::Vec2d{}};
+    friend bool operator==(const VignetteKernel&, const VignetteKernel&) = default;
+};
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
                  SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
                  ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
-                 AlphaAssociationKernel, ColorizeKernel>;
+                 AlphaAssociationKernel, ColorizeKernel, VignetteKernel>;
 
 // #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade;
 // #506: or Highlight Roll-off; #503: or Alpha Association; #504: or Colorize) kernel in the kernel's canonical order
@@ -560,6 +583,18 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
             visit(*colorize->gradient);
         return true;
     }
+    // #505: amount, exposure, midpoint, roundness, feather, highlight protection, then the centre
+    // (a CompiledVec2Parameter).
+    if (const auto* vignette = std::get_if<VignetteKernel>(&kernel)) {
+        visit(vignette->amount);
+        visit(vignette->exposure);
+        visit(vignette->midpoint);
+        visit(vignette->roundness);
+        visit(vignette->feather);
+        visit(vignette->highlightProtection);
+        visit(vignette->center);
+        return true;
+    }
     return false;
 }
 
@@ -570,7 +605,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<GradeKernel>(kernel) ||
            std::holds_alternative<HighlightRollOffKernel>(kernel) ||
            std::holds_alternative<AlphaAssociationKernel>(kernel) ||
-           std::holds_alternative<ColorizeKernel>(kernel);
+           std::holds_alternative<ColorizeKernel>(kernel) ||
+           std::holds_alternative<VignetteKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;

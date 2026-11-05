@@ -1654,6 +1654,47 @@ lowerImageEffect(const document::NodeRecord& node,
         addTopologyFailure(node.id, "Colorize parameters could not be lowered.");
         return std::nullopt;
     }
+    // #505 Vignette: the constant shape and mode, the strength the mode reads and every shared
+    // value; the other strength keeps the kernel's constant default without an identity, so an
+    // unused (even animated) value neither claims nor invalidates anything.
+    if (node.typeId == document::kVignetteNodeType) {
+        const auto* shape = parameterConstant<std::int64_t>(findParameterBinding(node, "shape"));
+        const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
+        const auto inRange = [](const std::int64_t* value, const std::string_view schemaKey) {
+            const auto domain = document::vignetteIntegerDomain(schemaKey);
+            return value && *value >= domain->minimum && *value <= domain->maximum;
+        };
+        bool lowered = inRange(shape, document::kVignetteShapeSchemaKey) &&
+                       inRange(mode, document::kVignetteModeSchemaKey);
+        runtime::VignetteKernel kernel;
+        if (lowered) {
+            kernel.shape = static_cast<runtime::VignetteShape>(*shape);
+            kernel.mode = static_cast<runtime::VignetteMode>(*mode);
+            const auto scalar = [&](const std::string_view role,
+                                    runtime::CompiledScalarParameter& target) {
+                const auto parameter = compiledScalarParameter(findParameterBinding(node, role));
+                lowered = lowered && parameter.has_value();
+                if (parameter)
+                    target = *parameter;
+            };
+            if (kernel.mode == runtime::VignetteMode::Multiply)
+                scalar("amount", kernel.amount);
+            else
+                scalar("exposure", kernel.exposure);
+            scalar("midpoint", kernel.midpoint);
+            scalar("roundness", kernel.roundness);
+            scalar("feather", kernel.feather);
+            scalar("highlightProtection", kernel.highlightProtection);
+            const auto center = compiledVec2Parameter(findParameterBinding(node, "center"));
+            lowered = lowered && center.has_value();
+            if (center)
+                kernel.center = *center;
+        }
+        if (lowered)
+            return runtime::CompiledImageEffect{node.id, *input, std::move(kernel)};
+        addTopologyFailure(node.id, "Vignette parameters could not be lowered.");
+        return std::nullopt;
+    }
     if (node.typeId == document::kHueSaturationNodeType) {
         const auto hue = compiledScalarParameter(findParameterBinding(node, "hue"));
         const auto saturation = compiledScalarParameter(findParameterBinding(node, "saturation"));

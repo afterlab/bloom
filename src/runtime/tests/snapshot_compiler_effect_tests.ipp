@@ -1454,3 +1454,93 @@ void testColorizeLowering(Expectations& expectations) {
       }
     }
 }
+
+// #505 Vignette lowers to one vignette kernel with its constant shape and mode. The mode keeps the
+// identity of only the strength it reads (Multiply the amount, Exposure the stops); the other stays
+// the kernel's constant default without an identity. Every shared value and the centre keep theirs.
+// A muted node passes its Image through.
+void testVignetteLowering(Expectations& expectations) {
+    using namespace document;
+    runtime::NodeDefinitionRegistry registry;
+    require(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    registry.freeze();
+    const auto effectId = NodeId::fromRaw(996);
+    const auto* definition = builtInNodeDefinitions().find(kVignetteNodeType, 1);
+    require(definition != nullptr, "the vignette definition exists");
+    for (const auto mode : {kVignetteMultiply, kVignetteExposure}) {
+        for (const bool muted : {false, true}) {
+            auto project = makeProject(singleLayerOptions());
+            auto* composition = project.findComposition(kCompositionId);
+            auto& graph = composition->graph();
+            std::vector<ParameterBinding> bindings;
+            std::map<std::string, ParameterId> ids;
+            std::uint64_t next = 2800;
+            for (const auto& parameter : definition->parameters) {
+                auto value = parameter.defaultValue;
+                if (parameter.role == "mode")
+                    value = mode;
+                if (parameter.role == "shape")
+                    value = kVignetteRectangular;
+                if (parameter.role == "feather")
+                    value = 0.25;
+                if (parameter.role == "center")
+                    value = Vec2d{-32.0, 18.5};
+                const auto id = ParameterId::fromRaw(next++);
+                require(composition->parameters().insert(
+                            {id, parameter.schemaKey, ConstantValueSource{value}}),
+                        "vignette parameter is valid");
+                ids[parameter.role] = id;
+                bindings.push_back({parameter.role, id});
+            }
+            require(graph.addNode({effectId, std::string(kVignetteNodeType), std::move(bindings),
+                                   1}),
+                    "vignette node is accepted");
+            require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
+            require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
+                                   NodeInputRef{effectId, "input"}}),
+                    "source feeds the vignette");
+            require(graph.addEdge({EdgeId::fromRaw(996), {effectId, "image"},
+                                   NodeInputRef{kFirstLayerNode,
+                                                std::string(kLayerOutputContentInputPort)}}),
+                    "vignette feeds Layer");
+            if (muted)
+                composition->nodeLayout()[effectId].muted = true;
+            expectations.expect(project.validate().ok(), "vignette graph is valid document truth");
+            const auto result = compile(std::move(project), registry);
+            expectations.expect(result.plan != nullptr, "vignette graph compiles");
+            if (!result.plan)
+                continue;
+            const auto effect = std::ranges::find_if(result.plan->operations(), [&](const auto& op) {
+                const auto* item = std::get_if<runtime::CompiledImageEffect>(&op);
+                return item && item->sourceNodeId == effectId;
+            });
+            if (muted) {
+                expectations.expect(effect == result.plan->operations().end(),
+                                    "a muted vignette passes its Image through");
+                continue;
+            }
+            require(effect != result.plan->operations().end(),
+                    "vignette lowers to an image effect");
+            const auto* kernel = std::get_if<runtime::VignetteKernel>(
+                &std::get<runtime::CompiledImageEffect>(*effect).kernel);
+            require(kernel != nullptr, "vignette lowers to a vignette kernel");
+            const bool multiply = mode == kVignetteMultiply;
+            const auto owns = [&](const ParameterId id, const char* role, const bool used) {
+                return used ? id == ids.at(role) : !id.isValid();
+            };
+            expectations.expect(
+                kernel->shape == runtime::VignetteShape::Rectangular &&
+                    static_cast<std::int64_t>(kernel->mode) == mode &&
+                    owns(kernel->amount.id, "amount", multiply) &&
+                    owns(kernel->exposure.id, "exposure", !multiply) &&
+                    owns(kernel->midpoint.id, "midpoint", true) &&
+                    owns(kernel->roundness.id, "roundness", true) &&
+                    owns(kernel->feather.id, "feather", true) &&
+                    std::get<double>(kernel->feather.source) == 0.25 &&
+                    owns(kernel->highlightProtection.id, "highlightProtection", true) &&
+                    owns(kernel->center.id, "center", true) &&
+                    std::get<Vec2d>(kernel->center.source) == Vec2d{-32.0, 18.5},
+                "vignette lowers its shape, its mode and only the strength that mode reads");
+        }
+    }
+}

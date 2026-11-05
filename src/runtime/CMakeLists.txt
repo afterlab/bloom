@@ -155,6 +155,7 @@ target_sources(
         luma_key_image_effect.cpp
         color_grade_curves.cpp
         color_grade_image_effect.cpp
+        vignette_image_effect.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp
         image_effect.hpp

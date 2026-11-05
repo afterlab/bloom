@@ -131,6 +131,9 @@ BLOOM_GPU_REQUIRED_EFFECT(AlphaAssociationKernel,
                           "Matting (#503)");
 BLOOM_GPU_REQUIRED_EFFECT(ColorizeKernel,
                           "Colorize: Fill, Tint, Tritone, Gradient Map and Black & White (#504)");
+BLOOM_GPU_REQUIRED_EFFECT(VignetteKernel,
+                          "Vignette: elliptical or rectangular falloff, multiply or exposure, with "
+                          "highlight protection (#505)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

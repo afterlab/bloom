@@ -8,6 +8,7 @@
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -363,7 +364,7 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kGradientEndParameterSchemaKey ||
            schemaKey == kVector2ValueParameterSchemaKey ||
            schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
-           schemaKey == "bloom.transform-2d.scale";
+           schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey;
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -395,6 +396,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kHueSaturationHueSchemaKey ||
            schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
+           isVignetteScalarSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -489,6 +491,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #504 Colorize (colorize_nodes.hpp).
     if (const auto colorize = colorizeScalarDomain(schemaKey))
         return value >= colorize->minimum && value <= colorize->maximum;
+    // #505 Vignette (vignette_nodes.hpp).
+    if (const auto vignette = vignetteScalarDomain(schemaKey))
+        return value >= vignette->minimum && value <= vignette->maximum;
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

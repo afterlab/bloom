@@ -899,6 +899,29 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{3.5});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *midpoint,
                                ConstantValueSource{1.0});
+
+    // #505 Vignette: the closed shape and mode, a strength, a share and the centre edit within
+    // their domains and refuse outside them.
+    const auto vignette = addRecipe("bloom.vignette");
+    const auto shape = vignette.outputId<ParameterId>("parameter.shape");
+    const auto exposure = vignette.outputId<ParameterId>("parameter.exposure");
+    const auto feather = vignette.outputId<ParameterId>("parameter.feather");
+    const auto center = vignette.outputId<ParameterId>("parameter.center");
+    if (!shape || !exposure || !feather || !center)
+        throw std::logic_error("Vignette exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *shape, ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *exposure, ConstantValueSource{-3.5});
+    (void)exercise<SetParameterSource>(test, fixture, *feather, ConstantValueSource{0.0});
+    (void)exercise<SetParameterSource>(
+        test, fixture, *center, ConstantValueSource{bloom::document::Vec2d{-240.0, 135.5}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *shape,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *exposure,
+                               ConstantValueSource{12.0});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *feather,
+                               ConstantValueSource{1.5});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *center,
+                               ConstantValueSource{bloom::document::Vec2d{2e6, 0.0}});
 }
 
 void testAddAndLayout(TestContext& test) {

@@ -377,6 +377,23 @@ constantMatchesSchema(const std::string_view schemaKey,
                                            ? isBoundedGradient(*gradient)
                                            : gradient->isValid());
     }
+    // #505 Vignette: finite scalars within their domains, a finite centre offset within +-1e6
+    // pixels and the closed shape and mode.
+    if (isVignetteScalarSchemaKey(schemaKey)) {
+        const auto* value = std::get_if<double>(&constant.value);
+        return value != nullptr && std::isfinite(*value) &&
+               isScalarWithinSchemaDomain(schemaKey, *value);
+    }
+    if (schemaKey == kVignetteCenterSchemaKey) {
+        const auto* value = std::get_if<Vec2d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y) &&
+               std::abs(value->x) <= kMaximumVignetteCenter &&
+               std::abs(value->y) <= kMaximumVignetteCenter;
+    }
+    if (const auto domain = vignetteIntegerDomain(schemaKey)) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= domain->minimum && *value <= domain->maximum;
+    }
     // #339 Drop Shadow, Glow and Light Wrap.
     if (isRecipeScalarSchemaKey(schemaKey)) {
         const auto* value = std::get_if<double>(&constant.value);
@@ -532,6 +549,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          schemaKey == bloom::document::kAlphaAssociationModeSchemaKey ||
          schemaKey == bloom::document::kAlphaAssociationWhiteSchemaKey ||
          bloom::document::isColorizeIntegerSchemaKey(schemaKey) ||
+         bloom::document::isVignetteIntegerSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;

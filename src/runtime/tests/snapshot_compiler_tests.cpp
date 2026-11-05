@@ -1943,6 +1943,7 @@ int main() {
         testColorGradeLowering(expectations);
         testAlphaAssociationLowering(expectations);
         testColorizeLowering(expectations);
+        testVignetteLowering(expectations);
         testImageChannelLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);

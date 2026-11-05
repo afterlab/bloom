@@ -1175,6 +1175,16 @@ void testColorGradeEvaluation() {
                              core::Color4d{1.2, 0.8, 0.2, 1.0}};
         return kernel;
     };
+    // #505 Vignette: a vignette is a grade whose gain depends on where the pixel is.
+    const auto vignette = [](const runtime::VignetteMode mode, const double x) {
+        runtime::VignetteKernel kernel;
+        kernel.mode = mode;
+        kernel.amount = {document::ParameterId::fromRaw(490), 0.9};
+        kernel.exposure = {document::ParameterId::fromRaw(491), -2.0};
+        kernel.midpoint = {document::ParameterId::fromRaw(492), 0.1};
+        kernel.center = {document::ParameterId::fromRaw(493), document::Vec2d{x, 0.0}};
+        return kernel;
+    };
     runtime::CpuCompositionEvaluator evaluator;
     runtime::CpuCompositionEvaluator fresh;
     const auto baseline = planWith({});
@@ -1206,6 +1216,12 @@ void testColorGradeEvaluation() {
          {}},
         {association(runtime::AlphaAssociationMode::RemoveMatting, false, {0.2, 0.4, 0.8, 1.0}),
          association(runtime::AlphaAssociationMode::RemoveMatting, false, {0.6, 0.4, 0.8, 1.0}),
+         {}},
+        {vignette(runtime::VignetteMode::Multiply, 0.0),
+         vignette(runtime::VignetteMode::Multiply, 1.0),
+         {}},
+        {vignette(runtime::VignetteMode::Exposure, 0.5),
+         vignette(runtime::VignetteMode::Multiply, 0.5),
          {}},
     };
     for (const auto& item : cases) {
@@ -1248,6 +1264,14 @@ void testColorGradeEvaluation() {
                "grade keeps the composited window");
         bool changedPixel = false;
         const auto window = image.descriptor()->dataWindow();
+        // #505: a vignette reads the composited image's own geometry.
+        const auto positioned =
+            prepared && prepared->kind == runtime::detail::ColorGradeKind::Vignette
+                ? runtime::detail::vignetteProgramData(
+                      *prepared, source.descriptor()->displayWindow(),
+                      source.descriptor()->dataWindow().originX(),
+                      source.descriptor()->dataWindow().originY(), 1.0, 1.0, 1.0)
+                : std::nullopt;
         for (auto y = window.originY(); y < window.maxYExclusive(); ++y)
             for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
                 const auto s = source.read(x, y);
@@ -1258,7 +1282,11 @@ void testColorGradeEvaluation() {
                 }
                 std::array<float, 4> expected{s.value()->red(), s.value()->green(),
                                               s.value()->blue(), s.value()->alpha()};
-                expect(runtime::detail::colorGradePixel(*prepared, expected), "grade pixel");
+                expect(positioned
+                           ? runtime::detail::vignettePixel(*positioned, x - window.originX(),
+                                                            y - window.originY(), expected)
+                           : runtime::detail::colorGradePixel(*prepared, expected),
+                       "grade pixel");
                 if (expected[3] == 0.0F)
                     expected = {0.0F, 0.0F, 0.0F, 0.0F};
                 expect(p.value()->red() == expected[0] && p.value()->green() == expected[1] &&

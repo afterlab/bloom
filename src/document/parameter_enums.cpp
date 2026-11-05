@@ -3,6 +3,7 @@
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
@@ -149,6 +150,11 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return {{"Clamp", kColorizeCycleClamp},
                 {"Repeat", kColorizeCycleRepeat},
                 {"Mirror", kColorizeCycleMirror}};
+    // #505 Vignette.
+    if (schemaKey == kVignetteShapeSchemaKey)
+        return {{"Elliptical", kVignetteElliptical}, {"Rectangular", kVignetteRectangular}};
+    if (schemaKey == kVignetteModeSchemaKey)
+        return {{"Multiply", kVignetteMultiply}, {"Exposure (stops)", kVignetteExposure}};
     if (schemaKey == kGlowModeSchemaKey)
         return {{"Classic", kGlowModeClassic},
                 {"Physical", kGlowModePhysical},

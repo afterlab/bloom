@@ -865,6 +865,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
             "}\n";
         return text;
     }
+    case ColorGradeKind::Vignette:
+        return vignetteProgramText();
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -980,6 +982,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareAlphaAssociation(*association, values);
     if (const auto* colorize = std::get_if<ColorizeKernel>(&kernel))
         return prepareColorize(*colorize, values);
+    if (const auto* vignette = std::get_if<VignetteKernel>(&kernel))
+        return prepareVignetteGrade(*vignette, values);
     return std::nullopt;
 }
 
@@ -1006,6 +1010,9 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         return alphaAssociationPixel(grade.data, pixel);
     if (grade.kind == ColorGradeKind::Colorize)
         return colorizePixel(grade.data, pixel);
+    // #505: a vignette depends on where the pixel is (vignettePixel).
+    if (grade.kind == ColorGradeKind::Vignette)
+        return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
     };
@@ -1046,9 +1053,24 @@ ImageEffectResult applyColorGrade(const PreparedColorGrade& grade,
                                   const render::Rgba32fImage& input, const std::size_t budget,
                                   const CancellationToken& cancellation,
                                   const OperationIndex operation,
-                                  const EvaluationProgressCallback& progress) {
+                                  const EvaluationProgressCallback& progress,
+                                  const double horizontalScale, const double verticalScale) {
     if (cancellation.isCancellationRequested())
         return ImageEffectResult{{}, {}, true};
+    // #505: a vignette's table gains the input's geometry; every pixel reads its own index.
+    std::optional<std::vector<float>> vignette;
+    if (grade.kind == ColorGradeKind::Vignette) {
+        const auto& descriptor = *input.descriptor();
+        const auto aspect = descriptor.pixelAspect();
+        vignette = vignetteProgramData(
+            grade, descriptor.displayWindow(), descriptor.dataWindow().originX(),
+            descriptor.dataWindow().originY(),
+            static_cast<double>(aspect.numerator()) / static_cast<double>(aspect.denominator()),
+            horizontalScale, verticalScale);
+        if (!vignette)
+            return failed(EvaluationDiagnosticCode::InvalidParameter,
+                          "Vignette geometry cannot be represented");
+    }
     auto builder = render::Rgba32fImageBuilder::create(*input.descriptor(), budget);
     if (!builder)
         return failed(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
@@ -1072,7 +1094,9 @@ ImageEffectResult applyColorGrade(const PreparedColorGrade& grade,
                 return ImageEffectResult{{}, {}, true};
             const auto p = (*source.value())[column];
             std::array<float, 4> graded{p.red(), p.green(), p.blue(), p.alpha()};
-            if (!colorGradePixel(grade, graded))
+            if (vignette ? !vignettePixel(*vignette, static_cast<std::int64_t>(column),
+                                          y - window.originY(), graded)
+                         : !colorGradePixel(grade, graded))
                 return failed(EvaluationDiagnosticCode::InvalidPixel,
                               "Color grade produced a non-finite value");
             const auto pixel =
@@ -1105,8 +1129,9 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                             ? data.size() == kAlphaAssociationFloats && data[0] >= 0.0F &&
                                   data[0] <= 4.0F && data[0] == std::floor(data[0])
                         : kind == ColorGradeKind::Colorize ? validColorizeTable(data)
+                        : kind == ColorGradeKind::Vignette ? validVignetteProgramData(data)
                                                            : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Colorize) ||
+    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Vignette) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1147,6 +1172,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_colorize";
         program.resourcePrefix = "bloom_colorize_";
         program.semanticsId = "bloom.render.colorize.v1";
+        break;
+    case ColorGradeKind::Vignette:
+        program.functionName = "bloom_vignette";
+        program.resourcePrefix = "bloom_vignette_";
+        program.semanticsId = "bloom.render.vignette.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);

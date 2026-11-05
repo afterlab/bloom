@@ -141,8 +141,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
-    // Association; #502 adds Adjustment; #504 adds Colorize.
-    expectations.expect(registry.definitions().size() == 155,
+    // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette.
+    expectations.expect(registry.definitions().size() == 156,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -289,8 +289,36 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
-                    "bloom.matte-erode", "bloom.matte-dilate"},
+                    "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette"},
                    document::NodeCategory::Filters);
+    // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
+    // no socket; every value animatable with its own socket in parameter order, the centre a
+    // Vector 2 offset from the frame's centre.
+    const auto* vignette = registry.find("bloom.vignette", 1);
+    const auto vignetteSockets = [&] {
+        std::size_t socket = 1;
+        for (const auto& parameter : vignette->parameters) {
+            if (!parameter.supportsAnimation)
+                continue;
+            if (socket >= vignette->inputs.size() ||
+                vignette->inputs[socket].name != parameter.role || vignette->inputs[socket].required)
+                return false;
+            ++socket;
+        }
+        return socket == vignette->inputs.size();
+    };
+    expectations.expect(
+        vignette && vignette->inputs.size() == 8 && vignette->parameters.size() == 9 &&
+            vignette->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            vignette->parameters[0].role == "shape" && !vignette->parameters[0].supportsAnimation &&
+            vignette->parameters[0].defaultValue == document::ParameterValue{std::int64_t{0}} &&
+            vignette->parameters[1].role == "mode" && !vignette->parameters[1].supportsAnimation &&
+            vignette->parameters[2].defaultValue == document::ParameterValue{0.5} &&
+            vignette->parameters[8].role == "center" &&
+            vignette->inputs[7].valueKind == runtime::SocketValueKind::Vector2 &&
+            vignetteSockets() && vignette->outputs.size() == 1 &&
+            vignette->outputs[0].valueKind == runtime::SocketValueKind::Image,
+        "#505: Vignette has its constant choices and an animatable socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
                     "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
                    document::NodeCategory::Compositing);

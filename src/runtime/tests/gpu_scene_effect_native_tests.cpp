@@ -1069,7 +1069,7 @@ void runBlurs(Expectations& expectations, GpuDevice& device, GpuSceneCache& cach
 }
 
 // #340 Levels, Curves and Hue/Saturation (#493: and every Curves curve kind; #494 Grade; #503
-// every Alpha Association mode; #504 every Colorize mode) of
+// every Alpha Association mode; #504 every Colorize mode; #505 both Vignette shapes and modes) of
 // signed/HDR/partial-alpha solids against the CPU oracle
 // (2e-6, exact alpha), one resident dispatch, warm zero dispatch and a changed value that
 // re-dispatches with parity. Alpha transfers here are linear and cubic, never a gamma, so the
@@ -1210,6 +1210,23 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
                                                 {1.0, Color4d{3.0, 2.0, 1.5, 1.0}}}}};
         return bloom::runtime::ImageEffectKernel{kernel};
     };
+    // #505: both shapes and modes, roundness both ways, a moved centre and highlight protection.
+    const auto vignette = [](const std::uint64_t id, const int variant) {
+        using bloom::runtime::VignetteMode;
+        using bloom::runtime::VignetteShape;
+        bloom::runtime::VignetteKernel kernel;
+        kernel.shape = variant % 2 == 1 ? VignetteShape::Rectangular : VignetteShape::Elliptical;
+        kernel.mode = variant >= 2 ? VignetteMode::Exposure : VignetteMode::Multiply;
+        kernel.amount = {ParameterId::fromRaw(id), variant == 1 ? -0.6 : 0.8};
+        kernel.exposure = {ParameterId::fromRaw(id + 1), variant == 3 ? 1.5 : -2.5};
+        kernel.midpoint = {ParameterId::fromRaw(id + 2), 0.3};
+        kernel.roundness = {ParameterId::fromRaw(id + 3), variant == 1 ? -0.5 : 0.6};
+        kernel.feather = {ParameterId::fromRaw(id + 4), 0.7};
+        kernel.highlightProtection = {ParameterId::fromRaw(id + 5), variant == 2 ? 0.8 : 0.0};
+        kernel.center = {ParameterId::fromRaw(id + 6),
+                         bloom::document::Vec2d{variant == 0 ? 0.0 : 2.5, -1.5}};
+        return bloom::runtime::ImageEffectKernel{kernel};
+    };
     // Changes one value of each kernel to prove invalidation re-dispatches.
     const auto change = [](bloom::runtime::ImageEffectKernel& kernel) {
         if (auto* l = std::get_if<LevelsKernel>(&kernel))
@@ -1226,6 +1243,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
         // #504: a changed amount changes the program's data in every mode.
         if (auto* c = std::get_if<bloom::runtime::ColorizeKernel>(&kernel))
             c->amount.source = 0.4;
+        // #505: a moved centre changes the program's data in every mode.
+        if (auto* v = std::get_if<bloom::runtime::VignetteKernel>(&kernel))
+            v->center.source = bloom::document::Vec2d{-3.0, 2.0};
         if (auto* a = std::get_if<bloom::runtime::AlphaAssociationKernel>(&kernel)) {
             if (a->mode == bloom::runtime::AlphaAssociationMode::RemoveMatting)
                 a->background.source = Color4d{0.75, 0.1, 0.3, 1.0};
@@ -1247,7 +1267,9 @@ void runColorGrades(Expectations& expectations, GpuDevice& device, GpuSceneCache
               association(id + 50, 0), association(id + 50, 1), association(id + 50, 2),
               association(id + 50, 3), association(id + 50, 4), colorize(id + 50, 0),
               colorize(id + 50, 1), colorize(id + 50, 2), colorize(id + 50, 3),
-              colorize(id + 50, 4), colorize(id + 50, 5), colorize(id + 50, 6)}) {
+              colorize(id + 50, 4), colorize(id + 50, 5), colorize(id + 50, 6),
+              vignette(id + 50, 0), vignette(id + 50, 1), vignette(id + 50, 2),
+              vignette(id + 50, 3)}) {
             cache.clear();
             const auto plan = effectPlan(kernel, id, std::nullopt, color);
             id += 100;

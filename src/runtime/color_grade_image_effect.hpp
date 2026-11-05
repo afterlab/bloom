@@ -31,7 +31,8 @@ enum class ColorGradeKind : std::uint8_t {
     Grade,
     RollOff,
     AlphaAssociation,
-    Colorize
+    Colorize,
+    Vignette
 };
 
 // The packed table, always a whole number of vec4s:
@@ -52,6 +53,13 @@ enum class ColorGradeKind : std::uint8_t {
 //            (by the largest channel) and [cyans, magentas, yellows, 0] (by the smallest). Table
 //            mode 0 Fill (A the colour), 1 Tint (A + L * B), 2 ramp (A + u * B below the midpoint,
 //            C + u * D above it), 3 Black & White (docs/architecture/image-filters.md, "Colorize")
+//   Vignette (#505): [table mode, strength, protection, hard edge] [inner, 1 / (outer - inner),
+//            exponent, 1 / exponent] [luma weights r, g, b, ellipse] [protection low,
+//            1 / (high - low), circle, 0] [centre offset x, y, 0, 0], table mode 0 Multiply
+//            (strength the amount) or 1 Exposure (strength the stops). Where it is applied the
+//            input's geometry is appended (vignetteProgramData): [centre x, centre y, scale x,
+//            scale y] in the input data window's pixel indices, so the program and the CPU read
+//            the same 24 floats (docs/architecture/image-filters.md, "Vignette")
 // A Levels channel maps x to t = (x - pivot) * scale (or the step x >= pivot when the input range
 // is empty), raises a positive t to the inverse gamma, and returns fma(t, range, black). A Grade
 // channel maps the straight value x to t = fma(x, slope, offset), raises a positive t to its power,
@@ -99,15 +107,38 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
                                     std::array<float, 4>& pixel) noexcept;
 [[nodiscard]] bool validCurvesTable(const std::vector<float>& data) noexcept;
 [[nodiscard]] const std::string& curvesProgramText();
+// #505 Vignette (vignette_image_effect.cpp): the table from sampled operands, the full program
+// data's structural check, and the fixed GPU program text that reads it.
+[[nodiscard]] std::optional<PreparedColorGrade> prepareVignetteGrade(const VignetteKernel& kernel,
+                                                                     std::span<const double> values);
+[[nodiscard]] bool validVignetteProgramData(const std::vector<float>& data) noexcept;
+[[nodiscard]] const std::string& vignetteProgramText();
 // The prepared table as cache identity bytes.
 [[nodiscard]] std::string colorGradeIdentity(const PreparedColorGrade& grade);
 
+// #505 Vignette: the prepared table with the input's geometry appended, the 24 floats the CPU
+// reference and the GPU program both read. `display` and `dataOriginX/Y` are at the evaluation
+// resolution; `horizontalScale` and `verticalScale` scale the full-resolution centre offset to it.
+// Null when the table is not a vignette's or the geometry cannot be represented.
+inline constexpr std::size_t kVignetteTableFloats = 20;
+inline constexpr std::size_t kVignetteProgramFloats = 24;
+[[nodiscard]] std::optional<std::vector<float>>
+vignetteProgramData(const PreparedColorGrade& grade, const render::ImageWindow& display,
+                    std::int64_t dataOriginX, std::int64_t dataOriginY, double pixelAspect,
+                    double horizontalScale, double verticalScale);
+// One premultiplied pixel at the data window index (x, y), in place. False when not finite.
+[[nodiscard]] bool vignettePixel(const std::vector<float>& data, std::int64_t x, std::int64_t y,
+                                 std::array<float, 4>& pixel) noexcept;
+
 struct ImageEffectResult;
-// Grades every pixel of the input's data window; the windows and pixel aspect are preserved.
+// Grades every pixel of the input's data window; the windows and pixel aspect are preserved. A
+// Vignette reads the input's display window and the evaluation scale.
 [[nodiscard]] ImageEffectResult applyColorGrade(const PreparedColorGrade&,
                                                 const render::Rgba32fImage&, std::size_t budget,
                                                 const CancellationToken&, OperationIndex,
-                                                const EvaluationProgressCallback&);
+                                                const EvaluationProgressCallback&,
+                                                double horizontalScale = 1.0,
+                                                double verticalScale = 1.0);
 // One fixed neighbourhood program per kind; the table is its storage-buffer data.
 [[nodiscard]] render::OcioGpuProgramResult buildColorGradeProgram(ColorGradeKind kind,
                                                                   const std::vector<float>& data);

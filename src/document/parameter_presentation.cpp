@@ -1,6 +1,7 @@
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 
 #include <bloom/document/layer_masks.hpp>
 #include <bloom/document/parameter.hpp>
@@ -290,6 +291,19 @@ const std::vector<Entry>& table() {
         {kColorizeCyansSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
         {kColorizeBluesSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
         {kColorizeMagentasSchemaKey, number(-2.0, 3.0, -2.0, 3.0, 1.0, 1, kPercent, 100.0)},
+        // #505 Vignette: the shares read as percentages; the exposure in stops; the centre an
+        // offset in pixels from the frame's centre.
+        {kVignetteShapeSchemaKey, choice()},
+        {kVignetteModeSchemaKey, choice()},
+        {kVignetteAmountSchemaKey, number(-1.0, 1.0, -1.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {kVignetteExposureSchemaKey, number(-10.0, 10.0, -4.0, 4.0, 0.1, 2, kStops)},
+        {kVignetteMidpointSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {kVignetteRoundnessSchemaKey, number(-1.0, 1.0, -1.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {kVignetteFeatherSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {kVignetteHighlightProtectionSchemaKey,
+         number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
+        {kVignetteCenterSchemaKey,
+         pixels(-kMaximumVignetteCenter, kMaximumVignetteCenter, 4096.0)},
         {"bloom.set-alpha.channel", choice()},
         // #479 Combine Channels.
         {"bloom.combine-channels.source", choice()},

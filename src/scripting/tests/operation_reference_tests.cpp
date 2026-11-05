@@ -254,7 +254,7 @@ void everyNodeCategoryIsNamed() {
            "grade");
     pinned({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"}, "color");
     pinned({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
-            "bloom.matte-dilate"},
+            "bloom.matte-dilate", "bloom.vignette"},
            "filters");
     pinned({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow",
             "bloom.light-wrap", "bloom.alpha-association"},
