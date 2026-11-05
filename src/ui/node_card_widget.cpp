@@ -2,9 +2,11 @@
 
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/curve_graph.hpp>
+#include <bloom/ui/depth_effect_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/levels_graph.hpp>
@@ -18,7 +20,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
     return typeId == document::kGradeNodeType || typeId == document::kLevelsNodeType ||
            typeId == document::kCurvesNodeType || typeId == document::kHueSaturationNodeType ||
            typeId == document::kColorizeNodeType || typeId == document::kVignetteNodeType ||
-           isScalarSliderNodeType(typeId) ||
+           document::isDepthEffectNodeType(typeId) || isScalarSliderNodeType(typeId) ||
            hasNodeControlsWidget(typeId);
 }
 
@@ -37,6 +39,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new ColorizeCardWidget(session, node, card, parent);
     if (typeId == document::kVignetteNodeType)
         return new VignetteCardWidget(session, node, card, parent);
+    if (document::isDepthEffectNodeType(typeId))
+        return new DepthEffectCardWidget(session, node, card, parent);
     if (isScalarSliderNodeType(typeId))
         return new ScalarSliderCardWidget(session, node, typeId, card, parent);
     // #541: Properties draws a layer's rotation in its own Transform section (with the same dial),

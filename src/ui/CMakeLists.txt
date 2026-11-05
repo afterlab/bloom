@@ -574,6 +574,7 @@ target_sources(
         grade_wheels.cpp
         grading_controls.cpp
         colorize_widget.cpp
+        depth_effect_widget.cpp
         vignette_widget.cpp
         gradient_parameter_row.cpp
         hue_saturation_widget.cpp
@@ -684,6 +685,7 @@ target_sources(
         viewer_channel_display.cpp
         viewer_editor_channel.cpp
         viewer_editor_cryptomatte.cpp
+        viewer_editor_focus.cpp
         viewer_editor_analysis.cpp
         viewer_editor_probe.cpp
         composition_preview_controller_analysis.cpp
@@ -768,6 +770,7 @@ target_sources(
             include/bloom/ui/grade_wheels.hpp
             include/bloom/ui/grading_controls.hpp
             include/bloom/ui/colorize_widget.hpp
+            include/bloom/ui/depth_effect_widget.hpp
             include/bloom/ui/vignette_widget.hpp
             include/bloom/ui/gradient_parameter_row.hpp
             include/bloom/ui/node_controls_widget.hpp

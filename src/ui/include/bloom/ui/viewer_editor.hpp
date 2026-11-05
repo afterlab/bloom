@@ -736,6 +736,17 @@ class ViewerEditor final : public QWidget,
     void refreshCryptomattePreview();
     bool cryptomattePickOutstanding_ = false;
     QPointF cryptomattePickPosition_;
+    // #483 Z Defocus focus picking (CompositionSession::requestFocusPick): the next click sets the
+    // node's focus point (Shift keeps picking), Escape cancels; the selected Z Defocus's focus
+    // point and the 5 x 5 area it samples are drawn over the frame while it is in use.
+    bool focusPickPress(QMouseEvent* event);
+    void focusPickChanged();
+    // `painted`: the mapping the frame was just painted with (else the gesture mapping).
+    void paintFocusPoint(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
+    // The node's frame (where its focus point is an offset from the centre) in composition
+    // coordinates; nullopt when the Viewer inspects another node's output.
+    [[nodiscard]] std::optional<QTransform> focusFrameToComposition(document::NodeId node) const;
+    [[nodiscard]] QPointF focusFrameCentre() const;
     bool textPress(QMouseEvent* event);
     bool creationMove(QMouseEvent* event);
     bool creationRelease(QMouseEvent* event);

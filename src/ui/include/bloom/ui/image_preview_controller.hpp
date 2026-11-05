@@ -97,6 +97,19 @@ class ImagePreviewController final : public QObject {
         QString message;
     };
     [[nodiscard]] Histogram histogram(document::NodeId node);
+    // #483: whether the image a Z Defocus or Depth Fog reads as depth looks like a colour picture
+    // rather than a depth pass: the fraction (0..1) of its covered pixels whose displayed red,
+    // green and blue differ by more than kDepthSpreadLevels of 255, read like histogram() at
+    // kHistogramEdge from the node's `depth` input on a worker. A depth pass is grey (R = G = B),
+    // so a large fraction means a colour image (a beauty or a normal pass) is connected.
+    static constexpr int kDepthSpreadLevels = 24;
+    struct ChannelSpread final {
+        double fraction = 0.0;
+        State state = State::Unconnected;
+        bool cpu = false;
+        QString message;
+    };
+    [[nodiscard]] ChannelSpread depthChannelSpread(document::NodeId node);
     // Session state, not project truth: whether curve graphs draw the histogram (on by default).
     [[nodiscard]] bool histogramsShown() const noexcept { return histogramsShown_; }
     void setHistogramsShown(bool shown);
@@ -143,6 +156,8 @@ class ImagePreviewController final : public QObject {
         bool showLook = true;
         // #493: a Curves node's input histogram rather than an Image Preview's picture.
         bool histogram = false;
+        // #483: a depth effect's depth-input channel spread (in `bins`, one value).
+        bool channelSpread = false;
         friend bool operator==(const Key&, const Key&) = default;
     };
     struct Converted final {
@@ -177,7 +192,8 @@ class ImagePreviewController final : public QObject {
     };
 
     [[nodiscard]] std::optional<Key> keyFor(document::NodeId node, QSize devicePixels,
-                                            bool histogram = false) const;
+                                            bool histogram = false,
+                                            bool channelSpread = false) const;
     void want(document::NodeId node, const Key& key);
     // Cancels the node's request in flight and forgets what it wanted (its input went away).
     void drop(document::NodeId node);

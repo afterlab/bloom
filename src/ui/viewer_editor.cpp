@@ -454,6 +454,8 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
                 [this] { session_.tools().setTool(ViewerTool::Cryptomatte); });
     }
     refreshCryptomattePreview();
+    connect(&session_, &CompositionSession::focusPickRequested, this,
+            &ViewerEditor::focusPickChanged);
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &ViewerEditor::refreshChannelInspectionChoices);
     connect(&session_, &CompositionSession::documentRebound, this, [this] {
@@ -1068,6 +1070,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     paintPathTools(painter);
     paintAnchorEditing(painter);
     paintTextEditing(painter);
+    paintFocusPoint(painter, painted.mapping);
 
     if (coverSnapshotInProgress_)
         coverCaptureDisplay_ = std::move(painted);
@@ -1276,7 +1279,8 @@ void ViewerEditor::updatePanCursor() {
 
     } else if (tool() == ViewerTool::Hand) {
         setCursor(Qt::OpenHandCursor);
-    } else if (tool() == ViewerTool::Zoom || tool() == ViewerTool::Cryptomatte) {
+    } else if (tool() == ViewerTool::Zoom || tool() == ViewerTool::Cryptomatte ||
+               session_.focusPickNode()) {
         setCursor(Qt::CrossCursor);
     } else {
         unsetCursor();
@@ -1289,6 +1293,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     // #536: a reference Viewer (pinned elsewhere, or to a node) keeps pan, zoom, the region of
     // interest and the probe; it never edits what it does not show.
     const bool reference = isReferenceOnly();
+    if (!reference && focusPickPress(event))
+        return;
     if (!reference && cryptomattePress(event))
         return;
     if (!reference && textEditPress(event))
@@ -1585,6 +1591,11 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
     }
     // Escape confirms every Viewer drag as it stands and returns to Select; Undo discards a
     // document edit. A region-of-interest drag keeps the region drawn so far.
+    if (session_.focusPickNode() && event->key() == Qt::Key_Escape) {
+        session_.cancelFocusPick();
+        event->accept();
+        return;
+    }
     if (roiGesture_ && event->key() == Qt::Key_Escape) {
         commitRoiGesture(roiGesture_->pointer);
         selectTool(ViewerTool::Select);

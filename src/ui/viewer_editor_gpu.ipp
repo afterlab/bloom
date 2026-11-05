@@ -98,12 +98,14 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         painter.translate(-request.containerRect.topLeft());
         const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
             resident->displayWindow, resident->pixelAspect);
+        std::optional<ViewerMapping> overlayMapping;
         if (descriptor) {
             // The composition frame is part of the CPU paint (paintViewerContent); the native
             // overlay must draw it too or a resident composition has no visible bounds at all.
             paintViewerCompositionFrame(painter, displayRect);
             const ViewerMapping mapping{displayRect, *format, frame->desiredIdentity().resolution,
                                         resident->pixelAspect, *descriptor.value()};
+            overlayMapping = mapping;
             const auto bounds = previewController_->selectedLayerBounds(frame);
             paintViewerOverlays(painter, canvasRect(), mapping,
                                 effectiveZoom(displayRect, *geometry), overlayOptions_,
@@ -116,6 +118,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         paintPathTools(painter);
         paintAnchorEditing(painter);
         paintTextEditing(painter);
+        paintFocusPoint(painter, overlayMapping);
         painter.end();
         if (!picture.isNull()) {
             request.overlay.picture = picture;

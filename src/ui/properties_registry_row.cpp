@@ -160,6 +160,10 @@ document::ShapeKind nodeShapeKind(const document::Composition& composition,
 QString parameterRowLabel(const std::string_view schemaKey, const std::string_view role) {
     if (auto field = fieldParameterLabel(schemaKey))
         return *field;
+    // #483 Z Defocus and Depth Fog: the depth table's own labels.
+    if (const auto* depth = document::depthParameterSpec(schemaKey); depth != nullptr)
+        return QCoreApplication::translate("PropertiesRow",
+                                           std::string(depth->label).c_str());
     return
         isEffectColorSpaceSchema(schemaKey)
             ? node_editor::displayTypeName(role)

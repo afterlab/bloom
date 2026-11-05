@@ -25,7 +25,9 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
@@ -34,11 +36,15 @@
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/curve_graph.hpp>
+#include <bloom/ui/depth_effect_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
+#include <bloom/ui/kit/button.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/gradient_editor.hpp>
@@ -152,8 +158,12 @@ bool cardContentFits(ui::node_editor::NodeItem& item, const char* name) {
         for (auto* label : root->findChildren<QLabel*>()) {
             if (!label->isVisibleTo(root) || label->text().isEmpty())
                 continue;
-            if (label->text().contains(QChar(0x2026)) ||
-                label->width() < label->fontMetrics().horizontalAdvance(label->text())) {
+            // A wrapped label (a card's warning) is cut short when it is shorter than its lines.
+            const bool cut = label->wordWrap()
+                                 ? label->height() < label->heightForWidth(label->width())
+                                 : label->width() <
+                                       label->fontMetrics().horizontalAdvance(label->text());
+            if (label->text().contains(QChar(0x2026)) || cut) {
                 std::cerr << name << ": label '" << label->text().toStdString()
                           << "' is cut short\n";
                 fits = false;
@@ -1164,6 +1174,141 @@ void groupDiamond() {
 }
 } // namespace
 
+// #483: the Z Defocus and Depth Fog cards in each mode paint inside their card with no label cut
+// short and show only what the mode reads: the focus pad and blade dial when used, the range
+// rows and the fog curve; "Pick focus in Viewer" arms the Viewer's focus pick; a depth read through
+// a colour transform warns, and "Read as data" removes the transform as one command.
+void depthEffectCards() {
+    {
+        CardFixture fixture(document::kZDefocusNodeType);
+        auto* card = fixture.item
+                         ? qobject_cast<ui::DepthEffectCardWidget*>(fixture.item->cardWidget())
+                         : nullptr;
+        expect(card != nullptr && card->defocus(), "Z Defocus draws its card widget");
+        const auto role = [&](const char* name) {
+            return ui::nodeRoleParameter(fixture.session, fixture.node, name);
+        };
+        if (card == nullptr || !role("mode") || !role("focusFrom") || !role("shape"))
+            return;
+        const auto check = [&](const char* name) {
+            QApplication::processEvents();
+            if (!paintsInsideCard(*fixture.item)) {
+                std::cerr << name << " paints outside its card\n";
+                ++failures;
+            }
+            if (!cardContentFits(*fixture.item, name))
+                ++failures;
+            capture(fixture, QString::fromLatin1(name));
+        };
+        check("z-defocus-depth");
+        expect(card->showsRole("focusDistance") && !card->showsRole("focusPoint") &&
+                   !card->showsRole("focalLength") && card->showsRole("maxSize") &&
+                   !card->showsRole("blades") && !card->showsRole("near") &&
+                   !card->showsRole("rotation") && card->showsRole("depthChannel") &&
+                   card->pickFocusButton()->isVisibleTo(card) &&
+                   !card->focusPad()->isVisibleTo(card) && !card->rotationDial()->isVisibleTo(card),
+               "a Depth Z Defocus shows the focus distance and the pick, not the lens or blades");
+        // Physical lens, focused from a point, through a polygon.
+        expect(fixture.session.setParameterValue(*role("mode"), document::kDefocusModePhysical,
+                                                 QStringLiteral("Mode")) &&
+                   fixture.session.setParameterValue(*role("focusFrom"),
+                                                     document::kFocusFromPoint,
+                                                     QStringLiteral("Focus")) &&
+                   fixture.session.setParameterValue(*role("shape"), document::kBokehPolygon,
+                                                     QStringLiteral("Shape")),
+               "the lens becomes a physical polygon focused from a point");
+        check("z-defocus-physical");
+        expect(card->showsRole("focalLength") && card->showsRole("fStop") &&
+                   card->showsRole("sensorWidth") && card->showsRole("units") &&
+                   !card->showsRole("size") && !card->showsRole("focusDistance") &&
+                   card->showsRole("focusPoint") && card->showsRole("blades") &&
+                   !card->showsRole("rotation") && card->focusPad()->isVisibleTo(card) &&
+                   card->rotationDial()->isVisibleTo(card) && card->socketY("rotation"),
+               "a physical polygon from a point shows the lens, the pad and the blade dial");
+        // The pick button arms the Viewer's focus pick for this node.
+        card->pickFocusButton()->click();
+        expect(!card->pickFocusButton()->isEnabled() || fixture.session.focusPickNode() ==
+                                                            std::optional(fixture.node),
+               "Pick focus in Viewer arms the focus pick for the node");
+        fixture.session.cancelFocusPick();
+        expect(!fixture.session.focusPickNode(), "the focus pick cancels");
+        expect(fixture.session.setParameterValue(*role("mode"), document::kDefocusModeUniform,
+                                                 QStringLiteral("Mode")),
+               "the lens becomes uniform");
+        check("z-defocus-uniform");
+        expect(!card->showsRole("interpretation") && !card->showsRole("depthChannel") &&
+                   !card->showsRole("focusFrom") && card->showsRole("size") &&
+                   !card->pickFocusButton()->isVisibleTo(card) &&
+                   !card->focusPad()->isVisibleTo(card),
+               "a uniform blur reads no depth: no depth, focus or pick rows");
+    }
+    {
+        CardFixture fixture(document::kDepthFogNodeType);
+        auto* card = fixture.item
+                         ? qobject_cast<ui::DepthEffectCardWidget*>(fixture.item->cardWidget())
+                         : nullptr;
+        expect(card != nullptr && !card->defocus(), "Depth Fog draws its card widget");
+        const auto falloff = ui::nodeRoleParameter(fixture.session, fixture.node, "falloff");
+        if (card == nullptr || !falloff)
+            return;
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item) || !cardContentFits(*fixture.item, "depth-fog"))
+            ++failures;
+        capture(fixture, QStringLiteral("depth-fog-linear"));
+        expect(card->fogRangeRow() != nullptr && card->nearFarRow() != nullptr &&
+                   !card->showsRole("start") && !card->showsRole("end") &&
+                   !card->showsRole("near") && !card->showsRole("density") &&
+                   !card->curveGraph()->isVisibleTo(card) && card->showsRole("color"),
+               "a linear mist fog draws its start/end and near/far ranges, no density or curve");
+        expect(fixture.session.setParameterValue(*falloff, document::kFogFalloffCurve,
+                                                 QStringLiteral("Falloff")),
+               "the fog follows a curve");
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item) || !cardContentFits(*fixture.item, "depth-fog-curve"))
+            ++failures;
+        capture(fixture, QStringLiteral("depth-fog-curve"));
+        expect(card->curveGraph()->isVisibleTo(card) && card->curveGraph()->parameter() &&
+                   card->fogRangeRow() != nullptr,
+               "a curve fog draws its falloff curve");
+        expect(fixture.session.setParameterValue(*falloff, document::kFogFalloffExponential,
+                                                 QStringLiteral("Falloff")),
+               "the fog is exponential");
+        QApplication::processEvents();
+        expect(card->fogRangeRow() == nullptr && card->showsRole("start") &&
+                   !card->showsRole("end") && card->showsRole("density") &&
+                   !card->curveGraph()->isVisibleTo(card),
+               "an exponential fog reads its start and density, not its end");
+        // A depth read from an image source through a colour transform warns, and the fix reads
+        // the file as data in one command.
+        const auto source = addNode(fixture.session, document::kImageSourceNodeType);
+        {
+            commands::Transaction transaction("Link", fixture.session.snapshot().revision());
+            transaction.emplace<commands::ConnectPorts>(
+                fixture.session.compositionId(), document::OutputPortRef{source, "image"},
+                document::NodeInputRef{fixture.node, std::string(document::kDepthEffectDepthPort)});
+            expect(fixture.session.executeNodeTransaction(std::move(transaction)).succeeded(),
+                   "an image source feeds the depth");
+        }
+        QApplication::processEvents();
+        expect(!card->colorWarning()->text().isEmpty() && card->colorWarning()->isVisibleTo(card) &&
+                   card->readAsDataButton()->isVisibleTo(card),
+               "a depth through a colour transform warns with a Read as data fix");
+        capture(fixture, QStringLiteral("depth-fog-warning"));
+        if (!paintsInsideCard(*fixture.item) ||
+            !cardContentFits(*fixture.item, "depth-fog-warning"))
+            ++failures;
+        const auto commands = fixture.stack.size();
+        card->readAsDataButton()->click();
+        QApplication::processEvents();
+        expect(fixture.stack.size() == commands + 1 &&
+                   !document::depthInputColorTransform(fixture.session.snapshot().project(),
+                                                       *fixture.session.composition(),
+                                                       fixture.node) &&
+                   !card->colorWarning()->isVisibleTo(card),
+               "Read as data removes the transform as one command and the warning goes");
+    }
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     ui::kit::installKinetikTheme(application);
@@ -1175,6 +1320,7 @@ int main(int argc, char** argv) {
     colorizeCard();
     colorizeGradientMap();
     vignetteCard();
+    depthEffectCards();
     nodeControlCards();
     linkedGradientStop();
     gradientBlendModes();

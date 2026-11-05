@@ -1,6 +1,7 @@
 #include <bloom/ui/channel_set_controller.hpp>
 
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
@@ -39,6 +40,9 @@ std::optional<std::string_view> ChannelSetController::inputPort(const std::strin
         return document::kChannelSetPort;
     if (typeId == document::kCompositionOutputNodeType)
         return document::kCompositionOutputChannelsInputPort;
+    // #483: a depth effect's channel picker lists its channel-set depth input.
+    if (document::isDepthEffectNodeType(typeId))
+        return document::kDepthEffectDepthPort;
     return std::nullopt;
 }
 

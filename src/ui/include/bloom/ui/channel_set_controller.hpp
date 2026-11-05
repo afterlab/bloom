@@ -38,7 +38,8 @@ class ChannelSetController final : public QObject {
     ~ChannelSetController() override;
 
     // The input whose channel set a node's pickers list: Channel Copy's `from`, the `channels`
-    // input of a Shuffle, Select Channels or Composition Output; nullopt for any other node.
+    // input of a Shuffle, Select Channels or Composition Output, a Z Defocus's or Depth Fog's
+    // `depth`; nullopt for any other node.
     [[nodiscard]] static std::optional<std::string_view> inputPort(std::string_view typeId);
 
     // Starts (or keeps) the listing of `node`'s input channel set for the current snapshot. An

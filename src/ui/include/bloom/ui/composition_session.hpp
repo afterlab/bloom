@@ -252,6 +252,22 @@ class CompositionSession final : public QObject {
         imagePreviews_ = controller;
     }
     [[nodiscard]] ImagePreviewController* imagePreviews() const noexcept { return imagePreviews_; }
+    // #483: Z Defocus's "Pick focus in Viewer": the Viewer's next click on the frame sets `node`'s
+    // focus point (and focuses from it) as one undoable edit; Escape or another request cancels.
+    // Session state only: never saved, never undoable.
+    void requestFocusPick(const document::NodeId node) {
+        focusPickNode_ = node;
+        emit focusPickRequested();
+    }
+    void cancelFocusPick() {
+        if (!focusPickNode_)
+            return;
+        focusPickNode_.reset();
+        emit focusPickRequested();
+    }
+    [[nodiscard]] std::optional<document::NodeId> focusPickNode() const noexcept {
+        return focusPickNode_;
+    }
 
     CompositionSession(document::Document& document, commands::CommandStack& commandStack,
                        document::CompositionId compositionId, QObject* parent = nullptr);
@@ -899,9 +915,12 @@ class CompositionSession final : public QObject {
     // Task DRIVE-1: a fresh resolution of the composition's driven parameters has landed.
     void drivenValuesChanged();
     void colorSettingsChanged();
+    // #483: a focus pick started or ended (focusPickNode()).
+    void focusPickRequested();
 
   private:
     struct CommandObserverState;
+    std::optional<document::NodeId> focusPickNode_;
 
     AssetController* assetController_ = nullptr;
     CryptomatteController* cryptomatteController_ = nullptr;

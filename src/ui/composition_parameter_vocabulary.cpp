@@ -10,6 +10,8 @@
 #include <bloom/commands/video_source_operations.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/channel_nodes.hpp>
+#include <bloom/document/depth_effect_parameters.hpp>
+#include <bloom/document/image_preview.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -296,7 +298,8 @@ bool refreshCryptomatteLayerSelector(kit::KDropdown& selector, const Composition
 bool isShuffleSlotSchema(const std::string_view schemaKey) noexcept {
     return schemaKey == "bloom.channel-shuffle.red" || schemaKey == "bloom.channel-shuffle.green" ||
            schemaKey == "bloom.channel-shuffle.blue" || schemaKey == "bloom.channel-shuffle.alpha" ||
-           schemaKey == document::kChannelPassParameterSchemaKey;
+           schemaKey == document::kChannelPassParameterSchemaKey ||
+           schemaKey == "bloom.z-defocus.depthChannel" || schemaKey == "bloom.depth-fog.depthChannel";
 }
 
 namespace {
@@ -321,12 +324,49 @@ bool refreshPassSelector(kit::KDropdown& selector, const CompositionSession& ses
         selector.setToolTip(QString::fromStdString(listing->diagnostic));
     return listed;
 }
+// #483: a depth effect's depth channel: R, G, B or A of an Image or Mask, or any channel of a
+// channel set by name; empty reads the first channel (never a mix of the colour channels).
+bool refreshDepthChannelSelector(kit::KDropdown& selector, const CompositionSession& session,
+                                 const document::NodeRecord& node) {
+    QList<std::pair<QString, QString>> items{{QObject::tr("First channel"), QString{}}};
+    const auto* composition = session.composition();
+    const auto source = composition != nullptr
+                            ? document::inspectedInputSource(composition->graph(), node.id,
+                                                             document::kDepthEffectDepthPort)
+                            : std::nullopt;
+    const bool channelSet = source && source->kind == document::SocketValueKind::ChannelSet;
+    const runtime::ChannelInspectionListing* listing = nullptr;
+    if (channelSet) {
+        auto* controller = session.channelSetController();
+        if (controller != nullptr && !controller->listingCurrent(node.id))
+            controller->request(node.id);
+        listing = controller != nullptr ? controller->listing(node.id) : nullptr;
+        if (listing != nullptr)
+            for (const auto& channel : listing->channels)
+                items.push_back({QString::fromStdString(channel), QString::fromStdString(channel)});
+    } else {
+        for (const auto* name : {"R", "G", "B", "A"})
+            items.push_back({QString::fromLatin1(name), QString::fromLatin1(name)});
+    }
+    const bool known = !channelSet || listing != nullptr;
+    const bool listed = fillProbeSelector(selector, items, boundNodeText(session, node, "depthChannel"),
+                                          known, QObject::tr("First channel"));
+    if (listing != nullptr && listing->channels.empty() && !listing->diagnostic.empty())
+        selector.setToolTip(QString::fromStdString(listing->diagnostic));
+    else
+        selector.setToolTip(QObject::tr("The one channel the depth is read from: R, G, B or A of "
+                                        "an image, or a channel set's channel by name (Z, "
+                                        "depth.Z, mist). Never a mix of the colour channels"));
+    return listed;
+}
 } // namespace
 
 bool refreshShuffleSlotSelector(kit::KDropdown& selector, const CompositionSession& session,
                                 const document::NodeRecord& node,
                                 const std::string_view schemaKey) {
     const auto role = schemaKey.substr(schemaKey.rfind('.') + 1);
+    if (role == "depthChannel")
+        return refreshDepthChannelSelector(selector, session, node);
     const std::size_t slot = role == "red" ? 0 : role == "green" ? 1 : role == "blue" ? 2 : 3;
     auto* controller = session.channelSetController();
     if (controller != nullptr && !controller->listingCurrent(node.id))

@@ -196,6 +196,38 @@ displayHistogram(const runtime::PreparedPreviewFrame& frame, runtime::TaskContex
     return bins;
 }
 
+// #483: the fraction of the covered pixels of `frame` whose displayed channels spread by more than
+// kDepthSpreadLevels (a grey depth pass spreads by none). Worker-only.
+[[nodiscard]] std::optional<std::vector<float>>
+displayChannelSpread(const runtime::PreparedPreviewFrame& frame, runtime::TaskContext& context) {
+    const auto view = frame.displayBufferView();
+    if (!view)
+        return std::nullopt;
+    const auto window = view->dataWindow.value_or(view->displayWindow).extent();
+    const auto stride = static_cast<std::size_t>(view->layout.rowStrideBytes) / sizeof(render::Rgba8);
+    std::uint64_t covered = 0;
+    std::uint64_t spread = 0;
+    for (std::uint32_t row = 0; row < window.height(); ++row) {
+        if (context.isCancellationRequested())
+            return std::nullopt;
+        for (std::uint32_t column = 0; column < window.width(); ++column) {
+            const auto index = static_cast<std::size_t>(row) * stride + column;
+            if (index >= view->pixels.size())
+                return std::nullopt;
+            const auto& pixel = view->pixels[index];
+            if (pixel.alpha == 0)
+                continue;
+            ++covered;
+            const auto high = std::max({pixel.red, pixel.green, pixel.blue});
+            const auto low = std::min({pixel.red, pixel.green, pixel.blue});
+            spread += high - low > ImagePreviewController::kDepthSpreadLevels ? 1U : 0U;
+        }
+    }
+    return std::vector<float>{covered == 0 ? 0.0F
+                                           : static_cast<float>(static_cast<double>(spread) /
+                                                                static_cast<double>(covered))};
+}
+
 [[nodiscard]] std::optional<std::int64_t> constantInteger(const document::Composition& composition,
                                                           const document::NodeRecord& node,
                                                           const std::string_view role) {
@@ -290,13 +322,14 @@ document::ImagePreviewDisplay ImagePreviewController::display(const document::No
 
 std::optional<ImagePreviewController::Key>
 ImagePreviewController::keyFor(const document::NodeId node, const QSize devicePixels,
-                               const bool histogram) const {
+                               const bool histogram, const bool channelSpread) const {
     const auto* composition = session_.composition();
     if (composition == nullptr)
         return std::nullopt;
-    const auto source = histogram
-                            ? document::inspectedInputSource(composition->graph(), node, "input")
-                            : document::imagePreviewSource(composition->graph(), node);
+    const auto source =
+        channelSpread ? document::inspectedInputSource(composition->graph(), node, "depth")
+        : histogram   ? document::inspectedInputSource(composition->graph(), node, "input")
+                      : document::imagePreviewSource(composition->graph(), node);
     if (!source)
         return std::nullopt;
     const auto extent =
@@ -315,13 +348,14 @@ ImagePreviewController::keyFor(const document::NodeId node, const QSize devicePi
                .time = time,
                .width = extent->width(),
                .height = extent->height(),
-               .display = histogram ? ImagePreviewDisplay::Rgba : display(node),
+               .display = histogram || channelSpread ? ImagePreviewDisplay::Rgba : display(node),
                .source = source->output,
                .channelSet = source->kind == document::SocketValueKind::ChannelSet,
                .displayName = settings.displayName,
                .viewName = settings.viewName,
                .showLook = settings.showLook,
-               .histogram = histogram};
+               .histogram = histogram,
+               .channelSpread = channelSpread};
 }
 
 ImagePreviewController::Preview ImagePreviewController::preview(const document::NodeId node,
@@ -390,6 +424,37 @@ ImagePreviewController::Histogram ImagePreviewController::histogram(const docume
                 .message = shown.failure};
     want(node, *key);
     return {.bins = shown.bins, .state = State::Pending, .cpu = shown.cpu, .message = {}};
+}
+
+ImagePreviewController::ChannelSpread
+ImagePreviewController::depthChannelSpread(const document::NodeId node) {
+    if (session_.snapshot().project().id() != project_)
+        resetForProject();
+    const auto key = keyFor(node, QSize(kHistogramEdge, kHistogramEdge), false, true);
+    auto& shown = shown_[node];
+    const auto fraction = [&shown] {
+        return shown.bins.size() == 1 ? static_cast<double>(shown.bins.front()) : 0.0;
+    };
+    if (!key) {
+        drop(node);
+        return {.fraction = 0.0, .state = State::Unconnected, .cpu = false, .message = {}};
+    }
+    if (shown.key == key)
+        return {.fraction = fraction(), .state = State::Ready, .cpu = shown.cpu, .message = {}};
+    if (const auto kept = std::ranges::find(kept_, *key, &Kept::key); kept != kept_.end()) {
+        kept->used = ++uses_;
+        shown.key = key;
+        shown.bins = kept->bins;
+        shown.cpu = kept->cpu;
+        shown.failed.reset();
+        if (pending_.contains(node))
+            want(node, *key);
+        return {.fraction = fraction(), .state = State::Ready, .cpu = shown.cpu, .message = {}};
+    }
+    if (shown.failed == key)
+        return {.fraction = 0.0, .state = State::Failed, .cpu = shown.cpu, .message = shown.failure};
+    want(node, *key);
+    return {.fraction = 0.0, .state = State::Pending, .cpu = shown.cpu, .message = {}};
 }
 
 void ImagePreviewController::drop(const document::NodeId node) {
@@ -538,12 +603,14 @@ bool ImagePreviewController::startConvert(const document::NodeId node, Pending& 
     auto submission = scheduler_.submit<ConvertedHandle>(
         std::move(request),
         [frame = result->frame(), normalized, channel,
-         histogram = pending.key.histogram](runtime::TaskContext& context) {
+         histogram = pending.key.histogram,
+         channelSpread = pending.key.channelSpread](runtime::TaskContext& context) {
             using Result = runtime::TaskResult<ConvertedHandle>;
             if (context.isCancellationRequested())
                 return Result::cancelled();
-            if (histogram) {
-                auto bins = displayHistogram(*frame, context);
+            if (histogram || channelSpread) {
+                auto bins = channelSpread ? displayChannelSpread(*frame, context)
+                                          : displayHistogram(*frame, context);
                 if (context.isCancellationRequested())
                     return Result::cancelled();
                 if (!bins)

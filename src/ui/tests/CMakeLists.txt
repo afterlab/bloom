@@ -1581,6 +1581,18 @@ set_tests_properties(bloom.ui.cryptomatte PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
     LABELS "ui;media;integration" TIMEOUT 120)
 
+# #483: Z Defocus focus picking in the Viewer (the click, Shift to keep picking, Escape, undo) and
+# the focus point drawn over the frame.
+add_executable(bloom_depth_focus_pick_ui_test depth_focus_pick_ui_tests.cpp)
+target_include_directories(bloom_depth_focus_pick_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_depth_focus_pick_ui_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_runtime_evaluator bloom_commands Qt6::Test)
+bloom_enable_warnings(bloom_depth_focus_pick_ui_test)
+add_test(NAME bloom.ui.depth-focus-pick COMMAND bloom_depth_focus_pick_ui_test)
+set_tests_properties(bloom.ui.depth-focus-pick PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    LABELS "ui;integration" TIMEOUT 120)
+
 # #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
 # on a rootless multi-layer EXR, in Properties and on the node cards.
 add_executable(bloom_channel_pickers_ui_test channel_pickers_ui_tests.cpp)
