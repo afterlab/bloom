@@ -164,8 +164,8 @@ void entryLayersRoundTrip() {
             text.find("\"pivot\": \"frame\"") != std::string::npos &&
             text.find("\"role\": \"timeRemap\"") != std::string::npos &&
             text.find("\"bloom.adjustment\"") != std::string::npos &&
-            text.find("\"minor\": 41") != std::string::npos,
-        "entry layers, the frame pivot, their Time Remap and the Adjustment are written at 1.41");
+            text.find("\"minor\": 42") != std::string::npos,
+        "entry layers, the frame pivot, their Time Remap and the Adjustment are written at 1.42");
     const auto decoded = decodeText(text);
     expect(static_cast<bool>(decoded), "the 1.38 document decodes");
     if (decoded) {
@@ -211,7 +211,7 @@ void olderDocumentsOpenUnchangedAndRefuseEntryMembers() {
     static_cast<void>(merge);
     const auto current = encode(plain.document);
     auto legacy = current;
-    replaceOnce(legacy, "\"minor\": 41", "\"minor\": 36");
+    replaceOnce(legacy, "\"minor\": 42", "\"minor\": 36");
     const auto decodedLegacy = decodeText(legacy);
     expect(static_cast<bool>(decodedLegacy), "a 1.36 document without entry layers decodes");
     auto operation = memory();
@@ -237,7 +237,7 @@ void olderDocumentsOpenUnchangedAndRefuseEntryMembers() {
     Fixture fixture;
     fixture.withEntryLayers();
     auto text = encode(fixture.document);
-    replaceOnce(text, "\"minor\": 41", "\"minor\": 36");
+    replaceOnce(text, "\"minor\": 42", "\"minor\": 36");
     expect(!static_cast<bool>(decodeText(text)), "a 1.36 document carrying entry layers is refused");
 
     // The pivot takes only "frame".

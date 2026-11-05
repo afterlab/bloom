@@ -136,7 +136,7 @@ void testRoundTrip() {
 
 void testMigration() {
     const auto current = encode(makeDocument(false));
-    auto older = replaceOnce(current, "\"minor\": 41", "\"minor\": 28");
+    auto older = replaceOnce(current, "\"minor\": 42", "\"minor\": 28");
     older = std::regex_replace(
         older, std::regex(R"(,\s*"exportQueue"\s*:\s*\{\s*"jobs"\s*:\s*\[\]\s*\})"), "");
     older = std::regex_replace(
@@ -166,7 +166,7 @@ void testMigration() {
            "a migrated 1.28 project equals the same project saved at 1.31");
 
     // The already-migrated guard: a 1.28-labelled file that already has the queue is refused.
-    const auto mislabelled = replaceOnce(current, "\"minor\": 41", "\"minor\": 28");
+    const auto mislabelled = replaceOnce(current, "\"minor\": 42", "\"minor\": 28");
     auto bad = parseStrictJsonDom(std::as_bytes(std::span(mislabelled)), {}, operation);
     if (bad) {
         const auto refused = migrateDocumentDom(bad.document()->root(), {1, 28}, {1, 34},
@@ -278,8 +278,8 @@ void testWebmFormats() {
     seed.project.setExportQueue({{webm}});
     const Document document{std::move(seed.project)};
     const auto text = encode(document);
-    expect(text.find("\"minor\": 41\n  },\n  \"project\"") != std::string::npos,
-           "the document is written at 1.41");
+    expect(text.find("\"minor\": 42\n  },\n  \"project\"") != std::string::npos,
+           "the document is written at 1.42");
     for (const auto* token : {"\"vp9-webm\"", "\"av1-webm\"", "\"av1-mp4\"", "\"8bit\""})
         expect(text.find(token) != std::string::npos, "each 1.33 token is written");
     const auto decoded = decodeQueue(text);
@@ -291,12 +291,12 @@ void testWebmFormats() {
     wrong.settings.codecProfile = "main10";
     expect(!validateExportOutput(wrong).ok(), "an HEVC profile does not apply to VP9");
 
-    const auto older = replaceOnce(text, "\"minor\": 41\n  },\n  \"project\"",
+    const auto older = replaceOnce(text, "\"minor\": 42\n  },\n  \"project\"",
                                    "\"minor\": 32\n  },\n  \"project\"");
     expect(!decodeQueue(older), "a document claiming 1.32 cannot name a 1.33 format");
 
     const auto plain = encode(makeDocument(true));
-    const auto plain132 = replaceOnce(plain, "\"minor\": 41\n  },\n  \"project\"",
+    const auto plain132 = replaceOnce(plain, "\"minor\": 42\n  },\n  \"project\"",
                                       "\"minor\": 32\n  },\n  \"project\"");
     expect(static_cast<bool>(decodeQueue(plain132)), "a 1.32 queue without new formats decodes");
     auto operation = memory();

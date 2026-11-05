@@ -303,6 +303,11 @@ migrateGradientStopLinksV1_39(const JsonValue& root, std::pmr::memory_resource* 
 [[nodiscard]] MigrationStepOutcome migrateGradientModesV1_40(const JsonValue& root,
                                                              std::pmr::memory_resource* resource,
                                                              std::pmr::vector<char>& output);
+// Matte sources, document 1.41 -> 1.42 (#383): version-only. A matte mask's `matte` and a node track
+// matte's `node` are new members no older document carries.
+[[nodiscard]] MigrationStepOutcome migrateMatteSourcesV1_41(const JsonValue& root,
+                                                            std::pmr::memory_resource* resource,
+                                                            std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -344,7 +349,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 37}, {1, 38}, migrateGradientValuesV1_37},
     MigrationStepDescriptor{{1, 38}, {1, 39}, migrateGradientColorPairsV1_38},
     MigrationStepDescriptor{{1, 39}, {1, 40}, migrateGradientStopLinksV1_39},
-    MigrationStepDescriptor{{1, 40}, {1, 41}, migrateGradientModesV1_40}};
+    MigrationStepDescriptor{{1, 40}, {1, 41}, migrateGradientModesV1_40},
+    MigrationStepDescriptor{{1, 41}, {1, 42}, migrateMatteSourcesV1_41}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

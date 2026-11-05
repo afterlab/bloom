@@ -5,6 +5,7 @@
 
 #include "zip_container_test_support.hpp"
 
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -124,7 +125,8 @@ LegacyFixture legacyFixture() {
     fixture.node = *node;
     std::vector<document::ParameterBinding> bindings;
     std::map<std::string, document::ParameterId> byRole;
-    for (const auto& parameter : definition->parameters) {
+    // #383: a schema 1 Curves file never carried the effect mask Levels now has.
+    for (const auto& parameter : document::withoutEffectMask(*definition).parameters) {
         const auto id = draft.ids().allocateParameter();
         if (!id)
             throw std::logic_error("legacy fixture parameter");

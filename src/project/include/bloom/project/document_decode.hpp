@@ -485,6 +485,9 @@ inline constexpr std::uint32_t kGradientStopLinksMinor = 40;
 // #546: the first document minor whose gradient values may carry an interpolation, a colour mode
 // and a hue direction; an older one carrying any of them is refused at that member.
 inline constexpr std::uint32_t kGradientModesMinor = 41;
+// #383: the first document minor whose layer masks may take their shape from a Mask output
+// (`matte`) and whose track mattes may name one (`node`); an older one carrying either is refused.
+inline constexpr std::uint32_t kMatteSourcesMinor = 42;
 [[nodiscard]] bool isLegacyGradientColorPairNode(std::string_view typeId,
                                                  std::uint32_t schemaVersion) noexcept;
 // #541: opening a document older than 1.39 turns each schema 1 colour pair that makes up a ramp

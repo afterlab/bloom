@@ -1287,8 +1287,15 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
                 !emitNamedId(state, "path", mask.path.value()) ||
                 !emitNamedId(state, "feather", mask.feather.value()) ||
                 !emitNamedId(state, "expansion", mask.expansion.value()) ||
-                !emitNamedId(state, "opacity", mask.opacity.value()) ||
-                !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+                !emitNamedId(state, "opacity", mask.opacity.value()))
+                return false;
+            // Document 1.42 (#383): a matte mask's Mask output.
+            if (mask.matte) {
+                const PathScope matteScope(state, "matte");
+                if (!state.ok(writer.memberName("matte")) || !emitOutputPortRef(state, *mask.matte))
+                    return false;
+            }
+            if (!emitRetainedTrailing(state) || !state.ok(writer.endObject()))
                 return false;
         }
         if (!state.ok(writer.endArray()))
@@ -1297,9 +1304,17 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
     if (boundary.trackMatte) {
         const PathScope scope(state, "trackMatte");
         const auto& matte = *boundary.trackMatte;
-        if (!state.ok(writer.memberName("trackMatte")) || !state.ok(writer.beginObject()) ||
-            !emitNamedId(state, "source", matte.source.value()) ||
-            !state.ok(writer.memberName("channel")) ||
+        if (!state.ok(writer.memberName("trackMatte")) || !state.ok(writer.beginObject()))
+            return false;
+        // Document 1.42 (#383): a node matte names its Mask output instead of a source layer.
+        if (matte.node) {
+            const PathScope nodeScope(state, "node");
+            if (!state.ok(writer.memberName("node")) || !emitOutputPortRef(state, *matte.node))
+                return false;
+        } else if (!emitNamedId(state, "source", matte.source.value())) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("channel")) ||
             !state.ok(
                 writer.stringValue(matte.channel == TrackMatteChannel::Luma ? "luma" : "alpha")) ||
             !state.ok(writer.memberName("inverted")) ||

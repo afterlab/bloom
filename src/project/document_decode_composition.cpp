@@ -1743,11 +1743,16 @@ template <typename Keyframe, typename DecodeOne>
         std::size_t index = 0;
         for (const auto& element : masks->arrayElements()) {
             const auto elementPath = joinPathIndex(masksPath, index++);
-            static constexpr std::array<std::string_view, 8> kKeys{
-                "id", "name", "mode", "inverted", "path", "feather", "expansion", "opacity"};
+            static constexpr std::array<std::string_view, 9> kKeys{
+                "id",        "name",    "mode", "inverted", "path", "feather",
+                "expansion", "opacity", "matte"};
+            // Document 1.42 (#383): a matte mask's Mask output.
+            const bool matte =
+                state.documentMinor >= kMatteSourcesMinor && element.findMember("matte") != nullptr;
             std::vector<const JsonValue*> members;
             std::vector<RetainedJsonMember> trailing;
-            if (!matchOrderedMembers(element, kKeys, true, state, elementPath, members, trailing))
+            if (!matchOrderedMembers(element, std::span(kKeys).first(matte ? 9 : 8), true, state,
+                                     elementPath, members, trailing))
                 return false;
             document::LayerMask mask;
             if (!decodeObjectId(*members[0], state, joinPath(elementPath, "id"), mask.id))
@@ -1788,6 +1793,13 @@ template <typename Keyframe, typename DecodeOne>
                                 mask.expansion) ||
                 !decodeObjectId(*members[7], state, joinPath(elementPath, "opacity"), mask.opacity))
                 return false;
+            if (matte) {
+                const AttachmentScope matteScope(state, "matte");
+                document::OutputPortRef source;
+                if (!decodeOutputPortRef(*members[8], state, joinPath(elementPath, "matte"), source))
+                    return false;
+                mask.matte = std::move(source);
+            }
             out.masks.push_back(std::move(mask));
         }
     }
@@ -1795,12 +1807,24 @@ template <typename Keyframe, typename DecodeOne>
         const auto mattePath = joinPath(path, "trackMatte");
         const AttachmentScope matteScope(state, "trackMatte");
         static constexpr std::array<std::string_view, 3> kKeys{"source", "channel", "inverted"};
+        // Document 1.42 (#383): a node matte names its Mask output in place of `source`.
+        static constexpr std::array<std::string_view, 3> kNodeKeys{"node", "channel", "inverted"};
+        const bool nodeMatte =
+            state.documentMinor >= kMatteSourcesMinor && matte->findMember("node") != nullptr;
         std::vector<const JsonValue*> members;
-        if (!matchOrderedMembers(*matte, kKeys, true, state, mattePath, members))
+        if (!matchOrderedMembers(*matte, nodeMatte ? kNodeKeys : kKeys, true, state, mattePath, members))
             return false;
         document::TrackMatte value;
-        if (!decodeObjectId(*members[0], state, joinPath(mattePath, "source"), value.source))
+        if (nodeMatte) {
+            const AttachmentScope nodeScope(state, "node");
+            document::OutputPortRef source;
+            if (!decodeOutputPortRef(*members[0], state, joinPath(mattePath, "node"), source))
+                return false;
+            value.node = std::move(source);
+        } else if (!decodeObjectId(*members[0], state, joinPath(mattePath, "source"),
+                                   value.source)) {
             return false;
+        }
         std::string_view channel;
         if (!decodeStringMember(*members[1], state, joinPath(mattePath, "channel"), channel))
             return false;

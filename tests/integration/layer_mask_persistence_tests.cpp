@@ -5,10 +5,12 @@
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
@@ -175,7 +177,7 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
                                                  document::FrameRate::framesPerSecond24()))
             .project};
     auto text = encode(plain);
-    replaceOnce(text, "\"minor\": 41", "\"minor\": 23");
+    replaceOnce(text, "\"minor\": 42", "\"minor\": 23");
     stripExportQueueV1_29(text);
     expect(static_cast<bool>(decodeText(text)), "a 1.23 document without masks decodes");
     auto operation = memory();
@@ -197,9 +199,71 @@ void olderDocumentsMigrateAndRefuseNewMembers() {
 
     Fixture fixture;
     auto masked = encode(fixture.document);
-    replaceOnce(masked, "\"minor\": 41", "\"minor\": 23");
+    replaceOnce(masked, "\"minor\": 42", "\"minor\": 23");
     stripExportQueueV1_29(masked);
     expect(!static_cast<bool>(decodeText(masked)), "a 1.23 document carrying masks is refused");
+}
+
+// #383 document 1.42: a node Mask as a layer's matte mask and as another layer's track matte
+// saves, reopens and decodes exactly; a 1.41 document carrying either is refused.
+void matteSourcesPersist() {
+    Fixture fixture;
+    const auto combine = *fixture
+                              .run<commands::AddNode>(fixture.composition,
+                                                      std::string(document::kMaskCombineNodeType),
+                                                      document::Vec2d{})
+                              .outputId<document::NodeId>(commands::kAddNodeOutput);
+    const document::OutputPortRef matte{combine,
+                                        std::string(document::kMaskCombineOutputPort)};
+    document::LayerId target{};
+    {
+        const auto current = fixture.document.snapshot();
+        for (const auto& boundary :
+             current.project().findComposition(fixture.composition)->graph().layerOutputs())
+            if (boundary.trackMatte)
+                target = boundary.layerId;
+    }
+    fixture.run<commands::AddLayerMask>(fixture.composition, target, document::PathValue{},
+                                        document::LayerMaskMode::Intersect, std::string{"Matte"},
+                                        matte);
+    const auto third =
+        *fixture
+             .run<commands::AddSolidLayer>(fixture.composition, "Node matted",
+                                           core::Color4d{0, 1, 0, 1})
+             .outputId<document::LayerId>(commands::kAddSolidLayerLayerOutput);
+    fixture.run<commands::SetTrackMatte>(
+        fixture.composition, third,
+        document::TrackMatte{document::LayerId{}, document::TrackMatteChannel::Alpha, false, matte});
+    const auto snapshot = fixture.document.snapshot();
+    expect(snapshot.project().validate().ok(), "the node-matted project validates");
+    const auto text = encode(fixture.document);
+    expect(text.find("\"matte\": {") != std::string::npos &&
+               text.find("\"node\": {") != std::string::npos,
+           "the matte mask's node and the node track matte are written");
+    expect(static_cast<bool>(decodeText(text)), "the 1.42 document decodes");
+
+    const auto settings = document::makeBloomNeutralColorSettingsV1({});
+    auto archive = project::buildVerifiedSaveArchive(
+        {}, {.snapshot = &snapshot, .colorSettings = &settings}, {}, memory());
+    expect(static_cast<bool>(archive), "the node-matted archive saves and verifies");
+    if (archive) {
+        auto result = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
+        expect(result.outcome() == project::OpenArchiveOutcome::Opened,
+               "the node-matted archive opens");
+        if (result.outcome() == project::OpenArchiveOutcome::Opened) {
+            auto opened = std::move(result).takeOpened();
+            const auto reopened = opened.document->snapshot();
+            const auto& before = *snapshot.project().findComposition(fixture.composition);
+            const auto& after = *reopened.project().findComposition(fixture.composition);
+            expect(std::ranges::equal(before.graph().layerOutputs(),
+                                      after.graph().layerOutputs()),
+                   "the matte mask and the node track matte equal themselves after save and open");
+            expect(reopened.project().validate().ok(), "the reopened project validates");
+        }
+    }
+    auto older = text;
+    replaceOnce(older, "\"minor\": 42", "\"minor\": 41");
+    expect(!static_cast<bool>(decodeText(older)), "a 1.41 document carrying a node matte is refused");
 }
 
 // Every handle mode on a path; the explicit modes are the ones the geometry would not imply.
@@ -323,7 +387,7 @@ void anchorModesPersistAndMigrate() {
                                          document::ShapeKind::Path, geometry);
     expect(shapedCommands.execute(std::move(add)).succeeded(), "a moded shape path is added");
     auto shapeText = encode(shaped);
-    replaceOnce(shapeText, "\"minor\": 41", "\"minor\": 23");
+    replaceOnce(shapeText, "\"minor\": 42", "\"minor\": 23");
     stripExportQueueV1_29(shapeText);
     expect(!static_cast<bool>(decodeText(shapeText)),
            "a pre-1.24 file carrying an anchor mode is refused");
@@ -362,7 +426,7 @@ void compositionTimecodePersists() {
         }
     }
     auto older = text;
-    replaceOnce(older, "\"minor\": 41", "\"minor\": 25");
+    replaceOnce(older, "\"minor\": 42", "\"minor\": 25");
     stripExportQueueV1_29(older);
     expect(!static_cast<bool>(decodeText(older)), "a pre-1.26 file carrying a timecode is refused");
 }
@@ -375,6 +439,7 @@ int main() {
         olderDocumentsMigrateAndRefuseNewMembers();
         anchorModesPersistAndMigrate();
         compositionTimecodePersists();
+        matteSourcesPersist();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

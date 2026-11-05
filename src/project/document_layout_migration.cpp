@@ -164,7 +164,8 @@ enum class Step {
     GradientValues,
     GradientColorPairs,
     GradientStopLinks,
-    GradientModes
+    GradientModes,
+    MatteSources
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -231,6 +232,9 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
         return false;
     // Gradient modes (1.40 -> 1.41, #546) are version-only: no older gradient carries one.
     if (step == Step::GradientModes)
+        return false;
+    // Matte sources (1.41 -> 1.42, #383) are version-only: no older mask or matte names a node.
+    if (step == Step::MatteSources)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -425,6 +429,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::GradientColorPairs    ? "{\"major\":1,\"minor\":39}"
                            : step == Step::GradientStopLinks     ? "{\"major\":1,\"minor\":40}"
                            : step == Step::GradientModes         ? "{\"major\":1,\"minor\":41}"
+                           : step == Step::MatteSources          ? "{\"major\":1,\"minor\":42}"
                                                                  : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -1037,6 +1042,12 @@ MigrationStepOutcome migrateGradientStopLinksV1_39(const JsonValue& root,
 MigrationStepOutcome migrateGradientModesV1_40(const JsonValue& root, std::pmr::memory_resource*,
                                                Buffer& output) {
     if (!sourceVersionIs(root, "40") || !transform(root, Scope::Root, Step::GradientModes, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateMatteSourcesV1_41(const JsonValue& root, std::pmr::memory_resource*,
+                                              Buffer& output) {
+    if (!sourceVersionIs(root, "41") || !transform(root, Scope::Root, Step::MatteSources, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }
