@@ -129,6 +129,56 @@ pipeline's first-frame latency (a 4K frame waits about 1.9 s in scene preparatio
 and 1.3 s in the EXR write and reopen verification, which run one frame at a time with the
 one-thread codec), and a 12-frame 4K export ran at 2.37 s per frame against 3.21 s for four.
 
+## After the #544 follow-up
+
+The same suite after three further #544 changes: image-sequence frames publish side by side in
+frame order on four blocking-I/O workers ([Frame output](../architecture/frame-output.md), "Frames
+in flight"); RAM preview frames land in the cache in frame order
+([GPU backend](../architecture/gpu-backend.md)); and an OCIO effect's output image refused for
+device room waits for capacity instead of sending the frame to the CPU reference path.
+
+- **Build:** main `8da3a9a22` plus the follow-up, RelWithDebInfo, clang.
+- **Machine state:** other GPU applications were resident. During the `cg-comp-2k` fill another
+  Bloom instance held about 15.8 GB of device memory; it was gone by the time of the repeat runs
+  below. `gpuBusyPercent` is machine-wide.
+- **Limits:** the defaults, `--reference-frames 1`.
+
+| | `two-layer-glow-2k` | `cg-comp-2k` | `cg-comp-4k` |
+|---|---|---|---|
+| Fill | 48 of 48 in 3.38 s, 0 waits | 24 of 24 in 10.3 s, 3 waits | 12 of 12 in 10.5 s, 5 waits |
+| GPU busy during the fill, mean (%) | 53.1 | 44.4 | 76.6 |
+| Fill run (longest run's first frame seen) | 0 only | 0 only | 0 only |
+| Export: s/frame (limit) | 0.473 (0.781) | 1.226 (2.21) | 2.251 (4.01) |
+| Export: GPU / CPU reference frames | 4 / 0 | 4 / 0 | 4 / 0 |
+
+Every route counted zero CPU fallbacks, and every check passed except `cg-comp-2k`'s
+`gpu-busy-during-fill`, which was measured while the other Bloom instance held most of the device:
+its fill waited for capacity and took twice as long. Three repeat fills of that shot with the
+device free took 5.3 to 5.9 s at 57 to 70% GPU busy, so no entry is listed for it.
+
+Repeat runs (fill, then a four-frame export, in one instance; three each):
+
+| | `two-layer-glow-2k` | `cg-comp-2k` |
+|---|---|---|
+| Fill (s) | 2.68, 3.25, 3.15 | 5.86, 5.47, 5.34 |
+| GPU busy during the fill (%) | 40.5, 53.3, 51.6 | 59.7, 69.8, 62.8 |
+| Export s/frame (limit) | 0.476 (0.72), 0.603 (0.77), 0.598 (0.76) | 1.361 (1.48), 1.219 (1.41), 1.347 (1.39) |
+
+`export-rate` now passes on both 2K shots: before, four frames published one at a time behind a
+destination check that waited about a second for a blocking-I/O worker that footage verification and
+the encoder probe held, and each frame's EXR write, reopen verification and hash (about 0.27 s at
+2K) ran after the previous frame's. The limit stays 4 times the fill plus 0.5 s; `cg-comp-2k`
+passes it by a small margin, because the first four frames' cold evaluation (about 4.2 s) is most
+of a four-frame export. `fill-contiguous-from-playhead` passes on the 4K comp although its fill
+still waits for capacity five times: a frame that finishes ahead of an earlier one is held until
+the earlier one lands.
+
+`gpu-busy-during-fill` stays listed for `two-layer-glow-2k` (40 to 55% over a 3 s fill). It is not
+bound by decode: per frame, the resident preview service's owner thread spends about 56 to 62 ms
+running the scene's dispatches one at a time, with a fence wait between them, and about 5 ms on
+display and transfer; prepared frames wait 170 to 200 ms for it, and about 7 of 16 cores are busy.
+The fastest of the repeat fills was the least busy.
+
 ## Earlier evidence on longer work areas
 
 Before the work areas were shortened and the export capped, a run over 96-frame work areas held

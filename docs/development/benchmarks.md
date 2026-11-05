@@ -403,10 +403,10 @@ to each parameter's range).
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
-lists in `knownFailures` the checks an open issue makes fail (#544: the 2K shots' four-frame export
-rate against their fast fills, the light 2K shot's GPU busy over a 3 s fill, and the 4K comp's fill
-caching a few frames ahead of the contiguous run; #545: a few CG comp alpha samples a Glow keys
-from blurred colour, which the device matches within 2e-6 rather than bit for bit).
+lists in `knownFailures` the checks an open issue makes fail (#544: the light 2K shot's GPU busy
+over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds; #545: a few
+CG comp alpha samples a Glow keys from blurred colour, which the device matches within 2e-6 rather
+than bit for bit).
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -508,7 +508,7 @@ reference frames are deleted after each scenario unless `--keep-outputs` is give
 than the threshold (percent, default 10) is a regression and fails the run. The suite runs on the
 RTX 4090 workstation and, when it is used, on the RTX 5080 bench host.
 
-Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, and after #544](benchmark-results-2026-11-05-scenarios.md).
+Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and after its follow-up](benchmark-results-2026-11-05-scenarios.md).
 
 ## Platform notes
 

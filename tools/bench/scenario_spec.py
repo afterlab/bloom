@@ -39,13 +39,12 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
                            "masterGamma": 1.1}]
 
 # The open issues behind the failures measured on 2026-11-05 (benchmark-results-2026-11-05-
-# scenarios.md), after the #544 fixes: the final render no longer falls back to the CPU and the
-# fills no longer starve on capacity waits; these checks are what is left of #544.
-EXPORT_RATE = ("#544: a four-frame export of a 2K shot that fills fast is slower per frame than "
-               "4 x the fill plus 0.5 s (pipeline latency, serial EXR encode and verify)")
-SHORT_FILL_BUSY = "#544: the light 2K shot's 3 s fill keeps the GPU under half busy on average"
-FILL_ORDER = ("#544: the 4K comp's fill still waits for device capacity a few times and caches "
-              "some frames ahead of the contiguous run")
+# scenarios.md). After the #544 fixes the final render no longer falls back to the CPU, the fills
+# no longer starve on capacity waits and land in frame order, and image sequences publish frames
+# side by side; this check is what is left of #544.
+SHORT_FILL_BUSY = ("#544: the light 2K shot's 3 s fill keeps the GPU about half busy on average "
+                   "(40-55%): the resident preview service runs each frame's scene dispatches one "
+                   "at a time on its owner thread, so frames wait for it, not for decode")
 ALPHA_PARITY = ("#545: the CG beauty's Classic Glow keys alpha from colour that went through "
                 "device Gaussian blurs (Light Wrap's blurred plate), which match the CPU within "
                 "2e-6 rather than bit for bit, so a few keyed alpha samples differ by an ULP")
@@ -58,7 +57,7 @@ SCENARIOS = {
                        "Physical Glow.",
         "tier": "1080p",
         "frames": 48,
-        "knownFailures": {"export-rate": EXPORT_RATE, "gpu-busy-during-fill": SHORT_FILL_BUSY},
+        "knownFailures": {"gpu-busy-during-fill": SHORT_FILL_BUSY},
         "layers": [
             {"name": "Plate", "media": "png16"},
             {"name": "CG beauty", "media": "exr_multilayer", "blend": "screen",
@@ -77,7 +76,7 @@ SCENARIOS = {
                        "adjustment layer grading the whole stack.",
         "tier": "1080p",
         "frames": 24,
-        "knownFailures": {"export-rate": EXPORT_RATE, "export-cpu-parity": ALPHA_PARITY},
+        "knownFailures": {"export-cpu-parity": ALPHA_PARITY},
         "layers": [
             {"name": "Plate", "media": "png16",
              "transform": {"scale": [1.1, 1.1]},
@@ -116,5 +115,5 @@ SCENARIOS = {
 }
 
 # The same comp at 4K (the 2160p tier), with a shorter work area.
-SCENARIOS["cg-comp-4k"] = dict(SCENARIOS["cg-comp-2k"], tier="2160p", frames=12, knownFailures={
-    "export-cpu-parity": ALPHA_PARITY, "fill-contiguous-from-playhead": FILL_ORDER})
+SCENARIOS["cg-comp-4k"] = dict(SCENARIOS["cg-comp-2k"], tier="2160p", frames=12,
+                               knownFailures={"export-cpu-parity": ALPHA_PARITY})
