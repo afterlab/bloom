@@ -264,6 +264,27 @@ keys switches at the next key. A Colorize node from an older project keeps its S
 Highlights ramp until you first edit the gradient, which starts from that same ramp. Black & White shows a slider per colour over a track from black to that colour. The card
 shows only the current mode's controls; the others keep their values.
 
+## Vignette
+
+Vignette darkens an image towards the edges of its frame, the way a lens does; it is in the
+**Filters** section. Its card shows the frame with the vignette drawn over mid grey: drag the
+**Center** point to move it (hold **Ctrl** for finer control), and watch the picture follow every
+slider.
+
+- **Shape**: **Elliptical** follows an ellipse, **Rectangular** a rounded rectangle.
+- **Mode**: **Multiply** scales the light by **Amount** at the edges (100% makes the corners black;
+  a negative amount brightens them instead); **Exposure (stops)** changes the edges by
+  **Exposure** stops instead (-1 halves the light there).
+- **Midpoint** moves the falloff out towards the corners (high) or in towards the middle (low).
+- **Roundness** above 0 makes the shape a circle (or a square) whatever the frame's aspect; below
+  0 squares its corners off.
+- **Feather** softens the falloff; 0 is a hard edge.
+- **Highlight protection** keeps bright highlights from darkening: mid grey and below take the
+  whole vignette, and pixels at 1.0 or brighter keep that share of their brightness.
+
+The vignette always follows the frame, at any resolution and whatever the image's own bounds, and
+alpha is never changed. Every value can be keyed or driven from its socket.
+
 ## Masks
 
 These nodes don't have a mask input yet. To limit an adjustment to part of the image, mix the

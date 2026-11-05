@@ -2,7 +2,7 @@
 
 Status: implemented; grouped native and cross-platform qualification pending
 
-Updated: 2026-11-04
+Updated: 2026-11-05
 
 ## Gaussian Blur and Box Blur
 
@@ -970,3 +970,99 @@ stops, a hard edge, one stop, the 64-stop limit and a refused malformed table. T
 holds the card in every mode inside its card with no label cut short, the ramp drag as one command,
 the stop click opening the picker, and the gradient editor's stop drag, add, pull-off removal and
 position field as one command each, keyed as one whole value whose keys interpolate.
+
+## Vignette
+
+`bloom.vignette`, schema 1 (#505), darkens (or brightens) an image towards the edges of its frame,
+the finishing step of a lens look. It is listed under Filters (search also finds it as lens, falloff,
+darken edges or corners) and has one Image in, `input`, and one Image out, `image`, over the input's
+data and display windows with its pixel aspect.
+
+Parameters:
+
+| Control | Role | Default | Kind |
+| --- | --- | --- | --- |
+| Shape | `shape` | Elliptical | Constant dropdown: Elliptical (0), Rectangular (1) |
+| Mode | `mode` | Multiply | Constant dropdown: Multiply (0), Exposure (stops) (1) |
+| Amount | `amount` | 50% | Animatable `[-1, 1]`, Multiply |
+| Exposure | `exposure` | -1 stop | Animatable `[-10, 10]` stops, Exposure |
+| Midpoint | `midpoint` | 50% | Animatable `[0, 1]` |
+| Roundness | `roundness` | 0% | Animatable `[-1, 1]` |
+| Feather | `feather` | 50% | Animatable `[0, 1]` |
+| Highlight protection | `highlightProtection` | 0% | Animatable `[0, 1]` |
+| Center | `center` | (0, 0) | Animatable Vector 2, pixels from the frame's centre, each axis within `+-1e6` |
+
+The two choices decide the arithmetic, so they have no socket; every other value is animatable and
+drivable with its own socket in parameter order (the centre's a Vector 2).
+
+The vignette is measured against the input's display window (the frame it belongs to, not its data
+window), so a data window grown by a blur or cut by a region of interest changes nothing, and in
+full-resolution units, so a proxy resolution draws the same vignette. With the display window's
+width `W` and height `H` in full-resolution pixels, the pixel aspect `PAR` and the centre
+`C = (W / 2, H / 2) + center`, a pixel centre `p` (in full-resolution pixels) sits at
+`q = ((p.x - C.x) PAR / A.x, (p.y - C.y) / A.y)`, where the half-axes `A` are the frame's halves
+`(W PAR / 2, H / 2)` moved geometrically towards their geometric mean (a circle of the same area)
+by `circle = max(roundness, 0)`: `A.x = (W PAR / 2)^(1 - circle) * g^circle` and likewise for `y`,
+`g = sqrt(W PAR / 2 * H / 2)`. With roundness 0 the shape touches the frame's edges; at 1 it is a
+circle (a square for Rectangular) whatever the frame's aspect.
+
+The distance is a superellipse norm, `d = (|q.x|^n + |q.y|^n)^(1/n)`, each `|q|` first limited to 4
+(beyond that every falloff is complete): `n = 2` (an ellipse) for Elliptical and `n = 6` (a rounded
+rectangle) for Rectangular, multiplied by `4^(-roundness)` when roundness is negative, which squares
+the corners off. The falloff is centred at `c = 0.4 + 1.2 midpoint` and runs from
+`inner = c (1 - feather)` to `outer = c (1 + feather)`: `t = clamp((d - inner) / (outer - inner), 0, 1)`
+and `mask = t^2 (3 - 2t)`, or a hard edge, `mask = d >= inner ? 1 : 0`, with feather 0. With the
+defaults the frame's edges sit at half strength and its corners at nearly full strength.
+
+The gain is `1 - amount * mask` (Multiply; a negative amount brightens) or `2^(exposure * mask)`
+(Exposure, in stops). Highlight protection moves it back towards one for bright pixels:
+`h = smoothstep((L - 0.18) / 0.82)` of the straight Rec. 709 luma `L` (the track-matte Luma's
+weights), and `gain' = gain + protection * h * (1 - gain)`, so mid grey and below take the whole
+vignette and a pixel at 1.0 or brighter keeps that share of its exposure. The premultiplied colour is
+multiplied by the gain and alpha is kept exactly; a pixel with alpha 0 passes unchanged. No colour
+transform is applied: the arithmetic is scene-linear, on the values as stored. An amount (or an
+exposure) of 0 is the exact identity and aliases its input. A non-finite result is the grades'
+non-finite pixel failure, never published.
+
+The node lowers to one `VignetteKernel` (Required in the GPU coverage contract), a grade kind of the
+shared colour grade machinery (`color_grade_image_effect.hpp`, `vignette_image_effect.cpp`): the
+host prepares a table of five vec4s from the sampled values (`[mode, strength, protection, hard edge]`,
+`[inner, 1 / (outer - inner), n, 1 / n]`, the luma weights with an ellipse flag, the protection's
+`[0.18, 1 / 0.82, circle, 0]` and the centre offset), and where the effect is applied (the CPU
+evaluator from its input image, the GPU scene builder from its input command's descriptor) appends
+the input's geometry as a sixth: the centre and the per-axis scales in the data window's own pixel
+indices, from its display window, data origin, pixel aspect and the evaluation scale. The CPU
+reference reads those 24 floats per pixel, and the device runs one fixed resident neighbourhood
+program over the same floats with the same binary32 operations (precise fused multiply-adds, the
+wrapper's correctly rounded division; `sqrt`, `pow` and `exp2` to the device's precision). A changed
+value changes only data, never the shader. The compiler lowers only the strength the mode reads (the
+other is a constant without a parameter identity, and the table holds only the one read), so an
+unused, even animated, strength neither claims the parameter nor invalidates a cached frame. Cache
+identity is the prepared table (the frame key already carries the resolution and region of
+interest); an animated value makes the operation time-dependent. Cancellation is checked per row,
+the output is charged to the pixel budget, and preview, RAM preview, still and sequence export,
+video export and headless render all take the same resident command; there is no exception.
+
+The card widget (`vignette_widget.hpp`), drawn the same on the node card and in Properties, puts the
+centre on a point pad (`kit::KPointPad`) over a picture of the frame that shows the falloff as the
+node computes it (shape, roundness, midpoint, feather and the strength over mid grey), so dragging
+the centre or any slider redraws where the darkening falls; the centre keeps its X/Y row, diamond and
+socket among the node's rows. Under the pad are slider rows for Amount (Multiply) or Exposure
+(Exposure), Midpoint, Roundness, Feather and Highlight protection, each with its diamond, its Reset
+and key menu and its socket beside it. Shape and Mode are the node's dropdown rows.
+
+Tests: the vignette test compares both shapes and modes, roundness both ways, a moved centre, a hard
+edge, highlight protection and anamorphic pixels with an independent double-precision formula over
+HDR, signed, partial and zero alpha with a data window that overhangs its display window (2e-5
+relative, exact alpha); checks the untouched centre, black and exactly-the-stops corners, the circle
+on a wide frame, protected highlights, the rectangle's reach and a proxy resolution's agreement; and
+covers identity, unused strengths, domains, the fixed program, the geometry refusals, cache identity,
+the budget and cancellation. The image effect test runs both modes through the evaluator (cold, warm
+reuse, ROI, invalidation by a moved centre and a changed mode); the compiler test checks the lowering
+of each mode and a muted node; the commands test edits and refuses values. The
+`effect.VignetteKernel` and `node.bloom.vignette` coverage fixtures prepare both shapes and modes on
+the production builder, full frame and ROI, and the native grade harness runs them on the device
+against the CPU oracle at the 2e-6/exact-alpha gate with a warm zero-dispatch rerun and a moved
+centre that re-dispatches. The grading cards test holds the card in both modes and shapes inside its
+card with no label cut short, the falloff drawn on the pad and following the centre, and the centre
+drag and a slider drag as one command each.
