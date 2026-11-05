@@ -463,6 +463,9 @@ struct FieldRasterGeometry final {
 [[nodiscard]] bool applyFieldRasterGeometry(std::vector<float>& table,
                                             const FieldRasterGeometry& geometry);
 
+// Sets every mask Shape Distance's field pixels per texel of its distance image.
+void setFieldTexelScale(std::vector<float>& table, double unitsPerTexel) noexcept;
+
 // Structural check of a table before either route interprets it: the magic and version, every
 // instruction's op, registers and parameter block within the table, every value finite.
 [[nodiscard]] bool validFieldTable(std::span<const float> table) noexcept;

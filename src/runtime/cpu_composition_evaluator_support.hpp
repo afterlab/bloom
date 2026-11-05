@@ -129,6 +129,9 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                            function(*effect.secondaryInput);
                        if (effect.maskInput)
                            function(*effect.maskInput);
+                       // #525: the images a field raster's program reads.
+                       for (const auto image : effect.fieldImages)
+                           function(image);
                    },
                    [](const CompiledImageSource&) {},
                    [](const CompiledVideoSource&) {},

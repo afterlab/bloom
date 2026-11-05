@@ -34,9 +34,11 @@
 #include "gpu_coverage_video_support.hpp"
 #include "gpu_coverage_working_space_support.hpp"
 #include "gpu_route_proof_io.hpp"
+#include "field_test_programs.hpp"
 #include "grade_curves_test_support.hpp"
 #include "merge_entry_test_support.hpp"
 
+#include <bloom/document/field_parameters.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/runtime/gpu_coverage_contract.hpp>
@@ -1499,6 +1501,122 @@ displayProofRunner(const bool customView) {
                              "mix and a multi-stop Gradient Map, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #525 Fields: field programs over the HDR, signed, partial-alpha gradient canvas (an Image
+    // field reads that gradient through its slot, so the atlas route is taken), a mask's exact
+    // distance, every field operation, sub-samples, output modes and each Fields node's lowering.
+    const auto runFields = [](const std::vector<bloom::runtime::ImageEffectKernel>& kernels,
+                              std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& kernel : kernels) {
+            auto definition =
+                bloom::gpu_coverage_plans::effectPlan(kernel, idBase)->copyDefinition();
+            definition.operations[0] = bloom::gpu_coverage_plans::gradient(false, idBase + 50);
+            if (const auto* field = std::get_if<bloom::runtime::FieldRasterKernel>(&kernel);
+                field != nullptr && std::ranges::any_of(field->program.instructions,
+                                                        [](const auto& instruction) {
+                                                            return instruction.slot >= 0;
+                                                        }))
+                std::get<bloom::runtime::CompiledImageEffect>(definition.operations[1])
+                    .fieldImages = {bloom::runtime::OperationIndex::fromRaw(0)};
+            const auto plan =
+                std::make_shared<const bloom::runtime::CompiledCompositionPlan>(std::move(definition));
+            idBase += 100;
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 6, 4);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    const auto fieldKernel = [](const bloom::core::field::FieldOp op, const std::uint64_t idBase,
+                                const int variant = 0, const std::uint32_t samples = 1) {
+        return bloom::runtime::ImageEffectKernel{bloom::runtime::FieldRasterKernel{
+            bloom::field_test_programs::operationProgram(op, idBase, variant), samples}};
+    };
+    const auto addField = [&add, runFields](std::string id,
+                                            std::vector<bloom::runtime::ImageEffectKernel> kernels,
+                                            const std::uint64_t idBase, std::string evidence) {
+        add(
+            std::move(id), GpuCoverageFixtureCriterion::Prepared, "src/runtime field raster tests",
+            [runFields, kernels = std::move(kernels), idBase, evidence = std::move(evidence)] {
+                return runFields(kernels, idBase, evidence);
+            },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    };
+    {
+        using bloom::core::field::FieldOp;
+        addField("effect.FieldRasterKernel",
+                 {fieldKernel(FieldOp::Noise, 525000, 1), fieldKernel(FieldOp::Image, 525100),
+                  fieldKernel(FieldOp::Ramp, 525200, 0, 4)},
+                 525300,
+                 "production field raster: a fractal noise, an Image field through the atlas and "
+                 "a 4-sample ramp, full frame and ROI");
+        addField("effect.MaskDistanceKernel",
+                 {bloom::runtime::MaskDistanceKernel{3.0}, bloom::runtime::MaskDistanceKernel{0.5}},
+                 526000, "production mask distance: both exact passes over the padded mask");
+        std::uint64_t base = 527000;
+        for (const auto op : bloom::core::field::kFieldOps) {
+            addField(std::string{"feature.field.op."} +
+                         std::string{bloom::core::field::fieldOpName(op)},
+                     {fieldKernel(op, base, 0), fieldKernel(op, base + 100, 1),
+                      fieldKernel(op, base + 200, 2)},
+                     base + 300,
+                     "production field operation " +
+                         std::string{bloom::core::field::fieldOpName(op)} +
+                         ": three variants, full frame and ROI");
+            base += 1000;
+        }
+        addField("feature.field.images",
+                 {fieldKernel(FieldOp::Image, base, 0), fieldKernel(FieldOp::Image, base + 100, 1),
+                  fieldKernel(FieldOp::Image, base + 200, 2)},
+                 base + 300, "production field image slots: the atlas with every filter and edge");
+        base += 1000;
+        addField("feature.field.supersample",
+                 {fieldKernel(FieldOp::Noise, base, 2, 4), fieldKernel(FieldOp::Pattern, base + 100, 1, 16)},
+                 base + 300, "production field sub-samples: 4 and 16 per pixel");
+        base += 1000;
+        addField("feature.field.output_modes",
+                 {fieldKernel(FieldOp::Noise, base, 1), fieldKernel(FieldOp::Arrow, base + 100),
+                  fieldKernel(FieldOp::Ramp, base + 200), fieldKernel(FieldOp::Force, base + 300)},
+                 base + 400, "production field output modes: Raw scalar, Mask, Colour and vector");
+        base += 1000;
+        const std::vector<std::pair<std::string_view, std::vector<FieldOp>>> nodes{
+            {bloom::document::kFieldNoiseNodeType, {FieldOp::Noise}},
+            {bloom::document::kFieldVoronoiNodeType, {FieldOp::Voronoi}},
+            {bloom::document::kFieldRandomNodeType, {FieldOp::Random}},
+            {bloom::document::kFieldPatternNodeType, {FieldOp::Pattern}},
+            {bloom::document::kFieldGradientNodeType, {FieldOp::Gradient}},
+            {bloom::document::kFieldShapeDistanceNodeType, {FieldOp::Shape}},
+            {bloom::document::kFieldFromImageNodeType, {FieldOp::Image}},
+            {bloom::document::kFieldForceNodeType, {FieldOp::Force}},
+            {bloom::document::kFieldMathNodeType, {FieldOp::Math}},
+            {bloom::document::kFieldRemapNodeType, {FieldOp::Remap}},
+            {bloom::document::kFieldTransformNodeType, {FieldOp::Transform}},
+            {bloom::document::kFieldDerivativeNodeType, {FieldOp::Derivative}},
+            {bloom::document::kFieldCombineNodeType, {FieldOp::Combine}},
+            {bloom::document::kFieldSeparateNodeType, {FieldOp::Swizzle}},
+            {bloom::document::kFieldRasterizeNodeType,
+             {FieldOp::Ramp, FieldOp::Arrow, FieldOp::Streak}}};
+        for (const auto& [type, ops] : nodes) {
+            std::vector<bloom::runtime::ImageEffectKernel> kernels;
+            for (const auto op : ops) {
+                kernels.push_back(fieldKernel(op, base, 1));
+                base += 100;
+            }
+            addField("node." + std::string{type}, std::move(kernels), base,
+                     "production " + std::string{type} + " lowering, full frame and ROI");
+            base += 1000;
+        }
+    }
     // #546: gradient blends through native GradientV1 (linear and radial generators) and the
     // resident Colorize program.
     {

@@ -3,6 +3,7 @@
 #include "channel_image_effect.hpp"
 #include "color_grade_image_effect.hpp"
 #include "directional_blur_image_effect.hpp"
+#include "field_raster.hpp"
 #include "footage_interpretation_pass.hpp"
 #include "layer_mask_coverage.hpp"
 #include "luma_key_image_effect.hpp"
@@ -104,6 +105,12 @@ void appendF64(std::vector<std::byte>& bytes, const double value) {
         appendU64(bytes, transform.directionalBlur.size());
         for (const auto value : transform.directionalBlur)
             appendF64(bytes, static_cast<double>(value));
+    }
+    // Appended only for #525 mask distance, so every earlier key keeps its exact bytes.
+    if (transform.kind == GpuOcioTransformKind::MaskDistance) {
+        appendText(bytes, "mask-distance");
+        appendU64(bytes, static_cast<std::uint64_t>(transform.maskDistanceReach));
+        appendU64(bytes, static_cast<std::uint64_t>(transform.maskDistancePass));
     }
     appendU64(bytes, transform.maskData.size());
     bytes.insert(bytes.end(), transform.maskData.begin(), transform.maskData.end());
@@ -324,6 +331,9 @@ GpuOcioPreparationResult GpuOcioProgramPreparer::prepare(
             return detail::buildChannelSelectProgram(transform.channelSelect);
         case GpuOcioTransformKind::DirectionalBlur:
             return detail::buildDirectionalBlurProgram(transform.directionalBlur);
+        case GpuOcioTransformKind::MaskDistance:
+            return detail::buildMaskDistanceProgram(transform.maskDistanceReach,
+                                                    transform.maskDistancePass);
         case GpuOcioTransformKind::LayerMask:
             return detail::buildLayerMaskProgram(transform.maskData);
         case GpuOcioTransformKind::FootageInterpretation:

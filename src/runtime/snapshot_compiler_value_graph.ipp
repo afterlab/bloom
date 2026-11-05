@@ -556,6 +556,9 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
         return runtime::CompiledValueKernel{runtime::CompiledValueUtility{
             descriptor->kernel, std::move(operands), std::move(selectors), std::move(dataBlock)}};
     }
+    case runtime::NodeLoweringKind::ValueFieldSample:
+        return lowerFieldSample(node, definition);
+    case runtime::NodeLoweringKind::Field:
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:
     case runtime::NodeLoweringKind::Checker:

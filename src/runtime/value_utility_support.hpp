@@ -123,6 +123,9 @@ class ValueUtilityReader final {
     case document::SocketValueKind::Audio:
     case document::SocketValueKind::Mask:
     case document::SocketValueKind::ChannelSet:
+    case document::SocketValueKind::ScalarField:
+    case document::SocketValueKind::Vector2Field:
+    case document::SocketValueKind::ColorField:
     case document::SocketValueKind::Scalar:
         break;
     }

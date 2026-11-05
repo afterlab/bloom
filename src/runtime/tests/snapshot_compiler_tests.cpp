@@ -1,3 +1,4 @@
+#include <bloom/core/field_program.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <map>
 #include <bloom/core/rational_time.hpp>
@@ -6,6 +7,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
+#include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/graph.hpp>
@@ -26,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -1917,6 +1920,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_layout_tests.ipp"
 #include "snapshot_compiler_mute_tests.ipp"
 #include "snapshot_compiler_recipe_tests.ipp"
+#include "snapshot_compiler_field_tests.ipp"
 
 } // namespace
 
@@ -1944,6 +1948,11 @@ int main() {
         testAlphaAssociationLowering(expectations);
         testColorizeLowering(expectations);
         testVignetteLowering(expectations);
+        testFieldGeneratorRasters(expectations);
+        testFieldChainCompilesToOneProgram(expectations);
+        testFieldSampleDrivesAValue(expectations);
+        testFieldImageSlotsAndLimits(expectations);
+        testColorizeReadsAField(expectations);
         testImageChannelLowering(expectations);
         testLiveValueOverrideOwners(expectations);
         testOverrideVectorKindsAndLimits(expectations);

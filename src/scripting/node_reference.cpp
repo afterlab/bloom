@@ -147,6 +147,8 @@ std::string_view nodeCategoryName(const document::NodeCategory category) noexcep
         return "filters";
     case document::NodeCategory::Grade:
         return "grade";
+    case document::NodeCategory::Fields:
+        return "fields";
     }
     return {};
 }

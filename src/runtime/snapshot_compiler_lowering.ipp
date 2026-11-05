@@ -360,6 +360,10 @@ lower(const std::vector<document::NodeId>& order) {
         // source.
         if (isValueNode(id))
             continue;
+        // #525: a Fields node's outputs are fields and its own rasters; a muted one passes its
+        // field through and draws nothing (lowerFieldNode()).
+        if (definition->lowering == runtime::NodeLoweringKind::Field)
+            continue;
         // #502: an Adjustment draws its target entry's stack below; with no single target, or
         // muted, it draws nothing. Several targets are a mistake the artist is told about.
         if (definition->lowering == runtime::NodeLoweringKind::Adjustment) {
@@ -461,6 +465,14 @@ lower(const std::vector<document::NodeId>& order) {
             continue;
         if (isValueNode(nodeId))
             continue;
+        // #525: a Fields node's rasters; its field outputs compile into whoever reads them.
+        if (definition->second->lowering == runtime::NodeLoweringKind::Field) {
+            if (!lowerFieldNode(*node, operations, indices))
+                return {};
+            continue;
+        }
+        if (!lowerFieldImageInputs(*node, *definition->second, operations, indices))
+            return {};
         // #502: an Adjustment's operation is the stack below its entry.
         if (definition->second->lowering == runtime::NodeLoweringKind::Adjustment) {
             const auto below = lowerStackBelowAdjustment(nodeId, indices);
@@ -1151,6 +1163,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::Cryptomatte:
     // #490: an Image Preview has no output, so no plan reaches it.
     case NodeLoweringKind::ImagePreview:
+    // #525: Fields nodes are lowered in the main loop (lowerFieldNode()).
+    case NodeLoweringKind::Field:
     case NodeLoweringKind::Unsupported:
     // A value lowering never reaches here: compileValueGraph() compiled it into the plan's value
     // operations, and lower()'s own loop skips it. Reaching this arm means the two passes disagree
@@ -1172,6 +1186,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::ValueReroute:
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
+    case NodeLoweringKind::ValueFieldSample:
         break;
     }
     addTopologyFailure(node.id, "Unsupported lowering reached plan publication.");

@@ -417,6 +417,14 @@ bloom_add_test(NAME bloom.runtime.colorize COMMAND bloom_runtime_colorize_test L
 
 # #505 Vignette: both shapes and modes against their formula, the promises, program, budget and
 # cancellation.
+add_executable(bloom_runtime_field_raster_test field_raster_tests.cpp)
+target_include_directories(bloom_runtime_field_raster_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_field_raster_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_field_raster_test)
+bloom_enable_strict_floating_point(bloom_runtime_field_raster_test)
+bloom_add_test(NAME bloom.runtime.field_raster COMMAND bloom_runtime_field_raster_test
+    LABELS unit runtime render)
+
 add_executable(bloom_runtime_vignette_test vignette_tests.cpp)
 target_include_directories(bloom_runtime_vignette_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_vignette_test PRIVATE bloom_runtime_evaluator)

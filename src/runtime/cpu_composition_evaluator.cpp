@@ -529,6 +529,15 @@ enum class ScalarDomain : std::uint8_t {
                                   effect.secondaryInput->value() < index;
                 if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel))
                     validKernel = discrete->quarterTurns <= 3;
+                // #525: only a field raster reads images through its program, at most four.
+                validKernel =
+                    validKernel &&
+                    (effect.fieldImages.empty() ||
+                     (std::holds_alternative<FieldRasterKernel>(effect.kernel) &&
+                      effect.fieldImages.size() <= core::field::kMaxFieldImages &&
+                      std::ranges::all_of(effect.fieldImages, [index](const OperationIndex image) {
+                          return image.value() < index;
+                      })));
                 if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
                     const bool invert = pointwise->effect == PointwiseImageEffect::Invert;
                     validKernel = static_cast<std::uint8_t>(pointwise->effect) <=
@@ -3380,7 +3389,30 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             bounds[index].local = bounds[effect.input.value()].output;
                             bounds[index].output = bounds[index].local;
                             if (slots[index] && !preparedEffect->identity()) {
-                                auto result = detail::applyImageEffect(
+                                // #525: a field raster reads its program's images beside its
+                                // canvas (an empty image is an absent slot).
+                                std::array<const render::Rgba32fImage*,
+                                           core::field::kMaxFieldImages>
+                                    fieldSlots{};
+                                for (std::size_t slot = 0; slot < effect.fieldImages.size() &&
+                                                           slot < fieldSlots.size();
+                                     ++slot)
+                                    fieldSlots[slot] =
+                                        slots[effect.fieldImages[slot].value()].get();
+                                auto result =
+                                    preparedEffect->colorGrade &&
+                                            preparedEffect->colorGrade->kind ==
+                                                detail::ColorGradeKind::FieldRaster
+                                        ? detail::applyFieldRaster(
+                                              *preparedEffect->colorGrade, *slots[index],
+                                              std::span<const render::Rgba32fImage* const>(
+                                                  fieldSlots.data(), effect.fieldImages.size()),
+                                              static_cast<double>(plan->format().width()),
+                                              static_cast<double>(plan->format().height()),
+                                              resolved.horizontalScale, resolved.verticalScale,
+                                              effectPixelBudget, cancellation, operationIndex,
+                                              progress, rowBands)
+                                        : detail::applyImageEffect(
                                     *preparedEffect, *slots[index],
                                     effect.secondaryInput && slots[effect.secondaryInput->value()]
                                         ? slots[effect.secondaryInput->value()].get()

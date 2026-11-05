@@ -13,6 +13,7 @@
 // are skipped.
 
 #include "compositing_recipe_test_support.hpp"
+#include "field_test_programs.hpp"
 #include "gpu_composite_native_support.hpp"
 #include "grade_curves_test_support.hpp"
 
@@ -1712,6 +1713,134 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
     }
 }
 
+// #525 Fields: every field operation (an Image field through the atlas of its slot), sub-samples
+// and a mask's exact distance against the CPU oracle. The kernel is Bloom's own binary32 arithmetic
+// on both sides, so the device may differ only where its sqrt rounds differently and a value then
+// lands on the other side of a cell or step boundary: at most 2% of the pixels may differ, each by
+// at most 1e-4 relative otherwise. One resident dispatch per pass and no readback, warm zero
+// dispatches with identical pixels, and a changed operand re-dispatches with parity.
+[[nodiscard]] bool fieldParity(const std::vector<Rgba32f>& actual,
+                               const std::span<const Rgba32f> expected, std::string& detail) {
+    if (actual.size() != expected.size() || actual.empty()) {
+        detail = "size";
+        return false;
+    }
+    std::size_t differing = 0;
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+        bool same = true;
+        for (std::size_t c = 0; c < 4; ++c) {
+            const float a = actual[i].components()[c];
+            const float e = expected[i].components()[c];
+            if (!std::isfinite(a) || !std::isfinite(e)) {
+                detail = "non-finite at " + std::to_string(i);
+                return false;
+            }
+            same = same && std::abs(a - e) <= 1e-4F * std::max(1.0F, std::abs(e));
+        }
+        differing += same ? 0U : 1U;
+    }
+    detail = std::to_string(differing) + " of " + std::to_string(actual.size()) + " pixels differ";
+    return differing * 50U <= actual.size();
+}
+
+void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::core::field::FieldOp;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    std::vector<std::pair<std::string, bloom::runtime::ImageEffectKernel>> kernels;
+    std::uint64_t id = 52500;
+    for (const auto op : bloom::core::field::kFieldOps)
+        for (int variant = 0; variant < 2; ++variant) {
+            kernels.emplace_back(std::string(bloom::core::field::fieldOpName(op)),
+                                 bloom::runtime::FieldRasterKernel{
+                                     bloom::field_test_programs::operationProgram(op, id, variant),
+                                     variant == 1 ? 4U : 1U});
+            id += 100;
+        }
+    kernels.emplace_back("mask distance", bloom::runtime::MaskDistanceKernel{3.0});
+    for (const auto& [name, kernel] : kernels) {
+        cache.clear();
+        auto definition =
+            effectPlan(kernel, id, std::nullopt, Color4d{-0.25, 1.75, 0.5, 0.625})->copyDefinition();
+        id += 200;
+        auto& effect = std::get<CompiledImageEffect>(definition.operations[1]);
+        const auto* field = std::get_if<bloom::runtime::FieldRasterKernel>(&effect.kernel);
+        if (field != nullptr &&
+            std::ranges::any_of(field->program.instructions,
+                                [](const auto& instruction) { return instruction.slot >= 0; }))
+            effect.fieldImages = {OperationIndex::fromRaw(0)};
+        const auto plan = std::make_shared<const CompiledCompositionPlan>(definition);
+        const auto request = requestFor(*plan);
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            "field native " + name + ": CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), "field native: executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                fieldParity(cold.pixels, oracle.frame()->processImage().pixels(),
+                                            detail),
+                            "field native " + name + ": CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            "field native " + name + ": data/display-window and PAR parity");
+        const auto passes = field != nullptr ? 1U : 2U;
+        expectations.expect(coldCounters.ocioEffectDispatches == passes &&
+                                coldCounters.readbacks == 0,
+                            "field native " + name + ": resident dispatches and no readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().ocioEffectDispatches ==
+                                    coldCounters.ocioEffectDispatches,
+                            "field native " + name +
+                                ": warm RAM reuse has identical pixels and zero dispatches");
+        if (field == nullptr)
+            continue;
+        auto changedDefinition = plan->copyDefinition();
+        auto& changedProgram = std::get<bloom::runtime::FieldRasterKernel>(
+                                   std::get<CompiledImageEffect>(changedDefinition.operations[1])
+                                       .kernel)
+                                   .program;
+        bool changed = false;
+        for (auto& instruction : changedProgram.instructions)
+            for (auto& scalar : instruction.scalars)
+                if (!changed)
+                    if (auto* value = std::get_if<double>(&scalar.source)) {
+                        *value += 0.5;
+                        changed = true;
+                    }
+        if (!changed)
+            continue;
+        const auto changedPlan =
+            std::make_shared<const CompiledCompositionPlan>(std::move(changedDefinition));
+        const auto rebuilt = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(rebuilt && changedOracle.frame(),
+                            "field native " + name + ": a changed operand prepares");
+        if (!rebuilt || !changedOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, rebuilt.scene);
+        expectations.expect(
+            rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                fieldParity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail) &&
+                executor.executor->counters().ocioEffectDispatches ==
+                    coldCounters.ocioEffectDispatches + 1,
+            "field native " + name + ": a changed operand re-dispatches with parity: " + detail);
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runCst(expectations, device, cache, from, to);
@@ -1727,6 +1856,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runColorGrades(expectations, device, cache);
     runChannelSelects(expectations, device, cache);
     runRecipes(expectations, device, cache);
+    runFields(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

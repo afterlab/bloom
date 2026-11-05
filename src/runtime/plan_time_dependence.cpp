@@ -12,7 +12,18 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
         // The other three readouts were baked into constants by the compiler and never reach here.
         const auto* utility = std::get_if<CompiledValueUtility>(&operation.kernel);
         const auto* sample = std::get_if<CompiledValueGradientSample>(&operation.kernel);
-        bool dependent =
+        // #525: a Field Sample whose field reads the clock or a keyed curve.
+        const auto* field = std::get_if<CompiledValueFieldSample>(&operation.kernel);
+        bool fieldAnimated = field != nullptr && field->program != nullptr &&
+                             field->program->usesTime;
+        if (field != nullptr && field->program != nullptr)
+            forEachFieldOperand(*field->program, [&](const auto& operand) {
+                using Operand = std::decay_t<decltype(operand)>;
+                if constexpr (std::is_same_v<Operand, CompiledPathParameter>)
+                    fieldAnimated = fieldAnimated ||
+                                    std::holds_alternative<CompiledPathCurve>(operand.source);
+            });
+        bool dependent = fieldAnimated ||
             std::holds_alternative<CompiledValueTime>(operation.kernel) ||
             (sample != nullptr &&
              std::holds_alternative<CompiledGradientCurve>(sample->gradient)) ||
@@ -85,7 +96,8 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledImageEffect>) {
                     if (input(step.input) ||
                         (step.secondaryInput && input(*step.secondaryInput)) ||
-                        (step.maskInput && input(*step.maskInput)))
+                        (step.maskInput && input(*step.maskInput)) ||
+                        std::ranges::any_of(step.fieldImages, input))
                         return true;
                     if (step.bypass)
                         return false;
@@ -103,7 +115,9 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                     if (const auto* directional = std::get_if<DirectionalBlurKernel>(&step.kernel))
                         return parameter(directional->angle) || parameter(directional->spacing);
                     if (isColorGradeKernel(step.kernel)) {
-                        bool animated = false;
+                        // #525: a field that reads the clock (a looping noise, a moving pattern).
+                        const auto* field = std::get_if<FieldRasterKernel>(&step.kernel);
+                        bool animated = field != nullptr && field->program.usesTime;
                         forEachColorGradeOperand(step.kernel, [&](const auto& operand) {
                             using Operand = std::decay_t<decltype(operand)>;
                             if constexpr (std::is_same_v<Operand, CompiledPathParameter>)

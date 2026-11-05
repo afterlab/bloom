@@ -781,6 +781,22 @@ bool applyFieldRasterGeometry(std::vector<float>& table, const FieldRasterGeomet
     return allFinite(table);
 }
 
+void setFieldTexelScale(std::vector<float>& table, const double unitsPerTexel) noexcept {
+    if (table.size() < kFieldTableCode * 4U || !finite(unitsPerTexel))
+        return;
+    const auto count = static_cast<std::size_t>(std::max(table[2], 0.0F));
+    for (std::size_t i = 0; i < count && (kFieldTableCode + 2U * i + 2U) * 4U <= table.size();
+         ++i) {
+        const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
+        if (a[0] != static_cast<float>(FieldOp::Shape))
+            continue;
+        const auto base = static_cast<std::size_t>(std::max(a[6], 0.0F));
+        const auto index = (base + 4U) * 4U + 1U;
+        if (index < table.size())
+            table[index] = narrow(unitsPerTexel);
+    }
+}
+
 // --- Validation ---------------------------------------------------------------------------------
 
 namespace {

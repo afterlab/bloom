@@ -516,13 +516,81 @@ struct VignetteKernel final {
     CompiledVec2Parameter center{{}, document::Vec2d{}};
     friend bool operator==(const VignetteKernel&, const VignetteKernel&) = default;
 };
+// #525 Fields: one instruction of a field program (bloom/core/field_program.hpp). `op` is a
+// core::field::FieldOp; `output` and `inputs` are registers (-1 an absent input). `choices` are the
+// constant choices the operation's encoder reads, and the operands its animatable values, sampled
+// per frame in this order: the scalars, the vectors, the curve, the ramp. `slot` is the image slot
+// an Image Field or mask Shape Distance reads (CompiledImageEffect::fieldImages), -1 for none.
+// runtime/field_raster.hpp has each operation's operand order.
+struct FieldInstruction final {
+    std::uint8_t op = 0;
+    std::int8_t output = 0;
+    std::array<std::int8_t, 4> inputs{-1, -1, -1, -1};
+    std::vector<std::int64_t> choices{};
+    std::vector<CompiledScalarParameter> scalars{};
+    std::vector<CompiledVec2Parameter> vectors{};
+    std::optional<CompiledPathParameter> curve{};
+    std::optional<CompiledGradientParameter> ramp{};
+    std::int8_t slot = -1;
+    friend bool operator==(const FieldInstruction&, const FieldInstruction&) = default;
+};
+// The program, its result register and how its value becomes premultiplied RGBA
+// (core::field::FieldResultKind and FieldOutputMode).
+struct FieldProgram final {
+    std::vector<FieldInstruction> instructions;
+    std::uint8_t result = 0;
+    std::uint8_t kind = 0;
+    std::uint8_t mode = 0;
+    // The composition's duration in seconds: a looping Noise's default loop length.
+    double compositionSeconds = 0.0;
+    // The program reads the clock time itself (a looping Noise, a moving Pattern), so it is time
+    // dependent even with constant operands.
+    bool usesTime = false;
+    friend bool operator==(const FieldProgram&, const FieldProgram&) = default;
+};
+// #525: a field rasterized over its input's data window at the evaluation resolution, every pixel
+// replaced (the input supplies only its windows). A grade kind whose prepared table gains the
+// raster's geometry where it is applied (color_grade_image_effect.hpp); its image slots are
+// CompiledImageEffect::fieldImages. docs/architecture/fields.md is the specification.
+struct FieldRasterKernel final {
+    FieldProgram program;
+    // 1, 4 or 16 sub-samples a pixel.
+    std::uint32_t samples = 1;
+    friend bool operator==(const FieldRasterKernel&, const FieldRasterKernel&) = default;
+};
+// #525 Shape Distance from a Mask: the exact signed Euclidean distance transform of the input's
+// coverage (alpha at 1/2), in evaluation pixels in every channel (outside positive), over the
+// input's data window grown by `reach` composition pixels, each distance limited to that reach plus
+// one pixel. Felzenszwalb and Huttenlocher's separable transform on the CPU; on the GPU the same
+// exact minimum by a bounded search (docs/architecture/fields.md, "Mask distance").
+struct MaskDistanceKernel final {
+    double reach = 0.0;
+    friend bool operator==(const MaskDistanceKernel&, const MaskDistanceKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
                  SeparableBlurKernel, LayerMaskKernel, Transform2DKernel, LumaKeyKernel,
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
                  ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
-                 AlphaAssociationKernel, ColorizeKernel, VignetteKernel>;
+                 AlphaAssociationKernel, ColorizeKernel, VignetteKernel, FieldRasterKernel,
+                 MaskDistanceKernel>;
+
+// #525: every operand of a field program, in instruction order and, within one, scalars, vectors,
+// the curve, then the ramp.
+template <typename Visit> void forEachFieldOperand(const FieldProgram& program, Visit&& visit) {
+    for (const auto& instruction : program.instructions) {
+        for (const auto& scalar : instruction.scalars)
+            visit(scalar);
+        for (const auto& vector : instruction.vectors)
+            visit(vector);
+        if (instruction.curve)
+            visit(*instruction.curve);
+        if (instruction.ramp)
+            visit(*instruction.ramp);
+    }
+}
 
 // #340: visits every animatable operand of a Levels, Curves, Hue/Saturation (#494: or Grade;
 // #506: or Highlight Roll-off; #503: or Alpha Association; #504: or Colorize) kernel in the kernel's canonical order
@@ -595,6 +663,11 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         visit(vignette->center);
         return true;
     }
+    // #525: the field program's operands (forEachFieldOperand).
+    if (const auto* field = std::get_if<FieldRasterKernel>(&kernel)) {
+        forEachFieldOperand(field->program, visit);
+        return true;
+    }
     return false;
 }
 
@@ -606,7 +679,8 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<HighlightRollOffKernel>(kernel) ||
            std::holds_alternative<AlphaAssociationKernel>(kernel) ||
            std::holds_alternative<ColorizeKernel>(kernel) ||
-           std::holds_alternative<VignetteKernel>(kernel);
+           std::holds_alternative<VignetteKernel>(kernel) ||
+           std::holds_alternative<FieldRasterKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
@@ -623,6 +697,9 @@ struct CompiledImageEffect final {
     // ADR 0028: this effect applies a track matte to the Layer Output at `input`; a Merge reads
     // that layer's blend mode and clock through it (see mergeEntryLayerOutput).
     bool trackMatte = false;
+    // #525: a FieldRasterKernel's image slots, in slot order (an Image Field's image, a mask Shape
+    // Distance's distance image), each sampled by its own data window.
+    std::vector<OperationIndex> fieldImages{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
 

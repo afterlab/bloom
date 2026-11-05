@@ -102,3 +102,14 @@ CompiledCompositionPlanDefinition CompiledCompositionPlan::copyDefinition() cons
 }
 
 } // namespace bloom::runtime
+
+namespace bloom::runtime {
+
+// #525: two Field Samples are equal when their programs are, wherever each is held.
+bool operator==(const CompiledValueFieldSample& a, const CompiledValueFieldSample& b) noexcept {
+    const bool programs = a.program == b.program ||
+                          (a.program != nullptr && b.program != nullptr && *a.program == *b.program);
+    return programs && a.operands == b.operands && a.position == b.position;
+}
+
+} // namespace bloom::runtime

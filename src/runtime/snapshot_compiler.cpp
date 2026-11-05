@@ -11,6 +11,8 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/field_nodes.hpp>
+#include <bloom/core/field_program.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
@@ -1082,6 +1084,7 @@ class CompilePass final {
 
 #include "snapshot_compiler_layer_time.ipp"
 #include "snapshot_compiler_lowering.ipp"
+#include "snapshot_compiler_fields.ipp"
 #include "snapshot_compiler_recipes.ipp"
 #include "snapshot_compiler_value_graph.ipp"
 

@@ -296,6 +296,19 @@ PreparedImageEffect ImageEffectContext::prepare(
         prepared.cacheIdentity = keyIdentity.bytes();
         return prepared;
     }
+    if (const auto* distance = std::get_if<MaskDistanceKernel>(&effect.kernel)) {
+        if (!std::isfinite(distance->reach) || distance->reach < 0.0) {
+            prepared.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
+                                          "Mask distance reach is out of domain");
+            return prepared;
+        }
+        prepared.maskDistance = *distance;
+        OperationKey key;
+        key.add(std::string("mask-distance-v1"));
+        key.add(maskDistanceReach(*distance, horizontalScale, verticalScale));
+        prepared.cacheIdentity = key.bytes();
+        return prepared;
+    }
     if (isColorGradeKernel(effect.kernel)) {
         auto grade = gradeValues ? prepareColorGrade(effect.kernel, *gradeValues) : std::nullopt;
         if (!grade) {
@@ -491,6 +504,9 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
     if (effect.lumaKey)
         return applyLumaKey(*effect.lumaKey, input, pixelBudget, cancellation, operation,
                             progress);
+    if (effect.maskDistance)
+        return applyMaskDistance(*effect.maskDistance, input, horizontalScale, verticalScale,
+                                 pixelBudget, cancellation, operation, progress);
     if (effect.colorGrade)
         return applyColorGrade(*effect.colorGrade, input, pixelBudget, cancellation, operation,
                                progress, horizontalScale, verticalScale);

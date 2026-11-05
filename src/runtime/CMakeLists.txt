@@ -71,6 +71,7 @@ target_sources(
         snapshot_compiler_entries.ipp
         snapshot_compiler_layer_time.ipp
         snapshot_compiler_lowering.ipp
+        snapshot_compiler_fields.ipp
         snapshot_compiler_recipes.ipp
         snapshot_compiler_support.hpp
         snapshot_compiler_value_graph.ipp
@@ -156,6 +157,7 @@ target_sources(
         color_grade_curves.cpp
         color_grade_image_effect.cpp
         vignette_image_effect.cpp
+        field_raster.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp
         image_effect.hpp

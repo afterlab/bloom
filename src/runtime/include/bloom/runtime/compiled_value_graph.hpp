@@ -13,6 +13,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -293,13 +294,28 @@ struct CompiledValueGradientSample final {
                            const CompiledValueGradientSample&) = default;
 };
 
+// #525 Field Sample: a field program (compiled_plan.hpp, FieldProgram) read at one position,
+// three outputs: its result's first lane (Scalar), its first two (Vector 2) and all four as a
+// straight colour (Colour). `operands` are the program's Scalar and Vector 2 operands in
+// forEachFieldOperand order, so the value graph's own sampling resolves them; its curves and ramps
+// are inline in the program and sampled at the frame. The program reads no image.
+struct FieldProgram;
+struct CompiledValueFieldSample final {
+    std::shared_ptr<const FieldProgram> program;
+    std::vector<CompiledValueOperand> operands;
+    CompiledValueOperand position;
+    // Equal programs compare equal (field_raster.cpp), not equal pointers.
+    friend bool operator==(const CompiledValueFieldSample&,
+                           const CompiledValueFieldSample&) noexcept;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
                  CompiledValueClamp, CompiledValueMix, CompiledValueCompare, CompiledValueSwitch,
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
                  CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
-                 CompiledValueGradientSample>;
+                 CompiledValueGradientSample, CompiledValueFieldSample>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -315,6 +331,10 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
             } else if constexpr (std::is_same_v<Step, CompiledValueGradientSample>) {
                 for (const auto& driver : step.drivers)
                     visit(driver.value);
+            } else if constexpr (std::is_same_v<Step, CompiledValueFieldSample>) {
+                for (const auto& operand : step.operands)
+                    visit(operand);
+                visit(step.position);
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {

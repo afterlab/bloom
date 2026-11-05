@@ -73,6 +73,10 @@ enum class GpuOcioTransformKind : std::uint8_t {
     // window; `directionalBlur` (detail::directionalBlurProgramData, sixteen weighted integer taps)
     // is its storage-buffer data, part of the prepare key and the command identity.
     DirectionalBlur = 13,
+    // #525 Shape Distance from a mask: one of the two fixed exact-distance passes over the input
+    // padded to the grown window (detail::buildMaskDistanceProgram); `maskDistanceReach` and
+    // `maskDistancePass` are its storage-buffer data.
+    MaskDistance = 14,
 };
 
 struct GpuOcioTransformSpec final {
@@ -102,6 +106,9 @@ struct GpuOcioTransformSpec final {
     std::array<float, 8> channelSelect{};
     // DirectionalBlur only: detail::directionalBlurProgramData.
     std::vector<float> directionalBlur;
+    // MaskDistance only: the reach in evaluation pixels and the pass (0 columns, 1 rows).
+    std::int64_t maskDistanceReach = 0;
+    int maskDistancePass = 0;
     // LayerMask only.
     std::vector<std::byte> maskData;
     // FootageInterpretation only.

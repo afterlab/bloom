@@ -3,6 +3,7 @@
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/value_utility_kernels.hpp>
 
+#include "field_raster.hpp"
 #include "gradient_source.hpp"
 #include "operation_key.hpp"
 #include <deque>
@@ -463,6 +464,8 @@ class Evaluator final {
                                const runtime::CompiledBoundsReadout& kernel);
     void evaluateGradientSample(const runtime::CompiledValueOperation& operation,
                                 const runtime::CompiledValueGradientSample& kernel);
+    void evaluateFieldSample(const runtime::CompiledValueOperation& operation,
+                             const runtime::CompiledValueFieldSample& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -514,6 +517,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateBoundsReadout(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueGradientSample>) {
                 evaluateGradientSample(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueFieldSample>) {
+                evaluateFieldSample(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -557,6 +562,77 @@ void Evaluator::evaluateGradientSample(const runtime::CompiledValueOperation& op
         return;
     }
     write(operation, 0, runtime::detail::gradientValueTintAt(*sampled, kernel.position));
+}
+
+// #525: the field program at this frame, read at the kernel's position. Its Scalar and Vector 2
+// operands are the kernel's operands in program order; its curves are sampled here.
+void Evaluator::evaluateFieldSample(const runtime::CompiledValueOperation& operation,
+                                    const runtime::CompiledValueFieldSample& kernel) {
+    const auto publish = [&](const std::array<float, 4>& value) {
+        write(operation, 0, static_cast<double>(value[0]));
+        write(operation, 1,
+              document::Vec2d{static_cast<double>(value[0]), static_cast<double>(value[1])});
+        write(operation, 2,
+              core::Color4d{static_cast<double>(value[0]), static_cast<double>(value[1]),
+                            static_cast<double>(value[2]), static_cast<double>(value[3])});
+    };
+    std::vector<double> values;
+    std::size_t next = 0;
+    bool evaluable = kernel.program != nullptr;
+    if (evaluable)
+        runtime::forEachFieldOperand(*kernel.program, [&](const auto& parameter) {
+            using Parameter = std::decay_t<decltype(parameter)>;
+            if constexpr (std::is_same_v<Parameter, runtime::CompiledPathParameter>) {
+                std::optional<document::PathValue> sampled;
+                if (const auto* constant = std::get_if<document::PathValue>(&parameter.source))
+                    sampled = *constant;
+                else
+                    sampled = runtime::samplePathCurve(
+                        std::get<runtime::CompiledPathCurve>(parameter.source), time_);
+                if (!sampled) {
+                    evaluable = false;
+                    return;
+                }
+                values.push_back(static_cast<double>(sampled->anchors.size()));
+                for (const auto& anchor : sampled->anchors) {
+                    values.push_back(anchor.point.x);
+                    values.push_back(anchor.point.y);
+                }
+            } else if constexpr (std::is_same_v<Parameter, runtime::CompiledGradientParameter>) {
+                // A ramp is a raster's colouring; a Field Sample's program has none.
+                evaluable = false;
+            } else {
+                const auto* value =
+                    next < kernel.operands.size() ? operandOf(kernel.operands[next]) : nullptr;
+                ++next;
+                if (const auto* scalar = asScalar(value)) {
+                    values.push_back(*scalar);
+                } else if (const auto* vector =
+                               value == nullptr ? nullptr : std::get_if<document::Vec2d>(value)) {
+                    values.push_back(vector->x);
+                    values.push_back(vector->y);
+                } else {
+                    evaluable = false;
+                }
+            }
+        });
+    values.push_back(time_.toSeconds());
+    const auto* positionValue = operandOf(kernel.position);
+    const auto* position =
+        positionValue == nullptr ? nullptr : std::get_if<document::Vec2d>(positionValue);
+    const auto sampled =
+        evaluable && position != nullptr && next == kernel.operands.size()
+            ? runtime::detail::sampleFieldProgram(*kernel.program, values, position->x,
+                                                  position->y)
+            : std::nullopt;
+    if (!sampled) {
+        fail(operation, {}, "Field is not evaluable at this time",
+             "The field's operands could not be sampled or lie outside the domain its operations "
+             "represent; the sample falls back to zero.");
+        publish({0.0F, 0.0F, 0.0F, 0.0F});
+        return;
+    }
+    publish(*sampled);
 }
 
 void Evaluator::evaluatePassthrough(const runtime::CompiledValueOperation& operation,

@@ -1,6 +1,7 @@
 #include "color_grade_image_effect.hpp"
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
+#include "field_raster.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "operation_key.hpp"
@@ -921,6 +922,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
     }
     case ColorGradeKind::Vignette:
         return vignetteProgramText();
+    case ColorGradeKind::FieldRaster:
+        return fieldRasterProgramText();
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -1021,6 +1024,13 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
     });
     if (!grade || !evaluable)
         return std::nullopt;
+    // #525: a field program then reads the clock time itself (a looping evolution, a pattern's
+    // speed), in exact seconds converted once here.
+    if (std::holds_alternative<FieldRasterKernel>(kernel)) {
+        if (!time)
+            return std::nullopt;
+        values.push_back(time->toSeconds());
+    }
     return values;
 }
 
@@ -1042,6 +1052,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareColorize(*colorize, values);
     if (const auto* vignette = std::get_if<VignetteKernel>(&kernel))
         return prepareVignetteGrade(*vignette, values);
+    if (const auto* field = std::get_if<FieldRasterKernel>(&kernel))
+        return prepareFieldRasterGrade(*field, values);
     return std::nullopt;
 }
 
@@ -1068,8 +1080,9 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
         return alphaAssociationPixel(grade.data, pixel);
     if (grade.kind == ColorGradeKind::Colorize)
         return colorizePixel(grade.data, pixel);
-    // #505: a vignette depends on where the pixel is (vignettePixel).
-    if (grade.kind == ColorGradeKind::Vignette)
+    // #505: a vignette depends on where the pixel is (vignettePixel); #525 a field raster replaces
+    // every pixel (applyFieldRaster).
+    if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
@@ -1188,8 +1201,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                                   data[0] <= 4.0F && data[0] == std::floor(data[0])
                         : kind == ColorGradeKind::Colorize ? validColorizeTable(data)
                         : kind == ColorGradeKind::Vignette ? validVignetteProgramData(data)
-                                                           : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Vignette) ||
+                        : kind == ColorGradeKind::FieldRaster
+                            ? validFieldProgramData(data)
+                            : data.size() == kHueSaturationFloats;
+    if (static_cast<std::uint8_t>(kind) >
+            static_cast<std::uint8_t>(ColorGradeKind::FieldRaster) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1235,6 +1251,11 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.functionName = "bloom_vignette";
         program.resourcePrefix = "bloom_vignette_";
         program.semanticsId = "bloom.render.vignette.v1";
+        break;
+    case ColorGradeKind::FieldRaster:
+        program.functionName = "bloom_field";
+        program.resourcePrefix = "bloom_field_";
+        program.semanticsId = "bloom.render.field-raster.v1";
         break;
     }
     program.shaderText = glslProgramText(kind);

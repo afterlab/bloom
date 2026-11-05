@@ -18,6 +18,7 @@
 // (feature.geometry.vector_coverage).
 
 #include <bloom/core/blend_mode.hpp>
+#include <bloom/core/field_program.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/render/native_samples.hpp>
@@ -134,6 +135,11 @@ BLOOM_GPU_REQUIRED_EFFECT(ColorizeKernel,
 BLOOM_GPU_REQUIRED_EFFECT(VignetteKernel,
                           "Vignette: elliptical or rectangular falloff, multiply or exposure, with "
                           "highlight protection (#505)");
+BLOOM_GPU_REQUIRED_EFFECT(FieldRasterKernel,
+                          "field program raster: every field operation, its images, sub-samples "
+                          "and output modes (#525)");
+BLOOM_GPU_REQUIRED_EFFECT(MaskDistanceKernel,
+                          "exact signed distance of a mask for Shape Distance (#525)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
@@ -344,6 +350,19 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         out.push_back(
             GpuFeatureCoverageEntry{id, "gradient blend (#546)", GpuCoverageDisposition::Required,
                                     "src/runtime gradient native batch and colorize tests"});
+    // #525 Fields: every field operation is pixel arithmetic of the one resident field program,
+    // with CPU parity through the production routes; so are the program's image slots (the atlas),
+    // its sub-sample grids and its output modes. None is a CPU frame.
+    for (const auto op : core::field::kFieldOps)
+        out.push_back(GpuFeatureCoverageEntry{
+            std::string{"feature.field.op."} + std::string{core::field::fieldOpName(op)},
+            "field operation (#525)", GpuCoverageDisposition::Required,
+            "src/runtime field raster tests"});
+    for (const auto* id : {"feature.field.images", "feature.field.supersample",
+                           "feature.field.output_modes"})
+        out.push_back(GpuFeatureCoverageEntry{id, "field raster axis (#525)",
+                                              GpuCoverageDisposition::Required,
+                                              "src/runtime field raster tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.display.view_adjust", "custom viewer exposure/gamma adjust",
         GpuCoverageDisposition::Required, "src/runtime gpu_neutral_display qualification tests"});
@@ -502,6 +521,8 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::Channel:
     case NodeLoweringKind::Cryptomatte:
     case NodeLoweringKind::Adjustment:
+    // #525: a Fields node's rasters (its field outputs compile into them).
+    case NodeLoweringKind::Field:
         return true;
     // #490: an inspection sink lowers to no operation; its preview is its upstream operations
     // through the Viewer's GPU preview route.
@@ -525,6 +546,7 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::ValueReroute:
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
+    case NodeLoweringKind::ValueFieldSample:
         return false;
     }
     return false;
@@ -548,6 +570,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
         return "operation.CompiledImageSource";
     case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::Mask: // a canvas Solid masked by a LayerMaskKernel effect
+    case NodeLoweringKind::Field: // a canvas Solid replaced by a FieldRasterKernel effect
         return "operation.CompiledImageEffect";
     case NodeLoweringKind::Channel: // channel algebra reaches pixels only through the gather
         return "operation.CompiledChannelShuffle";
@@ -587,6 +610,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ValueReroute:
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
+    case NodeLoweringKind::ValueFieldSample:
         return "scope.value";
     }
     return {};
@@ -678,7 +702,8 @@ gpuNodeTypeCoverage(const document::NodeDefinitionRegistry& registry) {
     // Every image-producing lowering must map to a Required operation. The runtime loop covers the
     // current enum range; the no-default switches above make a newly added enumerator a compile
     // failure under -Wswitch/-Werror before it could ever slip past this loop.
-    for (int raw = 0; raw <= static_cast<int>(document::NodeLoweringKind::Unsupported); ++raw) {
+    for (int raw = 0; raw <= static_cast<int>(document::NodeLoweringKind::ValueFieldSample);
+         ++raw) {
         const auto lowering = static_cast<document::NodeLoweringKind>(raw);
         if (!gpuLoweringIsPixelOperation(lowering)) {
             continue;

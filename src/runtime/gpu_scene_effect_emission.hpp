@@ -24,6 +24,7 @@
 #include "color_grade_image_effect.hpp"
 #include "directional_blur_image_effect.hpp"
 #include "discrete_image_effect.hpp"
+#include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
 #include "gpu_scene_preparation_common.hpp"
 #include "gpu_scene_vector_emission.hpp"
@@ -180,10 +181,18 @@ struct GpuSceneEffectEmission final {
     std::size_t consumedSecondLeaf = kNoVectorLeaf;
     bool consumedSecondText = false;
     bool consumedSecondShape = false;
+    // #525: the further leaves a field raster's images materialized.
+    struct ConsumedLeaf final {
+        std::size_t leaf = kNoVectorLeaf;
+        bool text = false;
+        bool shape = false;
+    };
+    std::vector<ConsumedLeaf> consumedFieldLeaves;
 };
 
 #include "gpu_scene_resize_fit_emission.ipp"
 #include "gpu_scene_transform_2d_emission.ipp"
+#include "gpu_scene_field_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -289,6 +298,22 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     if (const auto* kernel = std::get_if<Transform2DKernel>(&effect.kernel))
         return emitTransform2DCommand(*kernel, effect.input, operationIndex, ctx, cancellation,
                                       emit, charge, chargeCoverage, result);
+    // #525 Fields: a mask's signed distance, and a field raster with its images.
+    if (const auto* distance = std::get_if<MaskDistanceKernel>(&effect.kernel))
+        return emitMaskDistanceCommand(effect, *distance, operationIndex, ctx, ocioContext,
+                                       cancellation, emit, charge, chargeCoverage, result);
+    if (std::holds_alternative<FieldRasterKernel>(effect.kernel)) {
+        const auto values = sampleColorGradeOperands(
+            effect.kernel, plan, resolved,
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex)));
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Field values are out of domain");
+        return emitFieldRasterCommand(effect, *grade, operationIndex, ctx, ocioContext,
+                                      cancellation, emit, charge, chargeCoverage, result);
+    }
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);
     const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel);
@@ -999,6 +1024,12 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
             textConsumed[emitted.consumedSecondLeaf] = true;
         if (emitted.consumedSecondShape)
             shapeConsumed[emitted.consumedSecondLeaf] = true;
+    }
+    for (const auto& consumed : emitted.consumedFieldLeaves) {
+        if (consumed.text)
+            textConsumed[consumed.leaf] = true;
+        if (consumed.shape)
+            shapeConsumed[consumed.leaf] = true;
     }
     return std::nullopt;
 }

@@ -601,7 +601,7 @@ BFK_FN vec3 bfk_simplex2_flow(float x, float y, int oi, int oj, float alpha, uin
     return r;
 }
 
-// --- Value noise (After Effects' Block, Linear, Soft Linear and Spline interpolations) -------------
+// --- Value noise (Block, Linear, Soft Linear and Spline lattice interpolation) -----------------
 
 // A lattice value in [-1, 1): 2h - 1, or with flow cos(2 pi (h + alpha)).
 BFK_FN BFK_P float bfk_lattice(uint h, bool flow, float alpha) {

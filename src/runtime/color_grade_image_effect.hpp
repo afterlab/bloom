@@ -32,7 +32,10 @@ enum class ColorGradeKind : std::uint8_t {
     RollOff,
     AlphaAssociation,
     Colorize,
-    Vignette
+    Vignette,
+    // #525: a field raster (field_raster.hpp); the table is a field program's, its geometry
+    // appended where it is applied.
+    FieldRaster
 };
 
 // The packed table, always a whole number of vec4s:

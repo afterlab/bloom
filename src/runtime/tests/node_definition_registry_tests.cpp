@@ -141,8 +141,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Dilate and Luma Key; #490 adds the Image Preview sink; #340 adds Levels, Curves and
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
-    // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette.
-    expectations.expect(registry.definitions().size() == 156,
+    // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette; #525 adds the
+    // sixteen Fields nodes.
+    expectations.expect(registry.definitions().size() == 172,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -531,12 +532,17 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectations.expect(std::ranges::none_of(
                             registry.definitions(),
                             [](const auto& definition) {
+                                // #525: Image Field, Shape Distance and Rasterize Field's extent
+                                // read an image or a mask, so they take every pixel kind too.
                                 return definition.key.typeId != "bloom.image-preview" &&
+                                       definition.key.typeId != "bloom.field-from-image" &&
+                                       definition.key.typeId != "bloom.field-shape-distance" &&
+                                       definition.key.typeId != "bloom.field-rasterize" &&
                                        std::ranges::any_of(definition.inputs, [](const auto& port) {
                                            return port.acceptsPixelKinds;
                                        });
                             }),
-                        "#490: only the inspection input takes every pixel kind");
+                        "#490: only the inspection and field-reading inputs take every pixel kind");
     // #490 GPU coverage classification: the sink lowers to no operation (its preview is the
     // upstream operations through the Viewer's GPU route), so it is a scope, not a pixel
     // operation, and needs no node fixture of its own.
