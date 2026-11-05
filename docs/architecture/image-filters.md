@@ -645,11 +645,14 @@ publishes a partial image. On the GPU each primitive is its existing Required re
 the explicit Merge modes take the per-entry BlendV1 path, for preview, still and sequence export,
 video export and headless render. The recipes are covered by the Required `node.bloom.drop-shadow`,
 `node.bloom.glow` and `node.bloom.light-wrap` fixtures (an HDR, partial-alpha gradient over an HDR
-background, full frame and ROI); there is no exception. Glow's device cases key an HDR,
+background, full frame and ROI); there is no exception. Glow's coverage fixture cases key an HDR,
 partial-alpha solid: Luma Key's coverage is a function of colour, and a generated gradient's colour
-is within 2e-6 of the CPU reference on a device rather than bit-exact, so only a solid source can
-meet the exact-alpha gate. Decoded footage is bit-exact on both routes, so the Glow fixture also keys
-a Physical glow from a translucent premultiplied OpenEXR in the working space (#545).
+is within 2e-6 of the CPU reference on a device rather than bit-exact, so only a solid source meets
+the exact-alpha gate. Decoded footage is bit-exact on both routes, so the Glow fixture also keys
+a Physical glow from a translucent premultiplied OpenEXR in the working space (#545). Alpha keyed
+from tolerance-qualified colour, such as a Glow of a generated gradient or of a device Gaussian
+blur, is held to the same 2e-6 rather than exactly ([GPU backend](gpu-backend.md), reference-parity
+profile); the native recipe test keys a Glow from the gradient under that rule.
 
 Tests: the direct recipe test compares each chain and its variants (Shadow Only; a hard one-octave
 Glow Only; a keyed, masked Glow; Wrap Only) with an independent double-precision reference (direct

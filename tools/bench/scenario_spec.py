@@ -45,10 +45,6 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
 SHORT_FILL_BUSY = ("#544: the light 2K shot's 3 s fill keeps the GPU about half busy on average "
                    "(40-55%): the resident preview service runs each frame's scene dispatches one "
                    "at a time on its owner thread, so frames wait for it, not for decode")
-ALPHA_PARITY = ("#545: the CG beauty's Classic Glow keys alpha from colour that went through "
-                "device Gaussian blurs (Light Wrap's blurred plate), which match the CPU within "
-                "2e-6 rather than bit for bit, so a few keyed alpha samples differ by an ULP")
-
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass
     # with one large Glow (the effect-chain admission case of #539).
@@ -76,7 +72,6 @@ SCENARIOS = {
                        "adjustment layer grading the whole stack.",
         "tier": "1080p",
         "frames": 24,
-        "knownFailures": {"export-cpu-parity": ALPHA_PARITY},
         "layers": [
             {"name": "Plate", "media": "png16",
              "transform": {"scale": [1.1, 1.1]},
@@ -115,5 +110,55 @@ SCENARIOS = {
 }
 
 # The same comp at 4K (the 2160p tier), with a shorter work area.
-SCENARIOS["cg-comp-4k"] = dict(SCENARIOS["cg-comp-2k"], tier="2160p", frames=12,
-                               knownFailures={"export-cpu-parity": ALPHA_PARITY})
+SCENARIOS["cg-comp-4k"] = dict(SCENARIOS["cg-comp-2k"], tier="2160p", frames=12)
+
+# Alpha keyed from tolerance-qualified colour (#545). The reference-parity gate holds alpha exact,
+# except alpha an effect derives from colour that a device route matches within the 2e-6 gate
+# rather than bit for bit (gpu-backend.md, "reference-parity profile"): that alpha is held to the
+# same 2e-6 tolerance. Glow's Luma Key derives its coverage from its input's colour. The device
+# matches the CPU within the tolerance, not exactly, for colour through a Gaussian blur (and the
+# Light Wrap, Glow and Drop Shadow recipes built on it), a Grade's gamma or contrast and a Levels
+# gamma (the device `pow`, image-filters.md).
+COLOUR_KEYED_ALPHA = ("bloom.glow",)
+BLURRED_COLOUR = ("bloom.gaussian-blur", "bloom.light-wrap", "bloom.glow", "bloom.drop-shadow")
+
+
+def tolerance_qualified_colour(effect):
+    kind, values = effect
+    if kind in BLURRED_COLOUR:
+        return True
+    if kind == "bloom.grade":
+        return values.get("contrast", 1.0) != 1.0 or any(
+            value != 0.0 for role, value in values.items() if role.startswith("gamma"))
+    if kind == "bloom.levels":
+        return any(value != 1.0 for role, value in values.items() if role.endswith("Gamma"))
+    return False
+
+
+def _keyed_chain(name, effects, qualified, found):
+    """Walks one effect chain whose input is tolerance-qualified colour when `qualified` names the
+    effect that made it so; records each colour key over such colour and returns the source."""
+    for effect in effects:
+        if qualified and effect[0] in COLOUR_KEYED_ALPHA:
+            found.append(f"{name}: {effect[0]} keys colour after {qualified}")
+        if not qualified and tolerance_qualified_colour(effect):
+            qualified = effect[0]
+    return qualified
+
+
+def keyed_alpha(scenario):
+    """The colour keys in a scenario whose alpha comes from tolerance-qualified colour, as
+    "<layer>: <key> keys colour after <effect>". Empty: every alpha sample is held exact."""
+    found = []
+    below = None  # what makes the stack below tolerance-qualified, for an adjustment layer
+    for layer in scenario["layers"]:
+        if "adjustment" in layer:
+            qualified = _keyed_chain(layer["name"], layer["adjustment"], below, found)
+        else:
+            qualified = None
+            for entry in layer.get("merge") or ():
+                qualified = _keyed_chain(entry["name"], entry.get("effects") or (), None,
+                                         found) or qualified
+            qualified = _keyed_chain(layer["name"], layer.get("effects") or (), qualified, found)
+        below = below or qualified
+    return found

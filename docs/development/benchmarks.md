@@ -404,9 +404,7 @@ to each parameter's range).
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
 lists in `knownFailures` the checks an open issue makes fail (#544: the light 2K shot's GPU busy
-over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds; #545: a few
-CG comp alpha samples a Glow keys from blurred colour, which the device matches within 2e-6 rather
-than bit for bit).
+over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds).
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -486,7 +484,21 @@ check's detail carries a `message` with the measured figures.
 | `ram-preview-usable-memory` | The Preview frames pool never holds more host memory than the usable memory, its ceiling follows the usable memory (at least 90% of it: no fixed cap), and a fill that cached fewer frames than its range had reached at least 90% of the usable host memory or of the usable device capacity |
 | `export-gpu-complete` | Every exported frame published, all of them GPU frames, zero CPU reference frames |
 | `export-rate` | The fill completed, and the export's seconds per frame are at most `--export-fill-factor` (default 4) times the fill's seconds per cached frame plus `--export-allowance` (default 0.5 s, the float EXR write): a final render is not far slower than the preview of the same shot. A fill that stalled or timed out gives no preview rate, so the check fails |
-| `export-cpu-parity` | Every compared frame passes the documented reference-parity gate ([GPU backend](../architecture/gpu-backend.md)): each finite RGB component within 2e-6 absolute or relative, alpha exact, no finite CPU value non-finite |
+| `export-cpu-parity` | Every compared frame passes the documented reference-parity gate ([GPU backend](../architecture/gpu-backend.md)): each finite RGB component within 2e-6 absolute or relative, alpha exact, no finite CPU value non-finite. A shot that keys alpha from tolerance-qualified colour holds alpha to the same 2e-6 instead (below). The detail reports each frame's max alpha difference and how many alpha samples are not exact |
+
+The alpha gate follows the reference-parity profile's one exception (#545, [GPU
+backend](../architecture/gpu-backend.md)): alpha that an effect derives from colour a device route
+matches within 2e-6 rather than bit for bit is held to that 2e-6. The suite compares whole frames,
+so it cannot attribute an alpha sample to the effect that produced it. It applies the 2e-6 alpha
+gate to a shot when `scenario_spec.keyed_alpha()` finds such a key in the shot's spec: a Glow
+(whose Luma Key derives coverage from colour) after a Gaussian blur, Light Wrap, Glow or Drop
+Shadow, or after a Grade with a gamma or contrast or a Levels gamma, in the same chain, the nested
+Merge it filters, or, for an adjustment layer, the stack below. The check's `gate` names those
+keys. Every other shot keeps exact alpha. `two-layer-glow-2k` keys decoded footage, which both
+routes produce bit for bit, so its alpha stays exact. `cg-comp-2k` and `cg-comp-4k` key the
+beauty's colour after its Light Wrap and the nested passes' colour after a graded, blurred Merge,
+so their alpha is held to 2e-6. On 2026-11-05 (RTX 4090) frame 0 measured a max alpha difference
+of 5.96e-8 at 2K (5 alpha samples not exact) and at 4K (6), and `two-layer-glow-2k` an exact alpha.
 
 ### Running a scenario suite
 

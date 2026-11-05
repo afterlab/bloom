@@ -1091,6 +1091,15 @@ The first reference-parity profile uses `RGBA32F`. Its numeric gates are:
   bit-exact to the CPU fixture;
 - Translation/Opacity Bilinear v1 and Source-Over v1 use per-finite-component absolute and relative
   error limits of `2e-6`, with the comparison accepting a component only when either limit passes;
+- RGB is held to that `2e-6` limit and alpha is exact, with one exception (#545): alpha an effect
+  derives from colour that a device route matches within `2e-6` rather than bit for bit (a Luma
+  Key, Glow's included, of colour from a device Gaussian blur or a recipe built on it, a generated
+  gradient, or a Grade or Levels `pow`) is held to the same `2e-6` limit. The device Gaussian blur
+  stays within the tolerance and is not forced bit-exact. Alpha that does not come from such colour
+  stays exact; there is no other alpha tolerance and no opt-out. The native recipe test keys a Glow
+  from a generated gradient under this rule (max alpha difference 6.0e-8 on an RTX 4090), and the
+  scenario suite's `export-cpu-parity` check applies it only to a shot whose spec keys such colour
+  ([benchmarks](../development/benchmarks.md#scenario-suite));
 - no successful finite CPU result may become NaN or infinity; negative and HDR RGB are preserved;
 - subnormal and signed-zero cases follow the primitive fixture expectation. A device that flushes or
   rewrites a required case does not earn `ReferenceParity` for that operation;

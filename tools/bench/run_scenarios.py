@@ -833,13 +833,18 @@ def cpu_reference(args, project, frame, out, log):
             "path": out / "frame.exr"}
 
 
-def parity(gpu_path, cpu_path):
+def parity(gpu_path, cpu_path, keyed_alpha=False):
     """The documented reference-parity gate: every finite RGB component within 2e-6 absolute or
-    relative, alpha exact, no finite CPU value non-finite on the GPU."""
+    relative, alpha exact, no finite CPU value non-finite on the GPU. With `keyed_alpha` (the shot
+    keys alpha from tolerance-qualified colour, scenario_spec.keyed_alpha), alpha is held to that
+    same 2e-6 tolerance instead (#545). `alphaMismatches` counts every alpha sample that is not
+    exact, `alphaAboveGate` those beyond the alpha gate, `maxAlphaError` the largest difference."""
     import numpy as np  # noqa: PLC0415 (only the export check needs numpy)
     import imageio_min  # noqa: PLC0415
     gpu, cpu = imageio_min.read_exr(gpu_path), imageio_min.read_exr(cpu_path)
-    result = {"failingComponents": 0, "maxAbsError": 0.0, "nonFinite": 0, "alphaMismatches": 0}
+    result = {"failingComponents": 0, "maxAbsError": 0.0, "nonFinite": 0, "alphaMismatches": 0,
+              "alphaAboveGate": 0, "maxAlphaError": 0.0,
+              "alphaGate": "2e-6" if keyed_alpha else "exact"}
     for channel in ("R", "G", "B", "A"):
         a = np.asarray(gpu[channel], dtype=np.float64)
         e = np.asarray(cpu[channel], dtype=np.float64)
@@ -847,13 +852,16 @@ def parity(gpu_path, cpu_path):
         result["nonFinite"] += int(np.count_nonzero(finite & ~np.isfinite(a)))
         error = np.abs(np.where(finite, a - e, 0.0))
         result["maxAbsError"] = max(result["maxAbsError"], float(np.nanmax(error)))
+        allowed = 2e-6 * np.maximum(1.0, np.abs(e))
         if channel == "A":
-            result["alphaMismatches"] += int(np.count_nonzero(finite & (a != e)))
+            result["maxAlphaError"] = float(np.nanmax(error))
+            result["alphaMismatches"] = int(np.count_nonzero(finite & (a != e)))
+            result["alphaAboveGate"] = int(np.count_nonzero(
+                finite & (error > allowed) if keyed_alpha else finite & (a != e)))
         else:
-            allowed = 2e-6 * np.maximum(1.0, np.abs(e))
             result["failingComponents"] += int(np.count_nonzero(finite & (error > allowed)))
     result["passed"] = not (result["failingComponents"] or result["nonFinite"] or
-                            result["alphaMismatches"])
+                            result["alphaAboveGate"])
     return result
 
 
@@ -878,7 +886,8 @@ def measure_parity(args, shot, export, work, log):
         elif gpu_path is None:
             entry["error"] = "the export has no such frame"
         else:
-            entry.update(parity(gpu_path, reference["path"]))
+            entry.update(parity(gpu_path, reference["path"],
+                                keyed_alpha=bool(shot.get("keyedAlpha"))))
         rows.append(entry)
     return {"kind": "parity", "frames": rows,
             "passed": all(row.get("passed") for row in rows)}
@@ -1027,22 +1036,30 @@ def evaluate(args, shot, rows):
     results.append(check("export-rate", rate, {
         "message": message,
         "exportGpuBusyPercent": export.get("gpuBusyPercent")}))
+    keyed = shot.get("keyedAlpha") or []
     described = []
     for frame in parity_row.get("frames") or ():
         if frame.get("error"):
             described.append(f"frame {frame['frame']}: {frame['error']}")
-        elif frame.get("passed"):
+            continue
+        alpha = (f"max alpha difference {frame.get('maxAlphaError', 0.0):.3g} "
+                 f"({frame.get('alphaMismatches', 0)} alpha samples not exact)")
+        if frame.get("passed"):
             described.append(f"frame {frame['frame']}: within the gate (max abs "
-                             f"{frame['maxAbsError']:.3g})")
+                             f"{frame['maxAbsError']:.3g}, {alpha})")
         else:
             described.append(f"frame {frame['frame']}: {frame['failingComponents']} RGB "
                              f"components above 2e-6 (max abs {frame['maxAbsError']:.3g}), "
-                             f"{frame['alphaMismatches']} alpha samples differ, "
-                             f"{frame['nonFinite']} non-finite")
+                             f"{frame['alphaAboveGate']} alpha "
+                             f"samples beyond the {'2e-6' if keyed else 'exact'} alpha gate, "
+                             f"{alpha}, {frame['nonFinite']} non-finite")
+    gate = "2e-6 absolute or relative per RGB component, " + (
+        "alpha keyed from tolerance-qualified colour within 2e-6 (" + "; ".join(keyed) + ")"
+        if keyed else "exact alpha")
     results.append(check("export-cpu-parity", parity_row.get("passed") if parity_row and
                          "frames" in parity_row else None,
                          {"message": "; ".join(described) or "not measured",
-                          "gate": "2e-6 absolute or relative per RGB component, exact alpha",
+                          "gate": gate,
                           "frames": parity_row.get("frames"),
                           "skipped": parity_row.get("skipped")}))
     return known(results, shot.get("knownFailures") or {})
@@ -1197,7 +1214,8 @@ def command_run(args):
                 built = build_scenario(args, name, scenario, media, project, log)
                 entry["build"] = built
                 shot = dict(built, project=project,
-                            knownFailures=scenario.get("knownFailures") or {})
+                            knownFailures=scenario.get("knownFailures") or {},
+                            keyedAlpha=scenario_spec.keyed_alpha(scenario))
                 steps = [("fill", lambda: measure_fill(args, shot, files, log)),
                          ("playback", lambda: measure_playback(args, shot, files, log)),
                          ("scrub", lambda: measure_scrub(args, shot, files, log))]

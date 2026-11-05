@@ -227,6 +227,52 @@ class ParityGate(unittest.TestCase):
             self.assertTrue(suite.parity(close, reference)["passed"])
             self.assertEqual(suite.parity(far, reference)["failingComponents"], 16)
             self.assertEqual(suite.parity(alpha, reference)["alphaMismatches"], 16)
+            # #545: alpha keyed from tolerance-qualified colour is held to the same 2e-6, and its
+            # largest difference is reported; every other alpha stays exact.
+            ulp = write("ulp.exr", base, one * np.float32(0.9999999))
+            exact = suite.parity(ulp, reference)
+            self.assertFalse(exact["passed"])
+            self.assertEqual(exact["alphaAboveGate"], 16)
+            keyed = suite.parity(ulp, reference, keyed_alpha=True)
+            self.assertTrue(keyed["passed"])
+            self.assertEqual((keyed["alphaMismatches"], keyed["alphaAboveGate"]), (16, 0))
+            self.assertAlmostEqual(keyed["maxAlphaError"], 1.0 - float(np.float32(0.9999999)))
+            self.assertEqual(keyed["alphaGate"], "2e-6")
+            beyond = suite.parity(alpha, reference, keyed_alpha=True)
+            self.assertFalse(beyond["passed"])
+            self.assertEqual(beyond["alphaAboveGate"], 16)
+
+
+class KeyedAlpha(unittest.TestCase):
+    def test_only_keys_of_tolerance_qualified_colour(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        # The Physical Glow keys decoded footage, which both routes produce bit for bit.
+        self.assertEqual(spec.keyed_alpha(spec.SCENARIOS["two-layer-glow-2k"]), [])
+        for name in ("cg-comp-2k", "cg-comp-4k"):
+            self.assertEqual(spec.keyed_alpha(spec.SCENARIOS[name]), [
+                "CG beauty: bloom.glow keys colour after bloom.light-wrap",
+                "Passes: bloom.glow keys colour after bloom.grade"])
+        glow = ["bloom.glow", {"threshold": 0.5}]
+        layer = {"name": "L", "media": "png8"}
+        self.assertEqual(spec.keyed_alpha({"layers": [dict(layer, effects=[
+            ["bloom.grade", {"gainRed": 1.1}], glow, ["bloom.gaussian-blur", {}]])]}), [])
+        self.assertEqual(spec.keyed_alpha({"layers": [dict(layer, effects=[
+            ["bloom.levels", {"masterGamma": 1.2}], glow])]}),
+            ["L: bloom.glow keys colour after bloom.levels"])
+        self.assertEqual(spec.keyed_alpha({"layers": [
+            dict(layer, effects=[["bloom.gaussian-blur", {}]]),
+            {"name": "A", "adjustment": [glow]}]}),
+            ["A: bloom.glow keys colour after bloom.gaussian-blur"])
+
+    def test_check_reports_the_alpha_gate(self):
+        rows = passing_rows()
+        rows[3]["frames"][0].update(maxAlphaError=5.9e-8, alphaMismatches=5, alphaAboveGate=0)
+        shot = {"frames": 24, "knownFailures": {}, "keyedAlpha": ["L: bloom.glow keys colour"]}
+        item = next(c for c in suite.evaluate(args(), shot, rows)
+                    if c["check"] == "export-cpu-parity")
+        self.assertEqual(item["outcome"], "pass")
+        self.assertIn("max alpha difference 5.9e-08", item["detail"]["message"])
+        self.assertIn("within 2e-6 (L: bloom.glow keys colour)", item["detail"]["gate"])
 
 
 if __name__ == "__main__":
