@@ -8,20 +8,22 @@
 // pixel aspect ratio. It covers rotation 0/90/arbitrary, uniform/nonuniform/negative scale, an
 // authored anchor plus translation, and any precomposed parent matrix (including shear).
 //
-// The CPU primitives are the correctness oracle:
-//   - render::layerTransformBilinearRow() (src/render/cpu_image_primitives.cpp), and
-//   - the parented row (src/runtime/layer_parent_transform.hpp).
-// GPU parity is held to the documented per-finite-component 2e-6 absolute-or-relative gate
-// (docs/architecture/gpu-backend.md), never claimed bit-exact.
+// The CPU reference of the composed-matrix form, which is the form every production route uses
+// (#545), is affineMatrixResampleRow() below. It defines the sample coordinate as the same portable
+// double-float reconstruction the kernel runs, so the production CPU and GPU routes agree bit for
+// bit on all four components, alpha included. The LayerTransform form keeps
+// render::layerTransformBilinearRow() (src/render/cpu_image_primitives.cpp), which evaluates
+// LayerTransform::inverseMap() in binary64, as its oracle; that form is held to the documented
+// per-finite-component 2e-6 absolute-or-relative gate (docs/architecture/gpu-backend.md).
 //
 // SAMPLE METADATA. The general affine inverse map is uploaded as a compact O(1) set of binary64
 // coefficients (see GpuAffineMap) and the per-pixel source-local coordinate is derived on the GPU
-// with a portable error-free double-float reconstruction; the kernel performs the exact CPU
-// floor/factor reduction and the bilinear gather plus the opacity multiply. No O(width*height)
-// per-pixel host metadata loop runs on the successful path. The host never generates or resamples
-// RGBA pixels, and the kernel needs neither shaderFloat64 nor a 64-bit integer type. The original
-// per-pixel host preparation below (prepareAffineSamples/prepareAffineMatrixSamples) is retained as
-// the exact CPU reference used by tests; it is not on the GPU path.
+// with a portable error-free double-float reconstruction; the kernel performs the floor/factor
+// reduction and the bilinear gather plus the opacity multiply. No O(width*height) per-pixel host
+// metadata loop runs on the successful path. The host never generates or resamples RGBA pixels, and
+// the kernel needs neither shaderFloat64 nor a 64-bit integer type. The original per-pixel binary64
+// host preparation below (prepareAffineSamples/prepareAffineMatrixSamples) is retained for tests;
+// it is not on the GPU path.
 //
 // This header is intentionally narrow. It does not create a device or a service; it consumes the
 // existing GpuDevice and GpuImage. Native work runs on the device owner thread and fails closed
@@ -32,10 +34,12 @@
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/image_types.hpp>
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -97,16 +101,12 @@ struct GpuAffineMatrix final {
 //   localY(column, row) = localYAtOrigin + stepYPerColumn * column + stepYPerRow * row
 // `column`/`row` are 0-based data-window indices of `outputWindow`; the origin is folded into
 // `localXAtOrigin`/`localYAtOrigin`. The six coefficients are derived from the CPU oracle sampled
-// at the output origin and at one step along each axis, so the map tracks the same CPU oracle the
-// render path uses. This is a tolerance-qualified compact approximation, not a bit-exact
-// reconstruction: the probed-difference coefficients are not universally identical to the oracle's
-// own per-pixel inverseMap() evaluation for arbitrary origins or near-cancelling coefficients. The
-// kernel reconstructs each pixel in error-free two-Float32 (double-float, ~48 significand bits)
-// arithmetic without shaderFloat64, and parity is verified across the full output window by the
-// native gates to 2e-6 abs-or-rel on all four components with bit-exact alpha at the 0/1 endpoints.
-// A collapsed (non-finite or
-// zero-determinant) composed matrix yields the all-transparent sentinel map (both constants -2.0,
-// all steps 0).
+// at the output origin and at one step along each axis. The kernel reconstructs each pixel in
+// error-free two-Float32 (double-float, ~48 significand bits) arithmetic without shaderFloat64. That
+// reconstruction is not bit-identical to a per-pixel binary64 inverse map, so for the
+// composed-matrix form it IS the definition of the sample coordinate: affineMatrixResampleRow()
+// runs it on the CPU (#545). A collapsed (non-finite or zero-determinant) composed matrix yields the
+// all-transparent sentinel map (both constants -2.0, all steps 0).
 struct GpuAffineMap final {
     double localXAtOrigin = 0.0;
     double localYAtOrigin = 0.0;
@@ -130,6 +130,45 @@ struct GpuAffineMap final {
 [[nodiscard]] GpuAffineMap prepareAffineMatrixMap(const GpuAffineMatrix& matrix,
                                                   ImageWindow outputWindow);
 
+// The resample filter of the composed-matrix form (#480). Bilinear interpolates the four taps
+// around the sample point; Nearest copies the one tap whose centre is nearest (the upper tap on an
+// exact half-way factor), so data and ID images keep their stored values exactly.
+enum class GpuAffineFilter : std::uint32_t { Bilinear = 0, Nearest = 1 };
+
+// The six map coefficients as the kernel receives them: each binary64 coefficient split into an
+// error-free Float32 (hi, lo) pair, hi = (float)value and lo = (float)(value - hi), in the order
+// localX@origin, localY@origin, stepX/column, stepX/row, stepY/column, stepY/row. The device upload
+// and the CPU reference both use this split.
+[[nodiscard]] std::array<float, 12> splitAffineMap(const GpuAffineMap& map) noexcept;
+
+// The sample one output pixel of the lattice resamples, by the kernel's own arithmetic (#545):
+// localX = (x0 + stepXPerColumn * column) + stepXPerRow * row (and likewise localY) in error-free
+// double-float with Float32 operations and fma only, then the transparent range test on the pair
+// (not strictly inside (-1, extent) on either axis) and the floor/factor reduction of the pair, with
+// the factor rounded once to Float32. `column`/`row` are 0-based indices of the window the map was
+// prepared for and must be below 2^24. Returns the transparent sentinel outside the range.
+[[nodiscard]] GpuAffineSample reconstructAffineSample(const std::array<float, 12>& coefficients,
+                                                      std::uint32_t column, std::uint32_t row,
+                                                      std::uint32_t sourceWidth,
+                                                      std::uint32_t sourceHeight) noexcept;
+
+// The CPU reference of AffineBilinearV1's composed-matrix form, and the production CPU resample of
+// every layer, Transform 2D, Resize/Fit and discrete-transform map that is not a pure translation
+// (#545). It writes one row of `outputWindow` exactly as the kernel does when it runs over
+// `latticeWindow`: the map comes from prepareAffineMatrixMap(matrix, latticeWindow), every sample
+// from reconstructAffineSample(), then the same tap selection (Nearest: base + (factor >= 0.5)),
+// the same fma lerp with exact 0/1 factors, and the same opacity multiply. `latticeWindow` is the
+// window the GPU command covers; `outputWindow` may be a sub-window of it (a region-of-interest
+// clip) and then gets the same pixels. `source` is the image the matrix maps from: its data window is
+// the matrix's source window. Rejects an output window outside the lattice, a lattice of 2^24 or
+// more pixels on an axis, a row outside `outputWindow`, a mismatched output span and a non-finite
+// result.
+[[nodiscard]] ImageStatus affineMatrixResampleRow(Rgba32fImageView source,
+                                                  const GpuAffineMatrix& matrix, float opacity,
+                                                  GpuAffineFilter filter, ImageWindow latticeWindow,
+                                                  ImageWindow outputWindow, std::int64_t outputY,
+                                                  std::span<Rgba32f> output) noexcept;
+
 // Validated inputs for the LayerTransform form. `source` is shared immutable ownership retained for
 // the job's lifetime. `outputWindow` is the output DATA window only; the output DISPLAY window and
 // pixel aspect are preserved from the source. The opacity is LayerTransform::opacity(), already
@@ -139,11 +178,6 @@ struct GpuAffineParameters final {
     ImageWindow outputWindow;
     std::optional<LayerTransform> transform;
 };
-
-// The resample filter of the composed-matrix form (#480). Bilinear interpolates the four taps
-// around the sample point; Nearest copies the one tap whose centre is nearest (the upper tap on an
-// exact half-way factor), so data and ID images keep their stored values exactly.
-enum class GpuAffineFilter : std::uint32_t { Bilinear = 0, Nearest = 1 };
 
 // Validated inputs for the composed-matrix form. `opacity` must be finite in [0, 1] and is used as
 // the Float32 binding directly (the caller has already rounded it once).

@@ -232,8 +232,8 @@ void testDisplayBuilder(Expectations& expectations) {
 
 void testSolidAndParameters(Expectations& expectations) {
     using bloom::render::kCpuImagePrimitiveSemanticsVersion;
-    // ADAPTED (blend modes): the Layer Stack stage folds through the blend kernel now.
-    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 7,
+    // ADAPTED (#545): the composed-matrix affine resample takes the double-float coordinate rule.
+    expectations.expect(kCpuImagePrimitiveSemanticsVersion == 8,
                         "CPU image primitive semantics are explicitly versioned");
 
     const auto solid = solidPixelFromStraightLinearRec709Scene(Color4d{0.5, -2.0, 4.0, 0.25});

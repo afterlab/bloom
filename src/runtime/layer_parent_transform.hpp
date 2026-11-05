@@ -4,6 +4,7 @@
 #include <array>
 #include <bloom/document/parameter.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
+#include <bloom/render/gpu_affine.hpp>
 #include <cmath>
 #include <numbers>
 
@@ -47,8 +48,33 @@ struct LayerMatrix {
     }
 };
 
-// Single resample of a parented layer, with the same pixel-edge/proxy convention as LayerTransform.
-// The unparented path continues to use the reference primitive unchanged. `nearest` (#480 Resize,
+// The exact conversion from the runtime's AUTHOR-space LayerMatrix (pixel-centre + 0.5 convention)
+// to GpuAffine's source-local-0-based-pixel-centre to absolute-output-device-index convention,
+// folding the proxy scales exactly as ParentedLayerTransform::forwardMap does:
+//   X = a*lx + (sx/sy)*b*ly + a*ox + (sx/sy)*b*oy + sx*m.x - 0.5
+//   Y = (sy/sx)*c*lx + d*ly + (sy/sx)*c*ox + d*oy + sy*m.y - 0.5
+// where (ox, oy) is the source data-window origin and (lx, ly) a 0-based source pixel centre. At
+// sx == sy == 1 this is the accepted native affine conversion. The GPU command and the CPU row
+// (ParentedLayerTransform::row) both resample through this matrix.
+[[nodiscard]] inline render::GpuAffineMatrix
+toGpuAffineMatrix(const LayerMatrix& matrix, const render::ImageWindow sourceWindow,
+                  const double scaleX, const double scaleY) {
+    const double ox = static_cast<double>(sourceWindow.originX()) + 0.5;
+    const double oy = static_cast<double>(sourceWindow.originY()) + 0.5;
+    const double b = (scaleX / scaleY) * matrix.b;
+    const double c = (scaleY / scaleX) * matrix.c;
+    return render::GpuAffineMatrix{.a = matrix.a,
+                                   .b = b,
+                                   .tx = matrix.a * ox + b * oy + scaleX * matrix.x - 0.5,
+                                   .c = c,
+                                   .d = matrix.d,
+                                   .ty = c * ox + matrix.d * oy + scaleY * matrix.y - 0.5};
+}
+
+// Single resample through a composed author-space matrix, with the same pixel-edge/proxy convention
+// as LayerTransform: parented and concatenated layers, an unparented layer that does more than
+// move (#545), Transform 2D and Resize/Fit. A pure move keeps LayerTransform's translate-only row.
+// `nearest` (#480 Resize,
 // Fit and Transform 2D Nearest) copies the one tap at floor + (factor >= 0.5) on each axis instead
 // of interpolating, the CPU reference of AffineBilinearV1's nearest sampling.
 class ParentedLayerTransform {
@@ -94,57 +120,28 @@ class ParentedLayerTransform {
                                         static_cast<std::uint32_t>(y1 - y0 + 1));
         return result ? std::optional{*result.value()} : std::nullopt;
     }
+    // The device-space composed matrix AffineBilinearV1 receives for this placement.
+    [[nodiscard]] render::GpuAffineMatrix deviceMatrix() const {
+        return toGpuAffineMatrix(matrix_, window_, sx_, sy_);
+    }
+    // One output row. #545: the sample coordinate is AffineBilinearV1's own double-float
+    // reconstruction over `latticeWindow` (render::affineMatrixResampleRow), so this row and the
+    // GPU command agree bit for bit. `latticeWindow` is the window the GPU command covers: the
+    // layer's unclipped support. A region-of-interest clip passes its smaller `outputWindow` and
+    // gets the same pixels the full window has there.
+    [[nodiscard]] render::ImageStatus row(render::Rgba32fImageView source,
+                                          render::ImageWindow latticeWindow,
+                                          render::ImageWindow outputWindow, std::int64_t outputY,
+                                          std::span<render::Rgba32f> output) const {
+        return render::affineMatrixResampleRow(
+            source, deviceMatrix(), opacity_,
+            nearest_ ? render::GpuAffineFilter::Nearest : render::GpuAffineFilter::Bilinear,
+            latticeWindow, outputWindow, outputY, output);
+    }
     [[nodiscard]] render::ImageStatus row(render::Rgba32fImageView source,
                                           render::ImageWindow outputWindow, std::int64_t outputY,
                                           std::span<render::Rgba32f> output) const {
-        using Pixel = std::array<float, 4>;
-        const auto width = window_.extent().width(), height = window_.extent().height();
-        const auto sample = [&](std::int64_t x, std::int64_t y) -> Pixel {
-            if (x < 0 || y < 0 || x >= width || y >= height)
-                return {};
-            const auto p =
-                source.pixels()[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)];
-            return {p.red(), p.green(), p.blue(), p.alpha()};
-        };
-        const auto lerp = [](Pixel a, Pixel b, float t) {
-            if (t == 0)
-                return a;
-            if (t == 1)
-                return b;
-            for (std::size_t i = 0; i < a.size(); ++i)
-                a[i] = std::fma(t, b[i], (1 - t) * a[i]);
-            return a;
-        };
-        for (std::size_t column = 0; column < output.size(); ++column) {
-            const double px =
-                (static_cast<double>(outputWindow.originX()) + static_cast<double>(column) + 0.5) /
-                    sx_ -
-                matrix_.x;
-            const double py = (static_cast<double>(outputY) + 0.5) / sy_ - matrix_.y;
-            const double x = (matrix_.d * px - matrix_.b * py) / determinant_ * sx_ - 0.5 -
-                             static_cast<double>(window_.originX());
-            const double y = (-matrix_.c * px + matrix_.a * py) / determinant_ * sy_ - 0.5 -
-                             static_cast<double>(window_.originY());
-            if (!std::isfinite(x) || !std::isfinite(y) || x <= -1 || y <= -1 || x >= width ||
-                y >= height) {
-                output[column] = render::Rgba32f::transparent();
-                continue;
-            }
-            const auto ix = static_cast<std::int64_t>(std::floor(x)),
-                       iy = static_cast<std::int64_t>(std::floor(y));
-            const auto fx = static_cast<float>(x - static_cast<double>(ix)),
-                       fy = static_cast<float>(y - static_cast<double>(iy));
-            auto p = nearest_ ? sample(ix + (fx >= 0.5F ? 1 : 0), iy + (fy >= 0.5F ? 1 : 0))
-                              : lerp(lerp(sample(ix, iy), sample(ix + 1, iy), fx),
-                                     lerp(sample(ix, iy + 1), sample(ix + 1, iy + 1), fx), fy);
-            for (auto& channel : p)
-                channel *= opacity_;
-            const auto pixel = render::Rgba32f::fromPremultiplied(p[0], p[1], p[2], p[3]);
-            if (!pixel)
-                return *pixel.error();
-            output[column] = *pixel.value();
-        }
-        return std::nullopt;
+        return row(source, outputWindow, outputWindow, outputY, output);
     }
 
   private:

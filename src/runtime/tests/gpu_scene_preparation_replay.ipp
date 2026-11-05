@@ -11,7 +11,10 @@
 
 [[maybe_unused, nodiscard]] bool
 replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgba32fImage>>& images,
-            const double hScale = 1.0, const double vScale = 1.0) {
+            // The affine command carries its proxy factors in its device matrix (#545), so the
+            // replay no longer needs them; callers still pass them.
+            [[maybe_unused]] const double hScale = 1.0,
+            [[maybe_unused]] const double vScale = 1.0) {
     constexpr std::size_t kBudget = 1U << 28U;
     images.assign(scene.commands().size(), nullptr);
     for (const auto& command : scene.commands()) {
@@ -205,26 +208,17 @@ replayScene(const PreparedGpuScene& scene, std::vector<std::shared_ptr<const Rgb
             if (!builder) {
                 return false;
             }
-            // Recover the AUTHOR-space LayerMatrix from the device-space GpuAffine matrix and
-            // replay with the exact CPU oracle the evaluator's parented raster arm uses.
-            const auto& g = affine->matrix;
-            const double b = g.b * (vScale / hScale);
-            const double c = g.c * (hScale / vScale);
-            const double ox = static_cast<double>(affine->sourceWindow.originX()) + 0.5;
-            const double oy = static_cast<double>(affine->sourceWindow.originY()) + 0.5;
-            const double mx = (g.tx - g.a * ox - g.b * oy + 0.5) / hScale;
-            const double my = (g.ty - g.c * ox - g.d * oy + 0.5) / vScale;
-            bloom::runtime::detail::LayerMatrix matrix{g.a, b, c, g.d, mx, my};
-            bloom::runtime::detail::ParentedLayerTransform parented(
-                matrix, affine->sourceWindow, hScale, vScale, affine->opacity);
+            // #545: replay the command's own device-space matrix through the CPU reference row
+            // the evaluator's affine arms share.
             for (std::int64_t y = affine->outputWindow.originY();
                  y < affine->outputWindow.maxYExclusive(); ++y) {
                 auto row = builder.value()->row(y);
                 if (!row) {
                     return false;
                 }
-                if (const auto status =
-                        parented.row(*view.value(), affine->outputWindow, y, *row.value())) {
+                if (const auto status = bloom::render::affineMatrixResampleRow(
+                        *view.value(), affine->matrix, affine->opacity, affine->filter,
+                        affine->outputWindow, affine->outputWindow, y, *row.value())) {
                     (void)status;
                     return false;
                 }

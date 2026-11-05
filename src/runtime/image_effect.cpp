@@ -68,9 +68,11 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
     return {code, DiagnosticSeverity::Error, {}, "Transform 2D: " + reason, std::move(reason)};
 }
 
-// #336: one inverse-mapped premultiplied bilinear resample through the Layer Output's own
-// LayerTransform row reference. The display window and pixel aspect are retained; the data window is the
-// geometry's checked extent. Rows are cancellable and nothing partial is published.
+// #336: one inverse-mapped premultiplied resample through the Layer Output's own raster rows: the
+// exact translate-only LayerTransform row for a pure Bilinear move, otherwise the composed-matrix
+// row the GPU affine command shares (#545). The display window and pixel aspect are retained; the
+// data window is the geometry's checked extent. Rows are cancellable and nothing partial is
+// published.
 [[nodiscard]] ImageEffectResult
 applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage& input,
                  const std::size_t pixelBudget, const CancellationToken& cancellation,
@@ -116,11 +118,14 @@ applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage
     }
     const auto rows = window.extent().height();
     reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, rows});
-    // #480 Nearest: the GPU affine command's own author-space matrix, sampled at one tap.
-    const std::optional<ParentedLayerTransform> nearest =
-        prepared.filter == kResampleFilterNearest
+    // Exactly the GPU's choice: the translation pass for a pure Bilinear move, otherwise the affine
+    // command over the same author-space matrix (#480 Nearest samples it at one tap).
+    const bool nearestFilter = prepared.filter == kResampleFilterNearest;
+    const std::optional<ParentedLayerTransform> affine =
+        nearestFilter || !geometry->transform->isTranslationOnly()
             ? std::optional{ParentedLayerTransform{geometry->matrix, inputDescriptor.dataWindow(),
-                                                   horizontalScale, verticalScale, 1.0F, true}}
+                                                   horizontalScale, verticalScale, 1.0F,
+                                                   nearestFilter}}
             : std::nullopt;
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
         if (cancellation.isCancellationRequested()) {
@@ -128,7 +133,7 @@ applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage
             return result;
         }
         const auto row = target.value()->row(y);
-        if (!row || (nearest ? nearest->row(*source.value(), window, y, *row.value())
+        if (!row || (affine ? affine->row(*source.value(), window, y, *row.value())
                              : render::layerTransformBilinearRow(*source.value(), window, y,
                                                                  *geometry->transform,
                                                                  *row.value()))) {

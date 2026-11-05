@@ -139,12 +139,6 @@ applyDiscreteImageEffect(const DiscreteImageKernel kernel, const render::Rgba32f
     }
     const bool resample = (kernel.quarterTurns & 1U) && horizontalScale != verticalScale;
     const auto affine = discreteAffineMatrix(kernel, source, horizontalScale, verticalScale);
-    const double ox = static_cast<double>(source.originX()) + 0.5;
-    const double oy = static_cast<double>(source.originY()) + 0.5;
-    const LayerMatrix matrix{affine.a, affine.b, affine.c, affine.d,
-        affine.tx + 0.5 - affine.a * ox - affine.b * oy,
-        affine.ty + 0.5 - affine.c * ox - affine.d * oy};
-    const ParentedLayerTransform transform{matrix, source, 1.0, 1.0, 1.0F};
     const auto width = output.value()->extent().width();
     const auto height = output.value()->extent().height();
     reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, height});
@@ -155,8 +149,11 @@ applyDiscreteImageEffect(const DiscreteImageKernel kernel, const render::Rgba32f
         }
         auto row = builder.value()->row(output.value()->originY() + y);
         if (resample) {
-            if (transform.row(*view.value(), *output.value(), output.value()->originY() + y,
-                              *row.value())) {
+            // #545: the GPU command's own matrix through its CPU reference row.
+            if (render::affineMatrixResampleRow(
+                    *view.value(), affine, 1.0F, render::GpuAffineFilter::Bilinear,
+                    *output.value(), *output.value(), output.value()->originY() + y,
+                    *row.value())) {
                 refuse(EvaluationDiagnosticCode::InvalidPixel, "Discrete proxy resample failed");
                 return result;
             }

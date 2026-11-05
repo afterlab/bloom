@@ -58,18 +58,14 @@ struct GpuAffineMapGpu final {
 };
 static_assert(sizeof(GpuAffineMapGpu) == 48);
 
+// The split is splitAffineMap(), the one the CPU reference (affineMatrixResampleRow) reconstructs
+// from, so the device and the reference start from the same twelve Float32 values.
 [[nodiscard]] inline GpuAffineMapGpu packAffineMap(const GpuAffineMap& map) noexcept {
-    const auto split = [](const double value, float& high, float& low) noexcept {
-        high = static_cast<float>(value);
-        low = static_cast<float>(value - static_cast<double>(high));
-    };
+    const auto split = splitAffineMap(map);
     GpuAffineMapGpu packed;
-    split(map.localXAtOrigin, packed.coefficients[0], packed.coefficients[1]);
-    split(map.localYAtOrigin, packed.coefficients[2], packed.coefficients[3]);
-    split(map.stepXPerColumn, packed.coefficients[4], packed.coefficients[5]);
-    split(map.stepXPerRow, packed.coefficients[6], packed.coefficients[7]);
-    split(map.stepYPerColumn, packed.coefficients[8], packed.coefficients[9]);
-    split(map.stepYPerRow, packed.coefficients[10], packed.coefficients[11]);
+    for (std::size_t index = 0; index < split.size(); ++index) {
+        packed.coefficients[index] = split[index];
+    }
     return packed;
 }
 

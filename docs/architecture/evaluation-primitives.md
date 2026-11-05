@@ -218,14 +218,14 @@ identity. Full curve ownership, extrapolation, commands, diagnostics, and the po
 rational conversion contract are defined in
 [`animation-and-time.md`](animation-and-time.md).
 
-## CPU Image Primitive Vocabulary Semantics Version 7
+## CPU Image Primitive Vocabulary Semantics Version 8
 
 `bloom_render` now provides the allocation-free CPU reference row kernels used by the first
-composition evaluator. Their semantics version is `7`; the evaluator and process-frame cache
+composition evaluator. Their semantics version is `8`; the evaluator and process-frame cache
 identity record that version explicitly. Version 3 added the text coverage kernel and the glyph
 rasterizer below; version 4 replaced the translate-only layer resample with the affine one described
 under "Layer Transform Resampling"; version 5 added the per-mode blend kernel described under
-"Blending"; version 6 adds the path coverage and stroke outlines below; version 7 adds affine vector coverage. One number covers them all: neither the rasterizer, the resampler, nor the
+"Blending"; version 6 adds the path coverage and stroke outlines below; version 7 adds affine vector coverage; version 8 (#545) gives every affine resample that is not a pure translation the GPU kernel's double-float sample-coordinate rule, described under "Layer Transform Resampling". One number covers them all: neither the rasterizer, the resampler, nor the
 blend kernel carries a second semantics version that could drift out of the identity a published
 frame records.
 
@@ -280,6 +280,23 @@ kernel in the stage; the translate-only case is a path inside this one.
 - **Inverse mapping.** Each output pixel center maps back to one source coordinate through the
   precomputed inverse 2x2 matrix and pivot. Nothing per-pixel computes trigonometry, divides, or
   branches on an authored value.
+- **One sample-coordinate rule on CPU and GPU (#545).** A layer that does more than move, a parented
+  or concatenated layer, Transform 2D, Resize/Fit and a proxy-resampled discrete transform all
+  resample through the composed device matrix the GPU's `AffineBilinearV1` command receives, with
+  `render::affineMatrixResampleRow()`. That row does not evaluate the inverse map in binary64 per
+  pixel. It probes the closed-form inverse at the origin of the command's output window and one step
+  along each axis, splits the six binary64 coefficients into Float32 (hi, lo) pairs, and rebuilds
+  each pixel's coordinate as `(origin + stepPerColumn * column) + stepPerRow * row` in error-free
+  double-float arithmetic (Float32 operations and `fma` only, about 48 significand bits), exactly as
+  the kernel does. The transparent range test, the floor and the single Float32 rounding of the
+  factor work on that pair. The CPU and GPU routes therefore pick the same taps and factors and agree
+  bit for bit on all four components, alpha included, on every platform, with no device float64. A
+  region-of-interest clip evaluates the same lattice over the unclipped layer window, so it gets the
+  same pixels. Before version 8 the CPU used `LayerTransform::inverseMap()` in binary64 and a
+  sample whose factor was exactly 0 there could come out tiny but nonzero on the GPU and pick up a
+  neighbouring tap's near-zero alpha.
+- **Pure moves.** A layer that only moves keeps the translate-only `layerTransformBilinearRow()` path
+  below and the GPU's exact TranslationOpacity pass.
 - **Quarter turns are exact.** A rotation that is an exact multiple of 90 degrees resolves to exact
   `0` and `±1` cosine and sine instead of `std::cos`/`std::sin` of a rounded radian value, so a
   quarter turn maps pixel centers onto pixel centers and interpolates nothing. The reduction modulo
@@ -339,7 +356,7 @@ premultiplied RGBA directly, preserving finite signed/HDR RGB and alpha, with tr
 taps outside the source data window. Neither filter has a downsampling antialiasing prefilter.
 
 CPU and GPU share checked geometry. The CPU uses the existing parented affine row reference (its
-nearest tap for Nearest); GPU preparation emits resident `GpuSceneAffineCommand` work using
+nearest tap for Nearest), which since #545 is the GPU kernel's own double-float coordinate rule; GPU preparation emits resident `GpuSceneAffineCommand` work using
 `AffineBilinearV1`, whose `sampling` push word selects the nearest tap (the Required coverage axis
 `feature.resample.nearest`, shared with Transform 2D), including for
 preview and final-render evaluation. An optional checked output descriptor on individual and batched
@@ -369,8 +386,9 @@ either axis collapses the image.
 
 For input content-bounds centre `c`, the map is `q = c + pivot + translate + R(rotation) * S(scale)
 * (p - (c + pivot))`, which is exactly a Layer Output with `anchor = pivot` and `position = c +
-pivot + translate`. The CPU reference resamples with `render::LayerTransform` and
-`layerTransformBilinearRow`, the same row the Layer stage uses. It interpolates premultiplied RGBA
+pivot + translate`. The CPU reference resamples with the Layer stage's own rows: the translate-only
+`layerTransformBilinearRow` for a pure Bilinear move, otherwise the composed-matrix row over the
+author-space matrix the GPU command uses (#545, see "Layer Transform Resampling"). It interpolates premultiplied RGBA
 directly, preserves finite signed/HDR RGB and partial alpha, and uses exact transparent-black taps
 outside the source data window. Quarter turns and whole-pixel translations interpolate nothing, and
 proxy frames conjugate the full-resolution map by the per-axis proxy factors.
@@ -393,10 +411,8 @@ becomes the exact TranslationOpacity pass, and every other map, and every Neares
 resident `GpuSceneAffineCommand` (`AffineBilinearV1`, its nearest sampling for Nearest) built from
 the same author-space matrix. A collapsed or fully clipped transform
 emits no command. Preview and every final route go through the same production scene executor, and
-no CPU-rendered output is uploaded. Parity follows the affine backend contract: 2e-6 abs-or-rel on all
-components, with bit-exact alpha at the 0/1 endpoints; a Nearest tap is copied bit for bit. The
-required coverage fixtures use dyadic coefficients so that the coverage gate's bit-exact alpha
-check holds by construction.
+no CPU-rendered output is uploaded. The CPU and GPU routes share the double-float coordinate rule,
+so they agree bit for bit on all four components; a Nearest tap is copied bit for bit.
 
 Cache identity covers the sampled values, the input content-bounds centre, extent, filter, input
 identity, windows/PAR, proxy and ROI. The executor independently keys the actual matrix or

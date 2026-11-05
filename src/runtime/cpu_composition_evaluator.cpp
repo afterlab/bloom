@@ -3953,6 +3953,18 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 if (!parented->invertible())
                                     return;
                             }
+                            // #545: an unparented layer that does more than move resamples through
+                            // the same composed matrix as the GPU affine command, by its own
+                            // double-float coordinate rule, so the two routes agree bit for bit. A
+                            // pure move keeps the exact translate-only row. Its bounds still follow
+                            // the layer's own transform, as on the GPU.
+                            std::optional<detail::ParentedLayerTransform> unparentedAffine;
+                            if (!layer.parent && !transform.value()->isTranslationOnly())
+                                unparentedAffine.emplace(contentMatrices[index],
+                                                         sourceDescriptor->dataWindow(),
+                                                         resolved.horizontalScale,
+                                                         resolved.verticalScale,
+                                                         static_cast<float>(opacity->value));
                             // #502: fed by another raster layer, this layer resamples the chain's
                             // first non-layer image once through the composed matrix. Its bounds
                             // still follow its own transform of the earlier layer's bounds.
@@ -4041,6 +4053,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 : parented
                                     ? parented->supportBounds(*workingWindow.value())
                                     : transform.value()->supportBounds(*workingWindow.value());
+                            // The GPU command covers the unclipped support; a region-of-interest
+                            // clip resamples part of that same lattice.
+                            const auto latticeWindow = layerWindow;
                             if (layerWindow)
                                 layerWindow = clipWindow(*layerWindow, index);
                             if (!layerWindow.has_value()) {
@@ -4117,13 +4132,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             auto& image = *builder.value();
                             const auto& source = chainView ? *chainView : *sourceView.value();
                             const auto& layerTransform = *transform.value();
-                            const auto* resample = concatenated ? &*concatenated
-                                                   : parented   ? &*parented
-                                                                : nullptr;
+                            const auto* resample = concatenated       ? &*concatenated
+                                                   : parented         ? &*parented
+                                                   : unparentedAffine ? &*unparentedAffine
+                                                                      : nullptr;
                             const auto outputWindow = *layerWindow;
+                            const auto resampleLattice = *latticeWindow;
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, outputWindow.originY(),
                                 [&image, &source, &layerTransform, resample, outputWindow,
+                                 resampleLattice,
                                  &operationSubject, &vectorRaster, vectorFill, vectorStroke,
                                  vectorHasFill, vectorHasStroke, vectorRule, vectorOpacity,
                                  &cancellation](const std::int64_t y) -> RowFailure {
@@ -4181,7 +4199,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         return std::nullopt;
                                     }
                                     if (const auto rowStatus =
-                                            resample ? resample->row(source, outputWindow, y,
+                                            resample ? resample->row(source, resampleLattice,
+                                                                     outputWindow, y,
                                                                      *outputRow.value())
                                                      : render::layerTransformBilinearRow(
                                                            source, outputWindow, y, layerTransform,

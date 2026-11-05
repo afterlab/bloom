@@ -29,7 +29,12 @@ namespace bloom::render {
 // text rasterizer deliberately does not define a second version of its own, which could drift out
 // of that identity.
 // VECTOR-1: semantics 7 adds affine path coverage and font glyph outlines.
-inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 7;
+// #545: semantics 8 resamples every layer, Transform 2D, Resize/Fit and discrete-transform map that
+// is not a pure translation with affineMatrixResampleRow() (gpu_affine.hpp): the sample coordinate
+// is AffineBilinearV1's portable double-float reconstruction rather than a per-pixel binary64
+// inverse map, so CPU and GPU frames agree bit for bit. Earlier CPU frames of those layers can
+// differ in the last bits and must not be served.
+inline constexpr std::uint32_t kCpuImagePrimitiveSemanticsVersion = 8;
 
 // Checked authored layer parameters for the RETAINED pre-S4 translate-only primitive. Translation
 // remains Float64 pixel-center displacement; opacity is deliberately rounded once to the Float32

@@ -22,27 +22,7 @@
 
 namespace bloom::runtime::detail {
 
-// The exact conversion from the runtime's AUTHOR-space LayerMatrix (pixel-centre + 0.5 convention)
-// to GpuAffine's source-local-0-based-pixel-centre to absolute-output-device-index convention,
-// folding the proxy scales exactly as ParentedLayerTransform::forwardMap does:
-//   X = a*lx + (sx/sy)*b*ly + a*ox + (sx/sy)*b*oy + sx*m.x - 0.5
-//   Y = (sy/sx)*c*lx + d*ly + (sy/sx)*c*ox + d*oy + sy*m.y - 0.5
-// where (ox, oy) is the source data-window origin and (lx, ly) a 0-based source pixel centre. At
-// sx == sy == 1 this is the accepted native affine conversion.
-[[nodiscard]] inline render::GpuAffineMatrix
-toGpuAffineMatrix(const LayerMatrix& matrix, const render::ImageWindow sourceWindow,
-                  const double scaleX, const double scaleY) {
-    const double ox = static_cast<double>(sourceWindow.originX()) + 0.5;
-    const double oy = static_cast<double>(sourceWindow.originY()) + 0.5;
-    const double b = (scaleX / scaleY) * matrix.b;
-    const double c = (scaleY / scaleX) * matrix.c;
-    return render::GpuAffineMatrix{.a = matrix.a,
-                                   .b = b,
-                                   .tx = matrix.a * ox + b * oy + scaleX * matrix.x - 0.5,
-                                   .c = c,
-                                   .d = matrix.d,
-                                   .ty = c * ox + matrix.d * oy + scaleY * matrix.y - 0.5};
-}
+// toGpuAffineMatrix() lives in layer_parent_transform.hpp beside the CPU row that shares it.
 
 // The output-window-local device translation for a translation-only LayerTransform, or disengaged
 // when the transform is not an exact translation.

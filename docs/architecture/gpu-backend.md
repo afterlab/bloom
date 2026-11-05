@@ -129,10 +129,15 @@ separate runtime-compiled path, described under "Shaders And OpenColorIO". `GpuA
 `AffineBilinearV1`, a complete composed affine (rotation, uniform/nonuniform/negative scale, anchor,
 translation, and any precomposed parent matrix) over one resident image; the host uploads one compact
 O(1) affine map and the kernel reconstructs each source-local coordinate on the device with portable
-split-precision arithmetic that does not require a device float64 or 64-bit integer capability, held
-to the documented per-finite-component 2e-6 RGB parity tolerance with bit-exact alpha at the 0 and 1
-endpoints rather than a universal exactness claim, so no O(width*height) host metadata loop and no
-host pixel resampling occurs. `GpuBlend` runs `BlendV1`
+split-precision arithmetic that does not require a device float64 or 64-bit integer capability, so
+no O(width*height) host metadata loop and no host pixel resampling occurs. That double-float
+reconstruction is the definition of the sample coordinate (#545): the CPU reference of the
+composed-matrix form, `render::affineMatrixResampleRow()`, which every production CPU affine
+resample uses, runs the same probe, the same Float32 (hi, lo) split and the same error-free
+two-sum/two-product steps, so CPU and GPU frames agree bit for bit on all four components, alpha
+included, on every platform. A binary64 device path would not be portable (Metal through MoltenVK
+has no float64, and consumer GPUs run it slowly). The LayerTransform form, which no production
+route uses, keeps the binary64 `layerTransformBilinearRow()` oracle and the 2e-6 abs-or-rel gate. `GpuBlend` runs `BlendV1`
 for any `core::BlendMode` over two resident images, and `GpuPointResample` runs `PointResampleV1`,
 the bit-exact nearest-neighbour gather the media-image proxy path uses. `GpuImageUpload` also
 accepts decoded media in its native sample layout (`render::NativeSampleImage`, #422): 8-bit 4:2:0

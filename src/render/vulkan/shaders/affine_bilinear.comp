@@ -2,10 +2,12 @@
 // Bloom AffineBilinearV1 compute shader. Offline-generated/embedded; do not edit at runtime.
 // Operation: AffineBilinearV1.
 //
-// Mirrors render::layerTransformBilinearRow() (src/render/cpu_image_primitives.cpp) and the
-// parented row (src/runtime/layer_parent_transform.hpp) for the RGBA32F reference-parity profile.
-// The CPU primitives are the oracle; this shader must stay within the documented per-component
-// 2e-6 absolute-or-relative gate (docs/architecture/gpu-backend.md), never bit-exact by claim.
+// Its CPU reference is render::affineMatrixResampleRow() (src/render/gpu_affine_host.cpp), which
+// every production CPU affine resample uses (#545). That row defines the sample coordinate as this
+// kernel's double-float reconstruction and repeats every step below in IEEE binary32, so the two
+// agree bit for bit on all four components. The LayerTransform form is held to the documented
+// 2e-6 absolute-or-relative gate against render::layerTransformBilinearRow()
+// (docs/architecture/gpu-backend.md).
 //
 // COMPACT O(1) SAMPLE METADATA. The per-pixel integer/fraction array of the first revision is
 // gone. The host uploads six binary64 inverse-affine coefficients as one bounded 48-byte storage
