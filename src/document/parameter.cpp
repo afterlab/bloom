@@ -1,5 +1,6 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
+#include <bloom/document/field_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/shape.hpp>
 
@@ -377,6 +378,9 @@ constantMatchesSchema(const std::string_view schemaKey,
                                            ? isBoundedGradient(*gradient)
                                            : gradient->isValid());
     }
+    // #525 Fields: every parameter within its document domain (field_nodes.hpp).
+    if (fieldParameterSpec(schemaKey) != nullptr)
+        return isFieldParameterValueValid(schemaKey, constant.value);
     // #505 Vignette: finite scalars within their domains, a finite centre offset within +-1e6
     // pixels and the closed shape and mode.
     if (isVignetteScalarSchemaKey(schemaKey)) {
@@ -550,6 +554,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          schemaKey == bloom::document::kAlphaAssociationWhiteSchemaKey ||
          bloom::document::isColorizeIntegerSchemaKey(schemaKey) ||
          bloom::document::isVignetteIntegerSchemaKey(schemaKey) ||
+         bloom::document::isFieldConstantSchemaKey(schemaKey) ||
          bloom::document::isRecipeBooleanSchemaKey(schemaKey)) &&
         !std::holds_alternative<bloom::document::ConstantValueSource>(source))
         return false;

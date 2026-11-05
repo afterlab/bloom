@@ -1,4 +1,5 @@
 #include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/field_parameters.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -7,7 +8,10 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
 
+#include <algorithm>
 #include <array>
+#include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -394,9 +398,67 @@ ParameterPresentation fallback(const ParameterValueKind kind) {
 
 } // namespace
 
+namespace {
+
+// #525 Fields: one presentation per parameter role, from the Fields table's own domain.
+std::optional<ParameterPresentation> fieldPresentation(const std::string_view schemaKey) {
+    const auto* spec = fieldParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    const auto role = spec->role;
+    const auto low = spec->minimum;
+    const auto high = spec->maximum;
+    switch (spec->kind) {
+    case FieldParameterKind::Choice:
+        return choice();
+    case FieldParameterKind::Integer:
+        return whole(low, high, low, std::min(high, 64.0));
+    case FieldParameterKind::Seed:
+        return whole(-9.0e18, 9.0e18, 0.0, 100.0);
+    case FieldParameterKind::Boolean:
+    case FieldParameterKind::Curve:
+    case FieldParameterKind::Gradient: {
+        ParameterPresentation other;
+        other.kind = Kind::Other;
+        other.named = true;
+        return other;
+    }
+    case FieldParameterKind::Scalar:
+    case FieldParameterKind::Vector2:
+        break;
+    }
+    const auto is = [role](const std::initializer_list<std::string_view> names) {
+        return std::ranges::find(names, role) != names.end();
+    };
+    if (is({"rotation", "octaveRotation", "angle"}))
+        return number(low, high, -360.0, 360.0, 1.0, 1, kDegrees);
+    // Shares and factors, shown as stored (1 is the whole), the same in a card and in Properties.
+    if (is({"gain", "jitter", "width", "innerRatio", "bias", "contrast"}))
+        return number(low, high, low, std::min(high, is({"contrast"}) ? 4.0 : 1.0), 0.01, 3);
+    if (role == "loopLength")
+        return number(low, high, 0.0, 30.0, 0.1, 2, kSeconds);
+    if (role == "speed")
+        return number(low, high, -4.0, 4.0, 0.01, 2, "/s");
+    if (is({"octaves", "lacunarity", "ridgeOffset", "ridgeGain"}))
+        return number(low, high, low, std::min(high, 10.0), 0.05, 2);
+    if (is({"evolution", "phase", "cycle", "brightness", "valueA", "valueB", "valueT", "valueX",
+            "valueY", "valueZ", "valueW", "strength", "inLow", "inHigh", "outLow", "outHigh",
+            "rampLow", "rampHigh"}))
+        return number(low, high, std::max(low, -4.0), std::min(high, 4.0), 0.01, 3);
+    if (role == "scale")
+        return number(low, high, -4.0, 4.0, 0.01, 3);
+    if (role == "arrowScale")
+        return number(low, high, 0.0, 100.0, 0.5, 1, kPixels);
+    return pixels(low, high, std::min(high, low < 0.0 ? 2048.0 : 1024.0));
+}
+
+} // namespace
+
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
                                             const ParameterValueKind kind,
                                             const std::string_view role) {
+    if (auto field = fieldPresentation(schemaKey))
+        return *field;
     for (const auto& entry : table())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;

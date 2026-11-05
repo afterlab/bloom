@@ -10,6 +10,7 @@ target_sources(
         extension_records.cpp
         data_block.cpp
         grade_curves.cpp
+        field_nodes.cpp
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp
@@ -44,6 +45,8 @@ target_sources(
             include/bloom/document/layer_source.hpp
             include/bloom/document/channel_nodes.hpp
             include/bloom/document/grade_curves.hpp
+            include/bloom/document/field_nodes.hpp
+            include/bloom/document/field_parameters.hpp
             include/bloom/document/image_preview.hpp
             include/bloom/document/color_settings.hpp
             include/bloom/document/composition_settings.hpp

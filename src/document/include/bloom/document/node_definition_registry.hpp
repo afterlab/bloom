@@ -36,6 +36,12 @@ enum class SocketValueKind {
     Mask,
     // ADR 0026: a multi-channel image (render::ChannelSetImage). Never converts to or from Image.
     ChannelSet,
+    // #525 Fields (field_nodes.hpp): lazy functions of a composition position, never pixels. They
+    // connect only to their own kind (or to a Fields input that reads any field), never to an
+    // Image, a Mask or a value.
+    ScalarField,
+    Vector2Field,
+    ColorField,
 };
 
 enum class ParameterValueKind {
@@ -83,6 +89,12 @@ enum class ParameterValueKind {
         return "mask";
     case SocketValueKind::ChannelSet:
         return "channel-set";
+    case SocketValueKind::ScalarField:
+        return "scalar-field";
+    case SocketValueKind::Vector2Field:
+        return "vector2-field";
+    case SocketValueKind::ColorField:
+        return "color-field";
     }
     return "image";
 }
@@ -177,6 +189,9 @@ isPromotedSocketConnection(const SocketValueKind source,
     case SocketValueKind::Vector3:
     case SocketValueKind::Mask:
     case SocketValueKind::ChannelSet:
+    case SocketValueKind::ScalarField:
+    case SocketValueKind::Vector2Field:
+    case SocketValueKind::ColorField:
         return false;
     }
     return false;
@@ -198,6 +213,8 @@ struct InputPortDefinition {
     // #490: an inspection input (the Image Preview's) that also takes a Mask or a ChannelSet and
     // shows it as its image. False for every port that feeds evaluation.
     bool acceptsPixelKinds = false;
+    // #525: a Fields input that reads any field kind (ScalarField, Vector2Field or ColorField).
+    bool acceptsFieldKinds = false;
 
     friend bool operator==(const InputPortDefinition&, const InputPortDefinition&) = default;
 };
@@ -208,13 +225,20 @@ struct InputPortDefinition {
            kind == SocketValueKind::ChannelSet;
 }
 
+// #525: the field kinds an any-field input (acceptsFieldKinds) takes.
+[[nodiscard]] constexpr bool isFieldSocketKind(const SocketValueKind kind) noexcept {
+    return kind == SocketValueKind::ScalarField || kind == SocketValueKind::Vector2Field ||
+           kind == SocketValueKind::ColorField;
+}
+
 // isAcceptedSocketConnection() for a declared input: the same rule, plus the pixel kinds an
-// inspection input takes. Every connect and validation path that has the input's declaration asks
-// this one.
+// inspection or field-reading input takes and the field kinds an any-field input takes. Every
+// connect and validation path that has the input's declaration asks this one.
 [[nodiscard]] constexpr bool isAcceptedInputConnection(const SocketValueKind source,
                                                        const InputPortDefinition& input) noexcept {
     return isAcceptedSocketConnection(source, input.valueKind) ||
-           (input.acceptsPixelKinds && isPixelSocketKind(source));
+           (input.acceptsPixelKinds && isPixelSocketKind(source)) ||
+           (input.acceptsFieldKinds && isFieldSocketKind(source));
 }
 
 struct OutputPortDefinition {
@@ -271,6 +295,8 @@ enum class NodeCategory : std::uint8_t {
     // #500: image grades that never convert colour (Grade, Levels, Curves, Hue/Saturation,
     // Exposure, Offset, Multiply, Invert), apart from colour management.
     Grade,
+    // #525: the Fields family (field_nodes.hpp).
+    Fields,
     // Retained persisted schemas, excluded from new-node authoring categories.
 };
 
@@ -282,7 +308,7 @@ inline constexpr std::array kNodeCategories{
     NodeCategory::Sources, NodeCategory::Layers,    NodeCategory::Compositing,
     NodeCategory::Color,   NodeCategory::Values,    NodeCategory::Math,
     NodeCategory::Output,  NodeCategory::Utilities, NodeCategory::Transform,
-    NodeCategory::Filters, NodeCategory::Grade};
+    NodeCategory::Filters, NodeCategory::Grade,     NodeCategory::Fields};
 static_assert(
     [] {
         for (std::size_t index = 0; index < kNodeCategories.size(); ++index)
@@ -362,6 +388,11 @@ enum class NodeLoweringKind {
     // #490: the Image Preview inspection sink. It lowers to nothing: it has no output, so no plan
     // reaches it, and the interface previews its input through a Viewer-only inspection plan.
     ImagePreview,
+    // #525: a Fields node. Its field outputs compile into the field program of the raster or
+    // sample that reads them; its `image` and `mask` outputs (and Rasterize Field's) are rasters.
+    Field,
+    // #525 Field Sample: a field read at one position, a value (runtime::CompiledValueFieldSample).
+    ValueFieldSample,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -386,7 +417,9 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::ValueReroute:
     case NodeLoweringKind::ValueBoundsReadout:
     case NodeLoweringKind::ValueUtility:
+    case NodeLoweringKind::ValueFieldSample:
         return true;
+    case NodeLoweringKind::Field:
     case NodeLoweringKind::Shape:
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Checker:

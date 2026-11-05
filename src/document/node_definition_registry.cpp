@@ -3,6 +3,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -205,14 +206,15 @@ template <typename Definition>
             NodeCategory::Compositing};
 }
 
-// #504 Colorize: an Image in and out; the constant mode, source and cycle (they choose the
-// arithmetic, so they have no socket), then one socket per animatable/drivable value in parameter
-// order.
+// #504 Colorize: an Image in and out (#525: the input also takes a field, drawn raw over the
+// composition, so a scalar field's value is the grey the Colorize maps); the constant mode,
+// source and cycle (they choose the arithmetic, so they have no socket), then one socket per
+// animatable/drivable value in parameter order.
 [[nodiscard]] NodeDefinition colorizeDefinition() {
     using namespace bloom::document;
     NodeDefinition definition{{std::string(kColorizeNodeType), 1},
                               NodeLoweringKind::ImageEffect,
-                              {{"input", SocketValueKind::Image}},
+                              {{"input", SocketValueKind::Image, true, false, true}},
                               {{"image", SocketValueKind::Image}},
                               {},
                               std::nullopt,
@@ -485,6 +487,12 @@ template <typename Definition>
 [[nodiscard]] bool hasValidLoweringShape(const NodeDefinition& definition) {
     using namespace bloom::document;
     switch (definition.lowering) {
+    case NodeLoweringKind::Field:
+    case NodeLoweringKind::ValueFieldSample: {
+        // #525: the exact generated shape of every Fields node.
+        const auto* field = fieldNodeSpec(definition.key.typeId);
+        return field != nullptr && definition == fieldNodeDefinition(*field);
+    }
     case NodeLoweringKind::ImageEffect:
         if (definition.key.typeId == "bloom.gaussian-blur" ||
             definition.key.typeId == "bloom.box-blur") {
@@ -1634,6 +1642,9 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         channelPassDefinition(),
         imageToChannelSetDefinition(),
         cryptomatteDefinition()};
+    // #525: the Fields family, in menu order.
+    for (const auto& field : fieldNodeSpecs())
+        definitions.push_back(fieldNodeDefinition(field));
     // The value library is appended, not interleaved: the five above are the structural node types
     // a composition is built out of, and reading them first in one place is what makes the
     // registry's own contract legible.

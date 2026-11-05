@@ -6,6 +6,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/field_parameters.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
@@ -369,7 +370,8 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kGradientEndParameterSchemaKey ||
            schemaKey == kVector2ValueParameterSchemaKey ||
            schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
-           schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey;
+           schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
+           isFieldVec2AnimatableSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -401,7 +403,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kHueSaturationHueSchemaKey ||
            schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
-           isVignetteScalarSchemaKey(schemaKey) ||
+           isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -409,7 +411,8 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // ADR 0028: Path parameters animate through whole-value Path curves. #493: so does each Curves
 // curve, a Path used as a point list (grade_curves.hpp).
 [[nodiscard]] constexpr bool isPathAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return schemaKey == kLayerMaskPathSchemaKey || isGradeCurveSchemaKey(schemaKey);
+    return schemaKey == kLayerMaskPathSchemaKey || isGradeCurveSchemaKey(schemaKey) ||
+           isFieldPathAnimatableSchemaKey(schemaKey);
 }
 
 // #541: a gradient parameter animates through whole-value Gradient curves.
@@ -417,7 +420,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 isGradientAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return isColorizeGradientSchemaKey(schemaKey) ||
            schemaKey == kGradientStopsParameterSchemaKey ||
-           schemaKey == kGlowTintGradientSchemaKey;
+           schemaKey == kGlowTintGradientSchemaKey || isFieldGradientAnimatableSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {
@@ -499,6 +502,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #505 Vignette (vignette_nodes.hpp).
     if (const auto vignette = vignetteScalarDomain(schemaKey))
         return value >= vignette->minimum && value <= vignette->maximum;
+    // #525 Fields (field_parameters.hpp).
+    if (fieldParameterSpec(schemaKey) != nullptr)
+        return isFieldScalarWithinDomain(schemaKey, value);
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

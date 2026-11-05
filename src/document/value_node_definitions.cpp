@@ -1,5 +1,6 @@
 #include "value_node_definitions.hpp"
 
+#include <bloom/document/field_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -455,6 +456,9 @@ struct KindVocabulary final {
     case SocketValueKind::Audio:
     case SocketValueKind::Mask:
     case SocketValueKind::ChannelSet:
+    case SocketValueKind::ScalarField:
+    case SocketValueKind::Vector2Field:
+    case SocketValueKind::ColorField:
     case SocketValueKind::Scalar:
         break;
     }
@@ -484,6 +488,9 @@ struct KindVocabulary final {
     case SocketValueKind::Audio:
     case SocketValueKind::Mask:
     case SocketValueKind::ChannelSet:
+    case SocketValueKind::ScalarField:
+    case SocketValueKind::Vector2Field:
+    case SocketValueKind::ColorField:
     case SocketValueKind::Scalar:
         break;
     }
@@ -510,6 +517,9 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
     case SocketValueKind::Audio:
     case SocketValueKind::Mask:
     case SocketValueKind::ChannelSet:
+    case SocketValueKind::ScalarField:
+    case SocketValueKind::Vector2Field:
+    case SocketValueKind::ColorField:
     case SocketValueKind::Scalar:
         break;
     }
@@ -636,6 +646,10 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     if (!isValueLowering(definition.lowering)) {
         return false;
     }
+    // #525 Field Sample: a field read at one position; its shape is the Fields table's.
+    if (definition.lowering == NodeLoweringKind::ValueFieldSample)
+        return definition.key.typeId == kFieldSampleNodeType &&
+               definition.category == NodeCategory::Fields;
     // Value nodes are never structural: no layer slot, never a singleton, and always offered under
     // one of the two sections the Add surface lists them in.
     if (definition.layerSlotInput.has_value() || definition.cardinality != NodeCardinality::Many ||
@@ -821,6 +835,8 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::Cryptomatte:
     case NodeLoweringKind::ImagePreview:
     case NodeLoweringKind::Adjustment:
+    case NodeLoweringKind::Field:
+    case NodeLoweringKind::ValueFieldSample:
         break;
     }
     return false;

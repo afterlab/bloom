@@ -3,6 +3,7 @@
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/field_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -150,6 +151,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return {{"Clamp", kColorizeCycleClamp},
                 {"Repeat", kColorizeCycleRepeat},
                 {"Mirror", kColorizeCycleMirror}};
+    // #525 Fields: every Choice, its labels in stored-value order.
+    if (const auto* field = fieldParameterSpec(schemaKey);
+        field != nullptr && field->kind == FieldParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < field->choices.size(); ++index)
+            options.push_back({std::string(field->choices[index]),
+                               static_cast<std::int64_t>(index)});
+        return options;
+    }
     // #505 Vignette.
     if (schemaKey == kVignetteShapeSchemaKey)
         return {{"Elliptical", kVignetteElliptical}, {"Rectangular", kVignetteRectangular}};
