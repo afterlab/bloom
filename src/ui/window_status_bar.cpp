@@ -712,6 +712,10 @@ void WindowStatusBar::setDisplayedViewer(ViewerEditor* viewer) {
                                                       &WindowStatusBar::refreshProbeCell);
             displayedViewerDestroyedConnection_ =
                 connect(viewer, &QObject::destroyed, this, [this] {
+                    // `destroyed` arrives while the Viewer is half torn down: forget it first.
+                    QObject::disconnect(displayedViewerConnection_);
+                    QObject::disconnect(displayedViewerProbeConnection_);
+                    displayedViewer_ = nullptr;
                     refreshProbeCell({});
                     refreshPreviewCells();
                 });

@@ -116,6 +116,7 @@ const auto& iconAssets() {
         {IconId::LabelFilter, QLatin1StringView("funnel-simple")},
         {IconId::GraphEditor, QLatin1StringView("chart-line")},
         {IconId::Profiler, QLatin1StringView("gauge")},
+        {IconId::Pin, QLatin1StringView("push-pin")},
     });
     return entries;
 }

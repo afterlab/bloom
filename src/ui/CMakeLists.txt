@@ -200,6 +200,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/regular/eyedropper.svg
         kit/third_party/phosphor-icons/regular/chart-line.svg
         kit/third_party/phosphor-icons/regular/gauge.svg
+        kit/third_party/phosphor-icons/regular/push-pin.svg
         kit/third_party/phosphor-icons/regular/selection.svg
         kit/third_party/phosphor-icons/regular/square-half.svg
         kit/third_party/phosphor-icons/regular/align-left.svg
@@ -287,6 +288,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/bold/eyedropper-bold.svg
         kit/third_party/phosphor-icons/bold/chart-line-bold.svg
         kit/third_party/phosphor-icons/bold/gauge-bold.svg
+        kit/third_party/phosphor-icons/bold/push-pin-bold.svg
         kit/third_party/phosphor-icons/bold/selection-bold.svg
         kit/third_party/phosphor-icons/bold/square-half-bold.svg
         kit/third_party/phosphor-icons/bold/align-left-bold.svg
@@ -361,6 +363,7 @@ qt_add_resources(bloom_ui_kit "kinetik_icons"
         kit/third_party/phosphor-icons/fill/eyedropper-fill.svg
         kit/third_party/phosphor-icons/fill/chart-line-fill.svg
         kit/third_party/phosphor-icons/fill/gauge-fill.svg
+        kit/third_party/phosphor-icons/fill/push-pin-fill.svg
         kit/third_party/phosphor-icons/fill/selection-fill.svg
         kit/third_party/phosphor-icons/fill/square-half-fill.svg
         kit/third_party/phosphor-icons/fill/align-left-fill.svg
@@ -675,6 +678,9 @@ target_sources(
         viewer_editor_controls.cpp
         viewer_editor_menus.cpp
     viewer_editor_shutdown.cpp
+    viewer_editor_pin.cpp
+    viewer_preview_pool.cpp
+    workspace_window.cpp
         viewer_channel_display.cpp
         viewer_editor_channel.cpp
         viewer_editor_cryptomatte.cpp
@@ -748,6 +754,8 @@ target_sources(
             include/bloom/ui/ui_feedback.hpp
             include/bloom/ui/ui_sound_engine.hpp
             include/bloom/ui/main_window.hpp
+            include/bloom/ui/viewer_preview_pool.hpp
+            include/bloom/ui/workspace_window.hpp
             include/bloom/ui/assets_editor.hpp
             include/bloom/ui/asset_controller.hpp
             include/bloom/ui/cryptomatte_controller.hpp

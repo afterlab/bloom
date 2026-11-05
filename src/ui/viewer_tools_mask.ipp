@@ -28,7 +28,7 @@ std::optional<ViewerEditor::EditablePath> ViewerEditor::selectedMaskTarget() con
     const auto mask = std::ranges::find(layer->masks, selection->mask, &document::LayerMask::id);
     if (mask == layer->masks.end())
         return {};
-    const auto selected = previewController_.selectedLayerBounds();
+    const auto selected = previewController_->selectedLayerBounds();
     const auto bounds =
         std::ranges::find(selected, selection->layer, &runtime::EvaluatedOperationBounds::layerId);
     if (bounds == selected.end())
@@ -55,7 +55,7 @@ std::optional<ViewerEditor::MaskCreationTarget> ViewerEditor::maskCreationTarget
     if (!layer || selectedPath())
         return {};
     MaskCreationTarget target{*layer, std::nullopt};
-    const auto selected = previewController_.selectedLayerBounds();
+    const auto selected = previewController_->selectedLayerBounds();
     const auto bounds =
         std::ranges::find(selected, *layer, &runtime::EvaluatedOperationBounds::layerId);
     if (bounds != selected.end())
@@ -80,7 +80,7 @@ bool ViewerEditor::maskOutlinePress(QMouseEvent* event, const ViewerMapping& map
     const auto layerId = maskContextLayer(session_);
     const auto* composition = session_.composition();
     const auto* layer = layerId && composition ? composition->graph().findLayer(*layerId) : nullptr;
-    const auto selected = previewController_.selectedLayerBounds();
+    const auto selected = previewController_->selectedLayerBounds();
     const auto bounds =
         layerId ? std::ranges::find(selected, *layerId, &runtime::EvaluatedOperationBounds::layerId)
                 : selected.end();

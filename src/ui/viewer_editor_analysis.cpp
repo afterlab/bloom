@@ -48,15 +48,15 @@ void ViewerEditor::loadViewAdjust() {
 }
 
 bool ViewerEditor::frameInCurrentDomain(const PreparedPreviewFrameHandle& frame) const {
-    return frame && session_.composition() &&
+    return frame && shownComposition() &&
            frame->desiredIdentity().projectId == session_.snapshot().project().id() &&
-           frame->desiredIdentity().compositionId == session_.compositionId();
+           frame->desiredIdentity().compositionId == previewController_->targetCompositionId();
 }
 
 PreparedPreviewFrameHandle ViewerEditor::preparedDisplayFrame() const {
     if (packedHostShutdown_)
         return nullptr;
-    auto base = previewController_.state().frame;
+    auto base = previewController_->state().frame;
     if (!frameInCurrentDomain(base))
         return nullptr;
     if (viewAdjust_.neutral())
@@ -126,7 +126,7 @@ PreparedPreviewFrameHandle ViewerEditor::displayedFrame() const {
 PreparedPreviewFrameHandle ViewerEditor::appliedDisplayFrame() const { return displayedFrame(); }
 
 CompositionPreviewState ViewerEditor::displayedPreviewState() const {
-    auto state = previewController_.state();
+    auto state = previewController_->state();
     state.viewerDisplayState = true;
     if (state.desiredIdentity)
         state.desiredIdentity->viewAdjust = viewAdjust_;
@@ -157,7 +157,7 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
                                    : FrameFreshness::Stale;
     const bool sharedFailure =
         state.activity == PreviewActivity::Failed || state.activity == PreviewActivity::Unsupported;
-    if (!session_.composition() || sharedFailure) {
+    if (!shownComposition() || sharedFailure) {
         // Shared pipeline/configuration diagnostics remain authoritative, including when a
         // local adjustment has no candidate. Display freshness is still projected separately.
     } else if (!adjustmentFailure_.isEmpty() || !nativeFailure_.isEmpty() ||
@@ -172,7 +172,7 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
         state.activity = PreviewActivity::Rendering;
         state.message = tr("Preparing Viewer channel; previous complete display retained");
     } else if (!viewAdjust_.neutral() && !preparedDisplayFrame() &&
-               (adjustTask_ || frameInCurrentDomain(previewController_.state().frame))) {
+               (adjustTask_ || frameInCurrentDomain(previewController_->state().frame))) {
         state.activity = PreviewActivity::Rendering;
         state.message = tr("Preparing viewer adjustment; previous display intent retained");
     } else if (!state.frame && state.activity == PreviewActivity::Ready) {
@@ -222,8 +222,8 @@ CompositionPreviewState ViewerEditor::displayedPreviewState() const {
 void ViewerEditor::refreshViewAdjustment() {
     if (probePosition_)
         refreshProbe(*probePosition_);
-    const auto base = previewController_.state().frame;
-    if (previewController_.isShuttingDown() || !frameInCurrentDomain(base) ||
+    const auto base = previewController_->state().frame;
+    if (previewController_->isShuttingDown() || !frameInCurrentDomain(base) ||
         viewAdjust_.neutral()) {
         if (adjustTask_)
             adjustTask_->cancel();
@@ -248,8 +248,8 @@ void ViewerEditor::refreshViewAdjustment() {
     adjustmentFailure_.clear();
     const auto submission =
         base->provenance().provider == runtime::PreviewDisplayProvider::GpuPreparedPacked
-            ? previewController_.submitViewerDisplay(desired)
-            : previewController_.submitViewerAnalysis(desired);
+            ? previewController_->submitViewerDisplay(desired)
+            : previewController_->submitViewerAnalysis(desired);
     if (!submission.accepted()) {
         adjustmentFailure_ = submission.diagnostic && !submission.diagnostic->summary.empty()
                                  ? QString::fromStdString(submission.diagnostic->summary)
@@ -271,9 +271,9 @@ void ViewerEditor::consumeViewAdjustment() {
     adjustTask_.reset();
     if (result->state() == runtime::TaskState::Cancelled)
         adjustIdentity_.reset();
-    const auto base = previewController_.state().frame;
+    const auto base = previewController_->state().frame;
     const auto& value = result->value();
-    if (!previewController_.isShuttingDown() && base && value && *value && (*value)->frame()) {
+    if (!previewController_->isShuttingDown() && base && value && *value && (*value)->frame()) {
         auto desired = base->desiredIdentity();
         desired.viewAdjust = viewAdjust_;
         if ((*value)->frame()->desiredIdentity() == desired) {

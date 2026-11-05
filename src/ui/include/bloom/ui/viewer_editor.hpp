@@ -25,6 +25,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QTransform>
 #include <QWidget>
 
@@ -73,6 +74,20 @@ class QWheelEvent;
 namespace bloom::ui {
 
 class CompositionPreviewController;
+class ViewerPreviewPool;
+
+// #536 Viewer pin/follow. Following (the default), a Viewer shows the active composition; pinned,
+// it keeps showing one composition, or one node's output, whatever becomes active -- so two
+// monitors can show different things. A pin is session state: never project data, never undoable.
+enum class ViewerPinMode : std::uint8_t { Follow, Composition, Node };
+struct ViewerPin final {
+    ViewerPinMode mode = ViewerPinMode::Follow;
+    document::CompositionId composition;
+    // Node pins: the node and the Image or Mask output shown.
+    document::NodeId node;
+    std::string port;
+    friend bool operator==(const ViewerPin&, const ViewerPin&) = default;
+};
 struct CompositionPreviewState;
 class PlaybackController;
 class RamPreviewController;
@@ -223,6 +238,7 @@ struct ViewerDisplayDescriptor final {
 
 class ViewerEditor final : public QWidget,
                            public EditorChromeProvider,
+                           public EditorSessionStateProvider,
                            public EditorNativeSurface,
                            public PreferencesAware,
                            public kit::KColorSampleSource {
@@ -251,6 +267,39 @@ class ViewerEditor final : public QWidget,
     // have destroyed.
     ~ViewerEditor() override;
     [[nodiscard]] CompositionPreviewState displayedPreviewState() const;
+
+    // --- #536: pin/follow and the Viewer's own preview --------------------------------------
+    // Where a Viewer gets a preview controller of its own. Without one the Viewer can only follow
+    // and share the application's controller. Borrowed; must outlive the Viewer.
+    void setPreviewPool(ViewerPreviewPool* pool);
+    [[nodiscard]] const ViewerPin& pin() const noexcept { return pin_; }
+    // Pins (or, with ViewerPinMode::Follow, unpins). False, and nothing changes, when the pin
+    // names no composition or node of the project, or no preview controller of its own can be
+    // made.
+    bool setPin(ViewerPin pin);
+    bool pinToActiveComposition();
+    // The selected node's first Image or Mask output.
+    bool pinToSelectedNode();
+    void followActiveComposition();
+    // What the header says about the mode: "Following the active composition", "Pinned to ...".
+    [[nodiscard]] QString pinDescription() const;
+    // A Viewer pinned to another composition or to a node shows it for reference: its editing
+    // tools (selection, transforms, text, paths, masks, creation) are off; pan, zoom and the
+    // probe stay.
+    [[nodiscard]] bool isReferenceOnly() const;
+    // True while the Viewer prepares frames through a controller of its own: while pinned, or
+    // while hosted in a window that asks for its own display (a secondary workspace window).
+    [[nodiscard]] bool hasOwnPreview() const noexcept { return ownPreview_ != nullptr; }
+    // The controller the Viewer currently shows frames from (test seam).
+    [[nodiscard]] CompositionPreviewController& boundPreviewForTest() const noexcept {
+        return *previewController_;
+    }
+    // The window property that gives every Viewer in that window its own display transform.
+    static constexpr const char* kIndependentDisplayProperty = "bloomIndependentViewerDisplay";
+    // EditorSessionStateProvider: the pin (for this project) and, for a Viewer with its own
+    // preview, its Display / View.
+    [[nodiscard]] QJsonObject saveEditorSessionState() const override;
+    void restoreEditorSessionState(const QJsonObject& state) override;
     [[nodiscard]] std::optional<ViewerDisplayDescriptor> actualDisplayDescriptor() const;
 
     // them immediately after the panel switcher in the shared editor header.
@@ -619,7 +668,32 @@ class ViewerEditor final : public QWidget,
     void paintViewerContent(QPainter& painter);
 
     CompositionSession& session_;
-    CompositionPreviewController& previewController_;
+    // The controller frames come from: sharedPreview_, or ownPreview_ (#536).
+    CompositionPreviewController* previewController_;
+    // The application's controller: the transport, RAM preview and the window's readouts.
+    CompositionPreviewController& sharedPreview_;
+    std::unique_ptr<CompositionPreviewController> ownPreview_;
+    ViewerPreviewPool* previewPool_ = nullptr;
+    ViewerPin pin_;
+    // Hosted in a window with kIndependentDisplayProperty: the Viewer keeps its own display.
+    bool independentDisplay_ = false;
+    // The Display / View this Viewer chose while it has its own preview (session state).
+    std::optional<QStringList> ownDisplayView_;
+    // Receiver of the shared controller's readout signals, kept apart from `this` so rebinding
+    // the frame source never drops them.
+    QObject* sharedPreviewLink_ = nullptr;
+    QToolButton* pinButton_ = nullptr;
+    QMenu* pinMenu_ = nullptr;
+    kit::KLabel* pinLabel_ = nullptr;
+    void buildPinControl();
+    void updatePinControl();
+    void connectPreviewController();
+    void refreshPreviewBinding();
+    void bindPreviewController(CompositionPreviewController& controller);
+    void applyViewerChoicesToPreview();
+    void resetPreviewDerivedState();
+    void dropStalePin();
+    [[nodiscard]] const document::Composition* shownComposition() const;
     bool dragActive_ = false;
     QPointF dragPointer_;
     std::optional<ViewerMapping> activeMapping_;

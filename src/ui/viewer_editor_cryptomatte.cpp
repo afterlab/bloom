@@ -58,7 +58,7 @@ bool ViewerEditor::cryptomattePress(QMouseEvent* event) {
     // evaluated content-to-composition transform (moves, scales, rotations, parents and the proxy
     // all included) is inverted exactly as mask editing does.
     QPointF framePoint(coordinate.x, coordinate.y);
-    const auto& inspection = previewController_.viewerChannelInspection();
+    const auto& inspection = previewController_->viewerChannelInspection();
     if (!inspection || inspection->node != node->id) {
         if (inspection) {
             controller->reportPick(tr("Show the composition or this Cryptomatte's matte to pick"));
@@ -70,7 +70,7 @@ bool ViewerEditor::cryptomattePress(QMouseEvent* event) {
             return true;
         }
         const auto actual = actualDisplayDescriptor();
-        const auto bounds = previewController_.currentLayerBounds(actual ? actual->frame : nullptr);
+        const auto bounds = previewController_->currentLayerBounds(actual ? actual->frame : nullptr);
         const auto found =
             std::ranges::find(bounds, *layer, &runtime::EvaluatedOperationBounds::layerId);
         const auto world =
@@ -117,11 +117,11 @@ void ViewerEditor::refreshCryptomattePreview() {
         controller->preview(node->id))
         desired = runtime::ChannelInspection{
             node->id, std::string(document::kCryptomattePreviewInspectionPort), {}};
-    const auto& current = previewController_.viewerChannelInspection();
+    const auto& current = previewController_->viewerChannelInspection();
     const bool currentIsPreview =
         current && current->port == document::kCryptomattePreviewInspectionPort;
     if ((currentIsPreview && current != desired) || (!current && desired))
-        previewController_.setViewerChannelInspection(desired);
+        previewController_->setViewerChannelInspection(desired);
 }
 
 } // namespace bloom::ui

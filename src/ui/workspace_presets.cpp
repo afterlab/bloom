@@ -195,7 +195,7 @@ std::optional<QString> WorkspacePresets::validateName(const QString& name) const
 bool WorkspacePresets::saveCurrentAs(const QString& name) {
     if (validateName(name))
         return false;
-    user_.push_back({name.trimmed(), false, host_.saveLayoutState()});
+    user_.push_back({name.trimmed(), false, host_.saveLayoutState(false)});
     active_ = user_.back().name;
     edited_ = false;
     persist();
@@ -207,7 +207,7 @@ bool WorkspacePresets::updateActive() {
     const auto found = std::ranges::find(user_, active_, &WorkspacePreset::name);
     if (found == user_.end())
         return false;
-    found->layout = host_.saveLayoutState();
+    found->layout = host_.saveLayoutState(false);
     edited_ = false;
     persist();
     emit changed();
@@ -306,7 +306,7 @@ void WorkspacePresets::refreshEdited() {
     bool edited = false;
     if (const auto* preset = find(active_); preset != nullptr) {
         const auto wanted = shapeOf(preset->layout);
-        const auto live = shapeOf(host_.saveLayoutState());
+        const auto live = shapeOf(host_.saveLayoutState(false));
         edited = !(wanted && live && matches(*wanted, *live));
     }
     if (edited != edited_) {

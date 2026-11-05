@@ -133,7 +133,7 @@ void CompositionPreviewController::consumeReadyResult() {
         return;
     }
     if (!liveSessionMatches(completed.desiredIdentity)) {
-        requestPreview(session_.compositionId() != completed.desiredIdentity.compositionId,
+        requestPreview(targetCompositionId() != completed.desiredIdentity.compositionId,
                        PreviewRequestKind::Visible);
         return;
     }

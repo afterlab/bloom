@@ -64,7 +64,8 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
                                ExportQueueAdapter* const exportQueue,
                                scripting::LiveSessionHost* const liveSession,
                                McpServerAdapter* const mcpServer,
-                               ProfilerFeed* const profilerFeed) {
+                               ProfilerFeed* const profilerFeed,
+                               ViewerPreviewPool* const viewerPreviews) {
     std::shared_ptr<ScriptPanelRuntime> script;
 #ifdef BLOOM_BUILD_PYTHON
     if (projectHost) {
@@ -93,8 +94,10 @@ bool registerFoundationEditors(EditorRegistry& registry, CompositionSession& ses
 
     return addEditor(
                "bloom.viewer", "Viewer",
-               [&session, &previewController, ramPreview, gpuDependencies](QWidget* parent) {
+               [&session, &previewController, ramPreview, gpuDependencies,
+                viewerPreviews](QWidget* parent) {
                    auto* viewer = new ViewerEditor(session, previewController, ramPreview, parent);
+                   viewer->setPreviewPool(viewerPreviews);
                    if (gpuDependencies != nullptr && gpuDependencies->presentationClient) {
                        viewer->setGpuPresentationDependencies(
                            gpuDependencies->presentationClient(), gpuDependencies->scheduler,

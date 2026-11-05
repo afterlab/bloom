@@ -8,9 +8,20 @@
 #include <bloom/ui/kit/tokens.hpp>
 
 #include <QAction>
+#include <QApplication>
 #include <QChildEvent>
 #include <QContextMenuEvent>
+#include <QCursor>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
+#include <QGuiApplication>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QPixmap>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -101,6 +112,11 @@ constexpr int kHeaderButtonExtent = kit::px(kit::Size::Control);
 // one color a rounded panel's corner always reveals in this design language -- leaving the arc's
 // interior untouched so whatever is legitimately there (the header/footer's own rounded paint, or
 // content within the curve) still shows through normally.
+
+
+[[nodiscard]] bool isPanelDrag(const QMimeData* mime) {
+    return mime != nullptr && mime->hasFormat(QString::fromLatin1(kPanelDragMimeType));
+}
 
 } // namespace
 
@@ -208,6 +224,12 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     menuMaximizeAction->setObjectName("panelMaximizeAction");
     connect(menuMaximizeAction, &QAction::triggered, this,
             [this] { emit maximizeRequested(this); });
+    // #536: the keyboard and menu path of tearing the panel off into a window of its own.
+    auto* moveToWindowAction = contextMenu_->addAction(tr("Move to New Window"));
+    moveToWindowAction->setObjectName(QStringLiteral("panelMoveToNewWindowAction"));
+    connect(moveToWindowAction, &QAction::triggered, this,
+            [this] { emit tearOffRequested(this, QPoint{}); });
+    contextMenu_->setToolTipsVisible(true);
     auto* menuCloseAction = contextMenu_->addAction(tr("Close"));
     menuCloseAction->setObjectName("panelCloseAction");
     connect(menuCloseAction, &QAction::triggered, this, [this] { emit closeRequested(this); });
@@ -247,6 +269,9 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // The rounded frame overlay: created last so it starts on top, and it re-raises itself
     // whenever a child is added later (the chrome rebuild builds header and footer after this).
     frameOverlay_ = new kit::KPanelFrame(this);
+    dockIndicator_ = new kit::KDropIndicator(this);
+    dockIndicator_->setObjectName(QStringLiteral("panelDockIndicator"));
+    setAcceptDrops(true);
 
     watchForActivation(this);
     setAreaActive(false);
@@ -410,6 +435,173 @@ void EditorArea::setMaximizedAppearance(bool maximized) {
     if (auto* action = contextMenu_->findChild<QAction*>("panelMaximizeAction")) {
         action->setText(toolTip);
     }
+}
+
+void EditorArea::setMoveToNewWindowEnabled(const bool enabled, const QString& reason) {
+    if (auto* action = contextMenu_->findChild<QAction*>("panelMoveToNewWindowAction")) {
+        action->setEnabled(enabled);
+        action->setToolTip(enabled ? tr("Open this panel in a window of its own") : reason);
+    }
+}
+
+QJsonObject EditorArea::editorSessionState() const {
+    if (const auto* provider = dynamic_cast<const EditorSessionStateProvider*>(editorWidget_))
+        return provider->saveEditorSessionState();
+    return {};
+}
+
+void EditorArea::setEditorSessionState(const QJsonObject& state) {
+    if (state.isEmpty())
+        return;
+    if (auto* provider = dynamic_cast<EditorSessionStateProvider*>(editorWidget_))
+        provider->restoreEditorSessionState(state);
+}
+
+PanelDockEdge EditorArea::dockEdgeAt(const QPointF position) const {
+    // Distance to each edge as a fraction of the area's extent on that axis, so a wide area does
+    // not favour its top and bottom edges.
+    const double w = std::max(1, width());
+    const double h = std::max(1, height());
+    const std::array<std::pair<double, PanelDockEdge>, 4> distances{{
+        {position.x() / w, PanelDockEdge::Left},
+        {(w - position.x()) / w, PanelDockEdge::Right},
+        {position.y() / h, PanelDockEdge::Top},
+        {(h - position.y()) / h, PanelDockEdge::Bottom},
+    }};
+    return std::ranges::min_element(distances, {}, &std::pair<double, PanelDockEdge>::first)
+        ->second;
+}
+
+QRect EditorArea::dockRect(const PanelDockEdge edge) const {
+    const QRect whole = rect();
+    switch (edge) {
+    case PanelDockEdge::Left:
+        return whole.adjusted(0, 0, -whole.width() / 2, 0);
+    case PanelDockEdge::Right:
+        return whole.adjusted(whole.width() / 2, 0, 0, 0);
+    case PanelDockEdge::Top:
+        return whole.adjusted(0, 0, 0, -whole.height() / 2);
+    case PanelDockEdge::Bottom:
+        break;
+    }
+    return whole.adjusted(0, whole.height() / 2, 0, 0);
+}
+
+void EditorArea::showDockIndicator(const std::optional<PanelDockEdge> edge) {
+    dockIndicatorEdge_ = edge;
+    if (!edge) {
+        dockIndicator_->hide();
+        return;
+    }
+    dockIndicator_->setGeometry(dockRect(*edge));
+    dockIndicator_->show();
+    dockIndicator_->raise();
+}
+
+void EditorArea::handlePanelDragOver(QDropEvent& event, const QPointF local, const bool move) {
+    const auto* mime = event.mimeData();
+    if (QString::fromUtf8(mime->data(QString::fromLatin1(kPanelDragMimeType))) == areaId_) {
+        // Over itself: nothing to dock, and the release is still no tear-off.
+        event.setDropAction(Qt::MoveAction);
+        event.accept();
+        showDockIndicator(std::nullopt);
+        return;
+    }
+    event.setDropAction(Qt::MoveAction);
+    if (move)
+        static_cast<QDragMoveEvent&>(event).accept(QRect{});
+    event.accept();
+    showDockIndicator(dockEdgeAt(local));
+}
+
+void EditorArea::handlePanelDrop(QDropEvent& event, const QPointF local) {
+    showDockIndicator(std::nullopt);
+    const auto source =
+        QString::fromUtf8(event.mimeData()->data(QString::fromLatin1(kPanelDragMimeType)));
+    event.setDropAction(Qt::MoveAction);
+    event.accept();
+    if (source != areaId_)
+        emit dockRequested(source, this, dockEdgeAt(local));
+}
+
+void EditorArea::dragEnterEvent(QDragEnterEvent* event) {
+    if (!isPanelDrag(event->mimeData())) {
+        event->ignore();
+        return;
+    }
+    handlePanelDragOver(*event, event->position(), false);
+}
+
+void EditorArea::dragMoveEvent(QDragMoveEvent* event) {
+    if (!isPanelDrag(event->mimeData())) {
+        event->ignore();
+        return;
+    }
+    handlePanelDragOver(*event, event->position(), true);
+}
+
+void EditorArea::dragLeaveEvent(QDragLeaveEvent* /*event*/) { showDockIndicator(std::nullopt); }
+
+void EditorArea::dropEvent(QDropEvent* event) {
+    if (!isPanelDrag(event->mimeData())) {
+        event->ignore();
+        return;
+    }
+    handlePanelDrop(*event, event->position());
+}
+
+bool EditorArea::handleHeaderDrag(QObject* watched, QMouseEvent* event) {
+    // Only the header's own background starts a drag: its controls (the panel switcher opens on
+    // press, the buttons click) keep their own gestures.
+    if (watched != header_ && watched != headerLeft_ &&
+        (headerMenus_ == nullptr || watched != headerMenus_))
+        return false;
+    switch (event->type()) {
+    case QEvent::MouseButtonPress:
+        if (event->button() == Qt::LeftButton)
+            dragPressGlobal_ = event->globalPosition().toPoint();
+        return false;
+    case QEvent::MouseMove:
+        if (dragPressGlobal_ && (event->buttons() & Qt::LeftButton) &&
+            (event->globalPosition().toPoint() - *dragPressGlobal_).manhattanLength() >=
+                QApplication::startDragDistance()) {
+            dragPressGlobal_.reset();
+            startPanelDrag(event->globalPosition().toPoint());
+            return true;
+        }
+        return false;
+    case QEvent::MouseButtonRelease:
+        dragPressGlobal_.reset();
+        return false;
+    default:
+        return false;
+    }
+}
+
+void EditorArea::startPanelDrag(const QPoint /*globalPosition*/) {
+    // The drag belongs to the window, not to this area: a drop may close this area while the drag
+    // is still unwinding.
+    auto* drag = new QDrag(window());
+    auto* mime = new QMimeData;
+    mime->setData(QString::fromLatin1(kPanelDragMimeType), areaId_.toUtf8());
+    drag->setMimeData(mime);
+    const QPixmap header = header_->grab();
+    drag->setPixmap(header.width() > kit::px(kit::Size::PanelMinWidth)
+                        ? header.copy(0, 0, kit::px(kit::Size::PanelMinWidth), header.height())
+                        : header);
+    drag->setHotSpot(header_->mapFromGlobal(QCursor::pos()));
+    const QPointer<EditorArea> self(this);
+    const Qt::DropAction result = drag->exec(Qt::MoveAction);
+    drag->deleteLater();
+    if (self == nullptr || result != Qt::IgnoreAction)
+        return;
+    // Released outside every workspace: the panel tears off into a window of its own there. A
+    // Wayland client cannot see where outside its own windows the pointer is, so any release a
+    // workspace did not take counts as outside.
+    const QPoint at = QCursor::pos();
+    const bool wayland = QGuiApplication::platformName().startsWith(QStringLiteral("wayland"));
+    if (wayland || QApplication::topLevelAt(at) == nullptr)
+        emit tearOffRequested(this, wayland ? QPoint{} : at);
 }
 
 QSize EditorArea::minimumSizeHint() const {
@@ -640,6 +832,30 @@ bool EditorArea::eventFilter(QObject* watched, QEvent* event) {
     // lands here exactly like one delivered to the header directly; a right-click inside the
     // switcher's OWN open popup never reaches this filter at all, since that popup is a separate
     // top-level widget the header does not parent.
+    // A panel dragged over a child that takes drops of its own (the Viewer takes Assets items) is
+    // still this area's to dock: the child never sees it.
+    if (watched != this && (event->type() == QEvent::DragEnter ||
+                            event->type() == QEvent::DragMove || event->type() == QEvent::Drop)) {
+        auto* drop = static_cast<QDropEvent*>(event);
+        if (isPanelDrag(drop->mimeData())) {
+            const auto* child = qobject_cast<QWidget*>(watched);
+            const QPointF local = child != nullptr
+                                      ? QPointF(child->mapTo(this, drop->position().toPoint()))
+                                      : drop->position();
+            if (event->type() == QEvent::Drop)
+                handlePanelDrop(*drop, local);
+            else
+                handlePanelDragOver(*drop, local, event->type() == QEvent::DragMove);
+            return true;
+        }
+    }
+    if (watched != this && event->type() == QEvent::DragLeave)
+        showDockIndicator(std::nullopt);
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
+        event->type() == QEvent::MouseButtonRelease) {
+        if (handleHeaderDrag(watched, static_cast<QMouseEvent*>(event)))
+            return true;
+    }
     if (watched == header_ && event->type() == QEvent::ContextMenu) {
         const auto* menuEvent = static_cast<QContextMenuEvent*>(event);
         contextMenu_->popup(menuEvent->globalPos());

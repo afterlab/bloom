@@ -5,15 +5,21 @@
 #include <QByteArray>
 #include <QFrame>
 #include <QHash>
+#include <QJsonObject>
 #include <QList>
 #include <QPointer>
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+class QDragEnterEvent;
+class QDragMoveEvent;
+class QDropEvent;
 class QMenu;
 class QPoint;
 class QSettings;
@@ -25,6 +31,7 @@ namespace bloom::ui {
 
 class EditorArea;
 class EditorRegistry;
+enum class PanelDockEdge : std::uint8_t;
 
 enum class WorkspaceLayoutRestoreResult {
     Restored,
@@ -66,8 +73,27 @@ class WorkspaceHost final : public QFrame {
                              double newAreaFraction = 0.4);
 
     EditorArea* splitActiveArea(Qt::Orientation orientation);
+    // `before` puts the new area to the left of (or above) `area` instead of after it; `state` is
+    // the new editor's session state (EditorSessionStateProvider).
     EditorArea* splitArea(EditorArea& area, Qt::Orientation orientation,
-                          std::string initialEditorId = {}, double newAreaFraction = 0.5);
+                          std::string initialEditorId = {}, double newAreaFraction = 0.5,
+                          bool before = false, const QJsonObject& state = {});
+    // #536: docks a panel (editor `editorId` with session `state`) against `target`, taking the
+    // half of it on `edge`. Returns the new area, or nullptr when it could not be added (the area
+    // limit, a maximized panel, or a native surface still retiring).
+    EditorArea* dockPanel(EditorArea& target, PanelDockEdge edge, std::string editorId,
+                          const QJsonObject& state);
+    // Every area of the tree, in tree order, and the one with `areaId` (case-insensitive).
+    [[nodiscard]] QList<EditorArea*> areas() const;
+    [[nodiscard]] EditorArea* findArea(const QString& areaId) const;
+    // #536: closes the whole tree, all-or-nothing through the native-surface retirement gate, and
+    // runs `done` once it is gone (inline for a CPU-only tree). The host is empty afterwards and
+    // only fit for deletion. Used when its window closes.
+    void closeAll(std::function<void(bool closed)> done);
+    // #536: one active highlight across windows. A host whose window is not the active workspace
+    // paints no active highlight; its own active area is kept and comes back with the window.
+    void setActiveHighlightEnabled(bool enabled);
+    [[nodiscard]] bool isActiveHighlightEnabled() const noexcept { return highlightEnabled_; }
     [[nodiscard]] bool closeActiveArea();
     [[nodiscard]] bool closeArea(EditorArea& area);
     // Join: `survivor` expands over `absorbed`, its neighbour on the other side of one divider, and
@@ -79,7 +105,9 @@ class WorkspaceHost final : public QFrame {
     [[nodiscard]] bool isAreaMaximized() const noexcept;
     void toggleMaximizeActiveArea();
 
-    [[nodiscard]] QByteArray saveLayoutState() const;
+    // `includeEditorState` (schema 3) saves each editor's session state with its area; a workspace
+    // preset leaves it out, since a preset holds the arrangement only.
+    [[nodiscard]] QByteArray saveLayoutState(bool includeEditorState = true) const;
     [[nodiscard]] WorkspaceLayoutRestoreResult restoreLayoutState(const QByteArray& state);
     // Rearranges the panels into `layoutState` (the saveLayoutState() format) WITHOUT rebuilding the
     // ones it keeps: each area of the new tree is taken from the current tree when one hosts the
@@ -112,6 +140,17 @@ class WorkspaceHost final : public QFrame {
     // The arrangement changed: a split, close, divider drag, editor swap or a restored layout.
     // Emitted for artist edits and for programmatic changes alike; the preset picker compares.
     void layoutChanged();
+    // #536: an area asked to leave for a window of its own (menu or drag), or a dragged panel was
+    // dropped on one of this host's areas. The application, which owns every window, acts.
+    void tearOffRequested(EditorArea* area, QPoint globalPosition);
+    void dockRequested(const QString& sourceAreaId, EditorArea* target, PanelDockEdge edge);
+
+  protected:
+    // A panel dropped on the workspace's own gutters is taken (and ignored), so only a release
+    // outside every workspace tears a panel off.
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
   private:
     EditorArea* createArea(std::string_view initialEditorId = {}, QString areaId = {});
@@ -145,6 +184,7 @@ class WorkspaceHost final : public QFrame {
     QHash<QSplitter*, QList<int>> preMaximizeSizes_;
     NativeSurfaceRetirementGate surfaceRetirementGate_;
     std::string lastNativeSurfaceDiagnostic_;
+    bool highlightEnabled_ = true;
 };
 
 } // namespace bloom::ui

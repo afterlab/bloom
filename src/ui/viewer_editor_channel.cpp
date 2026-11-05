@@ -37,7 +37,7 @@ void ViewerEditor::startChannelDisplay() {
         if (!sameViewerPackedSource(channelView_->frame, channelWantedFrame_))
             add(viewerPackedSourceByteCost(channelView_->frame));
     }
-    const auto submission = previewController_.submitViewerChannelDisplay(
+    const auto submission = previewController_->submitViewerChannelDisplay(
         channelWantedFrame_, channelWantedChannel_, retainedBytes);
     if (!submission.accepted()) {
         channelFailure_ = tr("Viewer channel preparation could not be admitted");
@@ -173,14 +173,14 @@ void ViewerEditor::refreshChannelInspectionChoices() {
     }
     if (!target) {
         // Keep the choices of an active inspection so its entry stays visible after deselection.
-        if (!previewController_.viewerChannelInspection()) {
+        if (!previewController_->viewerChannelInspection()) {
             inspectionChoices_.clear();
             choicesTarget_.reset();
             rebuildChannelDropdown();
         }
         return;
     }
-    const auto submission = previewController_.submitChannelListing(target->node, target->port);
+    const auto submission = previewController_->submitChannelListing(target->node, target->port);
     if (submission.accepted()) {
         listingTask_ = submission.handle;
         listingTaskTarget_ = target;
@@ -217,7 +217,7 @@ void ViewerEditor::rebuildChannelDropdown() {
     for (const auto& choice : inspectionChoices_)
         channelDropdown_->addItem(tr("Inspect %1").arg(QString::fromStdString(choice.label)));
     int current = static_cast<int>(channel_);
-    if (const auto& inspection = previewController_.viewerChannelInspection();
+    if (const auto& inspection = previewController_->viewerChannelInspection();
         inspection && choicesTarget_ && inspection->node == choicesTarget_->node &&
         inspection->port == choicesTarget_->port) {
         for (std::size_t index = 0; index < inspectionChoices_.size(); ++index)
@@ -231,7 +231,7 @@ void ViewerEditor::chooseChannelDropdownIndex(const int index) {
     if (index < 0)
         return;
     if (index < kStandardChannelCount) {
-        previewController_.setViewerChannelInspection(std::nullopt);
+        previewController_->setViewerChannelInspection(std::nullopt);
         setChannel(static_cast<ViewerChannel>(index));
         return;
     }
@@ -240,7 +240,7 @@ void ViewerEditor::chooseChannelDropdownIndex(const int index) {
         return;
     // A session display choice: a viewer-only plan shows the channels raw; the project, its
     // compiled plan and every render or export are untouched.
-    previewController_.setViewerChannelInspection(runtime::ChannelInspection{
+    previewController_->setViewerChannelInspection(runtime::ChannelInspection{
         choicesTarget_->node, choicesTarget_->port, inspectionChoices_[choice].channels});
     setChannel(ViewerChannel::Rgba);
     rebuildChannelDropdown();

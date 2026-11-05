@@ -254,7 +254,7 @@ bool ViewerEditor::textPress(QMouseEvent* event) {
 }
 
 void ViewerEditor::publishRoi() {
-    previewController_.setRegionOfInterest(roiAction_ && roiAction_->isChecked() ? roiRect_
+    previewController_->setRegionOfInterest(roiAction_ && roiAction_->isChecked() ? roiRect_
                                                                                  : std::nullopt);
     updateRoiControls();
     update();

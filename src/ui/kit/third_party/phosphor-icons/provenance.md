@@ -106,6 +106,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `regular/eyedropper.svg` | `87cad5a974a6f152cc7dce67fd6c41fdc21f75d59bed20508b68c95f65d9ebc5` |
 | `regular/chart-line.svg` | `8a432fac53ae887b1726a96462aa8ea285e714b8e480261751361e4d6b2b226f` |
 | `regular/gauge.svg` | `c4e6d0499a3f3feada9599ec6d67ba03c28fe3c93ee34e82e5474bf0bca1df79` |
+| `regular/push-pin.svg` | `64c2dc8e17ac0dc1107990c1843654804f7960c35c49acdb5df5c45286910de1` |
 | `regular/selection.svg` | `5fff68fdc60d81f1855302416481dc69fe9f0abfbb353d3bc43f2c24150ab8d4` |
 | `regular/square-half.svg` | `09f561de8c5e6ed831723a1bc8f6f987fb453928a0028a3f95a0366bae055768` |
 | `regular/align-left.svg` | `37cf5a3b41f55b36b33623f5a987e3b4b6c4494e0c0ff46f5f16df8e305a39ab` |
@@ -191,6 +192,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `fill/eyedropper-fill.svg` | `8fb839f52aaadbe156dc9982deab2288c1e23fe335d65f7a638ba21ac8078037` |
 | `fill/chart-line-fill.svg` | `9528e485b685eca0c75dee314feb5f8cff3a0728325cfe811034e20af6aa9934` |
 | `fill/gauge-fill.svg` | `d598ac541234317975936732c705ff8b0b3a47bab5238d0f2dfd27c683dd2e76` |
+| `fill/push-pin-fill.svg` | `b3a7a363401c6e09ccd0fc5a7f6813c3183dab69b07eaca3419acf2fafe942b3` |
 | `fill/selection-fill.svg` | `39c98d739e03eecf38da5ccceb1093ca3b45826ee98a187e99bac2c3923fd8a2` |
 | `fill/square-half-fill.svg` | `b7de8273c0735917754a13552d4a1d84f5e4cbe40c8c1458e84ca1c4d0644628` |
 | `fill/align-left-fill.svg` | `704fc89bcaebb23f08b74b65cbb14b2c00d3a1f9409bc8f4790560f555afc65a` |
@@ -275,6 +277,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 | `bold/eyedropper-bold.svg` | `84cca4e37e3c813098a0b4dada7bfce670c56ad5ec0e924d0e3002e7218b7786` |
 | `bold/chart-line-bold.svg` | `ffff5add2c0384a6e4e2f661fd3784c4facfdc9d8bfe98d8467d710a6261b29c` |
 | `bold/gauge-bold.svg` | `6873e3efef663672352a24c3396ba2d7260df1c3c46cf7baae229bf12f316f1b` |
+| `bold/push-pin-bold.svg` | `47cf424c346b4cf5b581f037499d519796735f4c1b31a0ec44b945d43779aa4b` |
 | `bold/selection-bold.svg` | `bca7ab4688ca03ed591ba3cfba90bda277b25596b649898388c51aebc7742fb3` |
 | `bold/square-half-bold.svg` | `2f8165874291b521ab54da329ffeb2628a0ba7cb20a38e4e81eaa23f6815c230` |
 | `bold/align-left-bold.svg` | `dcae6ce0e634a7ff0bca9a151d1d0767d1333828aa542e8fac9dc213a47f65b4` |
@@ -336,7 +339,7 @@ Digests are SHA-256 over the checked-in bytes, with new files verified against d
 
 ## Manifest
 
-SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `b8a267103f469b1c43daf3a28ea26ea6e81630dd253c42c5a98436646cd2d003`.
+SHA-256 of sorted `<sha256>  <filename>\n` lines for all SVGs above: `47506a7a4fc3eceea43dcaab498b64c1312f1f10c122b298e74586766933ebc2`.
 
 ```sh
 (cd regular && sha256sum *.svg; cd ../fill && sha256sum *.svg; cd ../bold && sha256sum *.svg) | LC_ALL=C sort | sha256sum
@@ -362,3 +365,7 @@ The Profiler panel icon (issue #423, 2026-11-01) downloaded the same pinned arch
 SHA-256 above from the downloaded bytes, and extracted `gauge` in regular, fill and bold from
 `assets/` without modification, for the Profiler's panel-switcher glyph. The manifest digest above
 was recomputed over the whole checked-in subset with the command shown.
+The Viewer pin (issue #536, 2026-11-05) downloaded the same pinned archive, verified its SHA-256
+above from the downloaded bytes, and extracted `push-pin` in regular, fill and bold from `assets/`
+without modification, for the Viewer's follow/pin control. The manifest digest above was
+recomputed over the whole checked-in subset with the command shown.

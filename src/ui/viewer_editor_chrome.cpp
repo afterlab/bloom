@@ -67,12 +67,24 @@ void ViewerEditor::buildHeader() {
                 }
                 const auto id = document::CompositionId::fromRaw(
                     compositionSelector_->itemData(index).toULongLong());
-                if (id.isValid()) {
+                if (!id.isValid())
+                    return;
+                // A pinned Viewer re-pins to the chosen composition (#536); a following one
+                // makes it the active composition.
+                if (pin_.mode != ViewerPinMode::Follow)
+                    (void)setPin({.mode = ViewerPinMode::Composition,
+                                   .composition = id,
+                                   .node = {},
+                                   .port = {}});
+                else
                     (void)session_.setComposition(id);
-                }
             });
     bar->addWidget(compositionSelector_);
     bar->setElideFloor(compositionSelector_, kit::px(kit::Size::DropdownWidth));
+    // #536: follow the active composition, or pin this Viewer to one composition or node.
+    buildPinControl();
+    bar->addWidget(pinButton_);
+    bar->addWidget(pinLabel_);
 
     // Retired: the composition commands live in the application's Composition menu. The hidden
     // button keeps the old automation identities, and each of its actions runs the application's
@@ -173,6 +185,12 @@ bool ViewerEditor::triggerApplicationCommand(const QString& objectName) {
     if (host == nullptr || host == this)
         return false;
     auto* action = host->findChild<QAction*>(objectName);
+    // A secondary workspace window carries the application's commands as its own actions (#536).
+    if (action == nullptr) {
+        for (auto* candidate : host->actions())
+            if (candidate->objectName() == objectName)
+                action = candidate;
+    }
     auto* owner = action != nullptr ? qobject_cast<QWidget*>(action->parent()) : nullptr;
     if (action == nullptr || owner == this || (owner != nullptr && isAncestorOf(owner)))
         return false;
@@ -208,7 +226,7 @@ void ViewerEditor::rebuildCompositionSelector() {
                                       QVariant::fromValue<qulonglong>(composition.id().value()));
         compositionSelector_->setItemToolTip(index,
                                              tr("Composition shown in the Viewer: %1").arg(name));
-        if (composition.id() == session_.compositionId()) {
+        if (composition.id() == previewController_->targetCompositionId()) {
             selectedIndex = index;
         }
         ++index;
@@ -315,7 +333,12 @@ void ViewerEditor::rebuildDisplayViewControl() {
     viewerDisplayView_->setFixedWidth(
         std::clamp(viewerDisplayView_->sizeHint().width(), kit::px(kit::Size::DropdownWidth),
                    kit::px(kit::Size::ViewerDisplayViewWidth)));
-    const auto saved = session_.viewerDisplayViewMemory().recall(displayViewConfigRevision());
+    // A Viewer with its own preview shows its own choice; in a secondary window it starts on the
+    // project's default display (#536). The shared Viewers show the project's remembered choice.
+    const auto saved = ownDisplayView_ ? ownDisplayView_
+                       : ownPreview_ != nullptr && independentDisplay_
+                           ? std::nullopt
+                           : session_.viewerDisplayViewMemory().recall(displayViewConfigRevision());
     int selectedIndex = defaultIndex;
     if (saved) {
         for (int index = 0; index < viewerDisplayView_->count(); ++index) {
@@ -331,7 +354,7 @@ void ViewerEditor::rebuildDisplayViewControl() {
     viewerDisplayView_->setCurrentIndex(selectedIndex);
     const auto selected = viewerDisplayView_->itemData(selectedIndex).toStringList();
     if (selected.size() == 2) {
-        previewController_.setViewerDisplayView(selected[0].toStdString(),
+        previewController_->setViewerDisplayView(selected[0].toStdString(),
                                                 selected[1].toStdString());
     }
 }
@@ -518,8 +541,14 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
                 if (selected.size() != 2) {
                     return;
                 }
-                session_.viewerDisplayViewMemory().remember(displayViewConfigRevision(), selected);
-                previewController_.setViewerDisplayView(selected[0].toStdString(),
+                // A Viewer with its own preview keeps its own choice (#536); the shared one is
+                // remembered for the project.
+                if (ownPreview_ != nullptr)
+                    ownDisplayView_ = selected;
+                else
+                    session_.viewerDisplayViewMemory().remember(displayViewConfigRevision(),
+                                                                selected);
+                previewController_->setViewerDisplayView(selected[0].toStdString(),
                                                         selected[1].toStdString());
             });
     // Another project installed (New or Open) starts on its own remembered choice, or on the Viewer
@@ -536,10 +565,10 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
     viewerLookToggle_->setDefaultAction(lookAction_);
     const bool showLook = QSettings().value(lookSettingsKey(), true).toBool();
     lookAction_->setChecked(showLook);
-    previewController_.setViewerLookEnabled(showLook);
+    previewController_->setViewerLookEnabled(showLook);
     connect(lookAction_, &QAction::toggled, this, [this](const bool enabled) {
         QSettings().setValue(lookSettingsKey(), enabled);
-        previewController_.setViewerLookEnabled(enabled);
+        previewController_->setViewerLookEnabled(enabled);
     });
     rebuildDisplayViewControl();
     updateLookControl();
@@ -577,7 +606,7 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
         }
     }
     resolutionDropdown_->setCurrentIndex(savedIndex);
-    previewController_.setResolutionPolicy(
+    previewController_->setResolutionPolicy(
         static_cast<runtime::PreviewResolutionPolicy>(savedIndex));
     connect(resolutionDropdown_, &kit::KDropdown::currentIndexChanged, this,
             [this](const int index) {
@@ -587,25 +616,18 @@ void ViewerEditor::buildFooter(RamPreviewController* const ramPreview) {
                 QSettings().setValue(
                     kResolutionSetting,
                     QString::fromLatin1(kResolutionNames[static_cast<std::size_t>(index)]));
-                previewController_.setResolutionPolicy(
+                previewController_->setResolutionPolicy(
                     static_cast<runtime::PreviewResolutionPolicy>(index));
             });
-    connect(&previewController_, &CompositionPreviewController::resolutionChanged, this, [this] {
-        const QSignalBlocker blocker(resolutionDropdown_);
-        resolutionDropdown_->setCurrentIndex(
-            static_cast<int>(previewController_.settings().resolutionPolicy));
-        resolutionReadout_->setText(viewerResolutionText(previewController_));
-        resolutionDropdown_->setToolTip(tr("Resolution: %1").arg(viewerResolutionText(previewController_)));
-    });
     // Retired as a footer item, kept for automation: what the chosen policy resolved to. The
     // Resolution tooltip says the same.
     resolutionReadout_ = new kit::KLabel(footer);
     resolutionReadout_->setObjectName("viewerResolutionReadout");
     resolutionReadout_->setAccessibleName(tr("Effective preview resolution"));
     resolutionReadout_->setFont(kit::font(kit::TypeRole::Value));
-    resolutionReadout_->setText(viewerResolutionText(previewController_));
+    resolutionReadout_->setText(viewerResolutionText(*previewController_));
     resolutionReadout_->hide();
-    resolutionDropdown_->setToolTip(tr("Resolution: %1").arg(viewerResolutionText(previewController_)));
+    resolutionDropdown_->setToolTip(tr("Resolution: %1").arg(viewerResolutionText(*previewController_)));
 
     // Retired as a footer item, kept for automation and the preferences path: the surround is
     // chosen from View > Background. The stored value goes through the Preferences model's one

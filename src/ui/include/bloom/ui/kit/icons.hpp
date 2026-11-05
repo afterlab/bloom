@@ -136,6 +136,8 @@ enum class IconId : std::uint8_t {
     GraphEditor,
     // The Profiler panel (a gauge).
     Profiler,
+    // The Viewer's follow/pin control (#536): a push pin, filled while the Viewer is pinned.
+    Pin,
 };
 
 // Regular is the default interface weight; Fill marks a selected or toggled state. ADR 0010: add

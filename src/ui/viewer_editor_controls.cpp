@@ -439,9 +439,9 @@ void ViewerEditor::updateLoopButton() {
 void ViewerEditor::refreshZoomDropdown() {
     updatePreviewResolution();
     if (resolutionReadout_ != nullptr) {
-        resolutionReadout_->setText(viewerResolutionText(previewController_));
+        resolutionReadout_->setText(viewerResolutionText(*previewController_));
         resolutionDropdown_->setToolTip(
-            tr("Resolution: %1").arg(viewerResolutionText(previewController_)));
+            tr("Resolution: %1").arg(viewerResolutionText(*previewController_)));
     }
     if (zoomDropdown_ == nullptr) {
         return;
@@ -525,7 +525,7 @@ void ViewerEditor::layoutEmptyState() {
 void ViewerEditor::updateEmptyState() {
     if (emptyState_ == nullptr)
         return;
-    emptyState_->setVisible(session_.composition() == nullptr);
+    emptyState_->setVisible(shownComposition() == nullptr);
     layoutEmptyState();
 }
 

@@ -51,8 +51,8 @@ CompositionPreviewController::submitChannelListing(const document::NodeId node, 
     if (shuttingDown_ || !channelListingProvider_)
         return {};
     const auto time = session_.currentTime();
-    auto snapshot = session_.evaluationSnapshotForTime(time);
-    const auto composition = session_.compositionId();
+    auto snapshot = evaluationSnapshotFor(time);
+    const auto composition = targetCompositionId();
     if (snapshot.project().findComposition(composition) == nullptr)
         return {};
     runtime::TaskRequest request(
@@ -95,7 +95,7 @@ CompositionPreviewController::submitViewerPreparation(
     // carry THAT snapshot -- makeCompositionPreviewPipeline rejects a request whose identity and
     // snapshot revisions disagree -- rather than always the live one.
     const auto& live = session_.snapshot();
-    const auto& evaluation = session_.evaluationSnapshotForTime(identity.time);
+    const auto& evaluation = evaluationSnapshotFor(identity.time);
     const bool liveProvenance = identity.sourceRevision == live.revision();
     const bool evaluationProvenance = identity.sourceRevision == evaluation.revision();
     if (!liveProvenance && !evaluationProvenance)
@@ -104,9 +104,12 @@ CompositionPreviewController::submitViewerPreparation(
     // Active overrides were frozen against the live revision. They may only ride a request whose
     // identity names that same revision; if they cannot match it, refuse rather than pair
     // incompatible data.
-    auto overrides = session_.transformInteractionOverrides();
-    const auto valueOverrides = session_.valueEditOverrides();
-    overrides.insert(overrides.end(), valueOverrides.begin(), valueOverrides.end());
+    auto overrides = targetIsElsewhere() ? std::vector<runtime::SnapshotParameterOverride>{}
+                                         : session_.transformInteractionOverrides();
+    if (!targetIsElsewhere()) {
+        const auto valueOverrides = session_.valueEditOverrides();
+        overrides.insert(overrides.end(), valueOverrides.begin(), valueOverrides.end());
+    }
     for (const auto& override : overrides) {
         if (override.sourceRevision != identity.sourceRevision)
             return {};

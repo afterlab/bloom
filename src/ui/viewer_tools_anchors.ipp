@@ -107,7 +107,7 @@ void ViewerEditor::previewPathEdit(AnchorGesture& gesture, const document::PathV
         if (!started)
             return;
         gesture.previewing = true;
-        previewController_.beginInteractiveScrub();
+        previewController_->beginInteractiveScrub();
     }
     if (target.owner == EditablePath::Owner::Shape)
         (void)session_.updatePathEdit(next, toolValue(pathCentre(next) - pathCentre(gesture.base)));
@@ -120,7 +120,7 @@ void ViewerEditor::endPathPreview(AnchorGesture& gesture) {
         return;
     if (session_.isValueEditing(gesture.target.parameter))
         session_.cancelValueEdit();
-    previewController_.notifyScrubEnded();
+    previewController_->notifyScrubEnded();
     gesture.previewing = false;
 }
 

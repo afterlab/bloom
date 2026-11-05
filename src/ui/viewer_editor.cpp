@@ -279,8 +279,9 @@ void ViewerEditor::zoomOutAtCenter() {
 ViewerEditor::ViewerEditor(CompositionSession& session,
                            CompositionPreviewController& previewController,
                            RamPreviewController* const ramPreview, QWidget* parent)
-    : QWidget(parent), session_(session), previewController_(previewController),
-      ramPreview_(ramPreview) {
+    : QWidget(parent), session_(session), previewController_(&previewController),
+      sharedPreview_(previewController), ramPreview_(ramPreview) {
+    sharedPreviewLink_ = new QObject(this);
     setObjectName("viewerEditor");
     setAccessibleName(tr("Composition viewer"));
     // Assets items dropped on the Viewer become layers at the playhead, centred (#380).
@@ -297,12 +298,9 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // lets the widget receive Space/Z/F without a prior click.
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    connect(this, &ViewerEditor::probeChanged, &previewController_,
+    // The probe readout belongs to the window's status bar, which reads the shared controller.
+    connect(this, &ViewerEditor::probeChanged, &sharedPreview_,
             &CompositionPreviewController::probeChanged);
-    connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
-        if (probePosition_)
-            refreshProbe(*probePosition_);
-    });
 
     connect(&session_, &CompositionSession::snapshotChanged, this, [this] { cancelCreation(); });
     connect(&session_, &CompositionSession::compositionChanged, this, [this] {
@@ -329,8 +327,6 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     connect(&session_, &CompositionSession::snapshotChanged, this,
             [this] { notifyAnchorModeState(); });
     connect(&session_, &CompositionSession::currentTimeChanged, this,
-            [this] { notifyAnchorModeState(); });
-    connect(&previewController_, &CompositionPreviewController::stateChanged, this,
             [this] { notifyAnchorModeState(); });
     connect(&session_, &CompositionSession::liveValueChanged, this, [this] {
         if (textEdit_ && !session_.isValueEditing(textEdit_->parameter))
@@ -431,42 +427,22 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
             [this] { timeReadout_->refresh(); });
     // Task S5, item 3b: the dropped-frame readout follows the SAME refresh idiom as every other
     // footer element -- connect to whatever changes it, then update() this widget and the footer.
-    connect(&previewController_, &CompositionPreviewController::droppedFrameCountChanged, this,
-            [this] {
+    connect(&sharedPreview_, &CompositionPreviewController::droppedFrameCountChanged,
+            sharedPreviewLink_, [this] {
                 update();
                 if (statusBarFooter_ != nullptr) {
                     statusBarFooter_->update();
                 }
             });
     // Task PERF1, item 3: the RAM preview progress readout, through that same idiom.
-    connect(&previewController_, &CompositionPreviewController::ramPreviewProgressChanged, this,
-            [this] {
+    connect(&sharedPreview_, &CompositionPreviewController::ramPreviewProgressChanged,
+            sharedPreviewLink_, [this] {
                 update();
                 if (statusBarFooter_ != nullptr) {
                     statusBarFooter_->update();
                 }
             });
-    connect(&previewController_, &CompositionPreviewController::stateChanged, this, [this] {
-        updatePreviewAccessibility();
-        resolutionReadout_->setText(viewerResolutionText(previewController_));
-        resolutionDropdown_->setToolTip(viewerResolutionText(previewController_));
-        // A newly delivered frame may carry a format/proxy/pixel-aspect/display-descriptor change
-        // (docs/architecture/animation-and-time.md); a mid-drag mapping change cancels the gesture
-        // rather than silently mis-mapping the rest of it.
-        if (dragActive_ && !mappingStillValid()) {
-            endDrag(false);
-        }
-        update();
-        if (statusBarFooter_ != nullptr) {
-            statusBarFooter_->update();
-        }
-    });
-    connect(&previewController_, &CompositionPreviewController::stateChanged, this,
-            &ViewerEditor::refreshViewAdjustment);
-    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
-            &ViewerEditor::consumeChannelDisplay);
-    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
-            &ViewerEditor::consumeChannelListing);
+    connectPreviewController();
     connect(&session_, &CompositionSession::selectionChanged, this,
             &ViewerEditor::refreshChannelInspectionChoices);
     connect(&session_, &CompositionSession::selectionChanged, this,
@@ -480,49 +456,17 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     refreshCryptomattePreview();
     connect(&session_, &CompositionSession::snapshotChanged, this,
             &ViewerEditor::refreshChannelInspectionChoices);
-    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
-            &ViewerEditor::consumeViewAdjustment);
-    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
-            &ViewerEditor::consumeProbe);
-    connect(&previewController_, &CompositionPreviewController::viewerResultsAvailable, this,
-            &ViewerEditor::pollResidentCpuFallback);
     connect(&session_, &CompositionSession::documentRebound, this, [this] {
-        resetChannelDisplay();
-        // Different document owners may have colliding numeric project/composition/revision IDs.
-        // Detach cancelled per-view work and every local retained display before re-evaluation;
-        // no late completion can become a candidate for the newly bound document.
-        if (adjustTask_)
-            adjustTask_->cancel();
-        adjustTask_.reset();
-        adjustIdentity_.reset();
-        adjustedFrame_.reset();
-        adjustmentFailure_.clear();
-        if (cpuFallbackTask_)
-            cpuFallbackTask_->cancel();
-        cpuFallbackTask_.reset();
-        cpuFallbackIdentity_.reset();
-        cpuFallbackFailedIdentity_.reset();
-        cpuFallbackFrame_.reset();
-        lastCpuFrame_.reset();
-        gpuRequestedFrame_.reset();
-        cpuPaintedDisplay_.reset();
-        cpuCoverDisplay_.reset();
-        coverCaptureDisplay_.reset();
-        clearProbe();
-        probeTask_.reset();
-        probeIdentity_.reset();
-        probeTaskFrame_.reset();
-        probeCacheFrame_.reset();
-        probeCacheReference_.reset();
-        probeCacheDisplayLinear_.reset();
-        probeCacheDisplay_.reset();
-        probeFailure_.clear();
-        ++gpuOverlayRevision_;
-        gpuPublicationDomain_.reset();
-        updateGpuResidentPresentation();
-        updatePreviewAccessibility();
-        update();
+        resetPreviewDerivedState();
     });
+    // #536: a pin whose composition or node went away falls back to following.
+    connect(&session_, &CompositionSession::snapshotChanged, this, &ViewerEditor::dropStalePin);
+    connect(&session_, &CompositionSession::documentRebound, this,
+            [this] { followActiveComposition(); });
+    connect(&session_, &CompositionSession::compositionChanged, this,
+            [this] { updatePinControl(); });
+    connect(&session_, &CompositionSession::selectionChanged, this,
+            [this] { updatePinControl(); });
     updatePreviewResolution();
     updatePreviewAccessibility();
     updateOverlayActions();
@@ -530,7 +474,7 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
     // GPU-resident presentation is inert until setGpuPresentationDependencies() supplies a live
     // client. It never creates a device/thread here; the adapter owns the only native objects.
     gpuResident_ = std::make_unique<ViewerGpuResidentController>();
-    gpuResident_->setFrameTrace(previewController_.frameTrace());
+    gpuResident_->setFrameTrace(previewController_->frameTrace());
     gpuResident_->setPresentAck([this](const bool presented, const std::string& diagnostic) {
         // True only for an owner-applied coherent pair; its exact frame may remain stale.
         residentActive_ = presented || gpuResident_->canRetainAppliedDisplay();
@@ -837,7 +781,7 @@ void ViewerEditor::applyApplicationPreferences(const ApplicationPreferences& pre
 ViewTransform ViewerEditor::viewTransformForTest() const noexcept { return transform_; }
 
 QString ViewerEditor::statusBarReadoutTextForTest() const {
-    return viewerResolutionText(previewController_);
+    return viewerResolutionText(*previewController_);
 }
 
 ViewerChannel ViewerEditor::channelForTest() const noexcept { return channel_; }
@@ -871,7 +815,7 @@ QRectF ViewerEditor::canvasRect() const {
 }
 
 QColor ViewerEditor::frameBackgroundColor() const {
-    return compositionFrameColor(session_.composition());
+    return compositionFrameColor(shownComposition());
 }
 
 void ViewerEditor::layoutStatusBar() {
@@ -888,7 +832,7 @@ void ViewerEditor::updatePreviewResolution() {
     // A resident frame is presented at its native resolution. Auto stays stable Full so a zoom/pan
     // only updates the present parameters (destination/source) and never forces a re-evaluation or
     // an implicit proxy resolution change. Half/Quarter remain explicit choices made elsewhere.
-    const auto base = previewController_.state().frame;
+    const auto base = previewController_->state().frame;
     if (residentFrameIsDisplayed() ||
         (frameInCurrentDomain(base) &&
          base->provenance().provider == runtime::PreviewDisplayProvider::GpuResident)) {
@@ -904,7 +848,7 @@ void ViewerEditor::updatePreviewResolution() {
     if (actual.isEmpty() || displayed.isEmpty()) {
         return;
     }
-    previewController_.setDisplayedCompositionScale(
+    previewController_->setDisplayedCompositionScale(
         std::max(displayed.width() / actual.width(), displayed.height() / actual.height()) *
         devicePixelRatioF());
 }
@@ -923,6 +867,9 @@ bool ViewerEditor::event(QEvent* event) {
                         event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Hide))
         endDrag(false);
     const bool handled = QWidget::event(event);
+    // #536: the hosting window decides whether this Viewer keeps its own display transform.
+    if (event->type() == QEvent::Show)
+        refreshPreviewBinding();
     if (event->type() == QEvent::DevicePixelRatioChange) {
         if (dragActive_) {
             endDrag(false);
@@ -948,7 +895,7 @@ void ViewerEditor::setZoomPercent(const int percent) {
 }
 
 std::optional<ViewerEditor::DisplayGeometry> ViewerEditor::currentDisplayGeometry() const {
-    const auto* composition = session_.composition();
+    const auto* composition = shownComposition();
     if (composition == nullptr) {
         return std::nullopt;
     }
@@ -966,7 +913,7 @@ void ViewerEditor::paintEvent(QPaintEvent* event) {
     // footer -- not just the padded fit rectangle (owner, 2026-09-15: "it should be 100% to
     // viewer content width and height, not partial"). canvasRect() stays the fit target only.
     const QRectF surround = contentRect();
-    const auto* composition = session_.composition();
+    const auto* composition = shownComposition();
 
     if (composition == nullptr) {
         // Honest empty state (decision 5): the plain surround -- no frame background or grid,
@@ -1081,7 +1028,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                             displayRect.height()};
                     painter.drawImage(dataRect, image, QRectF(image.rect()));
                     if (!coverSnapshotInProgress_ && !displayRect.isEmpty()) {
-                        if (const auto& trace = previewController_.frameTrace(); trace) {
+                        if (const auto& trace = previewController_->frameTrace(); trace) {
                             // QPainter submission, not compositor scanout. Use the actual painted
                             // CPU fallback identity, which may differ from current desired intent.
                             trace->record(*cpuFrame, PreviewTraceStage::CpuPaint,
@@ -1091,10 +1038,10 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
                     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
                     paintViewerCompositionFrame(painter, displayRect);
                     if (geometry.has_value()) {
-                        const auto bounds = previewController_.selectedLayerBounds(cpuFrame);
+                        const auto bounds = previewController_->selectedLayerBounds(cpuFrame);
                         const auto descriptor = render::ReferenceDisplayBufferDescriptor::create(
                             bufferView->displayWindow, bufferView->pixelAspect);
-                        if (descriptor && session_.composition()) {
+                        if (descriptor && shownComposition()) {
                             const ViewerMapping mapping{
                                 displayRect, format, cpuFrame->desiredIdentity().resolution,
                                 bufferView->pixelAspect, *descriptor.value()};
@@ -1216,7 +1163,8 @@ std::optional<ViewerMapping> ViewerEditor::currentMapping() const {
     if (identity.projectId != evaluation.project().id() ||
         (identity.sourceRevision != live.revision() &&
          identity.sourceRevision != evaluation.revision()) ||
-        actual->mapping->compositionFormat != session_.composition()->format() ||
+        shownComposition() == nullptr ||
+        actual->mapping->compositionFormat != shownComposition()->format() ||
         actual->overlayRevision != gpuOverlayRevision_ || actual->captureRect != contentRect() ||
         actual->devicePixelRatio != devicePixelRatioF())
         return std::nullopt;
@@ -1232,7 +1180,7 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
     // SPLIT-2: read geometry translated to the CURRENT live graph, then order by the live Merge
     // entries. The raw frame bounds carry the retained snapshot's layer IDs, which after an
     // equivalent split name the head.
-    const auto bounds = previewController_.currentLayerBounds(frame);
+    const auto bounds = previewController_->currentLayerBounds(frame);
     if (const auto* stack = session_.timelineMerge()) {
         for (const auto& entry : stack->entries()) {
             const auto found = std::ranges::find(bounds, entry.layerId,
@@ -1241,7 +1189,7 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
                 ordered.push_back(*found);
         }
     }
-    const auto selected = previewController_.selectedLayerBounds(frame);
+    const auto selected = previewController_->selectedLayerBounds(frame);
     return hitTestViewer(mapping, point, ordered, selected, pointTextLayers(session_, selected));
 }
 
@@ -1276,7 +1224,7 @@ void ViewerEditor::endDrag(const bool commit) {
     }
     // Reuses TimelineRuler's Interactive-cadence arming (docs/architecture/animation-and-time.md,
     // "Session Time And Scrubbing"): bypasses any remaining trailing delay and disarms it.
-    previewController_.notifyScrubEnded();
+    previewController_->notifyScrubEnded();
 }
 
 void ViewerEditor::beginPan(const Qt::MouseButton button, const QPointF screenPoint,
@@ -1338,17 +1286,20 @@ void ViewerEditor::updatePanCursor() {
 void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (roiPress(event))
         return;
-    if (cryptomattePress(event))
+    // #536: a reference Viewer (pinned elsewhere, or to a node) keeps pan, zoom, the region of
+    // interest and the probe; it never edits what it does not show.
+    const bool reference = isReferenceOnly();
+    if (!reference && cryptomattePress(event))
         return;
-    if (textEditPress(event))
+    if (!reference && textEditPress(event))
         return;
-    if (textPress(event))
+    if (!reference && textPress(event))
         return;
-    if (anchorPress(event))
+    if (!reference && anchorPress(event))
         return;
-    if (pathPress(event))
+    if (!reference && pathPress(event))
         return;
-    if (creationPress(event))
+    if (!reference && creationPress(event))
         return;
     if (dragActive_ && event->button() == Qt::RightButton) {
         endDrag(false);
@@ -1383,7 +1334,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (event->button() != Qt::LeftButton || tool() != ViewerTool::Select || dragActive_) {
+    if (reference || event->button() != Qt::LeftButton || tool() != ViewerTool::Select ||
+        dragActive_) {
         QWidget::mousePressEvent(event);
         return;
     }
@@ -1421,7 +1373,7 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         actual->devicePixelRatio != devicePixelRatioF() || transform_ != pressedTransform ||
         gpuNativeRetirePending_ || gpuHostMutationPending_)
         return;
-    const auto selected = previewController_.selectedLayerBounds(actual->frame);
+    const auto selected = previewController_->selectedLayerBounds(actual->frame);
     const auto bounds =
         std::ranges::find(selected, hit.layerId, &runtime::EvaluatedOperationBounds::layerId);
     if (bounds == selected.end())
@@ -1454,7 +1406,7 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     activeGestureTransform_ = transform_;
     activeGestureSelectionRevision_ = gpuOverlayRevision_;
     setFocus(Qt::MouseFocusReason);
-    previewController_.beginInteractiveScrub();
+    previewController_->beginInteractiveScrub();
     event->accept();
 }
 

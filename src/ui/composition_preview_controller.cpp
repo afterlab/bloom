@@ -123,6 +123,15 @@ CompositionPreviewController::CompositionPreviewController(
     });
     connect(&session_, &CompositionSession::currentTimeChanged, this,
             &CompositionPreviewController::handleCurrentTimeChanged);
+    // A composition pinned elsewhere is prepared from the live snapshot, so every revision the
+    // session publishes may change its pixels (the retained provenance that lets the active
+    // composition skip render-neutral edits does not describe it).
+    connect(&session_, &CompositionSession::snapshotChanged, this, [this] {
+        if (!targetIsElsewhere() || shuttingDown_ || !state_.desiredIdentity ||
+            state_.desiredIdentity->sourceRevision == session_.snapshot().revision())
+            return;
+        requestPreview(false, PreviewRequestKind::Visible);
+    });
     connect(&session_, &CompositionSession::transformInteractionChanged, this,
             &CompositionPreviewController::handleTransformInteractionChanged);
     connect(&session_, &CompositionSession::retainedEvaluationChanged, this,
@@ -254,8 +263,8 @@ CompositionPreviewController::cacheKeyForTime(const core::RationalTime time) con
     // committed preview actually produced at that time even after a finite clip-range edit left a
     // different revision live elsewhere. This is what lets RAM preview, background caching and the
     // transport reuse unaffected frames.
-    const auto& snapshot = session_.evaluationSnapshotForTime(time);
-    const auto compositionId = session_.compositionId();
+    const auto& snapshot = evaluationSnapshotFor(time);
+    const auto compositionId = targetCompositionId();
     if (snapshot.project().findComposition(compositionId) == nullptr) {
         return std::nullopt;
     }
@@ -291,8 +300,7 @@ void CompositionPreviewController::setRegionOfInterest(std::optional<QRectF> reg
 std::optional<render::ImageWindow> CompositionPreviewController::regionOfInterest() const {
     if (!regionOfInterest_)
         return std::nullopt;
-    const auto* composition =
-        session_.snapshot().project().findComposition(session_.compositionId());
+    const auto* composition = targetComposition();
     if (!composition)
         return std::nullopt;
     const auto format = composition->format();
@@ -329,7 +337,7 @@ std::uint32_t CompositionPreviewController::resolutionDivisor() const noexcept {
     case runtime::PreviewResolutionPolicy::Auto:
         break;
     }
-    const auto* composition = session_.composition();
+    const auto* composition = targetComposition();
     if (composition == nullptr || displayedCompositionScale_ >= 1.0) {
         return 1;
     }
@@ -347,7 +355,7 @@ std::uint32_t CompositionPreviewController::resolutionDivisor() const noexcept {
 
 runtime::EvaluationResolution CompositionPreviewController::resolution() const {
     const auto divisor = resolutionDivisor();
-    const auto* composition = session_.composition();
+    const auto* composition = targetComposition();
     if (divisor == 1 || composition == nullptr) {
         return runtime::CompositionFormatResolution{};
     }
@@ -469,7 +477,9 @@ void CompositionPreviewController::handleCompositionChanged() {
     refreshRetentionRange();
     if (!shuttingDown_) {
         preparationEstimate_.reset();
-        requestPreview(true, PreviewRequestKind::Visible);
+        // A pinned controller keeps showing its composition: the frame it has stays until the
+        // next one replaces it.
+        requestPreview(!compositionTarget_.has_value(), PreviewRequestKind::Visible);
     }
 }
 
@@ -488,10 +498,10 @@ void CompositionPreviewController::handleDocumentEvaluationChanged() {
     const auto targetTime = pending_.has_value()  ? pending_->desiredIdentity.time
                             : active_.has_value() ? active_->desiredIdentity.time
                                                   : session_.currentTime();
-    const auto acceptedRevision = session_.evaluationSnapshotForTime(targetTime).revision();
+    const auto acceptedRevision = evaluationSnapshotFor(targetTime).revision();
     const auto projectId = session_.snapshot().project().id();
     const auto stillAccepted = [&](const runtime::PreviewRequestIdentity& identity) {
-        return identity.compositionId == session_.compositionId() &&
+        return identity.compositionId == targetCompositionId() &&
                identity.projectId == projectId && identity.sourceRevision == acceptedRevision;
     };
     // A retained frame whose pixels are still accepted does NOT imply its exposed geometry is
@@ -539,6 +549,8 @@ void CompositionPreviewController::handleWorkAreaChanged() {
 }
 
 void CompositionPreviewController::refreshRetentionRange() {
+    if (!settings_.scopesCacheRetention)
+        return;
     const auto* composition = session_.composition();
     if (composition == nullptr) {
         frameCache_->setRetentionRange(std::nullopt);
@@ -588,7 +600,7 @@ void CompositionPreviewController::handleCurrentTimeChanged() {
         return;
     }
     if (state_.desiredIdentity.has_value() &&
-        state_.desiredIdentity->compositionId == session_.compositionId() &&
+        state_.desiredIdentity->compositionId == targetCompositionId() &&
         state_.desiredIdentity->time == session_.currentTime()) {
         return;
     }
@@ -860,7 +872,8 @@ void CompositionPreviewController::requestPreview(
     // first means we never re-stamp an override's sourceRevision or hand it a snapshot that
     // disagrees with it.
     std::vector<runtime::SnapshotParameterOverride> interactionOverride;
-    if (kind == PreviewRequestKind::Interactive) {
+    // The overrides edit the active composition; a composition pinned elsewhere never takes them.
+    if (kind == PreviewRequestKind::Interactive && !targetIsElsewhere()) {
         interactionOverride = session_.transformInteractionOverrides();
         const auto values = session_.valueEditOverrides();
         interactionOverride.insert(interactionOverride.end(), values.begin(), values.end());
@@ -868,9 +881,9 @@ void CompositionPreviewController::requestPreview(
     // TEMPORAL-2B: a committed request resolves the genuine snapshot for its exact time; an
     // override request always uses the live snapshot its overrides were frozen against.
     const document::Snapshot snapshot =
-        interactionOverride.empty() ? session_.evaluationSnapshotForTime(session_.currentTime())
+        interactionOverride.empty() ? evaluationSnapshotFor(session_.currentTime())
                                     : session_.snapshot();
-    const document::CompositionId compositionId = session_.compositionId();
+    const document::CompositionId compositionId = targetCompositionId();
     PreparedPreviewFrameHandle retainedFrame = clearLastGoodFrame ? nullptr : state_.frame;
     if (retainedFrame != nullptr &&
         (retainedFrame->desiredIdentity().projectId != snapshot.project().id() ||
@@ -1233,17 +1246,51 @@ bool CompositionPreviewController::liveSessionMatches(
     // agrees, so an old project's frame can never become current merely because its numeric
     // revision collides. isCurrent() and the stale-result rejections below are unchanged.
     const auto& live = session_.snapshot();
-    if (session_.compositionId() != desiredIdentity.compositionId)
+    if (targetCompositionId() != desiredIdentity.compositionId)
         return false;
     if (live.project().id() != desiredIdentity.projectId)
         return false;
     // TEMPORAL-2B: a committed frame is current when its own genuine snapshot is the one the
     // session accepts FOR ITS TIME; an interactive frame carries the live revision. An old
     // project's frame can never become current merely because its numeric revision collides.
-    const auto& accepted = session_.evaluationSnapshotForTime(desiredIdentity.time);
+    const auto& accepted = evaluationSnapshotFor(desiredIdentity.time);
     return desiredIdentity.sourceRevision == live.revision() ||
            (accepted.project().id() == desiredIdentity.projectId &&
             desiredIdentity.sourceRevision == accepted.revision());
+}
+
+document::CompositionId CompositionPreviewController::targetCompositionId() const noexcept {
+    return compositionTarget_.value_or(session_.compositionId());
+}
+
+const document::Composition* CompositionPreviewController::targetComposition() const noexcept {
+    if (!compositionTarget_)
+        return session_.composition();
+    return session_.snapshot().project().findComposition(*compositionTarget_);
+}
+
+bool CompositionPreviewController::targetIsElsewhere() const noexcept {
+    return compositionTarget_.has_value() && *compositionTarget_ != session_.compositionId();
+}
+
+const document::Snapshot&
+CompositionPreviewController::evaluationSnapshotFor(const core::RationalTime time) const {
+    return targetIsElsewhere() ? session_.snapshot() : session_.evaluationSnapshotForTime(time);
+}
+
+void CompositionPreviewController::setCompositionTarget(
+    const std::optional<document::CompositionId> composition) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (compositionTarget_ == composition)
+        return;
+    compositionTarget_ = composition;
+    if (shuttingDown_)
+        return;
+    interactiveCadenceTimer_.stop();
+    preparationEstimate_.reset();
+    pending_.reset();
+    cancelAndDetachActive();
+    requestPreview(true, PreviewRequestKind::Visible);
 }
 
 } // namespace bloom::ui

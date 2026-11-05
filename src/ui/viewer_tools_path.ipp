@@ -17,7 +17,7 @@ std::optional<ViewerEditor::PathSelection> ViewerEditor::selectedPath() const {
     const auto value = session_.liveValue(parameter->id);
     if (!value || !std::holds_alternative<document::PathValue>(*value))
         return {};
-    const auto selected = previewController_.selectedLayerBounds();
+    const auto selected = previewController_->selectedLayerBounds();
     const auto layer = session_.selection().contextualLayer;
     const auto bounds = std::ranges::find(selected, layer.value_or(document::LayerId{}),
                                           &runtime::EvaluatedOperationBounds::layerId);

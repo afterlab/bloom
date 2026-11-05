@@ -32,6 +32,16 @@ class KPanelFrame final : public QWidget {
     QWidget* panel_;
     bool active_ = false;
 };
+// Where a dragged item will land: a Selection wash under an Accent SelectionEdge border. It never
+// takes the mouse, so the drag keeps reaching the widget beneath it. A dragged panel's dock target
+// (#536) is its user.
+class KDropIndicator final : public QWidget {
+  public:
+    explicit KDropIndicator(QWidget* parent);
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+};
 class KDiamond : public QWidget {
   public:
     using QWidget::QWidget;

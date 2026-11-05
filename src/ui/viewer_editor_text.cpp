@@ -67,8 +67,8 @@ bool ViewerEditor::beginTextEditing(std::optional<QPointF> point, const bool sel
     edit->world.translate(-anchor.x, -anchor.y);
     // SPLIT-2: geometry translated to the CURRENT live graph, so a retained frame after an
     // equivalent split addresses the live tail/head identity rather than a stale one.
-    if (previewController_.state().frame) {
-        const auto bounds = previewController_.currentLayerBounds();
+    if (previewController_->state().frame) {
+        const auto bounds = previewController_->currentLayerBounds();
         if (const auto parent = session_.parentOf(*layer)) {
             for (const auto& candidate : bounds)
                 if (candidate.layerId == *parent)
@@ -81,8 +81,8 @@ bool ViewerEditor::beginTextEditing(std::optional<QPointF> point, const bool sel
                     edit->world = *world;
     }
     edit->emptyWorld = edit->world;
-    if (previewController_.state().frame) {
-        for (const auto& bounds : previewController_.currentLayerBounds()) {
+    if (previewController_->state().frame) {
+        for (const auto& bounds : previewController_->currentLayerBounds()) {
             if (bounds.layerId != *layer || bounds.local.empty())
                 continue;
             const auto& w = edit->world;
@@ -121,7 +121,7 @@ bool ViewerEditor::beginTextEditing(std::optional<QPointF> point, const bool sel
     setAttribute(Qt::WA_InputMethodEnabled, true);
     setFocus(Qt::OtherFocusReason);
     setCursor(Qt::IBeamCursor);
-    previewController_.beginInteractiveScrub();
+    previewController_->beginInteractiveScrub();
     refreshTextLayout();
     return true;
 }
@@ -159,7 +159,7 @@ void ViewerEditor::finishTextEditing(const bool commit) {
             session_.cancelValueEdit();
         }
     }
-    previewController_.notifyScrubEnded();
+    previewController_->notifyScrubEnded();
     unsetCursor();
     updatePreviewAccessibility();
     update();
@@ -200,7 +200,7 @@ QTransform ViewerEditor::textToScreen() const {
     if (!textEdit_)
         return {};
     auto world = textEdit_->layoutContent.isEmpty() ? textEdit_->emptyWorld : textEdit_->world;
-    const auto bounds = previewController_.selectedLayerBounds();
+    const auto bounds = previewController_->selectedLayerBounds();
     for (const auto& bound : bounds)
         if (bound.layerId == textEdit_->layer && !textEdit_->layoutContent.isEmpty())
             if (const auto evaluated = textWorld(bound))
@@ -266,6 +266,10 @@ void ViewerEditor::moveTextCaret(const QPointF screenPoint, const bool extend) {
     update();
 }
 void ViewerEditor::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (isReferenceOnly()) {
+        QWidget::mouseDoubleClickEvent(event);
+        return;
+    }
     if (tool() == ViewerTool::Select && event->button() == Qt::LeftButton) {
         endDrag(false);
         if (const auto mapping = currentMapping()) {

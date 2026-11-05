@@ -391,7 +391,7 @@ inline constexpr double SidebarShare = 0.1875;
 inline constexpr double TimelineShare = 0.48;
 inline constexpr double NodesShare = 0.50;
 inline constexpr double PropertiesShare = 0.68;
-inline constexpr int WorkspaceVersion = 2;
+inline constexpr int WorkspaceVersion = 3;
 } // namespace Layout
 
 // Stroke widths in design pixels.

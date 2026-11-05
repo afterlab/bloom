@@ -1,16 +1,25 @@
 #pragma once
 
+#include <bloom/ui/workspace_window.hpp>
+
+#include <QList>
 #include <QMainWindow>
+#include <QPoint>
 #include <QPointer>
 #include <QTimer>
 
 #include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
 
 class QAction;
 class QCloseEvent;
 class QLabel;
 class QMenu;
 class QMenuBar;
+class QJsonArray;
+class QJsonValue;
 class QSettings;
 class QStackedWidget;
 
@@ -41,6 +50,10 @@ class ContextBar;
 class WorkspaceHost;
 class WorkspacePresets;
 class ViewerEditor;
+class EditorArea;
+class EditorNativeSurface;
+class WorkspaceWindow;
+enum class PanelDockEdge : std::uint8_t;
 enum class WorkspaceLayoutRestoreResult;
 
 // Historical custom-chrome setting (task U2, issue #118). Superseded by task C1 ("let OS handle
@@ -91,6 +104,7 @@ class MainWindow final : public QMainWindow {
                media::cache::MediaDiskCache* mediaDiskCache = nullptr,
                const AccelerationStatusProvider* accelerationStatus = nullptr,
                CachePurgeController* cachePurgeController = nullptr);
+    ~MainWindow() override;
 
     // ADR 0033: the application's export queue. Enables File > Add to Export Queue (Ctrl+M) and
     // shows the Export panel whenever a job is added. Null leaves the item present and disabled
@@ -99,6 +113,30 @@ class MainWindow final : public QMainWindow {
     [[nodiscard]] QAction* addToExportQueueAction() const noexcept { return addToExportQueueAction_; }
 
     [[nodiscard]] WorkspaceHost* workspaceHost() const noexcept;
+
+    // --- #536: secondary workspace windows ----------------------------------------------------
+    // Window > New Window: another full workspace window on the same session, with no menu bar
+    // and no toolbar. `layoutState` (WorkspaceHost::saveLayoutState()) is its arrangement, a
+    // single Viewer when empty; `placement` where it opens, beside this window when absent.
+    WorkspaceWindow* openWorkspaceWindow(const QByteArray& layoutState = {},
+                                         const std::optional<WorkspaceWindowPlacement>& placement = {});
+    [[nodiscard]] QList<WorkspaceWindow*> workspaceWindows() const;
+    // The main workspace first, then every secondary window's.
+    [[nodiscard]] QList<WorkspaceHost*> workspaceHosts() const;
+    // The workspace whose window was activated last: the one panel commands act on, and the one
+    // that paints the single active highlight.
+    [[nodiscard]] WorkspaceHost* activeWorkspaceHost() const noexcept;
+    // Tear-off: the panel leaves for a new window of its own (at `globalPosition` when given).
+    // Returns its area there, or nullptr (it is the only panel of its window, a panel is
+    // maximized, or a native surface is still retiring). One undo-free UI action.
+    EditorArea* tearOffPanel(EditorArea& area, QPoint globalPosition = {});
+    // Re-dock: the panel moves next to `target` (any window), taking the half of it on `edge`. A
+    // secondary window left without panels closes. Returns the panel's new area, or nullptr.
+    EditorArea* movePanel(EditorArea& source, EditorArea& target, PanelDockEdge edge);
+    // Every live editor native surface in every window, for the shutdown retirement gate.
+    [[nodiscard]] std::vector<EditorNativeSurface*> liveNativeSurfaces() const;
+    void releasePackedFramesForShutdown();
+    [[nodiscard]] QAction* newWindowAction() const noexcept { return newWindowAction_; }
     // The Viewer the status bar and context bar follow: the active area's, else the last active
     // one, else the first visible. Null with no visible Viewer.
     [[nodiscard]] ViewerEditor* displayedViewer();
@@ -142,6 +180,8 @@ class MainWindow final : public QMainWindow {
     void preferencesChanged();
     // The Preferences Sounds page asked to hear a sample at its unsaved volume.
     void soundTestRequested(const bloom::ui::ApplicationPreferences& draft);
+    // #536: a secondary workspace window opened (New Window, tear-off or a restored session).
+    void workspaceWindowOpened(bloom::ui::WorkspaceWindow* window);
 
   protected:
     void closeEvent(QCloseEvent* event) override;
@@ -157,6 +197,15 @@ class MainWindow final : public QMainWindow {
     void createHelpMenu(QMenu& helpMenu);
     void updatePurgeActions();
     void createEditorLayout(const EditorRegistry& editorRegistry);
+    void connectWorkspaceHost(WorkspaceHost& host);
+    void setActiveWorkspaceHost(WorkspaceHost* host);
+    [[nodiscard]] WorkspaceHost* hostOf(const QWidget* widget) const;
+    [[nodiscard]] EditorArea* findAreaAnywhere(const QString& areaId) const;
+    [[nodiscard]] QList<QAction*> applicationActions() const;
+    [[nodiscard]] bool belongsToWorkspace(const QWidget* widget) const;
+    void restoreWorkspaceWindows(const QJsonValue& windows);
+    [[nodiscard]] QJsonArray saveWorkspaceWindows() const;
+    [[nodiscard]] WorkspaceWindowPlacement placementBesideMainWindow() const;
     void createCentralStack();
     QWidget* createReadOnlyPlaceholderPage();
     void createWorkspaceActions();
@@ -178,8 +227,15 @@ class MainWindow final : public QMainWindow {
     void showPreferences();
     void applyPreferencesToOpenEditors(const ApplicationPreferences& preferences);
 
+    const EditorRegistry& editorRegistry_;
     CompositionSession& compositionSession_;
     ProjectHost& projectHost_;
+    std::vector<QPointer<WorkspaceWindow>> workspaceWindows_;
+    QPointer<WorkspaceHost> activeHost_;
+    QAction* newWindowAction_ = nullptr;
+    // macOS: the one parentless menu bar every window shares (Qt's documented route to one global
+    // menu bar for all windows). Elsewhere the menu bar is this window's own.
+    std::unique_ptr<QMenuBar> globalMenuBar_;
     // Borrowed, may be null; the command itself is owned by the application composition root.
     RamPreviewController* ramPreview_ = nullptr;
     // Borrowed, may be null; owned by the application composition root, and read only by the

@@ -222,9 +222,10 @@ void testLegacyLayoutMigration(Expectations& expectations) {
                             window.workspacePresets()->activeName() == QStringLiteral("Default"),
                         "legacy layout gains all panels of the Default preset");
     const auto migrated = window.workspaceHost()->saveLayoutState();
-    expectations.expect(QJsonDocument::fromJson(migrated).object().value("schema").toInt() == 2 &&
+    expectations.expect(QJsonDocument::fromJson(migrated).object().value("schema").toInt() ==
+                                kit::Layout::WorkspaceVersion &&
                             migrated.contains("bloom.assets"),
-                        "version 2 pins Assets into the migrated default");
+                        "the current schema pins Assets into the migrated default");
 }
 
 void testResetWorkspaceRestoresAndPersistsTheOwnerArrangement(Expectations& expectations) {

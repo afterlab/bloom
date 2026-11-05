@@ -31,6 +31,7 @@ class ProfilerFeed;
 class RamPreviewController;
 class CompositionSession;
 class ProjectHost;
+class ViewerPreviewPool;
 
 using EditorFactory = std::function<QWidget*(QWidget* parent)>;
 
@@ -81,12 +82,17 @@ class EditorRegistry final {
 //
 // `profilerFeed` is the application-lifetime feed the Profiler panels read (#423). Null registers
 // the Profiler with no source, every metric absent. It must outlive every editor.
+//
+// `viewerPreviews` (#536) makes a Viewer's own preview controller: a pinned Viewer's, and a
+// secondary window's Viewer with its own display transform. Null leaves every Viewer following
+// the active composition through `previewController`. It must outlive every editor.
 [[nodiscard]] bool registerFoundationEditors(
     EditorRegistry& registry, CompositionSession& session,
     CompositionPreviewController& previewController, RamPreviewController* ramPreview = nullptr,
     ProjectHost* projectHost = nullptr, const ViewerGpuDependencies* gpuDependencies = nullptr,
     std::shared_ptr<host::GpuExportProvider> gpuExportProvider = {},
     ExportQueueAdapter* exportQueue = nullptr, scripting::LiveSessionHost* liveSession = nullptr,
-    McpServerAdapter* mcpServer = nullptr, ProfilerFeed* profilerFeed = nullptr);
+    McpServerAdapter* mcpServer = nullptr, ProfilerFeed* profilerFeed = nullptr,
+    ViewerPreviewPool* viewerPreviews = nullptr);
 
 } // namespace bloom::ui

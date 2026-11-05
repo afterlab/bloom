@@ -63,6 +63,11 @@ struct CompositionPreviewSettings final {
     // The RAM preview cache's memory budget, used only when this controller has to create its own
     // cache (see the constructor). The application reads it from QSettings.
     std::size_t ramPreviewByteBudget = defaultPreviewFrameCacheByteBudget();
+    // #536: whether this controller scopes the shared frame cache's retention to the session's
+    // work area and provenance. Exactly one controller (the application's) does; a Viewer's own
+    // controller (a pinned Viewer, a Viewer in a secondary window) reads and fills the same cache
+    // without re-scoping it.
+    bool scopesCacheRetention = true;
 
     friend bool operator==(const CompositionPreviewSettings&,
                            const CompositionPreviewSettings&) = default;
@@ -235,6 +240,16 @@ class CompositionPreviewController final : public QObject {
     void setResolutionPolicy(runtime::PreviewResolutionPolicy policy);
     void setViewerDisplayView(std::string displayName, std::string viewName);
     void setViewerLookEnabled(bool enabled);
+    // #536 Viewer pin: the composition this controller prepares. Empty (the default) follows the
+    // session's active composition; a value pins it there whatever becomes active. A pinned
+    // composition other than the active one is prepared from the live snapshot at the shared
+    // playhead, without the active composition's interaction overrides.
+    void setCompositionTarget(std::optional<document::CompositionId> composition);
+    [[nodiscard]] const std::optional<document::CompositionId>& compositionTarget() const noexcept {
+        return compositionTarget_;
+    }
+    // The composition requests are built for: the pinned one, else the session's active one.
+    [[nodiscard]] document::CompositionId targetCompositionId() const noexcept;
     // ADR 0026: show channels of a ChannelSet output raw, or the composition again (nullopt).
     void setViewerChannelInspection(std::optional<runtime::ChannelInspection> inspection);
     // ADR 0026: the worker listing behind the Viewer's channel menu (injected by the composition
@@ -399,6 +414,13 @@ class CompositionPreviewController final : public QObject {
     [[nodiscard]] bool isCurrent(const ActiveRequest& request) const;
     [[nodiscard]] bool
     liveSessionMatches(const runtime::PreviewRequestIdentity& desiredIdentity) const noexcept;
+    [[nodiscard]] const document::Composition* targetComposition() const noexcept;
+    // True while pinned to a composition other than the active one.
+    [[nodiscard]] bool targetIsElsewhere() const noexcept;
+    // The snapshot a committed request at `time` is prepared from: the session's retained
+    // evaluation snapshot, or the live one for a composition pinned elsewhere (the retained
+    // provenance describes the active composition's timeline only).
+    [[nodiscard]] const document::Snapshot& evaluationSnapshotFor(core::RationalTime time) const;
 
     CompositionSession& session_;
     runtime::TaskScheduler& scheduler_;
@@ -428,6 +450,7 @@ class CompositionPreviewController final : public QObject {
     bool cachePurgeGate_ = false;
     double displayedCompositionScale_ = 1.0;
     std::optional<QRectF> regionOfInterest_;
+    std::optional<document::CompositionId> compositionTarget_;
     std::unique_ptr<PlaybackController> playbackController_;
     bool playbackActive_ = false;
     bool playbackPreparing_ = false;

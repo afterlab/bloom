@@ -10,7 +10,9 @@ void ViewerEditor::releasePackedFramesForShutdown() {
     if (packedHostShutdown_)
         return;
     packedHostShutdown_ = true;
-    disconnect(&previewController_, nullptr, this, nullptr);
+    disconnect(previewController_, nullptr, this, nullptr);
+    if (ownPreview_ != nullptr)
+        ownPreview_->releasePublishedFramesForShutdown();
     if (gpuResidentTimer_)
         gpuResidentTimer_->stop();
     // These handles have already reached terminal state. Native targets are already safe;

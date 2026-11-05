@@ -104,7 +104,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
             paintViewerCompositionFrame(painter, displayRect);
             const ViewerMapping mapping{displayRect, *format, frame->desiredIdentity().resolution,
                                         resident->pixelAspect, *descriptor.value()};
-            const auto bounds = previewController_.selectedLayerBounds(frame);
+            const auto bounds = previewController_->selectedLayerBounds(frame);
             paintViewerOverlays(painter, canvasRect(), mapping,
                                 effectiveZoom(displayRect, *geometry), overlayOptions_,
                                 textEdit_ ? std::span<const runtime::EvaluatedOperationBounds>{}
@@ -248,8 +248,9 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
         return;
     }
     const GpuPublicationDomain domain{session_.snapshot().project().id(),
-                                      session_.composition() ? session_.compositionId()
-                                                             : document::CompositionId{}};
+                                      shownComposition()
+                                          ? previewController_->targetCompositionId()
+                                          : document::CompositionId{}};
     if (!gpuPublicationDomain_ || *gpuPublicationDomain_ != domain) {
         // A selection clear and an earlier retirement cannot consume a later project/composition
         // clear. Refresh the cover for EVERY distinct domain before the retirement early return;
@@ -285,7 +286,7 @@ void ViewerEditor::updateGpuResidentPresentationBody() {
         return;
     }
     const auto frame = preparedDisplayFrame();
-    if (!frame && session_.composition()) {
+    if (!frame && shownComposition()) {
         // A desired adjustment may have no new complete candidate. Keep the actual last-good
         // native pair; this is not the composition-less/domain-clear retirement signal.
         const auto& applied = gpuResident_->appliedDisplay();
@@ -404,7 +405,7 @@ void ViewerEditor::requestResidentCpuFallback() {
     }
     // The existing async viewer-analysis CPU path answers the SAME request identity with real CPU
     // pixels. It is not a GPU readback and never runs on the UI thread.
-    const auto submission = previewController_.submitViewerAnalysis(identity);
+    const auto submission = previewController_->submitViewerAnalysis(identity);
     if (submission.accepted()) {
         cpuFallbackTask_ = submission.handle;
         cpuFallbackIdentity_ = identity;

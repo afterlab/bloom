@@ -32,6 +32,7 @@
 #include <bloom/ui/project_host.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/timeline_editor.hpp>
+#include <bloom/ui/viewer_preview_pool.hpp>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -52,6 +53,9 @@ struct WindowFixture {
     TaskUiBridge bridge{scheduler};
     std::unique_ptr<AssetController> assets;
     std::unique_ptr<CompositionPreviewController> preview;
+    PreviewFrameCacheHandle frameCache;
+    // #536: a Viewer's own preview controllers, on the same pipeline and shared cache.
+    std::unique_ptr<ViewerPreviewPool> viewerPreviews;
     EditorRegistry registry;
     // Set by `author` to give the window an export queue (ADR 0033); null leaves it without one.
     ExportQueueAdapter* exportQueue = nullptr;
@@ -128,13 +132,22 @@ struct WindowFixture {
         // A pinned budget: the status bar prints it, and the production default follows the
         // machine's memory, which would make every whole-window golden machine-dependent.
         evaluator.operationCache()->setByteBudget(kMinimumPreviewFrameCacheByteBudget);
+        frameCache = std::make_shared<PreviewFrameCache>(kMinimumPreviewFrameCacheByteBudget);
         preview = std::make_unique<CompositionPreviewController>(
             session, scheduler, bridge,
             makeCompositionPreviewPipeline(compiler, evaluator, display, qualified),
-            CompositionPreviewSettings{},
-            std::make_shared<PreviewFrameCache>(kMinimumPreviewFrameCacheByteBudget));
+            CompositionPreviewSettings{}, frameCache);
+        viewerPreviews = std::make_unique<ViewerPreviewPool>([this] {
+            CompositionPreviewSettings settings;
+            settings.scopesCacheRetention = false;
+            return std::make_unique<CompositionPreviewController>(
+                session, scheduler, bridge,
+                makeCompositionPreviewPipeline(compiler, evaluator, display, qualified), settings,
+                frameCache);
+        });
         if (!registerFoundationEditors(registry, session, *preview, nullptr, &projectHost, nullptr, {},
-                                       exportQueue))
+                                       exportQueue, nullptr, nullptr, nullptr,
+                                       viewerPreviews.get()))
             throw std::runtime_error("Editor registration failed");
         window = std::make_unique<MainWindow>(registry, session, projectHost, nullptr,
                                               preview.get(), nullptr, nullptr,
@@ -203,6 +216,7 @@ struct WindowFixture {
     ~WindowFixture() {
         window.reset();
         assets->cancel();
+        viewerPreviews->beginShutdown();
         preview->beginShutdown();
         bridge.beginShutdown();
         QElapsedTimer timer;

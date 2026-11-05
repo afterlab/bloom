@@ -81,9 +81,9 @@ void ViewerEditor::refreshProbe(QPointF position) {
     // The probe must not label another prepared request/adjustment/channel as painted values.
     // Until the exact displayed intent is current, the sample is explicitly unavailable.
     if (!mapping || !base || !shown || !actual || !mapping->displayRect.contains(position) ||
-        !contentRect().contains(position) || previewController_.isShuttingDown()) {
+        !contentRect().contains(position) || previewController_->isShuttingDown()) {
         clearProbe();
-        if (contentRect().contains(position) && !previewController_.isShuttingDown())
+        if (contentRect().contains(position) && !previewController_->isShuttingDown())
             probePosition_ = position;
         return;
     }
@@ -161,7 +161,7 @@ void ViewerEditor::refreshProbe(QPointF position) {
             probeIdentity_ = desired;
             probeTaskFrame_ = base;
             probeTaskPixel_ = pixel;
-            const auto submission = previewController_.submitViewerAnalysis(desired);
+            const auto submission = previewController_->submitViewerAnalysis(desired);
             if (submission.accepted()) {
                 probeTask_ = submission.handle;
             } else {

@@ -193,3 +193,12 @@ and timeline-column changes their tolerance had covered. Both references were re
 were 1.25708 (DPR 1) and 1.22671 (DPR 1.5), with changed fractions 0.00951910 and 0.00838368.
 Comparison tolerances and full-image coverage are unchanged; rendering identity goldens are
 unchanged.
+
+WINDOWS approval (2026-11-05, #536): Fit fills the Viewer with no padding, so the fitted
+composition grows to touch the Viewer's limiting edges (top and bottom in the fixture). The Viewer
+header gains the pin control (outline `push-pin`, Following) after the composition selector, and a
+narrow panel's header overflow shows the Bold vertical dots in header ink on the resting plate in
+place of the Fill glyph's solid box. Both references were regenerated with `--update-goldens` at
+DPR 1 and 1.5 and visually inspected. Before approval the mean channel errors were 4.99503 (DPR 1)
+and 4.96147 (DPR 1.5), with changed fractions 0.0771801 and 0.0768632. Comparison tolerances and
+full-image coverage are unchanged; rendering identity goldens are unchanged.

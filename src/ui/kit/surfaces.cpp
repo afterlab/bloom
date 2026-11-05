@@ -156,6 +156,22 @@ void KPanelFrame::paintEvent(QPaintEvent*) {
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(frame);
 }
+KDropIndicator::KDropIndicator(QWidget* parent) : QWidget(parent) {
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    hide();
+}
+void KDropIndicator::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    const QColor accent = color(Color::Accent);
+    painter.fillRect(rect(), withOpacity(accent, kSelectionWashOpacity));
+    QPen edge(accent);
+    edge.setWidth(px(Size::SelectionEdge));
+    edge.setJoinStyle(Qt::MiterJoin);
+    painter.setPen(edge);
+    painter.setBrush(Qt::NoBrush);
+    const qreal inset = edge.widthF() / 2.0;
+    painter.drawRect(QRectF(rect()).adjusted(inset, inset, -inset, -inset));
+}
 KSurface::KSurface(QWidget* parent, const Color fill) : QWidget(parent) {
     setAutoFillBackground(true);
     setFill(fill);

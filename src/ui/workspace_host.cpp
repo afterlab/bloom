@@ -6,6 +6,10 @@
 
 #include <QAction>
 #include <QContextMenuEvent>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -264,12 +268,19 @@ void showEntireTree(QWidget* widget) {
 }
 
 QJsonObject serializeNode(QWidget* widget, const bloom::ui::EditorArea* activeArea,
-                          const QHash<QSplitter*, QList<int>>& preservedSizes) {
+                          const QHash<QSplitter*, QList<int>>& preservedSizes,
+                          const bool includeEditorState) {
     if (const auto* area = qobject_cast<const bloom::ui::EditorArea*>(widget); area != nullptr) {
-        return {{"type", "area"},
-                {"id", area->areaId()},
-                {"editor", QString::fromStdString(area->editorId())},
-                {"active", area == activeArea}};
+        QJsonObject node{{"type", "area"},
+                         {"id", area->areaId()},
+                         {"editor", QString::fromStdString(area->editorId())},
+                         {"active", area == activeArea}};
+        // Schema 3: the editor's own session state rides with its area.
+        if (includeEditorState) {
+            if (const auto state = area->editorSessionState(); !state.isEmpty())
+                node.insert("state", state);
+        }
+        return node;
     }
 
     const auto* splitter = qobject_cast<const QSplitter*>(widget);
@@ -279,7 +290,8 @@ QJsonObject serializeNode(QWidget* widget, const bloom::ui::EditorArea* activeAr
 
     QJsonArray children;
     for (int index = 0; index < splitter->count(); ++index) {
-        children.push_back(serializeNode(splitter->widget(index), activeArea, preservedSizes));
+        children.push_back(serializeNode(splitter->widget(index), activeArea, preservedSizes,
+                                         includeEditorState));
     }
 
     const auto storedSizes = preservedSizes.constFind(const_cast<QSplitter*>(splitter));
@@ -338,6 +350,7 @@ WorkspaceHost::WorkspaceHost(const EditorRegistry& editorRegistry, QWidget* pare
     // A disabled join carries its reason as the item's tooltip.
     dividerMenu_->setToolTipsVisible(true);
 
+    setAcceptDrops(true);
     rootWidget_ = createArea();
     rootLayout_->addWidget(rootWidget_);
     setActiveArea(qobject_cast<EditorArea*>(rootWidget_));
@@ -551,7 +564,8 @@ EditorArea* WorkspaceHost::spawnBottomArea(const std::string_view editorId, cons
 }
 
 EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientation,
-                                     std::string initialEditorId, double newAreaFraction) {
+                                     std::string initialEditorId, double newAreaFraction,
+                                     const bool before, const QJsonObject& state) {
     if (isAreaMaximized() || areaCount() >= maximumAreaCount || !containsArea(rootWidget_, &area)) {
         return nullptr;
     }
@@ -571,12 +585,13 @@ EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientati
     const QPointer<EditorArea> areaGuard(&area);
     (void)beginWorkspaceMutation(
         [this, areaGuard, orientation, initialEditorId = std::move(initialEditorId),
-         newAreaFraction, createdArea] {
+         newAreaFraction, createdArea, before, state] {
             EditorArea* target = areaGuard.data();
             if (target == nullptr) {
                 return;
             }
             auto* newArea = createArea(initialEditorId);
+            newArea->setEditorSessionState(state);
             auto* parentSplitter = qobject_cast<QSplitter*>(target->parentWidget());
             auto* newSplitter = createSplitter(orientation);
             QList<int> parentSizes;
@@ -597,21 +612,23 @@ EditorArea* WorkspaceHost::splitArea(EditorArea& area, Qt::Orientation orientati
                 rootLayout_->addWidget(rootWidget_);
             }
 
-            newSplitter->addWidget(target);
-            newSplitter->addWidget(newArea);
+            newSplitter->addWidget(before ? newArea : target);
+            newSplitter->addWidget(before ? target : newArea);
             target->show();
             const int newSize = static_cast<int>(std::lround(defaultSplitWeight * newAreaFraction));
-            newSplitter->setSizes({defaultSplitWeight - newSize, newSize});
+            newSplitter->setSizes(before ? QList<int>{newSize, defaultSplitWeight - newSize}
+                                         : QList<int>{defaultSplitWeight - newSize, newSize});
             // The complete tree must have its window extent before minima can be applied.
             // Otherwise constructing a sidebar in an unshown 640px shell clamps it to half the
             // window.
-            QTimer::singleShot(0, newSplitter, [newSplitter, newAreaFraction] {
+            QTimer::singleShot(0, newSplitter, [newSplitter, newAreaFraction, before] {
                 const int extent = newSplitter->orientation() == Qt::Horizontal
                                        ? newSplitter->width()
                                        : newSplitter->height();
                 const int available = std::max(0, extent - newSplitter->handleWidth());
-                const int trailing = static_cast<int>(std::lround(available * newAreaFraction));
-                newSplitter->setSizes({available - trailing, trailing});
+                const int added = static_cast<int>(std::lround(available * newAreaFraction));
+                newSplitter->setSizes(before ? QList<int>{added, available - added}
+                                             : QList<int>{available - added, added});
             });
 
             setActiveArea(newArea);
@@ -776,11 +793,11 @@ void WorkspaceHost::toggleMaximizeActiveArea() {
     emit maximizeStateChanged(true);
 }
 
-QByteArray WorkspaceHost::saveLayoutState() const {
+QByteArray WorkspaceHost::saveLayoutState(const bool includeEditorState) const {
     const QJsonObject documentRoot = {
         {"format", layoutFormat},
         {"schema", layoutSchema},
-        {"root", serializeNode(rootWidget_, activeArea_, preMaximizeSizes_)},
+        {"root", serializeNode(rootWidget_, activeArea_, preMaximizeSizes_, includeEditorState)},
     };
     return QJsonDocument(documentRoot).toJson(QJsonDocument::Compact);
 }
@@ -819,8 +836,9 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
     if (serializedSchema > layoutSchema) {
         return WorkspaceLayoutRestoreResult::UnsupportedVersion;
     }
-    if ((serializedSchema != 1 && serializedSchema != layoutSchema) ||
-        !documentRoot.value("root").isObject()) {
+    // Every schema up to the current one reads: 2 added nothing a reader must know, 3 adds the
+    // optional per-area editor session state.
+    if (serializedSchema < 1 || !documentRoot.value("root").isObject()) {
         return WorkspaceLayoutRestoreResult::Invalid;
     }
 
@@ -874,6 +892,11 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
                 valid = false;
                 return nullptr;
             }
+            const auto stateValue = node.value("state");
+            if (!stateValue.isUndefined() && !stateValue.isObject()) {
+                valid = false;
+                return nullptr;
+            }
 
             if (dry) {
                 return dryNode;
@@ -891,6 +914,8 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
                 }
             } else {
                 area = createArea(editorId.toStdString(), areaId);
+                // A preset (reuseAreas) carries no editor state; a restored session does.
+                area->setEditorSessionState(stateValue.toObject());
             }
             if (isActive) {
                 restoredActiveArea = area;
@@ -1063,6 +1088,8 @@ EditorArea* WorkspaceHost::createArea(const std::string_view initialEditorId, QS
             toggleMaximizeActiveArea();
         }
     });
+    connect(area, &EditorArea::tearOffRequested, this, &WorkspaceHost::tearOffRequested);
+    connect(area, &EditorArea::dockRequested, this, &WorkspaceHost::dockRequested);
     return area;
 }
 
@@ -1237,10 +1264,103 @@ void WorkspaceHost::updateAreaControls() {
         area->setSplitEnabled(canChangeStructure);
         area->setCloseEnabled(canClose && canChangeStructure);
         area->setMaximizedAppearance(area == maximizedArea_);
+        area->setMoveToNewWindowEnabled(
+            canClose && canChangeStructure,
+            !canChangeStructure ? tr("Restore the full-screen panel to move a panel")
+                                : tr("The only panel of a window stays in it"));
         // A maximized panel is the only one visible, so no panel paints the active highlight
-        // until the layout is restored; the active area itself does not change.
-        area->setActiveHighlightSuppressed(maximizedArea_ != nullptr);
+        // until the layout is restored; the active area itself does not change. Nor does a host
+        // whose window is not the active workspace (#536: one highlight across windows).
+        area->setActiveHighlightSuppressed(maximizedArea_ != nullptr || !highlightEnabled_);
     }
+}
+
+EditorArea* WorkspaceHost::dockPanel(EditorArea& target, const PanelDockEdge edge,
+                                     std::string editorId, const QJsonObject& state) {
+    const bool sideBySide = edge == PanelDockEdge::Left || edge == PanelDockEdge::Right;
+    const bool before = edge == PanelDockEdge::Left || edge == PanelDockEdge::Top;
+    auto* area = splitArea(target, sideBySide ? Qt::Horizontal : Qt::Vertical,
+                           std::move(editorId), 0.5, before, state);
+    if (area != nullptr)
+        area->setFocus(Qt::OtherFocusReason);
+    return area;
+}
+
+QList<EditorArea*> WorkspaceHost::areas() const {
+    QList<EditorArea*> result;
+    collectAreas(rootWidget_, result);
+    return result;
+}
+
+EditorArea* WorkspaceHost::findArea(const QString& areaId) const {
+    for (auto* area : areas())
+        if (area->areaId().compare(areaId, Qt::CaseInsensitive) == 0)
+            return area;
+    return nullptr;
+}
+
+void WorkspaceHost::closeAll(std::function<void(bool closed)> done) {
+    if (surfaceRetirementGate_.isPending()) {
+        if (done)
+            done(false);
+        return;
+    }
+    auto finished = std::make_shared<std::function<void(bool)>>(std::move(done));
+    const auto status = beginWorkspaceMutation(
+        [this] {
+            // Detach the whole tree first: no retired surface is resumed into a closing window.
+            clearActiveArea();
+            maximizedArea_.clear();
+            preMaximizeSizes_.clear();
+            if (rootWidget_ != nullptr) {
+                rootLayout_->removeWidget(rootWidget_);
+                rootWidget_->hide();
+                rootWidget_->setParent(nullptr);
+                rootWidget_->deleteLater();
+                rootWidget_ = nullptr;
+            }
+        },
+        [finished](const NativeSurfaceRetirementGate::Result& result) {
+            if (*finished)
+                (*finished)(result.committed);
+        });
+    if (status == NativeSurfaceRetirementGate::StartStatus::Refused && *finished)
+        (*finished)(false);
+}
+
+void WorkspaceHost::setActiveHighlightEnabled(const bool enabled) {
+    if (highlightEnabled_ == enabled)
+        return;
+    highlightEnabled_ = enabled;
+    updateAreaControls();
+}
+
+void WorkspaceHost::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData()->hasFormat(QString::fromLatin1(kPanelDragMimeType))) {
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+        return;
+    }
+    QFrame::dragEnterEvent(event);
+}
+
+void WorkspaceHost::dragMoveEvent(QDragMoveEvent* event) {
+    if (event->mimeData()->hasFormat(QString::fromLatin1(kPanelDragMimeType))) {
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+        return;
+    }
+    QFrame::dragMoveEvent(event);
+}
+
+void WorkspaceHost::dropEvent(QDropEvent* event) {
+    // A gutter is no dock target: the panel stays where it was.
+    if (event->mimeData()->hasFormat(QString::fromLatin1(kPanelDragMimeType))) {
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+        return;
+    }
+    QFrame::dropEvent(event);
 }
 
 void WorkspaceHost::restoreMaximizedArea() {

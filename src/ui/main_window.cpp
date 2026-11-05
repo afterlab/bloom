@@ -38,6 +38,13 @@
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 #include <bloom/ui/workspace_presets.hpp>
+#include <bloom/ui/workspace_window.hpp>
+
+#include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonValue>
+#include <QScreen>
+#include <QUuid>
 
 #include <QAction>
 #include <QApplication>
@@ -67,6 +74,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <string_view>
 
 namespace {
@@ -105,7 +113,8 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
                        media::cache::MediaDiskCache* const mediaDiskCache,
                        const AccelerationStatusProvider* const accelerationStatus,
                        CachePurgeController* const cachePurgeController)
-    : QMainWindow(parent), compositionSession_(compositionSession), projectHost_(projectHost),
+    : QMainWindow(parent), editorRegistry_(editorRegistry),
+      compositionSession_(compositionSession), projectHost_(projectHost),
       ramPreview_(ramPreview),
       previewController_(previewController), playbackController_(playbackController),
       operationCache_(operationCache), mediaDiskCache_(mediaDiskCache),
@@ -219,7 +228,310 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     updateExportQueueActions();
 }
 
+MainWindow::~MainWindow() {
+    // Secondary windows are top-level windows of their own (so each gets its own taskbar entry
+    // and is never held above this one); this window owns their lifetime.
+    for (const auto& window : workspaceWindows_)
+        delete window.data();
+    workspaceWindows_.clear();
+}
+
 WorkspaceHost* MainWindow::workspaceHost() const noexcept { return workspaceHost_; }
+
+QList<WorkspaceWindow*> MainWindow::workspaceWindows() const {
+    QList<WorkspaceWindow*> windows;
+    for (const auto& window : workspaceWindows_)
+        if (window != nullptr)
+            windows.push_back(window.data());
+    return windows;
+}
+
+QList<WorkspaceHost*> MainWindow::workspaceHosts() const {
+    QList<WorkspaceHost*> hosts;
+    if (workspaceHost_ != nullptr)
+        hosts.push_back(workspaceHost_);
+    for (auto* window : workspaceWindows())
+        if (window->workspaceHost() != nullptr)
+            hosts.push_back(window->workspaceHost());
+    return hosts;
+}
+
+WorkspaceHost* MainWindow::activeWorkspaceHost() const noexcept {
+    return activeHost_ != nullptr ? activeHost_.data() : workspaceHost_;
+}
+
+WorkspaceHost* MainWindow::hostOf(const QWidget* widget) const {
+    if (widget == nullptr)
+        return nullptr;
+    for (auto* host : workspaceHosts())
+        if (host == widget || host->isAncestorOf(widget))
+            return host;
+    return nullptr;
+}
+
+EditorArea* MainWindow::findAreaAnywhere(const QString& areaId) const {
+    for (auto* host : workspaceHosts())
+        if (auto* area = host->findArea(areaId))
+            return area;
+    return nullptr;
+}
+
+bool MainWindow::belongsToWorkspace(const QWidget* widget) const {
+    const QWidget* top = widget != nullptr ? widget->window() : nullptr;
+    if (top == nullptr)
+        return false;
+    return std::ranges::any_of(workspaceWindows_,
+                               [top](const auto& window) { return window.data() == top; });
+}
+
+QList<QAction*> MainWindow::applicationActions() const {
+    // Every command of the menu bar, and the window-level actions installed on this window (the
+    // transport's Space): a secondary window carries them all, so its shortcuts reach the same
+    // application commands.
+    QList<QAction*> actions;
+    std::function<void(const QList<QAction*>&)> collect = [&](const QList<QAction*>& list) {
+        for (auto* action : list) {
+            if (action == nullptr || action->isSeparator())
+                continue;
+            if (auto* menu = action->menu()) {
+                collect(menu->actions());
+                continue;
+            }
+            if (!actions.contains(action))
+                actions.push_back(action);
+        }
+    };
+    if (menuBar_ != nullptr)
+        collect(menuBar_->actions());
+    collect(this->actions());
+    return actions;
+}
+
+WorkspaceWindowPlacement MainWindow::placementBesideMainWindow() const {
+    // A new window opens offset from this one on the same monitor, at half its size; the
+    // placement rule keeps it on screen.
+    const QRect frame = isFullScreen() || isMaximized() ? normalGeometry() : geometry();
+    const int offset = kit::px(kit::Spacing::XXL) * 2;
+    const QRect placed(frame.topLeft() + QPoint(offset, offset),
+                       QSize(std::max(kit::px(kit::Size::PanelMinWidth) * 2, frame.width() / 2),
+                             std::max(kit::px(kit::Size::PanelMinWidth), frame.height() / 2)));
+    return {.screen = screen() != nullptr ? screen()->name() : QString{}, .geometry = placed};
+}
+
+WorkspaceWindow*
+MainWindow::openWorkspaceWindow(const QByteArray& layoutState,
+                                const std::optional<WorkspaceWindowPlacement>& placement) {
+    auto* window = new WorkspaceWindow(editorRegistry_);
+    auto* host = window->workspaceHost();
+    bool restored = false;
+    if (!layoutState.isEmpty())
+        restored = host->restoreLayoutState(layoutState) == WorkspaceLayoutRestoreResult::Restored;
+    if (!restored)
+        host->resetToSingleArea("bloom.viewer");
+    window->setWindowTitle(windowTitle());
+    window->setWindowModified(isWindowModified());
+    window->setReadOnly(isShowingReadOnlyPlaceholder());
+    window->addActions(applicationActions());
+    workspaceWindows_.emplace_back(window);
+    connectWorkspaceHost(*host);
+    host->setActiveHighlightEnabled(host == activeWorkspaceHost());
+    connect(window, &WorkspaceWindow::activated, this, [this](WorkspaceWindow* activatedWindow) {
+        setActiveWorkspaceHost(activatedWindow->workspaceHost());
+        if (viewFullScreenAction_ != nullptr)
+            viewFullScreenAction_->setChecked(activatedWindow->isFullScreen());
+    });
+    connect(window, &WorkspaceWindow::closed, this, [this](WorkspaceWindow* closedWindow) {
+        std::erase_if(workspaceWindows_, [closedWindow](const auto& entry) {
+            return entry.isNull() || entry.data() == closedWindow;
+        });
+        if (activeHost_ == closedWindow->workspaceHost())
+            setActiveWorkspaceHost(workspaceHost_);
+        // Now, before the closed window's Viewers are deleted: the status bar and toolbar must
+        // never follow one of them past this point.
+        updateDisplayedViewer();
+    });
+    window->showWithPlacement(placement.value_or(placementBesideMainWindow()));
+    emit workspaceWindowOpened(window);
+    scheduleDisplayedViewerUpdate();
+    return window;
+}
+
+EditorArea* MainWindow::tearOffPanel(EditorArea& area, const QPoint globalPosition) {
+    auto* from = hostOf(&area);
+    if (from == nullptr || from->areaCount() <= 1 || from->isAreaMaximized() ||
+        from->isNativeSurfaceMutationPending()) {
+        statusStrip_->showTransientMessage(
+            from != nullptr && from->areaCount() <= 1
+                ? tr("The only panel of a window stays in it")
+                : tr("The panel could not move to a new window now"));
+        return nullptr;
+    }
+    const auto editorId = area.editorId();
+    const auto state = area.editorSessionState();
+    // The new window takes the panel's size: under the pointer when it was dragged out, else just
+    // below and right of where the panel was.
+    QRect frame(area.mapToGlobal(QPoint{}),
+                area.size().expandedTo(QSize(kit::px(kit::Size::PanelMinWidth) * 2,
+                                             kit::px(kit::Size::PanelMinWidth))));
+    if (!globalPosition.isNull())
+        frame.moveTopLeft(globalPosition -
+                          QPoint(frame.width() / 4, kit::px(kit::Size::HeaderRow) / 2));
+    else
+        frame.translate(kit::px(kit::Spacing::XXL), kit::px(kit::Spacing::XXL));
+    const auto* screenAt = QGuiApplication::screenAt(frame.center());
+    const WorkspaceWindowPlacement placement{
+        .screen = screenAt != nullptr ? screenAt->name()
+                                      : (screen() != nullptr ? screen()->name() : QString{}),
+        .geometry = frame};
+    QJsonObject areaNode{{"type", "area"},
+                         {"id", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                         {"editor", QString::fromStdString(editorId)},
+                         {"active", true}};
+    if (!state.isEmpty())
+        areaNode.insert("state", state);
+    const QJsonObject layout{{"format", "bloom.workspace-layout"},
+                             {"schema", kit::Layout::WorkspaceVersion},
+                             {"root", areaNode}};
+    auto* window =
+        openWorkspaceWindow(QJsonDocument(layout).toJson(QJsonDocument::Compact), placement);
+    (void)from->closeArea(area);
+    window->activateWindow();
+    setActiveWorkspaceHost(window->workspaceHost());
+    return window->workspaceHost()->activeArea();
+}
+
+EditorArea* MainWindow::movePanel(EditorArea& source, EditorArea& target,
+                                  const PanelDockEdge edge) {
+    auto* from = hostOf(&source);
+    auto* to = hostOf(&target);
+    if (from == nullptr || to == nullptr || &source == &target)
+        return nullptr;
+    if (from == workspaceHost_ && from->areaCount() <= 1) {
+        statusStrip_->showTransientMessage(tr("The main window keeps at least one panel"));
+        return nullptr;
+    }
+    if (from->isAreaMaximized() || to->isAreaMaximized()) {
+        statusStrip_->showTransientMessage(tr("Restore the full-screen panel to move a panel"));
+        return nullptr;
+    }
+    const auto editorId = source.editorId();
+    const auto state = source.editorSessionState();
+    auto* placed = to->dockPanel(target, edge, editorId, state);
+    if (placed == nullptr && !to->isNativeSurfaceMutationPending())
+        return nullptr;
+    if (from->areaCount() > 1) {
+        (void)from->closeArea(source);
+    } else {
+        // The last panel of a secondary window left it: the window closes.
+        for (auto* window : workspaceWindows())
+            if (window->workspaceHost() == from)
+                window->close();
+    }
+    setActiveWorkspaceHost(to);
+    return placed;
+}
+
+std::vector<EditorNativeSurface*> MainWindow::liveNativeSurfaces() const {
+    std::vector<EditorNativeSurface*> surfaces;
+    for (auto* host : workspaceHosts()) {
+        auto hosted = host->liveNativeSurfaces();
+        surfaces.insert(surfaces.end(), hosted.begin(), hosted.end());
+    }
+    return surfaces;
+}
+
+void MainWindow::releasePackedFramesForShutdown() {
+    for (auto* host : workspaceHosts())
+        host->releasePackedFramesForShutdown();
+}
+
+void MainWindow::connectWorkspaceHost(WorkspaceHost& host) {
+    connect(&host, &WorkspaceHost::areaCountChanged, this, [this] { updateWorkspaceActions(); });
+    connect(&host, &WorkspaceHost::maximizeStateChanged, this,
+            [this] { updateWorkspaceActions(); });
+    connect(&host, &WorkspaceHost::activeAreaChanged, this, [this, hostGuard = QPointer(&host)] {
+        // An artist's click or focus moves the one highlight to this workspace; a programmatic
+        // change in a window that is not active (a restored layout) does not.
+        if (hostGuard != nullptr && (hostGuard->window()->isActiveWindow() ||
+                                     hostGuard->isAncestorOf(QApplication::focusWidget())))
+            setActiveWorkspaceHost(hostGuard.data());
+        updateWorkspaceActions();
+    });
+    // Panel moves act after the gesture that asked for them has unwound (a drop arrives inside
+    // the drag's own event loop, and the move may close the area the drag started from).
+    connect(&host, &WorkspaceHost::tearOffRequested, this,
+            [this](EditorArea* area, const QPoint globalPosition) {
+                const QPointer<EditorArea> guard(area);
+                QTimer::singleShot(0, this, [this, guard, globalPosition] {
+                    if (guard != nullptr)
+                        (void)tearOffPanel(*guard, globalPosition);
+                });
+            });
+    connect(&host, &WorkspaceHost::dockRequested, this,
+            [this](const QString& sourceAreaId, EditorArea* target, const PanelDockEdge edge) {
+                const QPointer<EditorArea> guard(target);
+                QTimer::singleShot(0, this, [this, sourceAreaId, guard, edge] {
+                    auto* source = findAreaAnywhere(sourceAreaId);
+                    if (guard != nullptr && source != nullptr)
+                        (void)movePanel(*source, *guard, edge);
+                });
+            });
+}
+
+void MainWindow::setActiveWorkspaceHost(WorkspaceHost* host) {
+    if (host == nullptr)
+        host = workspaceHost_;
+    activeHost_ = host;
+    // One active highlight across every window: only the active workspace paints it.
+    for (auto* candidate : workspaceHosts())
+        candidate->setActiveHighlightEnabled(candidate == host);
+    updateWorkspaceActions();
+}
+
+QJsonArray MainWindow::saveWorkspaceWindows() const {
+    QJsonArray windows;
+    for (auto* window : workspaceWindows()) {
+        const auto placement = window->placement();
+        windows.push_back(QJsonObject{
+            {"id", window->windowId()},
+            {"layout",
+             QJsonDocument::fromJson(window->workspaceHost()->saveLayoutState()).object()},
+            {"placement", QJsonObject{{"screen", placement.screen},
+                                      {"x", placement.geometry.x()},
+                                      {"y", placement.geometry.y()},
+                                      {"width", placement.geometry.width()},
+                                      {"height", placement.geometry.height()},
+                                      {"fullScreen", placement.fullScreen},
+                                      {"maximized", placement.maximized}}},
+        });
+    }
+    return windows;
+}
+
+void MainWindow::restoreWorkspaceWindows(const QJsonValue& value) {
+    // Session state written by saveWorkspaceWindows(). A malformed entry is skipped on its own and
+    // never stops the main window from opening; a layout that does not validate opens the window
+    // with a single Viewer.
+    constexpr qsizetype maximumRestoredWindows = 64;
+    const auto windows = value.toArray();
+    for (qsizetype index = 0; index < std::min(windows.size(), maximumRestoredWindows); ++index) {
+        const auto entry = windows[index].toObject();
+        const auto layout = entry.value("layout").toObject();
+        const auto saved = entry.value("placement").toObject();
+        if (layout.isEmpty() || saved.isEmpty())
+            continue;
+        const WorkspaceWindowPlacement placement{
+            .screen = saved.value("screen").toString(),
+            .geometry = QRect(saved.value("x").toInt(), saved.value("y").toInt(),
+                              saved.value("width").toInt(), saved.value("height").toInt()),
+            .fullScreen = saved.value("fullScreen").toBool(),
+            .maximized = saved.value("maximized").toBool()};
+        (void)openWorkspaceWindow(QJsonDocument(layout).toJson(QJsonDocument::Compact),
+                                  placement);
+    }
+    // Restoring never moves the active highlight off the main window.
+    setActiveWorkspaceHost(workspaceHost_);
+}
 
 bool MainWindow::isShowingReadOnlyPlaceholder() const noexcept {
     return centralStack_ != nullptr && centralStack_->currentWidget() == readOnlyPlaceholderPage_;
@@ -251,9 +563,16 @@ WorkspaceLayoutRestoreResult MainWindow::restoreApplicationState(QSettings& sett
                             .object()
                             .value("schema")
                             .toInt();
-    if (result == WorkspaceLayoutRestoreResult::Restored && version < kit::Layout::WorkspaceVersion)
+    // Schema 2 is the Default-preset arrangement; schema 3 (#536) only adds editor session state
+    // and secondary windows, so a schema-2 layout restores as it is.
+    if (result == WorkspaceLayoutRestoreResult::Restored && version < 2)
         resetCompositingLayout();
     workspaceLayoutWritable_ = result != WorkspaceLayoutRestoreResult::UnsupportedVersion;
+    if (workspaceLayoutWritable_)
+        restoreWorkspaceWindows(
+            QJsonDocument::fromJson(settings.value(workspaceLayoutKey).toByteArray())
+                .object()
+                .value("windows"));
     updateWorkspaceActions();
     return result;
 }
@@ -262,7 +581,11 @@ void MainWindow::saveApplicationState(QSettings& settings) const {
     settings.setValue(windowGeometryKey, saveGeometry());
     settings.setValue(QLatin1StringView(contextBarVisibleKey), contextBarAction_->isChecked());
     if (workspaceLayoutWritable_) {
-        workspaceHost_->persistLayout(settings, workspaceLayoutKey);
+        // Schema 3: the main workspace, and every secondary window's layout and placement.
+        auto layout = QJsonDocument::fromJson(workspaceHost_->saveLayoutState()).object();
+        if (const auto windows = saveWorkspaceWindows(); !windows.isEmpty())
+            layout.insert("windows", windows);
+        settings.setValue(workspaceLayoutKey, QJsonDocument(layout).toJson(QJsonDocument::Compact));
     }
     if (playbackController_ != nullptr) {
         settings.setValue(QStringLiteral("playback/audio-enabled"),
@@ -272,6 +595,12 @@ void MainWindow::saveApplicationState(QSettings& settings) const {
 
 void MainWindow::completeShutdown() {
     shutdownComplete_ = true;
+    // Closing the main window closes every secondary window; their native surfaces retired with
+    // the rest of the application's.
+    for (auto* window : workspaceWindows()) {
+        window->setClosingForShutdown();
+        window->close();
+    }
     close();
 }
 
@@ -308,15 +637,28 @@ void MainWindow::createChrome() {
     // Kinetik TitleBar, FramelessEdgeResizer, and the "appearance/chrome" setting all stay
     // compiled and independently tested (see the ChromeMode comment in main_window.hpp) for a
     // possible future custom-chrome/CSD return, but MainWindow never constructs any of them.
+#ifdef Q_OS_MACOS
+    // #536: one global menu bar for every window, the main one and each secondary window.
+    globalMenuBar_ = std::make_unique<QMenuBar>(nullptr);
+    menuBar_ = globalMenuBar_.get();
+#else
     menuBar_ = menuBar();
+#endif
 }
 
 void MainWindow::toggleFullScreen() {
+    // F11 acts on the window it was pressed in: each window goes full screen on its own monitor.
+    if (auto* window = qobject_cast<WorkspaceWindow*>(QApplication::activeWindow())) {
+        window->toggleFullScreen();
+        viewFullScreenAction_->setChecked(window->isFullScreen());
+        return;
+    }
     if (isFullScreen()) {
         showNormal();
     } else {
         showFullScreen();
     }
+    viewFullScreenAction_->setChecked(isFullScreen());
 }
 
 void MainWindow::createMenus(QMenuBar& menuBar) {
@@ -726,7 +1068,9 @@ void MainWindow::applyPreferencesToOpenEditors(const ApplicationPreferences& pre
     // so the window reaches the live ones through the widget tree. A widget that does not implement
     // PreferencesAware is skipped; new editors built after this point read the saved value at
     // construction.
-    const auto descendants = findChildren<QWidget*>();
+    auto descendants = findChildren<QWidget*>();
+    for (auto* window : workspaceWindows())
+        descendants.append(window->findChildren<QWidget*>());
     for (QWidget* widget : descendants) {
         if (auto* aware = dynamic_cast<PreferencesAware*>(widget); aware != nullptr) {
             aware->applyApplicationPreferences(preferences);
@@ -837,6 +1181,11 @@ void MainWindow::updateWindowTitle() {
         path.has_value() ? QString::fromStdString(path->filename().string()) : tr("Untitled");
     setWindowTitle(QStringLiteral("%1[*]").arg(name));
     setWindowModified(projectHost_.isDirty());
+    // Every secondary window carries the same document title (#536).
+    for (auto* window : workspaceWindows()) {
+        window->setWindowTitle(windowTitle());
+        window->setWindowModified(isWindowModified());
+    }
 }
 
 void MainWindow::updateContentSurface() {
@@ -846,6 +1195,8 @@ void MainWindow::updateContentSurface() {
     // The bar authors through the session, which a read-only placeholder leaves bound to its stale
     // document: it is disabled while the placeholder is authoritative.
     contextBar_->setEnabled(!readOnly);
+    for (auto* window : workspaceWindows())
+        window->setReadOnly(readOnly);
     if (!readOnly) {
         centralStack_->setCurrentWidget(workspaceHost_);
         return;
@@ -870,6 +1221,7 @@ void MainWindow::updateContentSurface() {
 
 void MainWindow::createEditorLayout(const EditorRegistry& editorRegistry) {
     workspaceHost_ = new WorkspaceHost(editorRegistry, this);
+    activeHost_ = workspaceHost_;
     workspacePresets_ = new WorkspacePresets(*workspaceHost_, this);
     resetCompositingLayout();
 }
@@ -979,33 +1331,46 @@ void MainWindow::resetCompositingLayout(const bool persist) {
 void MainWindow::createWorkspaceActions() {
     // The panel header menu's Split Right / Split Down, for the active area: the new panel opens
     // to the right of it, or below it.
+    // #536: another workspace window on the same session.
+    newWindowAction_ = windowMenu_->addAction(tr("New Window"));
+    newWindowAction_->setObjectName(QStringLiteral("newWindowAction"));
+    newWindowAction_->setToolTip(
+        tr("Open another workspace window on this project, for example on a second monitor"));
+    connect(newWindowAction_, &QAction::triggered, this, [this] {
+        auto* window = openWorkspaceWindow();
+        window->activateWindow();
+        setActiveWorkspaceHost(window->workspaceHost());
+    });
+    windowMenu_->addSeparator();
+
+    // Every panel command acts on the active workspace, in whichever window (#536).
     splitRightAction_ = windowMenu_->addAction(tr("Split Active Area Right"));
     splitRightAction_->setObjectName("splitAreaRightAction");
     connect(splitRightAction_, &QAction::triggered, workspaceHost_,
-            [this] { workspaceHost_->splitActiveArea(Qt::Horizontal); });
+            [this] { activeWorkspaceHost()->splitActiveArea(Qt::Horizontal); });
 
     splitDownAction_ = windowMenu_->addAction(tr("Split Active Area Down"));
     splitDownAction_->setObjectName("splitAreaDownAction");
     connect(splitDownAction_, &QAction::triggered, workspaceHost_,
-            [this] { workspaceHost_->splitActiveArea(Qt::Vertical); });
+            [this] { activeWorkspaceHost()->splitActiveArea(Qt::Vertical); });
 
     windowMenu_->addSeparator();
 
     closeAreaAction_ = windowMenu_->addAction("Close Active Area");
     closeAreaAction_->setObjectName("closeAreaAction");
     connect(closeAreaAction_, &QAction::triggered, workspaceHost_,
-            [this] { (void)workspaceHost_->closeActiveArea(); });
+            [this] { (void)activeWorkspaceHost()->closeActiveArea(); });
 
     maximizeAreaAction_ = windowMenu_->addAction("Maximize Active Area");
     maximizeAreaAction_->setObjectName("maximizeAreaAction");
     maximizeAreaAction_->setCheckable(true);
     connect(maximizeAreaAction_, &QAction::triggered, workspaceHost_,
-            [this] { workspaceHost_->toggleMaximizeActiveArea(); });
+            [this] { activeWorkspaceHost()->toggleMaximizeActiveArea(); });
 
     // View menu's "Maximize Panel" (decision 2) routes to the exact same signal -- wired here,
     // now that workspaceHost_ exists, rather than in createViewMenu().
     connect(viewMaximizePanelAction_, &QAction::triggered, workspaceHost_,
-            [this] { workspaceHost_->toggleMaximizeActiveArea(); });
+            [this] { activeWorkspaceHost()->toggleMaximizeActiveArea(); });
 
     windowMenu_->addSeparator();
     contextBarAction_ = windowMenu_->addAction(tr("Toolbar"));
@@ -1022,12 +1387,7 @@ void MainWindow::createWorkspaceActions() {
         updateWorkspaceActions();
     });
 
-    connect(workspaceHost_, &WorkspaceHost::areaCountChanged, this,
-            [this] { updateWorkspaceActions(); });
-    connect(workspaceHost_, &WorkspaceHost::maximizeStateChanged, this,
-            [this] { updateWorkspaceActions(); });
-    connect(workspaceHost_, &WorkspaceHost::activeAreaChanged, this,
-            [this] { updateWorkspaceActions(); });
+    connectWorkspaceHost(*workspaceHost_);
     updateWorkspaceActions();
 }
 
@@ -1052,18 +1412,21 @@ void MainWindow::revealMcpServerPanel() {
 
 void MainWindow::updateWorkspaceActions() {
     scheduleDisplayedViewerUpdate();
-    const bool hasMultipleAreas = workspaceHost_->areaCount() > 1;
-    const bool canChangeStructure = !workspaceHost_->isAreaMaximized();
+    if (splitRightAction_ == nullptr)
+        return;
+    auto* host = activeWorkspaceHost();
+    const bool hasMultipleAreas = host->areaCount() > 1;
+    const bool canChangeStructure = !host->isAreaMaximized();
     splitRightAction_->setEnabled(canChangeStructure);
     splitDownAction_->setEnabled(canChangeStructure);
     closeAreaAction_->setEnabled(hasMultipleAreas && canChangeStructure);
     maximizeAreaAction_->setEnabled(hasMultipleAreas);
-    maximizeAreaAction_->setChecked(workspaceHost_->isAreaMaximized());
-    maximizeAreaAction_->setText(workspaceHost_->isAreaMaximized() ? "Restore Active Area"
-                                                                   : "Maximize Active Area");
+    maximizeAreaAction_->setChecked(host->isAreaMaximized());
+    maximizeAreaAction_->setText(host->isAreaMaximized() ? "Restore Active Area"
+                                                         : "Maximize Active Area");
     // Kept in lockstep with the Window menu's own action: same underlying state, two menu homes.
     viewMaximizePanelAction_->setEnabled(hasMultipleAreas);
-    viewMaximizePanelAction_->setChecked(workspaceHost_->isAreaMaximized());
+    viewMaximizePanelAction_->setChecked(host->isAreaMaximized());
 }
 
 void MainWindow::scheduleDisplayedViewerUpdate() {
@@ -1082,7 +1445,9 @@ void MainWindow::updateDisplayedViewer() {
 ViewerEditor* MainWindow::displayedViewer() {
     if (!workspaceHost_)
         return nullptr;
-    auto viewers = workspaceHost_->findChildren<ViewerEditor*>();
+    QList<ViewerEditor*> viewers;
+    for (auto* host : workspaceHosts())
+        viewers.append(host->findChildren<ViewerEditor*>());
     viewers.erase(std::remove_if(viewers.begin(), viewers.end(),
                                  [](const auto* viewer) { return !viewer->isVisible(); }),
                   viewers.end());
@@ -1095,7 +1460,7 @@ ViewerEditor* MainWindow::displayedViewer() {
     std::sort(viewers.begin(), viewers.end(),
               [&](const auto* a, const auto* b) { return areaId(a) < areaId(b); });
     ViewerEditor* selected = nullptr;
-    if (auto* active = workspaceHost_->activeArea()) {
+    if (auto* active = activeWorkspaceHost()->activeArea()) {
         auto* viewer = active->findChild<ViewerEditor*>();
         if (viewer && viewers.contains(viewer)) {
             selected = viewer;
@@ -1164,7 +1529,9 @@ bool belongsToWindow(const QWidget* widget, const QWidget* owner) {
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::KeyPress && ramPreviewAction_ != nullptr &&
         ramPreviewAction_->isEnabled() && isKeypadZeroPress(*static_cast<QKeyEvent*>(event)) &&
-        belongsToWindow(qobject_cast<QWidget*>(watched), this) && !textEntryHasFocus()) {
+        (belongsToWindow(qobject_cast<QWidget*>(watched), this) ||
+         belongsToWorkspace(qobject_cast<QWidget*>(watched))) &&
+        !textEntryHasFocus()) {
         ramPreviewAction_->trigger();
         return true;
     }
@@ -1172,9 +1539,12 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
          event->type() == QEvent::ChildAdded || event->type() == QEvent::ChildRemoved)) {
         const auto* widget = qobject_cast<QWidget*>(watched);
-        if (widget && (widget == workspaceHost_ || workspaceHost_->isAncestorOf(widget)))
+        if (widget && hostOf(widget) != nullptr)
             scheduleDisplayedViewerUpdate();
     }
+    // The main window activated: its workspace takes the one active highlight.
+    if (watched == this && event->type() == QEvent::WindowActivate)
+        setActiveWorkspaceHost(workspaceHost_);
     return QMainWindow::eventFilter(watched, event);
 }
 

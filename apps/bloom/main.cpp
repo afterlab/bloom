@@ -52,6 +52,7 @@
 #include <bloom/ui/image_preview_controller.hpp>
 #include <bloom/ui/interaction_sounds.hpp>
 #include <bloom/ui/jobs_editor.hpp>
+#include <bloom/ui/viewer_preview_pool.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/live_session_adapter.hpp>
 #include <bloom/ui/main_window.hpp>
@@ -425,6 +426,26 @@ int main(int argc, char* argv[]) try {
                 cpuEvaluator.assetBaseDirectory(), time, colorIntent, cancellation);
         };
     previewController.setChannelListingProvider(channelListingProvider);
+    // #536: a Viewer's own preview controller (a pinned Viewer, a secondary window's Viewer with
+    // its own display transform): the same pipeline, shared frame cache, GPU display route and
+    // processing policy as the application's controller. It reads and fills the shared cache but
+    // never re-scopes its retention, and has no frame trace of its own.
+    bloom::ui::ViewerPreviewPool viewerPreviews([&] {
+        auto controller = std::make_unique<bloom::ui::CompositionPreviewController>(
+            compositionSession, taskScheduler, taskUiBridge, previewPipeline,
+            bloom::ui::CompositionPreviewSettings{.colorIntent = compositionSession.colorIntent(),
+                                                  .displayName = {},
+                                                  .viewName = {},
+                                                  .showLook = true,
+                                                  .scopesCacheRetention = false},
+            previewFrameCache, nullptr, gpuPreviewDisplaySubmitter, nullptr,
+            processingPhasePolicy);
+        controller->setChannelListingProvider(channelListingProvider);
+        QObject::connect(&memoryBudgetController,
+                         &bloom::ui::MemoryBudgetController::sampleApplied, controller.get(),
+                         &bloom::ui::CompositionPreviewController::notifyProcessingCapacityChanged);
+        return controller;
+    });
     // #487: the Shuffle slot pickers and the channel/layer checklists read the channel set feeding
     // their node through the same listing.
     bloom::ui::ChannelSetController channelSetController(compositionSession, taskScheduler,
@@ -549,12 +570,16 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &imagePreviews,
                      &bloom::ui::ImagePreviewController::cancel);
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &viewerPreviews,
+                     &bloom::ui::ViewerPreviewPool::beginShutdown);
     // Pre-host retirement is installed below once the window exists. The early setup path
     // has no Viewer pins, but still stops the producer before closing the host owner.
     shutdownCoordinator.setPackedHostRetirement(
         [&] {
             gpuPreviewDisplayService.beginShutdown();
             previewController.releasePublishedFramesForShutdown();
+            viewerPreviews.releasePublishedFramesForShutdown();
             cpuEvaluator.operationCache()->close();
             packedHostRetirement->beginShutdown();
         },
@@ -708,7 +733,7 @@ int main(int argc, char* argv[]) try {
     const bool editorsRegistered = bloom::ui::registerFoundationEditors(
         editorRegistry, compositionSession, previewController, &ramPreviewController, &projectHost,
         &viewerGpuDependencies, gpuExportProvider, &exportQueueAdapter, &liveSessionHost,
-        &mcpAdapter, profilerFeed.get());
+        &mcpAdapter, profilerFeed.get(), &viewerPreviews);
     if (!editorsRegistered) {
         QEventLoop shutdownLoop;
         QObject::connect(&shutdownCoordinator,
@@ -924,14 +949,14 @@ int main(int argc, char* argv[]) try {
     // surface so the coordinator can require genuine retirement before Qt teardown. A CPU-only
     // workspace yields no surfaces and shutdown behavior is exactly as before.
     shutdownCoordinator.setNativeSurfaceSource(
-        [&window] { return window.workspaceHost()->liveNativeSurfaces(); });
+        [&window] { return window.liveNativeSurfaces(); });
     // Re-publish a changed presentation capability into already-live ViewerEditors: a newly Ready
     // client is handed over, and a later loss is handed over as a null client so those viewers drop
     // back to their own CPU paint path. The factory seam covers every editor created later; this
     // covers the ones the initial workspace restore already built. The viewer owns its own
     // same-request CPU fallback, and a null client simply leaves that CPU path in place.
     gpuViewerBootstrap.setPublicationSink([&window](const bloom::ui::ViewerGpuDependencies& deps) {
-        for (auto* surface : window.workspaceHost()->liveNativeSurfaces()) {
+        for (auto* surface : window.liveNativeSurfaces()) {
             if (auto* viewer = dynamic_cast<bloom::ui::ViewerEditor*>(surface); viewer != nullptr) {
                 viewer->setGpuPresentationDependencies(deps.presentationClient(), deps.scheduler,
                                                        deps.vulkanLoaderPath,
@@ -988,8 +1013,9 @@ int main(int argc, char* argv[]) try {
             // Tasks, native surfaces and export owners have retired before this callback.
             // Release every live CPU or native Viewer, not just surfaces with native targets.
             gpuPreviewDisplayService.beginShutdown();
-            window.workspaceHost()->releasePackedFramesForShutdown();
+            window.releasePackedFramesForShutdown();
             previewController.releasePublishedFramesForShutdown();
+            viewerPreviews.releasePublishedFramesForShutdown();
             cpuEvaluator.operationCache()->close();
             packedHostRetirement->beginShutdown();
         },

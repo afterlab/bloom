@@ -3,6 +3,8 @@
 #include <bloom/ui/native_surface_retirement.hpp>
 
 #include <QFrame>
+#include <QJsonObject>
+#include <QPoint>
 #include <QSize>
 #include <QString>
 #include <QStringView>
@@ -17,7 +19,12 @@
 #include <vector>
 
 class QAction;
+class QDragEnterEvent;
+class QDragLeaveEvent;
+class QDragMoveEvent;
+class QDropEvent;
 class QEvent;
+class QMouseEvent;
 class QHBoxLayout;
 class QMenu;
 class QObject;
@@ -133,6 +140,23 @@ class EditorChromeProvider {
     [[nodiscard]] virtual EditorChromeSpec& editorChrome() = 0;
 };
 
+// #536: an editor's own session state, saved with its area in the workspace layout (schema 3) and
+// carried when the panel moves to another area or window. Session/UI state only: never project
+// data, never undoable. An empty object means "nothing to keep".
+class EditorSessionStateProvider {
+  public:
+    virtual ~EditorSessionStateProvider() = default;
+    [[nodiscard]] virtual QJsonObject saveEditorSessionState() const = 0;
+    virtual void restoreEditorSessionState(const QJsonObject& state) = 0;
+};
+
+// #536: where a dragged panel docks against the area it is dropped on. The panel takes that half
+// of the area: Left/Right split it side by side, Top/Bottom stack it.
+enum class PanelDockEdge : std::uint8_t { Left, Right, Top, Bottom };
+
+// The drag payload of a panel being moved (its area ID, UTF-8). Only Bloom's own areas read it.
+inline constexpr auto kPanelDragMimeType = "application/x-bloom-panel";
+
 class EditorArea final : public QFrame {
     Q_OBJECT
 
@@ -177,6 +201,22 @@ class EditorArea final : public QFrame {
     void setSplitEnabled(bool enabled);
     void setCloseEnabled(bool enabled);
     void setMaximizedAppearance(bool maximized);
+    // #536: whether the panel menu's Move to New Window is offered, and why not.
+    void setMoveToNewWindowEnabled(bool enabled, const QString& reason = {});
+
+    // #536: the hosted editor's session state (EditorSessionStateProvider), or an empty object.
+    [[nodiscard]] QJsonObject editorSessionState() const;
+    // Hands `state` to the hosted editor when it keeps session state; otherwise it is ignored.
+    void setEditorSessionState(const QJsonObject& state);
+    // The dock edge a drop at `position` (area coordinates) takes: the nearest of the four edges,
+    // measured relative to the area's own width and height.
+    [[nodiscard]] PanelDockEdge dockEdgeAt(QPointF position) const;
+    // The rectangle (area coordinates) a panel docked at `edge` will take: that half of the area.
+    [[nodiscard]] QRect dockRect(PanelDockEdge edge) const;
+    // The dock indicator shown while a panel is dragged over this area (none outside a drag).
+    [[nodiscard]] std::optional<PanelDockEdge> dockIndicatorEdge() const noexcept {
+        return dockIndicatorEdge_;
+    }
 
     // task WIDTH-1: a fixed, content-independent floor (kit::Size::PanelMinWidth by this panel's
     // own header+footer height) -- overridden so a selection change inside the hosted editor can
@@ -191,10 +231,19 @@ class EditorArea final : public QFrame {
     void maximizeRequested(EditorArea* area);
     // The hosted editor type was replaced (also while the area is first built).
     void editorChanged(EditorArea* area);
+    // #536: the panel menu's Move to New Window, or a header drag released outside every Bloom
+    // window (`globalPosition` is where; null for the menu item).
+    void tearOffRequested(EditorArea* area, QPoint globalPosition);
+    // #536: a panel dragged from area `sourceAreaId` (any window) was dropped on this area.
+    void dockRequested(const QString& sourceAreaId, EditorArea* target, PanelDockEdge edge);
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
   private:
     void rebuildEditor(int editorIndex);
@@ -206,6 +255,12 @@ class EditorArea final : public QFrame {
     void onEditorChangeRetired(const NativeSurfaceRetirementGate::Result& result);
     int addUnavailableEditor(std::string_view editorId);
     void watchForActivation(QWidget* widget);
+    // #536: header press/move/release that drags this panel to another area or out of the window.
+    bool handleHeaderDrag(QObject* watched, QMouseEvent* event);
+    void startPanelDrag(QPoint globalPosition);
+    void handlePanelDragOver(QDropEvent& event, QPointF local, bool move);
+    void handlePanelDrop(QDropEvent& event, QPointF local);
+    void showDockIndicator(std::optional<PanelDockEdge> edge);
 
     const EditorRegistry& editorRegistry_;
     QString areaId_;
@@ -253,6 +308,11 @@ class EditorArea final : public QFrame {
     QToolButton* maximizeButton_ = nullptr;
     bool active_ = false;
     bool activeHighlightSuppressed_ = false;
+    // #536: a header press that may become a panel drag (header coordinates, global), and the
+    // dock indicator painted while another panel is dragged over this one.
+    std::optional<QPoint> dragPressGlobal_;
+    std::optional<PanelDockEdge> dockIndicatorEdge_;
+    QWidget* dockIndicator_ = nullptr;
     // Retire-before-replace gate for the outgoing editor's native surface (CPU-only: inert).
     NativeSurfaceRetirementGate surfaceRetirementGate_;
     // The editor index whose materialization currently matches editorWidget_/footer_/headerMenus_.
