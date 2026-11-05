@@ -711,6 +711,63 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
                 out.set(row, "source", source);
                 out.append(inputs, row);
             }
+            // #543: each stop of a bound gradient takes a colour and a position link; a linked
+            // one names the output that drives it.
+            for (const auto& parameter : definition->parameters) {
+                if (parameter.valueKind != document::ParameterValueKind::Gradient)
+                    continue;
+                const auto gradient = std::ranges::find(node.parameters, parameter.role,
+                                                        &document::ParameterBinding::role);
+                const auto* held = gradient == node.parameters.end()
+                                       ? nullptr
+                                       : composition.parameters().find(gradient->parameterId);
+                if (held == nullptr)
+                    continue;
+                std::size_t count = 0;
+                if (const auto* constant =
+                        std::get_if<document::ConstantValueSource>(&held->source))
+                    if (const auto* value = std::get_if<document::GradientValue>(&constant->value))
+                        count = value->stops.size();
+                if (const auto* animated =
+                        std::get_if<document::AnimationCurveSource>(&held->source))
+                    if (const auto* curve =
+                            composition.animationCurves().findGradient(animated->curveId))
+                        for (const auto& key : curve->keyframes)
+                            count = std::max(count, key.value.stops.size());
+                for (const auto& binding : node.parameters)
+                    if (const auto stop = document::parseGradientStopPort(binding.role);
+                        stop && stop->role == parameter.role)
+                        count = std::max<std::size_t>(count, stop->stop + 1U);
+                for (std::uint32_t stop = 0; stop < count; ++stop)
+                    for (const auto component : {document::GradientStopComponent::Color,
+                                                 document::GradientStopComponent::Position}) {
+                        const auto port =
+                            document::gradientStopPortName(parameter.role, stop, component);
+                        auto* row = out.object();
+                        out.set(row, "port", out.text(port));
+                        out.set(row, "kind",
+                                out.text(scripting::socketKindName(
+                                    component == document::GradientStopComponent::Color
+                                        ? document::SocketValueKind::Color
+                                        : document::SocketValueKind::Scalar)));
+                        out.set(row, "required", out.boolean(false));
+                        yyjson_mut_val* source = out.null();
+                        const auto link = std::ranges::find(node.parameters, port,
+                                                            &document::ParameterBinding::role);
+                        const auto* linked = link == node.parameters.end()
+                                                 ? nullptr
+                                                 : composition.parameters().find(link->parameterId);
+                        if (const auto* driver =
+                                linked ? std::get_if<document::DriverBindingSource>(&linked->source)
+                                       : nullptr) {
+                            source = out.object();
+                            out.set(source, "node", out.number(driver->sourceNodeId.value()));
+                            out.set(source, "port", out.text(driver->outputPort));
+                        }
+                        out.set(row, "source", source);
+                        out.append(inputs, row);
+                    }
+            }
         }
         out.set(record, "inputs", inputs);
         auto* outputs = out.array();
