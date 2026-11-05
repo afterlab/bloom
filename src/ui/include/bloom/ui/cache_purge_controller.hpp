@@ -48,7 +48,8 @@ class CachePurgeController final : public QObject {
     // `clearDecodedVideoMemory` runs on the purge worker; the composition root binds it to the
     // evaluator's decoded-video cache. `setProducerGate` runs on the UI thread and gates preview,
     // asset thumbnails, and export stage advancement. `purgeGpuRetainedCaches` runs on the purge
-    // worker, receives a timeout, and reaches the preview service's owner-thread resident cache.
+    // worker, receives a timeout, and reaches the preview service's owner-thread resident cache;
+    // it returns the device bytes the clear gave back, or nothing when it could not confirm it.
     // `bridge` is borrowed and must outlive this controller; it owns the poll that observes the
     // purge task, and `scheduler` must be the one it wraps.
     CachePurgeController(runtime::TaskScheduler& scheduler, TaskUiBridge& bridge,
@@ -57,7 +58,8 @@ class CachePurgeController final : public QObject {
                          runtime::GpuSceneCoverageCache* coverageCache,
                          std::function<void()> clearDecodedVideoMemory = {},
                          std::function<void(bool)> setProducerGate = {},
-                         std::function<bool(std::chrono::milliseconds)> purgeGpuRetainedCaches = {},
+                         std::function<std::optional<std::uint64_t>(std::chrono::milliseconds)>
+                             purgeGpuRetainedCaches = {},
                          QObject* parent = nullptr);
     ~CachePurgeController() override;
 
@@ -96,8 +98,14 @@ class CachePurgeController final : public QObject {
     runtime::GpuSceneCoverageCache* coverageCache_ = nullptr;
     std::function<void()> clearDecodedVideoMemory_;
     std::function<void(bool)> setProducerGate_;
-    std::function<bool(std::chrono::milliseconds)> purgeGpuRetainedCaches_;
-    std::optional<runtime::TaskHandle<std::uint64_t>> task_;
+    std::function<std::optional<std::uint64_t>(std::chrono::milliseconds)> purgeGpuRetainedCaches_;
+    // The purge worker's answer: whether the GPU clear was confirmed, and the device bytes it gave
+    // back (#544).
+    struct GpuPurgeOutcome final {
+        bool incomplete = false;
+        std::uint64_t deviceBytesReturned = 0;
+    };
+    std::optional<runtime::TaskHandle<GpuPurgeOutcome>> task_;
     std::chrono::steady_clock::time_point waitStartedAt_{};
     bool waitingForConsumers_ = false;
     Mode mode_ = Mode::None;

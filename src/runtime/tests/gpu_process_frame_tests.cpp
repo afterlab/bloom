@@ -598,6 +598,118 @@ void runDistinctFramesKeepRoomTest(Expectations& expectations, const Options& op
     std::cout << "DISTINCT_FRAMES Full1080 x" << rendered << " cache evicted on demand\n";
 }
 
+// #544: idle means small on the final render route too. Once the owner has had no request queued,
+// running or preparing for its idle trim delay, it gives its scene cache's device memory back, so
+// an app that exported once does not hold that memory until the next export.
+void runIdleTrimReturnsRetentionTest(Expectations& expectations, const Options& options) {
+    using namespace bloom::runtime;
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    bloom::render::test::FinalHostRetirementScope host;
+    const auto policy = std::make_shared<GpuProcessingPhasePolicy>(4, host.owner);
+    policy->setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    auto configured = gpuEvaluatorOptions(options.loader_path);
+    configured.processingPhasePolicy = policy;
+    configured.idleTrimDelay = std::chrono::milliseconds{100};
+    const auto evaluator = GpuProcessFrameEvaluator::create(configured);
+    if (!evaluator || !evaluator->gpuAvailable()) {
+        expectations.expect(false, "idle trim: the owner reaches native readiness");
+        return;
+    }
+    MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.process.status = ProcessMemoryStatus::Unsupported;
+    sample.process.source = ProcessMemorySource::OtherHostOnly;
+    sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
+    sample.processSampleFresh = true;
+    sample.sampleSerial = 1;
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    const auto plan =
+        twoSolidPlan(format(1920, 1080), Color4d{0.5, 0.25, 0.125, 1.0}, LayerValues{},
+                     Color4d{0.125, 0.5, 0.75, 0.5}, LayerValues{}, 1920.0, 1080.0, 9800);
+    auto request = requestFor(*plan);
+    request.pixelStorageByteLimit = gib;
+    const auto frame = evaluator->evaluate(plan, request);
+    const auto retained = evaluator->retentionStats().retainedBytes;
+    expectations.expect(frame.frame != nullptr && retained != 0,
+                        "idle trim: the frame renders and its scene cache retains device memory");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (evaluator->retentionStats().idleTrims == 0 &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto stats = evaluator->retentionStats();
+    expectations.expect(stats.idleTrims == 1 && stats.idleTrimmedBytes >= retained &&
+                            stats.retainedBytes == 0,
+                        "idle trim: after the delay the owner gives the scene cache back");
+    expectations.expect(policy->snapshot().reservations.retainedNativeImageBytes == 0,
+                        "idle trim: the root holds no retention afterwards");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    expectations.expect(evaluator->retentionStats().idleTrims == 1,
+                        "idle trim: an owner that stays idle trims once");
+    evaluator->beginShutdown();
+    std::cout << "IDLE_TRIM returned " << stats.idleTrimmedBytes << " bytes\n";
+}
+
+// #544: a native allocation refused for device room in the middle of a frame (another application
+// took the memory after the frame was admitted) is a capacity wait at the frame boundary. Before,
+// it came back as an over-budget failure and the final render took the CPU reference path for that
+// frame (minutes at 4K). The fixed device report, made from inside the running frame, leaves the
+// device no room after admission; once it is retired the same frame renders on the GPU.
+void runDeviceRoomRefusalWaitsTest(Expectations& expectations, const Options& options) {
+    using namespace bloom::runtime;
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    bloom::render::test::FinalHostRetirementScope host;
+    const auto policy = std::make_shared<GpuProcessingPhasePolicy>(4, host.owner);
+    policy->setHeadroom({.ramBytes = 0, .vramBytes = 0});
+    auto configured = gpuEvaluatorOptions(options.loader_path);
+    configured.processingPhasePolicy = policy;
+    const auto evaluator = GpuProcessFrameEvaluator::create(configured);
+    if (!evaluator || !evaluator->gpuAvailable()) {
+        expectations.expect(false, "device room: the owner reaches native readiness");
+        return;
+    }
+    MemoryBudgetState sample;
+    sample.machine.availableBytes = 60 * gib;
+    sample.process.status = ProcessMemoryStatus::Unsupported;
+    sample.process.source = ProcessMemorySource::OtherHostOnly;
+    sample.process.sampledAt = GpuProcessingPhasePolicy::Clock::now();
+    sample.processSampleFresh = true;
+    sample.sampleSerial = 1;
+    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    const auto plan =
+        twoSolidPlan(format(1920, 1080), Color4d{0.25, 0.5, 0.125, 1.0}, LayerValues{},
+                     Color4d{0.75, 0.125, 0.5, 0.5}, LayerValues{}, 1920.0, 1080.0, 9900);
+    auto request = requestFor(*plan);
+    request.pixelStorageByteLimit = gib;
+    constexpr std::uint64_t fixedEpoch = std::numeric_limits<std::uint64_t>::max() - 544;
+    const bloom::render::GpuAllocationBudget full{
+        .source = bloom::render::GpuAllocationBudgetSource::MemoryBudget,
+        .device_local_bytes = 64 * gib,
+        .available_bytes = mib,
+        .device_uuid = {0x05, 0x44}};
+    bool reported = false;
+    const auto takeTheRoom = [&](const EvaluationProgress& progress) {
+        if (progress.stage == EvaluationProgressStage::Operation && !reported)
+            reported = policy->reportDevice(fixedEpoch, full);
+    };
+    const auto refused = evaluator->evaluate(plan, request, {}, takeTheRoom);
+    expectations.expect(reported, "device room: the device is filled after admission");
+    expectations.expect(refused.status == GpuProcessFrameStatus::Failed && !refused.frame &&
+                            refused.diagnostic.code ==
+                                GpuProcessFrameDiagnosticCode::AwaitingCapacity,
+                        "device room: a mid-frame device refusal waits for capacity");
+    if (refused.diagnostic.code != GpuProcessFrameDiagnosticCode::AwaitingCapacity)
+        std::cerr << "device room: diagnostic " << static_cast<int>(refused.diagnostic.code) << ' '
+                  << refused.diagnostic.message << '\n';
+    static_cast<void>(policy->retireDeviceReport(fixedEpoch, true));
+    const auto recovered = evaluator->evaluate(plan, request);
+    expectations.expect(recovered.frame != nullptr &&
+                            recovered.frame->identity().provider == EvaluationProvider::GpuResident,
+                        "device room: with the room back the same frame renders on the GPU");
+    evaluator->beginShutdown();
+    std::cout << "DEVICE_ROOM mid-frame refusal waits, then renders\n";
+}
+
 int run(int argc, char** argv) {
     const Options options = parseOptions(argc, argv);
     if (!options.valid) {
@@ -697,6 +809,8 @@ int run(int argc, char** argv) {
     runLifecycleTests(expectations, options);
     runProcessingPhaseTest(expectations, options);
     runDistinctFramesKeepRoomTest(expectations, options);
+    runIdleTrimReturnsRetentionTest(expectations, options);
+    runDeviceRoomRefusalWaitsTest(expectations, options);
 
     if (!expectations.ok()) {
         std::cerr << "FAIL: GPU process-frame expectations failed\n";

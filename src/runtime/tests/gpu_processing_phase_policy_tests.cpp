@@ -1228,6 +1228,25 @@ int liveConstraintRemoval() {
 #endif
 }
 } // namespace
+// #544: retention asked to give way for a refused native allocation releases at least the
+// allocation and at least half of what it retains, so the next step of the same scene fits too.
+void deviceRoomGiveWayCoversTheAllocationAndHalfTheRetention() {
+    GpuProcessingPhasePolicy unmeasured;
+    require(deviceRoomGiveWay(unmeasured, 100, 0) == 100,
+            "without a device report the allocation itself gives way");
+    require(deviceRoomGiveWay(unmeasured, 100, 1000) == 500,
+            "half the retention gives way when it is more than the allocation");
+    GpuProcessingPhasePolicy policy;
+    require(policy.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                    .device_local_bytes = 8 * gib,
+                                    .available_bytes = 4 * gib}),
+            "the device reports its budget");
+    require(deviceRoomGiveWay(policy, 300, 200) == 300,
+            "a device with room still gives way by the allocation");
+    require(deviceRoomGiveWay(policy, 300, 8 * gib) == 4 * gib,
+            "a large retention gives half of itself back");
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--live-unlimited-probe")
@@ -1250,6 +1269,7 @@ int main(int argc, char** argv) {
         verifiedConstraintRemoval();
         deliveredNumericView();
         envelope();
+        deviceRoomGiveWayCoversTheAllocationAndHalfTheRetention();
         std::cout << "sampled paired policy/preview+final sizing PASS\n";
         return 0;
     } catch (const std::exception& error) {

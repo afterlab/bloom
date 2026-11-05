@@ -32,6 +32,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -273,8 +274,13 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
         },
         [&gpuPurgeCalls](const std::chrono::milliseconds /*timeout*/) {
             gpuPurgeCalls.fetch_add(1);
-            return true;
+            // #544: the device bytes the GPU clear gave back.
+            return std::optional<std::uint64_t>{3ULL * 1024 * 1024 * 1024};
         });
+    QString finishedMessage;
+    QObject::connect(
+        &controller, &ui::CachePurgeController::purgeFinished, &controller,
+        [&finishedMessage](bool, const QString& message) { finishedMessage = message; });
     const auto drive = [&controller] {
         for (int turn = 0; turn < 4000 && controller.isPurging(); ++turn) {
             QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
@@ -291,6 +297,8 @@ void testCachePurgeControllerClearsApplicableStores(Expectations& check) {
                  "cache purge: the producer gate is released when the purge finishes");
     check.expect(gpuPurgeCalls.load() == 1,
                  "cache purge: preview purge reaches the owning GPU cache purge API");
+    check.expect(finishedMessage.contains(QStringLiteral("3.0 GB of graphics memory returned")),
+                 "cache purge: the finished purge reports the device memory it gave back");
     check.expect(operationCache.retainedBytes(runtime::OperationCacheEntryKind::Operation) == 0,
                  "cache purge: preview purge drops derived operation results");
     check.expect(operationCache.retainedBytes(runtime::OperationCacheEntryKind::DecodedMedia) > 0,
@@ -490,7 +498,8 @@ void testServiceCachePurgeTimeoutWithdrawsAndSerializes(Expectations& check) {
     });
     std::thread caller([&core, &secondResult] {
         secondResult.store(
-            bloom::runtime::detail::purgeServiceCaches(core, std::chrono::milliseconds{2000}));
+            bloom::runtime::detail::purgeServiceCaches(core, std::chrono::milliseconds{2000})
+                .has_value());
     });
     caller.join();
     owner.join();

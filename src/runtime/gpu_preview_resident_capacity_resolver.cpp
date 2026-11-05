@@ -105,6 +105,37 @@ static void trimIdleDeviceRetention(const std::shared_ptr<PreviewDisplayServiceC
     core->foregroundCapacitySampledAt = {};
 }
 
+std::uint64_t giveWayToDeviceRoom(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                  const std::uint64_t bytes) noexcept {
+    if (core == nullptr || core->device == nullptr || !core->device->isOwnerThread() ||
+        !core->options.processingPhasePolicy)
+        return 0;
+    // Parked storage holds nothing anyone reads, so it goes first; then the scene cache's
+    // unpinned entries, least recently used first (the running scene's own inputs stay pinned).
+    // What the cache lets go of is parked on release, and is freed too.
+    const auto wanted = deviceRoomGiveWay(
+        *core->options.processingPhasePolicy, bytes,
+        core->device->nativeStorageReuseStats().parkedDeviceBytes +
+            (core->residentSceneCache != nullptr ? core->residentSceneCache->retainedBytes() : 0));
+    auto released = core->device->releaseReusableNativeStorage(wanted, true);
+    if (released < wanted && core->residentSceneCache != nullptr) {
+        const auto parkedBefore = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+        released += core->residentSceneCache->reclaim(wanted - released);
+        const auto parkedAfter = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+        if (parkedAfter > parkedBefore)
+            static_cast<void>(
+                core->device->releaseReusableNativeStorage(parkedAfter - parkedBefore, true));
+    }
+    if (released != 0) {
+        core->counterDeviceRoomReclaims.fetch_add(1, std::memory_order_relaxed);
+        core->counterDeviceRoomReclaimedBytes.fetch_add(released, std::memory_order_relaxed);
+        // Report the returned room now, so the retried allocation is admitted against it.
+        core->foregroundCapacitySampledAt = {};
+        refreshResidentForegroundCapacity(core);
+    }
+    return released;
+}
+
 void refreshResidentForegroundCapacity(
     const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept {
     if (core == nullptr || core->device == nullptr || !core->device->isOwnerThread() ||

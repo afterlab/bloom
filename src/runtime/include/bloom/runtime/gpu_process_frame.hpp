@@ -171,6 +171,9 @@ struct GpuProcessFrameEvaluatorOptions final {
     std::optional<std::uint64_t> readbackByteBudget;
     // Bounded per-native-job deadline while polling the executor.
     std::chrono::milliseconds nativeDeadline{30000};
+    // #544: after this long with no request queued, running or preparing, the owner gives the
+    // scene cache's device memory back (idle means small, as on the preview route).
+    std::chrono::milliseconds idleTrimDelay{1000};
     // Bounded admission: the maximum number of admitted-but-not-yet-running requests. A request
     // beyond this is refused with a typed OverBudget and no frame.
     std::size_t maxQueuedRequests = 16;
@@ -204,6 +207,19 @@ struct GpuProcessFrameEvaluatorOptions final {
     // fails with a typed BadAllocation. Zero (the default) disables it and production never sets
     // it.
     std::uint32_t failPreparationAllocationAt = 0;
+};
+
+// The device memory this evaluator retains between frames and how it gave it back (#544).
+struct GpuProcessFrameRetentionStats final {
+    // The scene cache's retained device bytes after the owner's last request or trim.
+    std::uint64_t retainedBytes = 0;
+    // Native allocations the root refused for device room after which the scene cache gave way
+    // inside the allocation, and the bytes it released.
+    std::uint64_t deviceRoomReclaims = 0;
+    std::uint64_t deviceRoomReclaimedBytes = 0;
+    // Idle trims and the device bytes they gave back.
+    std::uint64_t idleTrims = 0;
+    std::uint64_t idleTrimmedBytes = 0;
 };
 
 // Dedicated owner worker. Construction starts the worker and initializes the device on it; a
@@ -258,6 +274,9 @@ class GpuProcessFrameEvaluator final {
                     ProcessFrameIdentity identity,
                     std::shared_ptr<const PreparedGpuOcioCommand> outputCommand = nullptr,
                     const CancellationToken& cancellation = {});
+
+    // Thread-safe snapshot of the owner's device retention counters.
+    [[nodiscard]] GpuProcessFrameRetentionStats retentionStats() const noexcept;
 
     // Non-blocking. The destructor joins the owner worker.
     void beginShutdown() noexcept;

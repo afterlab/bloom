@@ -323,8 +323,15 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
         const bool neutralQualified = createAndQualifyResidentRoute(core);
         // #477: frames reuse the transient native storage of the frames before them instead of
         // allocating it per frame. Only a rooted route, whose waits evict it, parks storage.
-        if (core->options.processingPhasePolicy && core->device)
+        if (core->options.processingPhasePolicy && core->device) {
             core->device->setNativeStorageReuse(true);
+            // #544: retention gives way inside a native allocation refused for device room.
+            core->device->setDeviceRoomReclaimer(
+                [weak = std::weak_ptr(core)](const std::uint64_t bytes) -> std::uint64_t {
+                    const auto held = weak.lock();
+                    return held ? giveWayToDeviceRoom(held, bytes) : 0;
+                });
+        }
         // A failed Neutral qualification is not fatal for the general display route: as long as the
         // owner created the scene executor (and retained a live resident display), the service is
         // Ready and each request decides per-stage. The service is only Unavailable when neither

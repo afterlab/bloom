@@ -115,7 +115,7 @@ void exercisePackedStress(Expectations& checks, Fixture& fixture, const TestOpti
             fixture.evaluator.operationCache()->clearOperations();
             fixture.evaluator.operationCache()->clearDecodedMedia();
             coverage->clear();
-            return service.purgeRetainedCaches(5s);
+            return service.purgeRetainedCaches(5s).has_value();
         });
         checks.expect(packedStressWorkerResult(cleared, 10s),
                       "media/native purge and large frees run off the UI thread");

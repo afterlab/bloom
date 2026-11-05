@@ -48,16 +48,19 @@ struct PreviewDisplayServiceCore;
 // device.
 void retireNativeOnOwner(const std::shared_ptr<PreviewDisplayServiceCore>& core);
 // Defined in gpu_preview_display_service_cache_purge.cpp. Runs on the service owner thread: claims
-// a pending resident-cache purge under `cachePurgeMutex`, clears the scene cache, and publishes
-// completion. A withdrawn (timed-out) request is never cleared.
+// a pending resident-cache purge under `cachePurgeMutex`, clears the scene cache, frees the parked
+// native storage (#544), measures the device memory that went back, and publishes completion. A
+// withdrawn (timed-out) request is never cleared.
 void pollServiceQueueTimings(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 void processServiceCachePurge(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 // Defined in gpu_preview_display_service_cache_purge.cpp. Worker-thread side: queues a purge and
 // waits, bounded by `timeout`, for the owner to claim and clear it. A timeout withdraws the still-
-// pending request and returns false; it can never leave a clear to run after it returns. Returns
-// true when the clear completed (or the service has no resident route).
-[[nodiscard]] bool purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                                      std::chrono::milliseconds timeout) noexcept;
+// pending request and returns nothing; it can never leave a clear to run after it returns. Returns
+// the device bytes the clear gave back when it completed (zero when the service has no resident
+// route).
+[[nodiscard]] std::optional<std::uint64_t>
+purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                   std::chrono::milliseconds timeout) noexcept;
 
 inline constexpr std::size_t kMaxAcceptedServiceRoots = 512;
 
@@ -297,6 +300,8 @@ struct PreviewDisplayServiceCore final {
     std::atomic<std::uint64_t> counterCapacityWaits{0};
     std::atomic<std::uint64_t> counterIdleTrims{0};
     std::atomic<std::uint64_t> counterIdleTrimmedBytes{0};
+    std::atomic<std::uint64_t> counterDeviceRoomReclaims{0};
+    std::atomic<std::uint64_t> counterDeviceRoomReclaimedBytes{0};
     std::atomic<std::uint64_t> counterGpuCacheHits{0};
     std::atomic<std::uint64_t> counterGpuCacheMisses{0};
     std::atomic<std::uint64_t> counterCpuFallbacks{0};
@@ -338,6 +343,8 @@ struct PreviewDisplayServiceCore final {
     std::condition_variable cachePurgeCondition;
     bool cachePurgePending = false;
     std::uint64_t cachePurgeCompleted = 0;
+    // The device bytes the last completed purge gave back (#544), under `cachePurgeMutex`.
+    std::uint64_t cachePurgeReturnedBytes = 0;
 
     // Service-thread-owned stage bookkeeping.
     std::vector<std::shared_ptr<PreviewDisplayStageRecord>> stages;
@@ -456,6 +463,11 @@ void runGpuStartup(const std::shared_ptr<PreviewDisplayServiceCore>& core, TaskC
 void resolveResidentCapacity(const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
 void refreshResidentForegroundCapacity(
     const std::shared_ptr<PreviewDisplayServiceCore>& core) noexcept;
+// Owner thread, inside a native allocation the processing root refused for device room (#544):
+// parked native storage and the reusable scene cache give way by at least `bytes` where they can,
+// and the device is measured again. Returns the bytes released.
+std::uint64_t giveWayToDeviceRoom(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                                  std::uint64_t bytes) noexcept;
 
 // GPU parent starter payload (runs on the service thread): submit the CPU stage child, retain the
 // final completion, and return immediately.

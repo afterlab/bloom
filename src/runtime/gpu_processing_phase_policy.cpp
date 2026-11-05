@@ -759,6 +759,16 @@ void registerDeviceReclaim(GpuProcessingPhasePolicy& policy,
             return 0;
         });
 }
+std::uint64_t deviceRoomGiveWay(const GpuProcessingPhasePolicy& policy, const std::uint64_t bytes,
+                                const std::uint64_t retainedBytes) noexcept {
+    const auto counters = policy.snapshot().reservations;
+    auto shortfall = bytes;
+    if (counters.deviceCapacityBytes)
+        shortfall =
+            std::max(bytes, subtractSaturating(addSaturating(counters.totalDeviceClaimBytes, bytes),
+                                               *counters.deviceCapacityBytes));
+    return std::max(shortfall, retainedBytes / 2);
+}
 std::uint64_t deviceReclaimBytes(GpuDeviceReclaimRequest& request,
                                  const render::GpuAllocationBudget& live,
                                  const std::uint64_t vramHeadroomBytes) noexcept {

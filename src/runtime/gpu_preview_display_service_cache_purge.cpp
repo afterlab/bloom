@@ -4,7 +4,9 @@
 // the one place that touches that native cache for a purge, so the clear can never run on the wrong
 // thread. Clearing GpuSceneCache drops only the cache's own shared_ptr references: an image that
 // another owner still pins -- a displayed frame, an export product, an in-flight lease -- stays
-// valid, and no lease is globally invalidated. Nothing native is destroyed here.
+// valid, and no lease is globally invalidated. What the clear lets go of is parked for reuse
+// (#477); the purge then frees all parked native storage, so the device memory actually goes back
+// (#544), measures what went back and reports the device again.
 //
 // Request/claim/clear/cancel are serialized by the single `cachePurgeMutex`:
 //   * `purgeServiceCaches()` (worker thread) queues `cachePurgePending` under the mutex, wakes the
@@ -29,25 +31,43 @@ void processServiceCachePurge(const std::shared_ptr<PreviewDisplayServiceCore>& 
         return;
     }
     core->cachePurgePending = false;
+    const auto held = [&core]() -> std::uint64_t {
+        if (core->device == nullptr)
+            return 0;
+        return core->device->imageReclamationStats().liveAllocationBytes +
+               core->device->nativeStorageReuseStats().parkedDeviceBytes;
+    };
+    const auto before = held();
     if (core->residentSceneCache != nullptr) {
         core->residentSceneCache->clear();
     }
+    if (core->device != nullptr) {
+        const auto parked = core->device->nativeStorageReuseStats().parkedDeviceBytes;
+        if (parked != 0)
+            static_cast<void>(core->device->releaseReusableNativeStorage(parked, true));
+        // The returned room is admitted at once, not at the next sampling slot.
+        core->foregroundCapacitySampledAt = {};
+        refreshResidentForegroundCapacity(core);
+    }
+    const auto after = held();
+    core->cachePurgeReturnedBytes = before > after ? before - after : 0;
     ++core->cachePurgeCompleted;
     lock.unlock();
     core->cachePurgeCondition.notify_all();
 }
 
-bool purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
-                        const std::chrono::milliseconds timeout) noexcept {
+std::optional<std::uint64_t>
+purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
+                   const std::chrono::milliseconds timeout) noexcept {
     // Immutable construction-time state only: the resident route exists exactly when a GPU scene
     // stage was supplied. The native `residentSceneCache` pointer is created, read, and destroyed
     // ONLY on the service owner thread, so a caller thread must never inspect it.
     if (core->gpuStageFunction == nullptr) {
-        return true;
+        return std::uint64_t{0};
     }
     std::unique_lock lock(core->cachePurgeMutex);
     if (core->stopping.load(std::memory_order_acquire) || core->cachePurgePending) {
-        return false;
+        return std::nullopt;
     }
     const std::uint64_t target = core->cachePurgeCompleted + 1;
     core->cachePurgePending = true;
@@ -59,7 +79,7 @@ bool purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                core->stopping.load(std::memory_order_acquire);
     }));
     if (core->cachePurgeCompleted >= target) {
-        return true;
+        return core->cachePurgeReturnedBytes;
     }
     // Timed out (or stopping) before the owner claimed it: withdraw under the mutex. The owner
     // checks `cachePurgePending` under this same mutex before clearing, so a withdrawn request can
@@ -67,7 +87,7 @@ bool purgeServiceCaches(const std::shared_ptr<PreviewDisplayServiceCore>& core,
     if (core->cachePurgePending) {
         core->cachePurgePending = false;
     }
-    return false;
+    return std::nullopt;
 }
 
 } // namespace bloom::runtime::detail

@@ -145,6 +145,21 @@ struct GpuProcessFrameEvaluator::Impl final {
     // retained OCIO programs of the scene executor and the output colour stage (#474), which have
     // no fixed byte ceiling of their own; each least recently used first. Returns what it freed.
     std::uint64_t reclaimDevice(std::uint64_t bytes);
+    // Owner thread, inside a native allocation the root refused for device room (#544): the scene
+    // cache gives way by at least `bytes` where it can, and the device is reported again. Returns
+    // the bytes released.
+    std::uint64_t giveWayToDeviceRoom(std::uint64_t bytes);
+    std::atomic<std::uint64_t> deviceRoomReclaims{0};
+    std::atomic<std::uint64_t> deviceRoomReclaimedBytes{0};
+    // #544 idle trim. Owner thread: when the last request finished, and whether the cache was
+    // already given back since.
+    std::chrono::steady_clock::time_point lastWorkAt = std::chrono::steady_clock::now();
+    bool idleTrimmed = false;
+    std::atomic<std::uint64_t> idleTrims{0};
+    std::atomic<std::uint64_t> idleTrimmedBytes{0};
+    std::atomic<std::uint64_t> retainedBytes{0};
+    // Owner thread: gives the scene cache back after `options.idleTrimDelay` without work.
+    void trimIdleRetention(bool preparing);
     GpuProcessFrameOutcome
     runRequest(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                const EvaluationRequest& request,
@@ -212,8 +227,17 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequest(
                        refusal->domain == render::GpuProcessingPhaseDomain::Device;
             };
             if (refusedHere(device->nativeImageStorageRefusal()) ||
-                refusedHere(device->nativeBufferStorageRefusal()))
+                refusedHere(device->nativeBufferStorageRefusal())) {
                 deviceReclaim->request(std::max<std::uint64_t>(phaseLease->deviceNeedBytes(), 1));
+                // #544: the device had no room left for this frame (other work, or another
+                // application, holds it). That is a capacity wait at the frame boundary, never a
+                // reason to render the frame on the CPU reference path.
+                if (outcome.status == GpuProcessFrameStatus::Failed &&
+                    outcome.diagnostic.code == GpuProcessFrameDiagnosticCode::OverBudget)
+                    outcome.diagnostic = {GpuProcessFrameDiagnosticCode::AwaitingCapacity,
+                                          "the device has no room for this frame now: " +
+                                              outcome.diagnostic.message};
+            }
         }
         return outcome;
     } catch (const std::bad_alloc&) {
@@ -628,6 +652,12 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
                                 createdCache.diagnostic.message};
             } else {
                 cache = std::move(createdCache.cache);
+                // #544: the scene cache gives way inside a native allocation the root refused
+                // for device room, so a frame's own published intermediates cannot fill the
+                // device and fail the frame onto the CPU reference path.
+                if (options.processingPhasePolicy)
+                    device->setDeviceRoomReclaimer(
+                        [this](const std::uint64_t bytes) { return giveWayToDeviceRoom(bytes); });
                 auto executorBudgets = options.executorBudgets.value_or(GpuSceneExecutorBudgets{});
                 if (!options.executorBudgets && options.processingPhasePolicy) {
                     // Producer construction allocates no image. The per-request phase allowance
@@ -683,8 +713,10 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
             cv.wait_for(lock, std::chrono::milliseconds(50),
                         [this] { return stopping || !queue.empty() || deviceReclaim->pending(); });
             if (!stopping && queue.empty()) {
+                const bool preparing = inFlightPreparations != 0;
                 lock.unlock();
                 reportDevice();
+                trimIdleRetention(preparing);
                 continue;
             }
             // Shutdown drains every queued request as a typed cancellation, then exits. A request
@@ -741,6 +773,10 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
         active->phaseLease.reset();
         // Before completion is visible, so the caller's next frame is admitted into the room.
         keepRoomForNextPhase();
+        lastWorkAt = std::chrono::steady_clock::now();
+        idleTrimmed = false;
+        if (cache)
+            retainedBytes.store(cache->retainedBytes(), std::memory_order_relaxed);
         std::lock_guard lock(mutex);
         active->outcome = std::move(outcome);
         active->done = true;
@@ -748,6 +784,8 @@ void GpuProcessFrameEvaluator::Impl::runOwner() {
     }
 
     // Device-generation resources must be destroyed on the owner thread that created them.
+    if (device)
+        device->setDeviceRoomReclaimer({});
     uploader.reset();
     outputColor.reset();
     executor.reset();
@@ -816,6 +854,40 @@ void GpuProcessFrameEvaluator::Impl::reportDevice() {
     if (wanted != 0 && reclaimDevice(wanted) != 0)
         live = device->availableAllocationBudget();
     static_cast<void>(options.processingPhasePolicy->reportDevice(device->ownershipEpoch(), live));
+}
+
+void GpuProcessFrameEvaluator::Impl::trimIdleRetention(const bool preparing) {
+    const auto now = std::chrono::steady_clock::now();
+    if (preparing) {
+        lastWorkAt = now;
+        return;
+    }
+    if (idleTrimmed || !device || !cache || now - lastWorkAt < options.idleTrimDelay)
+        return;
+    idleTrimmed = true;
+    const auto released = cache->reclaim(cache->retainedBytes());
+    retainedBytes.store(cache->retainedBytes(), std::memory_order_relaxed);
+    if (released == 0)
+        return;
+    idleTrims.fetch_add(1, std::memory_order_relaxed);
+    idleTrimmedBytes.fetch_add(released, std::memory_order_relaxed);
+    if (options.processingPhasePolicy)
+        static_cast<void>(options.processingPhasePolicy->reportDevice(
+            device->ownershipEpoch(), device->availableAllocationBudget()));
+}
+
+std::uint64_t GpuProcessFrameEvaluator::Impl::giveWayToDeviceRoom(const std::uint64_t bytes) {
+    if (!device || !cache || !options.processingPhasePolicy)
+        return 0;
+    const auto released = cache->reclaim(
+        deviceRoomGiveWay(*options.processingPhasePolicy, bytes, cache->retainedBytes()));
+    if (released != 0) {
+        deviceRoomReclaims.fetch_add(1, std::memory_order_relaxed);
+        deviceRoomReclaimedBytes.fetch_add(released, std::memory_order_relaxed);
+        static_cast<void>(options.processingPhasePolicy->reportDevice(
+            device->ownershipEpoch(), device->availableAllocationBudget()));
+    }
+    return released;
 }
 
 std::uint64_t GpuProcessFrameEvaluator::Impl::reclaimDevice(const std::uint64_t bytes) {
@@ -1052,6 +1124,17 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::evaluate(
     GpuProcessFrameOutcome outcome = std::move(slot->outcome);
     slot->outcome = {};
     return outcome;
+}
+
+GpuProcessFrameRetentionStats GpuProcessFrameEvaluator::retentionStats() const noexcept {
+    if (impl_ == nullptr)
+        return {};
+    return {.retainedBytes = impl_->retainedBytes.load(std::memory_order_relaxed),
+            .deviceRoomReclaims = impl_->deviceRoomReclaims.load(std::memory_order_relaxed),
+            .deviceRoomReclaimedBytes =
+                impl_->deviceRoomReclaimedBytes.load(std::memory_order_relaxed),
+            .idleTrims = impl_->idleTrims.load(std::memory_order_relaxed),
+            .idleTrimmedBytes = impl_->idleTrimmedBytes.load(std::memory_order_relaxed)};
 }
 
 void GpuProcessFrameEvaluator::beginShutdown() noexcept {

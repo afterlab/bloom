@@ -7,6 +7,8 @@
 #include <bloom/ui/media_disk_cache_settings.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 
+#include "window_status_bar_segments.hpp"
+
 #include <utility>
 
 namespace bloom::ui {
@@ -25,7 +27,8 @@ CachePurgeController::CachePurgeController(
     media::cache::MediaDiskCache* const diskCache, runtime::OperationCache* const operationCache,
     runtime::GpuSceneCoverageCache* const coverageCache,
     std::function<void()> clearDecodedVideoMemory, std::function<void(bool)> setProducerGate,
-    std::function<bool(std::chrono::milliseconds)> purgeGpuRetainedCaches, QObject* parent)
+    std::function<std::optional<std::uint64_t>(std::chrono::milliseconds)> purgeGpuRetainedCaches,
+    QObject* parent)
     : QObject(parent), scheduler_(scheduler), bridge_(bridge), diskCache_(diskCache),
       operationCache_(operationCache), coverageCache_(coverageCache),
       clearDecodedVideoMemory_(std::move(clearDecodedVideoMemory)),
@@ -78,16 +81,25 @@ void CachePurgeController::poll() {
             return;
         }
         const bool success = result->state() == runtime::TaskState::Succeeded;
-        const bool gpuIncomplete = success && result->value().has_value() && *result->value() != 0;
+        const auto outcome =
+            success && result->value().has_value() ? *result->value() : GpuPurgeOutcome{};
         const bool wasPreview = mode_ == Mode::Preview;
         task_.reset();
         if (!success) {
             finish(false, tr("The cache purge did not complete"));
-        } else if (gpuIncomplete) {
+        } else if (outcome.incomplete) {
             // The CPU-side stores were cleared, but the GPU resident cache did not confirm its
             // clear in time. Report the partial result honestly; do not claim everything purged.
             finish(false, wasPreview ? tr("Preview cache partially purged; the GPU cache is busy")
                                      : tr("Media cache partially purged; the GPU cache is busy"));
+        } else if (outcome.deviceBytesReturned != 0) {
+            // #544: the graphics memory the clear actually gave back, measured on the device.
+            const auto returned =
+                statusbar::formatBytes(static_cast<std::size_t>(outcome.deviceBytesReturned));
+            finish(true,
+                   wasPreview
+                       ? tr("Preview cache purged; %1 of graphics memory returned").arg(returned)
+                       : tr("Media cache purged; %1 of graphics memory returned").arg(returned));
         } else {
             finish(true, wasPreview ? tr("Preview cache purged") : tr("Media cache purged"));
         }
@@ -123,7 +135,7 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
     auto* const coverage = coverageCache_;
     auto clearVideo = clearDecodedVideoMemory_;
     auto purgeGpu = purgeGpuRetainedCaches_;
-    auto submission = scheduler_.submit<std::uint64_t>(
+    auto submission = scheduler_.submit<GpuPurgeOutcome>(
         std::move(request),
         [mode, disk, operation, coverage, clearVideo, purgeGpu](runtime::TaskContext&) {
             if (mode == Mode::Media) {
@@ -144,18 +156,20 @@ void CachePurgeController::submitPurgeTask(const Mode mode) {
             // the pressure monitor to trim again once deferred host retirement has freed the rest.
             runtime::releaseFreedHostMemory();
             runtime::processMemoryBudgetLedger().requestHostTrim();
-            std::uint64_t incomplete = 0;
+            GpuPurgeOutcome outcome;
             if (purgeGpu) {
                 // Both purges clear the resident GPU scene cache: it retains decoded/uploaded media
                 // source images as well as operation intermediates, so a media purge that skipped
                 // it would let the next GPU frame reuse a source the artist just purged. The owning
-                // service clears on its own owner thread, preserving every outstanding pin/lease.
-                // Runs here, on a worker, never the UI.
-                if (!purgeGpu(kGpuPurgeTimeout)) {
-                    incomplete = 1;
-                }
+                // service clears on its own owner thread, preserving every outstanding pin/lease,
+                // and frees the parked native storage the clear let go of (#544). Runs here, on a
+                // worker, never the UI.
+                if (const auto returned = purgeGpu(kGpuPurgeTimeout))
+                    outcome.deviceBytesReturned = *returned;
+                else
+                    outcome.incomplete = true;
             }
-            return runtime::TaskResult<std::uint64_t>::succeeded(incomplete);
+            return runtime::TaskResult<GpuPurgeOutcome>::succeeded(outcome);
         });
     if (!submission.accepted()) {
         finish(false, tr("The cache purge could not start"));

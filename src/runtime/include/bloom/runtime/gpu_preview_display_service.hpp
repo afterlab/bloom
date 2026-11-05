@@ -196,6 +196,10 @@ struct GpuPreviewDisplayServiceCounters final {
     // Idle trims (#539) and the device bytes they gave back (parked storage and scene cache).
     std::uint64_t idleTrims = 0;
     std::uint64_t idleTrimmedBytes = 0;
+    // #544: native allocations the root refused for device room, after which parked storage and
+    // the scene cache gave way inside the allocation, and the bytes they released.
+    std::uint64_t deviceRoomReclaims = 0;
+    std::uint64_t deviceRoomReclaimedBytes = 0;
     // GPU parent submissions refused by the scheduler's bounded per-request admission (the derived
     // host default or an explicit configured capacity) BEFORE any stage work. Non-zero means a
     // request the display stage could have handled was forced onto the CPU by ADMISSION, not by
@@ -390,10 +394,12 @@ class GpuPreviewDisplayService final {
     // be called from a worker thread, never the UI thread: it posts the clear to the service owner
     // thread and waits there (bounded by `timeout`). Clearing drops only the cache's own
     // references, so a displayed or exported lease that still pins an image stays valid -- no live
-    // lease is invalidated and no native object is destroyed. Returns true when the clear ran (or
-    // this service has no resident route), false when the service is shutting down or the wait
+    // lease is invalidated. The parked native storage is then freed (#544), so the device memory
+    // goes back. Returns the device bytes that went back when the clear ran (zero when this
+    // service has no resident route), nothing when the service is shutting down or the wait
     // expired.
-    [[nodiscard]] bool purgeRetainedCaches(std::chrono::milliseconds timeout) noexcept;
+    [[nodiscard]] std::optional<std::uint64_t>
+    purgeRetainedCaches(std::chrono::milliseconds timeout) noexcept;
 
     // Non-blocking. Closes admission for this service's own tasks, requests cancellation on the
     // tasks it submitted (including ordinary CPU fallback roots), and wakes the service thread.

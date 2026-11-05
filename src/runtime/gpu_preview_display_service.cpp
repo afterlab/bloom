@@ -692,6 +692,10 @@ GpuPreviewDisplayServiceStatus GpuPreviewDisplayService::status() const {
     result.counters.idleTrims = core.counterIdleTrims.load(std::memory_order_relaxed);
     result.counters.idleTrimmedBytes =
         core.counterIdleTrimmedBytes.load(std::memory_order_relaxed);
+    result.counters.deviceRoomReclaims =
+        core.counterDeviceRoomReclaims.load(std::memory_order_relaxed);
+    result.counters.deviceRoomReclaimedBytes =
+        core.counterDeviceRoomReclaimedBytes.load(std::memory_order_relaxed);
     result.counters.gpuAdmissionRefusals =
         core.counterGpuAdmissionRefusals.load(std::memory_order_relaxed);
     result.counters.fullFrameReadbacks =
@@ -871,10 +875,10 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         throw;
     }
 }
-bool GpuPreviewDisplayService::purgeRetainedCaches(
-    const std::chrono::milliseconds timeout) noexcept {
+std::optional<std::uint64_t>
+GpuPreviewDisplayService::purgeRetainedCaches(const std::chrono::milliseconds timeout) noexcept {
     return impl_ == nullptr || impl_->core == nullptr
-               ? false
+               ? std::nullopt
                : detail::purgeServiceCaches(impl_->core, timeout);
 }
 void GpuPreviewDisplayService::beginShutdown() noexcept {

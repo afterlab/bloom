@@ -541,10 +541,10 @@ int runTests(int argc, char** argv) {
     // lease already presented above. A subsequent identical request then has to recompute, proving
     // the retained scene cache was actually cleared rather than merely reported.
     const auto beforePurge = service.status().counters;
-    bool purged = false;
+    std::optional<std::uint64_t> purged;
     std::thread purgeThread([&] { purged = service.purgeRetainedCaches(2s); });
     purgeThread.join();
-    expectations.expect(purged, "the owner-thread resident cache purge completed");
+    expectations.expect(purged.has_value(), "the owner-thread resident cache purge completed");
     expectations.expect(presentedLease->isValid(),
                         "a lease already published stays valid across the cache purge");
     auto afterPurge = service.submit(TaskRequest("resident after purge", taskOwner), snapshot,

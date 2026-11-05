@@ -257,6 +257,14 @@ class GpuDeviceReclaimRequest final {
 void registerDeviceReclaim(GpuProcessingPhasePolicy& policy,
                            const std::shared_ptr<GpuDeviceReclaimRequest>& request,
                            std::function<void()> wake = {});
+// #544: how much of an owner's `retainedBytes` of reusable device retention gives way for a
+// native allocation of `bytes` the root refused for room: at least the allocation plus however far
+// the claims already exceed the capacity (retention can outgrow a capacity that fell meanwhile),
+// and at least half of what is retained, so a scene that keeps publishing intermediates into a
+// full device is not refused again at its next step; the most recently used half stays.
+[[nodiscard]] std::uint64_t deviceRoomGiveWay(const GpuProcessingPhasePolicy& policy,
+                                              std::uint64_t bytes,
+                                              std::uint64_t retainedBytes) noexcept;
 // Owner thread: what to evict now. The larger of a waiting request's shortfall and, under a live
 // driver budget, how far the device's free memory has fallen below the VRAM headroom (another
 // program took it), as host caches shrink when free RAM falls below the RAM headroom.
