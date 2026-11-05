@@ -411,7 +411,21 @@ constexpr std::array kNotes{
         "Uses another layer of the same Merge as this layer's track matte.", "",
         "bloom.layer.clear-track-matte query:layers", ""},
     OperationNotes{"bloom.layer.clear-track-matte", "Removes a layer's track matte.", "",
-        "bloom.layer.set-track-matte", ""},
+        "bloom.layer.set-track-matte bloom.layer.set-node-track-matte", ""},
+    OperationNotes{"bloom.layer.set-node-track-matte",
+        "Uses a node's Mask output (a Cryptomatte, a Mask Combine) as this layer's track matte.",
+        "", "bloom.layer.clear-track-matte query:nodes query:layers", ""},
+    OperationNotes{"bloom.layer.add-matte-mask",
+        "Adds a mask whose shape is a node's Mask output (a Cryptomatte selection, a Mask "
+        "Combine) instead of a path.",
+        "mask, path, feather, expansion, opacity",
+        "bloom.layer.set-mask-matte bloom.layer.clear-mask-matte query:nodes", ""},
+    OperationNotes{"bloom.layer.set-mask-matte",
+        "Shapes an existing mask by a node's Mask output instead of its path.", "",
+        "bloom.layer.clear-mask-matte bloom.layer.add-matte-mask query:layers", ""},
+    OperationNotes{"bloom.layer.clear-mask-matte",
+        "Returns a mask shaped by a node to its own path.", "",
+        "bloom.layer.set-mask-matte query:layers", ""},
     OperationNotes{"bloom.layer.split-at-time",
         "Splits a layer at `time` into two layers (Ctrl+K): the original ends at `time` and a copy "
         "starts there.",
@@ -696,7 +710,8 @@ void refine(const std::string& op, ArgumentSchema& argument) {
         chooseIntegers(argument, {"None", "Add", "Subtract", "Intersect", "Difference"});
         if (!argument.required)
             argument.defaultText = "1 (Add)";
-    } else if (name == "channel" && op == "bloom.layer.set-track-matte") {
+    } else if (name == "channel" && (op == "bloom.layer.set-track-matte" ||
+                                      op == "bloom.layer.set-node-track-matte")) {
         chooseIntegers(argument, {"Alpha", "Luma"});
     } else if (name == "kind" && op == "bloom.layer.add-shape") {
         choose(argument, {{"rectangle", "Rectangle"},

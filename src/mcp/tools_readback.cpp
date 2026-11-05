@@ -303,12 +303,30 @@ yyjson_mut_val* layersQuery(Json& out, yyjson_mut_val* result, const document::P
             out.set(item, "feather", out.number(mask.feather.value()));
             out.set(item, "expansion", out.number(mask.expansion.value()));
             out.set(item, "opacity", out.number(mask.opacity.value()));
+            // #383: a matte mask's Mask output.
+            if (mask.matte) {
+                auto* matte = out.object();
+                out.set(matte, "node", out.number(mask.matte->nodeId.value()));
+                out.set(matte, "port", out.text(mask.matte->port));
+                out.set(item, "matte", matte);
+            } else {
+                out.set(item, "matte", out.null());
+            }
             out.append(masks, item);
         }
         out.set(row, "masks", masks);
         if (layer.trackMatte) {
             auto* matte = out.object();
             out.set(matte, "source", out.number(layer.trackMatte->source.value()));
+            // #383: a node matte's Mask output (its source is then 0).
+            if (layer.trackMatte->node) {
+                auto* node = out.object();
+                out.set(node, "node", out.number(layer.trackMatte->node->nodeId.value()));
+                out.set(node, "port", out.text(layer.trackMatte->node->port));
+                out.set(matte, "node", node);
+            } else {
+                out.set(matte, "node", out.null());
+            }
             out.set(matte, "channel",
                     out.text(layer.trackMatte->channel == document::TrackMatteChannel::Luma
                                  ? "luma"

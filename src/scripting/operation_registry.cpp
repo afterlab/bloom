@@ -3140,6 +3140,106 @@ OperationRegistry OperationRegistry::builtIn() {
                                          *inverted}),
                 std::nullopt);
         });
+    // #383: a node's Mask output as a track matte, a matte mask or a new matte mask.
+    const auto matteNodeArgument = [] {
+        return need("node", ValueKind::Id, StableId{1},
+                    "The node whose Mask output is the matte (a Cryptomatte, Mask, Mask Combine, "
+                    "matte filter or Fields generator).");
+    };
+    const auto mattePortArgument = [] {
+        return maybe("port", ValueKind::String, "mask", "The node's Mask output. Defaults to mask.");
+    };
+    const auto matteOutput = [](const std::string& op, const Arguments& args,
+                                OperationCreateResult& error)
+        -> std::optional<document::OutputPortRef> {
+        const auto node = id(args, op, "node", error);
+        const auto port = text(args, op, "port", error, false);
+        if (!node || error.diagnostic() != nullptr)
+            return std::nullopt;
+        return document::OutputPortRef{document::NodeId::fromRaw(*node),
+                                       port.value_or(std::string("mask"))};
+    };
+    add("bloom.layer.set-node-track-matte",
+        {compositionArgument(), layerArgument(), matteNodeArgument(), mattePortArgument(),
+         maybe("channel", ValueKind::Integer, std::int64_t{0}, "0 Alpha, 1 Luma. Defaults to Alpha."),
+         maybe("inverted", ValueKind::Boolean, false, "Whether the matte is inverted.")},
+        [matteOutput](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto output = matteOutput(op, args, error);
+            const auto channel = integer(args, op, "channel", error, false);
+            const auto inverted = boolean(args, op, "inverted", error, false);
+            if (!composition || !layer || !output || error.diagnostic() != nullptr)
+                return error;
+            if (channel && (*channel < 0 || *channel > 1))
+                return failure(op, "channel", "channels are 0 Alpha, 1 Luma");
+            document::TrackMatte matte{document::LayerId{},
+                                       static_cast<document::TrackMatteChannel>(channel.value_or(0)),
+                                       inverted.value_or(false), *output};
+            return OperationCreateResult(std::make_unique<commands::SetTrackMatte>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer), std::move(matte)),
+                                         std::nullopt);
+        });
+    add("bloom.layer.add-matte-mask",
+        {compositionArgument(), layerArgument(), matteNodeArgument(), mattePortArgument(),
+         maybe("mode", ValueKind::Integer, std::int64_t{1},
+               "0 None, 1 Add, 2 Subtract, 3 Intersect, 4 Difference. Defaults to Add."),
+         maybe("name", ValueKind::String, "Mask 1", "The mask name. Defaults to Mask N.")},
+        [matteOutput](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto output = matteOutput(op, args, error);
+            const auto mode = integer(args, op, "mode", error, false);
+            const auto name = text(args, op, "name", error, false);
+            if (!composition || !layer || !output || error.diagnostic() != nullptr)
+                return error;
+            if (mode && (*mode < 0 || *mode > 4))
+                return failure(op, "mode",
+                               "modes are 0 None, 1 Add, 2 Subtract, 3 Intersect, "
+                               "4 Difference");
+            return OperationCreateResult(
+                std::make_unique<commands::AddLayerMask>(
+                    document::CompositionId::fromRaw(*composition),
+                    document::LayerId::fromRaw(*layer), document::PathValue{},
+                    mode ? static_cast<document::LayerMaskMode>(*mode)
+                         : document::LayerMaskMode::Add,
+                    name.value_or(std::string{}), *output),
+                std::nullopt);
+        });
+    add("bloom.layer.set-mask-matte",
+        {compositionArgument(), layerArgument(), maskArgument(), matteNodeArgument(),
+         mattePortArgument()},
+        [matteOutput](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            const auto output = matteOutput(op, args, error);
+            if (!composition || !layer || !mask || !output || error.diagnostic() != nullptr)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::SetLayerMaskMatte>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask), *output),
+                                         std::nullopt);
+        });
+    add("bloom.layer.clear-mask-matte", {compositionArgument(), layerArgument(), maskArgument()},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto mask = id(args, op, "mask", error);
+            if (!composition || !layer || !mask)
+                return error;
+            return OperationCreateResult(std::make_unique<commands::SetLayerMaskMatte>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer),
+                                             document::LayerMaskId::fromRaw(*mask), std::nullopt),
+                                         std::nullopt);
+        });
     add("bloom.layer.clear-track-matte", {compositionArgument(), layerArgument()},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);

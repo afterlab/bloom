@@ -4376,6 +4376,83 @@ class LayerOps:
         Related: bloom.layer.set-mask-path, query:layers, transact
         """
         ...
+    def add_matte_mask(self, node: int | Proxy, port: str = ..., mode: int = ..., name: str = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.add-matte-mask  (operation, layer)
+        Adds a mask whose shape is a node's Mask output (a Cryptomatte selection, a Mask Combine)
+        instead of a path.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          node  id  required
+              The node whose Mask output is the matte (a Cryptomatte, Mask, Mask Combine, matte filter
+              or Fields generator).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          port  str  optional
+              The node's Mask output. Defaults to mask.
+              Unit: port name (query:node-types lists each type's ports)
+          mode  int  optional, default 1 (Add)
+              0 None, 1 Add, 2 Subtract, 3 Intersect, 4 Difference. Defaults to Add.
+              Range: 0..4
+              Values:
+                0  None
+                1  Add
+                2  Subtract
+                3  Intersect
+                4  Difference
+          name  str  optional
+              The mask name. Defaults to Mask N.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: mask, path,
+          feather, expansion, opacity (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.add-matte-mask","args":{"node":1}}]}}
+          Python:
+            bloom.ops.layer.add_matte_mask(node=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.add-matte-mask","args":{"node":1}}]
+
+        Related: bloom.layer.set-mask-matte, bloom.layer.clear-mask-matte, query:nodes, transact
+        """
+        ...
     def add_shape(self, kind: str, position: tuple[float, float] = ..., size: tuple[float, float] = ..., lineStart: tuple[float, float] = ..., lineEnd: tuple[float, float] = ..., path: Path = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-shape  (operation, layer)
         Adds a shape layer (rectangle, ellipse, triangle, polygon, star, line or a path) on top of the
@@ -4706,6 +4783,67 @@ class LayerOps:
         Related: bloom.layer.set-mask-path, bloom.layer.stop-animating-mask-path, transact
         """
         ...
+    def clear_mask_matte(self, mask: int | Proxy, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.clear-mask-matte  (operation, layer)
+        Returns a mask shaped by a node to its own path.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          mask  id  required
+              The layer mask to edit.
+              Unit: mask id (query:layers .masks)
+              Range: >= 1
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.clear-mask-matte","args":{"mask":1}}]}}
+          Python:
+            bloom.ops.layer.clear_mask_matte(mask=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.clear-mask-matte","args":{"mask":1}}]
+
+        Related: bloom.layer.set-mask-matte, query:layers, transact
+        """
+        ...
     def clear_track_matte(self, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.clear-track-matte  (operation, layer)
         Removes a layer's track matte.
@@ -4759,7 +4897,7 @@ class LayerOps:
           CLI:
             bloom-cli run edits.json   # [{"op":"bloom.layer.clear-track-matte","args":{}}]
 
-        Related: bloom.layer.set-track-matte, transact
+        Related: bloom.layer.set-track-matte, bloom.layer.set-node-track-matte, transact
         """
         ...
     def delete(self, *, composition: int | Proxy = ..., layers: tuple = ...) -> Mapping[str, Any] | None:
@@ -5653,6 +5791,75 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
+    def set_mask_matte(self, mask: int | Proxy, node: int | Proxy, port: str = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.set-mask-matte  (operation, layer)
+        Shapes an existing mask by a node's Mask output instead of its path.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          mask  id  required
+              The layer mask to edit.
+              Unit: mask id (query:layers .masks)
+              Range: >= 1
+          node  id  required
+              The node whose Mask output is the matte (a Cryptomatte, Mask, Mask Combine, matte filter
+              or Fields generator).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          port  str  optional
+              The node's Mask output. Defaults to mask.
+              Unit: port name (query:node-types lists each type's ports)
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.set-mask-matte","args":{"mask":1,"node":1}}]}}
+          Python:
+            bloom.ops.layer.set_mask_matte(mask=1, node=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.set-mask-matte","args":{"mask":1,"node":1}}]
+
+        Related: bloom.layer.clear-mask-matte, bloom.layer.add-matte-mask, query:layers, transact
+        """
+        ...
     def set_mask_mode(self, mask: int | Proxy, mode: int, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-mask-mode  (operation, layer)
         Sets how a mask combines with the masks above it.
@@ -5857,6 +6064,79 @@ class LayerOps:
             bloom-cli run edits.json   # [{"op":"bloom.layer.set-name-follows-source","args":{"follows":true}}]
 
         Related: bloom.layer.rename, query:layers, transact
+        """
+        ...
+    def set_node_track_matte(self, node: int | Proxy, port: str = ..., channel: int = ..., inverted: bool = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.set-node-track-matte  (operation, layer)
+        Uses a node's Mask output (a Cryptomatte, a Mask Combine) as this layer's track matte.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          node  id  required
+              The node whose Mask output is the matte (a Cryptomatte, Mask, Mask Combine, matte filter
+              or Fields generator).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          port  str  optional
+              The node's Mask output. Defaults to mask.
+              Unit: port name (query:node-types lists each type's ports)
+          channel  int  optional
+              0 Alpha, 1 Luma. Defaults to Alpha.
+              Range: 0..1
+              Values:
+                0  Alpha
+                1  Luma
+          inverted  bool  optional
+              Whether the matte is inverted.
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.set-node-track-matte","args":{"node":1}}]}}
+          Python:
+            bloom.ops.layer.set_node_track_matte(node=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.set-node-track-matte","args":{"node":1}}]
+
+        Related: bloom.layer.clear-track-matte, query:nodes, query:layers, transact
         """
         ...
     def set_parent(self, parent: int | Proxy = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:

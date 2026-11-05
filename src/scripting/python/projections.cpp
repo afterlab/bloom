@@ -256,6 +256,11 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
                 maskRecord["feather"] = mask.feather.value();
                 maskRecord["expansion"] = mask.expansion.value();
                 maskRecord["opacity"] = mask.opacity.value();
+                // #383: a matte mask's Mask output, as (node id, port), or None.
+                if (mask.matte)
+                    maskRecord["matte"] = nb::make_tuple(mask.matte->nodeId.value(), mask.matte->port);
+                else
+                    maskRecord["matte"] = nb::none();
                 masks.append(maskRecord);
             }
             record["masks"] = masks;
@@ -264,6 +269,12 @@ nb::dict projectSnapshot(const document::Snapshot& snapshot) {
                 matte["source"] = boundary.trackMatte->source.value();
                 matte["channel"] = static_cast<std::int64_t>(boundary.trackMatte->channel);
                 matte["inverted"] = boundary.trackMatte->inverted;
+                // #383: a node matte's Mask output, as (node id, port), or None.
+                if (boundary.trackMatte->node)
+                    matte["node"] = nb::make_tuple(boundary.trackMatte->node->nodeId.value(),
+                                                   boundary.trackMatte->node->port);
+                else
+                    matte["node"] = nb::none();
                 record["track_matte"] = matte;
             } else {
                 record["track_matte"] = nb::none();
