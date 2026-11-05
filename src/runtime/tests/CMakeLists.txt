@@ -250,6 +250,11 @@ target_link_libraries(bloom_runtime_glow_legacy_controls_test PRIVATE bloom_runt
 bloom_enable_warnings(bloom_runtime_glow_legacy_controls_test)
 bloom_enable_strict_floating_point(bloom_runtime_glow_legacy_controls_test)
 bloom_add_test(NAME bloom.runtime.glow-legacy-controls COMMAND bloom_runtime_glow_legacy_controls_test LABELS unit runtime persistence TIMEOUT 60)
+# #541: a document older than 1.39 opens its schema 1 colour pairs as gradient values.
+add_executable(bloom_runtime_gradient_color_pairs_test ${PROJECT_SOURCE_DIR}/tests/integration/gradient_color_pair_migration_tests.cpp)
+target_link_libraries(bloom_runtime_gradient_color_pairs_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_gradient_color_pairs_test)
+bloom_add_test(NAME bloom.runtime.gradient-color-pairs COMMAND bloom_runtime_gradient_color_pairs_test LABELS unit runtime persistence TIMEOUT 60)
 
 add_executable(bloom_runtime_layer_time_test ${PROJECT_SOURCE_DIR}/tests/integration/layer_time_tests.cpp)
 target_link_libraries(bloom_runtime_layer_time_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)

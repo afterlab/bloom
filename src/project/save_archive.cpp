@@ -499,6 +499,7 @@ ReopenChainResult runReopenChain(const std::span<const std::byte> archive,
         if (!capturedInputVersion.has_value()) {
             migrateLegacySourceColorSpaces(envelope);
             migrateLegacyCurvesNodes(envelope);
+            migrateLegacyGradientColorPairs(envelope);
             migrateLegacyGlowNodes(envelope);
         }
         auto reconstructed = reconstructDocument(

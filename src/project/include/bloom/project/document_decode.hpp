@@ -476,6 +476,19 @@ void migrateLegacyCurvesNodes(DecodedDocumentEnvelope& envelope);
 // with, so the picture is unchanged. Open path only, like the migrations above.
 void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope);
 
+// #541: the first document minor whose Linear and Radial Gradients and Glows are at schema 2. An
+// older document's schema 1 nodes open through migrateLegacyGradientColorPairs.
+inline constexpr std::uint32_t kGradientColorPairsMinor = 39;
+[[nodiscard]] bool isLegacyGradientColorPairNode(std::string_view typeId,
+                                                 std::uint32_t schemaVersion) noexcept;
+// #541: opening a document older than 1.39 turns each schema 1 colour pair that makes up a ramp
+// into a gradient value of two stops: a Linear or Radial Gradient's start and end colours become
+// its `gradient` (stops at 0 and 1), and a Glow's tint and outer tint its `tintGradient` (the
+// tightest and the widest octave), each node moving to schema 2. Constant colours convert
+// exactly; keyed colours become whole-value gradient keys (docs/architecture/project-format.md,
+// "Gradient Colour Pairs"). Open path only, before migrateLegacyGlowNodes.
+void migrateLegacyGradientColorPairs(DecodedDocumentEnvelope& envelope);
+
 // Decodes `root` (the document.json root value from a parsed StrictJsonDomDocument) into a
 // DecodedDocumentEnvelope. `root` must outlive the call; nothing is retained past return. See the
 // file-level comment above for exact scope. May throw std::bad_alloc; never throws otherwise.

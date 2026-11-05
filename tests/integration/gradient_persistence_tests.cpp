@@ -155,8 +155,8 @@ void gradientsRoundTrip() {
 
     const auto constantText = encode(fixture.document);
     expect(constantText.find("\"kind\": \"gradient\"") != std::string::npos &&
-               constantText.find("\"minor\": 38") != std::string::npos,
-           "the gradient constant is written at 1.38");
+               constantText.find("\"minor\": 39") != std::string::npos,
+           "the gradient constant is written at 1.39");
     const auto decodedConstant = decodeText(constantText);
     expect(static_cast<bool>(decodedConstant), "the gradient constant decodes");
 
@@ -222,7 +222,7 @@ void olderAndMalformedDocuments() {
         return;
     // A document claiming 1.37 cannot carry a gradient.
     auto claimed = current;
-    replaceOnce(claimed, "\"minor\": 38", "\"minor\": 37");
+    replaceOnce(claimed, "\"minor\": 39", "\"minor\": 37");
     expect(!static_cast<bool>(decodeText(claimed)), "a 1.37 document carrying a gradient is refused");
 
     // A malformed gradient is refused: a stop outside [0, 1], an unknown stop member.
@@ -249,7 +249,7 @@ void olderAndMalformedDocuments() {
     document::Document bare{
         document::makeNewProject("Bare", "Main", core::RationalTime::fromInteger(4)).project};
     auto legacy = encode(bare);
-    replaceOnce(legacy, "\"minor\": 38", "\"minor\": 37");
+    replaceOnce(legacy, "\"minor\": 39", "\"minor\": 37");
     const auto decodedLegacy = decodeText(legacy);
     expect(static_cast<bool>(decodedLegacy), "a 1.37 document without gradients decodes");
     auto operation = memory();

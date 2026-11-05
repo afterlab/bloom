@@ -42,8 +42,7 @@ constexpr std::array kSolidSourceBindings{
                              bloom::document::kSolidHeightParameterSchemaKey},
 };
 constexpr std::array kGradientBindings{
-    ExpectedParameterBinding{"startColor", bloom::document::kGradientStartColorParameterSchemaKey},
-    ExpectedParameterBinding{"endColor", bloom::document::kGradientEndColorParameterSchemaKey},
+    ExpectedParameterBinding{"gradient", bloom::document::kGradientStopsParameterSchemaKey},
     ExpectedParameterBinding{"start", bloom::document::kGradientStartParameterSchemaKey},
     ExpectedParameterBinding{"end", bloom::document::kGradientEndParameterSchemaKey},
     ExpectedParameterBinding{"width", bloom::document::kSolidWidthParameterSchemaKey},

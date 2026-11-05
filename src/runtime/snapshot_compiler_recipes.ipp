@@ -129,11 +129,11 @@ lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOpera
             if (gradient)
                 operands.gradient = *gradient;
         }
-        if (findParameterBinding(node, "outerTint") != nullptr) {
-            auto outerTint = color("outerTint");
-            lowered = lowered && outerTint.has_value();
-            if (outerTint)
-                operands.outerTint = *outerTint;
+        if (const auto* binding = findParameterBinding(node, "tintGradient")) {
+            auto tintGradient = compiledGradientParameter(binding->parameterId);
+            lowered = lowered && tintGradient.has_value();
+            if (tintGradient)
+                operands.tintGradient = std::move(*tintGradient);
         }
         if (!lowered || mode < document::kGlowModeClassic || mode > document::kGlowModeStreak ||
             operands.points < document::kMinimumGlowPoints ||

@@ -161,7 +161,8 @@ enum class Step {
     SequenceMemberStamps,
     VerifiedMemberDigests,
     EntryLayers,
-    GradientValues
+    GradientValues,
+    GradientColorPairs
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -218,6 +219,10 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
         return false;
     // Gradient values (1.37 -> 1.38, #541) are version-only: no older document carries one.
     if (step == Step::GradientValues)
+        return false;
+    // Gradient colour pairs (1.38 -> 1.39, #541) are version-only in the DOM: the schema 1 nodes
+    // convert on the open path (migrateLegacyGradientColorPairs).
+    if (step == Step::GradientColorPairs)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -409,6 +414,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::VerifiedMemberDigests ? "{\"major\":1,\"minor\":36}"
                            : step == Step::EntryLayers           ? "{\"major\":1,\"minor\":37}"
                            : step == Step::GradientValues        ? "{\"major\":1,\"minor\":38}"
+                           : step == Step::GradientColorPairs    ? "{\"major\":1,\"minor\":39}"
                                                                  : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -1001,6 +1007,13 @@ MigrationStepOutcome migrateGradientValuesV1_37(const JsonValue& root, std::pmr:
                                                 Buffer& output) {
     if (!sourceVersionIs(root, "37") ||
         !transform(root, Scope::Root, Step::GradientValues, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateGradientColorPairsV1_38(const JsonValue& root,
+                                                    std::pmr::memory_resource*, Buffer& output) {
+    if (!sourceVersionIs(root, "38") ||
+        !transform(root, Scope::Root, Step::GradientColorPairs, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

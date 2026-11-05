@@ -22,6 +22,7 @@
 #include <bloom/render/text_raster.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cmath>
 #include <limits>
@@ -461,8 +462,7 @@ enum class ScalarDomain : std::uint8_t {
                     !solid.gradient ||
                     (solid.gradient->repeatId.isValid() && solid.gradient->repeat >= 0 &&
                      solid.gradient->repeat <= 2 &&
-                     hasValidColorCurveReference(solid.gradient->endColor, plan, index, failure) &&
-                     hasValidVec2CurveReference(solid.gradient->start, plan, index, failure) &&
+                             hasValidVec2CurveReference(solid.gradient->start, plan, index, failure) &&
                      hasValidVec2CurveReference(solid.gradient->end, plan, index, failure));
                 return gradientValid &&
                        hasValidColorCurveReference(solid.color, plan, index, failure) &&
@@ -1218,7 +1218,7 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                     static_cast<void>(registerColor(solid.color, "color", operationSubject));
                     if (solid.gradient) {
                         static_cast<void>(
-                            registerColor(solid.gradient->endColor, "endColor", operationSubject));
+                            registerParameter(solid.gradient->stops.id, operationSubject));
                         static_cast<void>(
                             registerVec2(solid.gradient->start, "start", operationSubject));
                         static_cast<void>(
@@ -2733,7 +2733,16 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             key.add(step.gradient.has_value());
                             if (step.gradient) {
                                 key.add(step.gradient->radial);
-                                parameter(step.gradient->endColor);
+                                // #541: the stops this frame samples, as the kernel reads them.
+                                const auto sampled = detail::sampleGradientSource(
+                                    step.gradient->stops.source, *operandTime);
+                                key.add(sampled.has_value());
+                                if (sampled)
+                                    for (const auto& stop : detail::resolveGradientStops(*sampled)) {
+                                        key.add(std::bit_cast<std::uint32_t>(stop.position));
+                                        key.add(std::bit_cast<std::uint32_t>(stop.inverseSpan));
+                                        key.add(stop.color);
+                                    }
                                 parameter(step.gradient->start);
                                 parameter(step.gradient->end);
                                 key.add(step.gradient->repeat);
@@ -2997,13 +3006,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             }
                             std::optional<detail::ResolvedGradient> gradient;
                             if (solid.gradient) {
-                                const auto endColor = detail::resolveParameter(
-                                    solid.gradient->endColor, *plan, resolved);
+                                const auto sampled = detail::sampleGradientSource(
+                                    solid.gradient->stops.source, *operandTime);
                                 const auto start = detail::resolveParameter(solid.gradient->start,
                                                                             *plan, resolved);
                                 const auto end =
                                     detail::resolveParameter(solid.gradient->end, *plan, resolved);
-                                if (!endColor || !start || !end || !endColor->value.isValid() ||
+                                if (!sampled || !start || !end ||
                                     !std::isfinite(start->value.x) ||
                                     !std::isfinite(start->value.y) ||
                                     !std::isfinite(end->value.x) || !std::isfinite(end->value.y)) {
@@ -3015,8 +3024,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                                 const auto aspect = fullDescriptor.pixelAspect();
                                 gradient = detail::ResolvedGradient{
-                                    color->value,
-                                    endColor->value,
+                                    detail::resolveGradientStops(*sampled),
                                     start->value,
                                     end->value,
                                     solid.gradient->repeat,

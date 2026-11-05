@@ -1227,22 +1227,26 @@ lowerChecker(const document::NodeRecord& node) {
 [[nodiscard]] std::optional<runtime::CompiledOperation>
 lowerGradient(const document::NodeRecord& node) {
     using namespace document;
-    const auto startColor = compiledColorParameter(findParameterBinding(node, "startColor"));
-    const auto endColor = compiledColorParameter(findParameterBinding(node, "endColor"));
+    const auto* gradientBinding = findParameterBinding(node, "gradient");
+    const auto stops =
+        gradientBinding ? compiledGradientParameter(gradientBinding->parameterId) : std::nullopt;
     const auto start = compiledVec2Parameter(findParameterBinding(node, "start"));
     const auto end = compiledVec2Parameter(findParameterBinding(node, "end"));
     const auto width = compiledScalarParameter(findParameterBinding(node, "width"));
     const auto height = compiledScalarParameter(findParameterBinding(node, "height"));
     const auto* repeatBinding = findParameterBinding(node, "repeat");
     const auto* repeat = parameterConstant<std::int64_t>(repeatBinding);
-    if (!startColor || !endColor || !start || !end || !width || !height || !repeatBinding ||
+    if (!stops || !start || !end || !width || !height || !repeatBinding ||
         !repeat || *repeat < 0 || *repeat > 2) {
         addTopologyFailure(node.id, "Gradient parameters could not be lowered.");
         return std::nullopt;
     }
-    runtime::CompiledSolid source{node.id, *startColor, *width, *height};
+    // #541: the colours are the gradient's stops; the Solid's own colour is unused.
+    runtime::CompiledSolid source{
+        node.id, runtime::CompiledColorParameter{{}, core::Color4d{0.0, 0.0, 0.0, 0.0}}, *width,
+        *height};
     source.gradient = runtime::CompiledGradient{node.typeId == kRadialGradientNodeType,
-                                                *endColor,
+                                                *stops,
                                                 *start,
                                                 *end,
                                                 repeatBinding->parameterId,

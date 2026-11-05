@@ -72,7 +72,10 @@ using bloom::runtime::OperationIndex;
                          {ParameterId::fromRaw(idBase + 3), 5.0}};
     source.gradient = CompiledGradient{
         radial,
-        {ParameterId::fromRaw(idBase + 4), Color4d{1.0, -0.5, 0.25, 0.25}},
+        {ParameterId::fromRaw(idBase + 4),
+         bloom::document::GradientValue{{{0.0, Color4d{-0.25, 2.0, 0.5, 0.75}},
+                                         {0.4, Color4d{3.0, 0.1, 0.0, 1.0}},
+                                         {1.0, Color4d{1.0, -0.5, 0.25, 0.25}}}}},
         {ParameterId::fromRaw(idBase + 5), Vec2d{1.0, 1.0}},
         {ParameterId::fromRaw(idBase + 6), Vec2d{5.0, 1.0}},
         ParameterId::fromRaw(idBase + 7), radial ? 2 : 0};

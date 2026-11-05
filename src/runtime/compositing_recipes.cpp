@@ -1,4 +1,5 @@
 #include "compositing_recipes.hpp"
+#include "gradient_source.hpp"
 
 #include <bloom/render/image_coverage.hpp>
 
@@ -133,6 +134,16 @@ RecipeEmitter::components(const CompiledColorParameter& color) {
             CompiledScalarParameter{{}, ValueOutputIndex::fromRaw(first + 3)}};
 }
 
+CompiledColorParameter RecipeEmitter::gradientColor(const CompiledGradientParameter& gradient,
+                                                   const double position) {
+    // A constant gradient folds to its colour; a keyed one samples per frame in the value graph.
+    if (const auto* constant = std::get_if<document::GradientValue>(&gradient.source))
+        return CompiledColorParameter{
+            {}, gradientTintAt(document::sortedGradientStops(*constant), position)};
+    return CompiledColorParameter{
+        {}, values_(CompiledValueGradientSample{gradient.source, position}, 1)};
+}
+
 CompiledVec2Parameter RecipeEmitter::vector(const CompiledScalarParameter& x,
                                             const CompiledScalarParameter& y) {
     const auto* constantX = std::get_if<double>(&x.source);
@@ -204,8 +215,10 @@ OperationIndex appendDropShadow(RecipeEmitter& emitter, const OperationIndex inp
 //    and blue by 2 chromatic / 3) builds the glow once per channel at its own fraction of the size
 //    or length; Channel Select keeps that channel with a third of its coverage and an Add Merge
 //    sums the three, so each channel's colour is exact.
-//  * Gradient tints octave j by tint + (outerTint - tint) * j / (octaves - 1) before the fold;
-//    the final Levels then scales by the intensity alone.
+//  * Gradient (#541) tints octave j by the tint gradient's colour at j / (octaves - 1) before the
+//    fold (gradientTintAt: c + (next - c) * u per channel, so a two-stop gradient is schema 1's
+//    tint + (outerTint - tint) * j / (octaves - 1)); the final Levels then scales by the intensity
+//    alone.
 //  * Dirt adds the glow times the dirt image's luma coverage (Multiply Alpha, Luma), scaled by
 //    dirtAmount; roll-off (Highlight Roll-off) then compresses the whole glow layer.
 OperationIndex appendGlow(RecipeEmitter& emitter, const OperationIndex input,
@@ -248,12 +261,6 @@ OperationIndex appendGlow(RecipeEmitter& emitter, const OperationIndex input,
                 emitter.effect(bright, multiplyAlpha(render::ImageCoverageChannel::Alpha), *mask);
     }
 
-    std::array<CompiledScalarParameter, 4> inner{};
-    std::array<CompiledScalarParameter, 4> outer{};
-    if (operands.gradient && !streak) {
-        inner = emitter.components(operands.tint);
-        outer = emitter.components(operands.outerTint);
-    }
     const auto octaves = std::max<std::int64_t>(1, operands.octaves);
     // Physical's per-octave ratio 2^(2 - exponent); Classic's is the falloff itself.
     const auto falloff =
@@ -279,13 +286,8 @@ OperationIndex appendGlow(RecipeEmitter& emitter, const OperationIndex input,
                 const double t = octaves > 1 ? static_cast<double>(octave) /
                                                    static_cast<double>(octaves - 1)
                                              : 0.0;
-                std::array<CompiledScalarParameter, 3> colour{};
-                for (std::size_t channel = 0; channel < colour.size(); ++channel)
-                    colour[channel] = emitter.scalar(
-                        ScalarPrimitive::MultiplyAdd,
-                        {emitter.scalar(ScalarPrimitive::Subtract, {outer[channel], inner[channel]}),
-                         RecipeEmitter::constant(t), inner[channel]});
-                image = emitter.effect(image, gainLevels(colour, std::nullopt));
+                const auto tint = emitter.components(emitter.gradientColor(operands.tintGradient, t));
+                image = emitter.effect(image, gainLevels({tint[0], tint[1], tint[2]}, std::nullopt));
             }
             return image;
         };

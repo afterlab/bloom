@@ -56,6 +56,8 @@ struct RecipeValues final {
     std::array<double, 3> channelRadius{1.0, 1.0, 1.0};
     bool gradient = false;
     core::Color4d outerTint{0.25, 0.5, 1.5, 1.0};
+    // #541: a whole tint gradient in place of the tint-to-outer-tint pair, when set.
+    std::optional<document::GradientValue> tintGradient;
     std::int64_t points = 4;
     double angle = 30.0;
     double length = 6.0;
@@ -117,7 +119,9 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
                            scalar(idBase + 4, 10.0)};
     gradient.gradient =
         CompiledGradient{false,
-                         {ParameterId::fromRaw(idBase + 5), core::Color4d{6.0, 3.0, 1.5, 1.0}},
+                         {ParameterId::fromRaw(idBase + 5),
+                          document::GradientValue{{{0.0, core::Color4d{0.5, 0.25, 0.1, 0.6}},
+                                                   {1.0, core::Color4d{6.0, 3.0, 1.5, 1.0}}}}},
                          {ParameterId::fromRaw(idBase + 6), Vec2d{1.0, 1.0}},
                          {ParameterId::fromRaw(idBase + 7), Vec2d{11.0, 9.0}},
                          ParameterId::fromRaw(idBase + 8),
@@ -206,8 +210,12 @@ inline constexpr std::uint32_t kRecipeHeight = 20;
             for (std::size_t channel = 0; channel < 3; ++channel)
                 operands.radius[channel] = scalar(idBase + 61 + channel, values.channelRadius[channel]);
             operands.gradient = values.gradient;
-            operands.outerTint =
-                CompiledColorParameter{ParameterId::fromRaw(idBase + 64), values.outerTint};
+            // #541: the octave tints run from the tint to the outer tint through a gradient.
+            operands.tintGradient = bloom::runtime::CompiledGradientParameter{
+                ParameterId::fromRaw(idBase + 64),
+                values.tintGradient
+                    ? *values.tintGradient
+                    : document::GradientValue{{{0.0, values.tint}, {1.0, values.outerTint}}}};
             operands.points = values.points;
             operands.angle = scalar(idBase + 65, values.angle);
             operands.length = scalar(idBase + 66, values.length);

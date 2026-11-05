@@ -984,7 +984,7 @@ void recipeRows() {
           Expected{"bloom.glow",
                    {"threshold", "knee", "intensity", "size", "falloff", "tint", "octaves",
                     // #506
-                    "mode", "exponent", "outerTint", "radiusRed", "radiusGreen", "radiusBlue",
+                    "mode", "exponent", "radiusRed", "radiusGreen", "radiusBlue",
                     "points", "angle", "length", "chromatic", "dirtAmount", "rollOff"},
                    "glowOnly"},
           Expected{"bloom.light-wrap", {"radius", "amount"}, "wrapOnly"},

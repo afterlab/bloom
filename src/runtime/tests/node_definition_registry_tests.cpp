@@ -149,17 +149,28 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
           "bloom.resize", "bloom.fit", "bloom.transform-2d", "bloom.gaussian-blur",
           "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate",
           "bloom.luma-key", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"})
-        expectations.expect(registry.find(type, 1) != nullptr,
+        // #541: the gradient generators and Glow are at schema 2.
+        expectations.expect(registry.find(type, std::string_view(type) == "bloom.glow" ||
+                                                        std::string_view(type).ends_with("-gradient")
+                                                    ? 2
+                                                    : 1) != nullptr,
                             "each pinned image-node addition is registered");
     // #339: the recipes are Image effects whose first input is the required Image; Glow's key and
     // Light Wrap's background are optional Images, Glow's mask an optional Mask; every animatable
     // value has its socket and the switches and Glow's octaves are constants.
     for (const auto* type : {"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap"}) {
-        const auto* recipe = registry.find(type, 1);
+        const auto* recipe = registry.find(type, std::string_view(type) == "bloom.glow" ? 2 : 1);
         bool sockets = recipe != nullptr;
+        // #541: a gradient value animates as a whole and has no socket kind.
         if (recipe)
             for (const auto& parameter : recipe->parameters)
-                sockets = sockets && (parameter.supportsAnimation ==
+                sockets = sockets && (parameter.valueKind == runtime::ParameterValueKind::Gradient
+                                          ? !std::ranges::any_of(recipe->inputs,
+                                                                 [&](const auto& input) {
+                                                                     return input.name ==
+                                                                            parameter.role;
+                                                                 })
+                                          : parameter.supportsAnimation ==
                                       std::ranges::any_of(recipe->inputs, [&](const auto& input) {
                                           return input.name == parameter.role;
                                       }));
@@ -179,7 +190,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                                 "#339: a recipe of another shape is refused");
         }
     }
-    const auto* glow = registry.find("bloom.glow", 1);
+    const auto* glow = registry.find("bloom.glow", 2);
     expectations.expect(glow && glow->inputs[1].name == "key" &&
                             glow->inputs[1].valueKind == runtime::SocketValueKind::Image &&
                             !glow->inputs[1].required && glow->inputs[2].name == "mask" &&
@@ -199,7 +210,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     };
     bool optional = glow != nullptr;
     for (const auto* role : {"mode", "exponent", "radiusRed", "radiusGreen", "radiusBlue",
-                             "gradient", "outerTint", "points", "angle", "length", "chromatic",
+                             "gradient", "tintGradient", "points", "angle", "length", "chromatic",
                              "dirtAmount", "rollOff"}) {
         const auto* parameter = glowParameter(role);
         optional = optional && parameter != nullptr && !parameter->required;

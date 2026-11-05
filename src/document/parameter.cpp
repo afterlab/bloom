@@ -368,15 +368,14 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value != nullptr && *value >= domain->minimum && *value <= domain->maximum;
     }
-    // #541: Gradient Map's gradient, each stop's RGB within +-1e6 like the colours.
-    if (isColorizeGradientSchemaKey(schemaKey)) {
+    // #541: Gradient Map's gradient, each stop's RGB within +-1e6 like the colours; the
+    // generators' colours and Glow's tint gradient, any finite straight colour like the colour
+    // pairs they replace.
+    if (isGradientAnimatableSchemaKey(schemaKey)) {
         const auto* gradient = std::get_if<GradientValue>(&constant.value);
-        return gradient != nullptr && gradient->isValid() &&
-               std::ranges::all_of(gradient->stops, [](const GradientStop& stop) {
-                   return std::abs(stop.color.red) <= kMaximumColorizeColor &&
-                          std::abs(stop.color.green) <= kMaximumColorizeColor &&
-                          std::abs(stop.color.blue) <= kMaximumColorizeColor;
-               });
+        return gradient != nullptr && (isColorizeGradientSchemaKey(schemaKey)
+                                           ? isBoundedGradient(*gradient)
+                                           : gradient->isValid());
     }
     // #339 Drop Shadow, Glow and Light Wrap.
     if (isRecipeScalarSchemaKey(schemaKey)) {
@@ -631,6 +630,22 @@ GradientValue defaultColorizeGradient() {
     return {{{0.0, core::Color4d{0.0, 0.0, 0.0, 1.0}},
              {0.18, core::Color4d{0.24, 0.17, 0.1, 1.0}},
              {1.0, core::Color4d{1.0, 1.0, 1.0, 1.0}}}};
+}
+
+GradientValue defaultGeneratorGradient() {
+    return {{{0.0, core::Color4d{0.0, 0.0, 0.0, 1.0}}, {1.0, core::Color4d{1.0, 1.0, 1.0, 1.0}}}};
+}
+
+GradientValue defaultGlowTintGradient() {
+    return {{{0.0, core::Color4d{1.0, 1.0, 1.0, 1.0}}, {1.0, core::Color4d{1.0, 0.5, 0.25, 1.0}}}};
+}
+
+bool isBoundedGradient(const GradientValue& value) noexcept {
+    return value.isValid() && std::ranges::all_of(value.stops, [](const GradientStop& stop) {
+               return std::abs(stop.color.red) <= kMaximumColorizeColor &&
+                      std::abs(stop.color.green) <= kMaximumColorizeColor &&
+                      std::abs(stop.color.blue) <= kMaximumColorizeColor;
+           });
 }
 
 std::vector<GradientStop> sortedGradientStops(const GradientValue& value) {

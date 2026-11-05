@@ -3,6 +3,7 @@
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/value_utility_kernels.hpp>
 
+#include "gradient_source.hpp"
 #include "operation_key.hpp"
 #include <deque>
 
@@ -460,6 +461,8 @@ class Evaluator final {
                          const runtime::CompiledValueUtility& kernel);
     void evaluateBoundsReadout(const runtime::CompiledValueOperation& operation,
                                const runtime::CompiledBoundsReadout& kernel);
+    void evaluateGradientSample(const runtime::CompiledValueOperation& operation,
+                                const runtime::CompiledValueGradientSample& kernel);
 
     core::RationalTime time_;
     document::FrameRate rate_;
@@ -509,6 +512,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateUtility(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledBoundsReadout>) {
                 evaluateBoundsReadout(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueGradientSample>) {
+                evaluateGradientSample(operation, kernel);
             } else {
                 evaluatePromotion(operation, kernel);
             }
@@ -533,6 +538,21 @@ void Evaluator::evaluateBoundsReadout(const runtime::CompiledValueOperation& ope
     write(operation, 1, document::Vec2d{bounds.output.left, bounds.output.top});
     write(operation, 2, bounds.anchor);
     write(operation, 3, bounds.output.centre());
+}
+
+// #541: the gradient at this frame, then its colour at the kernel's position.
+void Evaluator::evaluateGradientSample(const runtime::CompiledValueOperation& operation,
+                                       const runtime::CompiledValueGradientSample& kernel) {
+    const auto sampled = runtime::detail::sampleGradientSource(kernel.gradient, time_);
+    if (!sampled) {
+        fail(operation, {}, "Gradient is not evaluable at this time",
+             "The gradient's keys could not be sampled; its colour falls back to black.");
+        write(operation, 0, core::Color4d{0.0, 0.0, 0.0, 1.0});
+        return;
+    }
+    write(operation, 0,
+          runtime::detail::gradientTintAt(document::sortedGradientStops(*sampled),
+                                          kernel.position));
 }
 
 void Evaluator::evaluatePassthrough(const runtime::CompiledValueOperation& operation,

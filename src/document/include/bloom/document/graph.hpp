@@ -27,7 +27,10 @@ inline constexpr std::string_view kSolidSourceNodeType = "bloom.solid-source";
 inline constexpr std::string_view kCheckerSourceNodeType = "bloom.checker-source";
 inline constexpr std::string_view kLinearGradientNodeType = "bloom.linear-gradient";
 inline constexpr std::string_view kRadialGradientNodeType = "bloom.radial-gradient";
-inline constexpr std::uint32_t kGradientNodeSchemaVersion = 1;
+// #541: schema 2 colours the gradient with a multi-stop gradient value (`gradient`); schema 1's
+// start and end colours open as its two stops (docs/architecture/project-format.md).
+inline constexpr std::uint32_t kGradientNodeSchemaVersion = 2;
+inline constexpr std::uint32_t kLegacyGradientNodeSchemaVersion = 1;
 inline constexpr std::string_view kTextSourceNodeType = "bloom.text-source";
 inline constexpr std::string_view kCompositionOutputNodeType = "bloom.composition-output";
 inline constexpr std::string_view kCompositionSourceNodeType = "bloom.composition-source";

@@ -311,7 +311,9 @@ template <typename Definition>
 // ray count) are constants without a socket.
 [[nodiscard]] NodeDefinition recipeDefinition(const std::string_view typeId) {
     using namespace bloom::document;
-    NodeDefinition definition{{std::string(typeId), 1},
+    NodeDefinition definition{{std::string(typeId), typeId == kGlowNodeType
+                                                        ? kGlowNodeSchemaVersion
+                                                        : kRecipeNodeSchemaVersion},
                               NodeLoweringKind::ImageEffect,
                               {{"input", SocketValueKind::Image}},
                               {{"image", SocketValueKind::Image}},
@@ -371,8 +373,10 @@ template <typename Definition>
         scalar("exponent", kGlowExponentSchemaKey, false);
         color("tint", kGlowTintSchemaKey, bloom::core::Color4d{1.0, 1.0, 1.0, 1.0});
         flag("gradient", kGlowGradientSchemaKey, false);
-        color("outerTint", kGlowOuterTintSchemaKey, bloom::core::Color4d{1.0, 0.5, 0.25, 1.0},
-              false);
+        // #541: the tint gradient is a whole gradient value: animatable, with no socket.
+        definition.parameters.push_back({"tintGradient", std::string(kGlowTintGradientSchemaKey),
+                                         ParameterValueKind::Gradient, false, true,
+                                         defaultGlowTintGradient()});
         scalar("radiusRed", kGlowRadiusRedSchemaKey, false);
         scalar("radiusGreen", kGlowRadiusGreenSchemaKey, false);
         scalar("radiusBlue", kGlowRadiusBlueSchemaKey, false);
@@ -633,20 +637,18 @@ template <typename Definition>
         return (hasCanonicalKey(definition, kLinearGradientNodeType, kGradientNodeSchemaVersion) ||
                 hasCanonicalKey(definition, kRadialGradientNodeType, kGradientNodeSchemaVersion)) &&
                definition.inputs.empty() && hasImageOutput(definition, "image") &&
-               definition.outputs.size() == 1 && definition.parameters.size() == 7 &&
-               hasParameter(definition, 0, "startColor", kGradientStartColorParameterSchemaKey,
-                            ParameterValueKind::Color4d, true) &&
-               hasParameter(definition, 1, "endColor", kGradientEndColorParameterSchemaKey,
-                            ParameterValueKind::Color4d, true) &&
-               hasParameter(definition, 2, "start", kGradientStartParameterSchemaKey,
+               definition.outputs.size() == 1 && definition.parameters.size() == 6 &&
+               hasParameter(definition, 0, "gradient", kGradientStopsParameterSchemaKey,
+                            ParameterValueKind::Gradient, true) &&
+               hasParameter(definition, 1, "start", kGradientStartParameterSchemaKey,
                             ParameterValueKind::Vec2d, true) &&
-               hasParameter(definition, 3, "end", kGradientEndParameterSchemaKey,
+               hasParameter(definition, 2, "end", kGradientEndParameterSchemaKey,
                             ParameterValueKind::Vec2d, true) &&
-               hasParameter(definition, 4, "width", kSolidWidthParameterSchemaKey,
+               hasParameter(definition, 3, "width", kSolidWidthParameterSchemaKey,
                             ParameterValueKind::Float64, true) &&
-               hasParameter(definition, 5, "height", kSolidHeightParameterSchemaKey,
+               hasParameter(definition, 4, "height", kSolidHeightParameterSchemaKey,
                             ParameterValueKind::Float64, true) &&
-               hasParameter(definition, 6, "repeat", kGradientRepeatParameterSchemaKey,
+               hasParameter(definition, 5, "repeat", kGradientRepeatParameterSchemaKey,
                             ParameterValueKind::Integer) &&
                !definition.layerSlotInput;
     case NodeLoweringKind::VideoSource:
@@ -964,10 +966,8 @@ template <typename Definition>
             NodeLoweringKind::Gradient,
             {},
             {{"image", SocketValueKind::Image}},
-            {{"startColor", std::string(kGradientStartColorParameterSchemaKey),
-              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{0, 0, 0, 1}},
-             {"endColor", std::string(kGradientEndColorParameterSchemaKey),
-              ParameterValueKind::Color4d, true, true, bloom::core::Color4d{1, 1, 1, 1}},
+            {{"gradient", std::string(kGradientStopsParameterSchemaKey),
+              ParameterValueKind::Gradient, true, true, defaultGeneratorGradient()},
              {"start", std::string(kGradientStartParameterSchemaKey), ParameterValueKind::Vec2d,
               true, true, Vec2d{0, 0}},
              {"end", std::string(kGradientEndParameterSchemaKey), ParameterValueKind::Vec2d, true,

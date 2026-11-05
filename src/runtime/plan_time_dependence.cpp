@@ -11,8 +11,11 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
         // A Time node, and the one readout whose value is the FRAME rather than the composition.
         // The other three readouts were baked into constants by the compiler and never reach here.
         const auto* utility = std::get_if<CompiledValueUtility>(&operation.kernel);
+        const auto* sample = std::get_if<CompiledValueGradientSample>(&operation.kernel);
         bool dependent =
             std::holds_alternative<CompiledValueTime>(operation.kernel) ||
+            (sample != nullptr &&
+             std::holds_alternative<CompiledGradientCurve>(sample->gradient)) ||
             std::holds_alternative<CompiledBoundsReadout>(operation.kernel) ||
             (utility != nullptr && utility->operation == document::ValueUtilityKernel::FrameNumber);
         forEachValueOperand(operation.kernel, [&](const CompiledValueOperand& operand) {
@@ -53,8 +56,9 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 if constexpr (std::is_same_v<Step, CompiledSolid>)
                     return parameter(step.color) || parameter(step.width) || parameter(step.height) ||
                            (step.gradient &&
-                            (parameter(step.gradient->endColor) || parameter(step.gradient->start) ||
-                             parameter(step.gradient->end)));
+                            (std::holds_alternative<CompiledGradientCurve>(
+                                 step.gradient->stops.source) ||
+                             parameter(step.gradient->start) || parameter(step.gradient->end)));
                 else if constexpr (std::is_same_v<Step, CompiledChecker>)
                     return parameter(step.colorA) || parameter(step.colorB);
                 else if constexpr (std::is_same_v<Step, CompiledShape>)

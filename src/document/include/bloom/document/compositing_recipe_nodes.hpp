@@ -17,6 +17,11 @@ namespace bloom::document {
 inline constexpr std::string_view kDropShadowNodeType = "bloom.drop-shadow";
 inline constexpr std::string_view kGlowNodeType = "bloom.glow";
 inline constexpr std::string_view kLightWrapNodeType = "bloom.light-wrap";
+// #541: Glow schema 2 tints its octaves through a gradient value (`tintGradient`) in place of
+// schema 1's outer tint; Drop Shadow and Light Wrap stay at schema 1.
+inline constexpr std::uint32_t kGlowNodeSchemaVersion = 2;
+inline constexpr std::uint32_t kLegacyGlowNodeSchemaVersion = 1;
+inline constexpr std::uint32_t kRecipeNodeSchemaVersion = 1;
 
 // Drop Shadow. The shadow is the input's alpha, softened, moved `distance` pixels toward
 // `direction` (degrees clockwise from up: 135 is down and to the right), coloured, faded by
@@ -51,8 +56,10 @@ inline constexpr std::int64_t kDefaultGlowOctaves = 5;
 //   exponent    Physical: the point-spread falloff exponent p, PSF ~ r^-p (2 is inverse square).
 //   radiusRed/Green/Blue   per-channel fraction of `size` (Streak: of `length`), so a channel's
 //               glow can be tighter than the others.
-//   gradient, outerTint    with the gradient on, the octaves run from `tint` (tightest) to
-//               `outerTint` (widest) instead of all taking `tint`.
+//   gradient, tintGradient   with the gradient on (and not Streak), octave j of n takes the
+//               colour of `tintGradient` at j / (n - 1), the tightest octave its start and the
+//               widest its end, instead of all taking `tint` (#541; schema 1 ran from `tint` to
+//               an `outerTint` colour, which opens as this gradient's two stops).
 //   points, angle, length, chromatic   Streak: the number of rays (2 is an anamorphic streak), the
 //               first ray's angle in degrees clockwise from screen right, the ray length in pixels,
 //               and the dispersion that shortens green and blue against red.
@@ -64,6 +71,8 @@ inline constexpr std::string_view kGlowRadiusRedSchemaKey = "bloom.glow.radius-r
 inline constexpr std::string_view kGlowRadiusGreenSchemaKey = "bloom.glow.radius-green";
 inline constexpr std::string_view kGlowRadiusBlueSchemaKey = "bloom.glow.radius-blue";
 inline constexpr std::string_view kGlowGradientSchemaKey = "bloom.glow.gradient";
+inline constexpr std::string_view kGlowTintGradientSchemaKey = "bloom.glow.tint-gradient";
+// Schema 1's outer tint, read only by the migration that makes it the tint gradient's end.
 inline constexpr std::string_view kGlowOuterTintSchemaKey = "bloom.glow.outer-tint";
 inline constexpr std::string_view kGlowPointsSchemaKey = "bloom.glow.points";
 inline constexpr std::string_view kGlowAngleSchemaKey = "bloom.glow.angle";

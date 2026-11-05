@@ -167,7 +167,7 @@ std::set<std::string> roles(const document::NodeRecord& node) {
 
 void legacyGlowOpensWithFullControls() {
     Fixture fixture;
-    const auto* definition = document::builtInNodeDefinitions().find(document::kGlowNodeType, 1);
+    const auto* definition = document::builtInNodeDefinitions().find(document::kGlowNodeType, document::kGlowNodeSchemaVersion);
     if (!definition)
         throw std::logic_error("Glow definition");
     const auto newRoles = roles(*fixture.document.snapshot()
@@ -285,7 +285,7 @@ void partialGlowKeepsItsControls() {
            "a bound #506 control keeps its id and value");
     expect(
         node->parameters.size() ==
-            document::builtInNodeDefinitions().find(document::kGlowNodeType, 1)->parameters.size(),
+            document::builtInNodeDefinitions().find(document::kGlowNodeType, document::kGlowNodeSchemaVersion)->parameters.size(),
         "the partly bound Glow gains the rest of its controls");
     expect(sameBits(before.pixels, render(snapshot, fixture.composition).pixels),
            "the partly bound Glow renders bit-identically");

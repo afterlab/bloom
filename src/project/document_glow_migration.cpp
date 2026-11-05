@@ -16,13 +16,17 @@
 namespace bloom::project {
 
 void migrateLegacyGlowNodes(DecodedDocumentEnvelope& envelope) {
-    const auto* definition = document::builtInNodeDefinitions().find(document::kGlowNodeType, 1);
+    // #541: after migrateLegacyGradientColorPairs, every Glow of an older document is at the
+    // current schema.
+    const auto* definition = document::builtInNodeDefinitions().find(
+        document::kGlowNodeType, document::kGlowNodeSchemaVersion);
     if (definition == nullptr)
         return;
     auto ids = document::IdAllocator::fromHighWater(envelope.highWater);
     for (auto& composition : envelope.compositions)
         for (auto& node : composition.graph.nodes) {
-            if (node.typeId != document::kGlowNodeType || node.schemaVersion != 1)
+            if (node.typeId != document::kGlowNodeType ||
+                node.schemaVersion != document::kGlowNodeSchemaVersion)
                 continue;
             bool added = false;
             for (const auto& parameter : definition->parameters) {

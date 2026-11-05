@@ -271,12 +271,25 @@ struct CompiledBoundsReadout final {
     friend bool operator==(const CompiledBoundsReadout&, const CompiledBoundsReadout&) = default;
 };
 
+// #541: the colour of a gradient value at a fixed position, one Colour output. Glow's tint
+// gradient lowers to one per octave when the gradient is animated (a constant gradient folds into
+// constant colours instead). The gradient is inline, a constant or a whole-value Gradient curve
+// sampled at the frame, so the kernel has no value operand.
+struct CompiledValueGradientSample final {
+    std::variant<document::GradientValue, CompiledGradientCurve> gradient;
+    double position = 0.0;
+
+    friend bool operator==(const CompiledValueGradientSample&,
+                           const CompiledValueGradientSample&) = default;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
                  CompiledValueClamp, CompiledValueMix, CompiledValueCompare, CompiledValueSwitch,
                  CompiledValueSeparate, CompiledValueCombine, CompiledValueRandom,
-                 CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout>;
+                 CompiledValuePromotion, CompiledValueUtility, CompiledBoundsReadout,
+                 CompiledValueGradientSample>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -287,7 +300,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
         [&visit](const auto& step) {
             using Step = std::decay_t<decltype(step)>;
             if constexpr (std::is_same_v<Step, CompiledValueTime> ||
-                          std::is_same_v<Step, CompiledBoundsReadout>) {
+                          std::is_same_v<Step, CompiledBoundsReadout> ||
+                          std::is_same_v<Step, CompiledValueGradientSample>) {
                 // The one kernel with no operands: its value is the frame being rendered.
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||

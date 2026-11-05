@@ -285,6 +285,13 @@ migrateEntryLayersV1_36(const JsonValue& root, std::pmr::memory_resource* resour
 [[nodiscard]] MigrationStepOutcome
 migrateGradientValuesV1_37(const JsonValue& root, std::pmr::memory_resource* resource,
                            std::pmr::vector<char>& output);
+// Gradient colour pairs, document 1.38 -> 1.39 (#541): version-only in the DOM. Linear and Radial
+// Gradient and Glow move to schema 2, whose colour pair is a gradient value; the open path's
+// migrateLegacyGradientColorPairs (document_decode.hpp) converts a schema 1 node of an older
+// document.
+[[nodiscard]] MigrationStepOutcome
+migrateGradientColorPairsV1_38(const JsonValue& root, std::pmr::memory_resource* resource,
+                               std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -323,7 +330,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 34}, {1, 35}, migrateSequenceMemberStampsV1_34},
     MigrationStepDescriptor{{1, 35}, {1, 36}, migrateVerifiedMemberDigestsV1_35},
     MigrationStepDescriptor{{1, 36}, {1, 37}, migrateEntryLayersV1_36},
-    MigrationStepDescriptor{{1, 37}, {1, 38}, migrateGradientValuesV1_37}};
+    MigrationStepDescriptor{{1, 37}, {1, 38}, migrateGradientValuesV1_37},
+    MigrationStepDescriptor{{1, 38}, {1, 39}, migrateGradientColorPairsV1_38}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

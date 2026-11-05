@@ -67,6 +67,10 @@ class RecipeEmitter final {
     // The straight red, green, blue and alpha of a colour operand.
     [[nodiscard]] std::array<CompiledScalarParameter, 4>
     components(const CompiledColorParameter& color);
+    // #541: a gradient's colour at `position` (gradientTintAt): a constant for a constant
+    // gradient, otherwise a value-graph sample of its curve at the frame.
+    [[nodiscard]] CompiledColorParameter gradientColor(const CompiledGradientParameter& gradient,
+                                                       double position);
     [[nodiscard]] CompiledVec2Parameter vector(const CompiledScalarParameter& x,
                                                const CompiledScalarParameter& y);
 
@@ -113,7 +117,8 @@ struct GlowOperands final {
     std::array<CompiledScalarParameter, 3> radius{
         RecipeEmitter::constant(1.0), RecipeEmitter::constant(1.0), RecipeEmitter::constant(1.0)};
     bool gradient = false;
-    CompiledColorParameter outerTint{{}, core::Color4d{1.0, 0.5, 0.25, 1.0}};
+    // #541: the octave tints with the gradient on; unbound, the default warm gradient.
+    CompiledGradientParameter tintGradient{{}, document::defaultGlowTintGradient()};
     std::int64_t points = 4;                                          // Streak rays
     CompiledScalarParameter angle = RecipeEmitter::constant(0.0);     // degrees clockwise from right
     CompiledScalarParameter length = RecipeEmitter::constant(128.0);  // Streak ray length, pixels

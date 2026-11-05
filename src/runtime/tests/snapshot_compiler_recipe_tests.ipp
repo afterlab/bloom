@@ -16,7 +16,8 @@ recipeFixture(const std::string_view type,
     RecipeFixture fixture{makeProject(), NodeId::fromRaw(1300), {}};
     auto* composition = fixture.project.findComposition(kCompositionId);
     auto& graph = composition->graph();
-    const auto* definition = builtInNodeDefinitions().find(type, 1);
+    const auto* definition = builtInNodeDefinitions().find(
+        type, type == kGlowNodeType ? kGlowNodeSchemaVersion : kRecipeNodeSchemaVersion);
     require(definition != nullptr, "recipe definition exists");
     std::vector<ParameterBinding> bindings;
     std::uint64_t next = 1300;
@@ -31,7 +32,8 @@ recipeFixture(const std::string_view type,
         bindings.push_back({parameter.role, id});
         fixture.parameters.emplace(parameter.role, id);
     }
-    require(graph.addNode({fixture.node, std::string(type), std::move(bindings), 1}),
+    require(graph.addNode({fixture.node, std::string(type), std::move(bindings),
+                           definition->key.schemaVersion}),
             "recipe node is accepted");
     require(graph.eraseEdge(kFirstSourceEdge), "source edge is removed");
     require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
@@ -289,6 +291,65 @@ void testGlowLowering(Expectations& expectations) {
                                 recipeKernel<runtime::LevelsKernel>(keyedPlan, keyedOps[4]),
                             "the key pass is keyed, the Mask multiplies it and Glow only stops "
                             "before the Merge");
+    }
+}
+
+// #541: with the gradient on, each octave's Levels takes the tint gradient's colour at
+// j / (n - 1): a constant gradient folds to constants (here a three-stop gradient whose middle stop
+// is off centre), and a keyed one samples per octave in the value graph, time dependent.
+void testGlowTintGradientLowering(Expectations& expectations) {
+    using namespace document;
+    const GradientValue stops{{{0.0, core::Color4d{0.0, 1.0, 1.0, 1.0}},
+                               {0.25, core::Color4d{1.0, 1.0, 1.0, 1.0}},
+                               {1.0, core::Color4d{0.5, 1.0, 1.0, 1.0}}}};
+    const std::unordered_map<std::string, ParameterValue> values{
+        {"intensity", 3.0}, {"octaves", std::int64_t{3}}, {"gradient", true},
+        {"tintGradient", stops}};
+    {
+        auto fixture = recipeFixture(kGlowNodeType, values);
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "a Glow with a tint gradient compiles");
+        if (result.plan) {
+            std::vector<double> reds;
+            for (const auto index : recipeOperations(*result.plan, node))
+                if (const auto* levels = recipeKernel<runtime::LevelsKernel>(*result.plan, index))
+                    if (const auto* red = std::get_if<double>(&levels->channels[1].outputWhite.source))
+                        reds.push_back(*red);
+            const auto has = [&](const double expected) {
+                return std::ranges::any_of(
+                    reds, [&](const double red) { return std::abs(red - expected) < 1e-12; });
+            };
+            expectations.expect(has(0.0) && has(1.0 + (0.5 - 1.0) * (0.25 / 0.75)) && has(0.5),
+                                "the octaves take the gradient's colour at 0, 1/2 and 1");
+        }
+    }
+    auto keyed = recipeFixture(kGlowNodeType, values);
+    auto* composition = keyed.project.findComposition(kCompositionId);
+    constexpr auto curveId = AnimationCurveId::fromRaw(1360);
+    auto later = stops;
+    later.stops[1].position = 0.75;
+    require(composition->animationCurves().insert(GradientAnimationCurve{
+                curveId,
+                {{KeyframeId::fromRaw(1361), core::RationalTime::fromInteger(0), stops},
+                 {KeyframeId::fromRaw(1362), core::RationalTime::fromInteger(1), later}}}),
+            "tint gradient curve is publishable");
+    require(composition->parameters().setSource(keyed.parameters.at("tintGradient"),
+                                                AnimationCurveSource{curveId}),
+            "the tint gradient animates");
+    auto keyedResult = compileRecipe(std::move(keyed.project));
+    expectations.expect(keyedResult.plan != nullptr, "a Glow with a keyed tint gradient compiles");
+    if (keyedResult.plan) {
+        std::vector<double> positions;
+        for (const auto& operation : keyedResult.plan->valueOperations())
+            if (const auto* sample =
+                    std::get_if<runtime::CompiledValueGradientSample>(&operation.kernel);
+                sample && std::holds_alternative<runtime::CompiledGradientCurve>(sample->gradient))
+                positions.push_back(sample->position);
+        expectations.expect(positions.size() == 3 &&
+                                std::ranges::is_permutation(positions,
+                                                            std::vector<double>{0.0, 0.5, 1.0}),
+                            "a keyed tint gradient samples once per octave in the value graph");
     }
 }
 

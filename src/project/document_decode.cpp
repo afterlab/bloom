@@ -2338,7 +2338,12 @@ DocumentDecodeResult decodeDocumentEnvelope(const JsonValue& root) {
                           parsedVersion == 4) &&
                         // #493: Curves schema 1 opens as schema 2 (migrateLegacyCurvesNodes).
                         !(*kind->asString() == document::kCurvesNodeType &&
-                          parsedVersion == document::kLegacyCurvesNodeSchemaVersion)) {
+                          parsedVersion == document::kLegacyCurvesNodeSchemaVersion) &&
+                        // #541: a gradient generator's or Glow's schema 1 colour pair opens as a
+                        // gradient value in a document older than 1.39
+                        // (migrateLegacyGradientColorPairs).
+                        !(schemaVersion.minor < kGradientColorPairsMinor &&
+                          isLegacyGradientColorPairNode(*kind->asString(), parsedVersion))) {
                         return DocumentDecodeResult::failure(
                             DocumentDecodeError::UnsupportedNodeVersion,
                             "/project/compositions/" + std::to_string(compositionIndex) +

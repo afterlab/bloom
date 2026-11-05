@@ -334,10 +334,31 @@ enum class Composite : std::uint8_t { Over, Add, Atop, In };
         if (sum.pixels.empty())
             sum = Image::blank(blurred.x0, blurred.y0, blurred.width, blurred.height);
         const double t = octaves > 1 ? static_cast<double>(octave) / static_cast<double>(octaves - 1) : 0.0;
-        const std::array<double, 3> colour{
+        std::array<double, 3> colour{
             values.tint.red + (values.outerTint.red - values.tint.red) * t,
             values.tint.green + (values.outerTint.green - values.tint.green) * t,
             values.tint.blue + (values.outerTint.blue - values.tint.blue) * t};
+        if (values.tintGradient) {
+            // An independent walk of the stops, sorted by position (ties in stored order): held
+            // outside them, linear inside the segment that holds t.
+            auto stops = values.tintGradient->stops;
+            std::ranges::stable_sort(stops, {}, &document::GradientStop::position);
+            const auto rgb = [](const core::Color4d& c) {
+                return std::array<double, 3>{c.red, c.green, c.blue};
+            };
+            colour = t <= stops.front().position ? rgb(stops.front().color) : rgb(stops.back().color);
+            for (std::size_t i = 0; i + 1 < stops.size(); ++i) {
+                const auto& a = stops[i];
+                const auto& b = stops[i + 1];
+                if (t > a.position && t <= b.position && b.position > a.position) {
+                    const double u = (t - a.position) / (b.position - a.position);
+                    colour = {a.color.red + (b.color.red - a.color.red) * u,
+                              a.color.green + (b.color.green - a.color.green) * u,
+                              a.color.blue + (b.color.blue - a.color.blue) * u};
+                    break;
+                }
+            }
+        }
         for (auto y = sum.y0; y < sum.y0 + sum.height; ++y)
             for (auto x = sum.x0; x < sum.x0 + sum.width; ++x) {
                 const auto tap = blurred.at(x, y);
@@ -662,6 +683,17 @@ void testModes() {
     values.channelRadius = {0.5, 1.0, 0.75};
     values.points = 3;
     testReference(Recipe::Glow, values, "Glow Streak (per-channel length, lens dirt, roll-off)");
+    // #541: a four-stop tint gradient, unsorted, with HDR colour: octave j of 5 takes the gradient
+    // at j / 4.
+    values = {};
+    values.gradient = true;
+    values.tintGradient = document::GradientValue{{{1.0, {0.2, 0.4, 2.0, 1.0}},
+                                                   {0.0, {1.0, 1.0, 1.0, 1.0}},
+                                                   {0.3, {1.5, 0.25, 0.1, 1.0}},
+                                                   {0.6, {0.0, 1.0, 0.5, 1.0}}}};
+    testReference(Recipe::Glow, values, "Glow Classic (four-stop tint gradient)");
+    values.mode = GlowMode::Physical;
+    testReference(Recipe::Glow, values, "Glow Physical (four-stop tint gradient)");
 }
 
 // #506: the Streak rays' cache identity: a warm frame reuses every pass; a changed length

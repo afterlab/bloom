@@ -30,7 +30,7 @@ namespace bloom::runtime::detail {
 template <typename Emit, typename Charge>
 [[nodiscard]] std::optional<GpuSceneLeafFailure> emitSolidCommand(
     const CompiledSolid& solid, const CompiledCompositionPlan& plan,
-    const ResolvedEvaluation& resolved, const std::size_t index,
+    const ResolvedEvaluation& resolved, const core::RationalTime time, const std::size_t index,
     const OperationIndex operationIndex, const render::ImageWindow fullWindow,
     const render::ImageWindow fullDisplayWindow, const core::PixelAspectRatio fullPixelAspect,
     const double hScale, const double vScale, Emit&& emit, Charge&& charge,
@@ -84,10 +84,10 @@ template <typename Emit, typename Charge>
     const auto solidAspect = descriptor.value()->pixelAspect();
     std::optional<render::GpuBatchGradient> gpuGradient;
     if (solid.gradient) {
-        const auto endColor = resolveParameter(solid.gradient->endColor, plan, resolved);
+        const auto sampled = sampleGradientSource(solid.gradient->stops.source, time);
         const auto start = resolveParameter(solid.gradient->start, plan, resolved);
         const auto end = resolveParameter(solid.gradient->end, plan, resolved);
-        if (!endColor || !start || !end || !endColor->value.isValid() ||
+        if (!sampled || !start || !end ||
             !std::isfinite(start->value.x) || !std::isfinite(start->value.y) ||
             !std::isfinite(end->value.x) || !std::isfinite(end->value.y))
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
@@ -97,8 +97,9 @@ template <typename Emit, typename Charge>
             return std::array{static_cast<float>(value.red), static_cast<float>(value.green),
                               static_cast<float>(value.blue), static_cast<float>(value.alpha)};
         };
-        gpuGradient->stops = {{0.0F, 1.0F, straight(color->value)},
-                              {1.0F, 0.0F, straight(endColor->value)}};
+        for (const auto& stop : resolveGradientStops(*sampled))
+            gpuGradient->stops.push_back(
+                {stop.position, stop.inverseSpan, straight(stop.color)});
         gpuGradient->endpoints = {static_cast<float>(start->value.x),
                                   static_cast<float>(start->value.y),
                                   static_cast<float>(end->value.x),

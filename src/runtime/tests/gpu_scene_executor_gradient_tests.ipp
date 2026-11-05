@@ -1,5 +1,16 @@
 // Both gradient authoring nodes run through the production plan builder and native executor.
 // The CPU evaluator remains the numeric oracle; the only readback is the terminal test probe.
+[[nodiscard]] bloom::document::GradientValue twoStops(const Color4d first, const Color4d second) {
+    return {{{0.0, first}, {1.0, second}}};
+}
+// #541: five stops, out of order, with a hard edge at 0.6 and held ends.
+[[nodiscard]] bloom::document::GradientValue multiStop() {
+    return {{{0.85, Color4d{0.2, 0.9, 1.5, 1.0}},
+             {0.1, Color4d{-0.25, 2.0, 0.5, 0.75}},
+             {0.6, Color4d{1.0, -0.5, 0.25, 0.25}},
+             {0.35, Color4d{3.0, 0.1, 0.0, 1.0}},
+             {0.6, Color4d{0.0, 0.0, 0.0, 0.5}}}};
+}
 [[nodiscard]] PlanPtr gradientPlan(const bool radial, const bool degenerate = false) {
     const auto base = twoLayerPlan(format(9, 6, pixelAspect(4, 3)),
                                    LayerValues{.position = {4.5, 3.0}},
@@ -11,7 +22,8 @@
     source.color.source = Color4d{-0.25, 2.0, 0.5, 0.75};
     source.gradient = bloom::runtime::CompiledGradient{
         radial,
-        {bloom::document::ParameterId::fromRaw(id + 1), Color4d{1.0, -0.5, 0.25, 0.25}},
+        {bloom::document::ParameterId::fromRaw(id + 1),
+         twoStops(Color4d{-0.25, 2.0, 0.5, 0.75}, Color4d{1.0, -0.5, 0.25, 0.25})},
         {bloom::document::ParameterId::fromRaw(id + 2),
          bloom::document::Vec2d{radial ? 2.0 : 0.0, radial ? 1.5 : 0.0}},
         {bloom::document::ParameterId::fromRaw(id + 3),
@@ -42,6 +54,42 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
             expectParity(expectations, *executor.executor, oracle, plan, request,
                          radial ? "radial gradient proxy" : "linear gradient proxy");
         }
+    }
+    // #541: a multi-stop table, linear and radial, and a keyed gradient between two tables.
+    for (const bool radial : {false, true}) {
+        auto stopsDefinition = gradientPlan(radial)->copyDefinition();
+        std::get<bloom::runtime::CompiledSolid>(stopsDefinition.operations[0])
+            .gradient->stops.source = multiStop();
+        const auto stopsPlan = publish(std::move(stopsDefinition));
+        expectParity(expectations, *executor.executor, oracle, stopsPlan, requestFor(*stopsPlan),
+                     radial ? "radial gradient five stops with a hard edge"
+                            : "linear gradient five stops with a hard edge");
+    }
+    {
+        auto keyedDefinition = gradientPlan(false)->copyDefinition();
+        auto reversed = multiStop();
+        for (auto& stop : reversed.stops)
+            stop.position = 1.0 - stop.position;
+        bloom::runtime::CompiledGradientCurve keyed;
+        keyed.id = bloom::document::AnimationCurveId::fromRaw(180300);
+        keyed.keyframes = {{bloom::document::KeyframeId::fromRaw(180301),
+                            RationalTime::fromInteger(0), multiStop()},
+                           {bloom::document::KeyframeId::fromRaw(180302),
+                            RationalTime::fromInteger(2), reversed}};
+        std::get<bloom::runtime::CompiledSolid>(keyedDefinition.operations[0])
+            .gradient->stops.source = std::move(keyed);
+        const auto keyedPlan = publish(std::move(keyedDefinition));
+        expectParity(expectations, *executor.executor, oracle, keyedPlan,
+                     requestFor(*keyedPlan, RationalTime::fromInteger(1)),
+                     "keyed gradient between two stop tables");
+        const auto halfway =
+            CpuGpuSceneBuilder{}.build(keyedPlan, requestFor(*keyedPlan, RationalTime::fromInteger(1)));
+        const auto start =
+            CpuGpuSceneBuilder{}.build(keyedPlan, requestFor(*keyedPlan, RationalTime::fromInteger(0)));
+        expectations.expect(halfway.hasValue() && start.hasValue() &&
+                                keyOf(halfway.scene->commands().front()) !=
+                                    keyOf(start.scene->commands().front()),
+                            "gradient: a keyed stop table changes the source semantic key");
     }
     const auto degenerate = gradientPlan(true, true);
     expectParity(expectations, *executor.executor, oracle, degenerate, requestFor(*degenerate),
@@ -139,7 +187,7 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
         auto hdrDefinition = gradientPlan(false)->copyDefinition();
         auto& hdr = std::get<bloom::runtime::CompiledSolid>(hdrDefinition.operations[0]);
         hdr.color.source = Color4d{1e39, -1e39, 0, 1};
-        hdr.gradient->endColor.source = Color4d{-1e39, 1e39, 0, 1};
+        hdr.gradient->stops.source = twoStops(Color4d{1e39, -1e39, 0, 1}, Color4d{-1e39, 1e39, 0, 1});
         hdr.width.source = 1.0;
         hdr.height.source = 1.0;
         hdr.gradient->start.source = bloom::document::Vec2d{0, 0};
@@ -156,7 +204,7 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
             auto distantDefinition = gradientPlan(radial)->copyDefinition();
             auto& distant = std::get<bloom::runtime::CompiledSolid>(distantDefinition.operations[0]);
             distant.color.source = Color4d{0, 0, 0, 1};
-            distant.gradient->endColor.source = Color4d{1, 1, 1, 1};
+            distant.gradient->stops.source = twoStops(Color4d{0, 0, 0, 1}, Color4d{1, 1, 1, 1});
             distant.gradient->start.source = bloom::document::Vec2d{100000000, 0};
             distant.gradient->end.source = bloom::document::Vec2d{100000008, 0};
             distant.gradient->repeat = repeat;

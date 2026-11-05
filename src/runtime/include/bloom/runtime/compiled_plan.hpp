@@ -115,11 +115,20 @@ struct EvaluatedOperationBounds final {
 // A lowered solid source. Its colour is a typed operand rather than a resolved constant (task S5):
 // the solid colour schema is animatable now, so the value is either a constant or an index into the
 // plan's Color4 curve table -- exactly the shape a Layer Output transform operand already had.
+// #541: a gradient parameter is a constant or an inline Gradient curve.
+struct CompiledGradientParameter final {
+    document::ParameterId id;
+    std::variant<document::GradientValue, CompiledGradientCurve> source;
+    friend bool operator==(const CompiledGradientParameter&,
+                           const CompiledGradientParameter&) = default;
+};
+
 // Linear and radial generators share the Solid source's explicit extent and pixel-window path.
-// Their colours interpolate as straight scene-linear RGBA, then premultiply once for storage.
+// Their colours interpolate as straight scene-linear RGBA between the stops of `stops` (#541), then
+// premultiply once for storage. The Solid's own colour is unused (a transparent constant).
 struct CompiledGradient final {
     bool radial = false;
-    CompiledColorParameter endColor;
+    CompiledGradientParameter stops;
     CompiledVec2Parameter start;
     CompiledVec2Parameter end;
     document::ParameterId repeatId;
@@ -307,13 +316,6 @@ struct CompiledPathParameter final {
     document::ParameterId id;
     std::variant<document::PathValue, CompiledPathCurve> source;
     friend bool operator==(const CompiledPathParameter&, const CompiledPathParameter&) = default;
-};
-// #541: a gradient parameter is a constant or an inline Gradient curve.
-struct CompiledGradientParameter final {
-    document::ParameterId id;
-    std::variant<document::GradientValue, CompiledGradientCurve> source;
-    friend bool operator==(const CompiledGradientParameter&,
-                           const CompiledGradientParameter&) = default;
 };
 struct CompiledLayerMask final {
     document::LayerMaskId id;

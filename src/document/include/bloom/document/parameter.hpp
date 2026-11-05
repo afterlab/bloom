@@ -31,6 +31,9 @@ inline constexpr std::string_view kCheckerHeightParameterSchemaKey = "bloom.chec
 // sampled at its centre. Radial distance uses the composition's physical pixel aspect.
 inline constexpr std::string_view kGradientStartParameterSchemaKey = "bloom.gradient.start";
 inline constexpr std::string_view kGradientEndParameterSchemaKey = "bloom.gradient.end";
+// #541: the gradient's colours, a GradientValue of one to 64 stops along start -> end (schema 2).
+inline constexpr std::string_view kGradientStopsParameterSchemaKey = "bloom.gradient.stops";
+// Schema 1's start and end colours, read only by the migration that makes them two stops.
 inline constexpr std::string_view kGradientStartColorParameterSchemaKey =
     "bloom.gradient.start-color";
 inline constexpr std::string_view kGradientEndColorParameterSchemaKey = "bloom.gradient.end-color";
@@ -263,6 +266,14 @@ struct GradientValue {
 // #541: a new Colorize node's gradient: its ramp's default colours, black, the warm mid grey at
 // 0.18 and white, so a new Gradient Map looks as it did before the gradient existed.
 [[nodiscard]] GradientValue defaultColorizeGradient();
+// #541: a new Linear or Radial Gradient's colours, black at the start to white at the end, as its
+// schema 1 start and end colours were.
+[[nodiscard]] GradientValue defaultGeneratorGradient();
+// #541: a new Glow's tint gradient, white in the tightest octave to the warm (1, 0.5, 0.25) in the
+// widest, as its schema 1 tint and outer tint were.
+[[nodiscard]] GradientValue defaultGlowTintGradient();
+// #541: a gradient whose stops are valid and within Colorize's +-1e6 colour bound.
+[[nodiscard]] bool isBoundedGradient(const GradientValue& value) noexcept;
 
 // The third authoring vector width (task S7). A genuinely new authoring type rather than a reuse of
 // Vec2d or Color4d: a Color is not a Vec4 under
@@ -355,7 +366,9 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // #541: a gradient parameter animates through whole-value Gradient curves.
 [[nodiscard]] constexpr bool
 isGradientAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
-    return isColorizeGradientSchemaKey(schemaKey);
+    return isColorizeGradientSchemaKey(schemaKey) ||
+           schemaKey == kGradientStopsParameterSchemaKey ||
+           schemaKey == kGlowTintGradientSchemaKey;
 }
 
 [[nodiscard]] constexpr bool isCanvasMarginSchemaKey(const std::string_view schemaKey) noexcept {
