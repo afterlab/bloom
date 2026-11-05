@@ -11,6 +11,7 @@ target_sources(
         data_block.cpp
         grade_curves.cpp
         field_nodes.cpp
+        depth_effect_nodes.cpp
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp

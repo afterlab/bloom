@@ -6,6 +6,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
@@ -371,7 +372,7 @@ inline constexpr double kMaximumLayerMaskExpansionPixels = 1000.0;
            schemaKey == kVector2ValueParameterSchemaKey ||
            schemaKey == "bloom.transform-2d.translate" || schemaKey == "bloom.transform-2d.pivot" ||
            schemaKey == "bloom.transform-2d.scale" || schemaKey == kVignetteCenterSchemaKey ||
-           isFieldVec2AnimatableSchemaKey(schemaKey);
+           isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isVec3AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -404,7 +405,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kHueSaturationSaturationSchemaKey || isGradeValueSchemaKey(schemaKey) ||
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
-           schemaKey == kLayerMaskFeatherSchemaKey ||
+           isDepthScalarAnimatableSchemaKey(schemaKey) || schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
 
@@ -412,7 +413,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
 // curve, a Path used as a point list (grade_curves.hpp).
 [[nodiscard]] constexpr bool isPathAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     return schemaKey == kLayerMaskPathSchemaKey || isGradeCurveSchemaKey(schemaKey) ||
-           isFieldPathAnimatableSchemaKey(schemaKey);
+           isFieldPathAnimatableSchemaKey(schemaKey) || isDepthPathAnimatableSchemaKey(schemaKey);
 }
 
 // #541: a gradient parameter animates through whole-value Gradient curves.
@@ -447,7 +448,7 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kGradientEndColorParameterSchemaKey ||
            schemaKey == kTextColorParameterSchemaKey ||
            schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
-           isColorizeColorSchemaKey(schemaKey);
+           isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey);
 }
 
 [[nodiscard]] constexpr bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -505,6 +506,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #525 Fields (field_parameters.hpp).
     if (fieldParameterSpec(schemaKey) != nullptr)
         return isFieldScalarWithinDomain(schemaKey, value);
+    // #483 Z Defocus and Depth Fog (depth_effect_parameters.hpp).
+    if (depthParameterSpec(schemaKey) != nullptr)
+        return isDepthScalarWithinDomain(schemaKey, value);
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

@@ -210,8 +210,9 @@ struct InputPortDefinition {
     std::string name;
     SocketValueKind valueKind = SocketValueKind::Image;
     bool required = true;
-    // #490: an inspection input (the Image Preview's) that also takes a Mask or a ChannelSet and
-    // shows it as its image. False for every port that feeds evaluation.
+    // #490: an Image input that also takes a Mask or a ChannelSet: the Image Preview's inspection
+    // input, which shows it as its image, and (#483) a depth effect's `depth`, which reads one
+    // channel of it. False for every other port.
     bool acceptsPixelKinds = false;
     // #525: a Fields input that reads any field kind (ScalarField, Vector2Field or ColorField).
     bool acceptsFieldKinds = false;

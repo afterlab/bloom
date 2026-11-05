@@ -4,6 +4,7 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
+#include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -162,6 +163,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         Options options;
         for (std::size_t index = 0; index < field->choices.size(); ++index)
             options.push_back({std::string(field->choices[index]),
+                               static_cast<std::int64_t>(index)});
+        return options;
+    }
+    // #483 Z Defocus and Depth Fog: every Choice, its labels in stored-value order.
+    if (const auto* depth = depthParameterSpec(schemaKey);
+        depth != nullptr && depth->kind == DepthParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < depth->choices.size(); ++index)
+            options.push_back({std::string(depth->choices[index]),
                                static_cast<std::int64_t>(index)});
         return options;
     }

@@ -1,5 +1,6 @@
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/field_parameters.hpp>
+#include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -457,6 +458,35 @@ std::optional<ParameterPresentation> fieldPresentation(const std::string_view sc
     return pixels(low, high, std::min(high, low < 0.0 ? 2048.0 : 1024.0));
 }
 
+// #483 Z Defocus and Depth Fog: one presentation per parameter, from the depth table itself.
+std::optional<ParameterPresentation> depthPresentation(const std::string_view schemaKey) {
+    const auto* spec = depthParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    switch (spec->kind) {
+    case DepthParameterKind::Choice:
+        return choice();
+    case DepthParameterKind::Integer:
+        return whole(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum,
+                     spec->unit);
+    case DepthParameterKind::Boolean:
+    case DepthParameterKind::Curve:
+    case DepthParameterKind::Text: {
+        ParameterPresentation other;
+        other.kind = Kind::Other;
+        other.named = true;
+        return other;
+    }
+    case DepthParameterKind::Color:
+        return number(spec->minimum, spec->maximum, 0.0, 1.0, 0.01, 3);
+    case DepthParameterKind::Scalar:
+    case DepthParameterKind::Vector2:
+        break;
+    }
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit);
+}
+
 } // namespace
 
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
@@ -464,6 +494,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
                                             const std::string_view role) {
     if (auto field = fieldPresentation(schemaKey))
         return *field;
+    if (auto depth = depthPresentation(schemaKey))
+        return *depth;
     for (const auto& entry : table())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;

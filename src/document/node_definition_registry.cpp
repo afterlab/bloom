@@ -3,6 +3,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
+#include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -561,6 +562,9 @@ template <typename Definition>
             return definition == colorizeDefinition();
         if (definition.key.typeId == kVignetteNodeType)
             return definition == vignetteDefinition();
+        // #483 Z Defocus and Depth Fog: the exact generated shapes.
+        if (isDepthEffectNodeType(definition.key.typeId))
+            return definition == depthEffectDefinition(definition.key.typeId);
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1639,6 +1643,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         gradeDefinition(),
         colorizeDefinition(),
         vignetteDefinition(),
+        depthEffectDefinition(kZDefocusNodeType),
+        depthEffectDefinition(kDepthFogNodeType),
         separateChannelsDefinition(),
         combineChannelsDefinition(),
         recipeDefinition(kDropShadowNodeType),
