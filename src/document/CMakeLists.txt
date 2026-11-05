@@ -21,6 +21,7 @@ target_sources(
         image_preview.cpp
         layer_stack.cpp
         new_project.cpp
+        gradient_interpolation.cpp
         parameter.cpp
         parameter_enums.cpp
         parameter_presentation.cpp
@@ -94,6 +95,16 @@ if(BUILD_TESTING)
         LABELS unit
     )
 
+
+    add_executable(bloom_document_gradient_interpolation_test
+                   tests/gradient_interpolation_tests.cpp)
+    target_link_libraries(bloom_document_gradient_interpolation_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_gradient_interpolation_test)
+    bloom_add_test(
+        NAME bloom.document.gradient-interpolation
+        COMMAND bloom_document_gradient_interpolation_test
+        LABELS unit
+    )
 
     add_executable(bloom_document_render_reachability_test tests/render_reachability_tests.cpp)
     target_link_libraries(bloom_document_render_reachability_test PRIVATE bloom_document)

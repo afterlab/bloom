@@ -6,6 +6,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/validation.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -244,9 +245,11 @@ struct PathValue {
 // #541: a colour gradient, the value of a gradient parameter (Colorize's Gradient Map). Any number
 // of stops, each a position in [0, 1] and a straight colour; the stops need not be sorted (a reader
 // sorts them by position, keeping the stored order of equal positions, which makes a hard edge).
-// Between two stops the colour interpolates linearly, outside the first and last stop it holds.
-// A gradient animates as a whole value, like a Path: two keys with the same stop count interpolate
-// stop by stop (position and colour); otherwise the earlier key holds.
+// Between two stops the colour blends as its modes say (#546, gradient_interpolation.hpp: Linear
+// in RGB unless set otherwise), outside the first and last stop it holds (the spline modes extend
+// to 0 and 1). A gradient animates as a whole value, like a Path: two keys with the same stop count
+// interpolate stop by stop (position and colour); otherwise the earlier key holds. The modes always
+// come from the earlier key.
 inline constexpr std::size_t kMaximumGradientStops = 64;
 struct GradientStop {
     double position = 0.0;
@@ -255,14 +258,16 @@ struct GradientStop {
 };
 struct GradientValue {
     std::vector<GradientStop> stops;
+    // #546: how the colour blends between stops.
+    GradientModes modes{};
     // One to kMaximumGradientStops stops, each position finite within [0, 1] and each colour
-    // finite with its alpha within [0, 1].
+    // finite with its alpha within [0, 1], and modes each within its vocabulary.
     [[nodiscard]] bool isValid() const noexcept;
     friend bool operator==(const GradientValue&, const GradientValue&) = default;
 };
 // The stops by position, equal positions in stored order.
 [[nodiscard]] std::vector<GradientStop> sortedGradientStops(const GradientValue& value);
-// The straight colour of `value` at `position` (linear between stops, held outside them).
+// The straight colour of `value` at `position` in [0, 1], blended as its modes say (binary64).
 [[nodiscard]] core::Color4d gradientColorAt(const GradientValue& value, double position);
 // #541: a new Colorize node's gradient: its ramp's default colours, black, the warm mid grey at
 // 0.18 and white, so a new Gradient Map looks as it did before the gradient existed.

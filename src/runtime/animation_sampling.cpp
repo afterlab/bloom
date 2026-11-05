@@ -597,6 +597,8 @@ std::optional<document::GradientValue> sampleGradientCurve(const CompiledGradien
     const double u = *sampled.value;
     const auto mix = [u](const double a, const double b) { return a + (b - a) * u; };
     document::GradientValue result;
+    // #546: the modes are discrete: the earlier key's hold until the next key.
+    result.modes = from.value.modes;
     result.stops.reserve(from.value.stops.size());
     for (std::size_t stop = 0; stop < from.value.stops.size(); ++stop) {
         const auto& a = from.value.stops[stop];

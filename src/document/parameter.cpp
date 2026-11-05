@@ -642,6 +642,9 @@ bool PathValue::isValid() const noexcept {
 
 bool GradientValue::isValid() const noexcept {
     return !stops.empty() && stops.size() <= kMaximumGradientStops &&
+           isGradientInterpolation(static_cast<std::uint8_t>(modes.interpolation)) &&
+           isGradientColorMode(static_cast<std::uint8_t>(modes.colorMode)) &&
+           isGradientHueDirection(static_cast<std::uint8_t>(modes.hueDirection)) &&
            std::ranges::all_of(stops, [](const GradientStop& stop) {
                return std::isfinite(stop.position) && stop.position >= 0.0 &&
                       stop.position <= 1.0 && stop.color.isValid();
@@ -735,6 +738,29 @@ core::Color4d gradientColorAt(const GradientValue& value, const double position)
     const auto stops = sortedGradientStops(value);
     if (stops.empty())
         return {};
+    if (!value.modes.isLinearRgb()) {
+        // #546: the shared definition, in binary64 with the spans taken from the positions.
+        const auto at = [&](const std::size_t index) {
+            const auto& stop = stops[index];
+            double inverse = 0.0;
+            if (index + 1 < stops.size()) {
+                const double span = stops[index + 1].position - stop.position;
+                inverse = span > 0.0 ? 1.0 / span : 0.0;
+            }
+            return gradient_math::Stop<double>{
+                stop.position,
+                std::isfinite(inverse) ? inverse : 0.0,
+                {stop.color.red, stop.color.green, stop.color.blue, stop.color.alpha}};
+        };
+        const double firstPosition = stops.front().position;
+        const double lastSpan = 1.0 - stops.back().position;
+        const double leadIn = firstPosition > 0.0 ? 1.0 / firstPosition : 0.0;
+        const double leadOut = lastSpan > 0.0 ? 1.0 / lastSpan : 0.0;
+        const auto color = gradient_math::sample<double>(
+            stops.size(), at, std::isfinite(leadIn) ? leadIn : 0.0,
+            std::isfinite(leadOut) ? leadOut : 0.0, std::clamp(position, 0.0, 1.0), value.modes);
+        return {color[0], color[1], color[2], color[3]};
+    }
     if (!(position > stops.front().position))
         return stops.front().color;
     if (position >= stops.back().position)
