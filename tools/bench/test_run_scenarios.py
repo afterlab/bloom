@@ -273,6 +273,8 @@ class KeyedAlpha(unittest.TestCase):
             self.assertEqual(spec.keyed_alpha(spec.SCENARIOS[name]), [
                 "CG beauty: bloom.glow keys colour after bloom.light-wrap",
                 "Passes: bloom.glow keys colour after bloom.grade"])
+        self.assertEqual(spec.keyed_alpha(spec.SCENARIOS["cryptomatte-mattes-2k"]), [
+            "Highlights: bloom.glow keys colour after bloom.gaussian-blur"])
         glow = ["bloom.glow", {"threshold": 0.5}]
         layer = {"name": "L", "media": "png8"}
         self.assertEqual(spec.keyed_alpha({"layers": [dict(layer, effects=[
@@ -294,6 +296,48 @@ class KeyedAlpha(unittest.TestCase):
         self.assertEqual(item["outcome"], "pass")
         self.assertIn("max alpha difference 5.9e-08", item["detail"]["message"])
         self.assertIn("within 2e-6 (L: bloom.glow keys colour)", item["detail"]["gate"])
+
+
+class NodeCost(unittest.TestCase):
+    """#383: per-node GPU cost ratios, their budgets and the baseline comparison."""
+
+    @staticmethod
+    def case(name, ms, reference="grade", comparable="", tier="1080p", ok=True):
+        return {"case": name, "node": name, "tier": tier, "parameter": "", "value": 0,
+                "reference": reference, "comparable": comparable, "ok": ok, "error": "",
+                "coldMs": ms, "warmMs": 0.01, "ms": ms, "dispatches": 4, "warmDispatches": 0}
+
+    def cases(self, image_to_mask_ms=5.0):
+        return [self.case("grade", 4.0), self.case("luma-key-mix", 4.5),
+                self.case("image-to-mask-mix", image_to_mask_ms, comparable="luma-key-mix")]
+
+    def test_ratios_against_reference_and_comparable(self):
+        import node_cost  # noqa: PLC0415
+        rows = {r["case"]: r for r in node_cost.with_ratios(self.cases())}
+        self.assertEqual(rows["image-to-mask-mix"]["referenceRatio"], 1.25)
+        self.assertEqual(rows["image-to-mask-mix"]["comparableRatio"], 1.111)
+        self.assertIsNone(rows["grade"]["referenceRatio"])
+        self.assertEqual(node_cost.violations(self.cases()), [])
+
+    def test_over_budget_and_unrun_cases_are_flagged(self):
+        import node_cost  # noqa: PLC0415
+        found = node_cost.violations(self.cases(image_to_mask_ms=40.0))
+        self.assertEqual([f["case"] for f in found], ["1080p image-to-mask-mix"] * 2)
+        self.assertIn("the reference grade", found[0]["reason"])
+        unrun = self.cases() + [self.case("matte-x", 0, ok=False, comparable="grade")]
+        self.assertEqual(node_cost.violations(unrun)[0]["case"], "1080p matte-x")
+        known = self.cases() + [self.case("cryptomatte-image-16", 0, tier="2160p", ok=False)]
+        self.assertEqual(node_cost.violations(known), [])
+
+    def test_compare_flags_growth_over_the_threshold(self):
+        import node_cost  # noqa: PLC0415
+        baseline = {"cases": self.cases()}
+        current = {"cases": self.cases(image_to_mask_ms=6.0)}
+        comparison = node_cost.compare(current, baseline, 10.0)
+        self.assertEqual({r["metric"] for r in comparison["regressions"]},
+                         {"ms", "referenceRatio", "comparableRatio"})
+        self.assertEqual(comparison["budgetViolations"], [])
+        self.assertEqual(node_cost.compare(baseline, baseline, 10.0)["regressions"], [])
 
 
 if __name__ == "__main__":

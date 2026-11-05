@@ -106,3 +106,32 @@ def footage_assets():
             yield tier, image_format, "sequence"
         for video_format in videos:
             yield tier, video_format, "video"
+
+# Per-node GPU cost (`run_bench.py nodes`, benchmarks.md "Node cost"): the native benches (build
+# targets relative to the build directory), the tiers they run at, and the budgets for each new
+# node case's ms per frame against its cheap reference (a Grade) and its closest existing
+# comparable at the same resolution. A case may carry its own budget; "default" covers the rest.
+NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench"}
+NODE_COST_TIERS = ("1080p", "2160p")
+NODE_COST_BUDGETS = {
+    "default": {"reference": 4.0, "comparable": 2.0},
+    # Mask Combine reads two Mask nodes where Luma Key is one node.
+    "mask-combine-mix": {"reference": 4.0, "comparable": 2.75},
+    # N node Masks: N Mask nodes plus one combine each, held to N Image Mix nodes by the same Masks;
+    # against one Grade the count is the cost (about 0.6 of a Grade per Mask).
+    "matte-layer-masks-4": {"reference": 5.0, "comparable": 1.5},
+    "matte-layer-masks-16": {"reference": 14.0, "comparable": 1.5},
+    # A Cryptomatte route costs what the #364 node itself costs (its rank upload and coverage
+    # pass, about ten Grades at 1080p), so it is held to that node's existing Image output.
+    "cryptomatte-layer-mask-1": {"reference": 14.0, "comparable": 1.5},
+    "cryptomatte-layer-mask-16": {"reference": 14.0, "comparable": 1.5},
+    "cryptomatte-layer-mask-64": {"reference": 14.0, "comparable": 1.5},
+    "cryptomatte-layer-mask-256": {"reference": 18.0, "comparable": 2.0},
+    "cryptomatte-effect-mask-16": {"reference": 14.0, "comparable": 1.5},
+}
+# Cases a known limitation keeps from running: the stacked four-rank Cryptomatte upload of a 2160p
+# frame (about 530 MB plus its staging) is over the device's per-image upload budget.
+NODE_COST_KNOWN_FAILURES = frozenset(
+    ("2160p", case) for case in ("cryptomatte-image-16", "cryptomatte-layer-mask-1",
+                                 "cryptomatte-layer-mask-16", "cryptomatte-layer-mask-64",
+                                 "cryptomatte-layer-mask-256", "cryptomatte-effect-mask-16"))

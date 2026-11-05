@@ -18,6 +18,7 @@ harness (bloom_ui_gpu_packed_viewer_test), which is wired like the desktop appli
     run_bench.py run [--suite quick|standard|full] [--media-root R] [--build-dir B]
                      [--baseline old.json --threshold 10] [--label nas]
     run_bench.py compare new.json old.json [--threshold 10]
+    run_bench.py nodes [--tier 1080p --tier 2160p] [--baseline old.json]   (per-node GPU cost)
     run_bench.py chart  ...   (colour/format accuracy checks; see chart_check.py)
 
 Results: <work-dir>/results/<UTC timestamp>[-label].json plus a .md summary table.
@@ -40,6 +41,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import bench_media  # noqa: E402
 import bench_spec as spec  # noqa: E402
+import node_cost  # noqa: E402
 
 REPO = HERE.parent.parent
 OFFSCREEN_ENV = {"QT_QPA_PLATFORM": "offscreen", "QT_QPA_PLATFORMTHEME": "generic"}
@@ -743,10 +745,79 @@ def command_chart(args):
 
 
 def command_compare(args):
-    comparison = compare(json.loads(Path(args.current).read_text()),
-                         json.loads(Path(args.baseline).read_text()), args.threshold)
+    current = json.loads(Path(args.current).read_text())
+    baseline = json.loads(Path(args.baseline).read_text())
+    if current.get("schema") == node_cost.SCHEMA:
+        comparison = node_cost.compare(current, baseline, args.threshold)
+        report_comparison(comparison)
+        report_budgets(comparison["budgetViolations"])
+        return 1 if comparison["regressions"] or comparison["budgetViolations"] else 0
+    comparison = compare(current, baseline, args.threshold)
     report_comparison(comparison)
     return 1 if comparison["regressions"] or comparison["cpuFallbackMeasurements"] else 0
+
+
+def report_budgets(found):
+    if found:
+        print(f"{len(found)} node cost case(s) over budget:")
+        for item in found:
+            print(f"  {item['case']}: {item['reason']}")
+    else:
+        print("every node cost case is within its budget")
+
+
+def command_nodes(args):
+    """Per-node GPU cost (#383 onwards): each node bench in spec.NODE_BENCHES, run under the GPU
+    lock, its cases' ratios held to spec.NODE_COST_BUDGETS (and, with --baseline, compared)."""
+    build_dir = Path(args.build_dir).resolve()
+    root = bench_media.media_root(args.media_root).resolve()
+    loader = find_loader(build_dir, args.loader)
+    work = Path(args.work_dir).resolve()
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    name = f"{stamp}-nodes" + (f"-{args.label}" if args.label else "")
+    results_dir = work / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    cases, runs = [], []
+    for bench, target in spec.NODE_BENCHES.items():
+        binary = executable(build_dir / target)
+        if not binary.is_file():
+            raise SystemExit(f"missing {binary}; build {binary.name} first")
+        output = results_dir / f"{name}-{bench}.json"
+        command = [str(binary), "--loader", str(loader), "--media-root", str(root),
+                   "--tiers", ",".join(args.tier or spec.NODE_COST_TIERS),
+                   "--repeats", str(args.repeats), "--json", str(output)]
+        with GpuLock(args.gpu_lock_file):
+            completed = subprocess.run(command, capture_output=True, text=True, env=bench_env(),
+                                       timeout=args.timeout)
+        print(completed.stdout, end="", flush=True)
+        if completed.returncode == 77 or not output.is_file():
+            raise SystemExit(f"{bench}: did not run ({completed.returncode}): "
+                             f"{completed.stdout[-400:]}{completed.stderr[-400:]}")
+        found = json.loads(output.read_text())["cases"]
+        for case in found:
+            case["bench"] = bench
+        cases += found
+        runs.append({"bench": bench, "exitCode": completed.returncode})
+        output.unlink()
+    document = {"schema": node_cost.SCHEMA, "startedAt": stamp, "label": args.label,
+                "machine": machine_info(), "bloom": bloom_revision(build_dir),
+                "media": {"root": str(root)}, "repeats": args.repeats,
+                "budgets": spec.NODE_COST_BUDGETS, "runs": runs,
+                "cases": node_cost.with_ratios(cases)}
+    (results_dir / f"{name}.json").write_text(json.dumps(document, indent=1) + "\n")
+    table = node_cost.table(cases)
+    (results_dir / f"{name}.md").write_text(f"# Bloom node cost {name}\n\n{table}\n")
+    print(table)
+    print(f"results: {results_dir / (name + '.json')}")
+    found = node_cost.violations(cases)
+    report_budgets(found)
+    failed = bool(found)
+    if args.baseline:
+        comparison = node_cost.compare(document, json.loads(Path(args.baseline).read_text()),
+                                       args.threshold)
+        report_comparison(comparison)
+        failed = failed or bool(comparison["regressions"])
+    return 1 if failed else 0
 
 
 def command_merge(args):
@@ -823,13 +894,25 @@ def main():
     mrg = sub.add_parser("merge", help="merge results files into one")
     mrg.add_argument("results", nargs="+")
     mrg.add_argument("-o", "--output", required=True)
+    nod = sub.add_parser("nodes", help="per-node GPU cost cases and their ratio budgets")
+    nod.add_argument("--media-root")
+    nod.add_argument("--build-dir", default="build/pw-desktop")
+    nod.add_argument("--work-dir", default="bench-work")
+    nod.add_argument("--loader")
+    nod.add_argument("--gpu-lock-file", help="flock this file around the bench")
+    nod.add_argument("--label")
+    nod.add_argument("--tier", action="append", choices=("720p", "1080p", "2160p"))
+    nod.add_argument("--repeats", type=int, default=5, help="fresh-cache reruns per case")
+    nod.add_argument("--timeout", type=int, default=1800, help="per bench, seconds")
+    nod.add_argument("--baseline", help="compare against this node cost results JSON")
+    nod.add_argument("--threshold", type=float, default=10.0, help="regression threshold, %%")
     cmp = sub.add_parser("compare", help="compare two results files")
     cmp.add_argument("current")
     cmp.add_argument("baseline")
     cmp.add_argument("--threshold", type=float, default=10.0)
     args = parser.parse_args()
     sys.exit({"run": command_run, "chart": command_chart, "merge": command_merge,
-              "compare": command_compare}[args.command](args))
+              "compare": command_compare, "nodes": command_nodes}[args.command](args))
 
 
 if __name__ == "__main__":

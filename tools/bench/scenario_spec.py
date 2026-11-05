@@ -17,6 +17,13 @@ area, and its layers from the bottom up. A layer is one of:
   output, "image" by default>, "keys": {role: [[frame, value], ...]}, "transform", "blend",
   "effects": [...]} (a generator node drawn as a layer, with no media).
 
+A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
+Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
+"maskCombine": {name: [mode, first, second]} a Mask Combine of two of them, "matteMasks":
+[[name, mode], ...] layer masks shaped by those Masks (mode a layer-mask mode name), and
+"trackMatte": name a node track matte read from one (any earlier layer's). An effect may take a
+third element {"mask": name, "maskChannel": value} connecting that Mask to its mask input.
+
 An effect is [node type, {role: value}]. Values of the roles in SCALED are pixel sizes at 1920
 wide and scale with the composition width (clamped to the parameter's range by the builder).
 A transform's "position" is a fraction of the frame. When a new heavy node lands, add a scenario
@@ -48,6 +55,10 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
 SHORT_FILL_BUSY = ("#544: the light 2K shot's 3 s fill keeps the GPU about half busy on average "
                    "(40-55%): the resident preview service runs each frame's scene dispatches one "
                    "at a time on its owner thread, so frames wait for it, not for decode")
+MATTE_FILL_BUSY = ("#544: the Cryptomatte shot fills at about 3 fps with the GPU about 20% busy "
+                   "(2026-11-06): the resident preview service runs each frame's dispatches one at "
+                   "a time on its owner thread, and every frame first decodes and uploads the "
+                   "multilayer EXR's Cryptomatte rank images on the host")
 NOISE_FILL_BUSY = ("#544: the Noise shot fills its 24 frames in about half a second (45 fps on "
                    "2026-11-05), too short to keep the GPU half busy on average")
 SCENARIOS = {
@@ -152,7 +163,7 @@ BLURRED_COLOUR = ("bloom.gaussian-blur", "bloom.light-wrap", "bloom.glow", "bloo
 
 
 def tolerance_qualified_colour(effect):
-    kind, values = effect
+    kind, values = effect[0], effect[1]
     if kind in BLURRED_COLOUR:
         return True
     if kind == "bloom.grade":
@@ -190,3 +201,36 @@ def keyed_alpha(scenario):
             qualified = _keyed_chain(layer["name"], layer.get("effects") or (), qualified, found)
         below = below or qualified
     return found
+
+# The synthetic scene's object names (blender_scene.py).
+CARDS = [f"Card{i}" for i in range(5)]
+
+# #383: the matte workflow heavy node. The CG beauty pass's Cryptomatte selects the pillars and the
+# cards; that selection minus the veil (Mask Combine Subtract) is the beauty layer's matte mask and
+# limits its warm grade through the grade's mask input, and the cards alone matte a blurred, glowing
+# highlights pass as a node track matte.
+SCENARIOS["cryptomatte-mattes-2k"] = {
+    "description": "A PNG plate under a CG beauty pass (multilayer EXR) shaped by its Cryptomatte: "
+                   "the pillars and cards minus the veil (Mask Combine) as a matte layer mask and "
+                   "as the mask input of a Grade, and the cards as the node track matte of a "
+                   "blurred, glowing highlights pass (EXR float).",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16"},
+        {"name": "CG beauty", "media": "exr_multilayer",
+         "cryptomattes": {"Objects": ", ".join([f"Pillar{i}" for i in range(12)] + CARDS +
+                                               ["Veil"]),
+                          "Veil": "Veil",
+                          "Cards": ", ".join(CARDS)},
+         "maskCombine": {"Solid objects": ["Subtract", "Objects", "Veil"]},
+         "matteMasks": [["Solid objects", "Add"]],
+         "effects": [[GRADE_WARM[0], GRADE_WARM[1], {"mask": "Solid objects"}], CURVES_S]},
+        {"name": "Highlights", "media": "exr_float_zip", "blend": "add",
+         "trackMatte": "Cards",
+         "effects": [["bloom.gaussian-blur", {"radius": 32}],
+                     ["bloom.glow", {"mode": "Physical", "size": 128, "intensity": 1.2,
+                                     "threshold": 0.6}]]},
+    ],
+    "knownFailures": {"gpu-busy-during-fill": MATTE_FILL_BUSY},
+}

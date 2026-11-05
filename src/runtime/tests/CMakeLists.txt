@@ -820,6 +820,27 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_coverage_native_acceptance
     PROPERTIES SKIP_RETURN_CODE 77)
 
+# #383 matte workflow GPU cost benchmark (tools/bench/run_bench.py nodes): real documents through
+# the production compiler, scene builder and executor, timed cold, warm and per frame. The CTest is
+# a 64x64 smoke run of every non-media case so the benchmark keeps building and running; it skips
+# (77) without a device or the packaged shader tools.
+add_executable(bloom_runtime_gpu_matte_node_bench gpu_matte_node_bench.cpp)
+target_link_libraries(bloom_runtime_gpu_matte_node_bench
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_render)
+target_include_directories(bloom_runtime_gpu_matte_node_bench
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_matte_node_bench PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_matte_node_bench>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_matte_node_bench)
+bloom_enable_warnings(bloom_runtime_gpu_matte_node_bench)
+bloom_add_test(
+    NAME bloom.runtime.gpu_matte_node_bench_smoke
+    COMMAND bloom_runtime_gpu_matte_node_bench --smoke
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_matte_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
+
 # ADR 0028 animated masks: a path keyed on 24 frames is prepared by the production builder through
 # the shared preparer from THIS target's packaged shader tools and must compile at most one shader
 # module and one native program; the native half runs the range cold (CPU-oracle parity, exact

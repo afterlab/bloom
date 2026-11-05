@@ -59,6 +59,7 @@ GPU_PROVIDERS = ("gpuResident", "gpuPreparedPacked")
 COMPARED = {"fillFps": True, "firstFrameSeconds": False, "exportSecondsPerFrame": False}
 BLENDS = {"normal": 0, "add": 1, "multiply": 2, "screen": 3, "overlay": 4, "darken": 5,
           "lighten": 6}
+MASK_MODES = {"None": 0, "Add": 1, "Subtract": 2, "Intersect": 3, "Difference": 4}
 
 # --- MCP over Streamable HTTP --------------------------------------------------------------------
 
@@ -347,6 +348,7 @@ class Builder:
         self.assets = {}
         self.ranges = {}
         self.layers = {}  # layer name -> {"source": node, "output": node}
+        self.mattes = {}  # matte name -> the node whose `mask` output it is (#383)
 
     def transact(self, op, **args):
         revision = self.client.call("query", {"kind": "project"})["revision"]
@@ -411,7 +413,9 @@ class Builder:
     def chain(self, source, port, effects, background=None):
         """Feeds `effects` from (source, port); returns the last node."""
         node = source
-        for node_type, values in effects:
+        for effect in effects:
+            node_type, values = effect[0], effect[1]
+            options = effect[2] if len(effect) > 2 else {}
             node = self.transact("bloom.node.add-fed-by", composition=self.composition,
                                  nodeType=node_type, node=node, port=port)["node"]
             port = "image"
@@ -420,7 +424,47 @@ class Builder:
                               sourceNode=background, sourcePort="image", targetNode=node,
                               port="background")
             self.set_values(node, node_type, values)
+            if options.get("mask"):
+                # #383: the effect's mask input, limited to a named Mask of the shot.
+                self.transact("bloom.node.connect", composition=self.composition,
+                              sourceNode=self.mattes[options["mask"]], sourcePort="mask",
+                              targetNode=node, port="mask")
+                if "maskChannel" in options:
+                    self.set_values(node, node_type, {"maskChannel": options["maskChannel"]})
         return node
+
+    def matte_nodes(self, layer, source):
+        """#383: the layer's Cryptomatte selections (reading the source's channel set) and the
+        Mask Combines of them, by name in self.mattes."""
+        for name, mattes in (layer.get("cryptomattes") or {}).items():
+            node = self.transact("bloom.node.add", composition=self.composition,
+                                 nodeType="bloom.cryptomatte")["node"]
+            self.transact("bloom.node.connect", composition=self.composition, sourceNode=source,
+                          sourcePort="channels", targetNode=node, port="channels")
+            self.set_values(node, "bloom.cryptomatte", {"mattes": mattes})
+            self.mattes[name] = node
+        for name, (mode, first, second) in (layer.get("maskCombine") or {}).items():
+            node = self.transact("bloom.node.add", composition=self.composition,
+                                 nodeType="bloom.mask-combine")["node"]
+            for port, matte in (("a", first), ("b", second)):
+                self.transact("bloom.node.connect", composition=self.composition,
+                              sourceNode=self.mattes[matte], sourcePort="mask", targetNode=node,
+                              port=port)
+            self.set_values(node, "bloom.mask-combine", {"mode": mode})
+            self.mattes[name] = node
+
+    def layer_mattes(self, layer, output):
+        """#383: the layer's masks shaped by named Masks and its node track matte."""
+        if not layer.get("matteMasks") and not layer.get("trackMatte"):
+            return
+        record = next(r for r in self.records()["records"] if r["layerOutputNode"] == output)
+        for name, mode in layer.get("matteMasks") or ():
+            self.transact("bloom.layer.add-matte-mask", composition=self.composition,
+                          layer=record["id"], node=self.mattes[name], port="mask",
+                          mode=MASK_MODES[mode], name=name)
+        if layer.get("trackMatte"):
+            self.transact("bloom.layer.set-node-track-matte", composition=self.composition,
+                          layer=record["id"], node=self.mattes[layer["trackMatte"]], port="mask")
 
     def layer_controls(self, output_node, layer):
         transform = dict(layer.get("transform") or {})
@@ -462,6 +506,7 @@ class Builder:
             self.transact("bloom.node.set-parameter-value", composition=self.composition,
                           node=source, role="layer", text=color_layer)
         self.layers[layer["name"]] = {"source": source, "output": output}
+        self.matte_nodes(layer, source)
         background = None
         if layer.get("lightWrap"):
             background = self.layers[layer["lightWrap"]]["source"]
@@ -470,6 +515,7 @@ class Builder:
             self.transact("bloom.node.connect", composition=self.composition, sourceNode=last,
                           sourcePort="image", targetNode=output, port="image")
         self.layer_controls(output, layer)
+        self.layer_mattes(layer, output)
         return output
 
     def nested(self, layer, output_merge):
