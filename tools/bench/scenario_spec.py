@@ -46,7 +46,8 @@ EXPORT_RATE = ("#544: a four-frame export of a 2K shot that fills fast is slower
 SHORT_FILL_BUSY = "#544: the light 2K shot's 3 s fill keeps the GPU under half busy on average"
 FILL_ORDER = ("#544: the 4K comp's fill still waits for device capacity a few times and caches "
               "some frames ahead of the contiguous run")
-ALPHA_PARITY = "#545: GPU export frames differ from the CPU reference in alpha"
+ALPHA_PARITY = ("#545: the CG comp's scaled and rotated layers resample near-zero alpha through "
+                "the GPU affine map, which is exact only at alpha 0 and 1")
 
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass
@@ -56,8 +57,7 @@ SCENARIOS = {
                        "Physical Glow.",
         "tier": "1080p",
         "frames": 48,
-        "knownFailures": {"export-rate": EXPORT_RATE, "export-cpu-parity": ALPHA_PARITY,
-                          "gpu-busy-during-fill": SHORT_FILL_BUSY},
+        "knownFailures": {"export-rate": EXPORT_RATE, "gpu-busy-during-fill": SHORT_FILL_BUSY},
         "layers": [
             {"name": "Plate", "media": "png16"},
             {"name": "CG beauty", "media": "exr_multilayer", "blend": "screen",
