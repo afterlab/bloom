@@ -1526,21 +1526,34 @@ no existing plan evaluates differently.
 - *Coverage.* For each pixel, in rank order, `c = clamp(c + (bits(id) is selected ? coverage : 0),
   0, 1)` in Float32, published as `(c, c, c, c)`. The CPU reference and the GPU kernel apply exactly
   this order, so they are bit-identical.
-- *Host gather.* Host preparation reads only the rank channels of the layer (decode layout): each
-  rank pair becomes one image on the union window of the rank channels in the anchor source's
-  frame, R = the ID's exact bits, G = its coverage, B = 0, A = 1, zero outside a channel's window. A
-  non-finite ID or coverage is repaired to 0 and counted.
-- *GPU.* The ranks are stacked vertically into one upload (rank r occupies rows `[r * h, (r + 1) *
-  h)`) and `CryptomatteCoverageV1` (`src/render/vulkan/shaders/cryptomatte_coverage.comp`) computes
-  the matte from it and a bounded buffer of the selected IDs; the proxy PointResampleV1 gather
-  follows. The coverage contract requires `operation.CompiledCryptomatte` and
-  `node.bloom.cryptomatte` with native parity; `bloom.runtime.gpu_cryptomatte_native` proves the
-  native matte bit for bit against the CPU reference (manifest, no manifest, raw IDs, proxy, empty
-  selection), the Image output, selection-edit reuse, cancellation and the budget.
+- *Host gather.* Host preparation reads only the rank channels of the layer (decode layout) into
+  its rank layers as the file stores them: one data image per two ranks, on the union window of the
+  rank channels in the anchor source's frame, holding the (ID, coverage) channels of ranks 2k and
+  2k + 1 (the last layer of an odd rank count holds one pair) with the IDs' exact bits and zero
+  outside a channel's window. A non-finite ID or coverage is repaired to 0 and counted. The layers
+  do not depend on the selection, so every Cryptomatte of the same type in one scene build reads
+  one gather (#549).
+- *GPU.* Each rank layer is its own frame-sized RGBA32F data upload (R/G the ID bits and coverage
+  of rank 2k, B/A those of rank 2k + 1: two ranks in 16 bytes per pixel, the file's own layout),
+  so no Cryptomatte upload is larger than one RGBA32F frame of its size: the stacked rank image
+  that pushed 2160p off the GPU route is gone, and the request's live bytes (usable device
+  capacity minus headroom on the production routes) bound the layers and passes together.
+  `CryptomatteCoverageV1`
+  (`src/render/vulkan/shaders/cryptomatte_coverage.comp`) runs once per rank layer, in rank order,
+  each pass reading its layer, a bounded buffer of the selected IDs and the previous pass's output
+  (the matte so far, or the preview's unclamped colour and alpha, stored as binary32), so the last
+  pass is bit-identical to the CPU reference; the proxy PointResampleV1 gather follows. The
+  coverage contract requires `operation.CompiledCryptomatte` and `node.bloom.cryptomatte` with
+  native parity; `bloom.runtime.gpu_cryptomatte_native` proves the native matte bit for bit
+  against the CPU reference (manifest, no manifest, raw IDs, proxy, empty selection, one to four
+  ranks), the Image output, selection-edit reuse, two mattes sharing one upload per layer,
+  cancellation and the budget.
 - *Cache identity.* The CPU result key is `cryptomatte-v1` with the sources' cache keys (their
-  content digests cover the manifest), the layer and the matte list. The GPU rank upload is keyed by
-  the source decode identities and rank channels only, so a selection edit reuses it; the resolved
-  IDs are kept beside it under the selection key, and the coverage command key carries the IDs.
+  content digests cover the manifest), the layer and the matte list. Each GPU rank layer upload is
+  keyed by the source decode identities (the source sample), the rank channels and the layer's
+  index only, so a selection edit, a second matte of the same type and a later frame that reads
+  the same source sample reuse the resident layers; each matte resolves its IDs through the
+  gather's manifest, and each coverage pass's key carries the IDs and the previous pass's key.
 - *Viewer.* A Viewer inspection with no channels shows a pixel output port directly; the channel
   menu offers "Cryptomatte matte" for a selected Cryptomatte.
 - *ID-color preview.* Selecting a Cryptomatte with Preview on (Properties, a session display

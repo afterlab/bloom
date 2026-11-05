@@ -408,16 +408,21 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
-lists in `knownFailures` the checks an open issue makes fail (#386: the Cryptomatte shot's GPU busy
-over its fill, which decodes and uploads its rank images on the host every frame, #549; and the
-Noise shot's GPU busy, which its fill is too short to judge: on 2026-11-06 it filled 24 frames in
-0.4 s, so the 200 ms `nvidia-smi` samples, each itself an average over the driver's own window,
-caught two or three readings at 31% average and 50% peak; a fair judgement needs a longer work area,
-which would change the scenario's baseline, so the marker stays and the check is not weakened). The
-light 2K shot's GPU-busy marker was removed when #386's bounded blend and OCIO batches and fence
-waits made it pass (64% busy, 2026-11-06). On 2026-11-06 (RTX 4090, 12 frames) `cryptomatte-mattes-2k`
-showed its first frame in 4.9 s, filled at 2.8 fps with the GPU 19% busy, played cached at 24 fps,
-exported its 4 frames on the GPU with no CPU fallback, and passed every other check.
+lists in `knownFailures` the checks an open issue makes fail (#549: the Cryptomatte shot's GPU busy
+over its fill; #386: the Noise shot's GPU busy, which its fill is too short to judge: on 2026-11-06
+it filled 24 frames in 0.4 s, so the 200 ms `nvidia-smi` samples, each itself an average over the
+driver's own window, caught two or three readings at 31% average and 50% peak; a fair judgement
+needs a longer work area, which would change the scenario's baseline, so the marker stays and the
+check is not weakened). The light 2K shot's GPU-busy marker was removed when #386's bounded blend
+and OCIO batches and fence waits made it pass (64% busy, 2026-11-06). After #549 (2026-11-06, RTX
+4090, alternating runs) `cryptomatte-mattes-2k` shows its first frame in 3.0 to 3.1 s (4.4 to 4.9
+before), fills at 7.2 to 8.1 fps (2.9 to 3.2) with the GPU 35 to 51% busy (10 to 18%), plays cold
+at 16 fps (2.7), scrubs in 0.8 to 0.9 s (2.1) and exports its 4 frames on the GPU at 0.67 s/frame
+(1.02). The fill's GPU busy passed the 50% bar in one of three runs: each frame's host work is
+now mostly the ZIP decode of the multilayer EXR, once for the beauty and once more for the
+Cryptomatte rank channels, so its marker points at #549. Two of those runs failed
+`claims-within-factor` (3.02 and 3.18 against 3): the fill's host use fell further than the
+preflight claim for a channel read, which #549 did not change ([results](benchmark-results-2026-11-06-549.md)).
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -535,7 +540,8 @@ than the threshold (percent, default 10) is a regression and fails the run. The 
 RTX 4090 workstation and, when it is used, on the RTX 5080 bench host.
 
 Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and after its follow-up](benchmark-results-2026-11-05-scenarios.md);
-[the same machine, before and after #386](benchmark-results-2026-11-06-386.md).
+[the same machine, before and after #386](benchmark-results-2026-11-06-386.md);
+[the same machine, before and after #549](benchmark-results-2026-11-06-549.md).
 
 ## Node cost
 
@@ -582,21 +588,26 @@ its `CryptoObject` layer. Measured on 2026-11-06 (RTX 4090, 9 reruns, ms/frame):
 | 4 node Masks as layer masks | 12.15 | 3.23x | 1.06x | 42.06 | 3.13x | 1.08x |
 | 16 node Masks as layer masks | 36.17 | 9.60x | 1.02x | 120.07 | 8.94x | 1.01x |
 | Node track matte (a Mask node) | 5.40 | 1.43x | 1.31x layer track matte | 17.56 | 1.31x | 1.01x |
-| Cryptomatte, 1 ID, as a layer mask | 42.65 | 10.42x | 1.07x Cryptomatte Image | | | |
-| Cryptomatte, 16 IDs, as a layer mask | 42.71 | 10.43x | 1.07x | | | |
-| Cryptomatte, 64 IDs, as a layer mask | 42.66 | 10.42x | 1.07x | | | |
-| Cryptomatte, 256 IDs, as a layer mask | 43.03 | 10.51x | 1.08x | | | |
-| Cryptomatte, 16 IDs, on a Grade's mask input | 41.86 | 10.22x | 1.05x | | | |
+| Cryptomatte, 1 ID, as a layer mask | 11.83 | 3.02x | 1.01x Cryptomatte Image | 74.94 | 6.27x | 1.06x |
+| Cryptomatte, 16 IDs, as a layer mask | 11.65 | 2.98x | 1.00x | 74.91 | 6.27x | 1.06x |
+| Cryptomatte, 64 IDs, as a layer mask | 11.67 | 2.98x | 1.00x | 74.85 | 6.26x | 1.06x |
+| Cryptomatte, 256 IDs, as a layer mask | 11.66 | 2.98x | 1.00x | 75.94 | 6.35x | 1.07x |
+| Cryptomatte, 16 IDs, on a Grade's mask input | 13.03 | 3.33x | 1.12x | 60.03 | 5.02x | 0.85x |
 
-Cold runs took 2.3 to 10 ms at 1080p for the solid cases (39 to 63 ms for the Cryptomatte ones,
-whose rank upload dominates) and warm runs under 0.01 ms with no dispatch. The routes add one
-Multiply Alpha or Image Mix per matte: N node Masks cost N Mask nodes plus one combine each, the
-same as N Image Mix nodes by those Masks (a path mask list stays one kernel, about 0.8 of a Grade
-for any count). The Cryptomatte cases cost what the #364 node costs on its own (its Image output
-is 9.7x the EXR Grade): the four RGBA32F rank images it uploads each frame. At 2160p that stacked
-upload (about 530 MB plus its staging) is over the device's per-image upload budget, so those
-cases do not run there (`NODE_COST_KNOWN_FAILURES`); the Cryptomatte IDs picked do not change the
-cost measurably up to 256.
+Cold runs took 2.3 to 10 ms at 1080p for the solid cases and warm runs under 0.01 ms with no
+dispatch. The routes add one Multiply Alpha or Image Mix per matte: N node Masks cost N Mask nodes
+plus one combine each, the same as N Image Mix nodes by those Masks (a path mask list stays one
+kernel, about 0.8 of a Grade for any count). The Cryptomatte cases cost what the #364 node costs on
+its own and are held to its Image output; their reference is the Grade over the same EXR (3.92 ms
+at 1080p, 11.95 ms at 2160p). The Cryptomatte rows were re-measured for #549 (2026-11-06, two
+alternating runs of 5 reruns each, means): the node now uploads each of the EXR's two rank layers
+once per frame as one frame-sized data image (66 MB at 1080p, 265 MB at 2160p, all of it float
+data that cannot cross as binary16) and runs one coverage pass per layer, so it costs about 3 EXR
+Grades at 1080p (36.4 ms, 9.3x, before) and about 6 at 2160p, where the stacked rank upload of
+the earlier layout was over the per-image ceiling and the cases did not run. At 2160p each 133 MB
+layer's staging buffer is a fresh allocation every frame (about 11 ms of the frame). Their budget
+is 7x the EXR Grade and 1.5x the Image output, and no case is a known failure. The Cryptomatte IDs
+picked do not change the cost measurably up to 256.
 
 ## Platform notes
 

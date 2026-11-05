@@ -121,17 +121,16 @@ NODE_COST_BUDGETS = {
     # against one Grade the count is the cost (about 0.6 of a Grade per Mask).
     "matte-layer-masks-4": {"reference": 5.0, "comparable": 1.5},
     "matte-layer-masks-16": {"reference": 14.0, "comparable": 1.5},
-    # A Cryptomatte route costs what the #364 node itself costs (its rank upload and coverage
-    # pass, about ten Grades at 1080p), so it is held to that node's existing Image output.
-    "cryptomatte-layer-mask-1": {"reference": 14.0, "comparable": 1.5},
-    "cryptomatte-layer-mask-16": {"reference": 14.0, "comparable": 1.5},
-    "cryptomatte-layer-mask-64": {"reference": 14.0, "comparable": 1.5},
-    "cryptomatte-layer-mask-256": {"reference": 18.0, "comparable": 2.0},
-    "cryptomatte-effect-mask-16": {"reference": 14.0, "comparable": 1.5},
+    # A Cryptomatte route costs what the #364 node itself costs, so it is held to that node's
+    # existing Image output. #549: the node uploads its two rank layers each frame (66 MB at 1080p,
+    # 265 MB at 2160p, against the EXR Grade's half-float beauty), about 3 EXR Grades at 1080p
+    # and 6 at 2160p.
+    "cryptomatte-layer-mask-1": {"reference": 7.0, "comparable": 1.5},
+    "cryptomatte-layer-mask-16": {"reference": 7.0, "comparable": 1.5},
+    "cryptomatte-layer-mask-64": {"reference": 7.0, "comparable": 1.5},
+    "cryptomatte-layer-mask-256": {"reference": 7.0, "comparable": 1.5},
+    "cryptomatte-effect-mask-16": {"reference": 7.0, "comparable": 1.5},
 }
-# Cases a known limitation keeps from running: the stacked four-rank Cryptomatte upload of a 2160p
-# frame (about 530 MB plus its staging) is over the device's per-image upload budget.
-NODE_COST_KNOWN_FAILURES = frozenset(
-    ("2160p", case) for case in ("cryptomatte-image-16", "cryptomatte-layer-mask-1",
-                                 "cryptomatte-layer-mask-16", "cryptomatte-layer-mask-64",
-                                 "cryptomatte-layer-mask-256", "cryptomatte-effect-mask-16"))
+# Cases a known limitation keeps from running: none (#549 put the 2160p Cryptomatte cases back on
+# the GPU route).
+NODE_COST_KNOWN_FAILURES = frozenset()

@@ -52,10 +52,12 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
 # scenarios.md). After the #544 fixes the final render no longer falls back to the CPU, the fills
 # no longer starve on capacity waits and land in frame order, and image sequences publish frames
 # side by side. The GPU-busy check moved to #386, whose batched submissions and fence waits made
-# the light 2K shot pass it (64% busy on 2026-11-06); what is left of it is listed here.
-MATTE_FILL_BUSY = ("#386: the Cryptomatte shot fills at about 3 fps with the GPU about 19% busy "
-                   "(2026-11-06): every frame first decodes and uploads the multilayer EXR's "
-                   "Cryptomatte rank images on the host (#549)")
+# the light 2K shot pass it (64% busy on 2026-11-06); what is left of it is listed here (the
+# Cryptomatte shot's under #549, which tripled its fill).
+MATTE_FILL_BUSY = ("#549: the Cryptomatte shot fills at 7 to 8 fps with the GPU 35 to 51% busy "
+                   "(2026-11-06, about 3 fps and 10 to 18% before #549): each frame's host work is "
+                   "mostly the ZIP decode of the multilayer EXR, once for the beauty and once more "
+                   "for the Cryptomatte rank channels")
 NOISE_FILL_BUSY = ("#386: the Noise shot fills its 24 frames in about 0.4 s (59 fps on "
                    "2026-11-06), two or three GPU utilisation samples: too short to judge the "
                    "average busy fairly (31%, peak 50%)")

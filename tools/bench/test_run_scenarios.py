@@ -326,8 +326,10 @@ class NodeCost(unittest.TestCase):
         self.assertIn("the reference grade", found[0]["reason"])
         unrun = self.cases() + [self.case("matte-x", 0, ok=False, comparable="grade")]
         self.assertEqual(node_cost.violations(unrun)[0]["case"], "1080p matte-x")
-        known = self.cases() + [self.case("cryptomatte-image-16", 0, tier="2160p", ok=False)]
-        self.assertEqual(node_cost.violations(known), [])
+        # #549: Cryptomatte runs at 2160p, so an unrun 2160p Cryptomatte case is a violation.
+        unrun_2160p = self.cases() + [self.case("cryptomatte-image-16", 0, tier="2160p", ok=False)]
+        self.assertEqual(node_cost.violations(unrun_2160p)[0]["case"],
+                         "2160p cryptomatte-image-16")
 
     def test_compare_flags_growth_over_the_threshold(self):
         import node_cost  # noqa: PLC0415

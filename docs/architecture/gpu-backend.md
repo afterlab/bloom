@@ -140,6 +140,10 @@ has no float64, and consumer GPUs run it slowly). The LayerTransform form, which
 route uses, keeps the binary64 `layerTransformBilinearRow()` oracle and the 2e-6 abs-or-rel gate. `GpuBlend` runs `BlendV1`
 for any `core::BlendMode` over two resident images, and `GpuPointResample` runs `PointResampleV1`,
 the bit-exact nearest-neighbour gather the media-image proxy path uses. `GpuImageUpload` also
+uploads data channels (`render::ChannelSetImage`, #549): up to four planes become the R, G, B and A
+lanes of a resident RGBA32F data image, interleaved into the staging buffer with their bits as they
+are (never as binary16); a Cryptomatte rank layer crosses this way, one frame-sized upload per layer
+that every matte of the type reads. It also
 accepts decoded media in its native sample layout (`render::NativeSampleImage`, #422): 8-bit 4:2:0
 or 16-bit 4:4:4:4 YUV(A) planes, packed 16-bit RGBA, or packed binary16 RGBA. The planes are copied
 as they are into one storage staging buffer and `SampleConvertV1` widens them on the device to the

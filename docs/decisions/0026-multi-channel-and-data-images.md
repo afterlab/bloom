@@ -235,10 +235,11 @@ open to owner review; none changes a rendered or exported pixel the decision def
   out). It is one pixel operation, `CompiledCryptomatte`, reading the layer's rank pairs and the
   part metadata through the §1 decode; the compiler lets one node publish different operations on
   its two outputs.
-- **GPU representation.** As for the Shuffle, host preparation gathers only the rank channels into
-  one stacked raw upload (decode layout; ID bits verbatim); the coverage accumulation is a GPU
-  pass (`CryptomatteCoverageV1`) followed by the proxy PointResampleV1. The matte is bit-identical
-  to the CPU reference.
+- **GPU representation.** As for the Shuffle, host preparation gathers only the rank channels
+  (decode layout; ID bits verbatim), here into the type's rank layers, each one frame-sized data
+  upload shared by every matte of the type (#549); the coverage accumulation is one GPU pass per
+  rank layer (`CryptomatteCoverageV1`) followed by the proxy PointResampleV1. The matte is
+  bit-identical to the CPU reference.
 - **Viewer.** An inspection with no channels shows a pixel output port directly; it previews the
   matte. A selected Cryptomatte shows the ID-color preview (a viewer-only `preview` inspection
   port, the same GPU kernel in a second mode). The eyedropper maps the Viewer point through the
