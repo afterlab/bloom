@@ -9,6 +9,7 @@ which pins the generator, records every asset's geometry and format, and a SHA-2
     bench_media.py encode   --tier 720p                                     # FFmpeg from PNG16
     bench_media.py chart    [--tier 1080p]                                  # procedural chart
     bench_media.py manifest --provenance "Blender 4.5.x LTS, Cycles OptiX, <GPU>"
+    bench_media.py derive   --tier 1080p --format png16_mist --frames 24     # a derived pass
     bench_media.py verify   [--json report.json]
 
 Verification statuses per asset:
@@ -194,6 +195,44 @@ def command_encode(args):
             subprocess.run(command, check=True, env={**os.environ, "SVT_LOG": "1"})
 
 
+def derive_pass(root, tier, fmt, frames):
+    """#483: frames 1..`frames` of the derived pass `fmt` (spec.DERIVED_PASSES) of tier `tier`
+    under `root`, written from its rendered source where missing; returns (folder, entry), the
+    entry shaped as a manifest sequence entry. Deterministic: the same source frames give the same
+    files."""
+    import numpy as np  # noqa: PLC0415 (only the derived passes need numpy)
+
+    import imageio_min  # noqa: PLC0415
+    recipe = spec.DERIVED_PASSES[fmt]
+    source = spec.sequence_path(tier, recipe["source"])
+    relative = spec.sequence_path(tier, fmt)
+    for frame in range(1, frames + 1):
+        out = root / relative.replace("####", f"{frame:04d}")
+        if out.is_file():
+            continue
+        path = root / source.replace("####", f"{frame:04d}")
+        if not path.is_file():
+            raise SystemExit(f"missing {path}; the derived {fmt} pass needs its source media")
+        depth = imageio_min.read_exr(path)[recipe["channel"]].astype(np.float64)
+        mist = np.where(np.isfinite(depth),
+                        np.clip((depth - recipe["start"]) / recipe["depth"], 0.0, 1.0), 1.0)
+        value = np.round(mist * 65535.0).astype(np.uint16)
+        rgba = np.stack([value, value, value, np.full_like(value, 65535)], axis=-1)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        partial = out.with_name(out.name + ".partial")
+        imageio_min.write_png(partial, rgba, 16, srgb=False)
+        partial.replace(out)
+    entry = {"type": "sequence", "path": relative, "first": 1, "frames": frames,
+             "contiguous": True, "fps": spec.FPS, "kind": "derived", "tier": tier, "format": fmt}
+    return root / str(Path(relative).parent), entry
+
+
+def command_derive(args):
+    root = media_root(args.root)
+    folder, _ = derive_pass(root, args.tier, args.format, args.frames)
+    print(f"derived {args.tier}/{args.format}: {args.frames} frames in {folder}")
+
+
 def command_chart(args):
     root = media_root(args.root)
     command = [sys.executable, str(HERE / "chart.py"), "--out", str(root)]
@@ -337,12 +376,17 @@ def main():
     manifest = sub.add_parser("manifest", help="record assets present under the root")
     manifest.add_argument("--tier", action="append", choices=spec.TIER_ORDER)
     manifest.add_argument("--provenance", help="render machine summary, no host or user names")
+    derive = sub.add_parser("derive", help="write a pass derived from the rendered media")
+    derive.add_argument("--tier", required=True, choices=spec.TIER_ORDER)
+    derive.add_argument("--format", required=True, choices=sorted(spec.DERIVED_PASSES))
+    derive.add_argument("--frames", type=int, default=24)
     check = sub.add_parser("verify", help="verify the media against the manifest")
     check.add_argument("--tier", action="append", choices=spec.TIER_ORDER)
     check.add_argument("--json", help="write the verification report here")
     args = parser.parse_args()
     handler = {"render": command_render, "encode": command_encode, "chart": command_chart,
-               "manifest": command_manifest, "verify": command_verify}[args.command]
+               "manifest": command_manifest, "derive": command_derive,
+               "verify": command_verify}[args.command]
     sys.exit(handler(args) or 0)
 
 

@@ -16,7 +16,8 @@ SCHEMA = "bloom-node-cost/1"
 
 
 def keyed(cases):
-    return {(c["tier"], c["case"]): c for c in cases}
+    """Cases by (bench, tier, case): each bench names its own reference and comparables."""
+    return {(c.get("bench", ""), c["tier"], c["case"]): c for c in cases}
 
 
 def with_ratios(cases):
@@ -26,7 +27,7 @@ def with_ratios(cases):
     for case in cases:
         row = dict(case)
         for field in ("reference", "comparable"):
-            other = by_key.get((case["tier"], case.get(field) or ""))
+            other = by_key.get((case.get("bench", ""), case["tier"], case.get(field) or ""))
             ratio = None
             if (case.get("ok") and other and other.get("ok") and other.get("ms")
                     and other["case"] != case["case"]):
@@ -68,7 +69,7 @@ def compare(current, baseline, threshold):
     old = keyed(with_ratios(baseline["cases"]))
     regressions, improvements = [], []
     for case in with_ratios(current["cases"]):
-        before = old.get((case["tier"], case["case"]))
+        before = old.get((case.get("bench", ""), case["tier"], case["case"]))
         if not before or not case.get("ok") or not before.get("ok"):
             continue
         for metric in ("ms", "referenceRatio", "comparableRatio"):
@@ -76,7 +77,8 @@ def compare(current, baseline, threshold):
             if not new_value or not old_value:
                 continue
             change = (new_value - old_value) / old_value * 100
-            row = {"key": f"{case['tier']} {case['case']}", "metric": metric,
+            row = {"key": f"{case.get('bench', '')} {case['tier']} {case['case']}".strip(),
+                   "metric": metric,
                    "baseline": old_value, "current": new_value, "changePercent": round(change, 1)}
             if change > threshold:
                 regressions.append(row)
@@ -87,20 +89,21 @@ def compare(current, baseline, threshold):
 
 
 def table(cases):
-    lines = ["| Tier | Case | Node | Param | Cold ms | Warm ms | ms/frame | Dispatches | "
+    lines = ["| Bench | Tier | Case | Node | Param | Cold ms | Warm ms | ms/frame | Dispatches | "
              "vs reference | vs comparable |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for case in with_ratios(cases):
         if not case.get("ok"):
-            lines.append(f"| {case['tier']} | {case['case']} | {case['node']} | | did not run: "
-                         f"{case.get('error', '')} | | | | | |")
+            lines.append(f"| {case.get('bench', '')} | {case['tier']} | {case['case']} | "
+                         f"{case['node']} | | did not run: {case.get('error', '')} | | | | | |")
             continue
         param = f"{case['parameter']} {case['value']}" if case.get("parameter") else ""
         ref = (f"{case['referenceRatio']:.2f}x {case['reference']}"
                if case.get("referenceRatio") else "")
         cmp_ = (f"{case['comparableRatio']:.2f}x {case['comparable']}"
                 if case.get("comparableRatio") else "")
-        lines.append(f"| {case['tier']} | {case['case']} | {case['node']} | {param} | "
+        lines.append(f"| {case.get('bench', '')} | {case['tier']} | {case['case']} | "
+                     f"{case['node']} | {param} | "
                      f"{case['coldMs']:.2f} | {case['warmMs']:.3f} | {case['ms']:.2f} | "
                      f"{case['dispatches']} | {ref} | {cmp_} |")
     return "\n".join(lines)

@@ -342,5 +342,76 @@ class NodeCost(unittest.TestCase):
         self.assertEqual(node_cost.compare(baseline, baseline, 10.0)["regressions"], [])
 
 
+class DepthScenario(unittest.TestCase):
+    """#483: the depth effects scenario, its derived mist pass and its depth inputs."""
+
+    @staticmethod
+    def read_png16(path):
+        import struct  # noqa: PLC0415
+        import zlib  # noqa: PLC0415
+
+        import numpy as np  # noqa: PLC0415
+        data = pathlib.Path(path).read_bytes()
+        width, height = struct.unpack(">II", data[16:24])
+        position, idat = 8, b""
+        while position < len(data):
+            length = struct.unpack(">I", data[position:position + 4])[0]
+            if data[position + 4:position + 8] == b"IDAT":
+                idat += data[position + 8:position + 8 + length]
+            position += 12 + length
+        rows = np.frombuffer(zlib.decompress(idat), dtype=np.uint8).reshape(height, -1)
+        filtered = rows[:, 1:].astype(np.int64)
+        assert (rows[:, 0] == 1).all(), "the writer uses the Sub filter on every row"
+        for x in range(8, filtered.shape[1]):
+            filtered[:, x] = (filtered[:, x] + filtered[:, x - 8]) % 256
+        raw = filtered.astype(np.uint8).tobytes()
+        return np.frombuffer(raw, dtype=">u2").reshape(height, width, 4)
+
+    def test_mist_pass_is_derived_from_the_render_depth(self):
+        import bench_media  # noqa: PLC0415
+        import imageio_min  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
+        spec = suite.bench.spec
+        recipe = spec.DERIVED_PASSES["png16_mist"]
+        with tempfile.TemporaryDirectory(prefix="bloom-mist-") as folder:
+            root = pathlib.Path(folder)
+            source = root / spec.sequence_path("720p", recipe["source"]).replace("####", "0001")
+            source.parent.mkdir(parents=True)
+            start, depth = recipe["start"], recipe["depth"]
+            z = np.array([[start, start + depth / 2, start + depth, 1.0e10]], dtype=np.float32)
+            imageio_min.write_exr(source, {recipe["channel"]: z,
+                                           "ViewLayer.Combined.R": np.zeros_like(z)})
+            found, entry = bench_media.derive_pass(root, "720p", "png16_mist", 1)
+            self.assertEqual((entry["type"], entry["frames"], entry["kind"]),
+                             ("sequence", 1, "derived"))
+            png = found / "bench_720p_mist.0001.png"
+            self.assertEqual(imageio_min.read_png_header(png)["bitDepth"], 16)
+            pixels = self.read_png16(png)
+            self.assertEqual(pixels[0, :, 0].tolist(), [0, 32768, 65535, 65535],
+                             "mist runs 0 at the start to 1 at start + depth; empty depth is 1")
+            self.assertTrue((pixels[0, :, 0] == pixels[0, :, 2]).all() and
+                            (pixels[0, :, 3] == 65535).all(), "grey and opaque")
+            self.assertNotIn(b"sRGB", png.read_bytes()[:200], "the pass is untagged data")
+            stamp = png.stat().st_mtime_ns
+            bench_media.derive_pass(root, "720p", "png16_mist", 1)
+            self.assertEqual(png.stat().st_mtime_ns, stamp, "an existing frame is kept")
+
+    def test_scenario_reads_both_depth_encodings_and_fogs_first(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["depth-effects-2k"]
+        self.assertEqual(suite.scenario_formats(scenario),
+                         ["exr_multilayer", "png16", "png16_mist"])
+        passes = {f"{layer['name']}:channels" for layer in scenario["layers"]}
+        passes.update(name for layer in scenario["layers"]
+                      for name in (layer.get("passes") or {}))
+        for layer in scenario["layers"]:
+            kinds = [effect[0] for effect in layer["effects"]]
+            self.assertLess(kinds.index("bloom.depth-fog"), kinds.index("bloom.z-defocus"),
+                            "fog before defocus")
+            for effect in layer["effects"]:
+                self.assertIn(effect[2]["depth"], passes, "each depth input names a pass")
+        self.assertEqual(spec.keyed_alpha(scenario), [])
+
+
 if __name__ == "__main__":
     unittest.main()

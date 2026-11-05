@@ -24,6 +24,13 @@ Cryptomatte node per name reading the layer's channel set (the matte list in the
 "trackMatte": name a node track matte read from one (any earlier layer's). An effect may take a
 third element {"mask": name, "maskChannel": value} connecting that Mask to its mask input.
 
+A footage layer may also carry depth passes (#483): "passes": {name: {"media": format,
+"colorSpace": label}} adds a source node per name reading that footage (a derived pass such as
+"png16_mist" included; "Raw" reads a depth pass as data), and every footage layer's own channel set
+is the pass "<layer name>:channels". An effect's third element may then hold {"depth": pass name,
+"depthChannel": value} connecting that pass to its depth input, and {"keys": {role: [[frame,
+value], ...]}} keys its parameters (a rack focus).
+
 An effect is [node type, {role: value}]. Values of the roles in SCALED are pixel sizes at 1920
 wide and scale with the composition width (clamped to the parameter's range by the builder).
 A transform's "position" is a fraction of the frame. When a new heavy node lands, add a scenario
@@ -61,6 +68,15 @@ MATTE_FILL_BUSY = ("#549: the Cryptomatte shot fills at 7 to 8 fps with the GPU 
 NOISE_FILL_BUSY = ("#386: the Noise shot fills its 24 frames in about 0.4 s (59 fps on "
                    "2026-11-06), two or three GPU utilisation samples: too short to judge the "
                    "average busy fairly (31%, peak 50%)")
+DEPTH_FILL_BUSY = ("#386: the depth effects shot fills at 8 to 14 fps with the GPU 5 to 25% busy "
+                   "(2026-11-06): its 12 to 24 frames fill in one to three seconds, a few GPU "
+                   "utilisation samples, and every frame first decodes three sequences (the plate, "
+                   "its mist pass and the multilayer EXR) on the host")
+DEPTH_HOST_CLAIMS = ("#539: the depth effects shot's host claims over the fill reached 3.06 to "
+                     "3.34 times the peak anonymous memory in three runs (2026-11-06), over the 3x "
+                     "factor, while its device claims stay at 1.0 to 1.03 times use: the preflight "
+                     "host claim for its EXR depth channel read, as the Cryptomatte shot's channel "
+                     "read shows intermittently")
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass
     # with one large Glow (the effect-chain admission case of #539).
@@ -232,4 +248,42 @@ SCENARIOS["cryptomatte-mattes-2k"] = {
                                      "threshold": 0.6}]]},
     ],
     "knownFailures": {"gpu-busy-during-fill": MATTE_FILL_BUSY},
+}
+
+# #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate
+# is fogged and then defocused through a physical lens from its 16-bit PNG mist pass (derived from
+# the render's camera depth and read as data), the focus racking from the near pillars to the back;
+# over it the CG beauty pass (multilayer EXR) is fogged and defocused from its own float Z channel,
+# with polygon bokeh and highlight boost. Fog comes before the defocus, as the docs recommend.
+MIST = "Plate mist"
+EXR_Z = "CG beauty:channels"
+SCENARIOS["depth-effects-2k"] = {
+    "description": "A PNG plate fogged and defocused (physical lens, racking focus) from its "
+                   "16-bit PNG mist pass, under the CG beauty pass (multilayer EXR) fogged and "
+                   "defocused (polygon bokeh, highlight boost) from its own float Z channel.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "passes": {MIST: {"media": "png16_mist", "colorSpace": "Raw"}},
+         "effects": [
+             ["bloom.depth-fog", {"interpretation": 3, "falloff": "Exponential", "start": 0.05,
+                                  "end": 1.0, "density": 2.0, "amount": 0.8},
+              {"depth": MIST}],
+             ["bloom.z-defocus", {"mode": "Physical lens", "interpretation": 3, "near": 5.0,
+                                  "far": 40.0, "focalLength": 85.0, "fStop": 2.0,
+                                  "maxSize": 48.0},
+              {"depth": MIST, "keys": {"focusDistance": [[0, 8.0], [23, 24.0]]}}]]},
+        {"name": "CG beauty", "media": "exr_multilayer",
+         "effects": [
+             ["bloom.depth-fog", {"interpretation": 0, "start": 10.0, "end": 40.0,
+                                  "amount": 0.6},
+              {"depth": EXR_Z, "depthChannel": "ViewLayer.Depth.Z"}],
+             ["bloom.z-defocus", {"interpretation": 0, "focusDistance": 9.0, "maxSize": 32.0,
+                                  "shape": "Polygon (blades)", "blades": 6, "highlightGain": 1.5,
+                                  "highlightThreshold": 0.8},
+              {"depth": EXR_Z, "depthChannel": "ViewLayer.Depth.Z"}]]},
+    ],
+    "knownFailures": {"gpu-busy-during-fill": DEPTH_FILL_BUSY,
+                      "claims-within-factor": DEPTH_HOST_CLAIMS},
 }

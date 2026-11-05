@@ -54,6 +54,17 @@ SEQUENCE_PATTERN = {
     "exr_half_piz": "bench_{tier}_exr_half_piz.####.exr",
     "exr_float_zip": "bench_{tier}_exr_float_zip.####.exr",
     "exr_multilayer": "bench_{tier}_multilayer.####.exr",
+    "png16_mist": "bench_{tier}_mist.####.png",
+}
+
+# #483: passes derived from the rendered media rather than rendered themselves (bench_media.py
+# derive; run_scenarios.py writes the frames a scenario needs on first use). "png16_mist" is a
+# 16-bit PNG mist pass of the multilayer EXR's camera depth: mist = clamp((Z - start) / depth,
+# 0, 1), 1 where the render is empty (the common mist encoding, 0 at the camera's near start), in
+# all of R, G and B with opaque alpha, untagged (no sRGB chunk): data, not a picture.
+DERIVED_PASSES = {
+    "png16_mist": {"source": "exr_multilayer", "channel": "ViewLayer.Depth.Z", "start": 5.0,
+                   "depth": 35.0},
 }
 
 # Video encodes from the 16-bit PNG master. Non-alpha codecs flatten over black (premultiply).
@@ -111,7 +122,8 @@ def footage_assets():
 # targets relative to the build directory), the tiers they run at, and the budgets for each new
 # node case's ms per frame against its cheap reference (a Grade) and its closest existing
 # comparable at the same resolution. A case may carry its own budget; "default" covers the rest.
-NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench"}
+NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench",
+                "depth": "src/runtime/tests/bloom_runtime_gpu_depth_node_bench"}
 NODE_COST_TIERS = ("1080p", "2160p")
 NODE_COST_BUDGETS = {
     "default": {"reference": 4.0, "comparable": 2.0},
@@ -130,6 +142,19 @@ NODE_COST_BUDGETS = {
     "cryptomatte-layer-mask-64": {"reference": 7.0, "comparable": 1.5},
     "cryptomatte-layer-mask-256": {"reference": 7.0, "comparable": 1.5},
     "cryptomatte-effect-mask-16": {"reference": 7.0, "comparable": 1.5},
+    # #483 Z Defocus is a two-dimensional gather (1 + 4K(K + 1) samples a pixel at K rings: 289 at
+    # Normal) where its comparable Gaussian blur is separable (2 (2r + 1) taps), plus its circle of
+    # confusion map, tile maximum and prefilter; its cost follows the rings and the share of the
+    # frame out of focus. Held about 25% over the 2026-11-06 measurement at either tier. Depth Fog
+    # keeps the default budgets.
+    "z-defocus-8": {"reference": 10.5, "comparable": 6.5},
+    "z-defocus-32": {"reference": 17.0, "comparable": 8.5},
+    "z-defocus-128": {"reference": 22.0, "comparable": 4.5},
+    "z-defocus-32-quality-0": {"reference": 11.5, "comparable": 5.5},
+    "z-defocus-32-quality-2": {"reference": 21.5, "comparable": 10.5},
+    "z-defocus-32-quality-3": {"reference": 21.5, "comparable": 10.5},
+    "z-defocus-uniform-32": {"reference": 12.0, "comparable": 5.75},
+    "z-defocus-bokeh-32": {"reference": 20.0, "comparable": 9.75},
 }
 # Cases a known limitation keeps from running: none (#549 put the 2160p Cryptomatte cases back on
 # the GPU route).

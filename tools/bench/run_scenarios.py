@@ -349,6 +349,7 @@ class Builder:
         self.ranges = {}
         self.layers = {}  # layer name -> {"source": node, "output": node}
         self.mattes = {}  # matte name -> the node whose `mask` output it is (#383)
+        self.passes = {}  # pass name -> (source node, port) a depth input reads (#483)
 
     def transact(self, op, **args):
         revision = self.client.call("query", {"kind": "project"})["revision"]
@@ -424,6 +425,15 @@ class Builder:
                               sourceNode=background, sourcePort="image", targetNode=node,
                               port="background")
             self.set_values(node, node_type, values)
+            if options.get("depth"):
+                # #483: the effect's depth input, a pass of the shot (or the layer's own channels).
+                depth_node, depth_port = self.passes[options["depth"]]
+                self.transact("bloom.node.connect", composition=self.composition,
+                              sourceNode=depth_node, sourcePort=depth_port, targetNode=node,
+                              port="depth")
+                if "depthChannel" in options:
+                    self.set_values(node, node_type, {"depthChannel": options["depthChannel"]})
+            self.set_keys(node, options.get("keys") or {})
             if options.get("mask"):
                 # #383: the effect's mask input, limited to a named Mask of the shot.
                 self.transact("bloom.node.connect", composition=self.composition,
@@ -432,6 +442,24 @@ class Builder:
                 if "maskChannel" in options:
                     self.set_values(node, node_type, {"maskChannel": options["maskChannel"]})
         return node
+
+    def node_type(self, node):
+        nodes = self.client.call("query", {"kind": "nodes",
+                                           "composition": self.composition})["records"]
+        return next(r["typeId"] for r in nodes if r["id"] == node)
+
+    def depth_passes(self, layer, source):
+        """#483: the layer's own channel set as the pass "self", and each of its "passes" ({name:
+        {"media": format, "colorSpace": label}}) as a source node of that footage read in that
+        colour space (a depth pass is data: "Raw" reads its values unchanged)."""
+        self.passes[f"{layer['name']}:channels"] = (source, "channels")
+        for name, spec in (layer.get("passes") or {}).items():
+            node = self.transact("bloom.node.add-asset-source", composition=self.composition,
+                                 asset=self.asset(spec["media"]))["node"]
+            if spec.get("colorSpace"):
+                self.set_values(node, self.node_type(node), {"colorSpace": spec["colorSpace"],
+                                                             "inputColorSpaceId": ""})
+            self.passes[name] = (node, "image")
 
     def matte_nodes(self, layer, source):
         """#383: the layer's Cryptomatte selections (reading the source's channel set) and the
@@ -507,6 +535,7 @@ class Builder:
                           node=source, role="layer", text=color_layer)
         self.layers[layer["name"]] = {"source": source, "output": output}
         self.matte_nodes(layer, source)
+        self.depth_passes(layer, source)
         background = None
         if layer.get("lightWrap"):
             background = self.layers[layer["lightWrap"]]["source"]
@@ -1169,9 +1198,13 @@ def failing(checks):
 # --- the run -------------------------------------------------------------------------------------
 
 
-def scenario_media(root, manifest, tier, formats):
+def scenario_media(root, manifest, tier, formats, frames=0):
     found = {}
     for fmt in formats:
+        if fmt in bench.spec.DERIVED_PASSES:
+            # #483: a pass derived from the rendered media, written on first use.
+            found[fmt] = bench_media.derive_pass(root, tier, fmt, frames)
+            continue
         entry = manifest["assets"].get(f"{tier}/{fmt}")
         if entry is None:
             raise SystemExit(f"the manifest has no {tier}/{fmt} footage")
@@ -1188,6 +1221,7 @@ def scenario_formats(scenario):
         for inner in layer.get("merge") or [layer]:
             if inner.get("media"):
                 formats.add(inner["media"])
+            formats.update(spec["media"] for spec in (inner.get("passes") or {}).values())
     return sorted(formats)
 
 
@@ -1290,7 +1324,8 @@ def command_run(args):
     with open(base.with_suffix(".log"), "w", encoding="utf-8") as log:
         for name in names:
             scenario = scenario_spec.SCENARIOS[name]
-            media = scenario_media(root, manifest, scenario["tier"], scenario_formats(scenario))
+            media = scenario_media(root, manifest, scenario["tier"], scenario_formats(scenario),
+                                   args.frames or scenario["frames"])
             files = [p for _, entry in media.values() for p in bench.media_files(root, entry)]
             project = work / "projects" / name / f"{name}.bloom"
             print(f"[{name}] building", flush=True)
