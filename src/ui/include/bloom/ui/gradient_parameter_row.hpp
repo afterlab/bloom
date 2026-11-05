@@ -13,6 +13,11 @@
 // gradient keeps each link on its stop: a stop keeps its stored index through moves, and removing
 // one removes its links (CompositionSession::setGradientValue).
 //
+// #546: under the Stop row, a Color mode dropdown (RGB, HSV, HSL) and either an Interpolation
+// dropdown (Constant, Linear, Ease, Cardinal, B-Spline, Exponential) for RGB or a Hue dropdown
+// (Near, Far, Clockwise, Counter-clockwise) for HSV and HSL, as Blender's Color Ramp offers them;
+// each choice is one edit, and the bar is drawn in the chosen blend.
+//
 // Colorize's Gradient Map, the Linear and Radial Gradient generators' colours and Glow's tint
 // gradient draw this row. A node saved without its gradient bound shows what it renders with (the
 // spec's fallback, else the node's default) and binds the gradient on its first edit.
@@ -41,6 +46,7 @@ class KeyframeDiamond;
 namespace kit {
 class KButton;
 class KColorChip;
+class KDropdown;
 class KGradientEditor;
 class KLabel;
 class KValueField;
@@ -57,7 +63,8 @@ class GradientParameterRow final : public QWidget {
         QString name;
         QString description;
         // The object names: <prefix>Row, <prefix>Label, <prefix>Editor, <prefix>Diamond,
-        // <prefix>StopLabel, <prefix>StopColor, <prefix>StopPosition, <prefix>Key, <prefix>Reset.
+        // <prefix>StopLabel, <prefix>StopColor, <prefix>StopPosition, <prefix>Key, <prefix>Reset,
+        // <prefix>ColorMode(Label), <prefix>Interpolation(Label) and <prefix>Hue.
         QString objectPrefix;
         // What an unbound gradient renders with; unset means the node's default.
         std::function<std::optional<document::GradientValue>()> fallback;
@@ -84,6 +91,9 @@ class GradientParameterRow final : public QWidget {
     [[nodiscard]] kit::KColorChip* stopChip() const noexcept { return chip_; }
     [[nodiscard]] kit::KValueField* stopPosition() const noexcept { return position_; }
     [[nodiscard]] kit::KLabel* label() const noexcept { return label_; }
+    [[nodiscard]] kit::KDropdown* colorModeDropdown() const noexcept { return colorMode_; }
+    [[nodiscard]] kit::KDropdown* interpolationDropdown() const noexcept { return interpolation_; }
+    [[nodiscard]] kit::KDropdown* hueDropdown() const noexcept { return hue_; }
     [[nodiscard]] kit::KButton* valuesButton() const noexcept { return disclosure_; }
     [[nodiscard]] bool valuesShown() const noexcept { return expanded_; }
     void setValuesShown(bool shown);
@@ -121,7 +131,10 @@ class GradientParameterRow final : public QWidget {
     void writeStops(std::vector<kit::KGradientEditor::Stop> stops);
     // Writes a gradient in stored order whose stop `i` was stored stop `newIndexOfOld^-1(i)`.
     void writeStored(document::GradientValue value,
-                     std::vector<std::optional<std::uint32_t>> newIndexOfOld);
+                     std::vector<std::optional<std::uint32_t>> newIndexOfOld,
+                     const QString& label = {});
+    // #546: writes the authored gradient with `modes`, its stops as they are.
+    void writeModes(document::GradientModes modes);
     void rebuildStopRows(std::size_t stops);
     [[nodiscard]] int stopRowsTop() const;
     // The bound parameter, binding the gradient first on a node saved without it.
@@ -137,6 +150,11 @@ class GradientParameterRow final : public QWidget {
     kit::KLabel* stopLabel_ = nullptr;
     kit::KColorChip* chip_ = nullptr;
     kit::KValueField* position_ = nullptr;
+    kit::KLabel* colorModeLabel_ = nullptr;
+    kit::KDropdown* colorMode_ = nullptr;
+    kit::KLabel* interpolationLabel_ = nullptr;
+    kit::KDropdown* interpolation_ = nullptr;
+    kit::KDropdown* hue_ = nullptr;
     QAction* keyAction_ = nullptr;
     kit::KButton* disclosure_ = nullptr;
     std::vector<StopRow> stopRows_;

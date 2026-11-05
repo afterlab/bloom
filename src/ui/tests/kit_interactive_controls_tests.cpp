@@ -70,6 +70,19 @@ void testGradientEditorEditsStops() {
            "the gradient interpolates Reference colour linearly between stops");
     expect(editor.colorAt(-1.0).red == 0.0F && editor.colorAt(2.0).red == 1.0F,
            "the ends hold past the bar");
+    // #546: an owner's sampler draws and colours the bar (here a hard step at the middle); an
+    // empty one restores the linear blend.
+    editor.setColorSampler(
+        [](const std::vector<kit::KGradientEditor::Stop>& stops, const double position) {
+            return position < 0.5 ? stops.front().color : stops.back().color;
+        });
+    expect(editor.hasColorSampler() && editor.colorAt(0.4).red == 0.0F &&
+               editor.colorAt(0.6).red == 1.0F,
+           "the owner's sampler gives the bar's colour");
+    host.grab();
+    editor.setColorSampler({});
+    expect(!editor.hasColorSampler() && std::abs(editor.colorAt(0.5).red - 0.5F) < 1e-6F,
+           "an empty sampler restores the linear blend");
 
     QSignalSpy started(&editor, &kit::KGradientEditor::editStarted);
     QSignalSpy finished(&editor, &kit::KGradientEditor::editFinished);

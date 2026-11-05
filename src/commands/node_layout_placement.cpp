@@ -67,8 +67,9 @@ constexpr double kSlotPitch = 12.0;
 constexpr double kDialSide = 50.0;
 constexpr double kPadMaxHeight = 208.0;
 // A gradient row (gradient_parameter_row.cpp) is the gradient editor (Size::Control bar,
-// Size::IconLarge handle band, Spacing::XXS), Spacing::XS and its Stop row (Size::Control).
-constexpr double kGradientRow = 78.0;
+// Size::IconLarge handle band, Spacing::XXS), then its Stop row, (#546) its Color mode and
+// Interpolation rows and its Values button, each Spacing::XS and Size::Control.
+constexpr double kGradientRow = 168.0;
 constexpr double kPadCardWidth = 336.0;
 
 struct NodeControlsEstimate final {

@@ -10,6 +10,7 @@
 #include <QWidget>
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -41,6 +42,11 @@ namespace bloom::ui::kit {
 // was given (`origin`) through moves and removals, so the owner can tell which stored stop each
 // one is after an edit reorders them.
 //
+// #546: how the colour blends between stops is the owner's (setColorSampler(): the gradient's
+// interpolation and colour mode); without a sampler the bar blends linearly in RGB. With one, the
+// bar is drawn a column at a time, so hard steps and spline overshoot read as the node renders
+// them, and a stop added on the bar takes the sampled colour.
+//
 // It keeps KSlider's edit-session contract, so properties::bindValueEdit() binds it unchanged: a
 // drag, a run of keys or one menu action is one edit (editStarted(), stopsChanged() for each step,
 // editFinished(), or editCancelled() after which the stops are back as they were).
@@ -61,6 +67,11 @@ class KGradientEditor final : public QWidget {
     explicit KGradientEditor(QWidget* parent = nullptr);
 
     void setColorConverter(KColorConverter converter);
+    // The straight Reference colour of `stops` (sorted, as stops() holds them) at a position in
+    // [0, 1]; an empty sampler restores the linear RGB blend.
+    using ColorSampler = std::function<KColor(const std::vector<Stop>& stops, double position)>;
+    void setColorSampler(ColorSampler sampler);
+    [[nodiscard]] bool hasColorSampler() const noexcept { return static_cast<bool>(sampler_); }
 
     // Stops are kept sorted by position (equal positions in the order given), each numbered with
     // its index in `stops` as its origin; a projection arriving mid-edit is refused.
@@ -81,8 +92,8 @@ class KGradientEditor final : public QWidget {
     void distributeStops();
     void reverseStops();
 
-    // The colour at `position` in [0, 1], straight Reference RGBA (linear between stops, held past
-    // the ends), and the same drawn for the display.
+    // The colour at `position` in [0, 1], straight Reference RGBA (the sampler's, else linear
+    // between stops and held past the ends), and the same drawn for the display.
     [[nodiscard]] KColor colorAt(double position) const;
     [[nodiscard]] QColor displayColorAt(double position) const;
 
@@ -137,6 +148,7 @@ class KGradientEditor final : public QWidget {
     [[nodiscard]] QColor displayed(const KColor& color) const;
 
     KColorConverter converter_;
+    ColorSampler sampler_;
     std::vector<Stop> stops_;
     std::vector<Stop> base_;
     std::size_t minimumStops_ = 2;

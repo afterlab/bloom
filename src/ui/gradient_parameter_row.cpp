@@ -11,6 +11,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
 #include <bloom/ui/kit/controls.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/gradient_editor.hpp>
 #include <bloom/ui/kit/tokens.hpp>
 #include <bloom/ui/kit/typography.hpp>
@@ -53,6 +54,20 @@ namespace {
 
 using document::GradientStopComponent;
 
+[[nodiscard]] QString labelText(const std::string_view label) {
+    return QString::fromUtf8(label.data(), static_cast<qsizetype>(label.size()));
+}
+
+// #546: the editor's bar in the gradient's own blend, through the document's definition.
+[[nodiscard]] kit::KColor sampleStops(const std::vector<kit::KGradientEditor::Stop>& stops,
+                                      const document::GradientModes modes, const double position) {
+    document::GradientValue value;
+    value.modes = modes;
+    for (const auto& stop : stops)
+        value.stops.push_back({stop.position, documentColor(stop.color)});
+    return referenceColor(document::gradientColorAt(value, position));
+}
+
 } // namespace
 
 GradientParameterRow::GradientParameterRow(CompositionSession& session,
@@ -90,6 +105,75 @@ GradientParameterRow::GradientParameterRow(CompositionSession& session,
     position_->setDecimals(1);
     position_->setSingleStep(1.0);
     position_->setUnit(QStringLiteral("%"));
+    // #546: how the colour blends between stops, as Blender's Color Ramp offers it.
+    const auto dropdown = [this, &prefix](const char* suffix, const QString& accessible,
+                                          const QString& tip) {
+        auto* box = new kit::KDropdown(this);
+        box->setObjectName(named(prefix, suffix));
+        box->setAccessibleName(accessible);
+        box->setControlSize(kit::KDropdown::ControlSize::Dense);
+        box->setToolTip(tip);
+        return box;
+    };
+    const auto rowLabel = [this, &prefix](const QString& name, const char* suffix,
+                                          const QString& tip) {
+        auto* label = new kit::KLabel(name, this, kit::TypeRole::UiSmall);
+        label->setObjectName(named(prefix, suffix));
+        label->setTone(kit::Color::Muted);
+        label->setToolTip(tip);
+        return label;
+    };
+    const auto modeTip = tr("How the colour blends between stops: RGB mixes red, green and blue; "
+                            "HSV and HSL turn the hue around the colour wheel.");
+    colorModeLabel_ = rowLabel(tr("Color mode"), "ColorModeLabel", modeTip);
+    colorMode_ = dropdown("ColorMode", tr("Color mode"), modeTip);
+    for (const auto mode : document::kGradientColorModes)
+        colorMode_->addItem(labelText(document::gradientColorModeLabel(mode)),
+                            static_cast<int>(mode));
+    colorMode_->setItemToolTip(0, tr("Mix red, green and blue"));
+    colorMode_->setItemToolTip(1, tr("Blend hue, saturation and value"));
+    colorMode_->setItemToolTip(2, tr("Blend hue, saturation and lightness"));
+    const auto interpolationTip = tr("How the colour moves from one stop to the next");
+    interpolationLabel_ = rowLabel(tr("Interpolation"), "InterpolationLabel", interpolationTip);
+    interpolation_ = dropdown("Interpolation", tr("Interpolation"), interpolationTip);
+    for (const auto mode : document::kGradientInterpolations)
+        interpolation_->addItem(labelText(document::gradientInterpolationLabel(mode)),
+                                static_cast<int>(mode));
+    interpolation_->setItemToolTip(0, tr("Hold each stop's colour up to the next stop"));
+    interpolation_->setItemToolTip(1, tr("Blend evenly from stop to stop"));
+    interpolation_->setItemToolTip(2, tr("Blend slowly out of and into each stop"));
+    interpolation_->setItemToolTip(3, tr("A smooth curve through every stop"));
+    interpolation_->setItemToolTip(4, tr("A smooth curve that passes near the stops"));
+    interpolation_->setItemToolTip(5, tr("Stay near each stop's colour, then turn quickly"));
+    hue_ = dropdown("Hue", tr("Hue direction"),
+                    tr("Which way the hue turns around the colour wheel between stops"));
+    for (const auto mode : document::kGradientHueDirections)
+        hue_->addItem(labelText(document::gradientHueDirectionLabel(mode)), static_cast<int>(mode));
+    hue_->setItemToolTip(0, tr("The shorter way around"));
+    hue_->setItemToolTip(1, tr("The longer way around"));
+    hue_->setItemToolTip(2, tr("Always towards yellow, green and blue (hue rising)"));
+    hue_->setItemToolTip(3, tr("Always towards magenta, blue and green (hue falling)"));
+    const auto chosen = [this](kit::KDropdown* box, auto apply) {
+        connect(box, &kit::KDropdown::activated, this, [this, box, apply](const int index) {
+            if (refreshing_)
+                return;
+            const auto current = value();
+            if (!current)
+                return;
+            auto modes = current->modes;
+            apply(modes, box->itemData(index).toInt());
+            writeModes(modes);
+        });
+    };
+    chosen(colorMode_, [](document::GradientModes& modes, const int value) {
+        modes.colorMode = static_cast<document::GradientColorMode>(value);
+    });
+    chosen(interpolation_, [](document::GradientModes& modes, const int value) {
+        modes.interpolation = static_cast<document::GradientInterpolation>(value);
+    });
+    chosen(hue_, [](document::GradientModes& modes, const int value) {
+        modes.hueDirection = static_cast<document::GradientHueDirection>(value);
+    });
     keyAction_ = new QAction(tr("Add Key"), this);
     keyAction_->setObjectName(named(prefix, "Key"));
     connect(keyAction_, &QAction::triggered, this, [this] {
@@ -280,6 +364,7 @@ void GradientParameterRow::writeStops(std::vector<kit::KGradientEditor::Stop> st
         std::ranges::stable_sort(order, {},
                                  [&](const std::size_t index) { return stops[index].position; });
     document::GradientValue value;
+    value.modes = base.modes;
     std::vector<std::optional<std::uint32_t>> newIndexOfOld(base.stops.size());
     for (std::size_t index = 0; index < order.size(); ++index) {
         const auto& stop = stops[order[index]];
@@ -291,10 +376,23 @@ void GradientParameterRow::writeStops(std::vector<kit::KGradientEditor::Stop> st
 }
 
 void GradientParameterRow::writeStored(document::GradientValue value,
-                                       std::vector<std::optional<std::uint32_t>> newIndexOfOld) {
+                                       std::vector<std::optional<std::uint32_t>> newIndexOfOld,
+                                       const QString& label) {
     if (const auto id = ensureParameter())
         static_cast<void>(session_.setGradientValue(*id, std::move(value), node_, spec_.role,
-                                                    std::move(newIndexOfOld), tr("Set Gradient")));
+                                                    std::move(newIndexOfOld),
+                                                    label.isEmpty() ? tr("Set Gradient") : label));
+}
+
+void GradientParameterRow::writeModes(const document::GradientModes modes) {
+    auto stored = value();
+    if (!stored || stored->modes == modes)
+        return;
+    stored->modes = modes;
+    std::vector<std::optional<std::uint32_t>> same(stored->stops.size());
+    for (std::uint32_t index = 0; index < same.size(); ++index)
+        same[index] = index;
+    writeStored(std::move(*stored), std::move(same), tr("Set Gradient Blend"));
 }
 
 void GradientParameterRow::setValuesShown(const bool shown) {
@@ -403,7 +501,8 @@ void GradientParameterRow::rebuildStopRows(const std::size_t stops) {
 }
 
 int GradientParameterRow::stopRowsTop() const {
-    return editor_->sizeHint().height() + small() + control() + small() + control();
+    // The bar, the Stop row, the Color mode and Interpolation (or Hue) rows, the Values button.
+    return editor_->sizeHint().height() + 4 * (small() + control());
 }
 
 void GradientParameterRow::setLabelWidth(const int width) {
@@ -415,6 +514,9 @@ int GradientParameterRow::labelWidthHint() const {
     const QFontMetrics metrics(label_->font());
     int widest = std::max(metrics.horizontalAdvance(label_->text()),
                           metrics.horizontalAdvance(stopLabel_->text()));
+    // The blend row's label reads Interpolation or Hue: room for either, so it never shifts.
+    for (const auto& text : {colorModeLabel_->text(), tr("Interpolation"), tr("Hue")})
+        widest = std::max(widest, metrics.horizontalAdvance(text));
     for (const auto& row : stopRows_)
         if (row.shown)
             widest = std::max(widest, metrics.horizontalAdvance(row.label->text()));
@@ -458,7 +560,16 @@ void GradientParameterRow::place() {
     const int chipHeight = std::min(control(), chip_->sizeHint().height());
     chip_->setGeometry(left, y + (control() - chipHeight) / 2, chipWidth, chipHeight);
     position_->setGeometry(left + chipWidth + small(), y, fieldWidth, control());
-    const int valuesY = y + control() + small();
+    // #546: the blend rows; the Hue dropdown takes the Interpolation one's place for HSV and HSL.
+    const int modeWidth = std::max(0, w - left - diamond);
+    const int modeY = y + control() + small();
+    colorModeLabel_->setGeometry(0, modeY, labelWidth, control());
+    colorMode_->setGeometry(left, modeY, modeWidth, control());
+    const int curveY = modeY + control() + small();
+    interpolationLabel_->setGeometry(0, curveY, labelWidth, control());
+    interpolation_->setGeometry(left, curveY, modeWidth, control());
+    hue_->setGeometry(left, curveY, modeWidth, control());
+    const int valuesY = curveY + control() + small();
     disclosure_->setGeometry(left, valuesY, std::max(disclosure_->sizeHint().width(), 0),
                              control());
     // #543: each shown stop row: its name, then its chip or field, or the link that drives it.
@@ -546,6 +657,29 @@ void GradientParameterRow::refresh(const bool locked) {
     const auto linked = [this](const std::uint32_t stop, const GradientStopComponent component) {
         return stopLink(stop, component).has_value();
     };
+    // #546: the blend pickers and the bar follow the gradient's modes.
+    const auto modes = gradient ? gradient->modes : document::GradientModes{};
+    {
+        refreshing_ = true;
+        const bool rgb = modes.colorMode == document::GradientColorMode::Rgb;
+        colorMode_->setCurrentIndex(colorMode_->findData(static_cast<int>(modes.colorMode)));
+        interpolation_->setCurrentIndex(
+            interpolation_->findData(static_cast<int>(modes.interpolation)));
+        hue_->setCurrentIndex(hue_->findData(static_cast<int>(modes.hueDirection)));
+        interpolationLabel_->setText(rgb ? tr("Interpolation") : tr("Hue"));
+        interpolationLabel_->setToolTip(rgb ? interpolation_->toolTip() : hue_->toolTip());
+        interpolation_->setVisible(rgb);
+        hue_->setVisible(!rgb);
+        for (auto* box : {colorMode_, interpolation_, hue_})
+            box->setEnabled(enabled);
+        refreshing_ = false;
+    }
+    editor_->setColorSampler(
+        modes.isLinearRgb()
+            ? kit::KGradientEditor::ColorSampler{}
+            : kit::KGradientEditor::ColorSampler(
+                  [modes](const std::vector<kit::KGradientEditor::Stop>& stops,
+                          const double position) { return sampleStops(stops, modes, position); }));
     if (gradient && !editor_->hasLiveEdit()) {
         projected_ = gradient;
         const auto shown = shownValue().value_or(*gradient);

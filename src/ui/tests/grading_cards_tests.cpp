@@ -40,6 +40,7 @@
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/color_chip.hpp>
+#include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/gradient_editor.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
 #include <bloom/ui/kit/range_selector.hpp>
@@ -826,6 +827,160 @@ void nodeControlCards() {
     }
 }
 
+// #546: the gradient's blend pickers on the card and in Properties. Choosing a colour mode, a hue
+// direction or an interpolation is one command each and is stored on the gradient; HSV and HSL
+// swap the Interpolation dropdown for the Hue one; the bar draws the chosen blend (Constant holds
+// the first stop's colour up to the second); one undo restores the previous blend.
+void gradientBlendModes() {
+    CardFixture fixture(document::kLinearGradientNodeType);
+    auto* card = fixture.item
+                     ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                     : nullptr;
+    if (card == nullptr || card->gradientRows().size() != 1)
+        return expect(false, "the Linear Gradient card draws its gradient row");
+    const auto refreshRow = [&] {
+        QApplication::processEvents();
+        fixture.item = ui::node_editor::nodeItemAncestor(
+            fixture.editor->graphScene()->findNodeItem(fixture.node));
+        card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(fixture.item->cardWidget())
+                            : nullptr;
+        return card != nullptr && card->gradientRows().size() == 1 ? card->gradientRows().front()
+                                                                   : nullptr;
+    };
+    // Three saturated stops, so each blend draws a visibly different bar.
+    const std::vector<document::GradientStop> colourful{{0.0, core::Color4d{1.0, 0.1, 0.0, 1.0}},
+                                                        {0.35, core::Color4d{0.1, 0.8, 0.1, 1.0}},
+                                                        {1.0, core::Color4d{0.1, 0.2, 1.0, 1.0}}};
+    {
+        const auto gradient = ui::nodeRoleParameter(fixture.session, fixture.node, "gradient");
+        commands::Transaction transaction("Stops", fixture.session.snapshot().revision());
+        transaction.emplace<commands::SetParameterSource>(
+            fixture.session.compositionId(), gradient.value_or(document::ParameterId{}),
+            document::ConstantValueSource{document::GradientValue{colourful}});
+        expect(gradient &&
+                   fixture.session.executeNodeTransaction(std::move(transaction)).succeeded(),
+               "the gradient takes three stops");
+    }
+    auto* row = refreshRow();
+    if (row == nullptr)
+        return expect(false, "the gradient row draws");
+    expect(row->colorModeDropdown()->isVisible() && row->interpolationDropdown()->isVisible() &&
+               !row->hueDropdown()->isVisible() &&
+               row->colorModeDropdown()->currentText() == QStringLiteral("RGB") &&
+               row->interpolationDropdown()->currentText() == QStringLiteral("Linear") &&
+               row->interpolationDropdown()->count() == 6 &&
+               row->colorModeDropdown()->count() == 3 && row->hueDropdown()->count() == 4,
+           "a new gradient shows RGB and Linear, with every mode offered");
+    expect(!row->editor()->hasColorSampler(), "Linear RGB draws the bar as a linear blend");
+    expect(cardContentFits(*fixture.item, "linear-gradient blend"), "the blend rows fit the card");
+    capture(fixture, QStringLiteral("gradient-blend-linear"));
+
+    const auto choose = [&](ui::kit::KDropdown* box, const QString& item) {
+        for (int index = 0; index < box->count(); ++index)
+            if (box->itemText(index) == item) {
+                box->chooseIndex(index);
+                return true;
+            }
+        return false;
+    };
+    auto commands = fixture.stack.size();
+    expect(choose(row->interpolationDropdown(), QStringLiteral("Constant")), "Constant is offered");
+    auto stored = storedGradient(fixture.session, fixture.node);
+    expect(stored && stored->modes.interpolation == document::GradientInterpolation::Constant &&
+               stored->stops == colourful && fixture.stack.size() == commands + 1,
+           "choosing Constant stores it on the gradient as one command");
+    row = refreshRow();
+    if (row == nullptr)
+        return expect(false, "the gradient row draws after the edit");
+    const auto held = row->editor()->colorAt(0.75);
+    expect(row->editor()->hasColorSampler() && held.red == 0.1F && held.green == 0.8F &&
+               held.blue == 0.1F,
+           "the bar draws Constant: the green stop holds up to the blue one");
+    capture(fixture, QStringLiteral("gradient-blend-constant"));
+    for (const auto* name : {"Ease", "Cardinal", "B-Spline", "Exponential"}) {
+        expect(choose(row->interpolationDropdown(), QString::fromLatin1(name)),
+               (std::string(name) + " is offered").c_str());
+        row = refreshRow();
+        if (row == nullptr)
+            return expect(false, "the gradient row draws after the edit");
+        capture(fixture, QStringLiteral("gradient-blend-") + QString::fromLatin1(name).toLower());
+    }
+    stored = storedGradient(fixture.session, fixture.node);
+    expect(stored && stored->modes.interpolation == document::GradientInterpolation::Exponential,
+           "each interpolation is stored as chosen");
+
+    commands = fixture.stack.size();
+    expect(choose(row->colorModeDropdown(), QStringLiteral("HSV")), "HSV is offered");
+    row = refreshRow();
+    if (row == nullptr)
+        return expect(false, "the gradient row draws after the edit");
+    stored = storedGradient(fixture.session, fixture.node);
+    expect(stored && stored->modes.colorMode == document::GradientColorMode::Hsv &&
+               stored->modes.interpolation == document::GradientInterpolation::Exponential &&
+               fixture.stack.size() == commands + 1,
+           "choosing HSV is one command and keeps the interpolation for RGB");
+    expect(row->hueDropdown()->isVisible() && !row->interpolationDropdown()->isVisible() &&
+               row->hueDropdown()->currentText() == QStringLiteral("Near"),
+           "HSV shows the Hue dropdown in the Interpolation one's place");
+    capture(fixture, QStringLiteral("gradient-blend-hsv-near"));
+    expect(choose(row->hueDropdown(), QStringLiteral("Counter-clockwise")),
+           "Counter-clockwise is offered");
+    stored = storedGradient(fixture.session, fixture.node);
+    expect(stored && stored->modes.hueDirection == document::GradientHueDirection::CounterClockwise,
+           "the hue direction is stored");
+    row = refreshRow();
+    if (row == nullptr)
+        return expect(false, "the gradient row draws after the edit");
+    capture(fixture, QStringLiteral("gradient-blend-hsv-counter-clockwise"));
+    for (const auto* name : {"Far", "Clockwise"}) {
+        expect(choose(row->hueDropdown(), QString::fromLatin1(name)),
+               (std::string(name) + " is offered").c_str());
+        row = refreshRow();
+        if (row == nullptr)
+            return expect(false, "the gradient row draws after the edit");
+        capture(fixture,
+                QStringLiteral("gradient-blend-hsv-") + QString::fromLatin1(name).toLower());
+    }
+    expect(choose(row->hueDropdown(), QStringLiteral("Counter-clockwise")),
+           "Counter-clockwise is offered again");
+    row = refreshRow();
+    if (row == nullptr)
+        return expect(false, "the gradient row draws after the edit");
+    expect(choose(row->colorModeDropdown(), QStringLiteral("HSL")), "HSL is offered");
+    row = refreshRow();
+    if (row == nullptr)
+        return expect(false, "the gradient row draws after the edit");
+    capture(fixture, QStringLiteral("gradient-blend-hsl-counter-clockwise"));
+
+    QWidget panel;
+    auto* properties = new ui::PropertiesEditor(fixture.session, &panel);
+    properties->setGeometry(0, 0, 420, 900);
+    panel.resize(420, 900);
+    panel.show();
+    fixture.session.selectNode(fixture.node);
+    QApplication::processEvents();
+    const ui::GradientParameterRow* inProperties = nullptr;
+    for (auto* candidate : properties->findChildren<ui::GradientParameterRow*>())
+        inProperties = candidate;
+    expect(inProperties && inProperties->colorModeDropdown()->currentText() == "HSL" &&
+               inProperties->hueDropdown()->currentText() == "Counter-clockwise" &&
+               inProperties->hueDropdown()->isVisibleTo(properties),
+           "Properties shows the same blend");
+    if (const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
+        !directory.isEmpty())
+        properties->grab().save(directory + QStringLiteral("/gradient-blend-properties.png"));
+
+    expect(fixture.session.undo(), "undo runs");
+    stored = storedGradient(fixture.session, fixture.node);
+    expect(stored && stored->modes.colorMode == document::GradientColorMode::Hsv,
+           "one undo restores the previous colour mode");
+    row = refreshRow();
+    expect(row != nullptr && row->reset() &&
+               storedGradient(fixture.session, fixture.node) ==
+                   document::defaultGeneratorGradient(),
+           "resetting the gradient restores Linear in RGB");
+}
+
 // #543: a Colour node linked to a gradient's second stop colour. The card draws a socket per stop
 // colour and position with the link's wire, the stop's Values row reads "Linked to <node>", the
 // stop's handle shows the driven colour and is marked linked, and the Stop row's chip is disabled.
@@ -1022,6 +1177,7 @@ int main(int argc, char** argv) {
     vignetteCard();
     nodeControlCards();
     linkedGradientStop();
+    gradientBlendModes();
     if (failures != 0)
         return 1;
     std::cout << "PASS: grading cards\n";

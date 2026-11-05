@@ -92,9 +92,16 @@ void KGradientEditor::setSelectedStop(const std::optional<std::size_t> index) {
     Q_EMIT selectedStopChanged();
 }
 
+void KGradientEditor::setColorSampler(ColorSampler sampler) {
+    sampler_ = std::move(sampler);
+    update();
+}
+
 KColor KGradientEditor::colorAt(const double position) const {
     if (stops_.empty())
         return KColor::fromRgba(0.0F, 0.0F, 0.0F, 1.0F, ColorSpace::Reference);
+    if (sampler_)
+        return sampler_(stops_, position);
     if (position <= stops_.front().position)
         return stops_.front().color;
     for (std::size_t index = 1; index < stops_.size(); ++index) {
@@ -681,17 +688,33 @@ void KGradientEditor::paintEvent(QPaintEvent*) {
     painter.setOpacity(state == State::Disabled ? kDisabledOpacity : 1.0);
     // Partial alpha reads against the checkerboard, as on a colour chip.
     drawAlphaCheckerboard(painter, bar, kCheckerCell, Radius::Small);
-    QLinearGradient gradient(bar.topLeft(), bar.topRight());
-    for (int sample = 0; sample <= kGradientSamples; ++sample) {
-        const double t = static_cast<double>(sample) / kGradientSamples;
-        gradient.setColorAt(t, displayColorAt(t));
-    }
-    for (const auto& stop : stops_)
-        gradient.setColorAt(stop.position, displayed(stop.color));
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(gradient);
     const auto radius = static_cast<qreal>(Radius::Small);
-    painter.drawRoundedRect(bar, radius, radius);
+    painter.setPen(Qt::NoPen);
+    if (sampler_) {
+        // #546: one column per device-independent pixel, each the colour at its centre.
+        QPainterPath shape;
+        shape.addRoundedRect(bar, radius, radius);
+        painter.save();
+        painter.setClipPath(shape);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        const int columns = std::max(1, static_cast<int>(std::ceil(bar.width())));
+        for (int column = 0; column < columns; ++column) {
+            const double t = columns == 1 ? 0.0 : (column + 0.5) / static_cast<double>(columns);
+            painter.fillRect(QRectF(bar.left() + column, bar.top(), 1.0, bar.height()),
+                             displayColorAt(t));
+        }
+        painter.restore();
+    } else {
+        QLinearGradient gradient(bar.topLeft(), bar.topRight());
+        for (int sample = 0; sample <= kGradientSamples; ++sample) {
+            const double t = static_cast<double>(sample) / kGradientSamples;
+            gradient.setColorAt(t, displayColorAt(t));
+        }
+        for (const auto& stop : stops_)
+            gradient.setColorAt(stop.position, displayed(stop.color));
+        painter.setBrush(gradient);
+        painter.drawRoundedRect(bar, radius, radius);
+    }
     painter.setBrush(Qt::NoBrush);
     applyHairlinePen(painter, color(borderForState(state)));
     painter.drawRoundedRect(bar, radius, radius);
