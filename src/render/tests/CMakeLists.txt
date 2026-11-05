@@ -397,7 +397,7 @@ target_include_directories(bloom_render_gpu_blend_kernel_test
 target_compile_definitions(bloom_render_gpu_blend_kernel_test
     PRIVATE
         "BLOOM_BLEND_SPV_SHA256=\"4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8\""
-        "BLOOM_BLEND_F64_SPV_SHA256=\"8db5b5ec94430a70c70d7fea42cd1da49cd327e8ece61cd475df44e0779740ff\""
+        "BLOOM_BLEND_F64_SPV_SHA256=\"f6617711858e94dea6a7f35c7d876ffd3e524b044c8558c652866b5bdd7e0018\""
         "BLOOM_BLEND_PORTABLE_SPV_SHA256=\"554a64a5170e2bc806f4c910188397f7c599b59a789480fb78ce81e281047823\"")
 bloom_enable_warnings(bloom_render_gpu_blend_kernel_test)
 bloom_enable_strict_floating_point(bloom_render_gpu_blend_kernel_test)
@@ -428,7 +428,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     target_compile_definitions(bloom_render_gpu_blend_test
         PRIVATE
             "BLOOM_BLEND_SPV_SHA256=\"4b9cc2009f9a1fcbdc05558bbbbb9e9aeb7573a4fc88a8127e25e22bc6c208f8\""
-            "BLOOM_BLEND_F64_SPV_SHA256=\"8db5b5ec94430a70c70d7fea42cd1da49cd327e8ece61cd475df44e0779740ff\""
+            "BLOOM_BLEND_F64_SPV_SHA256=\"f6617711858e94dea6a7f35c7d876ffd3e524b044c8558c652866b5bdd7e0018\""
             "BLOOM_BLEND_PORTABLE_SPV_SHA256=\"554a64a5170e2bc806f4c910188397f7c599b59a789480fb78ce81e281047823\""
             BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
     bloom_enable_warnings(bloom_render_gpu_blend_test)

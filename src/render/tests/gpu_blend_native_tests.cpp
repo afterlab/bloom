@@ -344,25 +344,25 @@ void testForeignInputs(Expectations& expectations, GpuDevice& device) {
     return pixels;
 }
 
-// Real-device dense HDR/cancellation parity for all eight modes against the Float64 CPU oracle,
-// strictly within the 2e-6 absolute-or-relative gate per component.
-void testDenseHdr(Expectations& expectations, GpuDevice& device) {
+// Every mode over one source/destination field against the Float64 CPU oracle, strictly within
+// the 2e-6 absolute-or-relative gate per component; with `exactAlpha`, alpha must also be
+// bit-identical.
+void runFieldModes(Expectations& expectations, GpuDevice& device, const std::uint32_t width,
+                   const std::uint32_t height, const std::vector<Rgba32f>& sourcePixels,
+                   const std::vector<Rgba32f>& destPixels, const std::string& prefix,
+                   const bool exactAlpha) {
     auto blend = GpuBlend::create(device);
     auto uploader = GpuImageUpload::create(device);
     if (!blend || !uploader) {
-        expectations.expect(false, "dense HDR hosts created");
+        expectations.expect(false, prefix + " hosts created");
         return;
     }
-    constexpr std::uint32_t kWidth = 257;
-    constexpr std::uint32_t kHeight = 3;
-    const auto sourceWindow = window(0, 0, kWidth, kHeight);
-    const auto sourcePixels = denseField(kWidth, kHeight, true);
-    const auto destPixels = denseField(kWidth, kHeight, false);
+    const auto sourceWindow = window(0, 0, width, height);
     auto sourceImage =
         makeImage(sourceWindow, sourceWindow, PixelAspectRatio::square(), sourcePixels);
     auto destImage = makeImage(sourceWindow, sourceWindow, PixelAspectRatio::square(), destPixels);
     if (!sourceImage || !destImage) {
-        expectations.expect(false, "dense HDR images build");
+        expectations.expect(false, prefix + " images build");
         return;
     }
     auto sourceResident =
@@ -370,14 +370,14 @@ void testDenseHdr(Expectations& expectations, GpuDevice& device) {
     auto destResident =
         upload(*uploader.upload, std::make_shared<const Rgba32fImage>(std::move(*destImage)));
     if (!sourceResident || !destResident) {
-        expectations.expect(false, "dense HDR images upload");
+        expectations.expect(false, prefix + " images upload");
         return;
     }
     auto source = std::make_shared<const GpuImage>(std::move(*sourceResident));
     auto destination = std::make_shared<const GpuImage>(std::move(*destResident));
     for (const auto mode : bloom::core::kBlendModes) {
         const auto value = static_cast<int>(bloom::core::blendModeStoredValue(mode));
-        const auto label = "dense-hdr-mode-" + std::to_string(value);
+        const auto label = prefix + "-mode-" + std::to_string(value);
         const auto begin = blend.blend->beginBlend({source, destination, mode}, kBudget);
         expectations.expect(begin.code == GpuBlendDiagnosticCode::None,
                             label + ": begin accepted: " + begin.message);
@@ -395,13 +395,13 @@ void testDenseHdr(Expectations& expectations, GpuDevice& device) {
         }
         auto result = blend.blend->takeImage();
         std::vector<Rgba32f> expected(destPixels);
-        for (std::uint32_t y = 0; y < kHeight; ++y) {
+        for (std::uint32_t y = 0; y < height; ++y) {
             auto row =
-                std::span<Rgba32f>(expected).subspan(static_cast<std::size_t>(y) * kWidth, kWidth);
+                std::span<Rgba32f>(expected).subspan(static_cast<std::size_t>(y) * width, width);
             const auto status = bloom::render::blendLinearRec709SceneRow(
                 mode,
                 std::span<const Rgba32f>(sourcePixels)
-                    .subspan(static_cast<std::size_t>(y) * kWidth, kWidth),
+                    .subspan(static_cast<std::size_t>(y) * width, width),
                 row);
             expectations.expect(!status.has_value(), label + ": oracle row succeeds");
         }
@@ -409,8 +409,48 @@ void testDenseHdr(Expectations& expectations, GpuDevice& device) {
         expectations.expect(readback.hasValue(), label + ": readback succeeds");
         if (readback) {
             static_cast<void>(pixelsMatch(readback.pixels, expected, expectations, label));
+            if (exactAlpha) {
+                std::size_t alphaMismatches = 0;
+                for (std::size_t index = 0; index < expected.size(); ++index)
+                    if (readback.pixels[index].alpha() != expected[index].alpha())
+                        ++alphaMismatches;
+                expectations.expect(alphaMismatches == 0, label + ": alpha is bit-exact (" +
+                                                              std::to_string(alphaMismatches) +
+                                                              " mismatches)");
+            }
         }
     }
+}
+
+// Real-device dense HDR/cancellation parity for all modes.
+void testDenseHdr(Expectations& expectations, GpuDevice& device) {
+    constexpr std::uint32_t kWidth = 257;
+    constexpr std::uint32_t kHeight = 3;
+    runFieldModes(expectations, device, kWidth, kHeight, denseField(kWidth, kHeight, true),
+                  denseField(kWidth, kHeight, false), "dense-hdr", false);
+}
+
+// #545: source-over alpha, fma(1 - as, ab, as), rounds 1 - as to Float32 first on the CPU. A tiny,
+// non-dyadic source alpha (a glow's faint fringe) over a partial backdrop is where a Float64
+// 1 - as lands an ULP away, so every mode must reproduce the CPU alpha bit for bit.
+void testSourceOverAlphaRounding(Expectations& expectations, GpuDevice& device) {
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 2;
+    std::vector<Rgba32f> source;
+    std::vector<Rgba32f> destination;
+    for (std::uint32_t index = 0; index < kWidth * kHeight; ++index) {
+        const auto step = static_cast<float>(index);
+        const float sourceAlpha =
+            8.9e-8F * (1.0F + 0.37F * step) * (index % 3U == 0U ? 1.0F : 9.0F);
+        const float destAlpha = 0.0156F + 0.00381F * step;
+        const float straight = 0.25F + 0.031F * step;
+        source.push_back(
+            pixel(straight * sourceAlpha, 0.5F * sourceAlpha, 2.5F * sourceAlpha, sourceAlpha));
+        destination.push_back(
+            pixel(0.75F * destAlpha, straight * destAlpha, 0.125F * destAlpha, destAlpha));
+    }
+    runFieldModes(expectations, device, kWidth, kHeight, source, destination, "tiny-source-alpha",
+                  true);
 }
 
 // One origin case with int64-safe CPU alignment. For every destination pixel the source-local
@@ -620,6 +660,7 @@ int main(int argc, char** argv) {
         expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
         testAllModes(expectations, *device.device);
         testDenseHdr(expectations, *device.device);
+        testSourceOverAlphaRounding(expectations, *device.device);
         testExtremeOrigins(expectations, *device.device);
         testChainedBlend(expectations, *device.device);
         testRejections(expectations, *device.device);

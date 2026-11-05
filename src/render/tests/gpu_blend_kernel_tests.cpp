@@ -23,7 +23,7 @@
 #endif
 #ifndef BLOOM_BLEND_F64_SPV_SHA256
 #define BLOOM_BLEND_F64_SPV_SHA256                                                                 \
-    "8db5b5ec94430a70c70d7fea42cd1da49cd327e8ece61cd475df44e0779740ff"
+    "f6617711858e94dea6a7f35c7d876ffd3e524b044c8558c652866b5bdd7e0018"
 #endif
 #ifndef BLOOM_BLEND_PORTABLE_SPV_SHA256
 #define BLOOM_BLEND_PORTABLE_SPV_SHA256                                                            \

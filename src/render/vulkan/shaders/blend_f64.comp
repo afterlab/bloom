@@ -137,10 +137,13 @@ void main()
 
     double as = double(source.a);
     double ab = double(backdrop.a);
-    double inverseSourceAlpha = 1.0 - as;
     dvec3 straightSource = dvec3(source.rgb) / as;
     dvec3 straightBackdrop = dvec3(backdrop.rgb) / ab;
-    vec4 composited = vec4(0.0, 0.0, 0.0, float(fma(inverseSourceAlpha, ab, as)));
+    // Alpha is source-over with the CPU's exact Float32 expression, fma(1 - as, ab, as) with
+    // 1 - as rounded to Float32 first (#545). A Float64 1 - as is not rounded and lands an ULP
+    // away when the source alpha is tiny.
+    precise float inverseSourceAlpha = 1.0 - source.a;
+    vec4 composited = vec4(0.0, 0.0, 0.0, fma(inverseSourceAlpha, backdrop.a, source.a));
     for (int channel = 0; channel < 3; ++channel) {
         double blended = bloom_separable_blend(bloom_blend_push.mode,
                                                straightBackdrop[channel], straightSource[channel]);
