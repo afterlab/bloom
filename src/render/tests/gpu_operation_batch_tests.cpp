@@ -76,8 +76,7 @@ void run(GpuDevice& device) {
     const auto gradientWindow = *madeGradientWindow.value();
     GpuBatchGradient gradient{gradientWindow, gradientWindow,
                               bloom::core::PixelAspectRatio::square()};
-    gradient.first = {-1.0F, 0.0F, 2.0F, 1.0F};
-    gradient.second = {3.0F, 0.0F, -2.0F, 0.0F};
+    gradient.stops = {{0.0F, 1.0F, {-1.0F, 0.0F, 2.0F, 1.0F}}, {1.0F, 0.0F, {3.0F, 0.0F, -2.0F, 0.0F}}};
     gradient.endpoints = {0.0F, 0.0F, 4.0F, 0.0F};
     gradient.exactWidth = 4.0F;
     gradient.exactHeight = 1.0F;
@@ -102,6 +101,37 @@ void run(GpuDevice& device) {
     }
     gradientImages.clear();
     device.reclaimReleasedImages();
+    // A multi-stop table: each pixel interpolates between the stops on either side of it.
+    gradient.stops = {{0.0F, 2.0F, {0.0F, 0.0F, 0.0F, 1.0F}},
+                      {0.5F, 2.0F, {4.0F, 0.0F, 0.0F, 1.0F}},
+                      {1.0F, 0.0F, {0.0F, 0.0F, 0.0F, 1.0F}}};
+    const std::array<GpuBatchOperation, 1> stopOps{gradient};
+    require(batch->begin(stopOps, capacity).code == GpuOperationBatchCode::None &&
+                complete(*batch) == GpuOperationBatchState::Ready,
+            "native multi-stop gradient submits and retires");
+    auto stopImages = batch->takeImages();
+    require(stopImages.size() == 1, "multi-stop gradient retains one native image");
+    if (stopImages.size() == 1) {
+        const auto stopReadback = readbackResidentImage(stopImages.front(), capacity);
+        const std::array expected{1.0F, 3.0F, 3.0F, 1.0F};
+        bool matches = stopReadback.code == GpuImageReadbackCode::None &&
+                       stopReadback.pixels.size() == expected.size();
+        for (std::size_t at = 0; matches && at < expected.size(); ++at)
+            matches = std::fabs(stopReadback.pixels[at].red() - expected[at]) < 0.0002F &&
+                      stopReadback.pixels[at].alpha() == 1.0F;
+        require(matches, "native gradient samples the stop on either side of each pixel");
+    }
+    stopImages.clear();
+    device.reclaimReleasedImages();
+    // An unsorted or empty stop table is refused before any backing is allocated.
+    gradient.stops = {{0.5F, 0.0F, {0.0F, 0.0F, 0.0F, 1.0F}}, {0.25F, 0.0F, {1.0F, 1.0F, 1.0F, 1.0F}}};
+    const std::array<GpuBatchOperation, 1> unsortedOps{gradient};
+    require(batch->begin(unsortedOps, capacity).code == GpuOperationBatchCode::Unsupported,
+            "an unsorted stop table is refused");
+    gradient.stops.clear();
+    const std::array<GpuBatchOperation, 1> emptyOps{gradient};
+    require(batch->begin(emptyOps, capacity).code == GpuOperationBatchCode::Unsupported,
+            "an empty stop table is refused");
     const auto before = root.snapshot();
     const auto baseline = device.allocatorMemorySnapshot();
     {

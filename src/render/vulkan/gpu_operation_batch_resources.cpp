@@ -35,7 +35,7 @@ bool State::initialize() {
         return false;
     }
     constexpr bool solidBindings[] = {true};
-    constexpr bool gradientBindings[] = {true};
+    constexpr bool gradientBindings[] = {true, false};
     constexpr bool translationBindings[] = {true, true, false, false, false};
     constexpr bool affineBindings[] = {true, true, false, false};
     constexpr bool overBindings[] = {true, true, true, false};
@@ -53,7 +53,7 @@ bool State::initialize() {
                                  vulkan_detail::kSourceOverSpirvByteCount, overBindings, 4, 24,
                                  reason, pipelines[3]) ||
         !createCompositePipeline(*control, vulkan_detail::kGradientSpirvCode,
-                                 vulkan_detail::kGradientSpirvByteCount, gradientBindings, 1, 96,
+                                 vulkan_detail::kGradientSpirvByteCount, gradientBindings, 2, 80,
                                  reason, pipelines[4]))
         return false;
     const VkDevice device = static_cast<VkDevice>(*control->device);
@@ -126,10 +126,10 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
             display = gradient->displayWindow;
             aspect = gradient->pixelAspect;
             struct alignas(16) GradientPush final {
-                std::array<float, 4> first, second, endpoints, transform, extent;
-                std::array<std::int32_t, 4> flags;
+                std::array<float, 4> endpoints, transform, extent;
+                std::array<std::int32_t, 4> flags, table;
             };
-            static_assert(sizeof(GradientPush) == 96);
+            static_assert(sizeof(GradientPush) == 80);
             constexpr float arithmeticLimit = std::numeric_limits<float>::max() / 2.0F;
             const auto finiteArray = [](const auto& values) {
                 return std::ranges::all_of(values, [](const float v) {
@@ -194,13 +194,27 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                         (gradient->radial ? std::sqrt(offset2 / span2) : projection / span2) <=
                             limit);
             };
-            if (!finiteArray(gradient->first) || !finiteArray(gradient->second) ||
+            // The stop table: sorted positions in [0, 1], finite spans and colours, alpha in [0, 1].
+            const auto stopsValid = [&] {
+                const auto& stops = gradient->stops;
+                if (stops.empty() || stops.size() > kGpuBatchGradientMaximumStops)
+                    return false;
+                for (std::size_t stop = 0; stop < stops.size(); ++stop) {
+                    const auto& value = stops[stop];
+                    if (!std::isfinite(value.position) || value.position < 0 ||
+                        value.position > 1 || !std::isfinite(value.inverseSpan) ||
+                        value.inverseSpan < 0 || !finiteArray(value.color) ||
+                        value.color[3] < 0 || value.color[3] > 1 ||
+                        (stop > 0 && value.position < stops[stop - 1].position))
+                        return false;
+                }
+                return true;
+            };
+            if (!stopsValid() ||
                 (!gradient->normalizedCoordinates &&
                  !std::ranges::all_of(gradient->endpoints, [](const float value) {
                     return std::isfinite(value);
                 })) ||
-                gradient->first[3] < 0 || gradient->first[3] > 1 ||
-                gradient->second[3] < 0 || gradient->second[3] > 1 ||
                 !std::isfinite(gradient->inverseHorizontalScale) ||
                 !std::isfinite(gradient->inverseVerticalScale) ||
                 gradient->inverseHorizontalScale <= 0 ||
@@ -221,13 +235,20 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 std::copy_n(gradient->normalizedCoordinates->begin(), 4, endpoints.begin());
                 std::copy_n(gradient->normalizedCoordinates->begin() + 4, 4, transform.begin());
             }
-            pack(job, GradientPush{gradient->first, gradient->second, endpoints, transform,
+            pack(job, GradientPush{endpoints, transform,
                                    {static_cast<float>(window->extent().width()),
                                     static_cast<float>(window->extent().height()),
                                     gradient->exactWidth, gradient->exactHeight},
                                    {gradient->normalizedCoordinates ? (gradient->radial ? 3 : 2)
                                                                     : (gradient->radial ? 1 : 0),
-                                    0, 0, static_cast<std::int32_t>(gradient->repeat)}});
+                                    0, 0, static_cast<std::int32_t>(gradient->repeat)},
+                                   {static_cast<std::int32_t>(gradient->stops.size()), 0, 0, 0}});
+            requestedMetadata = gradient->stops.size() * 8 * sizeof(float);
+            if (requestedMetadata > budgets.maxMetadataBytes) {
+                fail(GpuOperationBatchCode::OverBudget,
+                     "batch metadata exceeds the operation ceiling");
+                return false;
+            }
 
         } else {
             const GpuBatchImageRef* source = nullptr;
@@ -364,6 +385,17 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 !buffer(1, axisY.size() * sizeof(GpuAxisSample), false, axisY.data())) {
                 fail(GpuOperationBatchCode::AllocationFailed,
                      "batch translation metadata was refused");
+                return false;
+            }
+        } else if (const auto* gradient = std::get_if<GpuBatchGradient>(&operations[index])) {
+            std::vector<float> table;
+            table.reserve(gradient->stops.size() * 8);
+            for (const auto& stop : gradient->stops) {
+                table.insert(table.end(), {stop.position, stop.inverseSpan, 0.0F, 0.0F});
+                table.insert(table.end(), stop.color.begin(), stop.color.end());
+            }
+            if (!buffer(0, table.size() * sizeof(float), false, table.data())) {
+                fail(GpuOperationBatchCode::AllocationFailed, "batch gradient stops were refused");
                 return false;
             }
         } else if (const auto* affine = std::get_if<GpuBatchAffine>(&operations[index])) {

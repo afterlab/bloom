@@ -93,14 +93,12 @@ template <typename Emit, typename Charge>
             return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                         "Gradient endpoints are not evaluable");
         gpuGradient.emplace(render::GpuBatchGradient{solidWindow, solidDisplay, solidAspect});
-        gpuGradient->first = {static_cast<float>(color->value.red),
-                              static_cast<float>(color->value.green),
-                              static_cast<float>(color->value.blue),
-                              static_cast<float>(color->value.alpha)};
-        gpuGradient->second = {static_cast<float>(endColor->value.red),
-                               static_cast<float>(endColor->value.green),
-                               static_cast<float>(endColor->value.blue),
-                               static_cast<float>(endColor->value.alpha)};
+        const auto straight = [](const core::Color4d& value) {
+            return std::array{static_cast<float>(value.red), static_cast<float>(value.green),
+                              static_cast<float>(value.blue), static_cast<float>(value.alpha)};
+        };
+        gpuGradient->stops = {{0.0F, 1.0F, straight(color->value)},
+                              {1.0F, 0.0F, straight(endColor->value)}};
         gpuGradient->endpoints = {static_cast<float>(start->value.x),
                                   static_cast<float>(start->value.y),
                                   static_cast<float>(end->value.x),
@@ -110,7 +108,9 @@ template <typename Emit, typename Charge>
                 return std::isfinite(value);
             });
         };
-        if (!finiteColor(gpuGradient->first) || !finiteColor(gpuGradient->second))
+        if (!std::ranges::all_of(gpuGradient->stops, [&](const auto& stop) {
+                return finiteColor(stop.color);
+            }))
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedRequest,
                         "Gradient straight colours exceed native Float32 representation");
         const double aspect = static_cast<double>(solidAspect.numerator()) /
@@ -169,10 +169,13 @@ template <typename Emit, typename Charge>
     addWindowToKey(key, solidDisplay);
     addPixelAspectToKey(key, solidAspect);
     if (gpuGradient) {
-        for (const auto component : gpuGradient->first)
-            key.add(std::bit_cast<std::uint32_t>(component));
-        for (const auto component : gpuGradient->second)
-            key.add(std::bit_cast<std::uint32_t>(component));
+        key.add(gpuGradient->stops.size());
+        for (const auto& stop : gpuGradient->stops) {
+            key.add(std::bit_cast<std::uint32_t>(stop.position));
+            key.add(std::bit_cast<std::uint32_t>(stop.inverseSpan));
+            for (const auto component : stop.color)
+                key.add(std::bit_cast<std::uint32_t>(component));
+        }
         for (const auto component : gpuGradient->endpoints)
             key.add(std::bit_cast<std::uint32_t>(component));
         key.add(std::bit_cast<std::uint32_t>(gpuGradient->inverseHorizontalScale));

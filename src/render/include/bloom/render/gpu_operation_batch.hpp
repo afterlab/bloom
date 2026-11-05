@@ -28,14 +28,22 @@ struct GpuBatchImageRef final {
 struct GpuBatchSolid final {
     GpuSolidParameters parameters;
 };
+// One stop of a gradient's table: its position along the gradient, the reciprocal of the span to
+// the next stop (0 for the last stop and for a hard edge), and its straight scene-linear RGBA.
+struct GpuBatchGradientStop final {
+    float position = 0.0F;
+    float inverseSpan = 0.0F;
+    std::array<float, 4> color{};
+};
+inline constexpr std::size_t kGpuBatchGradientMaximumStops = 64;
 struct GpuBatchGradient final {
     GpuBatchGradient(ImageWindow data, ImageWindow display, core::PixelAspectRatio aspect)
         : dataWindow(data), displayWindow(display), pixelAspect(aspect) {}
     ImageWindow dataWindow;
     ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
-    std::array<float, 4> first{}; // straight scene-linear RGBA
-    std::array<float, 4> second{};
+    // One to kGpuBatchGradientMaximumStops stops sorted by position, each in [0, 1].
+    std::vector<GpuBatchGradientStop> stops;
     std::array<float, 4> endpoints{}; // startX, startY, endX, endY in author pixels
     float inverseHorizontalScale = 1.0F;
     float inverseVerticalScale = 1.0F;

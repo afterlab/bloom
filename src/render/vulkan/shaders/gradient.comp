@@ -1,14 +1,18 @@
 #version 460
-// Linear/Radial Gradient v1. Inputs are straight scene-linear; output is premultiplied RGBA32F.
+// Linear/Radial Gradient v1. Stops are straight scene-linear; output is premultiplied RGBA32F.
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D bloom_gradient_output;
+// The stop table, sorted by position: stop i is values[2i] = (position, 1 / (next position -
+// position) or 0 for the last stop and a hard edge, 0, 0) and values[2i + 1] = its straight RGBA.
+layout(set = 0, binding = 1, std430) readonly buffer BloomGradientStops {
+    vec4 values[];
+} bloom_gradient_stops;
 layout(push_constant) uniform BloomGradientPush {
-    vec4 first;
-    vec4 second;
     vec4 endpoints; // start.xy, end.xy in full-resolution author pixels
     vec4 transform; // inverse horizontal/vertical scale, pixel aspect, repeat mode
     vec4 extent; // output width/height, exact fractional source width/height
     ivec4 flags; // radial, data-window origin x/y, reserved
+    ivec4 table; // stop count (1 to 64), reserved
 } p;
 
 struct BloomDf { float hi; float lo; };
@@ -91,13 +95,35 @@ void main() {
         else if (repeat == 2) { float u = mod(t, 2.0); t = u <= 1.0 ? u : 2.0 - u; }
         else t = clamp(t, 0.0, 1.0);
     }
-    // Weighted endpoints avoid overflowing the difference of opposite-sign HDR colours.
-    vec4 straight = p.first * (1.0 - t) + p.second * t;
-    // Alpha is bit-exact with the CPU reference: two rounded products and one sum, no FMA.
-    precise float remaining = 1.0 - t;
-    precise float firstAlpha = p.first.a * remaining;
-    precise float secondAlpha = p.second.a * t;
-    precise float straightAlpha = firstAlpha + secondAlpha;
+    // Held before the first stop and from the last; between two stops the weighted endpoints avoid
+    // overflowing the difference of opposite-sign HDR colours.
+    int n = p.table.x;
+    vec4 straight;
+    precise float straightAlpha;
+    if (!(t > bloom_gradient_stops.values[0].x)) {
+        straight = bloom_gradient_stops.values[1];
+        straightAlpha = straight.a;
+    } else if (t >= bloom_gradient_stops.values[2 * (n - 1)].x) {
+        straight = bloom_gradient_stops.values[2 * n - 1];
+        straightAlpha = straight.a;
+    } else {
+        // The last stop at or before t; the next one is strictly after it.
+        int i = 0;
+        for (int j = 0; j < 64; ++j) {
+            if (i + 2 >= n || !(bloom_gradient_stops.values[2 * (i + 1)].x <= t)) break;
+            ++i;
+        }
+        vec4 head = bloom_gradient_stops.values[2 * i];
+        vec4 a = bloom_gradient_stops.values[2 * i + 1];
+        vec4 b = bloom_gradient_stops.values[2 * i + 3];
+        precise float u = (t - head.x) * head.y;
+        straight = a * (1.0 - u) + b * u;
+        // Alpha is bit-exact with the CPU reference: two rounded products and one sum, no FMA.
+        precise float remaining = 1.0 - u;
+        precise float firstAlpha = a.a * remaining;
+        precise float secondAlpha = b.a * u;
+        straightAlpha = firstAlpha + secondAlpha;
+    }
     float coverage = clamp(p.extent.z - float(index.x + p.flags.y), 0.0, 1.0) *
                      clamp(p.extent.w - float(index.y + p.flags.z), 0.0, 1.0);
     precise float alpha = straightAlpha * coverage;

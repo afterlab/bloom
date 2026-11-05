@@ -2,8 +2,8 @@
   "schema": "bloom.gpu.shader.manifest.v1",
   "operation": "GradientV1",
   "entrypoint": "main",
-  "shader": {"language": "GLSL_460", "stage": "compute", "sha256": "ac90194529e3b25cb0d13218f817d85533a25d62078e309d99eb3af08ba6d640", "spirvSha256": "6932e029b34d1a65e47ed74f98c301becfec03b00f9470438176bee96ab3cd46", "localSizeX": 256},
-  "bindings": [{"set": 0, "binding": 0, "kind": "storage-image", "access": "writeonly", "format": "rgba32f"}],
-  "pushConstant": {"byteCount": 96},
-  "contracts": {"color": "straight scene-linear interpolation; premultiplied RGBA32F output", "repeat": "clamp/repeat/mirror", "geometry": "physical pixel aspect, pixel-centre sampling; O(1) binary64 normalized origin/steps split into compensated Float32 pairs for production linear projection and radial norm; phase reduction retains the low component"}
+  "shader": {"language": "GLSL_460", "stage": "compute", "sha256": "06d2c53903f162433b41eb4aa2cf32de6e36eef01e868475c523b0612f0d7800", "spirvSha256": "5cc7cae4cd5a0fc67f4e8524e099c74030b023ecc7e05fd5c5e677e1c76a8867", "localSizeX": 256},
+  "bindings": [{"set": 0, "binding": 0, "kind": "storage-image", "access": "writeonly", "format": "rgba32f"}, {"set": 0, "binding": 1, "kind": "storage-buffer", "access": "readonly", "layout": "std430"}],
+  "pushConstant": {"byteCount": 80},
+  "contracts": {"color": "straight scene-linear interpolation through a sorted table of 1 to 64 stops, held outside the first and last; premultiplied RGBA32F output", "repeat": "clamp/repeat/mirror", "geometry": "physical pixel aspect, pixel-centre sampling; O(1) binary64 normalized origin/steps split into compensated Float32 pairs for production linear projection and radial norm; phase reduction retains the low component"}
 }
