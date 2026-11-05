@@ -157,16 +157,20 @@ VectorResult evaluateVector(const VectorPrimitive primitive, const std::uint8_t 
 // SplitMix64's finalizer. Chosen because it is a fixed, fully specified integer sequence with no
 // platform-dependent step: the same seed produces the same 64 bits under every compiler and
 // architecture, which is what makes a seeded Random node safe to cache a frame from.
-double hashUnitValue(const std::int64_t seed) noexcept {
+std::uint64_t hashWord(const std::int64_t seed) noexcept {
     auto state = static_cast<std::uint64_t>(seed) + 0x9E37'79B9'7F4A'7C15ULL;
     state ^= state >> 30U;
     state *= 0xBF58'476D'1CE4'E5B9ULL;
     state ^= state >> 27U;
     state *= 0x94D0'49BB'1331'11EBULL;
     state ^= state >> 31U;
+    return state;
+}
+
+double hashUnitValue(const std::int64_t seed) noexcept {
     // Exactly 53 bits, binary64's significand width: every value is representable with no rounding,
     // the spacing is uniform, and the result can never round up to 1.0.
-    return static_cast<double>(state >> 11U) * 0x1.0p-53;
+    return static_cast<double>(hashWord(seed) >> 11U) * 0x1.0p-53;
 }
 
 } // namespace bloom::core::primitives

@@ -116,6 +116,9 @@ vectorPrimitiveSignature(VectorPrimitive primitive) noexcept;
 // so a Random node is a pure function of its seed and varies over time only because something
 // wired a changing value (a Time node's frame number) into that seed.
 [[nodiscard]] double hashUnitValue(std::int64_t seed) noexcept;
+// The 64 bits hashUnitValue() rounds from: SplitMix64's finalizer of the seed. #525's field seeds
+// take their 32-bit lattice keys from this same versioned hash.
+[[nodiscard]] std::uint64_t hashWord(std::int64_t seed) noexcept;
 
 inline constexpr std::uint32_t kValueHashSemanticsVersion = 1;
 

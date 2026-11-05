@@ -8,6 +8,7 @@ target_sources(
         frame_time_mapping.cpp
         scalar_primitives.cpp
         value_primitives.cpp
+        field_program.cpp
         sha256.cpp
         utf8.cpp
         file_uri.cpp
@@ -19,6 +20,7 @@ target_sources(
         FILES
             include/bloom/core/artifact_target_key.hpp
             include/bloom/core/blend_mode.hpp
+            include/bloom/core/field_program.hpp
             include/bloom/core/color.hpp
             include/bloom/core/floating_point.hpp
             include/bloom/core/frame_time_mapping.hpp
@@ -34,6 +36,21 @@ target_sources(
             include/bloom/core/file_uri.hpp
             include/bloom/core/value_primitives.hpp
 )
+
+# #525: the field kernel is one source compiled as C++ (field_program.cpp includes it) and handed to
+# the GPU program as text. Embed the text byte for byte, regenerated whenever the kernel changes.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/field_kernel.glsl")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/field_kernel.glsl" BLOOM_FIELD_KERNEL_HEX HEX)
+string(LENGTH "${BLOOM_FIELD_KERNEL_HEX}" BLOOM_FIELD_KERNEL_HEX_LENGTH)
+math(EXPR BLOOM_FIELD_KERNEL_SIZE "${BLOOM_FIELD_KERNEL_HEX_LENGTH} / 2")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," BLOOM_FIELD_KERNEL_BYTES
+    "${BLOOM_FIELD_KERNEL_HEX}")
+file(CONFIGURE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/field_kernel_source.cpp"
+    CONTENT "#include \"bloom/core/field_program.hpp\"\n\nnamespace bloom::core::field {\nnamespace {\nconstexpr unsigned char kFieldKernelSource[] = {${BLOOM_FIELD_KERNEL_BYTES}0x00};\n} // namespace\n\nstd::string_view fieldKernelGlsl() noexcept {\n    return {reinterpret_cast<const char*>(kFieldKernelSource), ${BLOOM_FIELD_KERNEL_SIZE}};\n}\n\n} // namespace bloom::core::field\n"
+    @ONLY)
+target_sources(bloom_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/field_kernel_source.cpp")
 
 target_compile_features(bloom_core PUBLIC cxx_std_20)
 bloom_enable_warnings(bloom_core)
@@ -99,6 +116,16 @@ if(BUILD_TESTING)
         NAME bloom.core.value_primitives
         COMMAND bloom_core_value_primitives_test
         LABELS unit primitives
+    )
+
+    add_executable(bloom_core_field_program_test tests/field_program_tests.cpp)
+    target_link_libraries(bloom_core_field_program_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_field_program_test)
+    bloom_enable_strict_floating_point(bloom_core_field_program_test)
+    bloom_add_test(
+        NAME bloom.core.field_program
+        COMMAND bloom_core_field_program_test
+        LABELS unit
     )
 
     add_executable(bloom_core_sha256_test tests/sha256_tests.cpp)
