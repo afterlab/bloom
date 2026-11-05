@@ -178,6 +178,70 @@ int run(int argc, char** argv) {
             }
         }
     }
+    // #536: a narrow panel folds its header menus into an overflow button. It keeps the vertical
+    // dots but is a header button like Fullscreen beside it: the Chrome role's Bold glyph in the
+    // box and Foreground ink every header icon has, on the same resting plate, never a solid or
+    // accent-filled glyph. Hover and pressed come from the shared KIconButton recipe.
+    int headerOverflows = 0;
+    const auto overflowCapture = qEnvironmentVariable("BLOOM_HEADER_OVERFLOW_SCREENSHOT");
+    for (auto* panel : panels) {
+        auto* maximize = panel->findChild<kit::KIconButton*>("maximizeAreaButton");
+        for (auto* button : panel->findChildren<kit::KIconButton*>()) {
+            if (!button->objectName().endsWith(QStringLiteral("HeaderOverflowButton")) ||
+                !button->isVisible())
+                continue;
+            ++headerOverflows;
+            const qreal dpr = button->devicePixelRatioF();
+            const int box = kit::px(kit::iconSize(kit::IconRole::Chrome));
+            expect(button->iconSize() == QSize(box, box), button,
+                   "#536 header overflow glyph takes the Chrome icon box");
+            const QImage glyph =
+                button->icon()
+                    .pixmap(button->iconSize(), dpr, QIcon::Normal, QIcon::Off)
+                    .toImage()
+                    .convertToFormat(QImage::Format_ARGB32);
+            const QImage bold = kit::icon(kit::IconId::ContextMenu, kit::IconRole::Chrome)
+                                    .pixmap(button->iconSize(), dpr, QIcon::Normal, QIcon::Off)
+                                    .toImage()
+                                    .convertToFormat(QImage::Format_ARGB32);
+            expect(glyph == bold, button,
+                   "#536 header overflow shows the Bold vertical dots of a header icon");
+            int covered = 0, left = glyph.width(), right = -1, top = glyph.height(), bottom = -1;
+            for (int y = 0; y < glyph.height(); ++y)
+                for (int x = 0; x < glyph.width(); ++x)
+                    if (qAlpha(glyph.pixel(x, y)) > 127) {
+                        ++covered;
+                        left = std::min(left, x);
+                        right = std::max(right, x);
+                        top = std::min(top, y);
+                        bottom = std::max(bottom, y);
+                    }
+            expect(covered > 0 && covered * 4 < glyph.width() * glyph.height(), button,
+                   "#536 header overflow glyph is dots, not a solid plate");
+            expect(bottom - top > 2 * (right - left), button,
+                   "#536 header overflow dots stay vertical");
+            expect(button->visualState() == kit::State::Normal, button,
+                   "#536 header overflow rests unhighlighted");
+            if (maximize != nullptr) {
+                expect(button->visualState() == maximize->visualState(), button,
+                       "#536 header overflow rests in the same state as Fullscreen");
+                // Away from the glyph, the plate matches the Fullscreen button's at rest.
+                const QImage overflowImage = button->grab().toImage();
+                const QImage maximizeImage = maximize->grab().toImage();
+                const QPoint sample(qRound(button->width() * 0.2 * dpr),
+                                    qRound(button->height() * 0.5 * dpr));
+                const QPoint sampleMax(qRound(maximize->width() * 0.2 * dpr),
+                                       qRound(maximize->height() * 0.5 * dpr));
+                expect(overflowImage.pixelColor(sample) == maximizeImage.pixelColor(sampleMax),
+                       button, "#536 header overflow plate matches the other header buttons");
+            }
+            if (!overflowCapture.isEmpty() && headerOverflows == 1)
+                expect(panel->grab().save(overflowCapture), panel,
+                       "narrow-panel header screenshot saves");
+        }
+    }
+    expect(headerOverflows > 0, fixture.window.get(),
+           "#536 the fixture shows a narrow panel's header overflow");
     auto* viewerMenus = fixture.window->findChild<QWidget*>("viewerHeaderMenuBar");
     auto* overflow = fixture.window->findChild<kit::KMenuButton*>("viewerHeaderOverflowButton");
     const bool collapsed = viewerMenus->property("collapsed").toBool();

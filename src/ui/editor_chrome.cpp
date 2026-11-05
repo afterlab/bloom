@@ -129,9 +129,14 @@ class ChromeRow final : public kit::KSurface {
             })) {
             auto* button = new kit::KIconButton(this);
             button->setObjectName(spec.overflowButtonName);
+            // A header's overflow is a header button like its neighbours: the Chrome role (Bold,
+            // IconMedium), Foreground ink on the resting plate with only the shared hover and
+            // pressed states. The Control role's Fill weight is the footer's and the transport's;
+            // on a header it turned the vertical dots into a solid plate (#536).
+            const auto role = footer ? kit::IconRole::Control : kit::IconRole::Chrome;
             if (spec.overflowIcon)
-                button->setIcon(kit::icon(*spec.overflowIcon, kit::IconRole::Control));
-            const int box = kit::px(kit::iconSize(kit::IconRole::Control));
+                button->setIcon(kit::icon(*spec.overflowIcon, role));
+            const int box = kit::px(kit::iconSize(role));
             button->setIconSize(QSize(box, box));
             button->setToolTip(spec.overflowToolTip);
             button->setAccessibleName(spec.overflowToolTip);
