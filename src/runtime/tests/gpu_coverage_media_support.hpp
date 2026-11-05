@@ -193,6 +193,33 @@ struct ImageFixture final {
     return fixture;
 }
 
+// #545: a premultiplied float EXR in the working space (Rec.709 chromaticities) whose partial
+// alphas are not dyadic, so un-premultiplying a stored sample and premultiplying it again does not
+// return it. Its identity input transform must keep the stored samples on both routes, and a Luma
+// Key (a Glow) then reads the same colour and derives the same coverage.
+[[nodiscard]] inline const ImageFixture& translucentExrImage() {
+    static const ImageFixture fixture = [] {
+        std::filesystem::create_directories(gateDirectory());
+        const auto path = gateDirectory() / "translucent_hdr.exr";
+        constexpr int width = 16;
+        constexpr int height = 12;
+        std::vector<ExrPixel> pixels;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const auto fx = static_cast<float>(x);
+                const auto fy = static_cast<float>(y);
+                const float alpha =
+                    0.05F + 0.9F * static_cast<float>((7 * x + 3 * y) % 13) / 13.0F;
+                pixels.push_back(ExrPixel{(0.3F + 0.37F * fx) * alpha, (0.2F + 0.29F * fy) * alpha,
+                                          (2.1F - 0.11F * fx) * alpha, alpha});
+            }
+        }
+        writeExrRgba(path, width, height, pixels);
+        return probedImageFixture(path, 907, "translucent_hdr");
+    }();
+    return fixture;
+}
+
 // A 16-bit RGBA PNG (sRGB, straight alpha with transparent and opaque pixels), written with stored
 // deflate blocks so the fixture needs no compressor. Its samples cross as 16-bit RGBA.
 [[nodiscard]] inline const ImageFixture& png16Image() {

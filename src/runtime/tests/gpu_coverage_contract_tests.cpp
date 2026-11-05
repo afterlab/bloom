@@ -1739,6 +1739,19 @@ displayProofRunner(const bool customView) {
         combined.evidence = std::move(evidence);
         return combined;
     };
+    // A recipe keyed from real footage: the plan's input solid replaced by an image source.
+    const auto runMediaGlow = [](const bloom::recipe_test::RecipeValues& values,
+                                 const std::uint64_t idBase) {
+        const bloom::runtime::CpuCompositionEvaluator evaluator;
+        const auto recipe =
+            bloom::recipe_test::recipePlan(bloom::recipe_test::Recipe::Glow, values, idBase);
+        auto definition = recipe.plan->copyDefinition();
+        definition.operations[recipe.input.value()] = CompiledImageSource{
+            NodeId::fromRaw(idBase + 90), bloom::gpu_coverage_media::translucentExrImage().asset,
+            0, 0, 0, std::string{}, false};
+        return runMediaBuilder(publish(std::move(definition)), evaluator,
+                               bloom::gpu_coverage_media::gateDirectory());
+    };
     add(
         "node.bloom.drop-shadow", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime compositing recipe tests",
@@ -1755,7 +1768,7 @@ displayProofRunner(const bool customView) {
     add(
         "node.bloom.glow", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime compositing recipe tests",
-        [runRecipes] {
+        [runRecipes, runMediaGlow] {
             bloom::recipe_test::RecipeValues keyed;
             keyed.key = true;
             keyed.mask = true;
@@ -1764,9 +1777,23 @@ displayProofRunner(const bool customView) {
             // Luma Key's coverage is a function of colour: the exact-alpha gate keys a solid.
             bloom::recipe_test::RecipeValues glow;
             glow.solidInput = true;
-            return runRecipes(bloom::recipe_test::Recipe::Glow, {glow, keyed}, 169400,
-                              "production Glow: keyed octaves added to the input, and a keyed, "
-                              "masked glow only, full frame and ROI");
+            auto combined = runRecipes(bloom::recipe_test::Recipe::Glow, {glow, keyed}, 169400,
+                                       "production Glow: keyed octaves added to the input, and a "
+                                       "keyed, masked glow only, full frame and ROI, and a "
+                                       "Physical glow keyed from translucent working-space EXR "
+                                       "footage");
+            // #545: decoded footage in the working space keys the same colour on both routes, so
+            // a Physical glow of a translucent premultiplied EXR meets the exact-alpha gate.
+            bloom::recipe_test::RecipeValues physical;
+            physical.solidInput = true;
+            physical.mode = bloom::runtime::detail::GlowMode::Physical;
+            physical.threshold = 0.8;
+            physical.intensity = 1.5;
+            auto footage = runMediaGlow(physical, 169700);
+            combined.prepared = combined.prepared && footage.prepared;
+            for (auto& frame : footage.frames)
+                combined.frames.push_back(std::move(frame));
+            return combined;
         },
         {}, FixturePrerequisite::PackagedShaderTools);
     add(
