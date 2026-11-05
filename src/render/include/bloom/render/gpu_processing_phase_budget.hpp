@@ -110,6 +110,9 @@ struct GpuProcessingPhaseSnapshot final {
     // subset overlaps this constraint; it is not an additive physical-memory total.
     std::uint64_t ownedNativeImageBytes = 0;
     std::uint64_t ownedNonlocalNativeHostBytes = 0;
+    // #544: the device-local subset of the native images that left their phase when they were
+    // published (#539): reusable retention, which gives way inside a refused native allocation.
+    std::uint64_t retainedNativeImageBytes = 0;
     std::uint64_t totalDeviceClaimBytes = 0;
     std::size_t ownedNativeImages = 0;
     // Covered transient buffer suballocations. Output/upload nonlocal backing replaces planned

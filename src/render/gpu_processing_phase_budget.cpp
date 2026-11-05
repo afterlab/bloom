@@ -820,10 +820,16 @@ GpuProcessingPhaseBudget::reserve(const GpuProcessingPhaseRequest& request) noex
         }
         // The requested executor size is a ceiling: the phase may allocate up to it while live
         // capacity allows, but claims only its stated minimum (its live-image peak) up front.
-        executorBytes = std::max(
-            request.minimumExecutorBytes,
-            std::min(request.requestedExecutorBytes,
-                     remaining(deviceRemaining, request.deviceWorkingBytes)));
+        // Published retention does not cut that ceiling (#544): it gives way inside a native
+        // allocation the root refuses for room, so a device full of reusable cache must not
+        // squeeze a final render onto the CPU or a preview frame into a capacity wait.
+        const std::uint64_t executorRoom =
+            remaining(*counters.deviceCapacityBytes,
+                      counters.totalDeviceClaimBytes - std::min(counters.retainedNativeImageBytes,
+                                                                counters.totalDeviceClaimBytes));
+        executorBytes = std::max(request.minimumExecutorBytes,
+                                 std::min(request.requestedExecutorBytes,
+                                          remaining(executorRoom, request.deviceWorkingBytes)));
         // Never below a measured need (#417): the most native storage phases of this envelope
         // held, plus a quarter, which fits the remaining room. Retained device caches are claims
         // that give way on demand (#425), so a cache that fills the device must not squeeze the

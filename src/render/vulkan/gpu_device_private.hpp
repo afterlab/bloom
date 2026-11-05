@@ -35,6 +35,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -201,6 +202,11 @@ struct DeviceAllocatorState final {
     std::optional<NativePresentationStorageRefusal> presentationStorageRefusal;
     std::optional<NativeImageStorageRefusal> imageStorageRefusal;
     std::optional<NativeBufferStorageRefusal> bufferStorageRefusal;
+    // #544: the owner's reusable device retention (its scene cache, parked native storage), asked
+    // to give way when a phase's device-local reservation is refused for device room; the
+    // reservation is then tried once more. Owner thread only; returns the bytes it released.
+    std::function<std::uint64_t(std::uint64_t)> deviceRoomReclaimer;
+    bool reclaimingDeviceRoom = false;
     // Native RAII declaration order is deliberate: queues/device/instance die before the loader.
     DynamicLibrary loader;
     vk::raii::Instance instance{nullptr};
@@ -243,6 +249,34 @@ struct DeviceAllocatorState final {
     bool memoryBudgetEnabled = false;
     bool calibratedTimestampsEnabled = false;
 };
+
+// #544: reserves a phase's native storage, and when the root refuses a device-local reservation
+// for device room, lets the owner's reusable retention give way first and tries once more. A
+// running scene publishes its finished intermediates to the scene cache as retention; without
+// this, a 4K scene filled the device with them and its next allocation failed the whole frame,
+// which then waited, re-prepared and refilled the same cache (or, on the final render route,
+// fell back to the CPU). Owner thread only; never nested.
+template <typename Reserve>
+[[nodiscard]] auto reserveGivingWayToRetention(DeviceAllocatorState& state, const bool deviceLocal,
+                                               const std::uint64_t bytes, Reserve&& reserve) {
+    auto grant = reserve();
+    if (grant.token || !deviceLocal || grant.domain != GpuProcessingPhaseDomain::Device ||
+        (grant.status != GpuProcessingPhaseAdmission::AwaitingCapacity &&
+         grant.status != GpuProcessingPhaseAdmission::BudgetRefused) ||
+        !state.deviceRoomReclaimer || state.reclaimingDeviceRoom)
+        return grant;
+    state.reclaimingDeviceRoom = true;
+    std::uint64_t released = 0;
+    try {
+        released = state.deviceRoomReclaimer(bytes);
+    } catch (...) {
+        released = 0;
+    }
+    state.reclaimingDeviceRoom = false;
+    if (released != 0)
+        grant = reserve();
+    return grant;
+}
 
 } // namespace bloom::render::vulkan_detail
 

@@ -128,7 +128,9 @@ enum class NativeBufferAllocationOutcome { Allocated, TransferBudgetRefused, Pha
         const NativeBufferStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
-        auto grant = reserveFor(requirements.memoryRequirements.size, identity);
+        auto grant = reserveGivingWayToRetention(
+            state, identity.deviceLocal, requirements.memoryRequirements.size,
+            [&] { return reserveFor(requirements.memoryRequirements.size, identity); });
         if (!grant.token) {
             if (grant.status == GpuProcessingPhaseAdmission::BudgetRefused ||
                 grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity)

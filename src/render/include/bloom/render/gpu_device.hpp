@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -302,6 +303,12 @@ class GpuDevice final {
     // are released: device-local storage when `deviceLocal`, host-visible system memory otherwise.
     // Returns the bytes released.
     std::uint64_t releaseReusableNativeStorage(std::uint64_t bytes, bool deviceLocal) noexcept;
+    // Owner-thread only (#544). When the processing root refuses a phase's device-local native
+    // allocation for device room, `reclaimer` is asked for at least that allocation's bytes (the
+    // owner's reusable retention: its scene cache, parked storage) and the allocation is tried
+    // once more if it released anything. It runs on the owner thread inside the allocation, must
+    // not allocate native storage itself, and returns the bytes it released. Empty clears it.
+    void setDeviceRoomReclaimer(std::function<std::uint64_t(std::uint64_t)> reclaimer) noexcept;
     // Includes closed generations after their GpuDevice facade has been destroyed.
     [[nodiscard]] static GpuImageReclamationStats processImageReclamationStats() noexcept;
     [[nodiscard]] const GpuCapabilityReport& capabilityReport() const noexcept;

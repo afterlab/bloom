@@ -86,12 +86,16 @@ namespace bloom::render::vulkan_detail {
         const NativeImageStorageIdentity identity{
             state.presentationEpoch, selected, heap,
             (memory->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0};
-        auto grant =
-            presentation
-                ? NativeImageStorageToken::reservePresentation(
-                      state.processingRoot, requirements.memoryRequirements.size, identity)
-                : NativeImageStorageToken::reserve(state.processingPhase,
-                                                   requirements.memoryRequirements.size, identity);
+        auto grant = reserveGivingWayToRetention(
+            state, identity.deviceLocal, requirements.memoryRequirements.size, [&] {
+                return presentation
+                           ? NativeImageStorageToken::reservePresentation(
+                                 state.processingRoot, requirements.memoryRequirements.size,
+                                 identity)
+                           : NativeImageStorageToken::reserve(state.processingPhase,
+                                                              requirements.memoryRequirements.size,
+                                                              identity);
+            });
         if (!grant.token) {
             if (grant.status == GpuProcessingPhaseAdmission::AwaitingCapacity ||
                 grant.status == GpuProcessingPhaseAdmission::BudgetRefused)

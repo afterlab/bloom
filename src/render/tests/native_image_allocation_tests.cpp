@@ -348,6 +348,87 @@ void downstreamRefusal(GpuDevice& device) {
     }
 }
 } // namespace
+// #544: a device-local reservation the root refuses for room asks the owner's reusable retention
+// to give way, inside the allocation, and is tried once more; without a reclaimer, or when nothing
+// gives way, the refusal stands with its capacity metadata.
+void retentionGivesWayToRefusedAllocation(GpuDevice& device) {
+    auto state = GpuRendererAccess::state(device);
+    // Device-local types only: a compatible system-memory type would take the refused image.
+    const VkPhysicalDeviceMemoryProperties* memory = nullptr;
+    vmaGetMemoryProperties(state->allocator, &memory);
+    std::uint32_t localTypes = 0;
+    for (std::uint32_t type = 0; type < memory->memoryTypeCount; ++type)
+        if ((memory->memoryHeaps[memory->memoryTypes[type].heapIndex].flags &
+             VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0)
+            localTypes |= std::uint32_t{1} << type;
+    state->nativeImageMemoryTypeMaskForTests = localTypes;
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(1ULL << 30, true);
+    budget.setDeviceCapacity(1ULL << 30, true);
+    auto admitted = phase(budget, 1ULL << 20);
+    require(device.retainProcessingPhase(admitted), "retention phase retained");
+    const auto window = ImageWindow::create(0, 0, 64, 64);
+    require(bool(window), "actual image geometry exists");
+    // One published intermediate, standing in for a scene cache entry.
+    auto first = std::make_unique<GpuImageImpl>();
+    first->state = state;
+    first->generation = state->generation;
+    first->dataWindow = *window.value();
+    first->displayWindow = first->dataWindow;
+    require(createResidentImage(*state, 64, 64, *first), "the first image is allocated");
+    std::shared_ptr<const GpuImage> retained =
+        std::make_shared<GpuImage>(makeGpuImage(std::move(first)));
+    require(retained->promoteStorageOwnership(), "the first image is published as retention");
+    const auto held = budget.snapshot().totalDeviceClaimBytes;
+    require(held != 0 && budget.snapshot().retainedNativeImageBytes == held,
+            "the published image is the root's only device claim, as retention");
+    // Room for half an image more: the next allocation does not fit beside the retention.
+    budget.setDeviceCapacity(held + held / 2, true);
+    {
+        GpuImageImpl refused;
+        refused.state = state;
+        require(!createResidentImage(*state, 64, 64, refused),
+                "without a reclaimer the allocation is refused for room");
+        const auto refusal = device.nativeImageStorageRefusal();
+        require(refusal && refusal->domain == GpuProcessingPhaseDomain::Device,
+                "the refusal keeps its device capacity metadata");
+    }
+    int calls = 0;
+    std::uint64_t asked = 0;
+    device.setDeviceRoomReclaimer([&](const std::uint64_t bytes) -> std::uint64_t {
+        ++calls;
+        asked = bytes;
+        if (!retained)
+            return 0;
+        const auto released = budget.snapshot().retainedNativeImageBytes;
+        retained.reset();
+        return released;
+    });
+    GpuImageImpl second;
+    second.state = state;
+    require(createResidentImage(*state, 64, 64, second),
+            "the retention gives way inside the allocation, which then succeeds");
+    require(calls == 1 && asked != 0 && !retained,
+            "the reclaimer is asked once for the refused allocation's bytes");
+    require(!device.nativeImageStorageRefusal(), "a successful retry leaves no refusal");
+    second.destroy();
+    // Nothing left to give way: the refusal stands after one reclaimer call.
+    budget.setDeviceCapacity(held / 2, true);
+    {
+        GpuImageImpl refused;
+        refused.state = state;
+        require(!createResidentImage(*state, 64, 64, refused) && calls == 2,
+                "with nothing to give way the reclaimer is asked once and the refusal stands");
+        require(device.nativeImageStorageRefusal().has_value(),
+                "the standing refusal keeps its capacity metadata");
+    }
+    device.setDeviceRoomReclaimer({});
+    state->nativeImageMemoryTypeMaskForTests = 0;
+    device.retireProcessingPhase(admitted->id(), true);
+    admitted.reset();
+    std::cout << "PASS: retention gives way inside a native allocation refused for room\n";
+}
+
 int main(int argc, char** argv) {
     try {
         GpuDeviceCreationOptions options;
@@ -368,6 +449,7 @@ int main(int argc, char** argv) {
         actualAllocation(*device.device);
         downstreamRefusal(*device.device);
         backingFaults(*device.device);
+        retentionGivesWayToRefusedAllocation(*device.device);
         nonlocalDomains(*device.device);
         foreignAliases<GpuImageImpl, GpuImage>(*device.device, createResidentImageForTest,
                                                makeGpuImage);

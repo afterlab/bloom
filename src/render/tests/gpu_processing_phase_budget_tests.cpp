@@ -597,6 +597,54 @@ void deviceRoomOthersHoldIsAWait() {
     require(grant.lease && grant.lease->deviceCapacityAtAdmission() == 800,
             "room that returns admits the frame, which records the capacity it was admitted with");
 }
+// #544: published intermediates are reusable retention that gives way inside a native allocation
+// the root refuses for room, so they do not cut a later phase's executor ceiling; they still count
+// as claims, so they still gate admission.
+void retentionDoesNotCutExecutorCeiling() {
+    GpuProcessingPhaseBudget budget;
+    budget.setHostCapacity(10000, true);
+    budget.setDeviceCapacity(2000, true);
+    const GpuProcessingPhaseRequest scene{.fixedHostBytes = 10,
+                                          .deviceWorkingBytes = 50,
+                                          .requestedExecutorBytes = 1800,
+                                          .minimumExecutorBytes = 100,
+                                          .sourceFree = true};
+    constexpr NativeImageStorageIdentity local{
+        .allocatorGeneration = 1, .memoryType = 0, .heap = 0};
+    constexpr NativeImageStorageIdentity system{
+        .allocatorGeneration = 1, .memoryType = 1, .heap = 1, .deviceLocal = false};
+    std::vector<NativeImageStorageToken> published;
+    {
+        auto first = budget.reserve(scene);
+        require(first.lease != nullptr, "the first scene is admitted");
+        for (int step = 0; step < 15; ++step) {
+            auto image = NativeImageStorageToken::reserve(first.lease, 100, local);
+            require(image.token.has_value() && image.token->promote(),
+                    "each intermediate is published to the cache");
+            published.push_back(std::move(*image.token));
+        }
+        require(budget.snapshot().retainedNativeImageBytes == 1500 &&
+                    budget.snapshot().totalDeviceClaimBytes == 1500,
+                "published device-local images are retention, and still claims");
+        budget.setHostCapacity(10000, true);
+        auto host = NativeImageStorageToken::reserve(first.lease, 10, system);
+        require(host.token.has_value() && host.token->promote(),
+                "a system-memory image is published too");
+        require(budget.snapshot().retainedNativeImageBytes == 1500,
+                "system-memory images are not device retention");
+        first.lease->endDeviceExecution();
+    }
+    auto second = budget.reserve(scene);
+    require(second.lease && second.lease->executorByteLimit() == 1800,
+            "a device full of retention does not cut the next executor ceiling");
+    auto tooBig = scene;
+    tooBig.minimumExecutorBytes = 600;
+    require(budget.reserve(tooBig).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
+            "retention still gates admission: a need above the free room waits for it to give way");
+    published.resize(5);
+    require(budget.snapshot().retainedNativeImageBytes == 500,
+            "evicted retention leaves the retained count");
+}
 int main() {
     try {
         readinessAndRollback();
@@ -611,6 +659,7 @@ int main() {
         sourceScratchFollowsLargestSource();
         deviceClaimFollowsPeakLiveSet();
         deviceRoomOthersHoldIsAWait();
+        retentionDoesNotCutExecutorCeiling();
         std::cout << "paired phase readiness/sizing/lifetime/32-way contention PASS\n";
         return 0;
     } catch (const std::exception& error) {

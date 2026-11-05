@@ -107,6 +107,12 @@ void GpuDevice::setNativeStorageReuse(const bool enabled) noexcept {
     }
     vulkan_detail::closeStorageReuse(*impl_->control);
 }
+void GpuDevice::setDeviceRoomReclaimer(
+    std::function<std::uint64_t(std::uint64_t)> reclaimer) noexcept {
+    if (!isOwnerThread() || impl_->control == nullptr)
+        return;
+    impl_->control->deviceRoomReclaimer = std::move(reclaimer);
+}
 GpuNativeStorageReuseStats GpuDevice::nativeStorageReuseStats() const noexcept {
     if (impl_ == nullptr || impl_->control == nullptr)
         return {};

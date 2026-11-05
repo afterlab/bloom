@@ -157,6 +157,8 @@ bool NativeImageStorageToken::promote() noexcept {
         if (!origin_ || origin_->unproven_)
             return false;
         origin_->transferToRetentionLocked(bytes_);
+        if (identity_.deviceLocal)
+            state_->counters.retainedNativeImageBytes += bytes_;
         published_ = true;
         publishedOrigin_ = origin_;
         releasedOrigin = std::move(origin_);
@@ -178,9 +180,11 @@ bool NativeImageStorageToken::releaseFailedAttemptAfterBackingDestroyed(
         counters.ownedNativeImageBytes -= bytes_;
         --counters.ownedNativeImages;
         // Published storage already left the phase's allocation (#539).
-        if (published_)
+        if (published_) {
             counters.totalDeviceClaimBytes -= bytes_;
-        else
+            if (identity_.deviceLocal)
+                counters.retainedNativeImageBytes -= bytes_;
+        } else
             phase->returnDeviceLocked(bytes_);
         if (!identity_.deviceLocal) {
             counters.ownedNonlocalNativeHostBytes -= bytes_;
@@ -215,6 +219,8 @@ void NativeImageStorageToken::reset() noexcept {
             // Published storage left its phase when it was promoted (#539): it returns to the
             // root, never to the phase's claim.
             counters.totalDeviceClaimBytes -= bytes_;
+            if (identity_.deviceLocal)
+                counters.retainedNativeImageBytes -= bytes_;
             // An independent real release remains observable even when its existing grant is
             // replenished. Only explicit proved failed-attempt cleanup suppresses that event.
             incrementSaturating(counters.admissionRevision);

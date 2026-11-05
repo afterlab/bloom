@@ -58,6 +58,7 @@ GpuImageReclamationStats GpuDevice::imageReclamationStats() const noexcept { ret
 void GpuDevice::setNativeStorageReuse(bool) noexcept {}
 GpuNativeStorageReuseStats GpuDevice::nativeStorageReuseStats() const noexcept { return {}; }
 std::uint64_t GpuDevice::releaseReusableNativeStorage(std::uint64_t, bool) noexcept { return 0; }
+void GpuDevice::setDeviceRoomReclaimer(std::function<std::uint64_t(std::uint64_t)>) noexcept {}
 GpuOcioProgramRetirementStats GpuDevice::ocioProgramRetirementStats() const noexcept { return {}; }
 GpuImageReclamationStats GpuDevice::processImageReclamationStats() noexcept { return {}; }
 
