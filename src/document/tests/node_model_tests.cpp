@@ -1,3 +1,4 @@
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/node_layout.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <optional>
 #include <limits>
 #include <string>
 
@@ -236,8 +238,18 @@ void compositionNesting() {
 }
 
 void multiplyInvertDefinitions() {
-    const auto* multiply = builtInNodeDefinitions().find("bloom.multiply", 1);
-    const auto* invert = builtInNodeDefinitions().find("bloom.invert", 1);
+    // #383: both carry the optional effect mask after their own contract; checked without it.
+    const auto* multiplyFound = builtInNodeDefinitions().find("bloom.multiply", 1);
+    const auto* invertFound = builtInNodeDefinitions().find("bloom.invert", 1);
+    expect(multiplyFound && invertFound && hasEffectMask(*multiplyFound) &&
+               hasEffectMask(*invertFound),
+           "Multiply and Invert carry the effect mask");
+    const auto multiplyBase =
+        multiplyFound ? std::optional(withoutEffectMask(*multiplyFound)) : std::nullopt;
+    const auto invertBase =
+        invertFound ? std::optional(withoutEffectMask(*invertFound)) : std::nullopt;
+    const auto* multiply = multiplyBase ? &*multiplyBase : nullptr;
+    const auto* invert = invertBase ? &*invertBase : nullptr;
     expect(multiply && multiply->category == NodeCategory::Grade &&
                multiply->lowering == NodeLoweringKind::ImageEffect &&
                multiply->inputs.size() == 2 &&
@@ -255,7 +267,7 @@ void multiplyInvertDefinitions() {
                invert->inputs[0].valueKind == SocketValueKind::Image &&
                invert->parameters.empty() && invert->outputs.size() == 1 &&
                invert->outputs[0].valueKind == SocketValueKind::Image,
-           "Invert exposes the color image contract without an alpha or mask control");
+           "Invert exposes the color image contract without an alpha control of its own");
 }
 } // namespace
 

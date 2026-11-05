@@ -10,6 +10,7 @@
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/shape.hpp>
 #include <bloom/document/value_operations.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
@@ -121,7 +122,11 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return sequential({"Clamp", "Repeat", "Mirror"});
     if (schemaKey == "bloom.blur.edge")
         return sequential({"Transparent", "Clamp"});
-    if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel")
+    // #383 Mask Combine.
+    if (schemaKey == kMaskCombineModeSchemaKey)
+        return sequential({"Add", "Subtract", "Intersect", "Difference"});
+    if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel" ||
+        schemaKey == kEffectMaskChannelSchemaKey || schemaKey == kImageToMaskChannelSchemaKey)
         return sequential({"Alpha", "Red", "Green", "Blue", "Luma", "Alpha Inverted",
                            "Red Inverted", "Green Inverted", "Blue Inverted", "Luma Inverted"});
     if (schemaKey == kCombineChannelsSourceSchemaKey)

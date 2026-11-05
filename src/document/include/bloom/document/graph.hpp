@@ -155,6 +155,9 @@ struct LayerMask {
     ParameterId feather;
     ParameterId expansion;
     ParameterId opacity;
+    // #383 (document 1.42): a matte mask takes its shape from this Mask output instead of the path,
+    // read in the layer's content space; feather and expansion are path controls and do not apply.
+    std::optional<OutputPortRef> matte{};
 
     friend bool operator==(const LayerMask&, const LayerMask&) = default;
 };
@@ -162,9 +165,13 @@ struct LayerMask {
 // ADR 0028 track matte: the target layer's output multiplied by the source layer's coverage.
 enum class TrackMatteChannel : std::int64_t { Alpha, Luma };
 struct TrackMatte {
+    // The source layer; zero when `node` names the matte.
     LayerId source;
     TrackMatteChannel channel = TrackMatteChannel::Alpha;
     bool inverted = false;
+    // #383 (document 1.42): the matte is this Mask output, in composition space and time, instead
+    // of a layer. `source` is then zero.
+    std::optional<OutputPortRef> node{};
 
     friend bool operator==(const TrackMatte&, const TrackMatte&) = default;
 };
@@ -297,5 +304,10 @@ class CanonicalGraph final {
     LayerStack emptyStack_{NodeId{}};
     std::optional<OutputPortRef> compositionOutput_;
 };
+
+// #383: whether `node`'s pixels are computed from `upstream`'s, following edges (node inputs and
+// Merge slots) up from `node`. A layer may read a node's Mask as its matte only when that node does
+// not depend on the layer's Layer node (or, for a Merge entry's own layer, its Merge).
+[[nodiscard]] bool dependsOnNode(const CanonicalGraph& graph, NodeId node, NodeId upstream);
 
 } // namespace bloom::document

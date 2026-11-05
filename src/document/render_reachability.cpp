@@ -52,7 +52,7 @@ class GraphView final {
             // First boundary per layer wins, exactly as the compiler's linear search does.
             layers_.try_emplace(boundary.layerId, &boundary);
             anySolo_ = anySolo_ || boundary.solo;
-            if (boundary.trackMatte)
+            if (boundary.trackMatte && !boundary.trackMatte->node)
                 matteSources_.insert(boundary.trackMatte->source);
         }
         // #357: merges and their slots are indexed once, so consuming a slot edge is a lookup
@@ -357,6 +357,12 @@ RenderReachability RenderReachability::compute(const Composition& composition,
             else
                 pending.push_back(other->nodeId);
         }
+        // #383: a node track matte and every matte mask's node are read by the layer.
+        if (layer.trackMatte && layer.trackMatte->node)
+            pending.push_back(layer.trackMatte->node->nodeId);
+        for (const auto& mask : layer.masks)
+            if (mask.matte)
+                pending.push_back(mask.matte->nodeId);
     };
     reachEntryLayer = [&](const LayerOutputBoundary& layer) {
         if (!reachedEntryLayers.insert(layer.layerId).second)
@@ -482,6 +488,8 @@ RenderConfinement confineNodeChange(const Composition& composition,
     std::unordered_map<LayerId, std::vector<NodeId>> children;
     // ADR 0028: a matte source reaches output only through its targets, inside their spans.
     std::unordered_map<LayerId, std::vector<NodeId>> matteTargets;
+    // #383: the layers (their Layer node, or an entry layer's Merge) a matte node is read by.
+    std::unordered_map<NodeId, std::vector<NodeId>> matteNodeTargets;
     // #502: a Merge's own entry layers, whose children and matte targets a change to the Merge
     // (its entry layers' parameters are its own) reaches. An entry layer child or target is its
     // Merge's.
@@ -489,8 +497,17 @@ RenderConfinement confineNodeChange(const Composition& composition,
     for (const auto& boundary : graph.layerOutputs()) {
         if (boundary.parent && reachability.reaches(boundary.nodeId))
             children[*boundary.parent].push_back(boundary.nodeId);
-        if (boundary.trackMatte && reachability.reaches(boundary.nodeId))
+        if (boundary.trackMatte && !boundary.trackMatte->node &&
+            reachability.reaches(boundary.nodeId))
             matteTargets[boundary.trackMatte->source].push_back(boundary.nodeId);
+        // #383: a node matte or a matte mask's node reaches output through the layer it mattes.
+        if (reachability.reaches(boundary.nodeId)) {
+            if (boundary.trackMatte && boundary.trackMatte->node)
+                matteNodeTargets[boundary.trackMatte->node->nodeId].push_back(boundary.nodeId);
+            for (const auto& mask : boundary.masks)
+                if (mask.matte)
+                    matteNodeTargets[mask.matte->nodeId].push_back(boundary.nodeId);
+        }
         if (boundary.entryOwned())
             entryLayersOf[boundary.nodeId].push_back(boundary.layerId);
     }
@@ -578,6 +595,10 @@ RenderConfinement confineNodeChange(const Composition& composition,
             }
         }
         if (const auto found = drives.find(id); found != drives.end()) {
+            hasSuccessor = true;
+            pending.insert(pending.end(), found->second.begin(), found->second.end());
+        }
+        if (const auto found = matteNodeTargets.find(id); found != matteNodeTargets.end()) {
             hasSuccessor = true;
             pending.insert(pending.end(), found->second.begin(), found->second.end());
         }

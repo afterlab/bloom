@@ -1,4 +1,5 @@
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -303,10 +304,16 @@ constantMatchesSchema(const std::string_view schemaKey,
         return value != nullptr &&
                (*value == kCombineChannelsPremultiplied || *value == kCombineChannelsStraight);
     }
-    if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel") {
+    if (schemaKey == "bloom.set-alpha.channel" || schemaKey == "bloom.multiply-alpha.channel" ||
+        schemaKey == kEffectMaskChannelSchemaKey || schemaKey == kImageToMaskChannelSchemaKey) {
         // The closed matte selector (render::MatteSelection): 0-4 A/R/G/B/Luma, 5-9 inverted.
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value != nullptr && *value >= 0 && *value <= 9;
+    }
+    // #383 Mask Combine: Add, Subtract, Intersect, Difference.
+    if (schemaKey == kMaskCombineModeSchemaKey) {
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value < kMaskCombineModeCount;
     }
     if (schemaKey == "bloom.ocio-cst.from" || schemaKey == "bloom.ocio-cst.to" ||
         schemaKey == "bloom.ocio-file.process-space") {

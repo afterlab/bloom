@@ -379,9 +379,15 @@ bool CanonicalGraph::eraseNode(const NodeId id) {
     for (auto& target : layerOutputs_) {
         if (target.trackMatte) {
             const auto* source = findLayer(target.trackMatte->source);
-            if (source && source->nodeId == id)
+            if ((source && source->nodeId == id) ||
+                (target.trackMatte->node && target.trackMatte->node->nodeId == id))
                 target.trackMatte.reset();
         }
+        // #383: a matte mask whose node disappears goes with it, as a matte does. Its parameters
+        // are left to the caller's cleanup, as a removed node's are.
+        std::erase_if(target.masks, [id](const auto& mask) {
+            return mask.matte && mask.matte->nodeId == id;
+        });
     }
     std::erase_if(layerOutputs_, [id](const auto& boundary) { return boundary.nodeId == id; });
     // #502: an entry layer leaves with its slot. Its parameters stay in the store for the
@@ -409,7 +415,8 @@ void CanonicalGraph::clearTrackMattesOutsideMerge(const LayerId layer) {
         return std::nullopt;
     };
     for (auto& target : layerOutputs_) {
-        if (!target.trackMatte || (target.layerId != layer && target.trackMatte->source != layer))
+        if (!target.trackMatte || target.trackMatte->node ||
+            (target.layerId != layer && target.trackMatte->source != layer))
             continue;
         const auto targetMerge = mergeOf(target.layerId);
         if (!targetMerge || targetMerge != mergeOf(target.trackMatte->source))
@@ -577,6 +584,16 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
         if (matte.channel != TrackMatteChannel::Alpha && matte.channel != TrackMatteChannel::Luma)
             result.add(ValidationCode::InvalidValue, path + ".channel",
                        "Track matte channel must be Alpha or Luma");
+        // #383: a node matte names a Mask output of this composition, and no source layer.
+        if (matte.node) {
+            if (matte.source.isValid())
+                result.add(ValidationCode::InvalidLayerBoundary, path + ".source",
+                           "A node track matte has no source layer");
+            if (outputKind(*matte.node, registry) != SocketValueKind::Mask)
+                result.add(ValidationCode::MissingReference, path + ".node",
+                           "Track matte node must be a Mask output in the same composition");
+            continue;
+        }
         if (matte.source == boundary.layerId) {
             result.add(ValidationCode::InvalidLayerBoundary, path + ".source",
                        "A layer cannot be its own track matte");
@@ -594,10 +611,19 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             result.add(ValidationCode::InvalidLayerBoundary, path + ".source",
                        "Track matte source must be a layer in the same Merge");
     }
+    // #383: a matte mask names a Mask output of this composition.
+    for (const auto& boundary : layerOutputs_)
+        for (std::size_t index = 0; index < boundary.masks.size(); ++index)
+            if (const auto& matte = boundary.masks[index].matte;
+                matte && outputKind(*matte, registry) != SocketValueKind::Mask)
+                result.add(ValidationCode::MissingReference,
+                           "layerOutputs[" + std::to_string(boundary.layerId.value()) +
+                               "].masks[" + std::to_string(index) + "].matte",
+                           "A matte mask must name a Mask output in the same composition");
     for (const auto& boundary : layerOutputs_) {
         std::unordered_set<LayerId> chain{boundary.layerId};
         auto matte = boundary.trackMatte;
-        while (matte) {
+        while (matte && !matte->node) {
             const auto found = boundariesByLayer.find(matte->source);
             if (found == boundariesByLayer.end())
                 break;
@@ -642,6 +668,19 @@ ValidationResult CanonicalGraph::validate(const ParameterStore& parameters,
             adjacency[matteSource->second->nodeId].push_back(boundary.nodeId);
             ++indegree[boundary.nodeId];
         }
+        // #383: a node matte, or a matte mask's node, evaluates before the layer it mattes, so it
+        // must not depend on that layer (or, for a Merge entry's own layer, on its Merge).
+        const auto orderMatteNode = [&](const std::optional<OutputPortRef>& matte) {
+            if (matte && indegree.contains(boundary.nodeId) && indegree.contains(matte->nodeId) &&
+                matte->nodeId != boundary.nodeId) {
+                adjacency[matte->nodeId].push_back(boundary.nodeId);
+                ++indegree[boundary.nodeId];
+            }
+        };
+        if (boundary.trackMatte)
+            orderMatteNode(boundary.trackMatte->node);
+        for (const auto& mask : boundary.masks)
+            orderMatteNode(mask.matte);
     }
 
     for (const auto& edge : edges_) {
@@ -967,6 +1006,23 @@ bool CanonicalGraph::acceptsConnection(const SocketValueKind source, const Input
         return false;
     const auto port = findInputPort(*definition, fixed->port);
     return port && isAcceptedInputConnection(source, *port);
+}
+
+bool dependsOnNode(const CanonicalGraph& graph, const NodeId node, const NodeId upstream) {
+    std::vector<NodeId> pending{node};
+    std::unordered_set<NodeId> seen;
+    while (!pending.empty()) {
+        const auto id = pending.back();
+        pending.pop_back();
+        if (id == upstream)
+            return true;
+        if (!seen.insert(id).second)
+            continue;
+        for (const auto& edge : graph.edges())
+            if (destinationNode(edge.destination) == id)
+                pending.push_back(edge.source.nodeId);
+    }
+    return false;
 }
 
 } // namespace bloom::document

@@ -16,6 +16,7 @@ target_sources(
         node_definition_registry.cpp
         node_layout.cpp
         layer_masks.cpp
+        matte_nodes.cpp
         layer_source.cpp
         merge_entries.cpp
         channel_nodes.cpp

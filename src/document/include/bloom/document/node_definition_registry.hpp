@@ -215,6 +215,9 @@ struct InputPortDefinition {
     bool acceptsPixelKinds = false;
     // #525: a Fields input that reads any field kind (ScalarField, Vector2Field or ColorField).
     bool acceptsFieldKinds = false;
+    // #383: an effect's Mask input (matte_nodes.hpp) that also takes an Image, read through its
+    // matte selector. False for every other port.
+    bool acceptsImageMatte = false;
 
     friend bool operator==(const InputPortDefinition&, const InputPortDefinition&) = default;
 };
@@ -238,7 +241,8 @@ struct InputPortDefinition {
                                                        const InputPortDefinition& input) noexcept {
     return isAcceptedSocketConnection(source, input.valueKind) ||
            (input.acceptsPixelKinds && isPixelSocketKind(source)) ||
-           (input.acceptsFieldKinds && isFieldSocketKind(source));
+           (input.acceptsFieldKinds && isFieldSocketKind(source)) ||
+           (input.acceptsImageMatte && source == SocketValueKind::Image);
 }
 
 struct OutputPortDefinition {
@@ -393,6 +397,8 @@ enum class NodeLoweringKind {
     Field,
     // #525 Field Sample: a field read at one position, a value (runtime::CompiledValueFieldSample).
     ValueFieldSample,
+    // #383: Mask Combine and Image to Mask (matte_nodes.hpp), lowered to image combines.
+    Matte,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -439,6 +445,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Cryptomatte:
     case NodeLoweringKind::ImagePreview:
     case NodeLoweringKind::Adjustment:
+    case NodeLoweringKind::Matte:
         return false;
     }
     return false;

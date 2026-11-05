@@ -8,6 +8,7 @@
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/matte_nodes.hpp>
 
 #include <bloom/document/image_preview.hpp>
 
@@ -646,6 +647,9 @@ template <typename Definition>
         return definition == shapeDefinition();
     case NodeLoweringKind::Mask:
         return definition == maskDefinition();
+    // #383 Mask Combine and Image to Mask.
+    case NodeLoweringKind::Matte:
+        return definition == maskCombineDefinition() || definition == imageToMaskDefinition();
     case NodeLoweringKind::Adjustment:
         return definition == adjustmentDefinition();
     case NodeLoweringKind::Solid:
@@ -920,6 +924,13 @@ template <typename Definition>
 }
 
 [[nodiscard]] bool isValidDefinition(const NodeDefinition& definition) {
+    using namespace bloom::document;
+    // #383: an effect mask is valid exactly on an effect that takes one, after which the rest of
+    // the definition is checked as the effect's own shape.
+    if (hasEffectMask(definition)) {
+        const auto effect = withoutEffectMask(definition);
+        return takesEffectMask(effect) && isValidDefinition(effect);
+    }
     if (definition.key.typeId.empty() || definition.key.schemaVersion == 0 ||
         !hasUniqueNonEmptyNames(definition.inputs) || !hasUniqueNonEmptyNames(definition.outputs) ||
         !hasValidParameters(definition.parameters)) {
@@ -1641,7 +1652,13 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         channelRemoveDefinition(),
         channelPassDefinition(),
         imageToChannelSetDefinition(),
-        cryptomatteDefinition()};
+        cryptomatteDefinition(),
+        maskCombineDefinition(),
+        imageToMaskDefinition()};
+    // #383: every grade, colour-management and filter effect takes an optional mask.
+    for (auto& definition : definitions)
+        if (takesEffectMask(definition))
+            appendEffectMask(definition);
     // #525: the Fields family, in menu order.
     for (const auto& field : fieldNodeSpecs())
         definitions.push_back(fieldNodeDefinition(field));

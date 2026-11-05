@@ -5,6 +5,7 @@
 #include <bloom/document/vignette_nodes.hpp>
 
 #include <bloom/document/layer_masks.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
 
@@ -309,6 +310,10 @@ const std::vector<Entry>& table() {
         {kVignetteCenterSchemaKey,
          pixels(-kMaximumVignetteCenter, kMaximumVignetteCenter, 4096.0)},
         {"bloom.set-alpha.channel", choice()},
+        // #383 the matte workflow's selectors.
+        {kEffectMaskChannelSchemaKey, choice()},
+        {kImageToMaskChannelSchemaKey, choice()},
+        {kMaskCombineModeSchemaKey, choice()},
         // #479 Combine Channels.
         {"bloom.combine-channels.source", choice()},
         {"bloom.combine-channels.alpha-mode", choice()},
