@@ -310,6 +310,20 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.matte.track", "track matte Alpha/Luma/inverted/absent through the Merge",
         GpuCoverageDisposition::Required,
         "src/runtime track matte production scene preparation"});
+    // #383 matte workflow: every axis lowers to the resident Channel Select, ImageCombineV1
+    // Multiply Alpha and Image Mix mask dispatches, never a CPU matte pass.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.mask.combine", "Mask Combine Add/Subtract/Intersect/Difference over the canvas",
+        GpuCoverageDisposition::Required, "src/runtime matte workflow production scene preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.mask.effect_input", "an effect's optional mask input, Mask or Image, inverted",
+        GpuCoverageDisposition::Required, "src/runtime matte workflow production scene preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.mask.layer_matte", "a node Mask (Cryptomatte, Mask Combine) as a layer mask",
+        GpuCoverageDisposition::Required, "src/runtime matte workflow production scene preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.matte.track_node", "a track matte read from a node Mask through the Merge",
+        GpuCoverageDisposition::Required, "src/runtime matte workflow production scene preparation"});
     // #480 Nearest resampling is a pixel semantic of AffineBilinearV1 (its sampling word), never a
     // CPU resample: Resize, Fit and Transform 2D Nearest each reach the resident affine command.
     out.push_back(GpuFeatureCoverageEntry{
@@ -521,6 +535,8 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::Channel:
     case NodeLoweringKind::Cryptomatte:
     case NodeLoweringKind::Adjustment:
+    // #383: Mask Combine and Image to Mask lower to image combines.
+    case NodeLoweringKind::Matte:
     // #525: a Fields node's rasters (its field outputs compile into them).
     case NodeLoweringKind::Field:
         return true;
@@ -571,6 +587,7 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::ImageEffect:
     case NodeLoweringKind::Mask: // a canvas Solid masked by a LayerMaskKernel effect
     case NodeLoweringKind::Field: // a canvas Solid replaced by a FieldRasterKernel effect
+    case NodeLoweringKind::Matte: // #383: a canvas Solid combined with Masks
         return "operation.CompiledImageEffect";
     case NodeLoweringKind::Channel: // channel algebra reaches pixels only through the gather
         return "operation.CompiledChannelShuffle";

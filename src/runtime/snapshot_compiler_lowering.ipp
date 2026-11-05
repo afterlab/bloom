@@ -60,6 +60,13 @@
         }
     }
 
+    // #383: a Layer node lowers its matte masks with its content, so after their nodes.
+    for (const auto* node : reachableNodes_)
+        if (const auto boundary = layerOutputs_.find(node->id); boundary != layerOutputs_.end())
+            for (const auto& mask : boundary->second->masks)
+                if (mask.matte)
+                    orderBefore(mask.matte->nodeId, node->id);
+
     // ADR 0028: a track-matte target is lowered after its source layer.
     for (const auto* node : reachableNodes_) {
         const auto boundary = layerOutputs_.find(node->id);
@@ -174,6 +181,10 @@ void layerOperationDependencies(const document::LayerOutputBoundary& layer,
     if (const auto* edge = layerSlotInputEdge(layer.nodeId, *layer.entrySlot,
                                               document::kLayerStackContentInputRole))
         dependencies.push_back(edge->source.nodeId);
+    // #383: an entry layer's matte masks are lowered with it.
+    for (const auto& mask : layer.masks)
+        if (mask.matte)
+            dependencies.push_back(mask.matte->nodeId);
     if (layer.parent)
         if (const auto* parent = composition_->graph().findLayer(*layer.parent))
             layerOperationDependencies(*parent, dependencies, seen);
@@ -195,7 +206,9 @@ void entryDependencies(const document::NodeId merge, const document::LayerStackE
         // An adjustment entry's coverage is placed with its Layer node's parent.
         if (const auto* parent = composition_->graph().findLayer(*layer->parent))
             layerOperationDependencies(*parent, dependencies, seen);
-    if (layer->trackMatte)
+    if (layer->trackMatte && layer->trackMatte->node)
+        dependencies.push_back(layer->trackMatte->node->nodeId); // #383: a node matte
+    else if (layer->trackMatte)
         if (const auto* source = composition_->graph().findLayer(layer->trackMatte->source))
             layerOperationDependencies(*source, dependencies, seen);
 }
@@ -729,13 +742,18 @@ lower(const std::vector<document::NodeId>& order) {
             !emptyParentInput && !emptyImages_.contains(nodeId)) {
             if (const auto content =
                     findInputOperation(nodeId, document::kLayerOutputContentInputPort, indices)) {
-                auto kernel = lowerLayerMasks(*boundary->second);
-                if (!kernel)
+                maskedContent = lowerMaskedContent(nodeId, *boundary->second, *content, indices);
+                if (!maskedContent)
                     return {};
-                maskedContent = runtime::OperationIndex::fromRaw(operations.size());
-                operations.emplace_back(
-                    runtime::CompiledImageEffect{nodeId, *content, std::move(*kernel)});
             }
+        }
+        // #383 Mask Combine and Image to Mask.
+        if (definition->second->lowering == runtime::NodeLoweringKind::Matte) {
+            const auto matte = lowerMatteNode(*node, indices);
+            if (!matte)
+                return {};
+            indices.emplace(nodeId, *matte);
+            continue;
         }
         // ADR 0028 Mask node: an opaque white canvas, masked.
         if (definition->second->lowering == runtime::NodeLoweringKind::Mask) {
@@ -776,8 +794,16 @@ lower(const std::vector<document::NodeId>& order) {
             operations.emplace_back(runtime::CompiledMerge{nodeId, {{{}, {}, output->input}}});
             output->input = normalized;
         }
-        const auto index = runtime::OperationIndex::fromRaw(operations.size());
+        auto index = runtime::OperationIndex::fromRaw(operations.size());
         operations.push_back(*operation);
+        // #383: an effect with a connected mask applies only where the mask covers it.
+        if (definition->second->lowering == runtime::NodeLoweringKind::ImageEffect &&
+            document::hasEffectMask(*definition->second)) {
+            const auto masked = applyEffectMask(*node, index, indices);
+            if (!masked)
+                return {};
+            index = *masked;
+        }
         indices.emplace(nodeId, index);
     }
 
@@ -1156,6 +1182,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::Shape:
         return lowerShape(node);
     case NodeLoweringKind::Mask: // lowered in the main loop: a canvas Solid then a mask effect
+    case NodeLoweringKind::Matte: // #383, lowered in the main loop (lowerMatteNode())
     case NodeLoweringKind::Adjustment: // lowered in the main loop: the stack below its entry
     // ADR 0026: channel nodes are lowered in the main loop (a Shuffle's image output is a
     // CompiledChannelShuffle; channel algebra compiles into its expression).
@@ -1851,9 +1878,10 @@ lowerImageEffect(const document::NodeRecord& node,
 
 [[nodiscard]] bool hasReachableOutput(const document::NodeId nodeId,
                                       const std::string_view port) const {
-    return std::ranges::any_of(reachableEdges_, [&](const auto* edge) {
-        return edge->source.nodeId == nodeId && edge->source.port == port;
-    });
+    return reachedMatteOutputs_.contains({nodeId, std::string(port)}) ||
+           std::ranges::any_of(reachableEdges_, [&](const auto* edge) {
+               return edge->source.nodeId == nodeId && edge->source.port == port;
+           });
 }
 
 [[nodiscard]] const std::string* channelText(const document::NodeRecord& node,

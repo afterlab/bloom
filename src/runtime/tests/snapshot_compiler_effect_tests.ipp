@@ -121,8 +121,10 @@ void testExposureOffsetLowering(Expectations& expectations) {
         auto& graph = composition->graph();
         const auto effectId = NodeId::fromRaw(920);
         const auto* definition = builtInNodeDefinitions().find(type, 1);
-        require(definition != nullptr && definition->parameters.size() == 1,
-                "pointwise definition exists with one scalar control");
+        // #383: the scalar control, then the effect mask's channel selector.
+        require(definition != nullptr && definition->parameters.size() == 2 &&
+                    definition->parameters.back().role == "maskChannel",
+                "pointwise definition exists with one scalar control and the mask channel");
         const auto parameterId = ParameterId::fromRaw(920);
         require(composition->parameters().insert(
                     {parameterId, definition->parameters.front().schemaKey,
@@ -925,9 +927,10 @@ void testColorGradeLowering(Expectations& expectations) {
             std::vector<ParameterId> ids;
             runtime::forEachColorGradeOperand(kernel,
                                               [&](const auto& operand) { ids.push_back(operand.id); });
+            // #383: the effect mask's channel selector is the last parameter, never an operand.
             bool ordered = ids.size() + (type == kHueSaturationNodeType || type == kGradeNodeType
                                              ? 0U
-                                             : 1U) ==
+                                             : 1U) + 1U ==
                            definition->parameters.size();
             for (std::size_t i = 0; ordered && i < ids.size(); ++i)
                 ordered = ids[i] == ParameterId::fromRaw(2000 + i);

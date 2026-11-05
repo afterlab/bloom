@@ -19,6 +19,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/layer_masks.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/parameter.hpp>
@@ -35,6 +36,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <set>
 #include <new>
 #include <optional>
 #include <queue>
@@ -190,7 +192,7 @@ class CompilePass final {
                 return false;
             }
             anySolo_ = anySolo_ || boundary.solo;
-            if (boundary.trackMatte)
+            if (boundary.trackMatte && !boundary.trackMatte->node)
                 matteSources_.insert(boundary.trackMatte->source);
             // #502: a Merge entry's own layer has no node of its own; its nodeId is the Merge's.
             if (!boundary.entryOwned())
@@ -433,6 +435,16 @@ class CompilePass final {
             else
                 pending.push_back(other->nodeId);
         }
+        // #383: a node track matte and every matte mask's node are read by the layer.
+        const auto reachMatte = [&](const document::OutputPortRef& matte) {
+            pending.push_back(matte.nodeId);
+            reachedMatteOutputs_.emplace(matte.nodeId, matte.port);
+        };
+        if (layer.trackMatte && layer.trackMatte->node)
+            reachMatte(*layer.trackMatte->node);
+        for (const auto& mask : layer.masks)
+            if (mask.matte)
+                reachMatte(*mask.matte);
     }
 
     // #502: an entry layer is reached with its Merge's slot, or as a reached layer's parent or
@@ -1087,6 +1099,7 @@ class CompilePass final {
 #include "snapshot_compiler_fields.ipp"
 #include "snapshot_compiler_recipes.ipp"
 #include "snapshot_compiler_value_graph.ipp"
+#include "snapshot_compiler_mattes.ipp"
 
     void addTopologyFailure(const document::NodeId nodeId, std::string detail) {
         addFailure(runtime::CompileDiagnosticCode::TopologyInvariant, subject(nodeId, "graph"),
@@ -1158,6 +1171,9 @@ class CompilePass final {
     // #364: operations of a node with several pixel outputs, by output port (a Cryptomatte's Mask
     // and Image). A port listed here wins over the node's entry in the lowering index.
     std::map<std::pair<document::NodeId, std::string>, runtime::OperationIndex> portOperations_;
+    // #383: the Mask outputs a reached layer's node track matte or matte masks read, which are
+    // used as an edge from them would be.
+    std::set<std::pair<document::NodeId, std::string>> reachedMatteOutputs_;
     std::unordered_set<document::NodeId> transformParents_;
     // #502 every Merge entry is a layer. Entry layers (LayerOutputBoundary::entryOwned) that are
     // transform parents, the entry layers the reachable set reached (a consumed entry's, or a

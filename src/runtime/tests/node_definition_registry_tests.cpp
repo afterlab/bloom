@@ -1,6 +1,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/graph.hpp>
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/runtime/gpu_coverage_contract.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -121,6 +122,15 @@ void testValidationAndDuplicates(Expectations& expectations) {
                         "different schema versions may coexist");
 }
 
+// #383: a grade, colour or filter effect as it was before its effect mask was appended (the mask
+// input and channel are checked on their own).
+std::optional<bloom::document::NodeDefinition>
+withoutMask(const bloom::document::NodeDefinition* definition) {
+    if (definition == nullptr || !bloom::document::hasEffectMask(*definition))
+        return std::nullopt;
+    return bloom::document::withoutEffectMask(*definition);
+}
+
 void testFreezeAndBuiltIns(Expectations& expectations) {
     using namespace bloom;
     runtime::NodeDefinitionRegistry registry;
@@ -142,8 +152,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
     // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette; #525 adds the
-    // sixteen Fields nodes.
-    expectations.expect(registry.definitions().size() == 172,
+    // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask.
+    expectations.expect(registry.definitions().size() == 174,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -257,7 +267,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // #504 Colorize: an Image in and out; constant mode (Tint by default), source and cycle with no
     // socket; every colour and scalar animatable with its own socket in parameter order. #541: the
     // optional gradient last, animatable as a whole value with no socket.
-    const auto* colorize = registry.find("bloom.colorize", 1);
+    const auto colorizeUnmasked = withoutMask(registry.find("bloom.colorize", 1));
+    const auto* colorize = colorizeUnmasked ? &*colorizeUnmasked : nullptr;
     const auto socketsMatch = [&] {
         std::size_t socket = 1;
         for (const auto& parameter : colorize->parameters) {
@@ -295,7 +306,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
     // no socket; every value animatable with its own socket in parameter order, the centre a
     // Vector 2 offset from the frame's centre.
-    const auto* vignette = registry.find("bloom.vignette", 1);
+    const auto vignetteUnmasked = withoutMask(registry.find("bloom.vignette", 1));
+    const auto* vignette = vignetteUnmasked ? &*vignetteUnmasked : nullptr;
     const auto vignetteSockets = [&] {
         std::size_t socket = 1;
         for (const auto& parameter : vignette->parameters) {
@@ -351,9 +363,12 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // and Curves (#493 schema 2) nine animatable point-list curves (master, red, green, blue,
     // alpha, then the four hue curves) with no sockets, then a constant clamp; Hue/Saturation has
     // an animatable hue and saturation.
-    const auto* levels = registry.find("bloom.levels", 1);
-    const auto* curves = registry.find("bloom.curves", 2);
-    const auto* hueSaturation = registry.find("bloom.hue-saturation", 1);
+    const auto levelsUnmasked = withoutMask(registry.find("bloom.levels", 1));
+    const auto* levels = levelsUnmasked ? &*levelsUnmasked : nullptr;
+    const auto curvesUnmasked = withoutMask(registry.find("bloom.curves", 2));
+    const auto* curves = curvesUnmasked ? &*curvesUnmasked : nullptr;
+    const auto hueSaturationUnmasked = withoutMask(registry.find("bloom.hue-saturation", 1));
+    const auto* hueSaturation = hueSaturationUnmasked ? &*hueSaturationUnmasked : nullptr;
     expectations.expect(
         levels && levels->lowering == runtime::NodeLoweringKind::ImageEffect &&
             levels->category == document::NodeCategory::Grade && levels->inputs.size() == 26 &&
@@ -404,7 +419,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "#340: Hue/Saturation exposes an animatable hue and saturation");
     // #494: Grade has the four wheels (master, red, green, blue each) then the six primaries,
     // every one an animatable Scalar with its own socket.
-    const auto* grade = registry.find("bloom.grade", 1);
+    const auto gradeUnmasked = withoutMask(registry.find("bloom.grade", 1));
+    const auto* grade = gradeUnmasked ? &*gradeUnmasked : nullptr;
     expectations.expect(
         grade && grade->lowering == runtime::NodeLoweringKind::ImageEffect &&
             grade->category == document::NodeCategory::Grade && grade->inputs.size() == 23 &&
@@ -974,10 +990,85 @@ void testLargeFrozenRegistryLookup(Expectations& expectations) {
 
 } // namespace
 
+// #383: every Grade, Color Management and Filters image effect ends with the optional effect mask
+// (a Mask input that also lands an Image, then a constant Alpha-default selector); Glow keeps its
+// own mask; Mask Combine and Image to Mask are Matte lowerings under Compositing.
+void testMatteWorkflowDefinitions(Expectations& expectations) {
+    using namespace bloom;
+    runtime::NodeDefinitionRegistry registry;
+    expectations.expect(runtime::registerBuiltInNodeDefinitions(registry), "built-ins register");
+    std::size_t masked = 0;
+    bool shaped = true;
+    for (const auto& definition : registry.definitions()) {
+        const bool effect = definition.lowering == runtime::NodeLoweringKind::ImageEffect &&
+                            (definition.category == document::NodeCategory::Grade ||
+                             definition.category == document::NodeCategory::Color ||
+                             definition.category == document::NodeCategory::Filters);
+        if (!document::hasEffectMask(definition)) {
+            // Only an effect whose input is a Mask (the matte filters) or that has a mask of its
+            // own goes without.
+            shaped = shaped && !(effect && document::takesEffectMask(definition));
+            continue;
+        }
+        ++masked;
+        const auto& input = definition.inputs.back();
+        const auto& channel = definition.parameters.back();
+        shaped = shaped && effect && input.name == "mask" &&
+                 input.valueKind == runtime::SocketValueKind::Mask && !input.required &&
+                 input.acceptsImageMatte && channel.role == "maskChannel" &&
+                 !channel.supportsAnimation &&
+                 channel.defaultValue == document::ParameterValue{std::int64_t{0}};
+    }
+    const bool named = std::ranges::all_of(
+        std::array<std::string_view, 14>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+                                         "bloom.exposure", "bloom.offset", "bloom.multiply",
+                                         "bloom.invert", "bloom.colorize",
+                                         "bloom.ocio-colour-space-transform",
+                                         "bloom.ocio-file-transform", "bloom.gaussian-blur",
+                                         "bloom.box-blur", "bloom.vignette", "bloom.curves"},
+        [&](const std::string_view type) {
+            return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
+                return definition.key.typeId == type && document::hasEffectMask(definition);
+            });
+        });
+    expectations.expect(shaped && named && masked == 14,
+                        "every grade, colour and filter effect carries the effect mask");
+    const auto* glow = registry.find("bloom.glow", 2);
+    const auto* matteBlur = registry.find("bloom.matte-blur", 1);
+    const auto* exposure = registry.find("bloom.exposure", 1);
+    expectations.expect((glow == nullptr || !document::hasEffectMask(*glow)) && matteBlur &&
+                            !document::hasEffectMask(*matteBlur) && exposure &&
+                            document::hasEffectMask(*exposure),
+                        "Glow keeps its own mask input, a matte filter takes none, Exposure one");
+    const auto* combine = registry.find(document::kMaskCombineNodeType, 1);
+    expectations.expect(
+        combine && combine->lowering == runtime::NodeLoweringKind::Matte &&
+            combine->category == document::NodeCategory::Compositing &&
+            combine->inputs.size() == 2 &&
+            combine->inputs[0].valueKind == runtime::SocketValueKind::Mask &&
+            !combine->inputs[0].required && !combine->inputs[1].required &&
+            combine->outputs ==
+                std::vector<document::OutputPortDefinition>{
+                    {"mask", runtime::SocketValueKind::Mask}} &&
+            combine->parameters.size() == 1 && combine->parameters[0].role == "mode",
+        "Mask Combine takes two optional Masks and gives one, by a mode");
+    const auto* toMask = registry.find(document::kImageToMaskNodeType, 1);
+    expectations.expect(
+        toMask && toMask->lowering == runtime::NodeLoweringKind::Matte &&
+            toMask->inputs.size() == 1 &&
+            toMask->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            toMask->outputs ==
+                std::vector<document::OutputPortDefinition>{
+                    {"mask", runtime::SocketValueKind::Mask}} &&
+            toMask->parameters.size() == 1 && toMask->parameters[0].role == "channel",
+        "Image to Mask takes an Image and gives a Mask, by a channel");
+}
+
 int main() try {
     Expectations expectations;
     testValidationAndDuplicates(expectations);
     testFreezeAndBuiltIns(expectations);
+    testMatteWorkflowDefinitions(expectations);
     testStructuralLoweringsRequireCanonicalKeys(expectations);
     testValueLoweringShapeContract(expectations);
     testLargeFrozenRegistryLookup(expectations);

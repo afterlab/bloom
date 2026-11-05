@@ -211,12 +211,9 @@ entryLayerOperation(const document::LayerOutputBoundary& layer,
         operations.emplace_back(runtime::CompiledMerge{merge, {}});
     } else if (!layer.masks.empty()) {
         // ADR 0028 layer masks: in content space, before the layer transforms it.
-        auto kernel = lowerLayerMasks(layer);
-        if (!kernel)
+        content = lowerMaskedContent(merge, layer, *content, indices);
+        if (!content)
             return std::nullopt;
-        const auto masked = runtime::OperationIndex::fromRaw(operations.size());
-        operations.emplace_back(runtime::CompiledImageEffect{merge, *content, std::move(*kernel)});
-        content = masked;
     }
     auto lowered = lowerLayerBoundary(layer, merge, *content, pixelAspect, indices);
     if (!lowered)
@@ -239,7 +236,12 @@ lowerTrackMatte(const document::NodeId merge, const document::LayerOutputBoundar
     const auto owner = target.entryOwned() ? merge : target.nodeId;
     const auto* source = composition_->graph().findLayer(target.trackMatte->source);
     std::optional<runtime::OperationIndex> matte;
-    if (source != nullptr) {
+    // #383: a node matte is that Mask output, in composition space and time.
+    if (target.trackMatte->node) {
+        matte = matteNodeOperation(owner, *target.trackMatte->node, indices);
+        if (!matte)
+            return std::nullopt;
+    } else if (source != nullptr) {
         matte = layerOperationOf(*source, indices);
         if (!matte && hasFailure_)
             return std::nullopt;
@@ -490,12 +492,10 @@ lowerLayerStack(const document::NodeRecord& node, const runtime::NodeDefinition&
             white = appendWhiteFrame(merge);
             auto content = white;
             if (!layer->masks.empty()) {
-                auto kernel = lowerLayerMasks(*layer);
-                if (!kernel)
+                const auto masked = lowerMaskedContent(merge, *layer, white, indices);
+                if (!masked)
                     return std::nullopt;
-                content = runtime::OperationIndex::fromRaw(operations.size());
-                operations.emplace_back(
-                    runtime::CompiledImageEffect{merge, white, std::move(*kernel)});
+                content = *masked;
             }
             auto lowered = lowerLayerBoundary(*layer, merge, content, 1.0, indices);
             if (!lowered)

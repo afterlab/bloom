@@ -1082,6 +1082,64 @@ displayProofRunner(const bool customView) {
                                112600, ImageCoverageChannel::Alpha, false, true)},
                           "production track mattes");
         });
+    // #383 matte workflow: Mask Combine, Image to Mask, the effect mask, matte layer masks and
+    // node track mattes as the production lowering's chains of existing kernels.
+    constexpr auto matteEvidence = "src/runtime matte workflow production scene preparation";
+    const auto combinePlans = [] {
+        using bloom::document::LayerMaskMode;
+        return std::vector{
+            bloom::gpu_coverage_plans::maskCombinePlan(23830000, LayerMaskMode::Add),
+            bloom::gpu_coverage_plans::maskCombinePlan(23830100, LayerMaskMode::Subtract),
+            bloom::gpu_coverage_plans::maskCombinePlan(23830200, LayerMaskMode::Intersect),
+            bloom::gpu_coverage_plans::maskCombinePlan(23830300, LayerMaskMode::Difference)};
+    };
+    const auto imageToMaskPlans = [] {
+        using bloom::render::ImageCoverageChannel;
+        return std::vector{
+            bloom::gpu_coverage_plans::imageToMaskPlan(23830400, ImageCoverageChannel::Alpha, false),
+            bloom::gpu_coverage_plans::imageToMaskPlan(23830500, ImageCoverageChannel::Luma, true),
+            bloom::gpu_coverage_plans::imageToMaskPlan(23830600, ImageCoverageChannel::Green,
+                                                       false)};
+    };
+    for (const auto* id : {"feature.mask.combine", "node.bloom.mask-combine"})
+        add(
+            id, GpuCoverageFixtureCriterion::Prepared, matteEvidence,
+            [runAll, combinePlans] { return runAll(combinePlans(), "production Mask Combine"); },
+            {}, FixturePrerequisite::PackagedShaderTools);
+    add("node.bloom.image-to-mask", GpuCoverageFixtureCriterion::Prepared, matteEvidence,
+        [runAll, imageToMaskPlans] {
+            return runAll(imageToMaskPlans(), "production Image to Mask");
+        });
+    add(
+        "feature.mask.effect_input", GpuCoverageFixtureCriterion::Prepared, matteEvidence,
+        [runAll] {
+            return runAll({bloom::gpu_coverage_plans::effectMaskPlan(23830700, false, false),
+                           bloom::gpu_coverage_plans::effectMaskPlan(23830800, true, false),
+                           bloom::gpu_coverage_plans::effectMaskPlan(23830900, false, true),
+                           bloom::gpu_coverage_plans::effectMaskPlan(23830950, true, false, true),
+                           bloom::gpu_coverage_plans::effectMaskPlan(23830980, false, true,
+                                                                     true)},
+                          "production effect mask");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "feature.mask.layer_matte", GpuCoverageFixtureCriterion::Prepared, matteEvidence,
+        [runAll] {
+            return runAll({bloom::gpu_coverage_plans::layerMatteMaskPlan(23831000)},
+                          "production matte layer masks");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
+    add(
+        "feature.matte.track_node", GpuCoverageFixtureCriterion::Prepared, matteEvidence,
+        [runAll] {
+            using bloom::render::ImageCoverageChannel;
+            return runAll({bloom::gpu_coverage_plans::nodeTrackMattePlan(
+                               23831100, ImageCoverageChannel::Alpha, false),
+                           bloom::gpu_coverage_plans::nodeTrackMattePlan(
+                               23831200, ImageCoverageChannel::Alpha, true)},
+                          "production node track mattes");
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     add("node.bloom.multiply-alpha", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime image combine production scene preparation", [] {
             return runBuilder(imageCombinePlan(bloom::runtime::ImageCombineMode::MultiplyAlpha,

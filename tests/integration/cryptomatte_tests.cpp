@@ -6,6 +6,7 @@
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/layer_mask_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/channel_nodes.hpp>
@@ -303,6 +304,53 @@ void imageInputAndMute() {
 
 } // namespace
 
+// #383: a Cryptomatte selection as a layer's matte mask (content space) and as its node track
+// matte (composition space), over a frame-sized white solid in place of the Image output.
+void asLayerMatte() {
+    Fixture f("layer-matte", true);
+    f.setMattes({"cube"});
+    const auto white =
+        *f.run<commands::AddNode>(f.composition, std::string(document::kSolidSourceNodeType),
+                                  document::Vec2d{})
+             .outputId<document::NodeId>(commands::kAddNodeOutput);
+    const auto* record = f.graph().findNode(white);
+    for (const auto& binding : record->parameters) {
+        if (binding.role == "width" || binding.role == "height")
+            f.run<commands::SetParameterSource>(
+                f.composition, binding.parameterId,
+                document::ConstantValueSource{static_cast<double>(
+                    binding.role == "width" ? fixture::kWidth : fixture::kHeight)});
+        if (binding.role == "color")
+            f.run<commands::SetParameterSource>(
+                f.composition, binding.parameterId,
+                document::ConstantValueSource{core::Color4d{1.0, 1.0, 1.0, 1.0}});
+    }
+    f.connect(white, "image", f.layer, document::kLayerOutputContentInputPort);
+    const auto layerId = f.graph().findLayer(f.graph().layerOutputs().front().layerId)->layerId;
+    const document::OutputPortRef matte{f.cryptomatte,
+                                        std::string(document::kCryptomatteMaskOutputPort)};
+    const auto close = [](const Fixture::Frame& frame, const std::vector<int>& selected) {
+        for (std::size_t pixel = 0; pixel < frame.pixels.size(); ++pixel)
+            if (std::fabs(frame.pixels[pixel].alpha() -
+                          fixture::expectedCoverage(pixel, selected)) > 1e-6F)
+                return false;
+        return true;
+    };
+    const auto mask = *f.run<commands::AddLayerMask>(f.composition, layerId, document::PathValue{},
+                                                     document::LayerMaskMode::Add, std::string{},
+                                                     matte)
+                           .outputId<document::LayerMaskId>("mask");
+    expect(f.document.snapshot().project().validate().ok(), "a Cryptomatte matte mask validates");
+    expect(close(f.frame(), {1}), "a Cryptomatte matte mask keeps the selected object");
+    f.setMattes({"sphere", "floor"});
+    expect(close(f.frame(), {0, 2}), "editing the selection re-masks the layer");
+    f.run<commands::RemoveLayerMask>(f.composition, layerId, mask);
+    f.run<commands::SetTrackMatte>(
+        f.composition, layerId,
+        document::TrackMatte{document::LayerId{}, document::TrackMatteChannel::Alpha, false, matte});
+    expect(close(f.frame(), {0, 2}), "a Cryptomatte node track matte keeps the selection");
+}
+
 int main() {
     try {
         hashing();
@@ -312,6 +360,7 @@ int main() {
         malformedManifest();
         preview();
         rankLayersAreData();
+        asLayerMatte();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

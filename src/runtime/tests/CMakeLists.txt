@@ -273,6 +273,11 @@ target_link_libraries(bloom_runtime_layer_mask_test PRIVATE bloom_runtime_compil
 bloom_enable_warnings(bloom_runtime_layer_mask_test)
 bloom_add_test(NAME bloom.runtime.layer-masks COMMAND bloom_runtime_layer_mask_test LABELS unit runtime TIMEOUT 120)
 
+add_executable(bloom_runtime_matte_workflow_test ${PROJECT_SOURCE_DIR}/tests/integration/matte_workflow_tests.cpp)
+target_link_libraries(bloom_runtime_matte_workflow_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
+bloom_enable_warnings(bloom_runtime_matte_workflow_test)
+bloom_add_test(NAME bloom.runtime.matte-workflow COMMAND bloom_runtime_matte_workflow_test LABELS unit runtime TIMEOUT 120)
+
 add_executable(bloom_runtime_channel_shuffle_test ${PROJECT_SOURCE_DIR}/tests/integration/channel_shuffle_tests.cpp)
 target_link_libraries(bloom_runtime_channel_shuffle_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR)
 bloom_enable_warnings(bloom_runtime_channel_shuffle_test)

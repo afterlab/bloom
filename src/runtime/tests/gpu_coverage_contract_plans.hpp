@@ -662,4 +662,183 @@ trackMattePlan(const std::uint64_t idBase, const bloom::render::ImageCoverageCha
     return publish(std::move(definition));
 }
 
+// #383 matte workflow axes: the production lowering's chains of existing kernels (Channel Select,
+// Multiply Alpha and Image Mix with a Mask) for Mask Combine, Image to Mask, the effect mask, matte
+// layer masks and node track mattes. Each chain ends in a Layer of the base plan.
+[[nodiscard]] inline CompiledSolid matteCanvas(const std::uint64_t idBase,
+                                               const Color4d color = {1.0, 1.0, 1.0, 1.0}) {
+    return CompiledSolid{NodeId::fromRaw(idBase),
+                         {ParameterId::fromRaw(idBase + 1), color},
+                         {ParameterId::fromRaw(idBase + 2), 16.0},
+                         {ParameterId::fromRaw(idBase + 3), 12.0}};
+}
+[[nodiscard]] inline CompiledImageEffect
+matteMultiply(const std::uint64_t node, const std::size_t base, const std::size_t matte,
+              const bloom::render::ImageCoverageChannel channel, const bool invert,
+              const double factor = 1.0) {
+    return CompiledImageEffect{NodeId::fromRaw(node), OperationIndex::fromRaw(base),
+                               bloom::runtime::ImageCombineKernel{
+                                   bloom::runtime::ImageCombineMode::MultiplyAlpha,
+                                   CompiledScalarParameter{ParameterId{}, factor}, channel,
+                                   std::nullopt, invert},
+                               false, false, OperationIndex::fromRaw(matte)};
+}
+[[nodiscard]] inline CompiledImageEffect maskedMix(const std::uint64_t node, const std::size_t base,
+                                                   const std::size_t second,
+                                                   const std::size_t mask) {
+    CompiledImageEffect mix{NodeId::fromRaw(node), OperationIndex::fromRaw(base),
+                            bloom::runtime::ImageCombineKernel{
+                                bloom::runtime::ImageCombineMode::Mix,
+                                CompiledScalarParameter{ParameterId{}, 1.0},
+                                bloom::render::ImageCoverageChannel::Alpha},
+                            false, false, OperationIndex::fromRaw(second)};
+    mix.maskInput = OperationIndex::fromRaw(mask);
+    return mix;
+}
+[[nodiscard]] inline CompiledImageEffect whiteOver(const std::uint64_t node,
+                                                   const std::size_t image) {
+    using Source = bloom::runtime::ImageChannelSource;
+    return CompiledImageEffect{
+        NodeId::fromRaw(node), OperationIndex::fromRaw(image),
+        bloom::runtime::ChannelSelectKernel{{Source::One, Source::One, Source::One, Source::One}},
+        false, false};
+}
+// One Add path mask: the first (`second` false) or the fourth mask of the layer-mask fixture.
+[[nodiscard]] inline CompiledImageEffect pathCoverage(const std::uint64_t idBase,
+                                                      const std::size_t canvas, const bool second) {
+    auto kernel = layerMaskKernel(idBase);
+    auto mask = kernel.masks[second ? 3 : 0];
+    mask.mode = bloom::document::LayerMaskMode::Add;
+    kernel.masks = {mask};
+    return CompiledImageEffect{NodeId::fromRaw(idBase), OperationIndex::fromRaw(canvas),
+                               std::move(kernel), false, false};
+}
+// `operations`, then a Layer of the base plan over the last one, its Merge and the Output.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+matteChainPlan(const std::uint64_t idBase, std::vector<CompiledOperation> operations) {
+    auto definition = basePlan()->copyDefinition();
+    auto layer = std::get<CompiledLayerOutput>(definition.operations[1]);
+    layer.input = OperationIndex::fromRaw(operations.size() - 1);
+    const auto layerIndex = OperationIndex::fromRaw(operations.size());
+    operations.push_back(layer);
+    auto merge = std::get<CompiledMerge>(definition.operations[4]);
+    merge.entries = {CompiledMergeInput{LayerSlotId::fromRaw(idBase + 900), layer.layerId,
+                                        layerIndex}};
+    const auto mergeIndex = OperationIndex::fromRaw(operations.size());
+    operations.push_back(merge);
+    operations.push_back(CompiledCompositionOutput{NodeId::fromRaw(idBase + 901), mergeIndex});
+    definition.operations = std::move(operations);
+    definition.output = OperationIndex::fromRaw(definition.operations.size() - 1);
+    return publish(std::move(definition));
+}
+// Mask Combine: two path Masks on the canvas, the first placed on it, combined by `mode`.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+maskCombinePlan(const std::uint64_t idBase, const bloom::document::LayerMaskMode mode) {
+    using bloom::document::LayerMaskMode;
+    using Channel = bloom::render::ImageCoverageChannel;
+    std::vector<CompiledOperation> operations{matteCanvas(idBase), pathCoverage(idBase + 100, 0, false),
+                                              pathCoverage(idBase + 200, 0, true),
+                                              matteMultiply(idBase + 300, 0, 1, Channel::Alpha, false)};
+    switch (mode) {
+    case LayerMaskMode::Add:
+        operations.push_back(maskedMix(idBase + 301, 3, 0, 2));
+        break;
+    case LayerMaskMode::Subtract:
+    case LayerMaskMode::Intersect:
+        operations.push_back(
+            matteMultiply(idBase + 301, 3, 2, Channel::Alpha, mode == LayerMaskMode::Subtract));
+        break;
+    case LayerMaskMode::Difference:
+    case LayerMaskMode::None:
+        operations.push_back(matteMultiply(idBase + 301, 0, 3, Channel::Alpha, true));
+        operations.push_back(maskedMix(idBase + 302, 3, 4, 2));
+        break;
+    }
+    return matteChainPlan(idBase, std::move(operations));
+}
+// Image to Mask: a coloured, partly transparent image's selected coverage over the canvas.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+imageToMaskPlan(const std::uint64_t idBase, const bloom::render::ImageCoverageChannel channel,
+                const bool invert) {
+    return matteChainPlan(idBase,
+                          {matteCanvas(idBase), matteCanvas(idBase + 10, {0.25, 0.5, 0.125, 0.75}),
+                           matteMultiply(idBase + 20, 0, 1, channel, invert)});
+}
+// The effect mask: Exposure over the gradient limited by a path Mask (or a partly transparent
+// Image read through `channel`), inverted on request. A grade keeps its input's window, so it is
+// Image Mix(input, effect, mask) after the selector; a filter (`filter`) keeps its own result as
+// the base: Image Mix(effect, input, white(effect) x (1 - m)).
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+effectMaskPlan(const std::uint64_t idBase, const bool invert, const bool imageMask,
+               const bool filter = false) {
+    using Channel = bloom::render::ImageCoverageChannel;
+    std::vector<CompiledOperation> operations{
+        gradient(false, idBase),
+        CompiledImageEffect{NodeId::fromRaw(idBase + 10), OperationIndex::fromRaw(0),
+                            bloom::runtime::PointwiseImageKernel{
+                                bloom::runtime::PointwiseImageEffect::Exposure,
+                                CompiledScalarParameter{ParameterId::fromRaw(idBase + 11), 1.5}},
+                            false, false},
+        matteCanvas(idBase + 20, imageMask ? Color4d{0.5, 0.75, 0.25, 0.625} : Color4d{1, 1, 1, 1})};
+    std::size_t mask = 2;
+    if (!imageMask) {
+        operations.push_back(pathCoverage(idBase + 100, 2, false));
+        mask = 3;
+    }
+    const auto channel = imageMask ? Channel::Luma : Channel::Alpha;
+    if (filter) {
+        operations.push_back(whiteOver(idBase + 12, 1));
+        operations.push_back(matteMultiply(idBase + 30, operations.size() - 1, mask, channel,
+                                           !invert));
+        operations.push_back(maskedMix(idBase + 31, 1, 0, operations.size() - 1));
+    } else {
+        if (imageMask || invert) {
+            operations.push_back(whiteOver(idBase + 12, 0));
+            operations.push_back(
+                matteMultiply(idBase + 30, operations.size() - 1, mask, channel, invert));
+            mask = operations.size() - 1;
+        }
+        operations.push_back(maskedMix(idBase + 31, 0, 1, mask));
+    }
+    return matteChainPlan(idBase, std::move(operations));
+}
+// Matte layer masks: a path mask, then a matte mask (inverted, at an opacity) intersected, over
+// the content's white, multiplying the content.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+layerMatteMaskPlan(const std::uint64_t idBase) {
+    using Channel = bloom::render::ImageCoverageChannel;
+    return matteChainPlan(
+        idBase,
+        {gradient(false, idBase), whiteOver(idBase + 10, 0), pathCoverage(idBase + 100, 1, false),
+         matteCanvas(idBase + 20), pathCoverage(idBase + 200, 3, true),
+         matteMultiply(idBase + 30, 1, 4, Channel::Alpha, true, 0.625),
+         matteMultiply(idBase + 31, 2, 5, Channel::Alpha, false),
+         matteMultiply(idBase + 32, 0, 6, Channel::Alpha, false)});
+}
+// A node track matte: the target layer composited through a Multiply Alpha of a path Mask.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+nodeTrackMattePlan(const std::uint64_t idBase, const bloom::render::ImageCoverageChannel channel,
+                   const bool invert) {
+    auto definition = basePlan()->copyDefinition();
+    auto solid = definition.operations[0];
+    auto target = std::get<CompiledLayerOutput>(definition.operations[1]);
+    target.input = OperationIndex::fromRaw(0);
+    auto matte = matteMultiply(idBase + 30, 1, 3, channel, invert);
+    matte.sourceNodeId = target.sourceNodeId;
+    matte.trackMatte = true;
+    auto merge = std::get<CompiledMerge>(definition.operations[4]);
+    merge.entries = {CompiledMergeInput{LayerSlotId::fromRaw(idBase + 20), target.layerId,
+                                        OperationIndex::fromRaw(4)}};
+    definition.operations = {solid,
+                             target,
+                             matteCanvas(idBase),
+                             pathCoverage(idBase + 100, 2, false),
+                             matte,
+                             merge,
+                             CompiledCompositionOutput{NodeId::fromRaw(idBase + 40),
+                                                       OperationIndex::fromRaw(5)}};
+    definition.output = OperationIndex::fromRaw(6);
+    return publish(std::move(definition));
+}
+
 } // namespace bloom::gpu_coverage_plans
