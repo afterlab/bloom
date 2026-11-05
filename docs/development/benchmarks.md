@@ -374,6 +374,141 @@ tags (sRGB transfer, or BT.1886 for BT.709-tagged files) and compared, and the e
 back into Bloom and compared again. Results go to `<work-dir>/results/<timestamp>-chart.json` and
 `.md`; the command exits non-zero when any import fails a patch or siting check.
 
+## Scenario suite
+
+The media and layer-count benchmarks above measure one cost at a time. The scenario suite
+(`run_scenarios.py`, issue #540) builds realistic heavy comp shots and drives them the way an artist
+or an agent does, through the public MCP interface only, so a failure that needs a whole shot (an
+effect chain that cannot be admitted, a CPU fallback on export) shows up.
+
+| Tool | Runs in | Purpose |
+|---|---|---|
+| `scenario_spec.py` | Python 3 | The scenarios, as plain data |
+| `run_scenarios.py` | Python 3 (numpy for the parity check) | The runner: builds, measures, checks, compares |
+| `test_run_scenarios.py` | Python 3 | Its MCP client, rates, comparison, checks and parity gate (`bloom.bench.scenario-suite`) |
+
+### Scenarios
+
+Each scenario is a generic composite of CG render passes made only from the synthetic footage
+above (never production media): the multilayer EXR (`Composite.Combined`) stands in for a CG
+beauty render, the EXR half and float sequences for further passes and elements, the PNG
+sequences for a plate. Pixel sizes are given at 1920 wide and scale with the composition (clamped
+to each parameter's range).
+
+| Scenario | Size | Frames | Shot |
+|---|---|---|---|
+| `two-layer-glow-2k` | 1920×1080 | 48 | A PNG16 plate under a CG beauty pass with one Physical Glow (size 200): the smallest shot that needs a whole effect chain admitted at once (#539) |
+| `cg-comp-2k` | 1920×1080 | 24 | A blurred (48 px), graded plate; the beauty pass with Light Wrap (from the plate), Classic Glow (128), Drop Shadow, Curves and Levels; an EXR half element with Physical Glow (160) and Drop Shadow; an EXR float highlights pass with Streak Glow (400); a nested Merge of two passes (one graded) through a 96 px blur and a Classic Glow; an adjustment layer with Grade and Curves over the stack |
+| `cg-comp-4k` | 3840×2160 | 12 | The same comp at 4K |
+
+The work areas are short and the export renders only the first `--export-frames` frames (default
+4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
+lists in `knownFailures` the checks an open issue makes fail (#544: the final render's CPU
+fallback and minutes per frame, and fills and the Viewer waiting for device capacity; #545: GPU
+export frames differing from the CPU reference in alpha).
+
+When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
+leave the existing ones unchanged, so their baselines stay comparable.
+
+### The instance
+
+The runner starts a separate Bloom (`apps/bloom/Bloom`) for every measurement, offscreen
+(`QT_QPA_PLATFORM=offscreen`, no `DISPLAY`/`WAYLAND_DISPLAY`, no session bus, so no desktop
+notifications), in a scratch home of its own: `HOME` and every XDG folder point into
+`<work-dir>/scratch`, so its preferences, MCP token, crash recovery and caches are its own and are
+deleted when it stops. Its preferences file enables the in-app MCP server on a free loopback port;
+the runner reads the token from the instance's own data folder. Sounds, notifications and audio
+playback are turned off through `preferences.set`. The GPU driver's shader cache is shared across
+the suite's instances (`<work-dir>/driver-cache`), as it is across an artist's sessions; Bloom's own
+caches are not. The user's running Bloom, projects and settings are never touched. The isolation
+works through the XDG variables, so the runner runs on Linux only and refuses elsewhere.
+
+### What is measured
+
+Per scenario, each step in a fresh instance:
+
+1. **Build**: `project.new`, then one `transact` per operation (import, composition, layers,
+   effect chains through `bloom.node.add-fed-by`, the nested Merge through `bloom.node.add` and
+   `bloom.node.connect`, the adjustment layer, the work area), then `project.save-as`.
+2. **Fill**: footage dropped from the page cache (`coldDropped`), `project.open`,
+   `composition.activate`, `viewer.set` (Full, fit), `transport seek 0`, then the first Current
+   Viewer frame of frame 0 (`firstFrameSeconds` from `project.open`, `firstFrameProvider`,
+   `firstFrameCpuFallbacks`; `--first-frame-timeout`, default 120 s). Then `transport ram-preview`:
+   `fillSeconds` until the run stops caching, `fillFps` = cached frames / fill seconds, and the
+   cached playback the RAM preview starts for `--play-seconds`. A fill that caches no new frame for
+   `--stall-seconds` (default 120) is stopped and recorded as `fillStalled`; one still running after
+   `--fill-timeout` (default 600 s) as `fillTimedOut`.
+3. **Playback**: cold, `transport play` from frame 0 for `--play-seconds`, no fill.
+   Playback and scrub are skipped (and recorded as errors) when the first frame never arrives.
+4. **Scrub**: `transport seek` to `--scrub` frames alternating between the work area's halves, each
+   timed until the Viewer shows that frame Current (`scrubMedianSeconds`, `scrubMaxSeconds`).
+5. **Export**: `render` of the first `--export-frames` frames (default 4) to a float OpenEXR
+   sequence (`FlatExrRgba32fLinRec709SceneV1`, the final render route, with a progress token so
+   the answer streams; at most `--export-timeout`, default 900 s), `exportSecondsPerFrame` = wall
+   time / frames, the job's provenance from `export.status` (`gpuFrames`, `cpuFallbackFrames` = its
+   CPU reference frames) and the run log's warnings (`exportLog`).
+6. **Parity**: `--reference-frames` frames (default 1, the first exported frame; more are spread
+   up to the last exported frame; a 4K CPU reference frame of the comp takes about 9 minutes)
+   rendered by `bloom-cli render` with no Vulkan driver to find (`VK_ICD_FILENAMES` and `VK_DRIVER_FILES` point
+   at a missing file), so they are CPU reference frames (the CLI's `device` line must say
+   `gpu-frames=0 cpu-reference-frames=1`), compared with the exported frames.
+
+A watcher on a second MCP session reads `profiler.snapshot` every 250 ms over each measured window
+(schema 5, see [Profiler telemetry feed](../architecture/profiler-feed.md)): the Viewer's displayed
+frame (freshness, display provider, frame index), the GPU preview route's cumulative CPU fallbacks
+by reason, admission refusals, completions and capacity waits, the RAM Preview's range and longest
+contiguous cached run, the host and device admission claims, anonymous memory, Bloom's own device
+allocations (`gpu.liveBytes`), the usable host and device capacity, the Preview frames pool and the
+running tasks' names. Playback rates come from the playhead (`viewer.playheadFrame`, unwrapped
+across loops) and the dropped-frame count: `playTransportFps` is the transport's rate,
+`playbackFps` the frames it showed (advanced minus dropped) per second; the profiler's own playback
+rate counts only while a Profiler panel is open. `gpuBusyPercent` over the fill and the export is
+`nvidia-smi` utilization sampled every 200 ms (machine-wide, NVIDIA only).
+
+### Pass criteria
+
+Each check is `pass`, `fail`, `not-measured` (a figure the platform or a failed step did not give)
+or `known-failure` (it did not pass, and the scenario lists it with the open issue that causes
+it). `fail` and `not-measured` fail the run; `known-failure` is reported with its issue and does
+not. A listed check that passes is reported as passing, with a note that its entry can go. Each
+check's detail carries a `message` with the measured figures.
+
+| Check | Passes when |
+|---|---|
+| `no-cpu-fallback` | Over the fill, cached playback, playback, scrub and export: zero GPU preview CPU fallbacks (the first frames included), every displayed frame from a GPU scene evaluation (`gpuResident` or `gpuPreparedPacked`; `gpuNeutral` is a CPU-evaluated scene), no task named as a CPU reference or fallback, and zero export CPU reference frames |
+| `claims-within-factor` | In every measured window, the peak device claims are at most `--claim-factor` (default 3) times the peak of Bloom's own device allocations, and the peak host claims at most that factor times the peak anonymous memory. The default follows the stated device bound (own allocation plus two phases' needs; measured 1.1 to 2.1 times, [GPU backend](../architecture/gpu-backend.md)) |
+| `viewer-and-fill-progress` | The Viewer showed a first frame in every measurement within `--first-frame-timeout`, every scrub target within `--scrub-timeout`, and the fill never went `--stall-seconds` without caching a frame ("the fill cached no frame for 120 s (0 of 12 cached)") |
+| `claims-below-capacity` | Device claims never stayed above `--claim-capacity-percent` (default 90) of the usable device capacity for longer than `--claim-capacity-seconds` (default 60) in any measured window ("device claims stayed above 90% of usable capacity for 600 s"): work that waits for room instead of running |
+| `fill-completes` | The fill ended by itself: not stalled and not timed out |
+| `gpu-busy-during-fill` | The fill's mean GPU busy is at least `--gpu-busy-percent` (default 50) |
+| `fill-contiguous-from-playhead` | The fill's longest cached run starts at the playhead (frame 0) at every sample and, when the fill ends, holds every cached frame (`maxOutOfOrderFrames` reports the most frames cached ahead of the run while frames were in flight) |
+| `ram-preview-usable-memory` | The Preview frames pool never holds more host memory than the usable memory, its ceiling follows the usable memory (at least 90% of it: no fixed cap), and a fill that cached fewer frames than its range had reached at least 90% of the usable host memory or of the usable device capacity |
+| `export-gpu-complete` | Every exported frame published, all of them GPU frames, zero CPU reference frames |
+| `export-rate` | The fill completed, and the export's seconds per frame are at most `--export-fill-factor` (default 4) times the fill's seconds per cached frame plus `--export-allowance` (default 0.5 s, the float EXR write): a final render is not far slower than the preview of the same shot. A fill that stalled or timed out gives no preview rate, so the check fails |
+| `export-cpu-parity` | Every compared frame passes the documented reference-parity gate ([GPU backend](../architecture/gpu-backend.md)): each finite RGB component within 2e-6 absolute or relative, alpha exact, no finite CPU value non-finite |
+
+### Running a scenario suite
+
+Build `Bloom`, `bloom-cli` and the media first, then, under the benchmark lock on a shared machine:
+
+```sh
+python3 tools/bench/run_scenarios.py run --build-dir build/pw-desktop \
+    --media-root "$BLOOM_BENCH_MEDIA" --work-dir bench-work/scenarios [--scenario cg-comp-2k] \
+    [--baseline <old>.json --threshold 10] [--label 4090]
+python3 tools/bench/run_scenarios.py compare <new>.json <old>.json --threshold 10
+python3 tools/bench/run_scenarios.py list
+```
+
+Results go to `<work-dir>/results/<UTC timestamp>-scenarios[-label].json`, `.md` and `.log` (every
+instance's output and every reference render). The JSON holds the machine, the Bloom commit, the
+limits used and per scenario its build, every measurement row and every check. The exported and
+reference frames are deleted after each scenario unless `--keep-outputs` is given. With
+`--baseline`, `fillFps` falling or `firstFrameSeconds` or `exportSecondsPerFrame` rising by more
+than the threshold (percent, default 10) is a regression and fails the run. The suite runs on the
+RTX 4090 workstation and, when it is used, on the RTX 5080 bench host.
+
+Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918](benchmark-results-2026-11-05-scenarios.md).
+
 ## Platform notes
 
 The tools are Python and run on Linux, macOS and Windows. Cold runs need `posix_fadvise` (Linux);

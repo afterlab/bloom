@@ -146,7 +146,8 @@ void testHygiene(int& failures) {
           "tools/local/test_sprint_validation.py", "tools/bench/bench_media.py",
           "tools/bench/bench_spec.py", "tools/bench/blender_scene.py",
           "tools/bench/build_projects.py", "tools/bench/chart.py", "tools/bench/chart_check.py",
-          "tools/bench/imageio_min.py", "tools/bench/run_bench.py"}) {
+          "tools/bench/imageio_min.py", "tools/bench/run_bench.py", "tools/bench/run_scenarios.py",
+          "tools/bench/scenario_spec.py", "tools/bench/test_run_scenarios.py"}) {
         expect(hygieneFixture(qualificationTool, "print('qualification')\n").empty(),
                "named manual qualification drivers are accepted", failures);
     }

@@ -130,5 +130,14 @@ if(BUILD_TESTING)
             LABELS mcp integration
             TIMEOUT 180
         )
+        # The scenario suite runner's MCP client (against the same server), playback rate,
+        # baseline comparison, pass criteria and parity gate (tools/bench, issue #540).
+        bloom_add_test(
+            NAME bloom.bench.scenario-suite
+            COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/tools/bench/test_run_scenarios.py"
+                $<TARGET_FILE:bloom_mcp_http_test_host>
+            LABELS mcp unit
+            TIMEOUT 120
+        )
     endif()
 endif()

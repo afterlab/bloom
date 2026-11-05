@@ -71,7 +71,8 @@ constexpr auto kPythonQualificationTools = std::to_array<std::string_view>(
      // (benchmarks.md); tools/bench is not a general Python root.
      "tools/bench/bench_media.py", "tools/bench/bench_spec.py", "tools/bench/blender_scene.py",
      "tools/bench/build_projects.py", "tools/bench/chart.py", "tools/bench/chart_check.py",
-     "tools/bench/imageio_min.py", "tools/bench/run_bench.py"});
+     "tools/bench/imageio_min.py", "tools/bench/run_bench.py", "tools/bench/run_scenarios.py",
+     "tools/bench/scenario_spec.py", "tools/bench/test_run_scenarios.py"});
 
 template <std::size_t Size>
 [[nodiscard]] constexpr auto contains(const std::array<std::string_view, Size>& values,
