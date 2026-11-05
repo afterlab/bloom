@@ -50,7 +50,11 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
          index < steps.size() && operations.size() < render::kGpuOperationBatchCapacity; ++index) {
         const auto& step = steps[index];
         const std::uint64_t stepBytes = outputBytes(step);
-        if (!operations.empty() && plannedBytes + stepBytes > batchBudget)
+        // A batch keeps every output it records until its fence retires, where serial steps
+        // release each intermediate after its last reader: its bytes are bounded (#386).
+        if (!operations.empty() &&
+            (plannedBytes + stepBytes > batchBudget ||
+             plannedBytes + stepBytes > budgets.maxNativeBatchOutputBytes))
             break;
         if (step.kind == GpuSceneExecutorStepKind::Gradient) {
             if (!step.gradient)

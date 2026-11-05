@@ -948,12 +948,17 @@ synchronous fence wait hidden inside a task function is not a valid interim impl
 The production scene executor records two to sixty-four consecutive eligible Solid, gradient,
 translation, affine, source-over, blend (every blend mode and image combine, masked or not) and
 OCIO program kernels into one command buffer with explicit dependencies and one fence (#386).
-Blur, grade and the glow and light-wrap parts run as OCIO programs, so an effect chain is one
-submission instead of one per step. A batched blend uses the same plan (`planBlend`), kernel and
+Blur, grade and the glow and light-wrap parts run as OCIO programs, so an effect chain shares
+submissions instead of taking one per step. A batched blend uses the same plan (`planBlend`), kernel and
 push constants as `GpuBlend`; a batched OCIO program records the program's own pipeline, uniforms
 and status word, is marked submitted until the batch retires, and cannot be polled, retired or
 reused by another step meanwhile. A run stops before the step whose output would exceed the
-executor's batch allowance, and the batch pipelines are created once per device generation. The
+executor's batch allowance or `maxNativeBatchOutputBytes` (128 MiB): a batch keeps every output
+until its fence retires, where serial steps release each intermediate after its last reader, so
+long batches raised a frame's device peak and fewer frames fit in flight (a 2160p three-layer PNG16
+fill fell from 21.5 to 15.5 frames/s with whole-frame batches and rose to about 25 with the bound,
+which also lowered the frame's device peak below the earlier unbounded translation and source-over
+runs: 0.88 to 0.56 GB). The batch pipelines are created once per device generation. The
 executor keeps every OCIO program its current scene uses plus up to `maxOcioPrograms` (64) more,
 least recently used first, so a frame never recompiles its own effects. Upload, coverage and point
 resample still delimit runs and keep one submission and fence each.

@@ -267,6 +267,13 @@ struct GpuSceneExecutorBudgets final {
     // Bounded two-to-eight kernel native command batches; serial native fallback preserves
     // coverage and live-memory bounds for ineligible or pre-submit-refused plans.
     bool enableNativeBatches = true;
+    // The output bytes one batch may record (#386). A batch keeps every output until its fence
+    // retires, where serial steps release each intermediate after its last reader, so an unbounded
+    // batch raises a frame's device peak and fewer frames then fit in flight: a 2160p three-layer
+    // PNG16 fill ran at 15.5 frames/s with whole-frame batches and 25 with this bound (21.5 with
+    // no blend or OCIO batching). At 2160p one full-frame float output nearly fills it, so there
+    // only smaller steps share a submission.
+    std::uint64_t maxNativeBatchOutputBytes = 128ULL * 1024 * 1024;
     // Optional bounded pool for the host side of uploads (issue #401): the staging copy of a large
     // source runs as chunks on it, the owner thread participating, instead of one memcpy that
     // serialises every layer of every frame on the owner. Null copies on the owner thread. Not

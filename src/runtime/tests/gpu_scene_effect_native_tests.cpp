@@ -1875,12 +1875,16 @@ void runBatchedChains(Expectations& expectations, GpuDevice& device, GpuSceneCac
         expectations.expect(oracle.frame() && prepared, "batched chain: scene and oracle prepare");
         if (!oracle.frame() || !prepared)
             continue;
-        std::array<RunOutcome, 2> runs;
-        std::array<bloom::runtime::GpuSceneExecutorCounters, 2> counters;
-        for (std::size_t mode = 0; mode < 2; ++mode) {
+        // Serial, batched, and batched with an output bound no two steps fit under (a gradient
+        // still takes its required single-kernel batch in every mode).
+        std::array<RunOutcome, 3> runs;
+        std::array<bloom::runtime::GpuSceneExecutorCounters, 3> counters;
+        for (std::size_t mode = 0; mode < 3; ++mode) {
             cache.clear();
             GpuSceneExecutorBudgets budgets;
-            budgets.enableNativeBatches = mode == 1;
+            budgets.enableNativeBatches = mode != 0;
+            if (mode == 2)
+                budgets.maxNativeBatchOutputBytes = 1;
             auto executor = GpuSceneExecutor::create(device, cache, budgets);
             expectations.expect(executor.hasValue(), "batched chain: executor creates");
             if (!executor)
@@ -1906,6 +1910,14 @@ void runBatchedChains(Expectations& expectations, GpuDevice& device, GpuSceneCac
             "batched chain: the same kernels run in fewer submissions (" +
                 std::to_string(serial.nativeSubmissions) + " -> " +
                 std::to_string(batched.nativeSubmissions) + ")");
+        expectations.expect(runs[2].pollResult == GpuSceneExecutorPollResult::Ready &&
+                                runs[2].pixels == runs[0].pixels &&
+                                counters[2].nativeBatches == serial.nativeBatches &&
+                                counters[2].nativeSubmissions == serial.nativeSubmissions,
+                            "batched chain: a batch never records more output bytes than its "
+                            "bound, so a bound below two outputs runs every step on its own (" +
+                                std::to_string(counters[2].nativeBatches) + " batches, " +
+                                std::to_string(counters[2].nativeSubmissions) + " submissions)");
     }
 
     // A program a pending batch reads is busy: its owner can neither begin it nor see it retired.
