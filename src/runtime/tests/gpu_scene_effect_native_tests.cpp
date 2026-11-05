@@ -203,15 +203,36 @@ runScene(GpuSceneExecutor& executor,
     return outcome;
 }
 
-// RGB within the strict 2e-6 abs-or-rel gate; alpha byte-exact.
+// #545: alpha an effect derives from colour the device matches within 2e-6 rather than bit for bit
+// (a Luma Key of a generated gradient or of a device blur) is held to that same tolerance. Every
+// other alpha is exact.
+enum class AlphaGate : std::uint8_t { Exact, KeyedFromToleranceQualifiedColour };
+
+// RGB within the strict 2e-6 abs-or-rel gate; alpha byte-exact, or within the same 2e-6 under
+// AlphaGate::KeyedFromToleranceQualifiedColour. `maxAlphaError`, when given, receives the largest
+// alpha difference.
 [[nodiscard]] bool parity(const std::vector<Rgba32f>& actual,
-                          const std::span<const Rgba32f> expected, std::string& detail) {
+                          const std::span<const Rgba32f> expected, std::string& detail,
+                          const AlphaGate alphaGate = AlphaGate::Exact,
+                          float* const maxAlphaError = nullptr) {
     if (actual.size() != expected.size()) {
         detail = "size";
         return false;
     }
+    const auto within = [](const float a, const float e) {
+        const float scale = std::max(std::abs(a), std::abs(e));
+        return std::abs(a - e) <= 2e-6F * std::max(1.0F, scale);
+    };
+    float largestAlpha = 0.0F;
     for (std::size_t i = 0; i < actual.size(); ++i) {
-        if (actual[i].alpha() != expected[i].alpha()) {
+        largestAlpha = std::max(largestAlpha, std::abs(actual[i].alpha() - expected[i].alpha()));
+        if (maxAlphaError != nullptr)
+            *maxAlphaError = largestAlpha;
+        const bool alphaPasses = alphaGate == AlphaGate::Exact
+                                     ? actual[i].alpha() == expected[i].alpha()
+                                     : std::isfinite(actual[i].alpha()) &&
+                                           within(actual[i].alpha(), expected[i].alpha());
+        if (!alphaPasses) {
             detail = "alpha at " + std::to_string(i) + " got " + std::to_string(actual[i].alpha()) +
                      " want " + std::to_string(expected[i].alpha());
             return false;
@@ -223,8 +244,7 @@ runScene(GpuSceneExecutor& executor,
                 detail = "non-finite at " + std::to_string(i);
                 return false;
             }
-            const float scale = std::max(std::abs(a), std::abs(e));
-            if (std::abs(a - e) > 2e-6F * std::max(1.0F, scale)) {
+            if (!within(a, e)) {
                 detail = "rgb c" + std::to_string(c) + " at " + std::to_string(i) + " got " +
                          std::to_string(a) + " want " + std::to_string(e);
                 return false;
@@ -1520,7 +1540,8 @@ void runLumaKeys(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
 
 // #339 Drop Shadow, Glow and Light Wrap (#506: and Glow's Physical and Streak modes and shared
 // controls): the production recipe chains on the device against the CPU oracle at the
-// 2e-6/exact-alpha gate, with the data/display windows; a warm unchanged scene
+// 2e-6/exact-alpha gate (a Glow keyed from the gradient's colour: 2e-6 alpha, #545), with the
+// data/display windows; a warm unchanged scene
 // dispatches nothing; a changed opacity, intensity or amount re-runs only the chain after it (the
 // softened coverage, the octave blurs, the background blur stay cached): one Levels dispatch.
 void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
@@ -1539,6 +1560,7 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         RecipeValues changed;
         std::uint64_t changedOcioDispatches; // the re-run neighbourhood/Levels programs
         const char* name;
+        AlphaGate alphaGate = AlphaGate::Exact;
     };
     std::vector<Case> cases;
     {
@@ -1568,6 +1590,12 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         RecipeValues keyedChanged = keyed;
         keyedChanged.intensity = 0.5;
         cases.push_back({Recipe::Glow, keyed, keyedChanged, 1, "glow keyed"});
+        // #545: the Luma Key of the generated gradient, whose colour the device matches within
+        // 2e-6 rather than bit for bit: its keyed alpha is held to that same 2e-6.
+        RecipeValues gradientChanged;
+        gradientChanged.intensity = 4.0;
+        cases.push_back({Recipe::Glow, {}, gradientChanged, 1, "glow keyed from gradient colour"});
+        cases.back().alphaGate = AlphaGate::KeyedFromToleranceQualifiedColour;
     }
     {
         // #506 modes on the exact-alpha solid: a changed intensity re-runs only the gains (the
@@ -1643,11 +1671,17 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
             continue;
         const auto cold = runScene(*executor.executor, prepared.scene);
         const auto coldCounters = executor.executor->counters();
+        const std::string alphaGate =
+            item.alphaGate == AlphaGate::Exact ? "exact alpha" : "keyed alpha within 2e-6";
         std::string detail;
-        expectations.expect(
-            cold.pollResult == GpuSceneExecutorPollResult::Ready &&
-                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
-            name + "HDR/partial-alpha CPU parity (2e-6, exact alpha): " + detail);
+        float maxAlphaError = 0.0F;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       item.alphaGate, &maxAlphaError),
+                            name + "HDR/partial-alpha CPU parity (2e-6, " + alphaGate +
+                                "): " + detail);
+        if (item.alphaGate != AlphaGate::Exact)
+            std::cout << name << "max alpha difference " << maxAlphaError << '\n';
         const auto& descriptor = *oracle.frame()->processImage().descriptor();
         expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
                                 cold.displayWindow == descriptor.displayWindow() &&
@@ -1656,11 +1690,12 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
                             name + "resident dispatches and no per-operation readback");
         const auto warm = runScene(*executor.executor, prepared.scene);
-        expectations.expect(
-            warm.pollResult == GpuSceneExecutorPollResult::Ready &&
-                parity(warm.pixels, oracle.frame()->processImage().pixels(), detail) &&
-                dispatches(executor.executor->counters()) == dispatches(coldCounters),
-            name + "warm RAM reuse has identical pixels and zero dispatches");
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(warm.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       item.alphaGate) &&
+                                dispatches(executor.executor->counters()) ==
+                                    dispatches(coldCounters),
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
         const auto changed = builder.build(changedPlan, request);
         const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
         expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
@@ -1669,7 +1704,8 @@ void runRecipes(Expectations& expectations, GpuDevice& device, GpuSceneCache& ca
         const auto rerun = runScene(*executor.executor, changed.scene);
         expectations.expect(
             rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
-                parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail) &&
+                parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail,
+                       item.alphaGate) &&
                 executor.executor->counters().ocioEffectDispatches ==
                     coldCounters.ocioEffectDispatches + item.changedOcioDispatches,
             name + "a changed value re-runs only the chain after it, with CPU parity: " + detail);

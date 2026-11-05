@@ -76,7 +76,8 @@ struct RecipeValues final {
     bool animated = false;
     // The input is an HDR, partial-alpha solid instead of the gradient. Luma Key's coverage is a
     // function of colour, and the generated gradient's colour is within 2e-6, not bit-exact, on a
-    // device, so the device's exact-alpha gate keys a solid, as the Luma Key native cases do.
+    // device, so the device's exact-alpha gate keys a solid, as the Luma Key native cases do. A
+    // Glow keyed from the gradient is held to 2e-6 alpha instead (#545, gpu-backend.md).
     bool solidInput = false;
 };
 
