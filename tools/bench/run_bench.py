@@ -68,7 +68,7 @@ SUITES = {
 }
 # metric: True when higher is better
 COMPARED = {"fillFps": True, "playbackFps": True, "cachedPlaybackFps": True,
-            "secondsPerFrame": False, "peakRssBytes": False}
+            "secondsPerFrame": False, "peakRssBytes": False, "firstFrameSeconds": False}
 
 # --- environment --------------------------------------------------------------------------------
 
@@ -565,7 +565,7 @@ def compare(current, baseline, threshold):
             elif -worse > threshold:
                 improvements.append(row)
     fallbacks = [" ".join(str(k) for k in measurement_key(m) if k) for m in current["measurements"]
-                 if m.get("cpuFallbackFrames")]
+                 if m.get("cpuFallbackFrames") or m.get("firstFrameCpuFallbacks")]
     return {"threshold": threshold, "regressions": regressions, "improvements": improvements,
             "cpuFallbackMeasurements": fallbacks}
 

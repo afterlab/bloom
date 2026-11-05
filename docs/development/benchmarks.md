@@ -196,6 +196,11 @@ Every measurement is a fresh process.
   `Quarter`). **Cold**: the footage is dropped from the OS page cache first
   (`posix_fadvise(DONTNEED)`; `coldDropped` records whether the platform could). **Warm**: the
   footage is in the page cache. Bloom's own caches are always empty because the process is new.
+- **First frame** (every harness run): `firstFrameSeconds` is the time from showing the Viewer
+  until it paints a Current frame, with the service startup inside it (`serviceReadySeconds`, when
+  the GPU preview service left `Initializing`). `firstFrameProvider` is the frame's display
+  provider, and `firstFrameCpuFallbacks`/`firstFrameCpuFallbacksByReason` count the CPU fallbacks
+  up to that paint; it must be 0 on a GPU route (#542).
 - **Cached playback** (`cachedPlaybackFps`): when a fill completed, the transport plays from the
   start for `--play-seconds` and counts the distinct frames the Viewer actually showed.
   `cachedPresentedFps` counts every change of the shown frame, so it stays meaningful when a
@@ -345,8 +350,9 @@ python3 tools/bench/run_bench.py compare <new>.json <old>.json --threshold 10
 ```
 
 A regression is a measurement whose fill fps, playback fps or cached playback fps fell, or whose
-export seconds/frame or peak RSS rose, by more than the threshold (percent). Any CPU-fallback frame
-is reported separately. Either makes the command exit non-zero.
+export seconds/frame, peak RSS or first-frame seconds rose, by more than the threshold (percent).
+Any CPU-fallback frame, the first frame's included, is reported separately. Either makes the
+command exit non-zero.
 
 To compare storage, run the same suite with `--media-root` pointing at the other location (for
 example a network share holding a copy of the media) and a `--label`; the media is verified there

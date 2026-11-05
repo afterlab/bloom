@@ -782,6 +782,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
         shutdown();
         return options.require_device ? 1 : 77;
     }
+    const auto serviceReadySeconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - firstStarted).count();
     static_cast<void>(waitUntil([&] { return policy->snapshot().reservations.hostReady; }, 30s));
     const bool firstPainted = waitUntil(
         [&] { return viewer.displayedPreviewState().freshness == ui::FrameFreshness::Current; },
@@ -791,6 +793,9 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     const auto firstFrame = viewer.displayedFrameForTest();
     const int firstProvider =
         firstFrame ? static_cast<int>(firstFrame->provenance().provider) : -1;
+    // #542: the first frame is one frame's render on the GPU route, not a CPU reference render
+    // taken because the request arrived while the device was still starting.
+    const auto firstFrameCounters = service.status().counters;
     std::ostringstream json;
     json << std::setprecision(6) << "{\"project\":" << benchJson(projectPath.string())
          << ",\"mode\":\""
@@ -801,6 +806,12 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"firstFramePainted\":" << (firstPainted ? "true" : "false")
          << ",\"firstFrameSeconds\":" << firstFrameSeconds
          << ",\"firstFrameProvider\":" << firstProvider
+         << ",\"serviceReadySeconds\":" << serviceReadySeconds
+         << ",\"firstFrameCpuFallbacks\":" << firstFrameCounters.cpuFallbacks
+         << ",\"firstFrameCpuFallbacksByReason\":[";
+    for (std::size_t reason = 0; reason < firstFrameCounters.cpuFallbacksByReason.size(); ++reason)
+        json << (reason == 0 ? "" : ",") << firstFrameCounters.cpuFallbacksByReason[reason];
+    json << "]"
          << ",\"previewCacheBudgetBytes\":" << frameCache->byteBudget();
     const auto memoryWindowStarted = std::chrono::steady_clock::now();
     // Memory over the measured window: the sample with the highest RSS, and a line every ten
