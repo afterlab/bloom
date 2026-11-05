@@ -1,8 +1,11 @@
 # Bloom Project Format
 
-The current document schema is 1.38. It adds the gradient value -- a multi-stop colour ramp, a
-parameter constant and a whole-value animation curve -- that Colorize's Gradient Map maps through
-(see "Gradient Values In Document 1.38"). Document 1.37 let a Merge entry own its layer controls -- a
+The current document schema is 1.39. It moves the Linear and Radial Gradient generators' start and
+end colours and Glow's tint and outer tint onto gradient values, and opens an older document's
+colour pairs as two-stop gradients (see "Gradient Colour Pairs In Document 1.39"). Document 1.38
+added the gradient value -- a multi-stop colour ramp, a parameter constant and a whole-value
+animation curve -- that Colorize's Gradient Map maps through (see "Gradient Values In Document
+1.38"). Document 1.37 let a Merge entry own its layer controls -- a
 layer output record that names its slot and binds its own parameters -- added the layer `pivot`, and
 added the Adjustment node type (see "Entry Layers In Document 1.37"). Document 1.36 let a stamped image-sequence
 member also carry the content digest a full hash verified for the bytes that carried its stamp (see
@@ -972,12 +975,13 @@ save writes schema 2.
 #### Glow Controls
 
 Opening a project (#534) binds every optional `bloom.glow` parameter a node lacks: the #506 mode and
-shared controls (`mode`, `exponent`, the per-channel radius, `gradient`, `outerTint`, `points`,
+shared controls (`mode`, `exponent`, the per-channel radius, `gradient`, `tintGradient`, `points`,
 `angle`, `length`, `chromatic`, `dirtAmount`, `rollOff`), which a Glow saved before #506 never had.
 `migrateLegacyGlowNodes` rewrites the decoded envelope before reconstruction, on the open path only
 (never in save verification). Each missing role gets a new constant record at its definition
 default on a newly allocated parameter id (the allocator high water advances); bound roles keep
-their ids and values. The node schema (1) and the document schema version are unchanged. The
+their ids and values. The document schema version is unchanged; the node is at schema 2 by then
+(the colour pair migration below runs first and turns a saved `outerTint` into `tintGradient`). The
 compiler already lowered an unbound role with that default, so the plan and every pixel are the
 same, and Properties and the node card then show the full control set, as for a new Glow.
 
@@ -1442,9 +1446,9 @@ and the three component keyframe definitions; the historical `1.11` artifacts re
 ## Layer Parenting In Document 1.13
 
 Parenting was introduced in document `1.13`; the current writer and manifest declaration are
-`1.38`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
+`1.39`, and the load floor remains `1.15`. The historical `1.12 -> 1.13` bookkeeping step changes
 only the root minor.
-The current artifacts are `document-1.38.schema.json` and `manifest-1.38.schema.json`; the
+The current artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`; the
 historical parenting artifacts remain versioned at 1.18.
 
 A Layer Output may append `parent` after `labelColor`, before retained unknown members.
@@ -1679,6 +1683,54 @@ The `1.34` -> `1.35` DOM step `migrateSequenceMemberStampsV1_34` only advances t
 older member has its digest. The schema artifacts add `assetMember-1.35` and `assetManifest-1.35`;
 the schema check restores the 1.34 artifact from them exactly.
 
+## Gradient Colour Pairs In Document 1.39
+
+The Linear and Radial Gradient generators and Glow draw their colour ramps from gradient values
+(issue #541):
+
+- `bloom.linear-gradient` and `bloom.radial-gradient` are at node schema 2. Their required,
+  animatable `gradient` role (`bloom.gradient.stops`, default black at 0 and white at 1) replaces
+  schema 1's `startColor` and `endColor`; gradient position 0 is drawn at the `start` point and 1 at the
+  `end` point, and `repeat` repeats or mirrors the whole gradient as before.
+- `bloom.glow` is at node schema 2. Its optional, animatable `tintGradient` role
+  (`bloom.glow.tint-gradient`, default white at 0 and (1, 0.5, 0.25) at 1) replaces schema 1's
+  `outerTint`. With `gradient` on (and not Streak), octave `j` of `n` takes the gradient's colour at
+  `j / (n - 1)`; `tint` stays the colour of every octave with the gradient off.
+
+These gradients may hold any finite colour (HDR and signed colour stay authorable, as the colours
+they replace could); Colorize's keeps its `+-1e6` domain. Neither has a socket: a gradient is not a
+socket kind.
+
+Opening a document older than 1.39 converts each schema 1 node in the decoded envelope before
+reconstruction (`migrateLegacyGradientColorPairs`, the open path only, before the Glow controls
+migration), so it renders as it did:
+
+- The pair becomes a two-stop gradient: the first colour at 0, the second at 1. A generator's
+  gradient reuses `startColor`'s parameter id and drops the `endColor` record; a Glow keeps `tint`
+  and its gradient reuses `outerTint`'s id, or a newly allocated one when the Glow never had it
+  (with the `(1, 0.5, 0.25)` default as its end). A missing colour converts at its schema 1
+  default.
+- Two constants give a gradient constant whose stops are the two colours exactly. The native and
+  CPU gradient kernels evaluate a two-stop table at 0 and 1 to the same Float32 pixels as schema 1's
+  start/end pair, and Glow's octave tint is the same `tint + (outer - tint) * t`, so no pixel
+  changes.
+- A keyed colour converts to a gradient curve keyed at every time either colour has a key (on a
+  retired colour curve's id), each key's stops the two colours sampled there. A segment whose
+  keyed components all have their own key pair at exactly those times, with one interpolation and
+  easing and default handles, keeps that interpolation and easing; Hold everywhere stays Hold; any
+  other segment is Linear between the two keys' values, so the colours are exact at every key and a
+  Linear pair is exact throughout.
+- A colour driven through its socket by a value node has no gradient counterpart (a gradient has
+  no socket): its stop opens at the colour's default and a removed role's edge is dropped. A Glow's
+  driven `tint` keeps its socket and edge and still tints the glow with the gradient off.
+
+The node's bindings are re-sorted by role and the allocator's parameter, curve and keyframe high
+water advance. A schema 1 node missing its first colour is not converted and fails as an
+unsupported node version, and a document claiming 1.39 that carries a schema 1 generator or Glow is
+refused the same way. The `1.38` -> `1.39` DOM step `migrateGradientColorPairsV1_38` only advances
+the version. The schema artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`;
+the schema check restores the 1.38 artifacts from them exactly.
+
 ## Gradient Values In Document 1.38
 
 A parameter constant may be a gradient (issue #541): `{"kind": "gradient", "stops": [...]}`, its
@@ -1697,8 +1749,8 @@ gradient constant. Between two keys with the same stop count each stop's positio
 interpolate by the eased progress; keys with different stop counts, and Hold keys, hold the earlier
 key's gradient until the next (`runtime::sampleGradientCurve`).
 
-The only schema key with a gradient value is `bloom.colorize.gradient`, the Colorize node's
-optional `gradient` role. Its colour channels are held to the Colorize colour domain; its default is
+In 1.38 the only schema key with a gradient value is `bloom.colorize.gradient`, the Colorize node's
+optional `gradient` role (1.39 adds the generators' and Glow's; see above). Its colour channels are held to the Colorize colour domain; its default is
 black at 0, (0.24, 0.17, 0.10) at 0.18 and white at 1 -- the three-colour ramp Gradient Map used
 before. A new Colorize node binds it; a Colorize node saved before 1.38 has no binding and keeps
 mapping through its Shadows, Midtones, Highlights and Midpoint until the gradient is first edited,

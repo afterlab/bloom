@@ -728,9 +728,14 @@ aliases its input. Spacing is bounded to `[0, 1024]` pixels and the decay to `(0
   alpha to a third, Channel Select keeps that channel and an Add Merge sums the three, so every
   channel's colour is exact and the alpha is the union of the thirds.
 - `tint`, and the colour gradient: with `gradient` on (default off), octave `j` of `n` is tinted
-  `tint + (outerTint - tint) * j / (n - 1)` before the fold (the tightest octave takes `tint`, the
-  widest `outerTint`, default (1, 0.5, 0.25)), and the final Levels scales by `intensity` alone.
-  Streak uses `tint`.
+  with `tintGradient`'s colour at `j / (n - 1)` before the fold (the tightest octave takes the
+  gradient's start, the widest its end), and the final Levels scales by `intensity` alone. Streak
+  uses `tint`. `tintGradient` (node schema 2, #541) is an animatable gradient value of 1 to 64 stops
+  (default white at 0 and (1, 0.5, 0.25) at 1), edited on the card and in Properties with the
+  gradient editor; a constant gradient folds to constant octave tints, and a keyed one samples at
+  the frame through a value-graph gradient sample per octave. Its two-stop default is exactly schema
+  1's `tint + (outerTint - tint) * j / (n - 1)`, which a schema 1 Glow opens as (project-format.md,
+  "Gradient Colour Pairs In Document 1.39").
 - Lens dirt: an optional `dirt` Image input adds the glow times the dirt's Rec. 709 luma coverage
   (Multiply Alpha, Luma), its colour scaled by `dirtAmount` (`[0, 1000]`, default 1), as Unreal
   Engine's bloom dirt mask does.
@@ -743,7 +748,8 @@ aliases its input. Spacing is bounded to `[0, 1024]` pixels and the decay to `(0
   with the wrapper's correctly rounded division so the device matches the CPU.
 
 Defaults chosen for #506: mode Classic; exponent 2 (inverse square); points 4; angle 0; length
-128 pixels; chromatic 0; per-channel radius 1; gradient off with outer tint (1, 0.5, 0.25);
+128 pixels; chromatic 0; per-channel radius 1; gradient off with a white to (1, 0.5, 0.25) tint
+gradient;
 dirt amount 1; roll-off 0.
 
 Cache identity, cancellation, ROI and budget are the primitives': a changed intensity re-runs the

@@ -646,7 +646,12 @@ Cartesian, Degrees To Radians and Radians To Degrees); a low/high pair is its tw
 meaningful (Luma Key, Map Range's from and to, Clamp, In Range, Random, Wrap, Smoothstep); and a
 position is a point on a `KPointPad` over its frame, the exact X/Y rows staying below it (a Linear or
 Radial Gradient's start and end, joined by a line, on the node's own width and height; Transform
-2D's pivot and offset on the composition frame). Properties' Layer Transform section turns rotation
+2D's pivot and offset on the composition frame). A gradient value is a `GradientParameterRow`
+(`bloom/ui/gradient_parameter_row.hpp`): its name, the `KGradientEditor` and the gradient's
+diamond, then a Stop row with the selected stop's colour chip and its position in percent -- a
+Linear or Radial Gradient's Colors above its pad, Glow's Tint gradient above its angle dial, and
+Colorize's Gradient Map. A double-click on its name resets it, and its right-click menu offers
+Reset Gradient and the gradient's key. Properties' Layer Transform section turns rotation
 on a `KAngleDial` beside its field. A layer, shape, text box or solid is still dragged in the Viewer
 with its native handles. Every grading graph (Levels, Curves, the contrast picture) is one
 uniform grey with a grid line every quarter: no lighter 0..1 box and no dark band past 1.
@@ -716,7 +721,12 @@ notation with fewer significant digits, and finally to an ellipsis, so a digit o
 cut by the cell edge or painted over its axis prefix. A rounded reading is underlined with a dotted
 `Faint` hairline; the hover tooltip and the editor keep the exact value (the shortest text that
 reads back to the same double). An in-field label is measured and painted in `UiSmall` and elides
-inside its `ValueFieldLabelColumn` cap. `KListSurface` paints the common flat empty-row backdrop;
+inside its `ValueFieldLabelColumn` cap. A compact cell (a node card's or Properties' value cell) is
+`PropertiesFieldWidth` wide, widened to the widest number its soft range can show at its decimal
+places with its unit (every digit measured at the font's widest digit, an axis label's column
+included), so a four-digit position reads `1920.00 px` whole (#541); the width comes from the
+presentation, never from the number in the cell, so a cell does not resize as its digits change. A
+value past the soft range still steps down as above. `KListSurface` paints the common flat empty-row backdrop;
 `KRow` owns populated rows and column headings. A heading explicitly identifies its shorter
 `Control` pitch through `headerRow`.
 

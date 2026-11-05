@@ -760,9 +760,10 @@ The planned artist-facing vocabulary is maintained in
 
 ## Linear and radial gradient sources
 
-`bloom.linear-gradient` and `bloom.radial-gradient` version 1 are independent image-producing
-authoring nodes. Each stores animatable start/end straight RGBA colors and start/end `Vec2d`
-coordinates, animatable width/height, and a static integer repeat selector (`0` Clamp, `1`
+`bloom.linear-gradient` and `bloom.radial-gradient` version 2 are independent image-producing
+authoring nodes. Each stores an animatable gradient value (1 to 64 straight RGBA stops; version 1's
+start/end colour pair opens as its two stops, project-format.md "Gradient Colour Pairs In Document
+1.39") and start/end `Vec2d` coordinates, animatable width/height, and a static integer repeat selector (`0` Clamp, `1`
 Repeat, `2` Mirror). New nodes use the composition extent. Linear starts at the left edge and ends
 at the right edge; radial starts at the composition center and ends at the right edge. The source
 has a local data window from `(0,0)` to its resolved extent and inherits the composition display
@@ -772,22 +773,30 @@ horizontal and vertical resolution scales, so controls and composition geometry 
 
 Linear `t` is projection onto the start-to-end vector. Radial `t` is distance from start divided by
 the start-to-end distance. Horizontal distances are multiplied by physical pixel aspect in both
-formulas. A zero-length vector chooses the first color. Clamp confines `t` to `[0,1]`, Repeat
-uses its fractional part, and Mirror folds over period two. The two authored colors interpolate
-in the effective scene-linear working space as straight RGB and independent alpha; the result is
-premultiplied once for the process image. The phase is reduced in binary64 and rounded once to
-Float32 (Mirror folds that Float32 value); alpha is then interpolated in Float32 as two rounded
-products and one sum without fused multiply-add, so the CPU reference and native GradientV1 agree
-bit-exactly on alpha. RGB interpolates in binary64 within the 2e-6 parity bound. Negative and HDR RGB are retained when the resulting
+formulas. A zero-length vector chooses the first stop's color. Clamp confines `t` to `[0,1]`,
+Repeat uses its fractional part, and Mirror folds over period two. The gradient is sampled at the
+frame (a keyed gradient through `sampleGradientCurve`) and its stops sorted by position, ties kept
+in stored order. Up to the first stop the first color holds, from the last stop the last color
+holds, and between them the phase finds the last stop at or before it and its successor; two stops
+at one position make a hard edge. Each stop carries the Float32 reciprocal of its span to the next
+(zero for an empty span), and the local factor is `(phase - position) * inverseSpan` in Float32.
+The two stops' colors interpolate in the effective scene-linear working space as straight RGB and
+independent alpha; the result is premultiplied once for the process image. The phase is reduced in
+binary64 and rounded once to Float32 (Mirror folds that Float32 value); alpha is then interpolated
+in Float32 as two rounded products and one sum without fused multiply-add, so the CPU reference and
+native GradientV1 agree bit-exactly on alpha. A two-stop table at 0 and 1 has a local factor equal
+to the phase, so it reproduces version 1's start/end pixels bit for bit. RGB interpolates in binary64 within the 2e-6 parity bound. Negative and HDR RGB are retained when the resulting
 Float32 process pixel is finite. The fractional right/bottom extent coverage scales the final
 premultiplied pixel. ROI clips the requested output while preserving full source coordinates and
 the composition display window.
 
 The CPU evaluator shades rows with the shared cancellation and pixel budget gate. The GPU scene
-preparer resolves the same animation operands and windows and emits a semantic key containing both
-straight colors, endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
-shader digest. The native operation batch executes the gradient compute shader into a resident
-RGBA32F image, including single-generator batches; no full-frame CPU upload stands in for that
+preparer resolves the same animation operands and windows and emits a semantic key containing every
+sorted stop (position, reciprocal span, straight color), endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
+shader digest. GradientV1 reads the stop table from a storage-buffer binding (two `vec4` per stop:
+position and reciprocal span, then the straight color; the stop count in its push constants) and
+refuses an empty, oversized, unsorted or non-finite table as Unsupported. The native operation
+batch executes the gradient compute shader into a resident RGBA32F image, including single-generator batches; no full-frame CPU upload stands in for that
 shader. Its normal completion uses the same fence proof, cancellation, image budget, and retirement
 rules as other native batch operations. Native unavailability is reported explicitly and the
 portable CPU reference remains the supported fallback.
