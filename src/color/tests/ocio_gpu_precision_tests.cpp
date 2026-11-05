@@ -2,9 +2,10 @@
 //
 // The neutral config's process -> sRGB-texture CST is a real OCIO GammaOp whose unchanged CPU
 // oracle evaluates power with OCIO's `ssePower` polynomial (OPTIMIZATION_FAST_LOG_EXP_POW). The
-// adapter must redirect the generated body's `pow` token to that polynomial, must leave the
-// generated OCIO body byte-for-byte intact, and must not be emitted for a program without a
-// GammaOp. The device proof that this actually matches the oracle lives in the runtime native test.
+// adapter must rewrite the GammaOp region's `pow` to that polynomial and its moncurve scale/offset
+// to non-contracting operations (#545), must leave the extracted OCIO body byte-for-byte intact,
+// and must not be emitted for a program without a GammaOp. The device proof that this actually
+// matches the oracle lives in the runtime native test.
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -63,14 +64,36 @@ int main() {
 
     const auto adapter = bloom::color::ocioGpuSamplingGlslFor(*program);
     expect(adapter.dispatches(), "the GammaOp program emits an adapter");
-    expect(contains(adapter.preamble, "#define pow(x, y) bloom_ocio_cpu_fast_pow(x, y)"),
-           "the preamble redirects the pow token");
-    expect(contains(adapter.preamble, "vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e);"),
-           "the preamble forward-declares the vec4 overload");
-    expect(contains(adapter.definitions, "#undef pow") &&
-               contains(adapter.definitions, "bloom_ocio_cpu_log2") &&
+    expect(!contains(adapter.preamble, "#define pow") &&
+               contains(adapter.preamble, "vec4 bloom_ocio_cpu_gamma_pow(vec4 x, vec4 e);"),
+           "the preamble declares the GammaOp power without redirecting the pow token");
+    expect(contains(adapter.definitions, "bloom_ocio_cpu_log2") &&
                contains(adapter.definitions, "bloom_ocio_cpu_exp2"),
            "the definitions transcribe OCIO's sseLog2/sseExp2 fast power");
+    // #545: the reverse moncurve's `pow(x, gamma) * scale - offset` rounds the multiply and the
+    // subtract separately, as OCIO's SSE CPU renderer does; a device must not contract it.
+    expect(contains(adapter.shaderBody, "vec4 powSeg = bloom_ocio_cpu_sub4(bloom_ocio_cpu_mul4("
+                                        "bloom_ocio_cpu_gamma_pow(") &&
+               contains(adapter.shaderBody, "), scale), offset);") &&
+               !contains(adapter.shaderBody, ") * scale - offset;"),
+           "the reverse moncurve scale and offset are non-contracting operations");
+
+    // The decode direction: the forward moncurve's `scale * x + offset` likewise rounds twice.
+    const auto decode = bloom::color::buildOcioGpuProgramForCst(
+        *neutral, neutral->sRgbTextureColorSpaceId(), neutral->processColorSpaceId());
+    expect(decode.succeeded() && decode.program() != nullptr,
+           "the neutral sRGB decode program extracts");
+    if (decode.program() != nullptr) {
+        expect(contains(decode.program()->shaderText, "scale * outColor + offset"),
+               "the generated forward moncurve contracts a multiply-add");
+        const auto decodeAdapter = bloom::color::ocioGpuSamplingGlslFor(*decode.program());
+        expect(contains(decodeAdapter.shaderBody,
+                        "bloom_ocio_cpu_gamma_pow( max( vec4(0., 0., 0., 0.), "
+                        "bloom_ocio_cpu_add4(bloom_ocio_cpu_mul4(scale, outColor), offset)), "
+                        "gamma)") &&
+                   !contains(decodeAdapter.shaderBody, "scale * outColor + offset"),
+               "the forward moncurve scale and offset are non-contracting operations");
+    }
 
     // A program with no GammaOp signature keeps the generated hardware pow.
     bloom::render::OcioGpuProgramDesc matrixOnly;

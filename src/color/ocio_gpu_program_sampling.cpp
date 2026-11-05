@@ -168,13 +168,6 @@ coordinateType(const render::OcioGpuTextureDimensions dimensions) noexcept {
     return count;
 }
 
-// A GammaOp-only program keeps the accepted `pow` macro path (backward compatible with the runtime
-// wrapper as it stands). Every other program uses the per-op body specialization.
-[[nodiscard]] bool programPowerIsGammaOnly(const std::string_view shaderText) noexcept {
-    const std::size_t gammaOps = countOccurrences(shaderText, "// Add Gamma '");
-    return gammaOps != 0 && gammaOps == countOccurrences(shaderText, "pow(");
-}
-
 enum class OpKind : std::uint8_t { None, Gamma, Log, Matrix };
 
 struct OpBlock final {
@@ -265,6 +258,30 @@ struct BodySpecialization final {
     bool matrix = false;
 };
 
+// OCIO's moncurve GammaOp scales and offsets around its power: the forward form evaluates
+// `pow(scale * outColor + offset, gamma)` and the reverse form `pow(outColor, gamma) * scale -
+// offset`. The CPU renderer rounds the multiply and the add separately (two SSE operations), while
+// a device is free to contract the generated expression into one fma. That single rounding moves
+// the power's input by an ULP, which the power and a downstream HDR blend amplify past the parity
+// gate (#545), so both forms are rewritten to the non-contracting helpers.
+void specializeMoncurveAffine(std::string& region) {
+    replaceAll(region, "scale * outColor + offset",
+               "bloom_ocio_cpu_add4(bloom_ocio_cpu_mul4(scale, outColor), offset)");
+    constexpr std::string_view kReverseHead = "vec4 powSeg = bloom_ocio_cpu_gamma_pow(";
+    constexpr std::string_view kReverseTail = ") * scale - offset;";
+    for (std::size_t head = region.find(kReverseHead); head != std::string::npos;
+         head = region.find(kReverseHead, head + 1)) {
+        const std::size_t lineEnd = region.find('\n', head);
+        const std::size_t tail = region.find(kReverseTail, head);
+        if (tail == std::string::npos || (lineEnd != std::string::npos && tail > lineEnd))
+            continue;
+        region.replace(tail, kReverseTail.size(), "), scale), offset);");
+        region.replace(head, kReverseHead.size(),
+                       "vec4 powSeg = bloom_ocio_cpu_sub4(bloom_ocio_cpu_mul4("
+                       "bloom_ocio_cpu_gamma_pow(");
+    }
+}
+
 // Copy the generated body, rewriting only the identified op regions. Everything outside those
 // regions, including the op comments themselves and any unrelated `pow` call, is copied verbatim.
 //
@@ -298,6 +315,7 @@ specializeOcioShaderBody(const std::string_view source,
         switch (block.kind) {
         case OpKind::Gamma:
             replaceAll(region, "pow(", "bloom_ocio_cpu_gamma_pow(");
+            specializeMoncurveAffine(region);
             result.gamma = true;
             break;
         case OpKind::Log:
@@ -440,24 +458,6 @@ precise vec4 bloom_ocio_cpu_matrix(mat4 m, vec4 v)
 }
 )";
 
-// Backward-compatible GammaOp-only `pow` macro. The non-vec4 overloads forward to the generated
-// hardware pow, so only the GammaOp call is redirected.
-constexpr std::string_view kFastPowPreamble = R"(
-float bloom_ocio_cpu_fast_pow(float x, float e);
-vec2 bloom_ocio_cpu_fast_pow(vec2 x, vec2 e);
-vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e);
-vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e);
-#define pow(x, y) bloom_ocio_cpu_fast_pow(x, y)
-)";
-
-constexpr std::string_view kFastPowOverloads = R"(
-#undef pow
-float bloom_ocio_cpu_fast_pow(float x, float e) { return pow(x, e); }
-vec2 bloom_ocio_cpu_fast_pow(vec2 x, vec2 e) { return pow(x, e); }
-vec3 bloom_ocio_cpu_fast_pow(vec3 x, vec3 e) { return pow(x, e); }
-vec4 bloom_ocio_cpu_fast_pow(vec4 x, vec4 e) { return bloom_ocio_cpu_gamma_pow(x, e); }
-)";
-
 // Half-domain 1D LUTs. OCIO's generated `<name>_computePos` folds the half-float index and the
 // interpolation fraction into one binary32 `dep` (up to 2^16), leaving only 8-10 fraction bits
 // for large inputs, then re-encodes it as a texture coordinate. Its CPU renderer interpolates
@@ -567,20 +567,15 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
         declarations += "#define texture(s, c) bloom_ocio_sample_##s(c)\n";
     }
 
-    // CPU-math parity adapter. A GammaOp-only program keeps the accepted `pow` macro path; any
-    // program with a GammaOp, LogOp, or MatrixOp region gets a per-op body specialization instead.
+    // CPU-math parity adapter: any program with a GammaOp, LogOp, or MatrixOp region gets a per-op
+    // body specialization.
     const bool cpuParity = linkedOcioCpuUsesFastPower();
-    const bool gammaOnly = programPowerIsGammaOnly(program.shaderText);
     const bool hasGamma = programContainsGammaOp(program.shaderText);
     const bool hasLog = programContainsLogOp(program.shaderText);
     const bool hasMatrix = programContainsMatrixOp(program.shaderText);
 
-    if (cpuParity && gammaOnly && !hasLog && !hasMatrix) {
-        declarations += std::string(kFastPowPreamble);
-        definitions += std::string(kCpuHelperDefinitions);
-        definitions += std::string(kFastPowOverloads);
-    } else if ((cpuParity && (hasGamma || hasLog || hasMatrix)) ||
-               (hasMatrix && program.semanticsId == kOcioGpuPointwiseAffineSemanticsId)) {
+    if ((cpuParity && (hasGamma || hasLog || hasMatrix)) ||
+        (hasMatrix && program.semanticsId == kOcioGpuPointwiseAffineSemanticsId)) {
         BodySpecialization specialized =
             specializeOcioShaderBody(program.shaderText, program.cameraLogExponentScales);
         if (program.semanticsId == kOcioGpuPointwiseAffineSemanticsId) {
@@ -634,6 +629,8 @@ OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& pro
     result.definitions = std::move(definitions);
     return result;
 }
+
+bool ocioGpuCpuFastPowerAdapterApplies() noexcept { return linkedOcioCpuUsesFastPower(); }
 
 std::string_view ocioGpuPreciseDivisionGlsl() noexcept {
     // Correctly-rounded binary32 division. `a / b` gives a quotient within one ULP on a

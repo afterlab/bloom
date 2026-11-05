@@ -45,20 +45,21 @@ inline constexpr std::string_view kOcioGpuPointwiseAffineSemanticsId =
 // body's `texture(sampler, coord)` calls to the matching function.
 //
 // The adapter also reproduces the unchanged CPU oracle's exact arithmetic for the OCIO ops whose
-// GPU and SSE-CPU paths diverge: a GammaOp's fast minimax power, a LogOp's `sseExp2(x*log2(base))`
-// anti-log decomposition, and a MatrixOp's SSE add order. Whether the linked OCIO uses those SSE
-// paths is qualified at runtime from its own default CPU processor, never guessed from the host
-// architecture. Specialization is per OCIO op region, keyed on the pinned OCIO's deterministic op
-// comments, so a program that mixes a GammaOp with an ExponentOp or a fixed-function op never has
-// its unrelated `pow` calls rewritten.
+// GPU and SSE-CPU paths diverge: a GammaOp's fast minimax power and its moncurve scale/offset
+// rounded as two operations rather than one contracted fma (#545), a LogOp's
+// `sseExp2(x*log2(base))` anti-log decomposition, and a MatrixOp's SSE add order. Whether the
+// linked OCIO uses those SSE paths is qualified at runtime from its own default CPU processor,
+// never guessed from the host architecture. Specialization is per OCIO op region, keyed on the
+// pinned OCIO's deterministic op comments, so a program that mixes a GammaOp with an ExponentOp or
+// a fixed-function op never has its unrelated `pow` calls rewritten.
 //
 // The generated OCIO transform body stays byte-for-byte intact in the extracted
 // render::OcioGpuProgramDesc (and therefore its shaderTextDigest/contentIdentity are preserved);
-// the specialization is a wrapper-level body override plus preprocessor redirection, mixed
+// the specialization is a wrapper-level body override plus texture-call redirection, mixed
 // nearest/linear programs are handled per sampler, and the same API is what the production runtime
 // wrapper must consume.
 inline constexpr std::string_view kOcioGpuPreciseSamplingVersion =
-    "bloom.color.ocio-gpu-sampling.v6";
+    "bloom.color.ocio-gpu-sampling.v7";
 
 // Portable correctly-rounded binary32 division GLSL helper (no float64). Some Vulkan devices do not
 // round `a / b` to nearest-even, which the wrapper's un-premultiply needs to match the unchanged
@@ -68,8 +69,7 @@ inline constexpr std::string_view kOcioGpuPreciseSamplingVersion =
 [[nodiscard]] std::string_view ocioGpuPreciseDivisionGlsl() noexcept;
 struct OcioGpuSamplingGlsl final {
     // Emitted before the generated OCIO body: one forward declaration per texture plus the
-    // `texture` dispatch macro, the CPU-parity helper declarations, and (for a GammaOp-only
-    // program) the `pow` parity declarations and dispatch macro.
+    // `texture` dispatch macro and the CPU-parity helper declarations.
     std::string preamble;
     // Emitted after the generated OCIO body: the per-texture definitions and the CPU-parity helper
     // definitions. Empty alongside preamble.
@@ -82,6 +82,10 @@ struct OcioGpuSamplingGlsl final {
     [[nodiscard]] bool dispatches() const noexcept { return !preamble.empty(); }
 };
 [[nodiscard]] OcioGpuSamplingGlsl ocioGpuSamplingGlslFor(const render::OcioGpuProgramDesc& program);
+// Whether the linked OpenColorIO's default CPU processor takes the SSE fast power, so the adapter
+// above reproduces it (and a moncurve GammaOp then matches the CPU oracle bit for bit). Qualified
+// once at runtime from OCIO itself.
+[[nodiscard]] bool ocioGpuCpuFastPowerAdapterApplies() noexcept;
 
 // Display/view extraction for a resolved config, using the same display/view pair the CPU path
 // selects. Any enumerated non-data pair is accepted; the caller must still gate on the native

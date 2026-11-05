@@ -8,7 +8,8 @@
 // OpenColorIO CPU processor is built with OPTIMIZATION_FAST_LOG_EXP_POW, so on x86_64 the oracle's
 // power is OCIO's `ssePower` minimax polynomial, not the GPU's hardware pow; the two differ by up
 // to ~1.5e-5. The wrapper's CPU fast-power parity adapter must make the device reproduce the
-// oracle.
+// oracle. With that adapter the moncurve scale and offset also round as the CPU does (#545), so
+// the encode and the sRGB decode (texture -> process) are held bit for bit.
 //
 // The fixture covers negative, HDR, translucent, alpha-zero, transfer-breakpoint endpoints, the
 // exact failing builder value, and a deterministic pseudo-random grid. A missing device is an
@@ -16,6 +17,7 @@
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_color_space_processor.hpp>
+#include <bloom/color/ocio_gpu_program.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
@@ -96,17 +98,20 @@ class Expectations final {
     int failures_ = 0;
 };
 
-// RGB within the strict 2e-6 abs-or-rel gate; alpha byte-exact.
+// RGB within the strict 2e-6 abs-or-rel gate (bit-exact when `exact`); alpha byte-exact.
 [[nodiscard]] std::size_t compare(Expectations& expectations, const std::vector<Rgba32f>& actual,
                                   const std::vector<Rgba32f>& expected,
-                                  const std::string_view label) {
+                                  const std::string_view label, const bool exact) {
     if (actual.size() != expected.size()) {
         expectations.expect(false, std::string(label) + ": pixel count differs");
         return 1;
     }
-    const auto close = [](const float a, const float b) {
+    const auto close = [exact](const float a, const float b) {
         if (a == b) {
             return true;
+        }
+        if (exact) {
+            return false;
         }
         const double absolute = std::fabs(static_cast<double>(a) - static_cast<double>(b));
         const double magnitude =
@@ -129,9 +134,9 @@ class Expectations final {
         }
     }
     expectations.expect(mismatches == 0, std::string(label) +
-                                             ": every pixel matches the CPU oracle at 2e-6/exact "
-                                             "alpha (" +
-                                             std::to_string(mismatches) + " mismatches)");
+                                             ": every pixel matches the CPU oracle " +
+                                             (exact ? "bit for bit" : "at 2e-6/exact alpha") +
+                                             " (" + std::to_string(mismatches) + " mismatches)");
     return mismatches;
 }
 
@@ -268,7 +273,8 @@ class Expectations final {
 void runPrecision(Expectations& expectations, GpuDevice& device,
                   const bloom::color::ResolvedBloomNeutralConfig& config,
                   const std::string_view from, const std::string_view to,
-                  const std::string_view label, const std::vector<Rgba32f>& pixels) {
+                  const std::string_view label, const std::vector<Rgba32f>& pixels,
+                  const bool exact) {
     GpuOcioTransformSpec spec;
     spec.kind = GpuOcioTransformKind::Cst;
     spec.fromId = std::string(from);
@@ -335,7 +341,7 @@ void runPrecision(Expectations& expectations, GpuDevice& device,
         if (!readback) {
             return;
         }
-        static_cast<void>(compare(expectations, readback.pixels, expected, stage));
+        static_cast<void>(compare(expectations, readback.pixels, expected, stage, exact));
     };
 
     dispatch("cold");
@@ -389,8 +395,15 @@ int main(int argc, char** argv) {
         return kSkipExit;
     }
     expectations.expect(device.device->state() == GpuDeviceState::Ready, "the device is Ready");
+    // #545: with the CPU fast power, the moncurve GammaOp's power and its separately rounded
+    // scale and offset reproduce the CPU oracle bit for bit in both directions. The decode matters
+    // most: a Screen merge over an HDR layer multiplies a decoded sRGB plate's error by
+    // |1 - source|, so an error inside the gate for the decode alone left it.
+    const bool exact = bloom::color::ocioGpuCpuFastPowerAdapterApplies();
     runPrecision(expectations, *device.device, *neutral, neutral->processColorSpaceId(),
-                 neutral->sRgbTextureColorSpaceId(), "neutral GammaOp CST", fixturePixels());
+                 neutral->sRgbTextureColorSpaceId(), "neutral GammaOp CST", fixturePixels(), exact);
+    runPrecision(expectations, *device.device, *neutral, neutral->sRgbTextureColorSpaceId(),
+                 neutral->processColorSpaceId(), "neutral sRGB decode CST", fixturePixels(), exact);
 
     // A strict mixed GammaOp+other-program arm is intentionally not asserted here. The adapter is
     // verified (color unit test) to specialize only the GammaOp `pow(vec4, vec4)` and to forward

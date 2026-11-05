@@ -116,10 +116,20 @@ rounds twice and is one ULP off for LogC3 and Log3G10, and the anti-log multipli
 exponent. Nominal codes stayed inside the 2e-6 parity gate (up to 8e-7), but a 4.0 code reached
 3.3e-6. Extraction therefore records OCIO's CPU `kinv` for each camera log-to-linear op
 (`OcioGpuProgramDesc::cameraLogExponentScales`, transported by the color worker and part of the
-resource digest), and the CPU-parity sampling adapter (`bloom.color.ocio-gpu-sampling.v6`) emits it
+resource digest), and the CPU-parity sampling adapter (`bloom.color.ocio-gpu-sampling.v7`) emits it
 bit for bit while the extracted OCIO body stays verbatim. A negative and an over-range ramp, opaque
 and translucent, now match the CPU reference exactly for all eleven camera spaces under both configs
 in `bloom.runtime.gpu_footage_interpretation_native`.
+
+The same adapter holds the sRGB-style (moncurve) GammaOp to the CPU's arithmetic. OCIO's CPU
+renderer evaluates `pow(scale * x + offset, gamma)` (and the reverse `pow(x, gamma) * scale -
+offset`) with the multiply and the add rounded separately and its fast minimax power, while a
+device may contract the generated multiply-add into one fma. That single rounding was within the
+2e-6 gate for the decode alone (up to 27 ULP after the power), but a Screen merge over an HDR layer
+multiplies it by `|1 - source|` and took a decoded PNG plate past the gate (#545). The adapter
+rewrites both forms to non-contracting helpers, so an sRGB decode or encode matches the CPU
+reference bit for bit; `bloom.runtime.gpu_ocio_precision` checks both directions exactly on the
+device.
 
 A straight code high enough to overflow the anti-log in binary32 (about 9.8 for S-Log3, for
 example a premultiplied 3.0 at alpha 0.25) is a separate case: the CPU input conversion fails and
@@ -555,7 +565,9 @@ ao = as + ab * (1 - as)
 
 **Alpha compositing is source-over for every separable mode.** Only the colour combination changes,
 so such a mode never makes a layer cover more or less of what is beneath it than its own alpha says.
-The alpha expression above is evaluated with exactly the arithmetic the source-over kernel uses.
+The alpha expression above is evaluated with exactly the arithmetic the source-over kernel uses,
+`fma(1 - as, ab, as)` with `1 - as` rounded to binary32 first, on the CPU and on every GPU blend
+kernel, the Float64 one included (#545), so a mode's alpha is bit-exact on both routes.
 
 Two modes are evaluated without the round trip, because substituting their own `B` into the fold
 reduces it exactly:
