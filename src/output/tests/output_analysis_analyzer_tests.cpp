@@ -116,7 +116,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         pngDigest && pngDigest.preimageByteCount() == 1961 &&
             hasDigest(pngDigest.digest(),
-                      "6cc17415f46437d7a24e887e09e53aa1a4115339b114044c1f2f4b27e72cffdc"),
+                      "a16a31ebdce070896b529c9fde8174a33fcfe37d43178e4a63d89560e8cafcc5"),
         "the analyzer-produced PNG report preserves the independent digest golden");
 
     auto exrInputValue = exrInput(descriptor());
@@ -144,7 +144,7 @@ void testNominalPresetsAndDigestGoldens(Expectations& expectations) {
     expectations.expect(
         exrDigest && exrDigest.preimageByteCount() == 1521 &&
             hasDigest(exrDigest.digest(),
-                      "93b24f0666eb3949d930684ce1a47ce6f2e4fa7466132176599f15955d6cd2a7"),
+                      "23f4c7fe65423e8de21e275ba8a23f5ba00ebf648c29bb04de6bb0adc9d49b6f"),
         "the analyzer-produced EXR report preserves the independent digest golden");
 
     const auto availableTiff = analyzeTiffRgba16SrgbV1(

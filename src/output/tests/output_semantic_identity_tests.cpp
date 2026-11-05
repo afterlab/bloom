@@ -71,11 +71,11 @@ using namespace std::chrono_literals;
 // oracle was validated by reproducing every previously checked-in golden set byte for byte --
 // including both lanes' own pre-merge sets -- when fed their version numbers.
 constexpr std::string_view kExpectedPngAnalysisDigest =
-    "6cc17415f46437d7a24e887e09e53aa1a4115339b114044c1f2f4b27e72cffdc";
+    "a16a31ebdce070896b529c9fde8174a33fcfe37d43178e4a63d89560e8cafcc5";
 constexpr std::string_view kExpectedPngOutputDigest =
-    "2407cfa4c29aa166d267f89c0811a9a8a4dc2c60964c11d6370e46f04edcb3af";
+    "8cb42abddb4e92ebd9d94e7f45d32e96733dedc0e2204af87747261f052dac5f";
 constexpr std::string_view kExpectedExrOutputDigest =
-    "5d88de295e04f2588a2c5978a649dcaa758ed04d4b627c73bbca165eec1f7b60";
+    "b6a16786b783c0eb4a2a620c9e6fe8c6ae694337a0d57f542ae84d50f7557b59";
 constexpr std::uint64_t kExpectedPngPreimageBytes = 669;
 constexpr std::uint64_t kExpectedExrPreimageBytes = 567;
 

@@ -158,6 +158,12 @@ above; with `10 3 14 7` it derives PNG analysis `6cc17415...` (1961 bytes), EXR 
 `93b24f06...` (1521), PNG output `2407cfa4...` (669) and EXR output `5d88de29...` (567); every
 preimage length is unchanged.
 
+The affine CPU reference adopting the GPU's double-float sample coordinates (#545) then advanced
+CPU image primitive semantics 7 -> 8. With `10 3 14 7` the oracle reproduces the pins above; with
+`10 3 14 8` it derives PNG analysis `a16a31eb...` (1961 bytes), EXR analysis `23f4c7fe...` (1521),
+PNG output `8cb42abd...` (669) and EXR output `b6a16786...` (567); every preimage length is
+unchanged.
+
 ```python
 """Independent output-identity oracle (no Bloom code imported). Usage: oracle.py PLAN ANIM EVAL PRIM"""
 import hashlib, struct, sys
