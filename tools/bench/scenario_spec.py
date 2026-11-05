@@ -46,8 +46,9 @@ EXPORT_RATE = ("#544: a four-frame export of a 2K shot that fills fast is slower
 SHORT_FILL_BUSY = "#544: the light 2K shot's 3 s fill keeps the GPU under half busy on average"
 FILL_ORDER = ("#544: the 4K comp's fill still waits for device capacity a few times and caches "
               "some frames ahead of the contiguous run")
-ALPHA_PARITY = ("#545: the CG comp's scaled and rotated layers resample near-zero alpha through "
-                "the GPU affine map, which is exact only at alpha 0 and 1")
+ALPHA_PARITY = ("#545: the CG beauty's Classic Glow keys alpha from colour that went through "
+                "device Gaussian blurs (Light Wrap's blurred plate), which match the CPU within "
+                "2e-6 rather than bit for bit, so a few keyed alpha samples differ by an ULP")
 
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass

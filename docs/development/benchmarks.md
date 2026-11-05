@@ -405,8 +405,8 @@ The work areas are short and the export renders only the first `--export-frames`
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
 lists in `knownFailures` the checks an open issue makes fail (#544: the 2K shots' four-frame export
 rate against their fast fills, the light 2K shot's GPU busy over a 3 s fill, and the 4K comp's fill
-caching a few frames ahead of the contiguous run; #545: GPU export frames differing from the CPU
-reference in alpha).
+caching a few frames ahead of the contiguous run; #545: a few CG comp alpha samples a Glow keys
+from blurred colour, which the device matches within 2e-6 rather than bit for bit).
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
