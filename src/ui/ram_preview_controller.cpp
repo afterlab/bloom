@@ -167,6 +167,8 @@ void RamPreviewController::rebaseRange() {
     firstFrameIndex_ = mapping->nearestFrameIndex(range.start);
     totalFrameCount_ = endMapping.value()->maximumFrameIndex() - firstFrameIndex_ + 1;
     nextFrameIndex_ = 0;
+    landedFrames_.clear();
+    landingFrontier_ = 0;
     refreshCoverage(false, true);
     retentionLoss_.reset();
     pendingRetentionLoss_.clear();
@@ -194,6 +196,7 @@ void RamPreviewController::retryFrame(const std::uint64_t frameIndex, const std:
     if (++failures > kFrameRetries) {
         // Skipped: the run continues and ends PartialBudget; Play renders the frame on demand.
         partialForMemory_ = true;
+        landedFrames_.insert(frameIndex);
         return;
     }
     nextFrameIndex_ = std::min(nextFrameIndex_, frameIndex);
@@ -296,6 +299,8 @@ void RamPreviewController::advance() {
             // Still preparing: let those frames land, then revisit the rebase on their completion.
             return;
         }
+        if (!flushHeldFrames())
+            return;
         rebaseRange();
         if (!caching_) {
             return;
@@ -306,6 +311,8 @@ void RamPreviewController::advance() {
     if (retentionLoss_ == Completion::Failed)
         rescanAfterLoss();
     if (rangeDirty_ && pipeline_.empty()) {
+        if (!flushHeldFrames())
+            return;
         rebaseRange();
         if (!caching_)
             return;
@@ -323,6 +330,8 @@ void RamPreviewController::advance() {
     // Finish on the truth that every frame the range holds has actually landed, never merely
     // because the last frame was submitted: a second frame may still be preparing.
     if (pipeline_.empty() && nextFrameIndex_ >= totalFrameCount_) {
+        if (!flushHeldFrames())
+            return;
         refreshCoverage();
         // Frames memory took, or frames that kept failing, leave a partial run that still plays.
         finish(cachedFrameCount_ == totalFrameCount_ ? Completion::Complete
@@ -348,7 +357,10 @@ void RamPreviewController::requestFrames() {
             pipeline_.setWidth(fillWidthProvider_(pixels));
         }
     }
-    while (caching_ && serial == runSerial_ && pipeline_.hasCapacity()) {
+    // Frames held for in-order landing count against the width (#544), so a frame that keeps
+    // preparing or waiting cannot let the fill run arbitrarily far ahead of the cached run.
+    while (caching_ && serial == runSerial_ &&
+           pipeline_.inFlightCount() + heldFrames_.size() < pipeline_.width()) {
         const auto* composition = session_.composition();
         if (composition == nullptr) {
             finish(Completion::Failed);
@@ -376,7 +388,7 @@ void RamPreviewController::requestFrames() {
                 finish(Completion::Failed);
                 return;
             }
-            if (pipeline_.isInFlight(*key)) {
+            if (pipeline_.isInFlight(*key) || heldFrames_.contains(nextFrameIndex_)) {
                 ++nextFrameIndex_;
                 continue;
             }
@@ -508,29 +520,74 @@ bool RamPreviewController::drainResults() {
             rangeDirty_ = true;
             continue;
         }
-        const auto inserted = previewController_.frameCache().insert(cacheFrame);
-        publishProgress();
-        if (!caching_ || serial != runSerial_)
+        // #544: frames finish in any order (several prepare at once, and one may wait for device
+        // capacity); they land in frame order, so the cache grows as one run from the start.
+        if (ready.frameIndex != landingFrontier()) {
+            heldFrames_.insert_or_assign(ready.frameIndex, cacheFrame);
+            continue;
+        }
+        if (!landFrame(ready.frameIndex, cacheFrame) || !landHeldFrames())
             return false;
-        if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedStale) {
-            // The frame's revision or work area moved on while it was preparing: rescan.
-            rangeDirty_ = true;
-            continue;
-        }
-        if (inserted.outcome == PreviewFrameCache::InsertOutcome::Invalid) {
-            retryFrame(ready.frameIndex, serial);
-            continue;
-        }
-        if (retentionLoss_ == Completion::Failed)
-            rescanAfterLoss();
-        if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedBudget ||
-            inserted.outcome == PreviewFrameCache::InsertOutcome::AllocationFailure ||
-            retentionLoss_) {
-            // Memory refused or evicted frames: never a reason to stop. The cache keeps its most
-            // recently used frames; the run keeps filling and ends PartialBudget, then plays.
-            partialForMemory_ = true;
-            retentionLoss_.reset();
-        }
+    }
+    // A skipped frame settles the frontier too; a rescan lands what is held without waiting.
+    return rangeDirty_ ? flushHeldFrames() : landHeldFrames();
+}
+
+std::uint64_t RamPreviewController::landingFrontier() {
+    while (landingFrontier_ < totalFrameCount_ &&
+           (landedFrames_.contains(landingFrontier_) ||
+            coverageIndex_.contains(firstFrameIndex_ + landingFrontier_)))
+        ++landingFrontier_;
+    return landingFrontier_;
+}
+
+bool RamPreviewController::landHeldFrames() {
+    while (!heldFrames_.empty() && !rangeDirty_ &&
+           heldFrames_.begin()->first == landingFrontier()) {
+        auto held = heldFrames_.extract(heldFrames_.begin());
+        if (!landFrame(held.key(), held.mapped()))
+            return false;
+    }
+    return rangeDirty_ ? flushHeldFrames() : true;
+}
+
+bool RamPreviewController::flushHeldFrames() {
+    while (!heldFrames_.empty()) {
+        auto held = heldFrames_.extract(heldFrames_.begin());
+        if (!landFrame(held.key(), held.mapped()))
+            return false;
+    }
+    return true;
+}
+
+bool RamPreviewController::landFrame(
+    const std::uint64_t frameIndex,
+    const std::shared_ptr<const runtime::PreparedPreviewFrame>& cacheFrame) {
+    const auto serial = runSerial_;
+    landedFrames_.insert(frameIndex);
+    const auto inserted = previewController_.frameCache().insert(cacheFrame);
+    publishProgress();
+    if (!caching_ || serial != runSerial_)
+        return false;
+    if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedStale) {
+        // The frame's revision or work area moved on while it was preparing: rescan.
+        rangeDirty_ = true;
+        return true;
+    }
+    if (inserted.outcome == PreviewFrameCache::InsertOutcome::Invalid) {
+        landedFrames_.erase(frameIndex);
+        retryFrame(frameIndex, serial);
+        return true;
+    }
+    if (retentionLoss_ == Completion::Failed)
+        rescanAfterLoss();
+    if (inserted.outcome == PreviewFrameCache::InsertOutcome::RejectedBudget ||
+        inserted.outcome == PreviewFrameCache::InsertOutcome::AllocationFailure ||
+        retentionLoss_) {
+        // Memory refused or evicted frames: never a reason to stop. The cache keeps its most
+        // recently used frames; the run keeps filling and ends PartialBudget, then plays.
+        partialForMemory_ = true;
+        retentionLoss_.reset();
     }
     return true;
 }
@@ -572,6 +629,7 @@ void RamPreviewController::consumeReadyResult() {
 void RamPreviewController::finish(const Completion outcome) {
     const auto serial = runSerial_;
     pipeline_.cancelAllAndDetach();
+    heldFrames_.clear();
     caching_ = false;
     fillRetention_.end();
     rangeDirty_ = false;

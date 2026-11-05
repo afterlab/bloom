@@ -95,8 +95,8 @@ template <typename Predicate> bool waitUntil(Predicate predicate) {
     return std::invoke(predicate);
 }
 
-[[nodiscard]] runtime::TaskSchedulerConfig testSchedulerConfig() {
-    return {.cpuWorkerCount = 1,
+[[nodiscard]] runtime::TaskSchedulerConfig testSchedulerConfig(const std::size_t cpuWorkers = 1) {
+    return {.cpuWorkerCount = cpuWorkers,
             .blockingIoWorkerCount = 1,
             .cpuQueueCapacity = 16,
             .blockingIoQueueCapacity = 8,
@@ -241,10 +241,10 @@ struct SessionFixture final {
         };
     }
 
-    explicit SessionFixture(document::NewProject newProject)
+    explicit SessionFixture(document::NewProject newProject, const std::size_t cpuWorkers = 1)
         : document(std::move(newProject.project)), commands(document),
           session(document, commands, newProject.initialCompositionId),
-          scheduler(testSchedulerConfig()), bridge(scheduler),
+          scheduler(testSchedulerConfig(cpuWorkers)), bridge(scheduler),
           controller(session, scheduler, bridge, countingPipeline(),
                      ui::CompositionPreviewSettings{}, frameCache) {}
 };
@@ -1000,6 +1000,50 @@ void testCompositionSwitchEndsTheRunAndKeepsItsFrames(Expectations& expectations
 }
 
 // A transient frame failure is retried, not a reason to end the run on its own.
+// #544: frames prepare side by side and finish in any order, but they land in the cache in frame
+// order, so the cached range is always one run from the start of the work area. A frame that
+// finished ahead of an earlier one waits for it, and counts against the fill width meanwhile.
+void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM in-order landing", time(6, 25)), 2);
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the in-order fixture composition is animated across its range");
+    expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
+                        "the in-order fixture renders its first frame");
+    const auto before = fixture.preparationCount.load();
+    // The run's first preparation (frame 1; frame 0 is the Viewer's) blocks until released.
+    fixture.gateAtCall = before;
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, fixture.countingPipeline());
+    bool contiguous = true;
+    // Connected after the controller's own coverage handler, so it reads the updated run.
+    QObject::connect(&fixture.controller.frameCache(), &ui::PreviewFrameCache::entryRetained,
+                     &fixture.bridge, [&] {
+        const auto run = ramPreview.longestRetainedRun();
+        if (ramPreview.cachedFrameCount() != 0 &&
+            (!run || run->first != 0 || run->second != ramPreview.cachedFrameCount()))
+            contiguous = false;
+    });
+    ramPreview.start();
+    expectations.expect(waitUntil([&] { return fixture.gate.entered(); }),
+                        "frame 1 is preparing and held at the gate");
+    // Frame 2 prepares beside it and finishes first; it is held, not cached.
+    expectations.expect(waitUntil([&] { return fixture.preparationCount.load() == before + 2; }),
+                        "frame 2 prepares beside the held frame 1");
+    for (int spin = 0; spin < 50; ++spin)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    expectations.expect(fixture.preparationCount.load() == before + 2,
+                        "a frame held for in-order landing counts against the fill width");
+    expectations.expect(ramPreview.cachedFrameCount() == 1,
+                        "frame 2 does not land ahead of frame 1 (only frame 0 is cached)");
+    fixture.gate.release();
+    expectations.expect(waitUntil([&] { return !ramPreview.isCaching(); }),
+                        "the in-order run finishes once frame 1 lands");
+    expectations.expect(ramPreview.cachedFrameCount() == 6 && contiguous,
+                        "every frame landed and the cached range was one run from the start "
+                        "throughout");
+    finishFixture(fixture, expectations);
+}
+
 void testRamPreviewRetriesATransientFrameFailure(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM transient failure", time(6, 25)));
     expectations.expect(waitUntil([&] { return isReady(fixture.controller); }),
@@ -1674,6 +1718,7 @@ int main(int argc, char** argv) {
         testRamPreviewSharesResolutionAndCachesByPolicy(expectations);
         testResolutionChangeCancelsAnActiveRamPreview(expectations);
         testRamPreviewRetriesATransientFrameFailure(expectations);
+        testRamPreviewLandsFramesInOrder(expectations);
         testRamPreviewIgnoresSessionOnlyActivity(expectations);
         testCompositionSwitchEndsTheRunAndKeepsItsFrames(expectations);
         testCompiledPlanCacheCompilesOncePerRevision(expectations);

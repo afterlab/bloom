@@ -188,6 +188,15 @@ class RamPreviewController final : public QObject {
     // evaluation snapshot and frame key before it is retained or counted. Returns false when it
     // ended the run (cancel/failure/budget), true otherwise.
     [[nodiscard]] bool drainResults();
+    // #544: the lowest frame of the range that has neither landed in this run nor is cached.
+    [[nodiscard]] std::uint64_t landingFrontier();
+    // Inserts a finished frame into the cache. Returns false when that ended the run.
+    [[nodiscard]] bool landFrame(std::uint64_t frameIndex,
+                                 const std::shared_ptr<const runtime::PreparedPreviewFrame>& frame);
+    // Lands the held frames that now continue the run from the frontier; with a rescan pending,
+    // lands every held frame. Returns false when the run ended.
+    [[nodiscard]] bool landHeldFrames();
+    [[nodiscard]] bool flushHeldFrames();
     [[nodiscard]] bool resultIsCurrent(const PreviewFrameCacheKey& identityKey,
                                        const runtime::PreviewRequestIdentity& identity) const;
     [[nodiscard]] runtime::PreviewRequestIdentity identityFor(core::RationalTime time,
@@ -236,6 +245,12 @@ class RamPreviewController final : public QObject {
     // revisions along the range without mixing provenance within any one frame.
     document::CompositionId compositionId_;
     std::uint64_t nextFrameIndex_ = 0;
+    // #544: frames that finished ahead of an earlier frame still preparing (or waiting for
+    // capacity) are held here and land in frame order, so the cache is always one run from the
+    // range start. They are finished preview frames in host memory the cache would hold anyway.
+    std::map<std::uint64_t, std::shared_ptr<const runtime::PreparedPreviewFrame>> heldFrames_;
+    std::set<std::uint64_t> landedFrames_;
+    std::uint64_t landingFrontier_ = 0;
     std::uint64_t firstFrameIndex_ = 0;
     std::uint64_t cachedFrameCount_ = 0;
     std::uint64_t preparedFrameCount_ = 0;

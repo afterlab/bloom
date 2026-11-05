@@ -775,7 +775,12 @@ fallback remains supported on macOS and Windows.
 The RAM preview controller fills its range with a bounded two-deep pipeline
 so the next frame's CPU preparation overlaps the previous frame's display stage, with the
 pixels-identity duplicate guard, out-of-order collection, cancel-all, and no cross-frame coalescing
-key.
+key. Frames finish in any order (several prepare at once, and one may wait for device capacity
+while later ones run), but they land in the preview cache in frame order (#544): a finished frame
+ahead of an unfinished earlier one is held until the earlier one lands, is never submitted again,
+and counts against the fill width meanwhile, so the cached range is always one run from the start
+of the work area. A rescan or the end of the run lands whatever is held; a frame that is skipped
+after its retries no longer holds the frames after it.
 
 Honest outcome: the production application source wires the resident display route end to end, and a
 main-linked vertical acceptance now passes over a genuine OpenEXR document (a real `AddImageLayer`
