@@ -1,7 +1,9 @@
 # Bloom Project Format
 
-The current document schema is 1.40. It lets a value node drive a gradient stop's colour or
-position through a stop link (see "Gradient Stop Links In Document 1.40"). Document 1.39 moved the
+The current document schema is 1.41. It lets a gradient value carry its interpolation, colour mode
+and hue direction (see "Gradient Modes In Document 1.41"). Document 1.40 let a value node drive a
+gradient stop's colour or position through a stop link (see "Gradient Stop Links In Document
+1.40"). Document 1.39 moved the
 Linear and Radial Gradient generators' start and end colours and Glow's tint and outer tint onto
 gradient values, and opens an older document's colour pairs as two-stop gradients (see "Gradient
 Colour Pairs In Document 1.39"). Document 1.38
@@ -1734,6 +1736,30 @@ unsupported node version, and a document claiming 1.39 that carries a schema 1 g
 refused the same way. The `1.38` -> `1.39` DOM step `migrateGradientColorPairsV1_38` only advances
 the version. The schema artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`;
 the schema check restores the 1.38 artifacts from them exactly.
+
+## Gradient Modes In Document 1.41
+
+A gradient value (a constant, and the value of every key of a gradient curve) may follow its
+`stops` with how it blends between them (issue #546), in this order and each only when it is not
+the default:
+
+- `colorMode`: `"hsv"` or `"hsl"` (default RGB).
+- `hueDirection`: `"far"`, `"clockwise"` or `"counter-clockwise"` (default Near).
+- `interpolation`: `"constant"`, `"ease"`, `"cardinal"`, `"b-spline"` or `"exponential"` (default
+  Linear).
+
+A default spelled out, an unknown name or a member out of this order is refused, and so is a
+document claiming 1.40 or older that carries one (`UnknownMember` at the member). A mode the blend
+does not read (the hue direction of an RGB gradient, the interpolation of an HSV or HSL one) is
+still stored, so switching back restores it. The evaluation is evaluation-primitives.md's
+"Gradient Interpolation And Colour Modes".
+
+Every older gradient blends linearly in RGB, so the `1.40` -> `1.41` DOM step
+`migrateGradientModesV1_40` only advances the version. The schema artifacts are
+`document-1.41.schema.json` (the three optional properties on `gradientValue-1.38` and their
+`gradientColorMode-1.41`, `gradientHueDirection-1.41` and `gradientInterpolation-1.41`
+vocabularies) and `manifest-1.41.schema.json`; the schema check restores the 1.40 artifacts from
+them exactly.
 
 ## Gradient Stop Links In Document 1.40
 

@@ -257,6 +257,14 @@ Gradient Map shows its **Gradient** as an editable bar with a stop under it for 
 - Double-click a stop to pick its colour. The **Stop** row under the bar shows the selected stop's
   colour and position (0% at the left, 100% at the right) for exact values.
 - Right-click the bar for **Add Stop**, **Remove Stop**, **Distribute Evenly** and **Reverse**.
+- **Color mode** chooses how the colour blends from stop to stop: **RGB** mixes red, green and
+  blue, **HSV** and **HSL** turn the hue around the colour wheel. In RGB, **Interpolation** sets the
+  shape of the blend: **Constant** (hard steps), **Linear**, **Ease** (slow out of and into each
+  stop), **Cardinal** (a smooth curve through the stops), **B-Spline** (a smooth curve near the
+  stops) or **Exponential** (stays near a stop's colour, then turns quickly). In HSV and HSL,
+  **Hue** sets which way the hue turns: **Near** (the shorter way), **Far** (the longer way),
+  **Clockwise** or **Counter-clockwise**. These work as Blender's Color Ramp does, and the same
+  controls appear on every gradient (Linear and Radial Gradient's colours, Glow's tint gradient).
 
 The diamond beside the gradient keys the whole gradient at the playhead. Between two keys with the
 same number of stops each stop moves and changes colour smoothly; adding or removing a stop between

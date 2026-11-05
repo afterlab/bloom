@@ -651,7 +651,13 @@ Radial Gradient's start and end, joined by a line, on the node's own width and h
 diamond, then a Stop row with the selected stop's colour chip and its position in percent -- a
 Linear or Radial Gradient's Colors above its pad, Glow's Tint gradient above its angle dial, and
 Colorize's Gradient Map. A double-click on its name resets it, and its right-click menu offers
-Reset Gradient and the gradient's key. #543: under the Stop row its Values disclosure shows a row
+Reset Gradient and the gradient's key. #546: under the Stop row a "Color mode" dropdown (RGB, HSV,
+HSL) and an "Interpolation" dropdown (Constant, Linear, Ease, Cardinal, B-Spline, Exponential)
+choose how the colour blends between stops; for HSV and HSL the second row reads "Hue" and its
+dropdown (Near, Far, Clockwise, Counter-clockwise) takes the Interpolation one's place, as in
+Blender's Color Ramp, each option with a tooltip saying what it does. A choice is one edit ("Set
+Gradient Blend") of the whole gradient, its stops untouched, and the bar is drawn in the chosen blend.
+#543: under the blend rows its Values disclosure shows a row
 for each stop's colour ("Stop 2 color", a chip) and position ("Stop 2 position", in percent), each
 with its socket on a node card, so a value node links to a stop as to any other value. A linked row
 always shows, reads "Linked to <node>" in place of its control (its tooltip adds the driven value)
@@ -1588,7 +1594,10 @@ its owner for a stop's colour on a double-click or Enter, moves the selected sto
 its menu. Each of them draws its focus ring on its active part and treats a drag, a run of keys or
 one menu action as one edit. #543: `KGradientEditor` numbers each stop with its index in the list it
 was given (`Stop::origin`) and keeps that number through moves and removals, and draws a stop marked
-`colorLinked` or `positionLinked` as linked, leaving its linked part alone.
+`colorLinked` or `positionLinked` as linked, leaving its linked part alone. #546: its owner may give
+it a colour sampler (`setColorSampler`), the gradient's blend; the bar is then drawn a column at a
+time from the sampler (so Constant's hard steps and a spline's overshoot show as they render) and a
+stop added on the bar takes the sampled colour; without one the bar blends linearly in RGB.
 
 ## MCP Server panel
 

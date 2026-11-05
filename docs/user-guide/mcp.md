@@ -380,7 +380,12 @@ case, spaces, hyphens and underscores do not matter, so `"ping_pong"` names Ping
 `bloom.layer.add-shape` (`kind` `"path"`) and the mask operations take: `{"closed": bool,
 "anchors": [{"point": [x, y], "inHandle": [x, y] or null, "outHandle": [x, y] or null, "mode":
 "corner" | "mirrored" | "aligned" | "free" | "auto"}]}`, where `mode` is optional and inferred from the
-handles. A value out of range is refused with what the parameter
+handles. A Gradient parameter takes `{"stops": [{"position": p, "color": [r, g, b, a]}]}` with
+optional `"interpolation"` (`"constant"`, `"linear"`, `"ease"`, `"cardinal"`, `"b-spline"` or
+`"exponential"`), `"colorMode"` (`"rgb"`, `"hsv"` or `"hsl"`) and `"hueDirection"` (`"near"`,
+`"far"`, `"clockwise"` or `"counter-clockwise"`); one left out is Linear, RGB or Near. Python
+takes the same mapping with `color_mode` and `hue_direction`, and reading a gradient back always
+lists all three. A value out of range is refused with what the parameter
 accepts, for example "Parameter 31 (points of node 7, bloom.shape) cannot take 2; it takes a whole
 number in 3..64." A Boolean parameter such as a shape's `fillEnabled` or `strokeEnabled` can be
 driven by a Boolean value node: `{"driverNode": <id>, "driverPort": "result"}` with

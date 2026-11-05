@@ -905,7 +905,10 @@ the track-matte Luma and Luma Key use. Each mode gives a colour `c`:
   stop with `p_i <= t` (two stops at one position make a hard edge: the later one wins from there
   on). A stop's alpha is kept in the gradient but unused: Colorize keeps the pixel's alpha. A stop a
   value node drives (#543) takes its driven colour or position at the frame before the stops are
-  ordered, on the CPU reference and in the stop table the fixed program reads alike.
+  ordered, on the CPU reference and in the stop table the fixed program reads alike. That is the
+  Linear RGB blend; a gradient in another interpolation or in HSV or HSL (#546) blends as
+  evaluation-primitives.md's "Gradient Interpolation And Colour Modes" defines, the fixed program's
+  table carrying the mode words and the spline modes' outer spans where the unused ramp colours sit.
 - **Black & White** takes the largest, middle and smallest channel of `s` and
   `grey = min + (mid - min) * secondary + (max - mid) * primary`, `c = (grey, grey, grey)`. The
   primary weight belongs to the largest channel (Reds, Greens or Blues) and the secondary to the pair

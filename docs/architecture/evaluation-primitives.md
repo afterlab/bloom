@@ -803,6 +803,45 @@ shader. Its normal completion uses the same fence proof, cancellation, image bud
 rules as other native batch operations. Native unavailability is reported explicitly and the
 portable CPU reference remains the supported fallback.
 
+### Gradient Interpolation And Colour Modes
+
+A gradient value carries an interpolation, a colour mode and a hue direction (#546,
+`document::GradientModes`, `gradient_interpolation.hpp`); Linear in RGB is the blend above and
+keeps its exact operations. Blender's Color Ramp (`BKE_colorband_evaluate`) is the reference:
+
+- **Constant** holds the earlier stop's colour up to the next stop. **Ease** shapes the local
+  factor as `3u^2 - 2u^3`. **Exponential**, which the reference's Color Ramp lacks, is the
+  exponential easing of its F-Curves in their automatic (ease in) direction, the one Bloom's
+  Exponential keyframe easing applies: `(2^(10(u - 1)) - 2^-10) / (1 - 2^-10)`, exactly 0 and 1 at
+  the stops. These three hold the end colours outside the first and last stop like Linear.
+- **Cardinal** and **B-Spline** weigh the segment's two stops and their neighbours with the
+  reference's `key_curve_position_weights` (cardinal tension 0.71; the uniform cubic B-spline),
+  repeating the first and last stop past the ends and extending the outer spans to 0 and 1, so they
+  do not hold outside the end stops. The reference clamps all four channels to `[0,1]`; Bloom's
+  stops are scene-linear and may be HDR, so only alpha is clamped and Cardinal may overshoot.
+- **HSV** and **HSL** convert both stops with the reference's `rgb_to_hsv` / `rgb_to_hsl` (HSL's
+  lightness is capped at 1, as the reference's is; a zero saturation divisor, which only colours
+  outside `[0,1]` reach, gives no saturation), blend hue by the hue direction (`colorband_hue_interp`:
+  **Near** the shorter way round, **Far** the longer way and a full turn between equal hues,
+  **Clockwise** with the hue rising towards yellow and green, **Counter-clockwise** with it falling)
+  and saturation, value or lightness and alpha linearly, and convert back. As in the reference,
+  an HSV or HSL blend is always linear between neighbouring stops: the interpolation shapes RGB
+  only, and the hue direction HSV and HSL only, each kept while the other is in use.
+- A blended alpha is clamped to `[0,1]`.
+
+The CPU reference evaluates every mode other than Linear RGB in binary32 through
+`gradient_math::sample`, each product and sum a separately rounded operation and 2^x a degree-9
+Horner polynomial of fused multiply-adds, and native GradientV1 and the Colorize program run the
+same operations from `render::kGradientModesGlsl` (the build checks that gradient.comp carries that
+exact text), within the 2e-6 process gate; the document's binary64 evaluation of the same
+definition draws the editor's bar and Glow's octave tints. The modes as the blend reads them
+(`effectiveGradientModes`: no hue direction in RGB, Linear in HSV and HSL) are GradientV1's push
+constant words and part of the CPU and GPU semantic keys, so a mode the blend ignores never misses
+a cache; the spline modes also carry the Float32 reciprocals of the spans from 0 to the first stop
+and from the last stop to 1 in the first stop's spare table pair. A keyed gradient takes the
+earlier key's modes between two keys. The Required coverage axes are
+`feature.gradient.interpolation` and `feature.gradient.color_mode`.
+
 ## Image Effect Lowering
 
 COLOR-3 advances compiled-plan semantics to **8** and CPU evaluator semantics to **9**.
