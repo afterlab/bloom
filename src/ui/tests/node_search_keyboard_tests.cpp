@@ -551,8 +551,8 @@ void testSearchKeyboardAndMenus() {
                "Separate and Combine Channels sit beside the other channel nodes in Compositing");
         expect(entries("nodeAddCategoryMenu.Filters") == QStringList{"Box Blur", "Gaussian Blur",
                                                                      "Matte Blur", "Matte Dilate",
-                                                                     "Matte Erode"},
-               "Filters offers the blurs and matte filters");
+                                                                     "Matte Erode", "Vignette"},
+               "Filters offers the blurs, the matte filters and Vignette");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
                "a singleton already present is listed disabled with its refusal");

@@ -2,6 +2,7 @@
 
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/grade_wheels.hpp>
@@ -9,13 +10,15 @@
 #include <bloom/ui/levels_graph.hpp>
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/ui/scalar_slider_widget.hpp>
+#include <bloom/ui/vignette_widget.hpp>
 
 namespace bloom::ui {
 
 bool hasNodeCardWidget(const std::string_view typeId) noexcept {
     return typeId == document::kGradeNodeType || typeId == document::kLevelsNodeType ||
            typeId == document::kCurvesNodeType || typeId == document::kHueSaturationNodeType ||
-           typeId == document::kColorizeNodeType || isScalarSliderNodeType(typeId) ||
+           typeId == document::kColorizeNodeType || typeId == document::kVignetteNodeType ||
+           isScalarSliderNodeType(typeId) ||
            hasNodeControlsWidget(typeId);
 }
 
@@ -32,6 +35,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new HueSaturationCardWidget(session, node, card, parent);
     if (typeId == document::kColorizeNodeType)
         return new ColorizeCardWidget(session, node, card, parent);
+    if (typeId == document::kVignetteNodeType)
+        return new VignetteCardWidget(session, node, card, parent);
     if (isScalarSliderNodeType(typeId))
         return new ScalarSliderCardWidget(session, node, typeId, card, parent);
     // #541: Properties draws a layer's rotation in its own Transform section (with the same dial),

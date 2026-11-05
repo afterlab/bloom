@@ -7,6 +7,7 @@
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -369,6 +370,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kColorizeNodeType)
         return QStringLiteral("fill tint tritone duotone gradient map ramp colorama black white "
                               "monochrome greyscale grayscale toner channel mixer");
+    // #505.
+    if (typeId == document::kVignetteNodeType)
+        return QStringLiteral("vignette lens falloff darken edges corners finishing exposure "
+                              "light falloff");
     return {};
 }
 

@@ -26,6 +26,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/ui/node_card_widget.hpp>
 
+#include <QImage>
 #include <QPointF>
 #include <QRectF>
 #include <QString>
@@ -151,6 +152,8 @@ class PointPadRow final : public QWidget {
         // The frame the points are drawn against, read each refresh.
         std::function<QRectF()> frame;
         QString commandLabel;
+        // #505: the pad's backdrop (kit::KPointPad::setBackdrop), read each refresh.
+        std::function<QImage()> backdrop;
     };
 
     PointPadRow(CompositionSession& session, document::NodeId node, Spec spec,

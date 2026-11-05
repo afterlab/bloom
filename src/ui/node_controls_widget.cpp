@@ -388,6 +388,9 @@ void PointPadRow::refresh(const bool locked) {
     pad_->setEnabled(editable);
     if (!pad_->hasLiveEdit())
         pad_->setPoints(std::move(points));
+    // The backdrop follows the live values, a drag of the pad's own points included.
+    if (spec_.backdrop)
+        pad_->setBackdrop(spec_.backdrop());
 }
 
 // --- NodeControlsCardWidget ---------------------------------------------------------------------

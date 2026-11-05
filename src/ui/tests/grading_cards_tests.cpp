@@ -30,6 +30,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/vignette_nodes.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -50,6 +51,7 @@
 #include <bloom/ui/node_editor.hpp>
 #include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/scalar_slider_widget.hpp>
+#include <bloom/ui/vignette_widget.hpp>
 
 #include <cmath>
 #include <iostream>
@@ -469,6 +471,94 @@ void colorizeCard() {
            "a click on a stop opens its colour picker and changes nothing");
     chip->closePicker();
     expect(card->colorRow("shadows")->reset(), "a colour row resets to its default");
+}
+
+// #505: the Vignette card in both modes paints inside its card with no label cut short and shows
+// the strength its mode reads; its pad draws the falloff, which follows the centre and the shape,
+// and dragging the centre moves it as one command; a slider drag is one command too.
+void vignetteCard() {
+    CardFixture fixture(document::kVignetteNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::VignetteCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Vignette draws its card widget");
+    const auto mode = ui::nodeRoleParameter(fixture.session, fixture.node, "mode");
+    const auto shape = ui::nodeRoleParameter(fixture.session, fixture.node, "shape");
+    expect(mode && shape, "Vignette binds its mode and shape");
+    if (card == nullptr || !mode || !shape)
+        return;
+    expect(card->mode() == document::kVignetteMultiply, "a new Vignette multiplies");
+    const std::array<std::tuple<std::int64_t, std::int64_t, const char*>, 3> looks{
+        {{document::kVignetteMultiply, document::kVignetteElliptical, "vignette-multiply"},
+         {document::kVignetteExposure, document::kVignetteElliptical, "vignette-exposure"},
+         {document::kVignetteExposure, document::kVignetteRectangular, "vignette-rectangular"}}};
+    for (const auto& [value, form, name] : looks) {
+        expect(fixture.session.setParameterValue(*mode, value, QStringLiteral("Set Mode")) &&
+                   fixture.session.setParameterValue(*shape, form, QStringLiteral("Set Shape")),
+               "the Vignette mode and shape are set");
+        QApplication::processEvents();
+        expect(card->mode() == value, "the Vignette card follows its node's mode");
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << name << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, name))
+            ++failures;
+        capture(fixture, QString::fromLatin1(name));
+        const bool exposure = value == document::kVignetteExposure;
+        expect(card->valueRow("amount")->isVisibleTo(card) == !exposure &&
+                   card->valueRow("exposure")->isVisibleTo(card) == exposure &&
+                   card->valueRow("feather")->isVisibleTo(card) &&
+                   card->valueRow("highlightProtection")->isVisibleTo(card) &&
+                   card->socketY("amount").has_value() == !exposure &&
+                   card->socketY("exposure").has_value() == exposure &&
+                   card->socketY("roundness").has_value() && card->showsRole("mode") &&
+                   card->showsRole("shape") && card->showsRole("center") &&
+                   !card->showsRole("midpoint") && !card->showsRole("amount"),
+               "the Vignette card shows the strength its mode reads and every shared value");
+        const auto& backdrop = card->padRow()->pad()->backdrop();
+        expect(!backdrop.isNull() &&
+                   qGray(backdrop.pixel(backdrop.width() / 2, backdrop.height() / 2)) >
+                       qGray(backdrop.pixel(1, 1)) + 20,
+               "the pad draws the falloff: the corners darker than the centre");
+    }
+    expect(fixture.session.setParameterValue(*mode, document::kVignetteMultiply,
+                                             QStringLiteral("Set Mode")) &&
+               fixture.session.setParameterValue(*shape, document::kVignetteElliptical,
+                                                 QStringLiteral("Set Shape")),
+           "the Vignette is an elliptical multiply again");
+    QApplication::processEvents();
+    // Dragging the centre is one command and moves the darkening with it.
+    auto& pad = *card->padRow()->pad();
+    const auto before = card->preview(64);
+    const auto commands = fixture.stack.size();
+    const QPointF from = pad.screenPoint(pad.value(0));
+    const QPointF to = from + QPointF(pad.frameRect().width() * 0.25, 0.0);
+    mouse(pad, QEvent::MouseButtonPress, from);
+    mouse(pad, QEvent::MouseMove, to);
+    mouse(pad, QEvent::MouseButtonRelease, to);
+    QApplication::processEvents();
+    const auto centre = ui::nodeRoleParameter(fixture.session, fixture.node, "center");
+    const auto live = centre ? fixture.session.liveValue(*centre) : std::nullopt;
+    const auto* moved = live ? std::get_if<document::Vec2d>(&*live) : nullptr;
+    expect(fixture.stack.size() == commands + 1 && moved && moved->x > 100.0 &&
+               std::abs(moved->y) < 1e-6,
+           "dragging the centre moves it to the right as one command");
+    const auto after = card->preview(64);
+    const int probe = after.width() * 85 / 100;
+    expect(qGray(after.pixel(probe, after.height() / 2)) >
+               qGray(before.pixel(probe, before.height() / 2)),
+           "the falloff follows the centre");
+    capture(fixture, QStringLiteral("vignette-moved"));
+    // A slider drag is one command.
+    auto* slider = card->valueRow("feather")->slider();
+    const auto sliderCommands = fixture.stack.size();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(-slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(-slider->width() * 0.3, 0.0));
+    const auto feather = stored(fixture.session, fixture.node, "feather");
+    expect(fixture.stack.size() == sliderCommands + 1 && feather && *feather < 0.5,
+           "dragging the feather slider is one command");
 }
 
 std::optional<document::GradientValue> storedGradient(ui::CompositionSession& session,
@@ -929,6 +1019,7 @@ int main(int argc, char** argv) {
     groupDiamond();
     colorizeCard();
     colorizeGradientMap();
+    vignetteCard();
     nodeControlCards();
     linkedGradientStop();
     if (failures != 0)

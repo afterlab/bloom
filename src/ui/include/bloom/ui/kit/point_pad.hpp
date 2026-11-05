@@ -2,6 +2,7 @@
 
 #include <bloom/ui/kit/tokens.hpp>
 
+#include <QImage>
 #include <QPointF>
 #include <QRectF>
 #include <QSize>
@@ -24,6 +25,9 @@ namespace bloom::ui::kit {
 // point to the pointer, which it then follows. A double-click on a point resets every point to its
 // default. Two points can be joined by a line (setConnected), the way a gradient's start and end
 // are.
+//
+// A backdrop (setBackdrop) is a picture of what the points control, drawn into the frame under its
+// lines and points -- a vignette's falloff around its centre, say. It never takes input.
 //
 // Keyboard: one point is active and carries the focus ring; the arrow keys move it by one unit
 // (Shift ten), and Tab and Shift+Tab move to the next and previous point before focus leaves the
@@ -49,6 +53,9 @@ class KPointPad final : public QWidget {
     [[nodiscard]] const std::vector<Point>& points() const noexcept { return points_; }
     [[nodiscard]] QPointF value(std::size_t index) const;
     void setConnected(bool connected);
+    // The picture drawn into the frame, scaled to it; a null image draws none.
+    void setBackdrop(QImage backdrop);
+    [[nodiscard]] const QImage& backdrop() const noexcept { return backdrop_; }
     [[nodiscard]] bool connected() const noexcept { return connected_; }
 
     [[nodiscard]] std::size_t activePoint() const noexcept { return active_; }
@@ -105,6 +112,7 @@ class KPointPad final : public QWidget {
 
     QRectF frame_{0.0, 0.0, 1920.0, 1080.0};
     std::vector<Point> points_;
+    QImage backdrop_;
     std::vector<QPointF> base_;
     bool connected_ = false;
     std::size_t active_ = 0;

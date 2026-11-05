@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace bloom::ui::kit {
 namespace {
@@ -59,6 +60,11 @@ void KPointPad::setPoints(std::vector<Point> points) {
 
 QPointF KPointPad::value(const std::size_t index) const {
     return index < points_.size() ? points_[index].value : QPointF();
+}
+
+void KPointPad::setBackdrop(QImage backdrop) {
+    backdrop_ = std::move(backdrop);
+    update();
 }
 
 void KPointPad::setConnected(const bool connected) {
@@ -424,8 +430,14 @@ void KPointPad::paintEvent(QPaintEvent*) {
                        color(borderForState(state)), Radius::Small);
     if (state == State::Disabled)
         painter.setOpacity(kDisabledOpacity);
-    // The frame the values live in, and its centre lines.
+    // The frame the values live in, its backdrop, and its centre lines.
     const auto drawn = frameRect();
+    if (!backdrop_.isNull()) {
+        painter.save();
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawImage(drawn, backdrop_);
+        painter.restore();
+    }
     applyHairlinePen(painter, color(Color::Muted));
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(drawn);
