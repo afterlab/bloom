@@ -319,6 +319,40 @@ displayProofRunner(const bool customView) {
                 for (auto& value : frame.frames)
                     combined.frames.push_back(std::move(value));
             }
+            // #545: translucent footage under non-dyadic scales, a rotation and an opacity: sparse
+            // highlights on transparent black at a full-frame-sized composition, and partial
+            // alpha everywhere. Their near-zero and partial alphas resample through the
+            // double-float coordinate rule on both routes, so the gate's exact alpha holds without
+            // dyadic coefficients.
+            const bloom::runtime::CpuCompositionEvaluator evaluator;
+            const auto translucentLayer = [&](const bloom::gpu_coverage_media::ImageFixture& image,
+                                              const LayerValues values,
+                                              const std::uint64_t idBase, const std::uint32_t width,
+                                              const std::uint32_t height) {
+                auto definition =
+                    bloom::gpu_coverage_media::imageSourcePlan(image.asset, values, idBase)
+                        ->copyDefinition();
+                definition.format = format(width, height);
+                auto frame = runMediaBuilder(publish(std::move(definition)), evaluator,
+                                             bloom::gpu_coverage_media::gateDirectory());
+                combined.prepared = combined.prepared && frame.prepared;
+                combined.evidence += frame.evidence + "; ";
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            };
+            const auto& highlights = bloom::gpu_coverage_media::sparseHighlightsExrImage();
+            translucentLayer(highlights, LayerValues{.position = {30.5, 18.5}, .scale = {0.8, 0.8}},
+                             152000, 61, 37);
+            translucentLayer(highlights,
+                             LayerValues{.position = {29.3, 17.9}, .scale = {0.7, 0.9}}, 152100,
+                             61, 37);
+            translucentLayer(bloom::gpu_coverage_media::translucentExrImage(),
+                             LayerValues{.position = {3.9, 4.2},
+                                         .anchor = {0.35, -0.6},
+                                         .scale = {0.83, 1.17},
+                                         .rotation = 17.0,
+                                         .opacity = 0.6},
+                             152200, 8, 8);
             return combined;
         });
     const auto checkerPlan = [] {
@@ -382,10 +416,8 @@ displayProofRunner(const bool customView) {
                        "src/runtime Resize/Fit production affine preparation");
     // #336 Transform 2D: a genuine quarter-turned, nonuniformly scaled, sub-pixel translated
     // resample through the production resident affine preparation (never the identity alias or
-    // the translation pass). This gate requires bit-exact alpha everywhere, while the shared affine
-    // backend guarantees bit-exact alpha only at the 0/1 endpoints (gpu_affine.hpp), so these
-    // fixtures use dyadic coefficients whose inverse map is exact on both routes. Arbitrary
-    // rotations are verified at the documented 2e-6 gate by gpu_scene_effect_native.
+    // the translation pass). This gate requires bit-exact alpha everywhere; since #545 the CPU
+    // reference shares the kernel's double-float coordinate rule, so any coefficients meet it.
     const auto transform2D = [](const std::uint64_t base, const bloom::document::Vec2d translate,
                                 const bloom::document::Vec2d scale, const double rotation,
                                 const bloom::runtime::Transform2DExtent extent) {

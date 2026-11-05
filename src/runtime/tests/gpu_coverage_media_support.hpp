@@ -220,6 +220,32 @@ struct ImageFixture final {
     return fixture;
 }
 
+// #545: a premultiplied float EXR of sparse translucent highlights on exact transparent black, the
+// shape of a CG highlights pass. Every highlight borders alpha-0 samples, so a resample whose factor
+// is exactly zero on one route and tiny on the other would show as a near-zero alpha mismatch.
+[[nodiscard]] inline const ImageFixture& sparseHighlightsExrImage() {
+    static const ImageFixture fixture = [] {
+        std::filesystem::create_directories(gateDirectory());
+        const auto path = gateDirectory() / "sparse_highlights.exr";
+        constexpr int width = 61;
+        constexpr int height = 37;
+        std::vector<ExrPixel> pixels;
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const bool lit = (x * 7 + y * 11) % 5 == 0;
+                const float alpha =
+                    lit ? 0.07F + 0.83F * static_cast<float>((3 * x + 5 * y) % 17) / 17.0F : 0.0F;
+                pixels.push_back(ExrPixel{(1.7F + 0.13F * static_cast<float>(x)) * alpha,
+                                          (0.9F + 0.21F * static_cast<float>(y)) * alpha,
+                                          3.1F * alpha, alpha});
+            }
+        }
+        writeExrRgba(path, width, height, pixels);
+        return probedImageFixture(path, 908, "sparse_highlights");
+    }();
+    return fixture;
+}
+
 // A 16-bit RGBA PNG (sRGB, straight alpha with transparent and opaque pixels), written with stored
 // deflate blocks so the fixture needs no compressor. Its samples cross as 16-bit RGBA.
 [[nodiscard]] inline const ImageFixture& png16Image() {
