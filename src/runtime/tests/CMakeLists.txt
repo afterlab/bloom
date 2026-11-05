@@ -255,6 +255,12 @@ add_executable(bloom_runtime_gradient_color_pairs_test ${PROJECT_SOURCE_DIR}/tes
 target_link_libraries(bloom_runtime_gradient_color_pairs_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
 bloom_enable_warnings(bloom_runtime_gradient_color_pairs_test)
 bloom_add_test(NAME bloom.runtime.gradient-color-pairs COMMAND bloom_runtime_gradient_color_pairs_test LABELS unit runtime persistence TIMEOUT 60)
+# #543: value nodes drive gradient stops through stop links.
+add_executable(bloom_runtime_gradient_stop_links_test ${PROJECT_SOURCE_DIR}/tests/integration/gradient_stop_link_tests.cpp)
+target_link_libraries(bloom_runtime_gradient_stop_links_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_gradient_stop_links_test)
+bloom_enable_strict_floating_point(bloom_runtime_gradient_stop_links_test)
+bloom_add_test(NAME bloom.runtime.gradient-stop-links COMMAND bloom_runtime_gradient_stop_links_test LABELS unit runtime persistence TIMEOUT 120)
 
 add_executable(bloom_runtime_layer_time_test ${PROJECT_SOURCE_DIR}/tests/integration/layer_time_tests.cpp)
 target_link_libraries(bloom_runtime_layer_time_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
