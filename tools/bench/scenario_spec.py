@@ -12,7 +12,10 @@ area, and its layers from the bottom up. A layer is one of:
   "lightWrap": <name of a lower layer whose footage is the wrap's background>};
 - a nested Merge: {"name", "merge": [footage layers, bottom up], "transform", "blend",
   "effects": [...] (applied to the nested Merge's picture)};
-- an adjustment layer: {"name", "adjustment": [effects]} (filters the stack below it).
+- an adjustment layer: {"name", "adjustment": [effects]} (filters the stack below it);
+- a procedural layer: {"name", "generator": [node type, {role: value}], "port": <its raster
+  output, "image" by default>, "keys": {role: [[frame, value], ...]}, "transform", "blend",
+  "effects": [...]} (a generator node drawn as a layer, with no media).
 
 An effect is [node type, {role: value}]. Values of the roles in SCALED are pixel sizes at 1920
 wide and scale with the composition width (clamped to the parameter's range by the builder).
@@ -45,6 +48,8 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
 SHORT_FILL_BUSY = ("#544: the light 2K shot's 3 s fill keeps the GPU about half busy on average "
                    "(40-55%): the resident preview service runs each frame's scene dispatches one "
                    "at a time on its owner thread, so frames wait for it, not for decode")
+NOISE_FILL_BUSY = ("#544: the Noise shot fills its 24 frames in about half a second (45 fps on "
+                   "2026-11-05), too short to keep the GPU half busy on average")
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass
     # with one large Glow (the effect-chain admission case of #539).
@@ -107,6 +112,29 @@ SCENARIOS = {
             {"name": "Grade", "adjustment": [GRADE_WARM, CURVES_S]},
         ],
     },
+}
+
+# #525: the Fields heavy node. A fractal Noise animated through its evolution (so no frame reuses
+# another's raster), screened over the plate and lit by a Physical Glow, the glow of the noise's
+# bright crests. The issue's Noise-driven Displace is not built yet (#348), so the Noise drives a
+# Glow; add a Displace layer to a new scenario when it lands, keeping this one unchanged.
+SCENARIOS["noise-glow-2k"] = {
+    "description": "A PNG plate under a full-frame procedural Noise (Spline, Dynamic Twist, 8 "
+                   "octaves, evolving every frame) screened on top with a large Physical Glow.",
+    "tier": "1080p",
+    "frames": 24,
+    "knownFailures": {"gpu-busy-during-fill": NOISE_FILL_BUSY},
+    "layers": [
+        {"name": "Plate", "media": "png16"},
+        {"name": "Noise", "blend": "screen",
+         "generator": ["bloom.field-noise", {"type": "Spline", "fractal": "Dynamic Twist",
+                                             "size": [320, 240], "octaves": 8.0,
+                                             "octaveRotation": 25.0, "contrast": 1.6,
+                                             "overflow": "Soft Clamp"}],
+         "keys": {"evolution": [[0, 0.0], [24, 2.0]]},
+         "effects": [["bloom.glow", {"mode": "Physical", "size": 160, "intensity": 1.3,
+                                     "threshold": 0.55}]]},
+    ],
 }
 
 # The same comp at 4K (the 2160p tier), with a shorter work area.

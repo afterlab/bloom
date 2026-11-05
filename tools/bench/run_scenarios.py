@@ -368,9 +368,10 @@ class Builder:
         for role, value in values.items():
             kind = metadata[role]["valueKind"]
             if role in scenario_spec.SCALED:
-                value = value * self.unit
-                if metadata[role].get("maximum") is not None:
-                    value = min(value, metadata[role]["maximum"])
+                maximum = metadata[role].get("maximum")
+                scale = (lambda v: v * self.unit if maximum is None
+                         else min(v * self.unit, maximum))
+                value = [scale(v) for v in value] if isinstance(value, list) else scale(value)
             if kind == "integer" and isinstance(value, str):
                 labels = {c["label"].lower(): c["value"] for c in metadata[role]["choices"]}
                 value = labels[value.lower()]
@@ -382,6 +383,15 @@ class Builder:
             else:
                 self.transact("bloom.node.set-parameter-value", composition=self.composition,
                               node=node, role=role, **{argument: value})
+
+    def set_keys(self, node, keys):
+        """Keys `node`'s parameters: {role: [[frame, value], ...]}."""
+        for role, frames in keys.items():
+            parameter = self.parameter_id(node, role)
+            for frame, value in frames:
+                self.transact("bloom.animation.set-keyframe-at-time-for-parameter",
+                              composition=self.composition, parameter=parameter, time=frame,
+                              value=value)
 
     def parameter_id(self, node, role):
         nodes = self.client.call("query", {"kind": "nodes",
@@ -476,9 +486,36 @@ class Builder:
                       sourcePort="image", targetNode=output_merge, role="content")
         self.layer_controls(holder, layer)
 
+    def generator(self, layer, output_merge):
+        """A procedural source node (a Fields generator) whose `port` raster, through the
+        layer's effects, is one layer of the output Merge."""
+        node_type, values = layer["generator"]
+        source = self.transact("bloom.node.add", composition=self.composition,
+                               nodeType=node_type)["node"]
+        self.set_values(source, node_type, values)
+        self.set_keys(source, layer.get("keys") or {})
+        port = layer.get("port", "image")
+        last = self.chain(source, port, layer.get("effects") or ())
+        holder = self.transact("bloom.node.add-fed-by", composition=self.composition,
+                               nodeType="bloom.layer-output", node=last,
+                               port=port if last == source else "image")["node"]
+        self.transact("bloom.node.connect", composition=self.composition, sourceNode=holder,
+                      sourcePort="image", targetNode=output_merge, role="content")
+        self.layers[layer["name"]] = {"source": source, "output": holder}
+        self.layer_controls(holder, layer)
+        return holder
+
     def output_merge(self):
         entries = self.records()["entries"]
         found = [entry["merge"] for entry in entries if entry.get("outputMerge")]
+        if not found:
+            # A Merge with no entries yet: the one feeding the composition output.
+            nodes = self.client.call("query", {"kind": "nodes",
+                                               "composition": self.composition})["records"]
+            output = next((r for r in nodes if r["typeId"] == "bloom.composition-output"), None)
+            source = next((i["source"] for i in (output or {}).get("inputs", ())
+                           if i["port"] == "image" and i.get("source")), None)
+            found = [source["node"]] if source else []
         if not found:
             raise RuntimeError("the composition has no output Merge")
         return found[0]
@@ -492,6 +529,8 @@ class Builder:
         for layer in self.scenario["layers"]:
             if "merge" in layer:
                 self.nested(layer, merge or self.output_merge())
+            elif "generator" in layer:
+                self.generator(layer, merge or self.output_merge())
             elif "adjustment" in layer:
                 merge = merge or self.output_merge()
                 added = self.transact("bloom.merge.add-adjustment-layer",

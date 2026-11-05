@@ -392,19 +392,21 @@ effect chain that cannot be admitted, a CPU fallback on export) shows up.
 Each scenario is a generic composite of CG render passes made only from the synthetic footage
 above (never production media): the multilayer EXR (`Composite.Combined`) stands in for a CG
 beauty render, the EXR half and float sequences for further passes and elements, the PNG
-sequences for a plate. Pixel sizes are given at 1920 wide and scale with the composition (clamped
-to each parameter's range).
+sequences for a plate; a procedural layer (a Fields generator) needs no media. Pixel sizes are
+given at 1920 wide and scale with the composition (clamped to each parameter's range).
 
 | Scenario | Size | Frames | Shot |
 |---|---|---|---|
 | `two-layer-glow-2k` | 1920×1080 | 48 | A PNG16 plate under a CG beauty pass with one Physical Glow (size 200): the smallest shot that needs a whole effect chain admitted at once (#539) |
 | `cg-comp-2k` | 1920×1080 | 24 | A blurred (48 px), graded plate; the beauty pass with Light Wrap (from the plate), Classic Glow (128), Drop Shadow, Curves and Levels; an EXR half element with Physical Glow (160) and Drop Shadow; an EXR float highlights pass with Streak Glow (400); a nested Merge of two passes (one graded) through a 96 px blur and a Classic Glow; an adjustment layer with Grade and Curves over the stack |
 | `cg-comp-4k` | 3840×2160 | 12 | The same comp at 4K |
+| `noise-glow-2k` | 1920×1080 | 24 | A PNG16 plate under a full-frame procedural Noise (Spline, Dynamic Twist, 8 octaves, its evolution keyed so every frame is new) screened on top through a Physical Glow (160) (#525; the issue's Noise-driven Displace waits for Displace, #348) |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
 lists in `knownFailures` the checks an open issue makes fail (#544: the light 2K shot's GPU busy
-over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds).
+over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds, and the
+Noise shot's half-second fill).
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.

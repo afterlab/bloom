@@ -4,6 +4,7 @@ baseline comparison, the pass criteria and the parity gate.
 
     python3 test_run_scenarios.py <bloom_mcp_http_test_host>
 """
+import json
 import pathlib
 import subprocess
 import sys
@@ -36,6 +37,26 @@ class ClientAgainstServer(unittest.TestCase):
                 self.assertIn("composition", created, "transact outputs are read by name")
                 self.assertGreater(client.call("query", {"kind": "project"})["revision"],
                                    revision)
+                # #525: a procedural layer: a keyed Noise with its choices by label, through a
+                # Glow, as a layer of the output Merge.
+                builder.composition = created["composition"]
+                holder = builder.generator(
+                    {"name": "Noise", "blend": "screen",
+                     "generator": ["bloom.field-noise", {"type": "Spline",
+                                                         "fractal": "Dynamic Twist",
+                                                         "size": [320, 240]}],
+                     "keys": {"evolution": [[0, 0.0], [24, 2.0]]},
+                     "effects": [["bloom.glow", {"mode": "Physical", "size": 160}]]},
+                    builder.output_merge())
+                nodes = {r["id"]: r for r in client.call(
+                    "query", {"kind": "nodes", "composition": builder.composition})["records"]}
+                self.assertIn(holder, nodes, "the procedural layer is in the graph")
+                noise = builder.layers["Noise"]["source"]
+                self.assertEqual(nodes[noise]["typeId"], "bloom.field-noise")
+                keys = client.call("query", {"kind": "keyframes",
+                                             "composition": builder.composition,
+                                             "parameter": nodes[noise]["parameters"]["evolution"]})
+                self.assertIn('"keyframe"', json.dumps(keys), "the evolution is keyed")
                 with self.assertRaises(suite.McpError):
                     builder.transact("bloom.composition.delete", composition=999999)
                 with self.assertRaises(suite.McpError):
