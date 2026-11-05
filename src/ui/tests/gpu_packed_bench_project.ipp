@@ -1098,7 +1098,8 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
          << ",\"readAheadAwaited\":" << readAhead.awaited
          << ",\"readAheadDeferred\":" << readAhead.deferred
          << ",\"readAheadDecoded\":" << readAhead.decoded
-         << ",\"readAheadDecodesSkipped\":" << readAhead.decodesSkipped;
+         << ",\"readAheadDecodesSkipped\":" << readAhead.decodesSkipped
+         << ",\"readAheadDecodesYielded\":" << readAhead.decodesYielded;
     json << ",\"windowCpuSeconds\":" << benchProcessCpuSeconds() - cpuBefore
          << ",\"uploadBytes\":"
          << core::telemetry::gpuTransferTotals().uploadBytes - transfersBefore.uploadBytes

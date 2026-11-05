@@ -40,6 +40,10 @@ struct ImageSequenceReadAheadState final {
     std::size_t foregroundReads = 0;
     // The transport's position: the tracked frame of the latest request (#386).
     SourceUse transport{};
+    // Frames decoding their own sources, read-ahead decodes running, and the cores they share.
+    std::size_t foregroundDecodes = 0;
+    std::size_t aheadDecodes = 0;
+    std::size_t decodeLimit = std::max<std::size_t>(1, std::thread::hardware_concurrency() / 2);
     ImageSequenceReadAhead::Statistics statistics;
 
     void run() {
@@ -71,12 +75,10 @@ struct ImageSequenceReadAheadState final {
             auto revision = capture(job);
             const bool stored = revision != nullptr;
             bool decoded = false;
-            bool decodeSkipped = false;
-            if (stored && job.request.decode) {
-                if (decodeWanted(job.request.use))
-                    decoded = decode(job, *revision);
-                else
-                    decodeSkipped = true;
+            if (stored && job.request.decode && decodeWanted(job.request.use)) {
+                decoded = decode(job, *revision);
+                const std::lock_guard lock(mutex);
+                --aheadDecodes;
             }
             revision.reset();
             {
@@ -85,7 +87,6 @@ struct ImageSequenceReadAheadState final {
                 capturing.erase(job.request.revisionKey);
                 ++(stored ? statistics.captured : statistics.failed);
                 statistics.decoded += decoded ? 1U : 0U;
-                statistics.decodesSkipped += decodeSkipped ? 1U : 0U;
             }
             captured.notify_all();
         }
@@ -122,14 +123,23 @@ struct ImageSequenceReadAheadState final {
     // #386: a decode is for a frame the transport has not reached yet and that is still inside the
     // read-ahead window from where it is; any other frame was skipped (or is being prepared
     // already, and decodes its own samples).
-    [[nodiscard]] bool decodeWanted(const SourceUse& use) const {
+    // A decode that is wanted also takes a core (aheadDecodes); the caller releases it.
+    [[nodiscard]] bool decodeWanted(const SourceUse& use) {
         const std::lock_guard lock(mutex);
         if (stopping.load())
             return false;
-        if (!use.tracked || !transport.tracked || use.composition != transport.composition)
-            return true;
-        return use.frame > transport.frame &&
-               use.frame - transport.frame <= SourceWorkingSet::kReadAheadFrames;
+        if (use.tracked && transport.tracked && use.composition == transport.composition &&
+            (use.frame <= transport.frame ||
+             use.frame - transport.frame > SourceWorkingSet::kReadAheadFrames)) {
+            ++statistics.decodesSkipped;
+            return false;
+        }
+        if (foregroundDecodes + aheadDecodes >= decodeLimit) {
+            ++statistics.decodesYielded;
+            return false;
+        }
+        ++aheadDecodes;
+        return true;
     }
 
     // Decodes the member's native samples into the cache under the key the frame's upload looks
@@ -273,6 +283,40 @@ void ImageSequenceReadAhead::ForegroundRead::release() noexcept {
     if (idle)
         state_->ready.notify_all();
     state_.reset();
+}
+
+ImageSequenceReadAhead::ForegroundDecode::ForegroundDecode(std::shared_ptr<State> state)
+    : state_(std::move(state)) {
+    const std::lock_guard lock(state_->mutex);
+    ++state_->foregroundDecodes;
+}
+
+ImageSequenceReadAhead::ForegroundDecode::~ForegroundDecode() { release(); }
+
+ImageSequenceReadAhead::ForegroundDecode::ForegroundDecode(ForegroundDecode&& other) noexcept
+    : state_(std::move(other.state_)) {}
+
+ImageSequenceReadAhead::ForegroundDecode&
+ImageSequenceReadAhead::ForegroundDecode::operator=(ForegroundDecode&& other) noexcept {
+    if (this != &other) {
+        release();
+        state_ = std::move(other.state_);
+    }
+    return *this;
+}
+
+void ImageSequenceReadAhead::ForegroundDecode::release() noexcept {
+    if (!state_)
+        return;
+    {
+        const std::lock_guard lock(state_->mutex);
+        --state_->foregroundDecodes;
+    }
+    state_.reset();
+}
+
+ImageSequenceReadAhead::ForegroundDecode ImageSequenceReadAhead::foregroundDecode() {
+    return ForegroundDecode(state_);
 }
 
 ImageSequenceReadAhead::ForegroundRead ImageSequenceReadAhead::foregroundRead() {

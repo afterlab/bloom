@@ -62,6 +62,8 @@ class ImageSequenceReadAhead final {
         // the transport had already passed (or jumped away from) their frame.
         std::uint64_t decoded = 0;
         std::uint64_t decodesSkipped = 0;
+        // Decodes not run because frames' own decodes already used the cores.
+        std::uint64_t decodesYielded = 0;
     };
 
     // A frame reading its own source file (#477). While any is held, workers start no capture
@@ -79,6 +81,26 @@ class ImageSequenceReadAhead final {
       private:
         friend class ImageSequenceReadAhead;
         explicit ForegroundRead(std::shared_ptr<struct ImageSequenceReadAheadState> state);
+        void release() noexcept;
+        std::shared_ptr<struct ImageSequenceReadAheadState> state_;
+    };
+
+    // A frame decoding its own source (#386). Decodes ahead of the playhead use only the cores the
+    // frames being prepared leave: a worker runs no decode while the frames' decodes and its own
+    // would exceed one per physical core (half the hardware threads), so it never slows the frames
+    // the transport needs next.
+    class ForegroundDecode final {
+      public:
+        ForegroundDecode() = default;
+        ~ForegroundDecode();
+        ForegroundDecode(ForegroundDecode&& other) noexcept;
+        ForegroundDecode& operator=(ForegroundDecode&& other) noexcept;
+        ForegroundDecode(const ForegroundDecode&) = delete;
+        ForegroundDecode& operator=(const ForegroundDecode&) = delete;
+
+      private:
+        friend class ImageSequenceReadAhead;
+        explicit ForegroundDecode(std::shared_ptr<struct ImageSequenceReadAheadState> state);
         void release() noexcept;
         std::shared_ptr<struct ImageSequenceReadAheadState> state_;
     };
@@ -104,6 +126,8 @@ class ImageSequenceReadAhead final {
                              const std::function<bool()>& cancelled);
     // Holds back capture starts until the returned read is destroyed.
     [[nodiscard]] ForegroundRead foregroundRead();
+    // Counts a frame's own decode until the returned scope is destroyed.
+    [[nodiscard]] ForegroundDecode foregroundDecode();
     [[nodiscard]] Statistics statistics() const;
 
   private:

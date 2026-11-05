@@ -223,6 +223,13 @@ void addPixelAspect(OperationKey& key, const core::PixelAspectRatio ratio) {
         std::min<std::uint64_t>(pixels, std::numeric_limits<std::size_t>::max()));
 }
 
+// A frame's own decode, counted so the sequence read-ahead decodes only on the cores it leaves.
+[[nodiscard]] ImageSequenceReadAhead::ForegroundDecode
+foregroundDecode(const GpuSceneMediaContext& context) {
+    return context.sequenceReadAhead ? context.sequenceReadAhead->foregroundDecode()
+                                     : ImageSequenceReadAhead::ForegroundDecode{};
+}
+
 // Composition frames of image-sequence files captured ahead of the frame being prepared: the
 // source working set's read-ahead width (ADR 0037).
 constexpr auto kSequenceReadAheadFrames =
@@ -736,8 +743,12 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             return outcome;
         }
         media::ImageDecodeStatistics decodeStatistics;
-        auto native = decodeRawImageSamples(selection, byteBudget(pixelBudget), cancellation,
-                                            &decodeStatistics);
+        auto native = [&] {
+            // #386: the read-ahead's decodes give this frame's decode the cores.
+            const auto foreground = foregroundDecode(context);
+            return decodeRawImageSamples(selection, byteBudget(pixelBudget), cancellation,
+                                         &decodeStatistics);
+        }();
         addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
         addMediaWork(statistics.imageRepairedPixels, decodeStatistics.repairedPixels);
         if (native.cancelled) {
@@ -783,8 +794,11 @@ prepareImageColorLeaf(const CompiledImageSource& source, const EvaluationRequest
             // RAW decode: no processor, no implicit conversion, no resample. File decode stays
             // host preparation; the OCIO colour pass is the GPU command prepared below.
             media::ImageDecodeStatistics decodeStatistics;
-            auto decoded = decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation,
-                                                &decodeStatistics);
+            auto decoded = [&] {
+                const auto foreground = foregroundDecode(context);
+                return decodeRawImageSource(selection, byteBudget(pixelBudget), cancellation,
+                                            &decodeStatistics);
+            }();
             addMediaWork(statistics.imageDecodeNanoseconds, decodeStatistics.decodeNanoseconds);
             addMediaWork(statistics.imageRepairedPixels, decodeStatistics.repairedPixels);
             ++statistics.imageConversions;

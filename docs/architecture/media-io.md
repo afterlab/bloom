@@ -861,8 +861,17 @@ are exactly the ones its own decode would produce. A frame that claims a member 
 waits for that decode instead of decoding the member a second time. The latest frame that queued
 captures is the transport's position: a decode whose frame is at or behind it, or more than eight
 frames ahead of it (the transport jumped away), is not run, so frames the transport skips are never
-decoded. A decode must fit the cache's free budget at an upper bound of 16 bytes a pixel; like
-captures, decodes never evict.
+decoded. Decodes ahead use only the cores the frames leave: a worker runs no decode while frames'
+own decodes and the read-ahead's would exceed one per physical core (half the hardware threads),
+so a steady playback whose frames in flight already decode on every core runs as before, and the
+read-ahead decodes while the pipeline waits (before Play, after a seek). A decode must fit the
+cache's free budget at an upper bound of 16 bytes a pixel; like captures, decodes never evict.
+Measured on 2026-11-06 (warm 2160p PNG16 benchmark project B, offscreen harness, RTX 4090 and an
+8-core CPU), the first eight frames after Play were cached by 0.25 s instead of 0.5 s, the preroll
+ended on its frames instead of at its 0.5 s cap, and first motion came at 0.26 s instead of
+0.55 s, with steady playback unchanged (18 frames/s). Decoding every member ahead without the core
+limit had cost that playback about 10%, as it competed with the frames the transport needed
+next.
 Destroying the evaluator cancels outstanding captures and joins the workers. Export frames do not
 read ahead (see the linear-pass retention below).
 
