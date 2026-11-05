@@ -163,6 +163,25 @@ matteParentedToItsTarget(const document::CanonicalGraph& graph) {
     return std::nullopt;
 }
 
+// #383: why `layer` may not read the Mask output `matte` as its track matte or a matte mask, or
+// nothing when it may: the output must be a Mask of this composition, and its node must not depend
+// on the layer (its Layer node, or for a Merge entry's own layer its Merge) through image edges.
+inline std::optional<OperationResult> matteNodeRefusal(const document::CanonicalGraph& graph,
+                                                       const document::OutputPortRef& matte,
+                                                       const document::LayerOutputBoundary& layer) {
+    if (graph.findNode(matte.nodeId) == nullptr)
+        return OperationResult::rejected(OperationIssueCode::MissingReference,
+                                         "The matte node is not in the composition");
+    if (graph.outputKind(matte) != document::SocketValueKind::Mask)
+        return OperationResult::rejected(OperationIssueCode::SocketKindMismatch,
+                                         "A matte must be a node's Mask output");
+    if (document::dependsOnNode(graph, matte.nodeId, layer.nodeId))
+        return OperationResult::rejected(
+            OperationIssueCode::GraphCycle,
+            "The matte node is computed from this layer, so it cannot matte it");
+    return std::nullopt;
+}
+
 // A reroute that now has nothing on either side, removed (task FIX1, item I). A reroute is a bend
 // in a wire and nothing else -- it carries no value of its own, has no parameter to edit, and shows
 // no name -- so once both of its links are gone there is nothing for it to be. Answers whether it

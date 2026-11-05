@@ -88,6 +88,10 @@ OperationResult AddLayerMask::apply(document::Draft& draft) const {
     auto& layer = *target.layer;
     if (!path_.isValid())
         return invalid("Mask path is invalid");
+    // #383: a matte mask reads a Mask output instead of its path.
+    if (matte_)
+        if (auto refusal = detail::matteNodeRefusal(composition.graph(), *matte_, layer))
+            return std::move(*refusal);
     if (layer.masks.size() >= document::kMaximumLayerMasks)
         return invalid("A layer may hold at most 64 masks");
     auto name = name_.empty() ? "Mask " + std::to_string(layer.masks.size() + 1) : name_;
@@ -112,8 +116,8 @@ OperationResult AddLayerMask::apply(document::Draft& draft) const {
                            document::ConstantValueSource{1.0}});
     if (!inserted)
         return invalid("Mask parameters could not be created");
-    layer.masks.push_back(
-        {*maskId, std::move(name), mode_, false, *pathId, *featherId, *expansionId, *opacityId});
+    layer.masks.push_back({*maskId, std::move(name), mode_, false, *pathId, *featherId,
+                           *expansionId, *opacityId, matte_});
     return spanResult(composition_, layer, composition.duration(),
                       OperationResult::applied({{"mask", *maskId},
                                                 {"path", *pathId},
@@ -328,6 +332,26 @@ OperationResult StopAnimatingLayerMaskPath::apply(document::Draft& draft) const 
     return spanResult(composition_, *target.layer, composition.duration());
 }
 
+std::string_view SetLayerMaskMatte::typeId() const noexcept {
+    return "bloom.layer.set-mask-matte";
+}
+OperationResult SetLayerMaskMatte::apply(document::Draft& draft) const {
+    Target target;
+    if (auto failure = findTarget(draft, composition_, layer_, target))
+        return std::move(*failure);
+    auto* mask = findMask(*target.layer, mask_);
+    if (mask == nullptr)
+        return detail::invalidTarget();
+    if (mask->matte == matte_)
+        return OperationResult::noChange();
+    if (matte_)
+        if (auto refusal =
+                detail::matteNodeRefusal(target.composition->graph(), *matte_, *target.layer))
+            return std::move(*refusal);
+    mask->matte = matte_;
+    return spanResult(composition_, *target.layer, target.composition->duration());
+}
+
 std::string_view SetTrackMatte::typeId() const noexcept { return "bloom.layer.set-track-matte"; }
 OperationResult SetTrackMatte::apply(document::Draft& draft) const {
     Target target;
@@ -338,7 +362,16 @@ OperationResult SetTrackMatte::apply(document::Draft& draft) const {
     auto& layer = *target.layer;
     if (layer.trackMatte == matte_)
         return OperationResult::noChange();
-    if (matte_) {
+    // #383: a node matte names a Mask output, and no source layer.
+    if (matte_ && matte_->node) {
+        if (matte_->channel != document::TrackMatteChannel::Alpha &&
+            matte_->channel != document::TrackMatteChannel::Luma)
+            return invalid("Track matte channel must be Alpha or Luma");
+        if (matte_->source.isValid())
+            return invalid("A node track matte has no source layer");
+        if (auto refusal = detail::matteNodeRefusal(graph, *matte_->node, layer))
+            return std::move(*refusal);
+    } else if (matte_) {
         const auto& matte = *matte_;
         if (matte.channel != document::TrackMatteChannel::Alpha &&
             matte.channel != document::TrackMatteChannel::Luma)
@@ -376,7 +409,7 @@ OperationResult SetTrackMatte::apply(document::Draft& draft) const {
     std::vector<AffectedTimeRange> ranges;
     addSpan(ranges, layer, duration);
     for (const auto& candidate : {layer.trackMatte, matte_})
-        if (candidate)
+        if (candidate && !candidate->node)
             if (const auto* source = graph.findLayer(candidate->source))
                 addSpan(ranges, *source, duration);
     const auto previous = layer.trackMatte;

@@ -354,6 +354,13 @@ OperationResult RemoveNodes::apply(document::Draft& draft) const {
         // ADR 0028: a removed layer's masks own parameters (and curves) outside node bindings;
         // #502 so do a removed Merge's entry layers.
         for (const auto& boundary : composition->graph().layerOutputs()) {
+            // #383: a matte mask reading a removed node is removed with it.
+            for (const auto& mask : boundary.masks)
+                if (mask.matte && mask.matte->nodeId == id)
+                    for (const auto& [parameterId, schemaKey] : document::layerMaskParameters(mask)) {
+                        (void)schemaKey;
+                        candidates.insert(parameterId);
+                    }
             if (boundary.nodeId != id)
                 continue;
             for (const auto& mask : boundary.masks)

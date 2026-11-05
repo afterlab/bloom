@@ -1,5 +1,6 @@
 #include <bloom/commands/node_layout_placement.hpp>
 
+#include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
@@ -224,6 +225,9 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         });
     const bool dropdowns = std::ranges::any_of(
         definition->parameters, [](const auto& parameter) {
+            // #383: the effect mask's channel is a compact dropdown that never widens a card.
+            if (parameter.schemaKey == document::kEffectMaskChannelSchemaKey)
+                return false;
             return !document::parameterEnumOptions(parameter.schemaKey).empty() ||
                    parameter.schemaKey.starts_with("bloom.ocio-") ||
                    parameter.schemaKey == document::kImageInputColorSpaceIdParameterSchemaKey ||
@@ -270,6 +274,10 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     // Sources carry a dimensions/range readout row beside their parameters and generators a
     // second closing row; a bounds readout shows each value it reads out on its own row.
     rows += 2.0;
+    // #383: the effect mask's socket row and channel dropdown sit below the effect's own rows,
+    // with a little more room than a plain row.
+    if (document::hasEffectMask(*definition))
+        rows += 0.5;
     if (definition->lowering == document::NodeLoweringKind::ValueBoundsReadout)
         rows += static_cast<double>(definition->outputs.size());
     const double cardWidth = dropdowns ? std::max(width, kDropdownCardWidth)

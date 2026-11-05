@@ -15,14 +15,16 @@
 namespace bloom::commands {
 
 // Appends a mask with constant parameters (feather 0, expansion 0, opacity 1). An empty name
-// becomes "Mask N". Outputs: mask, path/feather/expansion/opacity parameters.
+// becomes "Mask N". With `matte` (#383) it is a matte mask taking its shape from that Mask output
+// of the composition. Outputs: mask, path/feather/expansion/opacity parameters.
 class AddLayerMask final : public Operation {
   public:
     AddLayerMask(document::CompositionId composition, document::LayerId layer,
                  document::PathValue path,
-                 document::LayerMaskMode mode = document::LayerMaskMode::Add, std::string name = {})
+                 document::LayerMaskMode mode = document::LayerMaskMode::Add, std::string name = {},
+                 std::optional<document::OutputPortRef> matte = std::nullopt)
         : composition_(composition), layer_(layer), path_(std::move(path)), mode_(mode),
-          name_(std::move(name)) {}
+          name_(std::move(name)), matte_(std::move(matte)) {}
     [[nodiscard]] std::string_view typeId() const noexcept override;
     [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
     [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
@@ -35,6 +37,7 @@ class AddLayerMask final : public Operation {
     document::PathValue path_;
     document::LayerMaskMode mode_;
     std::string name_;
+    std::optional<document::OutputPortRef> matte_;
 };
 
 // Erases the mask, its four parameters and any curves they own.
@@ -187,8 +190,29 @@ class StopAnimatingLayerMaskPath final : public Operation {
     document::PathValue value_;
 };
 
+// #383: makes the mask a matte mask taking its shape from `matte`, a Mask output of the composition
+// whose node does not depend on the layer, or with nullopt a path mask again (its path was kept).
+class SetLayerMaskMatte final : public Operation {
+  public:
+    SetLayerMaskMatte(document::CompositionId composition, document::LayerId layer,
+                      document::LayerMaskId mask, std::optional<document::OutputPortRef> matte)
+        : composition_(composition), layer_(layer), mask_(mask), matte_(std::move(matte)) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    document::LayerMaskId mask_;
+    std::optional<document::OutputPortRef> matte_;
+};
+
 // Sets or clears the target layer's track matte. The source must be another layer of the same
-// Merge and the matte relation must stay acyclic. The footprint unions the target and the old and
+// Merge and the matte relation must stay acyclic; a node matte (#383) names a Mask output whose
+// node does not depend on the target. The footprint unions the target and the old and
 // new source spans, because a matte source is hidden from its Merge.
 class SetTrackMatte final : public Operation {
   public:
