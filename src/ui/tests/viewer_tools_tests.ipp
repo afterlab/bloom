@@ -1037,6 +1037,13 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
             maxX = std::max(maxX, point.x());
             maxY = std::max(maxY, point.y());
         }
+        // Fit leaves no padding (#536): zoom out one notch so there is canvas around the frame.
+        const QPointF centre = QRectF(fixture.viewer.rect()).center();
+        QWheelEvent zoomOut(centre, fixture.viewer.mapToGlobal(centre.toPoint()), QPoint(0, 0),
+                            QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
+                            false);
+        QCoreApplication::sendEvent(&fixture.viewer, &zoomOut);
+        toolReady(fixture, expectations);
         toolDrag(fixture, {minX - 5, -10}, {maxX + 5, maxY + 5});
         expectations.expect(fixture.viewer.selectedAnchorsForTest().size() ==
                                 t->path.anchors.size(),

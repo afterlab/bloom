@@ -41,6 +41,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QKeyEvent>
+#include <QWheelEvent>
 #include <QMouseEvent>
 #include <QPointF>
 #include <QResizeEvent>
@@ -1206,6 +1207,15 @@ void testEscapeConfirmsMidDrag(Expectations& expectations) {
                             "the frame becomes ready again for the post-add revision");
         fixture.viewer.show();
         (void)waitUntil([&] { return fixture.viewer.mappingForTest().has_value(); });
+        // Fit has no padding (#536), so a full-frame layer's rotate zone outside its corners is
+        // off the Viewer: zoom out one notch, as an artist does, to reach it.
+        const QPointF center = QRectF(fixture.viewer.rect()).center();
+        QWheelEvent zoomOut(center, fixture.viewer.mapToGlobal(center.toPoint()), QPoint(0, 0),
+                            QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
+                            false);
+        QCoreApplication::sendEvent(&fixture.viewer, &zoomOut);
+        (void)waitUntil([&] { return isReady(fixture.controller); });
+        (void)fixture.viewer.grab();
         const auto mapping = fixture.viewer.mappingForTest();
         const auto bounds =
             fixture.controller.selectedLayerBounds(fixture.controller.state().frame);

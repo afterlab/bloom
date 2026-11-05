@@ -206,7 +206,6 @@ enum class Size : int {
     MinorTick = 4,
     MajorTick = 8,
     ViewerChecker = 22,
-    ViewerWorkPadding = 48,
     ViewerChannelWidth = 80,
     ViewerModeWidth = 108,
     ViewerZoomWidth = 64,

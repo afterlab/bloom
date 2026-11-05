@@ -339,10 +339,9 @@ void testViewerHasNoToolColumn(Expectations& expectations) {
     expectations.expect(fixture.viewer.findChild<QWidget*>("viewerToolColumn") == nullptr,
                         "the Viewer has no tool column");
     expectations.expect(fixture.viewer.contentRectForTest().left() == 0.0 &&
-                            fixture.viewer.canvasRectForTest().left() ==
-                                ui::kit::px(ui::kit::Size::ViewerWorkPadding),
-                        "the canvas runs from the Viewer's left edge, padded only by the work "
-                        "padding");
+                            fixture.viewer.canvasRectForTest() ==
+                                fixture.viewer.contentRectForTest(),
+                        "the canvas is the whole content area, with no padding (#536)");
     for (const auto tool : ui::kViewerTools)
         expectations.expect(fixture.viewer.findChild<QWidget*>(
                                 QStringLiteral("viewer") +

@@ -865,9 +865,9 @@ QRectF ViewerEditor::contentRect() const {
 }
 
 QRectF ViewerEditor::canvasRect() const {
-    const QRectF bar = statusBarRect();
-    const qreal padding = kit::px(kit::Size::ViewerWorkPadding);
-    return QRectF(rect()).adjusted(padding, padding, -padding, -bar.height() - padding);
+    // #536: Fit fills the whole content area -- the frame touches the limiting edges, with no
+    // padding -- in a docked panel, a separate window and full screen alike.
+    return contentRect();
 }
 
 QColor ViewerEditor::frameBackgroundColor() const {
