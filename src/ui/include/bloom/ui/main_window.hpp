@@ -224,8 +224,8 @@ class MainWindow final : public QMainWindow {
     QAction* quitAction_ = nullptr;
     QAction* undoAction_ = nullptr;
     QAction* redoAction_ = nullptr;
-    QAction* splitLeftRightAction_ = nullptr;
-    QAction* splitTopBottomAction_ = nullptr;
+    QAction* splitRightAction_ = nullptr;
+    QAction* splitDownAction_ = nullptr;
     QAction* closeAreaAction_ = nullptr;
     QAction* maximizeAreaAction_ = nullptr;
     QAction* ramPreviewAction_ = nullptr;

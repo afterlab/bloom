@@ -7,6 +7,9 @@ add_executable(bloom_kinetik_baseline_test
 add_executable(bloom_workspace_presets_test
     workspace_presets_tests.cpp
 )
+add_executable(bloom_workspace_panel_test
+    workspace_panel_tests.cpp
+)
 add_executable(bloom_kit_button_test
     kit_button_tests.cpp
 )
@@ -207,6 +210,7 @@ add_executable(bloom_node_editor_test
 target_link_libraries(bloom_editor_area_chrome_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_kinetik_baseline_test PRIVATE bloom_ui Qt6::Test)
 target_link_libraries(bloom_workspace_presets_test PRIVATE bloom_ui Qt6::Test)
+target_link_libraries(bloom_workspace_panel_test PRIVATE bloom_ui)
 target_link_libraries(bloom_kit_button_test PRIVATE bloom_ui_kit)
 target_link_libraries(bloom_kit_choice_test PRIVATE bloom_ui_kit Qt6::Test)
 target_link_libraries(bloom_kit_color_test PRIVATE bloom_ui_kit)
@@ -390,6 +394,7 @@ target_link_libraries(bloom_node_editor_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_editor_area_chrome_test)
 bloom_enable_warnings(bloom_kinetik_baseline_test)
 bloom_enable_warnings(bloom_workspace_presets_test)
+bloom_enable_warnings(bloom_workspace_panel_test)
 bloom_enable_warnings(bloom_kit_button_test)
 bloom_enable_warnings(bloom_kit_choice_test)
 bloom_enable_warnings(bloom_kit_color_test)
@@ -488,6 +493,14 @@ bloom_add_test(
 bloom_add_test(
     NAME bloom.ui.workspace_presets
     COMMAND bloom_workspace_presets_test
+    LABELS ui integration
+    TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+bloom_add_test(
+    NAME bloom.ui.workspace_panel
+    COMMAND bloom_workspace_panel_test
     LABELS ui integration
     TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

@@ -208,11 +208,19 @@ void testTheContextMenuOffersAllFourOperationsWithFullscreenWording(Expectations
     if (menu == nullptr) {
         return;
     }
-    for (const char* objectName : {"panelSplitHorizontalAction", "panelSplitVerticalAction",
+    for (const char* objectName : {"panelSplitRightAction", "panelSplitDownAction",
                                    "panelMaximizeAction", "panelCloseAction"}) {
         expectations.expect(menu->findChild<QAction*>(QString::fromLatin1(objectName)) != nullptr,
                             std::string{"the menu offers "} + objectName);
     }
+    // #538: the split directions name where the new panel opens.
+    auto* splitRight = menu->findChild<QAction*>(QStringLiteral("panelSplitRightAction"));
+    auto* splitDown = menu->findChild<QAction*>(QStringLiteral("panelSplitDownAction"));
+    expectations.expect(splitRight != nullptr &&
+                            splitRight->text() == QStringLiteral("Split Right"),
+                        "the horizontal split reads Split Right");
+    expectations.expect(splitDown != nullptr && splitDown->text() == QStringLiteral("Split Down"),
+                        "the vertical split reads Split Down");
     auto* maximizeAction = menu->findChild<QAction*>(QStringLiteral("panelMaximizeAction"));
     expectations.expect(maximizeAction != nullptr &&
                             maximizeAction->text() == QStringLiteral("Fullscreen"),
@@ -265,8 +273,8 @@ void testHeaderControlsAndMenuActionsStillDriveTheirSignals(Expectations& expect
     // QAction::trigger() fires the same signal a real click on a shown popup would, without
     // needing to actually open the (offscreen) popup -- the menu's own visibility is not what is
     // under test here.
-    menu->findChild<QAction*>(QStringLiteral("panelSplitHorizontalAction"))->trigger();
-    menu->findChild<QAction*>(QStringLiteral("panelSplitVerticalAction"))->trigger();
+    menu->findChild<QAction*>(QStringLiteral("panelSplitRightAction"))->trigger();
+    menu->findChild<QAction*>(QStringLiteral("panelSplitDownAction"))->trigger();
     area.findChild<QToolButton*>(QStringLiteral("maximizeAreaButton"))->click();
     // The menu's own Maximize/Close actions route to the SAME signals the standalone maximize
     // button does -- Close now has no standalone button at all, only the menu action.
@@ -292,8 +300,8 @@ void testSplitAndCloseEnablementIsUnchanged(Expectations& expectations) {
     area.setSplitEnabled(false);
     area.setCloseEnabled(false);
     expectations.expect(
-        !menu->findChild<QAction*>(QStringLiteral("panelSplitHorizontalAction"))->isEnabled() &&
-            !menu->findChild<QAction*>(QStringLiteral("panelSplitVerticalAction"))->isEnabled(),
+        !menu->findChild<QAction*>(QStringLiteral("panelSplitRightAction"))->isEnabled() &&
+            !menu->findChild<QAction*>(QStringLiteral("panelSplitDownAction"))->isEnabled(),
         "split enablement still reaches the menu's two split actions");
     expectations.expect(
         !menu->findChild<QAction*>(QStringLiteral("panelCloseAction"))->isEnabled(),
@@ -302,8 +310,8 @@ void testSplitAndCloseEnablementIsUnchanged(Expectations& expectations) {
     area.setSplitEnabled(true);
     area.setCloseEnabled(true);
     expectations.expect(
-        menu->findChild<QAction*>(QStringLiteral("panelSplitHorizontalAction"))->isEnabled() &&
-            menu->findChild<QAction*>(QStringLiteral("panelSplitVerticalAction"))->isEnabled(),
+        menu->findChild<QAction*>(QStringLiteral("panelSplitRightAction"))->isEnabled() &&
+            menu->findChild<QAction*>(QStringLiteral("panelSplitDownAction"))->isEnabled(),
         "and re-enabling reaches them too");
     expectations.expect(menu->findChild<QAction*>(QStringLiteral("panelCloseAction"))->isEnabled(),
                         "re-enabling reaches the close action too");

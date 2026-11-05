@@ -14,6 +14,8 @@
 #include <string_view>
 #include <vector>
 
+class QMenu;
+class QPoint;
 class QSettings;
 class QSplitter;
 class QString;
@@ -68,6 +70,11 @@ class WorkspaceHost final : public QFrame {
                           std::string initialEditorId = {}, double newAreaFraction = 0.5);
     [[nodiscard]] bool closeActiveArea();
     [[nodiscard]] bool closeArea(EditorArea& area);
+    // Join: `survivor` expands over `absorbed`, its neighbour on the other side of one divider, and
+    // `absorbed` closes exactly as closeArea() closes it. Both must be single panels in the same
+    // split, next to each other. The survivor keeps its editor and becomes the active, focused
+    // area. The divider's own right-click menu offers this as Join Left/Right/Up/Down.
+    [[nodiscard]] bool joinAreas(EditorArea& survivor, EditorArea& absorbed);
 
     [[nodiscard]] bool isAreaMaximized() const noexcept;
     void toggleMaximizeActiveArea();
@@ -109,7 +116,11 @@ class WorkspaceHost final : public QFrame {
   private:
     EditorArea* createArea(std::string_view initialEditorId = {}, QString areaId = {});
     EditorArea* spawnBottomArea(std::string_view editorId, double fraction);
-    QSplitter* createSplitter(Qt::Orientation orientation) const;
+    QSplitter* createSplitter(Qt::Orientation orientation);
+    [[nodiscard]] bool closeAreaInto(EditorArea& area, EditorArea* absorber);
+    void showDividerMenu(QSplitter& splitter, int handleIndex, const QPoint& globalPosition);
+    // Clears the active area and its highlight; a reused area must not keep a stale highlight.
+    void clearActiveArea();
     void replaceRoot(QWidget* newRoot);
     void updateAreaControls();
     void restoreMaximizedArea();
@@ -130,6 +141,7 @@ class WorkspaceHost final : public QFrame {
     QWidget* rootWidget_ = nullptr;
     QPointer<EditorArea> activeArea_;
     QPointer<EditorArea> maximizedArea_;
+    QMenu* dividerMenu_ = nullptr;
     QHash<QSplitter*, QList<int>> preMaximizeSizes_;
     NativeSurfaceRetirementGate surfaceRetirementGate_;
     std::string lastNativeSurfaceDiagnostic_;

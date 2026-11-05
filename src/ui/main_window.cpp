@@ -977,14 +977,16 @@ void MainWindow::resetCompositingLayout(const bool persist) {
 }
 
 void MainWindow::createWorkspaceActions() {
-    splitLeftRightAction_ = windowMenu_->addAction("Split Active Area Left/Right");
-    splitLeftRightAction_->setObjectName("splitAreaLeftRightAction");
-    connect(splitLeftRightAction_, &QAction::triggered, workspaceHost_,
+    // The panel header menu's Split Right / Split Down, for the active area: the new panel opens
+    // to the right of it, or below it.
+    splitRightAction_ = windowMenu_->addAction(tr("Split Active Area Right"));
+    splitRightAction_->setObjectName("splitAreaRightAction");
+    connect(splitRightAction_, &QAction::triggered, workspaceHost_,
             [this] { workspaceHost_->splitActiveArea(Qt::Horizontal); });
 
-    splitTopBottomAction_ = windowMenu_->addAction("Split Active Area Top/Bottom");
-    splitTopBottomAction_->setObjectName("splitAreaTopBottomAction");
-    connect(splitTopBottomAction_, &QAction::triggered, workspaceHost_,
+    splitDownAction_ = windowMenu_->addAction(tr("Split Active Area Down"));
+    splitDownAction_->setObjectName("splitAreaDownAction");
+    connect(splitDownAction_, &QAction::triggered, workspaceHost_,
             [this] { workspaceHost_->splitActiveArea(Qt::Vertical); });
 
     windowMenu_->addSeparator();
@@ -1052,8 +1054,8 @@ void MainWindow::updateWorkspaceActions() {
     scheduleDisplayedViewerUpdate();
     const bool hasMultipleAreas = workspaceHost_->areaCount() > 1;
     const bool canChangeStructure = !workspaceHost_->isAreaMaximized();
-    splitLeftRightAction_->setEnabled(canChangeStructure);
-    splitTopBottomAction_->setEnabled(canChangeStructure);
+    splitRightAction_->setEnabled(canChangeStructure);
+    splitDownAction_->setEnabled(canChangeStructure);
     closeAreaAction_->setEnabled(hasMultipleAreas && canChangeStructure);
     maximizeAreaAction_->setEnabled(hasMultipleAreas);
     maximizeAreaAction_->setChecked(workspaceHost_->isAreaMaximized());

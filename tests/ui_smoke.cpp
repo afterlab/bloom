@@ -479,7 +479,14 @@ int testMainWindow(const EditorRegistry& registry,
         return 69;
     }
 
-    auto* splitAction = window.findChild<QAction*>("splitAreaLeftRightAction");
+    auto* splitAction = window.findChild<QAction*>("splitAreaRightAction");
+    auto* splitDownAction = window.findChild<QAction*>("splitAreaDownAction");
+    if (!require(splitAction != nullptr && splitDownAction != nullptr &&
+                     splitAction->text() == QStringLiteral("Split Active Area Right") &&
+                     splitDownAction->text() == QStringLiteral("Split Active Area Down"),
+                 70)) {
+        return 70;
+    }
     auto* closeAction = window.findChild<QAction*>("closeAreaAction");
     auto* maximizeAction = window.findChild<QAction*>("maximizeAreaAction");
     auto* resetAction = window.findChild<QAction*>("resetWorkspaceAction");

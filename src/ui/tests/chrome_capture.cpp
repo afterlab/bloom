@@ -4,14 +4,20 @@
 // device pixel ratio.
 #include "window_fixture.hpp"
 
+#include <QContextMenuEvent>
 #include <QDir>
 #include <QImage>
+#include <QMenu>
+#include <QSplitter>
+#include <QSplitterHandle>
 #include <bloom/ui/context_bar.hpp>
+#include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/dropdown_popup.hpp>
 #include <bloom/ui/kit/theme.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 #include <bloom/ui/window_status_bar.hpp>
+#include <bloom/ui/workspace_host.hpp>
 #include <bloom/ui/workspace_presets.hpp>
 
 #include <iostream>
@@ -33,6 +39,32 @@ void settle() {
         QCoreApplication::processEvents();
         QTest::qWait(30);
     }
+}
+
+EditorArea* areaFor(WorkspaceHost& host, const std::string& editorId) {
+    for (auto* area : host.findChildren<EditorArea*>())
+        if (area->editorId() == editorId)
+            return area;
+    return nullptr;
+}
+
+// Right-clicks the divider before `index` in `splitter` and grabs the Join menu it opens.
+void captureDividerMenu(WorkspaceHost& host, QSplitter* splitter, const int index,
+                        const QString& name) {
+    auto* handle = splitter != nullptr ? splitter->handle(index) : nullptr;
+    if (handle == nullptr) {
+        std::cerr << "no divider for " << name.toStdString() << '\n';
+        return;
+    }
+    const QPoint local(handle->width() / 2, handle->height() / 2);
+    QContextMenuEvent event(QContextMenuEvent::Mouse, local, handle->mapToGlobal(local));
+    QCoreApplication::sendEvent(handle, &event);
+    settle();
+    if (auto* menu = host.findChild<QMenu*>(QStringLiteral("workspaceDividerMenu"))) {
+        save(menu->grab(), name);
+        menu->close();
+    }
+    settle();
 }
 
 } // namespace
@@ -78,6 +110,35 @@ int main(int argc, char** argv) {
             presets->apply(preset.name);
             settle();
             save(window.grab(), QStringLiteral("preset-") + preset.name.toLower());
+        }
+        // Panels: one highlight after a preset round trip from a focused Assets panel, none while a
+        // panel is maximized and back on the focused one after restoring, and the divider's Join
+        // menu (enabled between two single panels, disabled where a side is split).
+        presets->apply(QStringLiteral("Default"));
+        settle();
+        auto& host = *window.workspaceHost();
+        host.setActiveArea(areaFor(host, "bloom.assets"));
+        presets->apply(QStringLiteral("Export"));
+        settle();
+        presets->apply(QStringLiteral("Default"));
+        settle();
+        save(window.grab(), QStringLiteral("panels-after-preset-switch"));
+        host.setActiveArea(areaFor(host, "bloom.viewer"));
+        host.toggleMaximizeActiveArea();
+        settle();
+        save(window.grab(), QStringLiteral("panel-maximized"));
+        host.toggleMaximizeActiveArea();
+        settle();
+        save(window.grab(), QStringLiteral("panel-restored"));
+        if (auto* assets = areaFor(host, "bloom.assets")) {
+            auto* row = qobject_cast<QSplitter*>(assets->parentWidget());
+            captureDividerMenu(host, row, row != nullptr ? row->indexOf(assets) + 1 : -1,
+                               QStringLiteral("divider-menu-side-by-side"));
+        }
+        if (auto* timeline = areaFor(host, "bloom.timeline")) {
+            auto* column = qobject_cast<QSplitter*>(timeline->parentWidget());
+            captureDividerMenu(host, column, column != nullptr ? column->indexOf(timeline) : -1,
+                               QStringLiteral("divider-menu-split-side-disabled"));
         }
         presets->apply(QStringLiteral("Default"));
         settle();

@@ -168,6 +168,12 @@ class EditorArea final : public QFrame {
 
     void setAreaActive(bool active);
     [[nodiscard]] bool isAreaActive() const noexcept;
+    // Presentation only: while suppressed the frame paints the resting border even when this area
+    // is the active one (a maximized panel is the only one visible, so the highlight is redundant).
+    // The active state, keyboard focus and the "active" property are unchanged.
+    void setActiveHighlightSuppressed(bool suppressed);
+    // True when the frame currently paints the active (Accent) border.
+    [[nodiscard]] bool isActiveHighlightShown() const noexcept;
     void setSplitEnabled(bool enabled);
     void setCloseEnabled(bool enabled);
     void setMaximizedAppearance(bool maximized);
@@ -246,6 +252,7 @@ class EditorArea final : public QFrame {
     QMenu* contextMenu_ = nullptr;
     QToolButton* maximizeButton_ = nullptr;
     bool active_ = false;
+    bool activeHighlightSuppressed_ = false;
     // Retire-before-replace gate for the outgoing editor's native surface (CPU-only: inert).
     NativeSurfaceRetirementGate surfaceRetirementGate_;
     // The editor index whose materialization currently matches editorWidget_/footer_/headerMenus_.

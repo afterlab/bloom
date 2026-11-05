@@ -2,17 +2,22 @@
 
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
+#include <bloom/ui/kit/controls.hpp>
 
 #include <QAction>
+#include <QContextMenuEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QKeySequence>
+#include <QMenu>
+#include <QPoint>
 #include <QSet>
 #include <QSettings>
 #include <QSplitter>
+#include <QSplitterHandle>
 #include <QTimer>
 
 #include <QString>
@@ -24,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <numeric>
@@ -88,6 +94,45 @@ void setWeightedSizes(QSplitter& splitter, const std::array<int, count>& weights
         splitter.setSizes(sizes);
     });
 }
+
+// The divider between two panels. Dragging resizes exactly as QSplitterHandle always did (and
+// QSplitterHandle already shows the split resize cursor for its orientation); a right-click asks
+// the host for the Join menu of this one divider.
+using DividerMenuRequest = std::function<void(QSplitter&, int, const QPoint&)>;
+
+class WorkspaceDivider final : public QSplitterHandle {
+  public:
+    WorkspaceDivider(const Qt::Orientation orientation, QSplitter* parent,
+                     DividerMenuRequest request)
+        : QSplitterHandle(orientation, parent), request_(std::move(request)) {
+        setObjectName(QStringLiteral("workspaceDivider"));
+    }
+
+  protected:
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        if (request_ && splitter() != nullptr) {
+            request_(*splitter(), splitter()->indexOf(this), event->globalPos());
+        }
+        event->accept();
+    }
+
+  private:
+    DividerMenuRequest request_;
+};
+
+class WorkspaceSplitter final : public QSplitter {
+  public:
+    WorkspaceSplitter(const Qt::Orientation orientation, DividerMenuRequest request)
+        : QSplitter(orientation), request_(std::move(request)) {}
+
+  protected:
+    QSplitterHandle* createHandle() override {
+        return new WorkspaceDivider(orientation(), this, request_);
+    }
+
+  private:
+    DividerMenuRequest request_;
+};
 
 bool containsArea(QWidget* widget, const bloom::ui::EditorArea* area) {
     if (widget == area) {
@@ -286,6 +331,13 @@ WorkspaceHost::WorkspaceHost(const EditorRegistry& editorRegistry, QWidget* pare
     rootLayout_->setContentsMargins(gutter, gutter, gutter, gutter);
     rootLayout_->setSpacing(0);
 
+    // One Join menu for every divider, owned by the host rather than by a divider: a join removes
+    // a panel from its split, which deletes that panel's divider while its menu action still runs.
+    dividerMenu_ = kit::makeMenu(this);
+    dividerMenu_->setObjectName(QStringLiteral("workspaceDividerMenu"));
+    // A disabled join carries its reason as the item's tooltip.
+    dividerMenu_->setToolTipsVisible(true);
+
     rootWidget_ = createArea();
     rootLayout_->addWidget(rootWidget_);
     setActiveArea(qobject_cast<EditorArea*>(rootWidget_));
@@ -338,7 +390,7 @@ void WorkspaceHost::resetToSingleArea(const std::string_view editorId) {
         [this, id = std::string(editorId)] {
             auto* area = createArea(id);
             replaceRoot(area);
-            activeArea_.clear();
+            clearActiveArea();
             setActiveArea(area);
             updateAreaControls();
             emit areaCountChanged(1);
@@ -401,7 +453,7 @@ void WorkspaceHost::resetToDefaultLayout(const std::string_view viewerEditorId,
             setWeightedSizes(*root, defaultRootColumnWeights);
 
             replaceRoot(root);
-            activeArea_.clear();
+            clearActiveArea();
             const std::array<EditorArea*, 5> areas{viewerArea, nodesArea, assetsArea, timelineArea,
                                                    propertiesArea};
             setActiveArea(areas[std::min(activeIndex, areas.size() - 1)]);
@@ -579,7 +631,18 @@ bool WorkspaceHost::closeActiveArea() {
     return closeArea(*activeArea_);
 }
 
-bool WorkspaceHost::closeArea(EditorArea& area) {
+bool WorkspaceHost::closeArea(EditorArea& area) { return closeAreaInto(area, nullptr); }
+
+bool WorkspaceHost::joinAreas(EditorArea& survivor, EditorArea& absorbed) {
+    auto* splitter = qobject_cast<QSplitter*>(absorbed.parentWidget());
+    if (&survivor == &absorbed || splitter == nullptr || survivor.parentWidget() != splitter ||
+        std::abs(splitter->indexOf(&survivor) - splitter->indexOf(&absorbed)) != 1) {
+        return false;
+    }
+    return closeAreaInto(absorbed, &survivor);
+}
+
+bool WorkspaceHost::closeAreaInto(EditorArea& area, EditorArea* const absorber) {
     if (isAreaMaximized() || areaCount() <= 1 || !containsArea(rootWidget_, &area)) {
         return false;
     }
@@ -592,9 +655,11 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
     }
 
     const QPointer<EditorArea> areaGuard(&area);
+    const QPointer<EditorArea> absorberGuard(absorber);
+    const bool joining = absorber != nullptr;
     auto committed = std::make_shared<bool>(false);
     (void)beginWorkspaceMutation(
-        [this, areaGuard, committed] {
+        [this, areaGuard, absorberGuard, joining, committed] {
             EditorArea* target = areaGuard.data();
             if (target == nullptr) {
                 return;
@@ -604,8 +669,14 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
                 return;
             }
             const int areaIndex = splitter->indexOf(target);
+            // A join hands the closed panel's room and the focus to the panel that absorbs it.
+            EditorArea* survivorArea = absorberGuard.data();
+            if (joining && (survivorArea == nullptr || survivorArea->parentWidget() != splitter)) {
+                return;
+            }
             const int neighborIndex =
-                areaIndex + 1 < splitter->count() ? areaIndex + 1 : areaIndex - 1;
+                joining ? splitter->indexOf(survivorArea)
+                        : (areaIndex + 1 < splitter->count() ? areaIndex + 1 : areaIndex - 1);
             auto* nextActiveArea = firstArea(splitter->widget(neighborIndex));
             if (nextActiveArea == nullptr) {
                 return;
@@ -624,13 +695,21 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
                 QList<int> remainingSizes;
                 remainingSizes.reserve(parentSizes.size() - 1);
                 for (int index = 0; index < parentSizes.size(); ++index) {
-                    if (index != areaIndex) {
-                        remainingSizes.push_back(parentSizes[index]);
+                    if (index == areaIndex) {
+                        continue;
                     }
+                    int size = parentSizes[index];
+                    if (joining && index == neighborIndex) {
+                        size += parentSizes[areaIndex] + splitter->handleWidth();
+                    }
+                    remainingSizes.push_back(size);
                 }
                 splitter->setSizes(remainingSizes);
                 target->deleteLater();
                 setActiveArea(nextActiveArea);
+                if (joining) {
+                    nextActiveArea->setFocus(Qt::OtherFocusReason);
+                }
                 updateAreaControls();
                 emit areaCountChanged(areaCount());
                 emit layoutChanged();
@@ -666,6 +745,9 @@ bool WorkspaceHost::closeArea(EditorArea& area) {
             target->deleteLater();
 
             setActiveArea(nextActiveArea);
+            if (joining) {
+                nextActiveArea->setFocus(Qt::OtherFocusReason);
+            }
             updateAreaControls();
             emit areaCountChanged(areaCount());
             emit layoutChanged();
@@ -907,7 +989,7 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
             rootWidget_ = nullptr;
         }
         replaceRoot(restoredRoot);
-        activeArea_.clear();
+        clearActiveArea();
         setActiveArea(restoredActiveArea != nullptr ? restoredActiveArea : firstArea(rootWidget_));
         updateAreaControls();
         emit areaCountChanged(areaCount());
@@ -921,7 +1003,7 @@ WorkspaceLayoutRestoreResult WorkspaceHost::restoreLayoutStateNow(const QByteArr
 
     restoreMaximizedArea();
     replaceRoot(restoredRoot);
-    activeArea_.clear();
+    clearActiveArea();
     setActiveArea(restoredActiveArea != nullptr ? restoredActiveArea : firstArea(rootWidget_));
     updateAreaControls();
     emit areaCountChanged(areaCount());
@@ -984,8 +1066,11 @@ EditorArea* WorkspaceHost::createArea(const std::string_view initialEditorId, QS
     return area;
 }
 
-QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) const {
-    auto* splitter = new QSplitter(orientation);
+QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) {
+    auto* splitter = new WorkspaceSplitter(
+        orientation, [this](QSplitter& owner, const int handleIndex, const QPoint& position) {
+            showDividerMenu(owner, handleIndex, position);
+        });
     splitter->setObjectName("workspaceSplitter");
     splitter->setChildrenCollapsible(false);
     // The gutter (task U1, issue #117): panels are separated by a visible Background gap, not by a
@@ -996,6 +1081,71 @@ QSplitter* WorkspaceHost::createSplitter(Qt::Orientation orientation) const {
     splitter->setOpaqueResize(true);
     connect(splitter, &QSplitter::splitterMoved, this, &WorkspaceHost::layoutChanged);
     return splitter;
+}
+
+void WorkspaceHost::showDividerMenu(QSplitter& splitter, const int handleIndex,
+                                    const QPoint& globalPosition) {
+    // Handle 0 sits before the first panel and is never shown.
+    if (handleIndex <= 0 || handleIndex >= splitter.count()) {
+        return;
+    }
+    // A vertical divider (a Horizontal split) separates a left and a right panel; a horizontal one
+    // separates a top and a bottom panel. "Join X" means the panel on the other side expands
+    // toward X over the panel on that side.
+    auto* leading = qobject_cast<EditorArea*>(splitter.widget(handleIndex - 1));
+    auto* trailing = qobject_cast<EditorArea*>(splitter.widget(handleIndex));
+    const bool sideBySide = splitter.orientation() == Qt::Horizontal;
+    QString reason;
+    if (isAreaMaximized()) {
+        reason = tr("Restore the full-screen panel to join panels");
+    } else if (leading == nullptr || trailing == nullptr) {
+        reason = tr("One side of this divider is split; only two single panels sharing the "
+                    "whole divider can join");
+    }
+
+    struct Join {
+        QString text;
+        const char* objectName;
+        EditorArea* survivor;
+        EditorArea* absorbed;
+        QString description;
+    };
+    const std::array<Join, 2> joins =
+        sideBySide
+            ? std::array<Join, 2>{Join{tr("Join Left"), "workspaceJoinLeftAction", trailing,
+                                       leading, tr("The right panel expands over the left one")},
+                                  Join{tr("Join Right"), "workspaceJoinRightAction", leading,
+                                       trailing, tr("The left panel expands over the right one")}}
+            : std::array<Join, 2>{Join{tr("Join Up"), "workspaceJoinUpAction", trailing, leading,
+                                       tr("The bottom panel expands over the top one")},
+                                  Join{tr("Join Down"), "workspaceJoinDownAction", leading,
+                                       trailing, tr("The top panel expands over the bottom one")}};
+
+    dividerMenu_->clear();
+    for (const auto& join : joins) {
+        auto* action = dividerMenu_->addAction(join.text);
+        action->setObjectName(QString::fromLatin1(join.objectName));
+        action->setEnabled(reason.isEmpty());
+        action->setToolTip(reason.isEmpty() ? join.description : reason);
+        if (!reason.isEmpty()) {
+            continue;
+        }
+        const QPointer<EditorArea> survivor(join.survivor);
+        const QPointer<EditorArea> absorbed(join.absorbed);
+        connect(action, &QAction::triggered, this, [this, survivor, absorbed] {
+            if (survivor != nullptr && absorbed != nullptr) {
+                (void)joinAreas(*survivor, *absorbed);
+            }
+        });
+    }
+    dividerMenu_->popup(globalPosition);
+}
+
+void WorkspaceHost::clearActiveArea() {
+    if (activeArea_ != nullptr) {
+        activeArea_->setAreaActive(false);
+    }
+    activeArea_.clear();
 }
 
 bool WorkspaceHost::isNativeSurfaceMutationPending() const noexcept {
@@ -1087,6 +1237,9 @@ void WorkspaceHost::updateAreaControls() {
         area->setSplitEnabled(canChangeStructure);
         area->setCloseEnabled(canClose && canChangeStructure);
         area->setMaximizedAppearance(area == maximizedArea_);
+        // A maximized panel is the only one visible, so no panel paints the active highlight
+        // until the layout is restored; the active area itself does not change.
+        area->setActiveHighlightSuppressed(maximizedArea_ != nullptr);
     }
 }
 

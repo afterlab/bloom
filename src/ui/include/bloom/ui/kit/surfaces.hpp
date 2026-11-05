@@ -20,6 +20,7 @@ class KPanelFrame final : public QWidget {
   public:
     explicit KPanelFrame(QWidget* panel);
     void setActive(bool active);
+    [[nodiscard]] bool isActive() const noexcept { return active_; }
     [[nodiscard]] static int radiusPx() noexcept;
 
   protected:

@@ -192,13 +192,14 @@ EditorArea::EditorArea(const EditorRegistry& registry, std::string_view initialE
     // installs it on) opens this exact menu at the cursor instead.
     contextMenu_ = kit::makeMenu(this);
     contextMenu_->setObjectName("panelOptionsMenu");
-    auto* splitHorizontalAction = contextMenu_->addAction(tr("Split Horizontally"));
-    splitHorizontalAction->setObjectName("panelSplitHorizontalAction");
-    connect(splitHorizontalAction, &QAction::triggered, this,
+    // The direction names where the new panel opens: to the right, or below.
+    auto* splitRightAction = contextMenu_->addAction(tr("Split Right"));
+    splitRightAction->setObjectName("panelSplitRightAction");
+    connect(splitRightAction, &QAction::triggered, this,
             [this] { emit splitRequested(this, Qt::Horizontal); });
-    auto* splitVerticalAction = contextMenu_->addAction(tr("Split Vertically"));
-    splitVerticalAction->setObjectName("panelSplitVerticalAction");
-    connect(splitVerticalAction, &QAction::triggered, this,
+    auto* splitDownAction = contextMenu_->addAction(tr("Split Down"));
+    splitDownAction->setObjectName("panelSplitDownAction");
+    connect(splitDownAction, &QAction::triggered, this,
             [this] { emit splitRequested(this, Qt::Vertical); });
     contextMenu_->addSeparator();
     // "Maximize" reads as "Fullscreen"/"Exit Fullscreen" (fix 6's wording), kept in lockstep with
@@ -358,17 +359,30 @@ void EditorArea::setAreaActive(bool active) {
     setProperty("active", active);
     // The one panel border is the frame overlay's; nothing in the sheet keys on "active" any more.
     if (frameOverlay_ != nullptr)
-        frameOverlay_->setActive(active);
+        frameOverlay_->setActive(isActiveHighlightShown());
     update();
 }
 
 bool EditorArea::isAreaActive() const noexcept { return active_; }
 
+void EditorArea::setActiveHighlightSuppressed(const bool suppressed) {
+    if (activeHighlightSuppressed_ == suppressed) {
+        return;
+    }
+    activeHighlightSuppressed_ = suppressed;
+    if (frameOverlay_ != nullptr)
+        frameOverlay_->setActive(isActiveHighlightShown());
+}
+
+bool EditorArea::isActiveHighlightShown() const noexcept {
+    return active_ && !activeHighlightSuppressed_;
+}
+
 void EditorArea::setSplitEnabled(bool enabled) {
     // The split actions live in the context menu now (decision 4); the button that opens the menu
     // stays enabled either way -- Maximize and Close inside it are unaffected by this flag.
-    for (auto* action : {contextMenu_->findChild<QAction*>("panelSplitHorizontalAction"),
-                         contextMenu_->findChild<QAction*>("panelSplitVerticalAction")}) {
+    for (auto* action : {contextMenu_->findChild<QAction*>("panelSplitRightAction"),
+                         contextMenu_->findChild<QAction*>("panelSplitDownAction")}) {
         if (action != nullptr) {
             action->setEnabled(enabled);
         }
