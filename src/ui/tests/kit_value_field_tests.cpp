@@ -170,6 +170,40 @@ void testANarrowCompactCellFitsItsValue(Expectations& expectations) {
                         "a whole number keeps its configured places in a compact cell");
 }
 
+// #541: a compact cell is as wide as the widest number its soft range shows with its unit, so a
+// four-digit position at its own size keeps "px"; it does not resize as its digits change.
+void testACompactCellFitsItsSoftRangeWithItsUnit(Expectations& expectations) {
+    kit::KValueField field;
+    field.setCompact(true);
+    field.setPresentation({.minimum = std::numeric_limits<double>::lowest(),
+                           .maximum = std::numeric_limits<double>::max(),
+                           .softMinimum = -4096.0,
+                           .softMaximum = 4096.0,
+                           .step = 1.0,
+                           .decimals = 2,
+                           .unit = QStringLiteral("px")});
+    const int width = field.sizeHint().width();
+    expectations.expect(width > kit::px(kit::Size::PropertiesFieldWidth) &&
+                            field.maximumWidth() == width,
+                        "a four-digit soft range widens the compact cell past the field width");
+    field.resize(width, kit::px(kit::Size::Control));
+    bool whole = true;
+    for (const double value : {1920.0, -4096.0, 8888.88, -888.88}) {
+        field.setValue(value);
+        whole = whole && field.paintedText().endsWith(QStringLiteral(" px")) &&
+                !field.isDisplayRounded() && field.sizeHint().width() == width;
+    }
+    expectations.expect(whole, "every number in the soft range shows whole with its unit");
+    field.setLabel(QStringLiteral("X"));
+    expectations.expect(field.sizeHint().width() > width && field.maximumWidth() > width,
+                        "an axis label widens the cell by its column");
+    kit::KValueField unbounded;
+    unbounded.setCompact(true);
+    unbounded.setRange(-1.0e9, 1.0e9);
+    expectations.expect(unbounded.sizeHint().width() == kit::px(kit::Size::PropertiesFieldWidth),
+                        "an unbounded soft range keeps the Properties field width");
+}
+
 void testFiniteExtremesStayExactAndBounded(Expectations& expectations) {
     kit::KValueField field;
     field.setRange(std::numeric_limits<double>::lowest(), std::numeric_limits<double>::max());
@@ -620,6 +654,7 @@ int main(int argc, char** argv) {
     testTheFieldDoesNotResizeAsDigitsChange(expectations);
     testGeometryPlacesTheLabelAndCell(expectations);
     testANarrowCompactCellFitsItsValue(expectations);
+    testACompactCellFitsItsSoftRangeWithItsUnit(expectations);
     testTheCellIsTheWholeControlAndEnteringEditDoesNotMoveTheValue(expectations);
     testKeysStepTheValue(expectations);
     testTheWheelIsIgnoredUntilTheFieldIsFocused(expectations);

@@ -121,11 +121,55 @@ void KValueField::setCompact(const bool compact) {
     compact_ = compact;
     if (compact) {
         setMinimumWidth(px(Size::PropertiesFieldMinWidth));
-        setMaximumWidth(px(Size::PropertiesFieldWidth));
         setFixedHeight(px(Size::Control));
     }
-    updateGeometry();
+    geometryChanged();
     update();
+}
+
+// #541: a compact cell is the Properties field width, widened to the widest number its soft range
+// can show WITH its unit (every digit at the font's widest digit), so a four-digit position reads
+// "1920.00 px" rather than dropping the unit. Measured from the presentation, never from the
+// number now in the cell: the cell does not resize as digits change. An unbounded soft range
+// (none set on an unbounded field) keeps the Properties width; a value past the soft range still
+// falls back to fewer places, then scientific notation.
+int KValueField::compactWidth() const {
+    const QFontMetrics metrics(kit::font(TypeRole::Value));
+    QChar widest(QLatin1Char('0'));
+    for (char c = '1'; c <= '9'; ++c)
+        if (metrics.horizontalAdvance(QLatin1Char(c)) > metrics.horizontalAdvance(widest))
+            widest = QLatin1Char(c);
+    // Measured as the painter lays the string out, every digit replaced by the widest one.
+    const auto measure = [&](QString text) {
+        for (auto& c : text)
+            if (c.isDigit())
+                c = widest;
+        return metrics.horizontalAdvance(text);
+    };
+    constexpr double kWidestMeasured = 1e9;
+    int number = 0;
+    for (const auto end : {softMinimum_, softMaximum_}) {
+        if (!end || !std::isfinite(*end) || std::abs(*end) >= kWidestMeasured)
+            continue;
+        auto text = integer_ ? valueFieldExactText(valueFieldSaturatingInteger(std::round(*end)))
+                             : valueFieldNumber(*end, decimals_);
+        if (showsSign_ && !text.startsWith(QLatin1Char('-')))
+            text.prepend(QLatin1Char('+'));
+        number = std::max(number, measure(text));
+    }
+    if (number > 0 && !unit_.isEmpty())
+        number += metrics.horizontalAdvance(unit_) + px(Spacing::XS);
+    const int content = std::max(number, metrics.horizontalAdvance(specialValueText_));
+    const int prefix = label_.isEmpty() ? 0 : labelColumnWidth() + px(Spacing::XXS);
+    const int chrome = px(Spacing::XS) * 2 + px(Spacing::ControlInset) * 2 +
+                       (stepper_ ? px(Size::PropertiesStepperWidth) : 0);
+    return std::max(px(Size::PropertiesFieldWidth), content + prefix + chrome + 1);
+}
+
+void KValueField::geometryChanged() {
+    if (compact_)
+        setMaximumWidth(compactWidth());
+    updateGeometry();
 }
 
 void KValueField::setOutlinedAtRest(const bool outlined) {
@@ -134,7 +178,10 @@ void KValueField::setOutlinedAtRest(const bool outlined) {
 }
 
 void KValueField::setStepper(const bool stepper) {
-    stepper_ = stepper;
+    if (stepper_ != stepper) {
+        stepper_ = stepper;
+        geometryChanged();
+    }
     if (editing_)
         layOutEditor();
     update();
@@ -144,7 +191,7 @@ void KValueField::setLabel(const QString& label) {
     if (label_ == label)
         return;
     label_ = label;
-    updateGeometry();
+    geometryChanged();
     if (editing_)
         layOutEditor();
     update();
@@ -161,7 +208,7 @@ void KValueField::setUnit(const QString& unit) {
         // the editor is up has to re-derive them or the number would land on a stale x.
         layOutEditor();
     }
-    updateGeometry();
+    geometryChanged();
     update();
 }
 
@@ -171,7 +218,7 @@ void KValueField::setSpecialValueText(const QString& text) {
     if (specialValueText_ == text)
         return;
     specialValueText_ = text;
-    updateGeometry();
+    geometryChanged();
     update();
 }
 
@@ -224,8 +271,13 @@ double KValueField::minimum() const noexcept { return minimum_; }
 double KValueField::maximum() const noexcept { return maximum_; }
 
 void KValueField::setSoftRange(const double minimum, const double maximum) {
-    softMinimum_ = std::max(minimum, minimum_);
-    softMaximum_ = std::min(std::max(maximum, minimum), maximum_);
+    const auto low = std::max(minimum, minimum_);
+    const auto high = std::min(std::max(maximum, minimum), maximum_);
+    if (softMinimum_ == low && softMaximum_ == high)
+        return;
+    softMinimum_ = low;
+    softMaximum_ = high;
+    geometryChanged();
 }
 
 void KValueField::setSingleStep(const double step) {
@@ -241,7 +293,7 @@ void KValueField::setDecimals(const int decimals) {
     if (decimals_ == next)
         return;
     decimals_ = next;
-    updateGeometry();
+    geometryChanged();
     update();
 }
 
@@ -286,7 +338,7 @@ void KValueField::setIntegerMode(const bool integer) {
         step_ = std::max(1.0, std::round(step_));
         displayScale_ = 1.0;
     }
-    updateGeometry();
+    geometryChanged();
     update();
 }
 
@@ -300,7 +352,7 @@ void KValueField::setIntegerRange(const std::int64_t minimum, const std::int64_t
     minimum_ = static_cast<double>(integerMinimum_);
     maximum_ = static_cast<double>(integerMaximum_);
     commitInteger(integerValue_);
-    updateGeometry();
+    geometryChanged();
     update();
 }
 
@@ -407,7 +459,7 @@ void KValueField::setShowsSign(const bool shows) {
     if (showsSign_ == shows)
         return;
     showsSign_ = shows;
-    updateGeometry();
+    geometryChanged();
     update();
 }
 
@@ -532,12 +584,8 @@ State KValueField::visualState() const {
 }
 
 QSize KValueField::sizeHint() const {
-    if (compact_) {
-        const auto specialWidth =
-            QFontMetrics(kit::font(TypeRole::Value)).horizontalAdvance(specialValueText_) +
-            px(Spacing::XS) * 2;
-        return {std::max(px(Size::PropertiesFieldWidth), specialWidth), px(Size::Control)};
-    }
+    if (compact_)
+        return {compactWidth(), px(Size::Control)};
     const QFontMetrics valueMetrics(kit::font(TypeRole::Value));
     // Sized for the widest number the range can produce, not for the number currently in it: the
     // field must not resize as digits change.

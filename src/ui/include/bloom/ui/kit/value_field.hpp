@@ -274,6 +274,10 @@ class KValueField final : public QWidget {
     void beginEdit(const QString& seed = {});
     void endEdit(bool keep);
     void layOutEditor();
+    // A compact cell's width: its widest soft-range number and unit (see value_field.cpp).
+    [[nodiscard]] int compactWidth() const;
+    // updateGeometry(), after re-deriving a compact cell's maximum width.
+    void geometryChanged();
     void beginInteraction();
     void finishInteraction(bool keep);
     void finishScrub();

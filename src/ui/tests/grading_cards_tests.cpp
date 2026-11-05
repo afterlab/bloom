@@ -120,12 +120,9 @@ bool paintsInsideCard(ui::node_editor::NodeItem& item) {
 }
 
 // #499: every shown widget of a card sits inside it, no label is narrower than its text, no tab
-// is clipped, and no value field drops its digits or its unit. `sharedRowUnits` false excuses only
-// the unit of the card's shared compact rows (the generic "node..." cells, capped at the Properties
-// field width): at a four-digit position they keep every digit and drop "px", with the exact value
-// and unit in their tooltip. The card's own widgets are always held to the full rule.
-bool cardContentFits(ui::node_editor::NodeItem& item, const char* name,
-                     const bool sharedRowUnits = true) {
+// is clipped, and no value field -- the card's own widgets and its shared compact rows alike --
+// drops its digits or its unit.
+bool cardContentFits(ui::node_editor::NodeItem& item, const char* name) {
     const QRectF bounds = item.cardRect().adjusted(-0.5, -0.5, 0.5, 0.5);
     bool fits = true;
     for (auto* child : item.childItems()) {
@@ -166,10 +163,8 @@ bool cardContentFits(ui::node_editor::NodeItem& item, const char* name,
             if (!field->isVisibleTo(root))
                 continue;
             const auto painted = field->paintedText();
-            const bool unitExcused =
-                !sharedRowUnits && field->objectName().startsWith(QStringLiteral("node"));
             if (painted.contains(QChar(0x2026)) || field->isDisplayRounded() ||
-                (!unitExcused && !field->unit().isEmpty() && field->specialValueText().isEmpty() &&
+                (!field->unit().isEmpty() && field->specialValueText().isEmpty() &&
                  !painted.endsWith(field->unit()))) {
                 std::cerr << name << ": " << field->objectName().toStdString() << " shows '"
                           << painted.toStdString() << "', not its whole value and unit\n";
@@ -610,9 +605,7 @@ void nodeControlCards() {
             std::cerr << name << " paints outside its card\n";
             ++failures;
         }
-        // The gradient generators' Start/End rows read 1920 px at their default.
-        const bool generator = type == "bloom.linear-gradient" || type == "bloom.radial-gradient";
-        if (!cardContentFits(*fixture.item, name, !generator))
+        if (!cardContentFits(*fixture.item, name))
             ++failures;
         capture(fixture, QString::fromLatin1(name));
     }

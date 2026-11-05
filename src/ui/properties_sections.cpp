@@ -171,11 +171,12 @@ QWidget* makeCellGroup(const QString& objectName, const std::initializer_list<QW
     auto* layout = new QHBoxLayout(group);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(kit::px(kit::Spacing::XXS));
+    // #541: each cell's own width (a compact cell is wide enough for its widest number and unit).
+    int width = (static_cast<int>(cells.size()) - 1) * kit::px(kit::Spacing::XS);
     for (auto* cell : cells) {
         layout->addWidget(cell);
+        width += std::max(kit::px(kit::Size::PropertiesFieldWidth), cell->sizeHint().width());
     }
-    const int width = static_cast<int>(cells.size()) * kit::px(kit::Size::PropertiesFieldWidth) +
-                      (static_cast<int>(cells.size()) - 1) * kit::px(kit::Spacing::XS);
     group->setMaximumWidth(width);
     return group;
 }

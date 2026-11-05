@@ -183,3 +183,13 @@ and 12.88 (DPR 1.5), with changed fractions 0.106 and 0.104. Comparison toleranc
 coverage are unchanged; rendering identity goldens are unchanged.
 After merging the TYPE references the bar's approval was repeated on top of them (mean channel
 errors 12.81 and 12.89 before approval); the change is the same bar row and the same Viewer.
+
+COMPACT-CELLS approval (2026-11-05, #541): a compact value cell is now as wide as the widest number
+its soft range can show with its unit, so Properties' Transform cells read `100.00 %` and
+`0.00 px` where they dropped the unit before, and the hosted headers and footers that measure those
+cells re-lay out by their collapse ranks. The references also absorb the earlier interactive-control
+and timeline-column changes their tolerance had covered. Both references were regenerated with
+`--update-goldens` at DPR 1 and 1.5 and visually inspected. Before approval the mean channel errors
+were 1.25708 (DPR 1) and 1.22671 (DPR 1.5), with changed fractions 0.00951910 and 0.00838368.
+Comparison tolerances and full-image coverage are unchanged; rendering identity goldens are
+unchanged.
