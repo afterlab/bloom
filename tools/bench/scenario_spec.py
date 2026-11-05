@@ -39,18 +39,14 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
                            "masterGamma": 1.1}]
 
 # The open issues behind the failures measured on 2026-11-05 (benchmark-results-2026-11-05-
-# scenarios.md).
-EXPORT_CPU_FALLBACK = ("#544: the final render falls back to the CPU reference and takes seconds "
-                       "to minutes per frame")
-CAPACITY_WAITS = ("#544: fills and the Viewer wait for device capacity with the claims near the "
-                  "usable capacity")
+# scenarios.md), after the #544 fixes: the final render no longer falls back to the CPU and the
+# fills no longer starve on capacity waits; these checks are what is left of #544.
+EXPORT_RATE = ("#544: a four-frame export of a 2K shot that fills fast is slower per frame than "
+               "4 x the fill plus 0.5 s (pipeline latency, serial EXR encode and verify)")
+SHORT_FILL_BUSY = "#544: the light 2K shot's 3 s fill keeps the GPU under half busy on average"
+FILL_ORDER = ("#544: the 4K comp's fill still waits for device capacity a few times and caches "
+              "some frames ahead of the contiguous run")
 ALPHA_PARITY = "#545: GPU export frames differ from the CPU reference in alpha"
-EXPORT_FAILURES = {"no-cpu-fallback": EXPORT_CPU_FALLBACK,
-                   "export-gpu-complete": EXPORT_CPU_FALLBACK,
-                   "export-rate": EXPORT_CPU_FALLBACK, "export-cpu-parity": ALPHA_PARITY,
-                   "gpu-busy-during-fill": CAPACITY_WAITS}
-COMP_FAILURES = dict(EXPORT_FAILURES, **{"fill-contiguous-from-playhead": CAPACITY_WAITS,
-                                         "claims-below-capacity": CAPACITY_WAITS})
 
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass
@@ -60,7 +56,8 @@ SCENARIOS = {
                        "Physical Glow.",
         "tier": "1080p",
         "frames": 48,
-        "knownFailures": EXPORT_FAILURES,
+        "knownFailures": {"export-rate": EXPORT_RATE, "export-cpu-parity": ALPHA_PARITY,
+                          "gpu-busy-during-fill": SHORT_FILL_BUSY},
         "layers": [
             {"name": "Plate", "media": "png16"},
             {"name": "CG beauty", "media": "exr_multilayer", "blend": "screen",
@@ -79,7 +76,7 @@ SCENARIOS = {
                        "adjustment layer grading the whole stack.",
         "tier": "1080p",
         "frames": 24,
-        "knownFailures": COMP_FAILURES,
+        "knownFailures": {"export-rate": EXPORT_RATE, "export-cpu-parity": ALPHA_PARITY},
         "layers": [
             {"name": "Plate", "media": "png16",
              "transform": {"scale": [1.1, 1.1]},
@@ -117,9 +114,6 @@ SCENARIOS = {
     },
 }
 
-# The same comp at 4K (the 2160p tier), with a shorter work area. Its fill and Viewer starve on
-# capacity waits (#544), so it also lists the progress and fill checks.
-SCENARIOS["cg-comp-4k"] = dict(SCENARIOS["cg-comp-2k"], tier="2160p", frames=12, knownFailures=dict(
-    COMP_FAILURES, **{"viewer-and-fill-progress": CAPACITY_WAITS,
-                      "fill-completes": CAPACITY_WAITS,
-                      "ram-preview-usable-memory": CAPACITY_WAITS}))
+# The same comp at 4K (the 2160p tier), with a shorter work area.
+SCENARIOS["cg-comp-4k"] = dict(SCENARIOS["cg-comp-2k"], tier="2160p", frames=12, knownFailures={
+    "export-cpu-parity": ALPHA_PARITY, "fill-contiguous-from-playhead": FILL_ORDER})
