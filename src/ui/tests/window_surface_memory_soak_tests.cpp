@@ -516,8 +516,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return 1;
     }
     std::cout << "SOAK route=" << (gpu ? "gpu-prepared-packed" : "cpu") << '\n';
-    // #452: frames requested while the service was still initializing took the CPU path. They are
-    // counted, as GpuUnavailable, and are not part of the measured window changes below.
+    // #452: a CPU fallback before the service is ready is counted as GpuUnavailable and is not part
+    // of the measured window changes below. Since #542 a frame requested while the service is
+    // still initializing waits for the startup instead of taking the CPU path.
     const auto initializing = service.status().counters;
     checks.expect(initializing.cpuFallbacks ==
                       initializing.cpuFallbacksByReason[static_cast<std::size_t>(

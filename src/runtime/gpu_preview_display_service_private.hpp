@@ -484,7 +484,20 @@ struct PreviewStageSubmission final {
     std::optional<TaskGroupId> groupId;
     TaskSourceVersion sourceVersion;
     std::optional<std::string> coalescingKey;
+    // #542: submitted while the startup task was still pending. The owner's GPU executor runs the
+    // startup first, so the route and the allowance are decided when this request starts.
+    bool queuedBehindStartup = false;
+    bool deliveredDefaultAllowance = false;
 };
+
+// The resident route's selection gate: a Ready service with a live route and, for the
+// NativeResident product, a usable presentation generation.
+[[nodiscard]] bool residentRouteSelectable(const PreviewDisplayServiceCore& core);
+// The device allowance a GPU request carries: the owner's live foreground ceiling under a
+// delivered default budget, otherwise the request's explicit share.
+[[nodiscard]] std::size_t previewRequestDeviceAllowance(const PreviewDisplayServiceCore& core,
+                                                        bool deliveredDefault,
+                                                        std::size_t pixelStorageByteLimit);
 
 void startGpuPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>& core,
                           bool cancellationRequested,

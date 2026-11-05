@@ -488,6 +488,26 @@ void startResidentPreviewStage(const std::shared_ptr<PreviewDisplayServiceCore>&
         return;
     }
 
+    if (submission.queuedBehindStartup) {
+        // #542: the startup ran first on this owner thread. Route the request against its outcome
+        // with the allowance the owner has resolved since: a route that did not come up takes the
+        // full CPU path, counted as GpuUnavailable exactly as a submission after startup would be.
+        const auto allowance =
+            residentRouteSelectable(*core)
+                ? previewRequestDeviceAllowance(*core, submission.deliveredDefaultAllowance,
+                                                submission.pixelStorageByteLimit)
+                : 0;
+        if (allowance == 0) {
+            core->recordCpuFallback(GpuPreviewCpuFallbackReason::GpuUnavailable);
+            dispatchResidentCpuFallbackChild(core, stage);
+            if (stage->phase != StagePhase::Done)
+                core->stages.push_back(std::move(stage));
+            return;
+        }
+        stage->requestOwnedBytes = allowance;
+        stage->gpuByteAllowance = allowance;
+    }
+
     TaskRequest childRequest("GPU preview GPU-scene stage", submission.owner, submission.priority,
                              TaskExecutor::Cpu);
     childRequest.groupId = submission.groupId;

@@ -373,6 +373,86 @@ bool matrix(Expectations& checks, const TestOptions& options,
     return true;
 }
 
+// #542: a request made while the startup task is still pending (the first Viewer frame of a
+// project opened at launch) queues behind it and takes the GPU route once the device is up. It is
+// never rendered on the CPU reference because it arrived early. When the startup fails, the same
+// queued request takes the counted GpuUnavailable CPU path.
+void startupQueuedRequestProof(
+    Expectations& checks, const TestOptions& options,
+    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+    const std::shared_ptr<const bloom::color::PreparedCpuDisplayProcessorHandle>& processor,
+    const bloom::document::Snapshot& snapshot, const bool loaderAvailable) {
+    const std::string variant = loaderAvailable ? "device" : "missing loader";
+    PackedRetirementScope retirement;
+    TaskScheduler scheduler(schedulerConfig());
+    auto policy = std::make_shared<bloom::runtime::GpuProcessingPhasePolicy>(32, retirement.owner);
+    auto sample = bloom::runtime::memoryBudgetSample();
+    bloom::runtime::MemoryBudgetLedger ledger(sample.physicalBytes,
+                                              sample.machine.availableBytes.value_or(0));
+    ledger.beginProcessSampling();
+    const auto at = bloom::runtime::GpuProcessingPhasePolicy::Clock::now();
+    const auto state = ledger.applySample(std::move(sample), at);
+    policy->applyHostSample(state, ledger.physicalByteBudget(), at);
+    auto builder = std::make_shared<CpuGpuSceneBuilder>(
+        nullptr, bloom::runtime::GpuSceneMediaContext{}, bloom::runtime::GpuSceneOcioContext{},
+        bloom::runtime::GpuScenePreparationPhase{
+            .policy = policy,
+            .envelope = {.metadataBytes = 1024ULL * 1024,
+                         .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                         .requestedExecutorBytes = kBudget,
+                         .deviceWorkingBytes = 832ULL * 1024 * 1024}});
+    auto configured = packedOptions(options);
+    configured.processingPhasePolicy = policy;
+    if (!loaderAvailable)
+        configured.loaderPath = "/nonexistent/bloom-loader.so";
+    auto serviceOwner = std::make_unique<GpuPreviewDisplayService>(
+        scheduler, packedStageFunction(plan, builder, {}, processor),
+        generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
+        generalFallback(processor), configured);
+    auto& service = *serviceOwner;
+    const bloom::runtime::TaskOwner owner{.kind = bloom::runtime::TaskOwnerKind::Composition,
+                                          .id = bloom::runtime::TaskOwnerId::fromRaw(7)};
+    // Submitted at once: the startup task (device creation and qualification) has not run yet.
+    const bool initializing = service.status().state == GpuPreviewDisplayServiceState::Initializing;
+    auto submission = service.submit(TaskRequest("packed during startup", owner), snapshot,
+                                     makeIdentity(*plan, 900, {}, {}, {}), kBudget, {});
+    checks.expect(initializing, variant + ": the request is made while the startup is pending");
+    checks.expect(submission.accepted(), variant + ": the request made during startup is admitted");
+    const auto result = submission.accepted() ? awaitResult(submission.handle) : std::nullopt;
+    const auto frame = packedResult(result);
+    const auto status = service.status();
+    const auto unavailable = status.counters.cpuFallbacksByReason[static_cast<std::size_t>(
+        bloom::runtime::GpuPreviewCpuFallbackReason::GpuUnavailable)];
+    if (loaderAvailable) {
+        checks.expect(status.state == GpuPreviewDisplayServiceState::Ready,
+                      variant + ": the startup reaches Ready");
+        checks.expect(frame &&
+                          frame->provenance().provider ==
+                              bloom::runtime::PreviewDisplayProvider::GpuPreparedPacked &&
+                          frame->processIdentity().provider ==
+                              bloom::runtime::EvaluationProvider::GpuResident &&
+                          status.counters.cpuFallbacks == 0 && unavailable == 0,
+                      variant + ": the request made during startup is prepared on the GPU, "
+                                "not rendered on the CPU reference");
+        if (frame)
+            compareCpu(checks, *frame, plan, *processor);
+    } else {
+        checks.expect(status.state == GpuPreviewDisplayServiceState::Unavailable,
+                      variant + ": the startup reports Unavailable");
+        checks.expect(frame &&
+                          frame->provenance().provider ==
+                              bloom::runtime::PreviewDisplayProvider::CpuOcio &&
+                          !frame->provenance().gpuPreparedPacked &&
+                          status.counters.cpuFallbacks == 1 && unavailable == 1,
+                      variant + ": the queued request takes one counted GpuUnavailable CPU path");
+    }
+    if (!frame && result)
+        for (const auto& diagnostic : result->diagnostics())
+            std::cerr << "STARTUP_QUEUED " << diagnostic.code << ": " << diagnostic.summary << '\n';
+    service.beginShutdown();
+    serviceOwner.reset();
+}
+
 int run(int argc, char** argv) {
     bool shutdownProof = false;
     std::vector<char*> arguments;
@@ -428,6 +508,8 @@ int run(int argc, char** argv) {
         if (!matrix(checks, options, plan, processor, {}, document.snapshot()) ||
             !matrix(checks, options, plan, processor, programs, document.snapshot()))
             return options.requireDevice ? 1 : kSkipExit;
+        startupQueuedRequestProof(checks, options, plan, processor, document.snapshot(), true);
+        startupQueuedRequestProof(checks, options, plan, processor, document.snapshot(), false);
         unsupportedPackedProof(checks, packedOptions(options), plan, processor, programs,
                                document.snapshot());
         cancelledGeneralDisplayReleasesPhase(checks, packedOptions(options), plan, programs,

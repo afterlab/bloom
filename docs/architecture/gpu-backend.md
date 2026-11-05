@@ -353,6 +353,15 @@ Every request that takes the CPU path on either route increments `cpuFallbacks` 
 not worthwhile under the measured cost model, ineligible stage, unsupported GPU subset, native
 failure or device loss, native timeout); a bounded-admission refusal is counted by
 `gpuAdmissionRefusals` instead.
+A resident-route request made while the startup task is still pending, such as the first Viewer
+frame of a project opened at launch, does not take the CPU path as GPU unavailable (#542). It
+queues behind the startup on the owner's serial GPU executor and is routed when it starts, against
+the startup outcome and the allowance the owner has resolved by then: a Ready route prepares it on
+the GPU, and a startup that ended `Unavailable` gives it the full CPU path, counted as GPU
+unavailable. Before this, that first frame was a CPU reference render although the device was
+Ready about 1.3 s after launch: about 33 s for a 4K source through a Glow of size 64, 117-123 s at
+size 244, and 149 s for three 4K layers through a large Gaussian blur, cold or warm. It now paints
+2.0-2.6 s after the Viewer opens, the startup included.
 `beginShutdown()` is non-blocking; the destructor joins the service thread and drains child/native
 ownership before releasing the lease.
 

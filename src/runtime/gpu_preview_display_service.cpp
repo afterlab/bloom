@@ -408,6 +408,32 @@ void PreviewDisplayServiceCore::beginShutdownRoots(std::vector<TaskId>& out) noe
     out.swap(acceptedRoots);
 }
 
+bool residentRouteSelectable(const PreviewDisplayServiceCore& core) {
+    {
+        std::lock_guard lock(core.stateMutex);
+        if (core.state != GpuPreviewDisplayServiceState::Ready || !core.gpuAvailable)
+            return false;
+    }
+    return !core.residentRouteTerminal &&
+           (core.options.product == GpuPreviewDisplayProductMode::GpuPreparedPacked ||
+            (core.presentation != nullptr && core.presentation->available &&
+             core.presentation->registry != nullptr));
+}
+
+std::size_t previewRequestDeviceAllowance(const PreviewDisplayServiceCore& core,
+                                          const bool deliveredDefault,
+                                          const std::size_t pixelStorageByteLimit) {
+    // Two DISTINCT budgets. `pixelStorageByteLimit` is the caller's HOST pixel-storage ceiling for
+    // decoding and the CPU fallback. Rooted native execution uses its owner-resolved DEVICE
+    // ceiling: host source storage must not cap GPU intermediates or vice versa. Legacy explicit
+    // injected configurations retain their combined per-request allowance.
+    return deliveredDefault ? static_cast<std::size_t>(core.effectivePreviewByteAllowance.load(
+                                  std::memory_order_relaxed))
+                            : static_cast<std::size_t>(gpuResidentRequestBudget(
+                                  static_cast<std::uint64_t>(pixelStorageByteLimit),
+                                  static_cast<std::uint64_t>(core.previewByteAllowance())));
+}
+
 } // namespace detail
 
 struct GpuPreviewDisplayService::Impl final {
@@ -736,6 +762,12 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
     const auto current = status();
     const bool residentMode = core->gpuStageFunction != nullptr;
     bool gpuMode = false;
+    // #542: a resident request made while the startup task is still pending queues behind it on
+    // the owner's serial GPU executor and is routed when it starts, against the outcome. Taking
+    // the CPU path here instead rendered the first Viewer frame of a heavy composition on the
+    // CPU reference (minutes at 4K) although the device was ready a second later.
+    const bool startupPending = residentMode && impl_->attached &&
+                                current.state == GpuPreviewDisplayServiceState::Initializing;
     if (residentMode) {
         // Resident selection requires a usable presentation generation and a live route. It is
         // deliberately NOT gated on the Neutral-specific qualification (its measured pixel interval
@@ -743,25 +775,13 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
         // support gate): the per-request stage decides between a prepared general display program,
         // the startup Neutral fast path, and the CPU fallback. The packed readback qualification,
         // packed bandwidth, a fake qualification, and the raw document revision are all irrelevant.
-        gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
-                  !core->residentRouteTerminal &&
-                  (core->options.product == GpuPreviewDisplayProductMode::GpuPreparedPacked ||
-                   (core->presentation != nullptr && core->presentation->available &&
-                    core->presentation->registry != nullptr));
+        gpuMode = startupPending || detail::residentRouteSelectable(*core);
     } else {
         gpuMode = current.state == GpuPreviewDisplayServiceState::Ready && current.gpuAvailable &&
                   current.qualification != nullptr && current.qualification->eligible();
     }
-    // Two DISTINCT budgets. `pixelStorageByteLimit` is the caller's HOST pixel-storage ceiling for
-    // decoding and the CPU fallback. Rooted native execution uses its owner-resolved DEVICE
-    // ceiling: host source storage must not cap GPU intermediates or vice versa. Legacy explicit
-    // injected configurations retain their combined per-request allowance.
-    const std::size_t gpuAllowance =
-        deliveredDefault ? static_cast<std::size_t>(
-                               core->effectivePreviewByteAllowance.load(std::memory_order_relaxed))
-                         : static_cast<std::size_t>(gpuResidentRequestBudget(
-                               static_cast<std::uint64_t>(pixelStorageByteLimit),
-                               static_cast<std::uint64_t>(core->previewByteAllowance())));
+    const std::size_t gpuAllowance = detail::previewRequestDeviceAllowance(
+        *core, deliveredDefault != nullptr, pixelStorageByteLimit);
     // In resident mode the per-request stage decides between the general display program (which may
     // be a non-default display/view and a non-neutral ViewAdjust), the startup Neutral fast path,
     // and the CPU fallback. The submit gate therefore must NOT preempt a non-neutral request: doing
@@ -794,6 +814,8 @@ GpuPreviewDisplayService::submit(TaskRequest request, const document::Snapshot& 
     detail::PreviewStageSubmission stageSubmission(
         snapshot, identity, pixelStorageByteLimit, gpuAllowance, overrides, request.priority,
         request.owner, request.groupId, request.sourceVersion, request.coalescingKey);
+    stageSubmission.queuedBehindStartup = startupPending;
+    stageSubmission.deliveredDefaultAllowance = deliveredDefault != nullptr;
     TaskRequest cpuRequest = request;
     const bool fillWork = request.priority == TaskPriority::Foreground ||
                           request.priority == TaskPriority::Background;
