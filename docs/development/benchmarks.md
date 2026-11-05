@@ -401,12 +401,16 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `cg-comp-2k` | 1920×1080 | 24 | A blurred (48 px), graded plate; the beauty pass with Light Wrap (from the plate), Classic Glow (128), Drop Shadow, Curves and Levels; an EXR half element with Physical Glow (160) and Drop Shadow; an EXR float highlights pass with Streak Glow (400); a nested Merge of two passes (one graded) through a 96 px blur and a Classic Glow; an adjustment layer with Grade and Curves over the stack |
 | `cg-comp-4k` | 3840×2160 | 12 | The same comp at 4K |
 | `noise-glow-2k` | 1920×1080 | 24 | A PNG16 plate under a full-frame procedural Noise (Spline, Dynamic Twist, 8 octaves, its evolution keyed so every frame is new) screened on top through a Physical Glow (160) (#525; the issue's Noise-driven Displace waits for Displace, #348) |
+| `cryptomatte-mattes-2k` | 1920×1080 | 24 | A PNG16 plate under the beauty pass shaped by its own Cryptomatte (#383): the pillars and cards minus the veil (a Mask Combine Subtract of two selections) as a matte layer mask and as the mask input of a warm Grade (then Curves), and the cards as the node track matte of an EXR float highlights pass through a 32 px blur and a Physical Glow (128) |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
 lists in `knownFailures` the checks an open issue makes fail (#544: the light 2K shot's GPU busy
-over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds, and the
-Noise shot's half-second fill).
+over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds, the
+Noise shot's half-second fill, and the Cryptomatte shot's fill, which also decodes and uploads its
+rank images on the host every frame). On 2026-11-06 (RTX 4090, 12 frames) `cryptomatte-mattes-2k`
+showed its first frame in 4.9 s, filled at 2.8 fps with the GPU 19% busy, played cached at 24 fps,
+exported its 4 frames on the GPU with no CPU fallback, and passed every other check.
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -499,7 +503,8 @@ Merge it filters, or, for an adjustment layer, the stack below. The check's `gat
 keys. Every other shot keeps exact alpha. `two-layer-glow-2k` keys decoded footage, which both
 routes produce bit for bit, so its alpha stays exact. `cg-comp-2k` and `cg-comp-4k` key the
 beauty's colour after its Light Wrap and the nested passes' colour after a graded, blurred Merge,
-so their alpha is held to 2e-6. On 2026-11-05 (RTX 4090) frame 0 measured a max alpha difference
+so their alpha is held to 2e-6, and `cryptomatte-mattes-2k` keys the highlights' colour after
+their blur. On 2026-11-05 (RTX 4090) frame 0 measured a max alpha difference
 of 5.96e-8 at 2K (5 alpha samples not exact) and at 4K (6), and `two-layer-glow-2k` an exact alpha.
 
 ### Running a scenario suite
@@ -523,6 +528,67 @@ than the threshold (percent, default 10) is a regression and fails the run. The 
 RTX 4090 workstation and, when it is used, on the RTX 5080 bench host.
 
 Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and after its follow-up](benchmark-results-2026-11-05-scenarios.md).
+
+## Node cost
+
+Every new processing node ships with a cost case: `run_bench.py nodes` runs each native node
+bench listed in `bench_spec.NODE_BENCHES` under the GPU lock and writes
+`<work-dir>/results/<UTC timestamp>-nodes[-label].json` and `.md`. A node bench builds each case
+as a real document and runs it through the production compiler, scene builder (the packaged shader
+tools and the media context) and executor on the device, at 1080p and 2160p by default:
+
+| Field | Meaning |
+|---|---|
+| Cold ms | The first run on a fresh scene cache and executor: uploads, programs and every dispatch |
+| Warm ms | The same frame again on that executor: the output-cache hit a RAM preview serves (no dispatch) |
+| ms/frame | The median rerun on one executor whose cache retains nothing, so every pass dispatches again, the tier's cases interleaved round robin so a change of device clock moves every case alike |
+
+Each case names a cheap reference at the same resolution (a Grade) and, for a new node, its
+closest existing comparable; the ratios of ms/frame to theirs are held to the budgets in
+`bench_spec.NODE_COST_BUDGETS` (by default at most 4x the Grade and 2x the comparable; a case whose
+cost is a count, such as N masks, carries its own). `run_bench.py nodes` and `run_bench.py compare
+new.json old.json --threshold 10` fail on a case over budget, a case that did not run (except
+`NODE_COST_KNOWN_FAILURES`) and, against a baseline, a case whose ms/frame or ratio grew by more
+than the threshold.
+
+```sh
+python3 tools/bench/run_bench.py nodes --build-dir build/pw-desktop --media-root "$BLOOM_BENCH_MEDIA" \
+    [--tier 1080p] [--repeats 9] [--baseline old-nodes.json]
+```
+
+### Matte workflow (#383)
+
+`bloom_runtime_gpu_matte_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_matte_node_bench_smoke`). Its references and comparables are a Grade, Luma Key
+into Image Mix, path layer masks, a layer track matte, N Image Mix nodes each by its own Mask node,
+and the Cryptomatte node's Image output; the Cryptomatte cases read the bench multilayer EXR and
+its `CryptoObject` layer. Measured on 2026-11-06 (RTX 4090, 9 reruns, ms/frame):
+
+| Case | 1080p | vs Grade | vs comparable | 2160p | vs Grade | vs comparable |
+|---|---|---|---|---|---|---|
+| Grade (reference) | 3.77 | | | 13.43 | | |
+| Image to Mask into Image Mix | 5.36 | 1.42x | 1.20x Luma Key | 20.05 | 1.49x | 1.20x Luma Key |
+| Mask Combine (Difference of two Mask nodes) into Image Mix | 10.04 | 2.67x | 2.24x Luma Key | 32.57 | 2.42x | 1.95x Luma Key |
+| Grade with a Mask node on its mask input | 6.11 | 1.62x | 1.62x Grade | 19.91 | 1.48x | 1.48x Grade |
+| 1 node Mask as a layer mask | 6.64 | 1.76x | 1.24x Image Mix chain | 21.31 | 1.59x | 1.13x |
+| 4 node Masks as layer masks | 12.15 | 3.23x | 1.06x | 42.06 | 3.13x | 1.08x |
+| 16 node Masks as layer masks | 36.17 | 9.60x | 1.02x | 120.07 | 8.94x | 1.01x |
+| Node track matte (a Mask node) | 5.40 | 1.43x | 1.31x layer track matte | 17.56 | 1.31x | 1.01x |
+| Cryptomatte, 1 ID, as a layer mask | 42.65 | 10.42x | 1.07x Cryptomatte Image | | | |
+| Cryptomatte, 16 IDs, as a layer mask | 42.71 | 10.43x | 1.07x | | | |
+| Cryptomatte, 64 IDs, as a layer mask | 42.66 | 10.42x | 1.07x | | | |
+| Cryptomatte, 256 IDs, as a layer mask | 43.03 | 10.51x | 1.08x | | | |
+| Cryptomatte, 16 IDs, on a Grade's mask input | 41.86 | 10.22x | 1.05x | | | |
+
+Cold runs took 2.3 to 10 ms at 1080p for the solid cases (39 to 63 ms for the Cryptomatte ones,
+whose rank upload dominates) and warm runs under 0.01 ms with no dispatch. The routes add one
+Multiply Alpha or Image Mix per matte: N node Masks cost N Mask nodes plus one combine each, the
+same as N Image Mix nodes by those Masks (a path mask list stays one kernel, about 0.8 of a Grade
+for any count). The Cryptomatte cases cost what the #364 node costs on its own (its Image output
+is 9.7x the EXR Grade): the four RGBA32F rank images it uploads each frame. At 2160p that stacked
+upload (about 530 MB plus its staging) is over the device's per-image upload budget, so those
+cases do not run there (`NODE_COST_KNOWN_FAILURES`); the Cryptomatte IDs picked do not change the
+cost measurably up to 256.
 
 ## Platform notes
 

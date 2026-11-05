@@ -40,6 +40,24 @@ at 40 % gives the same pixels as the curved stack mixed over the unadjusted stac
 a track matte, the blend mode and the layer's in and out points apply as they do on any layer: a
 mask limits where the effect shows, and outside the layer's range the stack below is unchanged.
 
+## Limiting an effect, or a layer, to a matte
+
+Every grade, colour and filter effect has an optional **Mask** input. Wire a Mask into it (a
+Cryptomatte selection, a Mask node, a Luma Key) and the effect applies only where the Mask covers;
+elsewhere its input passes through unchanged. An Image wired in instead is read through the
+effect's **Mask channel** (Alpha, Red, Green, Blue or Luma, each also inverted).
+
+```text
+Source ─→ Grade ─→ Merge             Cryptomatte ─→ Mask Combine ─→ Layer mask, track matte
+Cryptomatte ─┘ (mask)                Mask ────────┘ (b)               or an effect's Mask input
+```
+
+A layer can be shaped by a node's Mask too: in Properties, **Add Mask from Node** adds a mask
+whose **Shape from** is that node (switch it back to **Path** to draw), and the **Track Matte**
+source lists the composition's node Masks beside its layers. **Mask Combine** adds, subtracts,
+intersects or takes the difference of two Masks; **Image to Mask** turns an image's alpha, luma or
+one channel into a Mask.
+
 ## Layer controls on the entry or on a Layer node
 
 ```text

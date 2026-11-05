@@ -732,7 +732,8 @@ adds `timelinePropertyDriven`, `timelinePropertyDriverLink` and `timelinePropert
 An expanded layer with masks shows a collapsible Masks group: one row per mask labelled with its
 name and mode (and Inverted), keying the path, with Feather, Expansion and Opacity rows beneath. A
 row press selects the mask. Each layer row has a Matte column (`layerTrackMatteDropdown`) listing
-None and the other layers of the same Merge, then Alpha, Luma and Inverted for the current matte.
+None, the other layers of the same Merge and the composition's node Masks (a Cryptomatte, a Mask
+Combine), then Alpha, Luma and Inverted for the current matte.
 
 ## Properties
 
@@ -762,8 +763,12 @@ is a UI preference; searching temporarily exposes matches without changing that 
 A layer's Masks section lists each mask with a name field, a closed Mode dropdown (None, Add,
 Subtract, Intersect, Difference), an Inverted switch, a keyable Path summary, Feather, Expansion and
 Opacity rows, and move-up, move-down and remove buttons; touching a group selects that mask for the
-Viewer. The Track Matte section has a source dropdown (None and the layers of the same Merge), an
-Alpha/Luma channel dropdown and an Inverted switch. A locked layer disables both sections.
+Viewer. Each mask's Shape from dropdown chooses Path or a node Mask of the composition (listed as
+"Node: <name>"); a mask shaped by a node hides its Path, Feather and Expansion rows. "Add Mask from
+Node" adds a mask shaped by the first node Mask. The Track Matte section has a source dropdown
+(None, "Layer: <name>" for the layers of the same Merge and "Node: <name>" for the node Masks), an
+Alpha/Luma channel dropdown and an Inverted switch. A node that would form a cycle with the layer is
+not listed. A locked layer disables both sections.
 
 ## Export
 

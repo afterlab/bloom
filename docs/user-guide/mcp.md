@@ -320,6 +320,14 @@ window's thread, and stop when the request is cancelled (`bloom.scripting.cancel
   ID without a manifest. A point outside the layer or over no object answers "No object under the
   point". To choose mattes by name, set the node's `mattes` text with
   `bloom.node.set-parameter-value`.
+- Any node's Mask output (a Cryptomatte, a Mask Combine, an Image to Mask) can shape a layer:
+  `bloom.layer.add-matte-mask` (`composition`, `layer`, `node`, optional `port` (default `mask`),
+  `mode` and `name`) adds a mask shaped by it, `bloom.layer.set-mask-matte` (`composition`, `layer`,
+  `mask`, `node`, optional `port`) reshapes an existing mask by it and
+  `bloom.layer.clear-mask-matte` returns the mask to its path. `bloom.layer.set-node-track-matte`
+  (`composition`, `layer`, `node`, optional `port`, `channel` and `inverted`) mattes the layer by the
+  node's Mask; `bloom.layer.clear-track-matte` clears it. The `layers` query reports a mask's
+  `matte` as `{node, port}` (null for a path mask) and a track matte's `node` the same way.
 
 A client that cannot read the project (no session) gets `bloom.scripting.source-unavailable` from
 these three.

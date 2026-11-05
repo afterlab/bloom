@@ -1,7 +1,9 @@
 # Bloom Project Format
 
-The current document schema is 1.41. It lets a gradient value carry its interpolation, colour mode
-and hue direction (see "Gradient Modes In Document 1.41"). Document 1.40 let a value node drive a
+The current document schema is 1.42. It lets a layer mask take its shape, and a track matte its
+coverage, from a node's Mask output (see "Matte Sources In Document 1.42"). Document 1.41 let a
+gradient value carry its interpolation, colour mode and hue direction (see "Gradient Modes In
+Document 1.41"). Document 1.40 let a value node drive a
 gradient stop's colour or position through a stop link (see "Gradient Stop Links In Document
 1.40"). Document 1.39 moved the
 Linear and Radial Gradient generators' start and end colours and Glow's tint and outer tint onto
@@ -1736,6 +1738,19 @@ unsupported node version, and a document claiming 1.39 that carries a schema 1 g
 refused the same way. The `1.38` -> `1.39` DOM step `migrateGradientColorPairsV1_38` only advances
 the version. The schema artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`;
 the schema check restores the 1.38 artifacts from them exactly.
+
+## Matte Sources In Document 1.42
+
+A layer mask may follow its `opacity` with `matte`, an output port reference (`{"node", "port"}`)
+naming the Mask output that shapes it (issue #383); its `path`, `feather` and `expansion` are still
+stored. A track matte may carry `node`, the same reference, in place of `source`, followed by
+`channel` and `inverted`. The referenced node must exist in the same composition, produce a Mask
+and not depend on the layer; a document claiming 1.41 or older that carries either member is
+refused (`UnknownMember` at the member). No older document has one, so the `1.41` -> `1.42` DOM step
+`migrateMatteSourcesV1_41` only advances the version. The schema artifacts are
+`document-1.42.schema.json` (`matte` on `layerMask-1.24`, and `trackMatte-1.24` requiring exactly
+one of `source` or `node`) and `manifest-1.42.schema.json`; the schema check restores the 1.41
+artifacts from them exactly.
 
 ## Gradient Modes In Document 1.41
 

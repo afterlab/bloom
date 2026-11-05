@@ -1508,6 +1508,10 @@ no existing plan evaluates differently.
   selection, in the common matte-list syntax: comma-separated, `\,` escapes a comma, `<1.23e-05>` or
   `<0xHEX>` is a raw ID). A muted Cryptomatte isolates nothing: its Mask is empty and its Image
   passes through.
+- *As a matte.* The `mask` output (like any Mask output) shapes a layer as a matte layer mask,
+  mattes a layer as a node track matte, limits an effect through its mask input and combines with
+  other Masks in Mask Combine (#383; image-filters.md, "Matte Workflow"). Editing the selection
+  re-renders the layers and effects it shapes.
 - *IDs.* A name's ID is MurmurHash3_x86_32 (seed 0) of its UTF-8 bytes used as Float32 bits; an ID
   whose exponent bits are all zero or all one has bit 23 flipped. The selection resolves each entry
   as a raw ID, else through the part's `cryptomatte/<key>/manifest` (the key whose `name` is the

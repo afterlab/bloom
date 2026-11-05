@@ -540,12 +540,21 @@ truth on the `LayerOutputBoundary`:
   opacity }`. The four values are parameters each mask owns (animatable; the path through a Path
   curve). Masks live in the layer's content space and multiply the content, in premultiplied space,
   by their accumulated coverage before the layer transform. The compiler lowers them to one
-  `LayerMaskKernel` image effect on the Layer Output's input.
+  `LayerMaskKernel` image effect on the Layer Output's input. A mask may instead take its shape
+  from a node's Mask output (`matte`, an output port reference; #383): its mode, invert and opacity
+  apply, its path, feather and expansion do not, and the masks then lower to a chain of the existing
+  combines (image-filters.md, "Matte Workflow").
 - `trackMatte` is an optional `TrackMatte { source, channel: Alpha|Luma, inverted }`. The source is
   another layer of the same Merge, the relation is acyclic, and a matte source contributes nothing
   to its Merge's composite while it is evaluated for its targets on its own clock. The compiler
   lowers a matted entry to a Multiply Alpha effect of the target's Layer Output by the source's; the
-  Merge reads the target's blend mode and clock through it (`mergeEntryLayerIndex`).
+  Merge reads the target's blend mode and clock through it (`mergeEntryLayerIndex`). A track matte
+  may instead read a node's Mask output (`node`, with no source layer; #383), in composition space
+  at the composition's time.
+- A matte node must produce a Mask and must not depend on the layer it shapes; validation refuses
+  either, and the reachability and same-time cycle gates treat the node as a dependency of that
+  layer. Deleting the node removes the masks it shapes and clears the track mattes it feeds in the
+  same undoable edit.
 - Typed commands with exact undo add, remove, reorder, rename, re-mode, invert and re-path masks
   and set the matte; deleting, duplicating, splitting and cloning layers carry masks with fresh ids.
   A matte source cannot be split. A layer that leaves a Merge -- its slot disconnected, or the slot

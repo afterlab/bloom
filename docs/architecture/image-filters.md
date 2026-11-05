@@ -1073,3 +1073,95 @@ against the CPU oracle at the 2e-6/exact-alpha gate with a warm zero-dispatch re
 centre that re-dispatches. The grading cards test holds the card in both modes and shapes inside its
 card with no label cut short, the falloff drawn on the pad and following the centre, and the centre
 drag and a slider drag as one command each.
+
+## Matte Workflow
+
+Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,
+a field rasterized to a Mask, and the two nodes below) shape a layer and limit an effect, and adds
+the conversions between images and Masks. A Mask is ADR 0028's transport: premultiplied white with
+the coverage in all four channels. Nothing here has a pixel kernel of its own: every route lowers to
+the existing Channel Select, Multiply Alpha and Image Mix (with its Mask) combines, so the CPU
+reference, the GPU dispatch, cache identity, invalidation and cancellation are exactly those
+kernels'. The GPU coverage contract requires `node.bloom.mask-combine`,
+`node.bloom.image-to-mask`, `feature.mask.combine`, `feature.mask.effect_input`,
+`feature.mask.layer_matte` and `feature.matte.track_node`, each a production-prepared plan.
+
+### Mask Combine
+
+`bloom.mask-combine`, schema 1, under Compositing, has two optional Mask inputs, `a` and `b`, and
+one Mask out, `mask`, covering the composition canvas. Its Combine control (`mode`, a constant
+dropdown) is Add (0, the default), Subtract (1), Intersect (2) or Difference (3), with ADR 0028's
+layer-mask arithmetic for coverage `a` and `b`:
+
+| Mode | Coverage |
+| --- | --- |
+| Add | `a + b - a b` |
+| Subtract | `a (1 - b)` |
+| Intersect | `a b` |
+| Difference | `a + b - 2 a b` |
+
+An unconnected input is zero coverage. `a` is placed on the canvas (white times `a`), then combined:
+Add is Image Mix of it towards white by `b`; Subtract and Intersect are Multiply Alpha by `b`
+(inverted for Subtract); Difference is Image Mix of it towards its own complement by `b`.
+
+### Image to Mask
+
+`bloom.image-to-mask`, schema 1, under Compositing, has one Image in, `input`, and one Mask out,
+`mask`, covering the composition canvas. Its Matte channel control (`channel`) is the matte
+selector Set Alpha and Multiply Alpha use: Alpha (0, the default), Red, Green, Blue, Luma, and the
+same five inverted (5 to 9). The Mask is the canvas multiplied by the selected value (Multiply
+Alpha), so a colour channel or luma reads the premultiplied stored value.
+
+### Effect mask
+
+Every image effect under Grade, Color Management and Filters whose leading input is `input` and
+whose only output is an Image `image` takes an optional `mask` input after its own inputs, and a
+Mask channel control (`maskChannel`, the same ten-value matte selector, default Alpha) after its
+own controls. Glow keeps its own `mask` input and so takes none; compositing recipes, transforms
+and combines take none. The input accepts a Mask, and an Image read through the selector; a Mask
+is always read as its coverage, so only the selector's inverted half applies to one. With nothing
+connected the effect lowers exactly as before.
+
+With mask coverage `m` the output is the effect's result where the mask covers it and the effect's
+own input elsewhere, `lerp(input, effect, m)`. A grade or colour-management effect keeps its
+input's data window, so it lowers to one Image Mix of the input towards the effect's result by the
+mask (after a Multiply Alpha of white by the mask when the selector is not plain Alpha). A filter
+may grow the window (a blur's halo), so there the effect's result is the base: Image Mix of the
+result towards the input by white-over-the-result times `1 - m` (Multiply Alpha with the selector's
+invert flipped), which keeps the halo.
+
+### Node mattes on layers
+
+A layer mask may take its shape from a node's Mask output instead of a path (`LayerMask.matte`, an
+output port reference; document 1.42). It keeps its name, mode, Inverted and Opacity; Path, Feather
+and Expansion do not apply. Its coverage is the Mask, inverted on request, times the opacity, in
+the layer's content space at the layer's time (the Mask's pixels as they lie on the canvas, with no
+layer transform applied to it). Masks without a matte lower to the single `LayerMaskKernel` as
+before. When any mask has a matte, every mask's coverage is its own Mask over the content's data
+window -- a path mask the kernel over opaque white (a leading run of path masks stays one kernel),
+a matte mask Multiply Alpha of white by its node's Mask -- accumulated in list order by the same
+modes and start rule as the kernel, and the content is multiplied by the result. An Intersect
+matte mask, and a Subtract one at a constant full opacity, multiplies the accumulation by its Mask
+directly (one Multiply Alpha, the invert and opacity in its selector and factor).
+
+A track matte may read a node's Mask instead of another layer (`TrackMatte.node`, with no source
+layer). Channel and Inverted apply as for a layer matte; the Mask is in composition space at the
+composition's time, and the target is composited through the same Multiply Alpha a layer matte
+uses. The matte node must produce a Mask and must not depend on the layer it shapes (a cycle is
+refused). Removing the node removes the masks it shapes and clears the track mattes it feeds, in
+the same undoable edit.
+
+### Evidence
+
+`bloom.runtime.matte-workflow` checks every Mask Combine mode and an unconnected input, Image to
+Mask's channels, an effect limited by a Mask and by an Image channel (inverted and muted), matte
+masks among path masks (every mode, invert, opacity, toggling the matte, removing its node), a
+masked filter, and node track mattes (Alpha, inverted Luma, refusals, removal) on the CPU
+reference. The Cryptomatte test drives a Cryptomatte selection as a matte mask and as a node track
+matte against its reference coverage, and re-masks the layer when the selection changes. The GPU
+coverage contract prepares each route's production plan, and its native acceptance runs the two
+nodes on the device against the CPU reference (exact alpha) cold, then warm with no dispatch. The
+node cost bench (benchmarks.md, "Node cost") times every route cold, warm and per frame at 1080p
+and 2160p against a Grade and the closest existing nodes, and the `cryptomatte-mattes-2k` scenario
+of the real-world suite plays, fills and exports a Cryptomatte matte mask, a masked Grade and a
+node track matte on the bench EXR.
