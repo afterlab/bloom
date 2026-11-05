@@ -173,12 +173,32 @@ document::PathValue pathValue(yyjson_val* item) {
 
 // #541: a gradient argument has the shape the parameter projection publishes: {"stops":
 // [{"position": p, "color": [r, g, b, a]}]}.
+// #546: with an optional "interpolation", "colorMode" and "hueDirection" by name.
 document::GradientValue gradientValue(yyjson_val* item) {
     auto* stops = yyjson_obj_get(item, "stops");
-    if (yyjson_obj_size(item) != 1 || !yyjson_is_arr(stops) ||
-        yyjson_arr_size(stops) > document::kMaximumGradientStops)
-        throw InvalidInput("A gradient is {stops}");
     document::GradientValue gradient;
+    std::size_t members = 1;
+    const auto named = [&](const char* key, auto parse, auto& out, const char* names) {
+        auto* text = yyjson_obj_get(item, key);
+        if (text == nullptr)
+            return;
+        ++members;
+        const auto value = yyjson_is_str(text)
+                               ? parse(std::string_view(yyjson_get_str(text), yyjson_get_len(text)))
+                               : std::nullopt;
+        if (!value)
+            throw InvalidInput(std::string("A gradient's ") + key + " is " + names);
+        out = *value;
+    };
+    named("interpolation", document::gradientInterpolationFromName, gradient.modes.interpolation,
+          "\"constant\", \"linear\", \"ease\", \"cardinal\", \"b-spline\" or \"exponential\"");
+    named("colorMode", document::gradientColorModeFromName, gradient.modes.colorMode,
+          "\"rgb\", \"hsv\" or \"hsl\"");
+    named("hueDirection", document::gradientHueDirectionFromName, gradient.modes.hueDirection,
+          "\"near\", \"far\", \"clockwise\" or \"counter-clockwise\"");
+    if (yyjson_obj_size(item) != members || !yyjson_is_arr(stops) ||
+        yyjson_arr_size(stops) > document::kMaximumGradientStops)
+        throw InvalidInput("A gradient is {stops, interpolation, colorMode, hueDirection}");
     yyjson_arr_iter rows = yyjson_arr_iter_with(stops);
     while (auto* row = yyjson_arr_iter_next(&rows)) {
         auto* position = yyjson_obj_get(row, "position");

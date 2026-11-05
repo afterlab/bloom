@@ -1127,6 +1127,28 @@ void gradientReadBack() {
                       gradient + R"(,"value":{"stops":[]}}})");
     expect(contains(result, "A gradient has 1 to 64 stops"),
            "a gradient without stops is refused, saying why: " + result);
+    // #546: the blend reads back by name, defaults included, and is set by name.
+    expect(contains(read, R"("interpolation":"linear")") &&
+               contains(read, R"("colorMode":"rgb")") && contains(read, R"("hueDirection":"near")"),
+           "the gradient reads back its blend: " + read);
+    result = transact(R"({"op":"bloom.parameter.set-source","args":{"composition":1,"parameter":)" +
+                      gradient +
+                      R"(,"value":{"stops":[{"position":0,"color":[1,0,0,1]},)"
+                      R"({"position":1,"color":[0,0,1,1]}],"interpolation":"b-spline",)"
+                      R"("colorMode":"hsv","hueDirection":"counter-clockwise"}}})");
+    expect(contains(result, R"("succeeded":true)"), "a gradient blend is accepted: " + result);
+    const auto blended = server.call(
+        "query", R"({"kind":"parameter","composition":1,"parameter":)" + gradient + "}");
+    expect(contains(blended, R"("interpolation":"b-spline")") &&
+               contains(blended, R"("colorMode":"hsv")") &&
+               contains(blended, R"("hueDirection":"counter-clockwise")"),
+           "the blend reads back as set: " + blended);
+    result = transact(R"({"op":"bloom.parameter.set-source","args":{"composition":1,"parameter":)" +
+                      gradient +
+                      R"(,"value":{"stops":[{"position":0,"color":[1,0,0,1]}],)"
+                      R"("interpolation":"bezier"}}})");
+    expect(contains(result, "A gradient's interpolation is"),
+           "an unknown interpolation is refused, saying which are known: " + result);
 }
 
 // profiler.snapshot (#423): unbound it says so; bound it returns the snapshot as JSON with

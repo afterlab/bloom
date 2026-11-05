@@ -213,13 +213,34 @@ document::Vec2d pathPoint(const nb::handle value) {
 
 // #541: a gradient argument is the mapping bloom.data projects for a gradient value: {"stops":
 // [{"position": p, "color": (r, g, b, a)}]}.
+// #546: with an optional 'interpolation', 'color_mode' and 'hue_direction' by name.
 Value gradientValue(const nb::dict& mapping) {
-    if (nb::len(mapping) != 1)
-        throw nb::type_error("A gradient is {'stops': [...]}");
+    document::GradientValue gradient;
+    std::size_t members = 1;
+    const auto named = [&](const char* key, auto parse, auto& out, const char* names) {
+        if (!mapping.contains(key))
+            return;
+        ++members;
+        const nb::handle item = mapping[key];
+        const auto value = nb::isinstance<nb::str>(item)
+                               ? parse(std::string_view(nb::cast<std::string>(item)))
+                               : std::nullopt;
+        if (!value)
+            throw nb::value_error((std::string("A gradient's ") + key + " is " + names).c_str());
+        out = *value;
+    };
+    named("interpolation", document::gradientInterpolationFromName, gradient.modes.interpolation,
+          "'constant', 'linear', 'ease', 'cardinal', 'b-spline' or 'exponential'");
+    named("color_mode", document::gradientColorModeFromName, gradient.modes.colorMode,
+          "'rgb', 'hsv' or 'hsl'");
+    named("hue_direction", document::gradientHueDirectionFromName, gradient.modes.hueDirection,
+          "'near', 'far', 'clockwise' or 'counter-clockwise'");
+    if (nb::len(mapping) != members)
+        throw nb::type_error(
+            "A gradient is {'stops': [...], 'interpolation', 'color_mode', 'hue_direction'}");
     const auto stops = nb::borrow<nb::sequence>(mapping["stops"]);
     if (nb::len(stops) > document::kMaximumGradientStops)
         throw nb::value_error("A gradient has at most 64 stops");
-    document::GradientValue gradient;
     for (const auto item : stops) {
         if (!nb::isinstance<nb::dict>(item))
             throw nb::type_error("A gradient stop is a mapping with a position and a color");

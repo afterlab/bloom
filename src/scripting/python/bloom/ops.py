@@ -30,7 +30,7 @@ _EXPECTED = {
     "color4": "four numbers as (r, g, b, a) with alpha in 0..1",
     "array": "a list or tuple",
     "time": "a whole frame, a Fraction, or an exact (numerator, denominator) time",
-    "value": "a number, True/False, text, (x, y), (x, y, z), (r, g, b, a) or a path",
+    "value": "a number, True/False, text, (x, y), (x, y, z), (r, g, b, a), a path or a gradient",
     "path": "a path {'closed': bool, 'anchors': [{'point': (x, y), 'in_handle': (x, y) or None, "
             "'out_handle': (x, y) or None, 'mode': 'corner' | 'mirrored' | 'aligned' | 'free' | "
             "'auto'}, ...]} (mode optional)",
@@ -70,6 +70,20 @@ def _sequence(value, size):
             and all(_finite(item) for item in value))
 
 
+_GRADIENT_MODES = ("interpolation", "color_mode", "hue_direction")
+
+
+def _gradient(value):
+    """A gradient {'stops': [{'position': p, 'color': (r, g, b, a)}], ...}, its modes by name."""
+    return (isinstance(value, dict) and "stops" in value
+            and set(value) <= {"stops", *_GRADIENT_MODES}
+            and all(type(value[key]) is str for key in _GRADIENT_MODES if key in value)
+            and isinstance(value["stops"], tuple)
+            and all(isinstance(stop, dict) and set(stop) == {"position", "color"}
+                    and _finite(stop["position"]) and _sequence(stop["color"], 4)
+                    for stop in value["stops"]))
+
+
 def _valid(value, kind):
     if kind == "bool":
         return type(value) is bool
@@ -90,7 +104,8 @@ def _valid(value, kind):
                     and all(type(item) is int for item in value)))
     if kind == "value":
         return (_finite(value) or type(value) in (bool, str)
-                or any(_sequence(value, size) for size in (2, 3, 4)) or _valid(value, "path"))
+                or any(_sequence(value, size) for size in (2, 3, 4)) or _valid(value, "path")
+                or _gradient(value))
     if kind == "path":
         return (isinstance(value, dict) and set(value) == {"closed", "anchors"}
                 and type(value["closed"]) is bool and isinstance(value["anchors"], tuple)

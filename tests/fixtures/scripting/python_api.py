@@ -472,6 +472,30 @@ class PythonApi(unittest.TestCase):
             self.assertEqual(command.returncode, 0, command.stderr.decode())
             self.assertIn(b'executed 2 transaction(s)', command.stdout)
 
+    def test_gradient_blend_modes(self):
+        """#546: a gradient's interpolation, colour mode and hue direction read and write by name."""
+        before = {node.id for node in bloom.data.nodes(1)}
+        bloom.ops.node.add(composition=1, nodeType='bloom.colorize', position=(0, 0))
+        node = next(node for node in bloom.data.nodes(1) if node.id not in before)
+        gradient = node.parameters['gradient']
+        value = bloom.data.parameters(1).get(gradient).value
+        self.assertEqual((value['interpolation'], value['color_mode'], value['hue_direction']),
+                         ('linear', 'rgb', 'near'))
+        blended = {'stops': [{'position': 0.0, 'color': (1, 0, 0, 1)},
+                             {'position': 1.0, 'color': (0, 0, 1, 1)}],
+                   'interpolation': 'ease', 'color_mode': 'hsl', 'hue_direction': 'far'}
+        self.assertTrue(bloom.ops.parameter.set_source(gradient, value=blended)['succeeded'])
+        value = bloom.data.parameters(1).get(gradient).value
+        self.assertEqual((value['interpolation'], value['color_mode'], value['hue_direction']),
+                         ('ease', 'hsl', 'far'))
+        # A gradient read back passes straight back in; the modes may be left out.
+        self.assertTrue(bloom.ops.parameter.set_source(gradient, value=value)['succeeded'])
+        self.assertTrue(bloom.ops.parameter.set_source(
+            gradient, value={'stops': blended['stops']})['succeeded'])
+        self.assertEqual(bloom.data.parameters(1).get(gradient).value['interpolation'], 'linear')
+        with self.assertRaises((ValueError, bloom.OperationError)):
+            bloom.ops.parameter.set_source(gradient, value=dict(blended, interpolation='bezier'))
+
     def test_removed_node_is_stale(self):
         before = {node.id for node in bloom.data.nodes(1)}
         bloom.ops.node.add(composition=1, nodeType='bloom.value-scalar', position=(0, 0))

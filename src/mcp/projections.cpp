@@ -58,6 +58,13 @@ yyjson_mut_val* parameterValue(Json& out, const document::ParameterValue& value)
                     out.append(stops, row);
                 }
                 out.set(gradient, "stops", stops);
+                // #546: how it blends between them.
+                out.set(gradient, "interpolation",
+                        out.text(document::gradientInterpolationName(item.modes.interpolation)));
+                out.set(gradient, "colorMode",
+                        out.text(document::gradientColorModeName(item.modes.colorMode)));
+                out.set(gradient, "hueDirection",
+                        out.text(document::gradientHueDirectionName(item.modes.hueDirection)));
                 return gradient;
             } else {
                 auto* path = out.object();

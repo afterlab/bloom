@@ -1037,7 +1037,21 @@ std::string pythonLiteral(const Value& value) {
                             "{\"position\": " + pythonLiteral(Value(stop.position)) +
                             ", \"color\": " + pythonLiteral(Value(stop.color)) + "}";
                 }
-                return text + "]}";
+                // #546: each mode that is not its default.
+                const auto& modes = held.modes;
+                text += "]";
+                if (modes.interpolation != document::GradientInterpolation::Linear)
+                    text += ", \"interpolation\": \"" +
+                            std::string(document::gradientInterpolationName(modes.interpolation)) +
+                            "\"";
+                if (modes.colorMode != document::GradientColorMode::Rgb)
+                    text += ", \"color_mode\": \"" +
+                            std::string(document::gradientColorModeName(modes.colorMode)) + "\"";
+                if (modes.hueDirection != document::GradientHueDirection::Near)
+                    text += ", \"hue_direction\": \"" +
+                            std::string(document::gradientHueDirectionName(modes.hueDirection)) +
+                            "\"";
+                return text + "}";
             } else {
                 std::string text = "(";
                 for (std::size_t index = 0; index < held.size(); ++index) {

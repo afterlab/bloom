@@ -55,6 +55,21 @@ std::string pathJson(const document::PathValue& path) {
     return text + "]}";
 }
 
+// #546: the gradient's modes that are not their defaults, as JSON members after its stops.
+[[nodiscard]] std::string gradientModesJson(const document::GradientModes& modes) {
+    std::string text;
+    if (modes.interpolation != document::GradientInterpolation::Linear)
+        text += ",\"interpolation\":\"" +
+                std::string(document::gradientInterpolationName(modes.interpolation)) + "\"";
+    if (modes.colorMode != document::GradientColorMode::Rgb)
+        text += ",\"colorMode\":\"" +
+                std::string(document::gradientColorModeName(modes.colorMode)) + "\"";
+    if (modes.hueDirection != document::GradientHueDirection::Near)
+        text += ",\"hueDirection\":\"" +
+                std::string(document::gradientHueDirectionName(modes.hueDirection)) + "\"";
+    return text;
+}
+
 // #541: a gradient as {"stops": [{"position": p, "color": [r, g, b, a]}]}, stops in stored order.
 std::string gradientJson(const document::GradientValue& gradient) {
     std::string text = "{\"stops\":[";
@@ -64,7 +79,7 @@ std::string gradientJson(const document::GradientValue& gradient) {
                 ",\"color\":" +
                 vector({stop.color.red, stop.color.green, stop.color.blue, stop.color.alpha}) + "}";
     }
-    return text + "]}";
+    return text + "]" + gradientModesJson(gradient.modes) + "}";
 }
 
 // A multiplication that reports overflow instead of wrapping, portable to every compiler.

@@ -337,7 +337,21 @@ std::string valueJson(const Value& value) {
                             numberText(stop.color.blue) + "," + numberText(stop.color.alpha) +
                             "]}";
                 }
-                return text + "]}";
+                // #546: each mode that is not its default.
+                const auto& modes = held.modes;
+                text += "]";
+                if (modes.interpolation != document::GradientInterpolation::Linear)
+                    text += ",\"interpolation\":\"" +
+                            std::string(document::gradientInterpolationName(modes.interpolation)) +
+                            "\"";
+                if (modes.colorMode != document::GradientColorMode::Rgb)
+                    text += ",\"colorMode\":\"" +
+                            std::string(document::gradientColorModeName(modes.colorMode)) + "\"";
+                if (modes.hueDirection != document::GradientHueDirection::Near)
+                    text += ",\"hueDirection\":\"" +
+                            std::string(document::gradientHueDirectionName(modes.hueDirection)) +
+                            "\"";
+                return text + "}";
             } else {
                 std::string text = "[";
                 for (std::size_t index = 0; index < held.size(); ++index)

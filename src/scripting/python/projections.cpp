@@ -57,6 +57,13 @@ nb::object parameterValue(const document::ParameterValue& value) {
                 }
                 nb::dict gradient;
                 gradient["stops"] = stops;
+                // #546: how it blends between them.
+                gradient["interpolation"] =
+                    std::string(document::gradientInterpolationName(item.modes.interpolation));
+                gradient["color_mode"] =
+                    std::string(document::gradientColorModeName(item.modes.colorMode));
+                gradient["hue_direction"] =
+                    std::string(document::gradientHueDirectionName(item.modes.hueDirection));
                 return gradient;
             } else {
                 return nb::cast(item);

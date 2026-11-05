@@ -380,10 +380,30 @@ class Parser final {
 }
 
 // #541: a gradient object, {"stops": [{"position": p, "color": [r, g, b, a]}]}, the shape the
-// parameter projection publishes.
+// parameter projection publishes, with (#546) an optional "interpolation", "colorMode" and
+// "hueDirection" by name (Linear, RGB and Near when left out).
 [[nodiscard]] std::optional<Value> gradientOf(const JsonObject& object) {
     const auto stops = object.find("stops");
-    if (object.size() != 1 || stops == object.end())
+    if (stops == object.end())
+        return std::nullopt;
+    document::GradientModes modes;
+    std::size_t members = 1;
+    const auto named = [&](const char* key, auto parse, auto& out) {
+        const auto found = object.find(key);
+        if (found == object.end())
+            return true;
+        ++members;
+        const auto* text = std::get_if<std::string>(&found->second.storage);
+        const auto value = text ? parse(*text) : std::nullopt;
+        if (!value)
+            return false;
+        out = *value;
+        return true;
+    };
+    if (!named("interpolation", document::gradientInterpolationFromName, modes.interpolation) ||
+        !named("colorMode", document::gradientColorModeFromName, modes.colorMode) ||
+        !named("hueDirection", document::gradientHueDirectionFromName, modes.hueDirection) ||
+        object.size() != members)
         return std::nullopt;
     const auto* rows = std::get_if<JsonArray>(&stops->second.storage);
     if (rows == nullptr || rows->size() > document::kMaximumGradientStops)
@@ -396,6 +416,7 @@ class Parser final {
         return std::nullopt;
     };
     document::GradientValue gradient;
+    gradient.modes = modes;
     for (const auto& row : *rows) {
         const auto* fields = std::get_if<JsonObject>(&row.storage);
         if (fields == nullptr || fields->size() != 2)
