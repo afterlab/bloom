@@ -7,6 +7,7 @@
 #include "properties_value_edits.hpp"
 #include "text_font_choices.hpp"
 #include "value_presentation.hpp"
+#include <QCoreApplication>
 #include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -16,6 +17,8 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <array>
+#include <optional>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -63,7 +66,99 @@ document::ShapeKind nodeShapeKind(const document::Composition& composition,
         }
     return document::ShapeKind::Rectangle;
 }
+// #525: the Fields parameters whose role alone does not say what they do. The noise rows carry the
+// fractal-noise names an artist knows from a layer-based compositor (Complexity, Sub Influence,
+// Sub Scaling, Sub Rotation, Sub Offset, Offset Turbulence, Evolution) beside the standard ones.
+[[nodiscard]] std::optional<QString> fieldParameterLabel(const std::string_view schemaKey) {
+    struct Label final {
+        std::string_view key;
+        const char* text;
+    };
+    static constexpr std::array kLabels{
+        Label{"bloom.field-noise.type", "Noise type"},
+        Label{"bloom.field-noise.fractal", "Fractal type"},
+        Label{"bloom.field-noise.seed", "Random seed"},
+        Label{"bloom.field-noise.size", "Scale"},
+        Label{"bloom.field-noise.offset", "Offset (Offset Turbulence)"},
+        Label{"bloom.field-noise.octaves", "Complexity (octaves)"},
+        Label{"bloom.field-noise.lacunarity", "Sub Scaling (lacunarity)"},
+        Label{"bloom.field-noise.gain", "Sub Influence (gain)"},
+        Label{"bloom.field-noise.octaveRotation", "Sub Rotation"},
+        Label{"bloom.field-noise.octaveOffset", "Sub Offset"},
+        Label{"bloom.field-noise.ridgeOffset", "Ridge offset"},
+        Label{"bloom.field-noise.ridgeGain", "Ridge sharpness"},
+        Label{"bloom.field-noise.evolution", "Evolution (cycles)"},
+        Label{"bloom.field-noise.evolutionMode", "Evolution motion"},
+        Label{"bloom.field-noise.loop", "Cycle evolution"},
+        Label{"bloom.field-noise.loopLength", "Cycle length (0 = composition)"},
+        Label{"bloom.field-noise.overflow", "Overflow"},
+        Label{"bloom.field-noise.range", "Output range"},
+        Label{"bloom.field-voronoi.mode", "Distance output"},
+        Label{"bloom.field-voronoi.metric", "Distance metric"},
+        Label{"bloom.field-voronoi.seed", "Random seed"},
+        Label{"bloom.field-voronoi.size", "Cell size"},
+        Label{"bloom.field-voronoi.jitter", "Randomness"},
+        Label{"bloom.field-voronoi.evolution", "Evolution (cycles)"},
+        Label{"bloom.field-voronoi.octaves", "Layers (octaves)"},
+        Label{"bloom.field-random.seed", "Random seed"},
+        Label{"bloom.field-random.cellSize", "Cell size"},
+        Label{"bloom.field-random.smooth", "Smooth between cells"},
+        Label{"bloom.field-random.evolution", "Evolution (cycles)"},
+        Label{"bloom.field-pattern.size", "Period"},
+        Label{"bloom.field-pattern.width", "Line width"},
+        Label{"bloom.field-pattern.phase", "Phase (cycles)"},
+        Label{"bloom.field-pattern.waveform", "Profile"},
+        Label{"bloom.field-pattern.speed", "Speed (cycles a second)"},
+        Label{"bloom.field-pattern.softness", "Edge softness"},
+        Label{"bloom.field-gradient.repeat", "Outside the ramp"},
+        Label{"bloom.field-gradient.cycle", "Phase (cycles)"},
+        Label{"bloom.field-shape-distance.source", "Shape from"},
+        Label{"bloom.field-shape-distance.falloff", "Falloff distance"},
+        Label{"bloom.field-shape-distance.falloffCurve", "Falloff curve"},
+        Label{"bloom.field-shape-distance.sides", "Sides or points"},
+        Label{"bloom.field-from-image.channel", "Scalar from"},
+        Label{"bloom.field-from-image.pairFirst", "Vector X from"},
+        Label{"bloom.field-from-image.pairSecond", "Vector Y from"},
+        Label{"bloom.field-from-image.filter", "Sampling"},
+        Label{"bloom.field-from-image.edge", "Outside the image"},
+        Label{"bloom.field-force.mode", "Force type"},
+        Label{"bloom.field-force.direction", "Spin"},
+        Label{"bloom.field-force.radius", "Radius"},
+        Label{"bloom.field-force.angle", "Direction"},
+        Label{"bloom.field-math.valueA", "A when unconnected"},
+        Label{"bloom.field-math.valueB", "B when unconnected"},
+        Label{"bloom.field-math.valueT", "T when unconnected"},
+        Label{"bloom.field-remap.inLow", "Input low"},
+        Label{"bloom.field-remap.inHigh", "Input high"},
+        Label{"bloom.field-remap.outLow", "Output low"},
+        Label{"bloom.field-remap.outHigh", "Output high"},
+        Label{"bloom.field-remap.clamp", "Clamp output"},
+        Label{"bloom.field-remap.steps", "Steps (0 = smooth)"},
+        Label{"bloom.field-remap.gain", "Gain (contrast)"},
+        Label{"bloom.field-transform.mode", "Coordinate mode"},
+        Label{"bloom.field-transform.tile", "Tile size"},
+        Label{"bloom.field-transform.segments", "Kaleidoscope segments"},
+        Label{"bloom.field-transform.warpAmount", "Warp amount"},
+        Label{"bloom.field-derivative.step", "Step"},
+        Label{"bloom.field-combine.valueX", "X when unconnected"},
+        Label{"bloom.field-combine.valueY", "Y when unconnected"},
+        Label{"bloom.field-combine.valueZ", "Z when unconnected"},
+        Label{"bloom.field-combine.valueW", "W when unconnected"},
+        Label{"bloom.field-rasterize.explicitSize", "Explicit size"},
+        Label{"bloom.field-rasterize.supersample", "Sub-samples"},
+        Label{"bloom.field-rasterize.inspect", "Inspect"},
+        Label{"bloom.field-rasterize.arrowSpacing", "Arrow spacing"},
+        Label{"bloom.field-rasterize.arrowScale", "Arrow length per unit"},
+    };
+    const auto* found = std::ranges::find(kLabels, schemaKey, &Label::key);
+    if (found == kLabels.end())
+        return std::nullopt;
+    return QCoreApplication::translate("PropertiesRow", found->text);
+}
+
 QString parameterRowLabel(const std::string_view schemaKey, const std::string_view role) {
+    if (auto field = fieldParameterLabel(schemaKey))
+        return *field;
     return
         isEffectColorSpaceSchema(schemaKey)
             ? node_editor::displayTypeName(role)

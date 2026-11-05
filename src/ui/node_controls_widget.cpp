@@ -6,7 +6,11 @@
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/field_nodes.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/curve_graph.hpp>
+#include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -30,6 +34,11 @@ namespace {
 [[nodiscard]] int control() { return kit::px(kit::Size::Control); }
 [[nodiscard]] int small() { return kit::px(kit::Spacing::XS); }
 [[nodiscard]] int dialSide() { return kit::px(kit::Size::Control) + kit::px(kit::Size::ToggleCell); }
+// #525: a curve graph keeps its own aspect at the card's width.
+[[nodiscard]] int curveHeight(const QWidget* canvas, const int width) {
+    const auto hint = canvas->sizeHint();
+    return hint.width() > 0 ? width * hint.height() / hint.width() : hint.height();
+}
 
 [[nodiscard]] const document::NodeDefinition* definitionOf(const CompositionSession& session,
                                                            const document::NodeId node) {
@@ -312,6 +321,8 @@ PointPadRow::PointPadRow(CompositionSession& session, const document::NodeId nod
             auto at = pad_->value(index);
             if (spec_.points[index].fromCentre)
                 at -= frame.center();
+            if (spec_.points[index].yUp)
+                at.setY(-at.y());
             values.emplace_back(document::Vec2d{at.x(), at.y()});
         }
         if (!session_.updateValueEdits(values))
@@ -378,11 +389,12 @@ void PointPadRow::refresh(const bool locked) {
         editable = editable && id && value && scalarEditable(session_, *id);
         const QPointF origin = point.fromCentre ? frame.center() : QPointF();
         const auto fallback = defaultVector(session_, node_, point.role);
+        const double flip = point.yUp ? -1.0 : 1.0;
         kit::KPointPad::Point shown{point.label,
-                                    value ? origin + QPointF(value->x, value->y) : origin,
+                                    value ? origin + QPointF(value->x, flip * value->y) : origin,
                                     std::nullopt};
         if (fallback)
-            shown.defaultValue = origin + QPointF(fallback->x, fallback->y);
+            shown.defaultValue = origin + QPointF(fallback->x, flip * fallback->y);
         points.push_back(std::move(shown));
     }
     pad_->setEnabled(editable);
@@ -406,6 +418,12 @@ struct Controls final {
     std::vector<RangeRow::Spec> ranges;
     std::vector<AngleDialRow::Spec> angles;
     std::vector<GradientParameterRow::Spec> gradients;
+    struct Curve final {
+        std::string role;
+        QString name;
+        QString description;
+    };
+    std::vector<Curve> curves;
 };
 
 [[nodiscard]] std::optional<Controls> controlsFor(const std::string_view typeId) {
@@ -481,6 +499,83 @@ struct Controls final {
         controls.angles.push_back(angle("degrees", "bloom.operand.scalar", true, true));
     } else if (typeId == "bloom.radians-to-degrees") {
         controls.angles.push_back(angle("radians", "bloom.operand.scalar", true, true, true));
+    } else if (document::isFieldNodeType(typeId)) {
+        // #525: field positions are composition pixels from the centre, +y up; field angles turn
+        // counter-clockwise (docs/architecture/fields.md).
+        const std::string type(typeId);
+        const auto key = [&type](const std::string_view role) {
+            return type + "." + std::string(role);
+        };
+        const auto tr = [](const char* text) {
+            return QCoreApplication::translate("NodeControls", text);
+        };
+        const auto point = [](std::string role, QString label) {
+            return PointPadRow::Point{std::move(role), std::move(label), true, true};
+        };
+        const auto fieldRange = [&key](std::string low, std::string high, QString name,
+                                       const double minimum, const double maximum) {
+            return RangeRow::Spec{low, high, key(low), key(high), std::move(name), minimum, maximum,
+                                  true};
+        };
+        if (typeId == document::kFieldNoiseNodeType) {
+            // Sub Offset moves each octave against the one before, not a place in the frame, so
+            // it stays a value row.
+            controls.points = {point("offset", tr("Offset"))};
+            controls.padLabel = tr("Move Noise");
+            controls.angles.push_back(angle("rotation", key("rotation"), false, true));
+            controls.angles.push_back(angle("octaveRotation", key("octaveRotation"), false, true));
+        } else if (typeId == document::kFieldPatternNodeType) {
+            controls.points = {point("centre", tr("Centre"))};
+            controls.padLabel = tr("Move Pattern");
+            controls.angles.push_back(angle("rotation", key("rotation"), false, true));
+        } else if (typeId == document::kFieldGradientNodeType) {
+            controls.points = {point("start", tr("Start")), point("end", tr("End"))};
+            controls.connected = true;
+            controls.padLabel = tr("Move Gradient");
+        } else if (typeId == document::kFieldShapeDistanceNodeType) {
+            controls.points = {point("centre", tr("Centre"))};
+            controls.padLabel = tr("Move Shape");
+            controls.angles.push_back(angle("rotation", key("rotation"), false, true));
+        } else if (typeId == document::kFieldForceNodeType) {
+            controls.points = {point("centre", tr("Centre"))};
+            controls.padLabel = tr("Move Force");
+            controls.angles.push_back(angle("angle", key("angle"), true, true));
+            controls.curves.push_back(
+                {"curve", tr("Falloff curve"),
+                 tr("With Falloff set to Curve: the strength (up) over the distance from the "
+                    "centre as a fraction of the radius (across).")});
+        } else if (typeId == document::kFieldMathNodeType) {
+            controls.angles.push_back(angle("angle", key("angle"), true, true));
+        } else if (typeId == document::kFieldRemapNodeType) {
+            controls.ranges.push_back(
+                fieldRange("inLow", "inHigh", tr("Input range"), 0.0, 1.0));
+            controls.ranges.push_back(
+                fieldRange("outLow", "outHigh", tr("Output range"), 0.0, 1.0));
+            controls.curves.push_back(
+                {"curve", tr("Remap curve"),
+                 tr("The output (up) for the input (across) after the input range is mapped to "
+                    "0 to 1; the identity diagonal changes nothing.")});
+        } else if (typeId == document::kFieldTransformNodeType) {
+            controls.points = {point("translate", tr("Translate")), point("pivot", tr("Pivot"))};
+            controls.padLabel = tr("Move Field");
+            controls.angles.push_back(angle("rotation", key("rotation"), false, true));
+        } else if (typeId == document::kFieldSampleNodeType) {
+            controls.points = {point("position", tr("Position"))};
+            controls.padLabel = tr("Move Sample");
+        } else if (typeId == document::kFieldRasterizeNodeType) {
+            controls.gradients.push_back(
+                {"ramp", std::string(document::kColorOperandParameterSchemaKey), tr("Ramp"),
+                 tr("Colour (Ramp) and Heatmap: the colours from Ramp low (left) to Ramp high "
+                    "(right)."),
+                 QStringLiteral("fieldRampGradient"),
+                 {}});
+            controls.ranges.push_back(
+                fieldRange("rampLow", "rampHigh", tr("Ramp range"), 0.0, 1.0));
+            controls.points = {point("explicitCentre", tr("Explicit centre"))};
+            controls.padLabel = tr("Move Extent");
+        } else {
+            return std::nullopt;
+        }
     } else {
         return std::nullopt;
     }
@@ -537,6 +632,17 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
         angle.neutral = defaultScalar(session_, node_, angle.role);
         angles_.push_back(new AngleDialRow(session_, node_, std::move(angle), this));
     }
+    for (auto& curve : controls.curves) {
+        CurveControl control;
+        control.role = curve.role;
+        control.label = new kit::KLabel(curve.name, this);
+        control.label->setToolTip(curve.description);
+        control.canvas = new CurveGraphCanvas(session_, node_, curve.role, this);
+        control.canvas->setAccessibleName(curve.name);
+        control.canvas->setObjectName(QStringLiteral("fieldCurve_") +
+                                      QString::fromStdString(curve.role));
+        curves_.push_back(control);
+    }
     for (const auto signal :
          {&CompositionSession::snapshotChanged, &CompositionSession::liveValueChanged,
           &CompositionSession::currentTimeChanged})
@@ -555,6 +661,9 @@ bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
             return false;
     for (const auto* angle : angles_)
         if (angle->role() == role)
+            return false;
+    for (const auto& curve : curves_)
+        if (curve.role == role)
             return false;
     return true;
 }
@@ -582,6 +691,8 @@ int NodeControlsCardWidget::heightAt(const int width) const {
         height += range->heightHint() + small();
     for (const auto* angle : angles_)
         height += angle->heightHint() + small();
+    for (const auto& curve : curves_)
+        height += curve.label->sizeHint().height() + curveHeight(curve.canvas, width) + 2 * small();
     return std::max(0, height - small());
 }
 
@@ -595,6 +706,9 @@ int NodeControlsCardWidget::minimumWidthHint() const {
         width = std::max(width, range->minimumWidthHint());
     for (const auto* angle : angles_)
         width = std::max(width, angle->minimumWidthHint());
+    for (const auto& curve : curves_)
+        width = std::max({width, curve.canvas->minimumSizeHint().width(),
+                          curve.label->sizeHint().width()});
     return width;
 }
 
@@ -638,6 +752,14 @@ void NodeControlsCardWidget::place() {
         angle->setGeometry(0, y, width(), angle->heightHint());
         y += angle->heightHint() + small();
     }
+    for (const auto& curve : curves_) {
+        const int labelHeight = curve.label->sizeHint().height();
+        curve.label->setGeometry(0, y, width(), labelHeight);
+        y += labelHeight + small();
+        const int h = curveHeight(curve.canvas, width());
+        curve.canvas->setGeometry(0, y, width(), h);
+        y += h + small();
+    }
 }
 
 void NodeControlsCardWidget::refresh() {
@@ -651,6 +773,10 @@ void NodeControlsCardWidget::refresh() {
         range->refresh(locked);
     for (auto* angle : angles_)
         angle->refresh(locked);
+    for (const auto& curve : curves_) {
+        curve.canvas->setEnabled(!locked && curve.canvas->parameter().has_value());
+        curve.canvas->update();
+    }
 }
 
 } // namespace bloom::ui

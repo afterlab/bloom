@@ -94,6 +94,12 @@ enum class Color : std::uint8_t {
     // ADR 0026: the multi-channel ChannelSet transport. A green beside Image's teal: related, but a
     // ChannelSet never connects to an Image socket.
     SocketChannelSet,
+    // #525: the three field transports. Each sits one hue step from the value kind it is a field
+    // of where the palette has room (Scalar's yellow-green, Vector's violet); a field socket is
+    // also drawn as a diamond, so the kind never rests on colour alone.
+    SocketScalarField,
+    SocketVectorField,
+    SocketColorField,
     // GRAPH-1: the graph editor's per-component curve strokes. X/Y/Z/W is the axis vocabulary and
     // R/G/B/A borrows it unchanged, so one colour always means "the first component" whatever the
     // parameter is. A scalar curve takes Keyframe; selection takes Accent; none of these four is

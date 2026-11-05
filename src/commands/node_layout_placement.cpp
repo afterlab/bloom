@@ -2,6 +2,7 @@
 
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/field_parameters.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter.hpp>
@@ -71,15 +72,37 @@ constexpr double kPadMaxHeight = 208.0;
 // Interpolation rows and its Values button, each Spacing::XS and Size::Control.
 constexpr double kGradientRow = 168.0;
 constexpr double kPadCardWidth = 336.0;
+// #525: the Noise card's long fractal-noise row labels ("Offset (Offset Turbulence)", "Sub Scaling
+// (lacunarity)") beside the dropdown field control.
+constexpr double kFieldNoiseCardWidth = 408.0;
 
 struct NodeControlsEstimate final {
     int angles = 0;
     int ranges = 0;
     bool pad = false;
     int gradients = 0;
+    // #525: a curve graph (curve_graph.cpp) with its caption above it.
+    int curves = 0;
 };
 
 [[nodiscard]] NodeControlsEstimate nodeControlsEstimate(const std::string_view typeId) {
+    // #525: the Fields cards' controls (node_controls_widget.cpp).
+    if (typeId == document::kFieldNoiseNodeType)
+        return {2, 0, true};
+    if (typeId == document::kFieldPatternNodeType ||
+        typeId == document::kFieldShapeDistanceNodeType ||
+        typeId == document::kFieldTransformNodeType)
+        return {1, 0, true};
+    if (typeId == document::kFieldGradientNodeType || typeId == document::kFieldSampleNodeType)
+        return {0, 0, true};
+    if (typeId == document::kFieldForceNodeType)
+        return {1, 0, true, 0, 1};
+    if (typeId == document::kFieldMathNodeType)
+        return {1, 0, false};
+    if (typeId == document::kFieldRemapNodeType)
+        return {0, 2, false, 0, 1};
+    if (typeId == document::kFieldRasterizeNodeType)
+        return {0, 1, true, 1};
     if (typeId == "bloom.transform-2d")
         return {1, 0, true};
     if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient")
@@ -299,9 +322,14 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +
                             static_cast<double>(controls.gradients) * (kGradientRow - kRow + kSmall) +
                             (controls.pad ? kPadMaxHeight + kSmall : 0.0);
+    const double controlsWidth =
+        node->typeId == document::kFieldNoiseNodeType ? std::max(cardWidth, kFieldNoiseCardWidth)
+        : controls.pad                                 ? std::max(cardWidth, kPadCardWidth)
+                                                       : cardWidth;
+    controlsHeight += static_cast<double>(controls.curves) *
+                      (kControl + std::round(controlsWidth * kCurveGraphAspect) + 2.0 * kSmall);
     if (controlsHeight > 0.0)
         controlsHeight += kPadding;
-    const double controlsWidth = controls.pad ? std::max(cardWidth, kPadCardWidth) : cardWidth;
     return {controlsWidth, kTitleBand + sockets * kRow + pills + rows * kRow + kPadding + thumbnail +
                                controlsHeight};
 }

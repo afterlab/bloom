@@ -202,6 +202,7 @@ void NodeGraphicsScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         }
         gesture.linkKind = socket->kind;
         gesture.linkAcceptsPixelKinds = gesture.input.has_value() && socket->acceptsPixelKinds();
+        gesture.linkAcceptsFieldKinds = gesture.input.has_value() && socket->acceptsFieldKinds();
         gesture.line =
             addPath({}, linePen(kit::color(socketColorToken(gesture.linkKind)), kit::kNodeLinkWidth));
         gesture.line->setZValue(10);

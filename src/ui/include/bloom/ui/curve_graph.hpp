@@ -38,6 +38,7 @@
 #include <array>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 class QMenu;
@@ -106,6 +107,10 @@ class CurveGraphCanvas final : public QWidget {
 
   public:
     CurveGraphCanvas(CompositionSession& session, document::NodeId node, QWidget* parent = nullptr);
+    // #525: a graph of one Master-shaped curve bound to the parameter role `role` of any node (a
+    // Fields falloff or remap curve), rather than the Curves node's channel curves.
+    CurveGraphCanvas(CompositionSession& session, document::NodeId node, std::string role,
+                     QWidget* parent = nullptr);
 
     [[nodiscard]] document::GradeCurve curve() const noexcept { return curve_; }
     void setCurve(document::GradeCurve curve);
@@ -174,6 +179,8 @@ class CurveGraphCanvas final : public QWidget {
 
     CompositionSession& session_;
     document::NodeId node_;
+    // #525: the role of the one curve this graph edits (empty: the Curves node's channel curves).
+    std::string role_;
     document::GradeCurve curve_ = document::GradeCurve::Master;
     std::optional<std::size_t> selected_;
     std::optional<std::size_t> hovered_;

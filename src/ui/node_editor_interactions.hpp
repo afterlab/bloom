@@ -31,6 +31,8 @@ struct NodeInteraction final {
     document::SocketValueKind linkKind = document::SocketValueKind::Image;
     // #490: the drag started on an inspection input that also takes a Mask or a ChannelSet.
     bool linkAcceptsPixelKinds = false;
+    // #525: the drag started on an any-field input that also takes the other field kinds.
+    bool linkAcceptsFieldKinds = false;
     QGraphicsPathItem* line = nullptr;
     QGraphicsRectItem* box = nullptr;
     node_editor::NodeEdgeItem* insertEdge = nullptr;
@@ -39,14 +41,17 @@ struct NodeInteraction final {
 };
 
 // Whether the link `gesture` drags may land on `target` by KIND: the shared
-// isAcceptedSocketConnection() rule, plus the pixel kinds an inspection input takes (#490). The
-// orientation and reroute questions stay with the callers.
+// isAcceptedSocketConnection() rule, plus the pixel kinds an inspection input takes (#490) and the
+// field kinds an any-field input takes (#525). The orientation and reroute questions stay with the
+// callers.
 [[nodiscard]] inline bool linkKindAccepted(const NodeInteraction& gesture,
                                            const node_editor::SocketItem& target) {
     if (gesture.output.has_value())
         return document::isAcceptedSocketConnection(gesture.linkKind, target.kind) ||
-               (target.acceptsPixelKinds() && document::isPixelSocketKind(gesture.linkKind));
+               (target.acceptsPixelKinds() && document::isPixelSocketKind(gesture.linkKind)) ||
+               (target.acceptsFieldKinds() && document::isFieldSocketKind(gesture.linkKind));
     return document::isAcceptedSocketConnection(target.kind, gesture.linkKind) ||
-           (gesture.linkAcceptsPixelKinds && document::isPixelSocketKind(target.kind));
+           (gesture.linkAcceptsPixelKinds && document::isPixelSocketKind(target.kind)) ||
+           (gesture.linkAcceptsFieldKinds && document::isFieldSocketKind(target.kind));
 }
 } // namespace bloom::ui

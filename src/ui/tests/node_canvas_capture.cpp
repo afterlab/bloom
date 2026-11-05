@@ -1,6 +1,6 @@
 // Review captures of the Node editor (task N1), maximized at about 2000 and 900 px wide: an
 // arranged multi-layer graph, collapsed cards, a coloured group frame, a Merge with three inputs,
-// the canvas at 25% and the footer. A tool, not a test:
+// the canvas at 25%, the footer and every Fields card (#525). A tool, not a test:
 //   bloom_node_canvas_capture <directory> <1|1.5>
 #include "window_fixture.hpp"
 
@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QImage>
 #include <bloom/commands/node_layout_arrange.hpp>
+#include <bloom/document/field_nodes.hpp>
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -253,6 +254,33 @@ int capture(int argc, char** argv) {
                                          : bounds.united(card->sceneBoundingRect());
         editor->graphView()->frameRect(bounds.adjusted(-120, -120, 120, 120));
     });
+
+    // 7. #525: every Fields card with its controls (point pads, dials, ranges, ramp, curves),
+    // each framed alone in a tall area so the card reads at about 100%.
+    double x = 6000.0;
+    for (const auto& spec : document::fieldNodeSpecs()) {
+        commands::Transaction add("Add Field", session.snapshot().revision());
+        add.emplace<commands::AddNode>(composition, std::string(spec.typeId),
+                                       document::Vec2d{x, 0.0});
+        x += 1000.0;
+        const auto added = session.executeNodeTransaction(std::move(add));
+        const auto node = added.outputId<document::NodeId>(commands::kAddNodeOutput);
+        if (!node) {
+            std::cerr << "could not add " << spec.typeId << '\n';
+            ++gFailures;
+            continue;
+        }
+        settle(20);
+        sizeArea(*fixture.window, *area, QSize(900, 1300));
+        settle();
+        if (auto* card = editor->graphScene()->findNodeItem(*node))
+            editor->graphView()->frameRect(card->sceneBoundingRect().adjusted(-40, -40, 40, 40));
+        settle(120);
+        auto name = QString::fromLatin1(spec.typeId.data(),
+                                        static_cast<qsizetype>(spec.typeId.size()));
+        name.replace(QLatin1Char('.'), QLatin1Char('-'));
+        save(area->grab().toImage(), QStringLiteral("nodes-card-%1").arg(name));
+    }
     return gFailures == 0 ? 0 : 1;
 }
 } // namespace

@@ -7,6 +7,7 @@
 #include "properties_value_edits.hpp"
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
+#include <bloom/document/field_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
@@ -298,6 +299,9 @@ class SocketItem final : public QGraphicsItem {
     // #490: an inspection input (the Image Preview's) also lands a Mask or a ChannelSet.
     void setAcceptsPixelKinds(const bool pixels) { acceptsPixelKinds_ = pixels; }
     [[nodiscard]] bool acceptsPixelKinds() const noexcept { return acceptsPixelKinds_; }
+    // #525: an any-field input that also takes the other field kinds.
+    void setAcceptsFieldKinds(const bool fields) { acceptsFieldKinds_ = fields; }
+    [[nodiscard]] bool acceptsFieldKinds() const noexcept { return acceptsFieldKinds_; }
     void setAuthoringEnabled(bool enabled);
 
     // How this socket reads while a link drag is in flight (task S1, item 6). A compatible socket
@@ -331,6 +335,7 @@ class SocketItem final : public QGraphicsItem {
     bool hovered_ = false;
     bool acceptsAnyKind_ = false;
     bool acceptsPixelKinds_ = false;
+    bool acceptsFieldKinds_ = false;
     DragAffinity affinity_ = DragAffinity::Idle;
     std::vector<document::InputPortRef> orderedInputs_;
     bool stackPill_ = false;
@@ -1025,6 +1030,10 @@ class NodeItem final : public QGraphicsObject {
         isTextSource_ = node.typeId == document::kTextSourceNodeType;
 
         for (const auto& role : roles) {
+            // #525: a Fields node's size, rotation, scale and position are its own values, never a
+            // layer transform or a text size, so each is an ordinary operand row.
+            if (document::isFieldNodeType(node.typeId) && buildOperandRow(node, role, registry))
+                continue;
             if (role == document::kPositionParameterRole) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Position editors verbatim, so
                 // the same gesture in either surface produces the same value.

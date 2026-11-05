@@ -40,10 +40,12 @@
 
 namespace bloom::ui {
 
+class CurveGraphCanvas;
 class GradientParameterRow;
 class GradingValueRow;
 namespace kit {
 class KAngleDial;
+class KLabel;
 class KPointPad;
 class KRangeSelector;
 } // namespace kit
@@ -145,6 +147,8 @@ class PointPadRow final : public QWidget {
         QString label;
         // The pad draws the value from the frame's centre (an offset) rather than from its origin.
         bool fromCentre = false;
+        // #525: the value is a field position, +y up (the pad draws +y down).
+        bool yUp = false;
     };
     struct Spec final {
         std::vector<Point> points;
@@ -198,6 +202,13 @@ class NodeControlsCardWidget final : public NodeCardWidget {
     [[nodiscard]] const std::vector<GradientParameterRow*>& gradientRows() const noexcept {
         return gradients_;
     }
+    // #525: a curve parameter's graph (a Fields falloff or remap curve) under its name.
+    struct CurveControl final {
+        std::string role;
+        kit::KLabel* label = nullptr;
+        CurveGraphCanvas* canvas = nullptr;
+    };
+    [[nodiscard]] const std::vector<CurveControl>& curveRows() const noexcept { return curves_; }
     void refresh();
 
   protected:
@@ -211,6 +222,7 @@ class NodeControlsCardWidget final : public NodeCardWidget {
     std::vector<GradientParameterRow*> gradients_;
     std::vector<RangeRow*> ranges_;
     std::vector<AngleDialRow*> angles_;
+    std::vector<CurveControl> curves_;
 };
 
 } // namespace bloom::ui

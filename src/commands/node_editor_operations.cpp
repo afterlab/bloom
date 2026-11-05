@@ -70,7 +70,9 @@ checkAddEditorNodeEligibility(const document::Snapshot& snapshot,
             if (definition->layerSlotInput && *kind == definition->layerSlotInput->valueKind)
                 return checkConnectionIds(true, true);
             for (const auto& port : definition->inputs)
-                if (*kind == port.valueKind)
+                if (*kind == port.valueKind ||
+                    (document::isAcceptedInputConnection(*kind, port) &&
+                     (port.acceptsPixelKinds || port.acceptsFieldKinds)))
                     return checkConnectionIds(
                         false,
                         std::ranges::none_of(definition->parameters, [&](const auto& parameter) {
@@ -251,10 +253,11 @@ OperationResult AddEditorNode::apply(document::Draft& draft) const {
             return connected.status == OperationStatus::Rejected ? connected : result;
         }
         for (const auto& port : definition->inputs) {
-            // #490: an inspection input (the Image Preview's) also takes a Mask or ChannelSet.
+            // #490: an inspection input (the Image Preview's) also takes a Mask or ChannelSet;
+            // #525: a field-reading input takes the pixel kinds, an any-field input every field.
             if (port.valueKind != kind &&
                 !(kind && document::isAcceptedInputConnection(*kind, port) &&
-                  port.acceptsPixelKinds))
+                  (port.acceptsPixelKinds || port.acceptsFieldKinds)))
                 continue;
             const auto connected =
                 ConnectPorts(composition_, *output_, document::NodeInputRef{*node, port.name})

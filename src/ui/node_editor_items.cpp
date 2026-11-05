@@ -2,11 +2,13 @@
 #include "value_presentation.hpp"
 #include <QCoreApplication>
 #include <QPainterPathStroker>
+#include <QPolygonF>
 #include <QShortcut>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
+#include <bloom/document/field_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -40,6 +42,12 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
         return kit::Color::SocketImage; // coverage, drawn as a pixel socket; named "Mask"
     case runtime::SocketValueKind::ChannelSet:
         return kit::Color::SocketChannelSet;
+    case runtime::SocketValueKind::ScalarField:
+        return kit::Color::SocketScalarField;
+    case runtime::SocketValueKind::Vector2Field:
+        return kit::Color::SocketVectorField;
+    case runtime::SocketValueKind::ColorField:
+        return kit::Color::SocketColorField;
     }
     return kit::Color::SocketImage;
 }
@@ -69,6 +77,8 @@ QString nodeCategoryName(const document::NodeCategory category) {
         return QCoreApplication::translate("node_editor", "Filters");
     case document::NodeCategory::Grade:
         return QCoreApplication::translate("node_editor", "Grade");
+    case document::NodeCategory::Fields:
+        return QCoreApplication::translate("node_editor", "Fields");
     }
     return {};
 }
@@ -114,6 +124,7 @@ std::span<const QString> nodeCategoryOrder() {
                                   QStringLiteral("Transform"),
                                   QStringLiteral("Filters"),
                                   QStringLiteral("Grade"),
+                                  QStringLiteral("Fields"),
                                   QStringLiteral("Color Management"),
                                   QStringLiteral("Values"),
                                   QStringLiteral("Math"),
@@ -346,6 +357,24 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
         LibraryName{document::kRandomNodeType, "Random"},
         LibraryName{document::kLayerBoundsNodeType, "Layer Bounds"},
         LibraryName{document::kRerouteNodeType, "Reroute"},
+        // #525 Fields. "Random Field" and "Gradient Field" say so beside the Random value and the
+        // gradient generators.
+        LibraryName{document::kFieldNoiseNodeType, "Noise"},
+        LibraryName{document::kFieldVoronoiNodeType, "Voronoi"},
+        LibraryName{document::kFieldRandomNodeType, "Random Field"},
+        LibraryName{document::kFieldPatternNodeType, "Pattern"},
+        LibraryName{document::kFieldGradientNodeType, "Gradient Field"},
+        LibraryName{document::kFieldShapeDistanceNodeType, "Shape Distance"},
+        LibraryName{document::kFieldFromImageNodeType, "Image Field"},
+        LibraryName{document::kFieldForceNodeType, "Force Field"},
+        LibraryName{document::kFieldMathNodeType, "Field Math"},
+        LibraryName{document::kFieldRemapNodeType, "Field Remap"},
+        LibraryName{document::kFieldTransformNodeType, "Field Transform"},
+        LibraryName{document::kFieldDerivativeNodeType, "Field Derivative"},
+        LibraryName{document::kFieldCombineNodeType, "Combine Field"},
+        LibraryName{document::kFieldSeparateNodeType, "Separate Field"},
+        LibraryName{document::kFieldSampleNodeType, "Field Sample"},
+        LibraryName{document::kFieldRasterizeNodeType, "Rasterize Field"},
     };
     const auto* const match = std::ranges::find(kLibraryNames, typeId, &LibraryName::typeId);
     if (match != kLibraryNames.end())
@@ -690,6 +719,12 @@ QString socketKindName(const document::SocketValueKind kind) {
         return QStringLiteral("Mask");
     case document::SocketValueKind::ChannelSet:
         return QStringLiteral("Channel Set");
+    case document::SocketValueKind::ScalarField:
+        return QStringLiteral("Scalar Field");
+    case document::SocketValueKind::Vector2Field:
+        return QStringLiteral("Vector Field");
+    case document::SocketValueKind::ColorField:
+        return QStringLiteral("Color Field");
     }
     return {};
 }
@@ -917,6 +952,13 @@ void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidg
     painter->setPen(QPen(kit::color(kit::Color::Surface), kit::kHairlineWidth));
     painter->setBrush(paintedInk());
     const qreal radius = hovered_ ? 6.0 : kSocketDiameter / 2;
+    // #525: a field socket is a diamond, so a field never reads as the value or image beside it.
+    if (document::isFieldSocketKind(kind)) {
+        const qreal r = radius * 1.25;
+        painter->drawPolygon(QPolygonF({QPointF(0.0, -r), QPointF(r, 0.0), QPointF(0.0, r),
+                                        QPointF(-r, 0.0)}));
+        return;
+    }
     if (!multiInput()) {
         painter->drawEllipse(QPointF(), radius, radius);
         return;
@@ -973,6 +1015,7 @@ struct SocketSpec final {
     bool anyKind = false;
     bool linked = false;
     bool pixelKinds = false;
+    bool fieldKinds = false;
 };
 // The fields a SocketItem fixes at construction. Everything else a spec carries is updated on the
 // kept item in place.
@@ -1026,7 +1069,8 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
                              {},
                              kindless,
                              linked,
-                             port.acceptsPixelKinds});
+                             port.acceptsPixelKinds,
+                             port.acceptsFieldKinds});
         }
         // #543: each stop of a bound gradient has a colour and a position socket, which the card
         // puts beside the stop's rows; a linked one always shows.
@@ -1132,6 +1176,7 @@ void NodeItem::buildSockets(const document::NodeRecord& node,
         }
         socket->setAcceptsAnyKind(spec.anyKind);
         socket->setAcceptsPixelKinds(spec.pixelKinds);
+        socket->setAcceptsFieldKinds(spec.fieldKinds);
         socket->linked = spec.linked;
         if (spec.pill && (!socket->multiInput() || socket->orderedInputs() != spec.ordered))
             socket->setOrderedInputs(std::move(spec.ordered));

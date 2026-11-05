@@ -525,7 +525,7 @@ kind takes its own role here on the day it ships.
 
 Sockets and the links leaving them identify a *transport* kind, which is a different question from
 what an item in a project is, so they have their own palette rather than borrowing the `Data*` roles.
-Nine separated hues for ten kinds, none of them `Accent` or `AccentHover`:
+Twelve separated hues for thirteen kinds, none of them `Accent` or `AccentHover`:
 
 | Socket kind | Palette token | Value | Hue |
 | --- | --- | --- | --- |
@@ -539,6 +539,14 @@ Nine separated hues for ten kinds, none of them `Accent` or `AccentHover`:
 | String | `SocketString` | `#F0C93C` | gold |
 | Audio | `SocketAudio` | `#7C5CFF` | blue-violet |
 | Channel Set | `SocketChannelSet` | `#4CD964` | green |
+| Scalar Field | `SocketScalarField` | `#C7DC3C` | chartreuse |
+| Vector Field | `SocketVectorField` | `#E05AD2` | magenta |
+| Color Field | `SocketColorField` | `#5A7CF0` | cornflower |
+
+A field socket (#525, `docs/architecture/fields.md`) is drawn as a diamond rather than a circle, and
+its links take the same ink: a field is a lazy function of position, not a value or an image, and the
+shape says so before the colour does. Scalar Field and Vector Field sit one hue step from Scalar and
+Vector; Color Field takes the free cornflower, since no hue near Color's vermilion is left.
 
 The two vector widths share one token deliberately: they are one family, and giving them adjacent
 violets would have said "these connect" when a cross-width link is refused. What distinguishes them is

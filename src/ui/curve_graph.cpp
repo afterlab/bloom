@@ -447,6 +447,13 @@ CurveGraphCanvas::CurveGraphCanvas(CompositionSession& session, const document::
         connect(previews, &ImagePreviewController::changed, this, qOverload<>(&QWidget::update));
 }
 
+CurveGraphCanvas::CurveGraphCanvas(CompositionSession& session, const document::NodeId node,
+                                   std::string role, QWidget* parent)
+    : CurveGraphCanvas(session, node, parent) {
+    role_ = std::move(role);
+    setToolTip(tr("Drag a point to shape the curve; click to add one, drag one off to remove it"));
+}
+
 QSize CurveGraphCanvas::sizeHint() const { return {240, canvasHeight(240)}; }
 QSize CurveGraphCanvas::minimumSizeHint() const { return {120, canvasHeight(120)}; }
 
@@ -471,6 +478,16 @@ void CurveGraphCanvas::setSelected(const std::optional<std::size_t> point) {
 }
 
 std::optional<document::ParameterId> CurveGraphCanvas::parameter() const {
+    if (!role_.empty()) {
+        const auto* composition = session_.composition();
+        const auto* record = composition ? composition->graph().findNode(node_) : nullptr;
+        if (record == nullptr)
+            return std::nullopt;
+        const auto binding = std::ranges::find(record->parameters, role_,
+                                               &document::ParameterBinding::role);
+        return binding == record->parameters.end() ? std::nullopt
+                                                   : std::optional(binding->parameterId);
+    }
     return curveParameter(session_, node_, curve_);
 }
 
@@ -538,13 +555,19 @@ void CurveGraphCanvas::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     CurveGraphPicture picture;
     picture.active = curve_;
-    picture.curves = curveGraphValues(session_, node_);
+    if (role_.empty()) {
+        picture.curves = curveGraphValues(session_, node_);
+    } else {
+        picture.curves = {};
+        picture.curves[document::gradeCurveIndex(curve_)] = value();
+    }
     picture.selected = selected_;
     picture.hovered = hovered_;
     picture.range = range();
     auto* previews = session_.imagePreviews();
     // Requested only here, while the graph is drawn: a hidden graph asks for nothing.
-    if (previews != nullptr && previews->histogramsShown() && showsHistogram(curve_))
+    if (role_.empty() && previews != nullptr && previews->histogramsShown() &&
+        showsHistogram(curve_))
         picture.histogram = previews->histogram(node_).bins;
     paintCurveGraph(painter, plotRect(), picture);
     if (hasFocus()) {

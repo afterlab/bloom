@@ -277,12 +277,12 @@ void testSearchKeyboardAndMenus() {
     // order is where pixels come from, how they are arranged, what numbers drive them, the
     // arithmetic over those numbers, the plumbing that carries them, and finally where the picture
     // goes. Transform (Resize, Fit, Crop, Pad, Flip, Rotate 90) and Filters (blurs) follow
-    // Compositing (ui-grammar.md); #500: then Grade, then Color Management.
+    // Compositing (ui-grammar.md); #500: then Grade, #525 Fields, then Color Management.
     expect(sectionHeadings(list->model()) ==
                QStringList{
                    QStringLiteral("Sources"), QStringLiteral("Layers"),
                    QStringLiteral("Compositing"), QStringLiteral("Transform"),
-                   QStringLiteral("Filters"), QStringLiteral("Grade"),
+                   QStringLiteral("Filters"), QStringLiteral("Grade"), QStringLiteral("Fields"),
                    QStringLiteral("Color Management"), QStringLiteral("Values"),
                    QStringLiteral("Math"), QStringLiteral("Convert"), QStringLiteral("String"),
                    QStringLiteral("Logic"), QStringLiteral("Time"), QStringLiteral("Color Values"),

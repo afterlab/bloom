@@ -85,6 +85,11 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     {Color::SocketString, 0xF0C93CU},
     {Color::SocketBoolean, 0xE0567BU},
     {Color::SocketChannelSet, 0x4CD964U},
+    // #525: chartreuse, magenta and cornflower, each at least 20 degrees of hue from every other
+    // socket role.
+    {Color::SocketScalarField, 0xC7DC3CU},
+    {Color::SocketVectorField, 0xE05AD2U},
+    {Color::SocketColorField, 0x5A7CF0U},
     // GRAPH-1 component curves: red, green, a light sky blue clearly lighter than Accent
     // (0x0C8CE9) and AccentHover (0x3AA5F0), and a neutral for the fourth channel.
     {Color::ComponentX, 0xE06C75U},
