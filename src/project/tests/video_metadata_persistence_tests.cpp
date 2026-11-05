@@ -129,7 +129,7 @@ void migration() {
         auto text = encode(makeDocument(timecode, 0));
         // A 1.24 file has no field order or timecode type.
         text = replaceRegex(text, R"(,\s*"fieldOrder": \d+,\s*"timecodeType": \d+)", "");
-        text = replaceRegex(text, R"("minor": 40(\s*\}))", "\"minor\": 24$1");
+        text = replaceRegex(text, R"("minor": 41(\s*\}))", "\"minor\": 24$1");
         stripExportQueueV1_29(text);
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
@@ -169,7 +169,7 @@ void videoColourDefaultMigration() {
             throw std::logic_error("video color default commit");
         auto text = encode(document);
         const auto current = encode(document);
-        text = replaceRegex(text, R"("minor": 40(\s*\}))", "\"minor\": 27$1");
+        text = replaceRegex(text, R"("minor": 41(\s*\}))", "\"minor\": 27$1");
         stripExportQueueV1_29(text);
         auto operation = memory();
         auto parsed = parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);

@@ -163,7 +163,8 @@ enum class Step {
     EntryLayers,
     GradientValues,
     GradientColorPairs,
-    GradientStopLinks
+    GradientStopLinks,
+    GradientModes
 };
 enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
 
@@ -227,6 +228,9 @@ enum class Scope { Root, Project, Composition, IdAllocation, HighestIssued };
         return false;
     // Gradient stop links (1.39 -> 1.40, #543) are version-only: no older document carries one.
     if (step == Step::GradientStopLinks)
+        return false;
+    // Gradient modes (1.40 -> 1.41, #546) are version-only: no older gradient carries one.
+    if (step == Step::GradientModes)
         return false;
     // The export queue (1.28 -> 1.29, ADR 0033) adds required members; their presence proves the
     // step already ran.
@@ -420,6 +424,7 @@ bool transform(const JsonValue& value, const Scope scope, const Step step, Buffe
                            : step == Step::GradientValues        ? "{\"major\":1,\"minor\":38}"
                            : step == Step::GradientColorPairs    ? "{\"major\":1,\"minor\":39}"
                            : step == Step::GradientStopLinks     ? "{\"major\":1,\"minor\":40}"
+                           : step == Step::GradientModes         ? "{\"major\":1,\"minor\":41}"
                                                                  : "{\"major\":1,\"minor\":22}");
         } else if (scope == Scope::Root && member.key() == "project") {
             if (!descend(Scope::Project))
@@ -1026,6 +1031,12 @@ MigrationStepOutcome migrateGradientStopLinksV1_39(const JsonValue& root,
                                                    std::pmr::memory_resource*, Buffer& output) {
     if (!sourceVersionIs(root, "39") ||
         !transform(root, Scope::Root, Step::GradientStopLinks, output))
+        return MigrationStepOutcome::failure("/schemaVersion");
+    return MigrationStepOutcome::success();
+}
+MigrationStepOutcome migrateGradientModesV1_40(const JsonValue& root, std::pmr::memory_resource*,
+                                               Buffer& output) {
+    if (!sourceVersionIs(root, "40") || !transform(root, Scope::Root, Step::GradientModes, output))
         return MigrationStepOutcome::failure("/schemaVersion");
     return MigrationStepOutcome::success();
 }

@@ -281,8 +281,9 @@ std::string withMinor(const std::string& text, const int from, const int to) {
 
 // Document 1.35: a project saved while only some members have digests reopens to the same asset,
 // and its stamped members read as before; a document claiming 1.34 cannot carry a stamp, and 1.34
-// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests, 1.37 entry layers, 1.38 gradients,
-// 1.39 gradient colour pairs, 1.40 gradient stop links).
+// reaches the current minor by version alone (1.35 stamps, 1.36 verified digests, 1.37 entry
+// layers, 1.38 gradients, 1.39 gradient colour pairs, 1.40 gradient stop links, 1.41 gradient
+// modes).
 void partialDigestsReopen() {
     Folder folder("bloom-lazy-sequence-reopen");
     for (int frame = 1; frame <= 3; ++frame)
@@ -312,10 +313,10 @@ void partialDigestsReopen() {
                "the reopened stamped members read");
         expect(encode(draft.project()) == text, "the canonical text is stable");
     }
-    expect(!decode(withMinor(text, 40, 34)), "a document claiming 1.34 cannot carry a stamp");
+    expect(!decode(withMinor(text, 41, 34)), "a document claiming 1.34 cannot carry a stamp");
 
     const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 40, 34);
+    const auto older = withMinor(plain, 41, 34);
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
     expect(static_cast<bool>(parsed), "the 1.34 document parses");
@@ -324,9 +325,9 @@ void partialDigestsReopen() {
             parsed.document()->root(), {1, 34}, project::kCanonicalDocumentSchemaVersionV1,
             project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 6 && migrated.migratedRoot() != nullptr &&
+                   migrated.stepsApplied() == 7 && migrated.migratedRoot() != nullptr &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.34 reaches the current minor through six version-only steps");
+               "1.34 reaches the current minor through seven version-only steps");
     }
 }
 
@@ -369,13 +370,13 @@ void verifiedDigestsRoundTrip() {
     expect(reopened && reopened->size() == 1 && reopened->front() == asset,
            "verified, legacy and pending members reopen exactly");
     expect(encode(verified) == text, "the canonical text is stable");
-    expect(!decode(withMinor(text, 40, 35)),
+    expect(!decode(withMinor(text, 41, 35)),
            "a document claiming 1.35 cannot carry both a digest and a stamp");
-    expect(!decode(withMinor(text, 40, 34)),
+    expect(!decode(withMinor(text, 41, 34)),
            "a document claiming 1.34 cannot carry both a digest and a stamp");
 
     const auto plain = encode(document.snapshot().project());
-    const auto older = withMinor(plain, 40, 35);
+    const auto older = withMinor(plain, 41, 35);
     expect(static_cast<bool>(decode(older)), "a 1.35 document with one form per member decodes");
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(older)), {}, operation);
@@ -384,9 +385,9 @@ void verifiedDigestsRoundTrip() {
             parsed.document()->root(), {1, 35}, project::kCanonicalDocumentSchemaVersionV1,
             project::kProductionDocumentMigrationSteps, {}, operation);
         expect(migrated.outcome() == project::MigrationOutcome::Migrated &&
-                   migrated.stepsApplied() == 5 && migrated.migratedRoot() != nullptr &&
+                   migrated.stepsApplied() == 6 && migrated.migratedRoot() != nullptr &&
                    static_cast<bool>(project::decodeDocumentEnvelope(*migrated.migratedRoot())),
-               "1.35 reaches the current minor through five version-only steps");
+               "1.35 reaches the current minor through six version-only steps");
     } else {
         expect(false, "the 1.35 document parses");
     }

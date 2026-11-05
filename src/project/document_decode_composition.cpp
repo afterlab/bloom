@@ -306,7 +306,18 @@ using document::Vec3d;
     }
     // Document 1.38 (#541): a gradient's stops, each {position, red, green, blue, alpha}.
     if (kindText == "gradient" && state.documentMinor >= 38) {
-        static constexpr std::array<std::string_view, 2> keys{"kind", "stops"};
+        // #546: from 1.41 its colour mode, hue direction and interpolation follow, each only when
+        // not the default (RGB, Near, Linear); an older document carrying one is refused.
+        std::vector<std::string_view> keys{"kind", "stops"};
+        for (const std::string_view mode : {"colorMode", "hueDirection", "interpolation"}) {
+            if (node.findMember(mode) == nullptr)
+                continue;
+            if (state.documentMinor < kGradientModesMinor) {
+                state.fail(DocumentDecodeError::UnknownMember, joinPath(path, mode));
+                return false;
+            }
+            keys.push_back(mode);
+        }
         std::vector<const JsonValue*> members;
         if (!matchOrderedMembers(node, keys, true, state, path, members))
             return false;
@@ -343,6 +354,32 @@ using document::Vec3d;
                                      decoded.color.alpha))
                 return false;
             value.stops.push_back(decoded);
+        }
+        for (std::size_t index = 2; index < keys.size(); ++index) {
+            const auto where = joinPath(path, keys[index]);
+            std::string_view text;
+            if (!decodeStringMember(*members[index], state, where, text))
+                return false;
+            bool known = false;
+            if (keys[index] == "colorMode") {
+                if (const auto mode = document::gradientColorModeFromName(text)) {
+                    value.modes.colorMode = *mode;
+                    known = mode != document::GradientColorMode::Rgb;
+                }
+            } else if (keys[index] == "hueDirection") {
+                if (const auto hue = document::gradientHueDirectionFromName(text)) {
+                    value.modes.hueDirection = *hue;
+                    known = hue != document::GradientHueDirection::Near;
+                }
+            } else if (const auto interpolation = document::gradientInterpolationFromName(text)) {
+                value.modes.interpolation = *interpolation;
+                known = interpolation != document::GradientInterpolation::Linear;
+            }
+            // A default is omitted, never written: spelling one out is not canonical.
+            if (!known) {
+                state.fail(DocumentDecodeError::DomainViolation, where);
+                return false;
+            }
         }
         if (!value.isValid()) {
             state.fail(DocumentDecodeError::DomainViolation, stopsPath);

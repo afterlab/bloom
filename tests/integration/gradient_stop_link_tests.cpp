@@ -385,10 +385,10 @@ void linksPersist() {
     expect(encode(*reopened.document) == encode(fixture.document), "the stop link reopens exactly");
 
     auto text = encode(fixture.document);
-    const auto version = text.find("\"minor\": 40");
+    const auto version = text.find("\"minor\": 41");
     if (version == std::string::npos)
-        return expect(false, "the document declares 1.40");
-    text.replace(version, std::string_view("\"minor\": 40").size(), "\"minor\": 39");
+        return expect(false, "the document declares 1.41");
+    text.replace(version, std::string_view("\"minor\": 41").size(), "\"minor\": 39");
     auto operation = memory();
     auto parsed = project::parseStrictJsonDom(std::as_bytes(std::span(text)), {}, operation);
     const auto decoded = parsed ? project::decodeDocumentEnvelope(parsed.document()->root())

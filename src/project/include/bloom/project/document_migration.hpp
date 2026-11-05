@@ -297,6 +297,12 @@ migrateGradientColorPairsV1_38(const JsonValue& root, std::pmr::memory_resource*
 [[nodiscard]] MigrationStepOutcome
 migrateGradientStopLinksV1_39(const JsonValue& root, std::pmr::memory_resource* resource,
                               std::pmr::vector<char>& output);
+// Gradient modes, document 1.40 -> 1.41 (#546): version-only. A gradient value's interpolation,
+// colour mode and hue direction are written only when not the default (Linear, RGB, Near), which
+// is how every older gradient blends.
+[[nodiscard]] MigrationStepOutcome migrateGradientModesV1_40(const JsonValue& root,
+                                                             std::pmr::memory_resource* resource,
+                                                             std::pmr::vector<char>& output);
 inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 0}, {1, 1}, migrateNodeLayoutV1_0},
     MigrationStepDescriptor{{1, 1}, {1, 2}, migrateNodeGroupsV1_1},
@@ -337,7 +343,8 @@ inline constexpr std::array kProductionDocumentMigrationSteps{
     MigrationStepDescriptor{{1, 36}, {1, 37}, migrateEntryLayersV1_36},
     MigrationStepDescriptor{{1, 37}, {1, 38}, migrateGradientValuesV1_37},
     MigrationStepDescriptor{{1, 38}, {1, 39}, migrateGradientColorPairsV1_38},
-    MigrationStepDescriptor{{1, 39}, {1, 40}, migrateGradientStopLinksV1_39}};
+    MigrationStepDescriptor{{1, 39}, {1, 40}, migrateGradientStopLinksV1_39},
+    MigrationStepDescriptor{{1, 40}, {1, 41}, migrateGradientModesV1_40}};
 
 enum class MigrationOutcome : std::uint8_t {
     // detectedVersion == currentVersion: no step ran, and this result owns no DOM. The caller must

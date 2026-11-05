@@ -339,7 +339,7 @@ void legacyNodesNeedAnOlderDocument() {
     expect(!current && current.error() == project::DocumentDecodeError::UnsupportedNodeVersion,
            "a 1.39 document carrying a schema 1 gradient or Glow is refused");
     auto older = text;
-    replaceAfter(older, "\"schemaVersion\": {", "\"minor\": 40", "\"minor\": 38");
+    replaceAfter(older, "\"schemaVersion\": {", "\"minor\": 41", "\"minor\": 38");
     expect(static_cast<bool>(decodeText(older)),
            "a 1.38 document's schema 1 gradient and Glow decode for the migration");
 }

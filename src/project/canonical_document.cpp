@@ -723,8 +723,23 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                 !emitFloat64Member(state, "alpha", stop.color.alpha) ||
                 !state.ok(writer.endObject()))
                 return false;
-        return state.ok(writer.endArray()) && emitRetainedTrailing(state) &&
-               state.ok(writer.endObject());
+        if (!state.ok(writer.endArray()))
+            return false;
+        // Document 1.41 (#546): each mode that is not its default, in this order.
+        const auto& modes = gradient->modes;
+        const auto named = [&](const std::string_view member, const std::string_view text) {
+            return state.ok(writer.memberName(member)) && state.ok(writer.stringValue(text));
+        };
+        if ((modes.colorMode != bloom::document::GradientColorMode::Rgb &&
+             !named("colorMode", bloom::document::gradientColorModeName(modes.colorMode))) ||
+            (modes.hueDirection != bloom::document::GradientHueDirection::Near &&
+             !named("hueDirection",
+                    bloom::document::gradientHueDirectionName(modes.hueDirection))) ||
+            (modes.interpolation != bloom::document::GradientInterpolation::Linear &&
+             !named("interpolation",
+                    bloom::document::gradientInterpolationName(modes.interpolation))))
+            return false;
+        return emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
     if (const auto* rational = std::get_if<bloom::core::RationalTime>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("rational")) &&

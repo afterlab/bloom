@@ -155,8 +155,8 @@ void gradientsRoundTrip() {
 
     const auto constantText = encode(fixture.document);
     expect(constantText.find("\"kind\": \"gradient\"") != std::string::npos &&
-               constantText.find("\"minor\": 40") != std::string::npos,
-           "the gradient constant is written at 1.40");
+               constantText.find("\"minor\": 41") != std::string::npos,
+           "the gradient constant is written at 1.41");
     const auto decodedConstant = decodeText(constantText);
     expect(static_cast<bool>(decodedConstant), "the gradient constant decodes");
 
@@ -222,7 +222,7 @@ void olderAndMalformedDocuments() {
         return;
     // A document claiming 1.37 cannot carry a gradient.
     auto claimed = current;
-    replaceOnce(claimed, "\"minor\": 40", "\"minor\": 37");
+    replaceOnce(claimed, "\"minor\": 41", "\"minor\": 37");
     expect(!static_cast<bool>(decodeText(claimed)), "a 1.37 document carrying a gradient is refused");
 
     // A malformed gradient is refused: a stop outside [0, 1], an unknown stop member.
@@ -249,7 +249,7 @@ void olderAndMalformedDocuments() {
     document::Document bare{
         document::makeNewProject("Bare", "Main", core::RationalTime::fromInteger(4)).project};
     auto legacy = encode(bare);
-    replaceOnce(legacy, "\"minor\": 40", "\"minor\": 37");
+    replaceOnce(legacy, "\"minor\": 41", "\"minor\": 37");
     const auto decodedLegacy = decodeText(legacy);
     expect(static_cast<bool>(decodedLegacy), "a 1.37 document without gradients decodes");
     auto operation = memory();
@@ -331,6 +331,98 @@ void unboundColorizeBindsOnFirstEdit() {
            "one undo removes the binding again");
 }
 
+// #546: a gradient's interpolation, colour mode and hue direction save and reopen in document
+// 1.41, each written only when it is not the default; a default gradient writes none of them; a
+// document claiming 1.40 that carries one is refused, as are a spelled-out default and an unknown
+// name; and a keyed gradient takes the earlier key's modes between its keys.
+void gradientModesPersist() {
+    Fixture fixture;
+    const auto gradient = fixture.parameter("gradient");
+    expect(gradient.has_value(), "a new Colorize binds its gradient");
+    if (!gradient)
+        return;
+    const auto plain = encode(fixture.document);
+    expect(plain.find("\"interpolation\"") == std::string::npos &&
+               plain.find("\"colorMode\"") == std::string::npos &&
+               plain.find("\"hueDirection\"") == std::string::npos,
+           "a Linear RGB gradient writes no mode");
+    auto blended = fiveStops();
+    blended.modes = {document::GradientInterpolation::BSpline, document::GradientColorMode::Hsl,
+                     document::GradientHueDirection::CounterClockwise};
+    fixture.run<commands::SetParameterSource>(
+        fixture.composition, *gradient,
+        document::ParameterSource{document::ConstantValueSource{blended}});
+    const auto text = encode(fixture.document);
+    const auto kindAt = text.find("\"kind\": \"gradient\"");
+    const auto modeAt = text.find("\"colorMode\": \"hsl\"", kindAt);
+    const auto hueAt = text.find("\"hueDirection\": \"counter-clockwise\"", kindAt);
+    const auto curveAt = text.find("\"interpolation\": \"b-spline\"", kindAt);
+    expect(kindAt != std::string::npos && modeAt != std::string::npos && hueAt > modeAt &&
+               curveAt > hueAt && curveAt != std::string::npos,
+           "the modes follow the stops in name order");
+    expect(static_cast<bool>(decodeText(text)), "the gradient with modes decodes");
+
+    const auto snapshot = fixture.document.snapshot();
+    const auto settings = document::makeBloomNeutralColorSettingsV1({});
+    auto archive = project::buildVerifiedSaveArchive(
+        {}, {.snapshot = &snapshot, .colorSettings = &settings}, {}, memory());
+    expect(static_cast<bool>(archive), "the archive with modes saves and verifies");
+    if (archive) {
+        auto result = project::openProjectArchive(archive.archive()->bytes(), {}, memory());
+        expect(result.outcome() == project::OpenArchiveOutcome::Opened, "the archive opens");
+        if (result.outcome() == project::OpenArchiveOutcome::Opened) {
+            auto opened = std::move(result).takeOpened();
+            const auto reopened = opened.document->snapshot();
+            const auto* composition = reopened.project().findComposition(fixture.composition);
+            const auto* record = composition ? composition->parameters().find(*gradient) : nullptr;
+            const auto* constant =
+                record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+            expect(constant && constant->value == document::ParameterValue{blended},
+                   "the modes reopen exactly");
+            expect(encode(*opened.document) == text, "the canonical text is stable");
+        }
+    }
+
+    auto claimed = text;
+    replaceOnce(claimed, "\"minor\": 41", "\"minor\": 40");
+    expect(!static_cast<bool>(decodeText(claimed)),
+           "a document claiming 1.40 that carries a gradient mode is refused");
+    auto spelled = text;
+    replaceOnce(spelled, "\"colorMode\": \"hsl\"", "\"colorMode\": \"rgb\"");
+    expect(!static_cast<bool>(decodeText(spelled)), "a spelled-out default mode is refused");
+    auto unknown = text;
+    replaceOnce(unknown, "\"interpolation\": \"b-spline\"", "\"interpolation\": \"bezier\"");
+    expect(!static_cast<bool>(decodeText(unknown)), "an unknown interpolation is refused");
+    auto reordered = text;
+    replaceOnce(reordered, "\"colorMode\": \"hsl\"", "\"colorMode\": \"hsx\"");
+    expect(!static_cast<bool>(decodeText(reordered)), "an unknown colour mode is refused");
+
+    // Keyed: the earlier key's modes hold until the next key.
+    fixture.run<commands::CreateAnimationForParameter>(fixture.composition, *gradient,
+                                                       core::RationalTime::fromInteger(0));
+    auto later = fiveStops();
+    later.modes.interpolation = document::GradientInterpolation::Constant;
+    fixture.run<commands::SetKeyframeAtTimeForParameter>(fixture.composition, *gradient,
+                                                         core::RationalTime::fromInteger(2), later);
+    const auto* keyed = fixture.comp().parameters().find(*gradient);
+    const auto* source = std::get_if<document::AnimationCurveSource>(&keyed->source);
+    const auto* curve =
+        source ? fixture.comp().animationCurves().findGradient(source->curveId) : nullptr;
+    expect(curve && curve->keyframes.size() == 2, "the gradient with modes keys");
+    if (curve) {
+        const auto compiled = runtime::compileAnimationCurve(*curve);
+        const auto middle =
+            runtime::sampleGradientCurve(compiled, core::RationalTime::fromInteger(1));
+        const auto end = runtime::sampleGradientCurve(compiled, core::RationalTime::fromInteger(2));
+        expect(middle && middle->modes == blended.modes && end && end->modes == later.modes,
+               "between keys the earlier key's modes hold; at a key its own");
+    }
+    const auto keyedText = encode(fixture.document);
+    expect(static_cast<bool>(decodeText(keyedText)) &&
+               keyedText.find("\"interpolation\": \"constant\"") != std::string::npos,
+           "a keyed gradient's modes are written per key");
+}
+
 } // namespace
 
 int main() {
@@ -338,6 +430,7 @@ int main() {
         gradientsRoundTrip();
         olderAndMalformedDocuments();
         unboundColorizeBindsOnFirstEdit();
+        gradientModesPersist();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

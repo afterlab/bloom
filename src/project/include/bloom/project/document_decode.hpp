@@ -482,6 +482,9 @@ inline constexpr std::uint32_t kGradientColorPairsMinor = 39;
 // #543: the first document minor that may carry a gradient stop link (a parameter under
 // bloom.gradient.stop-color or bloom.gradient.stop-position); an older one is refused at its key.
 inline constexpr std::uint32_t kGradientStopLinksMinor = 40;
+// #546: the first document minor whose gradient values may carry an interpolation, a colour mode
+// and a hue direction; an older one carrying any of them is refused at that member.
+inline constexpr std::uint32_t kGradientModesMinor = 41;
 [[nodiscard]] bool isLegacyGradientColorPairNode(std::string_view typeId,
                                                  std::uint32_t schemaVersion) noexcept;
 // #541: opening a document older than 1.39 turns each schema 1 colour pair that makes up a ramp
