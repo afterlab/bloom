@@ -355,7 +355,8 @@ product dependency. The same bounded exception names the local sprint runner and
 (`tools/local/sprint_validation.py`, `tools/local/test_sprint_validation.py`, see
 [Local validation](../development/local-validation.md)) and the performance benchmark generators
 and runner in `tools/bench/` (`bench_media.py`, `bench_spec.py`, `blender_scene.py`,
-`build_projects.py`, `chart.py`, `chart_check.py`, `imageio_min.py`, `run_bench.py`, see
+`build_projects.py`, `chart.py`, `chart_check.py`, `imageio_min.py`, `node_cost.py`,
+`run_bench.py`, `run_scenarios.py`, `scenario_spec.py`, `test_run_scenarios.py`, see
 [Performance benchmarks](../development/benchmarks.md)); they measure and qualify Bloom from outside
 and are likewise never imported by product code or run by the application build. The hygiene gate
 admits exactly these files and rejects other infrastructure Python sources and misplaced type stubs;
