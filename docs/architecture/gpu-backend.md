@@ -986,6 +986,47 @@ Foreign release queues that bounded owner for its native thread. The default rem
 frame; measurements and width-two limits are in the
 [Linux qualification record](../plans/gpu-304-linux-qualification.md).
 
+### Reused Command Sets And The Pipeline Cache
+
+The single-submission native jobs (the packed display transfer, path coverage and OCIO LUT uploads)
+take their command pool, primary command buffer and fence from the device generation instead of
+creating them per job (#457). A job gives its set back only after its own fence proved the
+submission retired; the next job resets the pool and the fence and records into the same buffer.
+A submission whose retirement is unproven keeps its set in its quarantine exactly as before, and
+the device creates a new set for the next job. A generation parks at most eight sets and releases
+them before its device. The preview owner also keeps one `GpuDisplayTransfer` for consecutive
+frames (a transfer that still owns a submission is replaced, and its destructor quarantines that
+submission). The transfer's staging buffer is the parked native storage of the frames before it
+(#477), so a steady preview frame creates no command pool, fence or staging allocation for its
+transfer. A LUT upload waits on its own fence once, event-driven as the #386 owners do, and returns
+as soon as the copy retires; the two-second bound only covers a queue that never retires, which
+quarantines the upload as before.
+
+Every pipeline a generation creates (the composite, blend, affine, operation-batch and other
+Bloom kernels, OCIO programs, path coverage, the displays and the Viewer's present pipeline) goes
+through one `VkPipelineCache`, so a route rebuilt on the same generation reuses compiled pipelines.
+When the device is created with a cache directory, the cache is persisted across launches as
+derived per-user cache state, never project state: `platform::gpuPipelineCacheDirectory()`, the
+`gpu-pipeline-cache` leaf of the per-user cache root (Linux and macOS `$XDG_CACHE_HOME/bloom` or
+`$HOME/.cache/bloom`, Windows `%LOCALAPPDATA%/bloom/Cache`). The application, `bloom-cli`,
+`bloom-mcp`, the headless export queue and the Python provider pass it; tests and tools that pass
+none keep the cache in memory. One file per physical GPU
+(`vulkan-<vendor>-<device>-<device UUID>.pipelinecache`) holds an 80-byte Bloom header (magic,
+format version, payload size and FNV-1a checksum, vendor and device id, driver version, device
+UUID, pipeline-cache UUID) before the driver's data. A file is used only when every field matches
+this device and driver, the checksum matches and the driver's own `VkPipelineCacheHeaderVersionOne`
+names the same vendor, device and pipeline-cache UUID; another GPU, a driver update or a truncated
+or corrupt file is rejected (`GpuPipelineCacheLoad::Rejected`, with the reason), the cache starts
+empty, and the next write replaces the file. A driver that refuses data which passed these checks
+gets an empty cache. Payloads are bounded at 64 MiB on read and write, the directory keeps the eight
+newest cache files and drops temporary files a crashed writer left, and every write goes to a unique
+temporary file renamed over the target, so a reader never sees a partial file. Only the device
+owner writes: the preview owner at most every two seconds at a point where it has no step to start,
+the export owner when it is idle, and every generation when it is destroyed; nothing is written
+unless pipelines were created since the last write. `GpuDevice::pipelineCacheStats()` reports the
+load outcome, loaded bytes, pipelines created and writes. Measurements are in the
+[#457 results](../development/benchmark-results-2026-11-06-457.md).
+
 ### CPU Composition Seam
 
 The composition preview's CPU half is now split from the display product applied to it, so a later

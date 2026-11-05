@@ -206,7 +206,10 @@ Every measurement is a fresh process.
   until it paints a Current frame, with the service startup inside it (`serviceReadySeconds`, when
   the GPU preview service left `Initializing`). `firstFrameProvider` is the frame's display
   provider, and `firstFrameCpuFallbacks`/`firstFrameCpuFallbacksByReason` count the CPU fallbacks
-  up to that paint; it must be 0 on a GPU route (#542).
+  up to that paint; it must be 0 on a GPU route (#542). Without `--bench-pipeline-cache <dir>`
+  the GPU device's pipeline cache stays in memory, so every run starts cold; with it the run uses
+  and writes the persisted cache in `<dir>` (#457), so a first frame can be measured with a cold
+  (empty) or warm directory.
 - **Cached playback** (`cachedPlaybackFps`): when a fill completed, the transport plays from the
   start for `--play-seconds` and counts the distinct frames the Viewer actually showed.
   `cachedPresentedFps` counts every change of the shown frame, so it stays meaningful when a
@@ -556,7 +559,8 @@ RTX 4090 workstation and, when it is used, on the RTX 5080 bench host.
 
 Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and after its follow-up](benchmark-results-2026-11-05-scenarios.md);
 [the same machine, before and after #386](benchmark-results-2026-11-06-386.md);
-[the same machine, before and after #549](benchmark-results-2026-11-06-549.md).
+[the same machine, before and after #549](benchmark-results-2026-11-06-549.md);
+[the same machine, before and after #457](benchmark-results-2026-11-06-457.md).
 
 ## Node cost
 
