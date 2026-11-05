@@ -688,6 +688,18 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *lowered);
             continue;
         }
+        // #483 Z Defocus and Depth Fog: a depth map and its gather or fog mix, then the effect
+        // mask.
+        if (document::isDepthEffectNodeType(node->typeId)) {
+            const auto lowered = lowerDepthEffect(*node, operations, indices);
+            if (!lowered)
+                return {};
+            const auto masked = applyEffectMask(*node, *lowered, indices);
+            if (!masked)
+                return {};
+            indices.emplace(nodeId, *masked);
+            continue;
+        }
         const auto* outputEdge = fixedInputEdge(nodeId, document::kCompositionOutputInputPort);
         // An unconnected composition output draws nothing, whether or not it is muted. Like a Layer
         // Output with no content ("added but not yet fed"), a disconnected output is an ordinary

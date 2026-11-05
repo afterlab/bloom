@@ -583,3 +583,138 @@ void testRecipeMute(Expectations& expectations) {
                             "a muted recipe passes its input through");
     }
 }
+
+// #483 Z Defocus and Depth Fog lower to their production chains: the depth map (its picked channel
+// of an Image), then the gather beside the map's tile maximum and the box prefilter, or the fog
+// mix; without a depth (outside Uniform) the input passes through, an unknown channel of an Image
+// is a topology failure, and an effect mask mixes the result back with the input.
+void testDepthEffectLowering(Expectations& expectations) {
+    using namespace document;
+    const auto kernelsOf = [](const runtime::CompiledCompositionPlan& plan, const NodeId node) {
+        std::vector<const runtime::CompiledImageEffect*> effects;
+        for (const auto index : recipeOperations(plan, node))
+            if (const auto* effect =
+                    std::get_if<runtime::CompiledImageEffect>(&plan.operations()[index]))
+                effects.push_back(effect);
+        return effects;
+    };
+    {
+        auto fixture = recipeFixture(kZDefocusNodeType,
+                                     {{"depthChannel", std::string("G")}, {"maxSize", 12.0}},
+                                     {"depth"});
+        const auto node = fixture.node;
+        const auto params = fixture.parameters;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Z Defocus compiles");
+        if (result.plan) {
+            const auto effects = kernelsOf(*result.plan, node);
+            const runtime::DepthMapKernel* map = nullptr;
+            const runtime::DefocusKernel* gather = nullptr;
+            const runtime::CompiledImageEffect* gatherEffect = nullptr;
+            std::size_t dilates = 0;
+            std::size_t boxes = 0;
+            for (const auto* effect : effects) {
+                if (const auto* item = std::get_if<runtime::DepthMapKernel>(&effect->kernel))
+                    map = item;
+                if (const auto* item = std::get_if<runtime::DefocusKernel>(&effect->kernel)) {
+                    gather = item;
+                    gatherEffect = effect;
+                }
+                if (const auto* item = std::get_if<runtime::SeparableBlurKernel>(&effect->kernel)) {
+                    // The tile maximum carries the map's colour (the signed radius in red).
+                    dilates += item->kind == runtime::SeparableBlurKind::Dilate &&
+                                       item->channels == runtime::BlurChannels::Rgba
+                                   ? 1U
+                                   : 0U;
+                    boxes += item->kind == runtime::SeparableBlurKind::Box ? 1U : 0U;
+                }
+            }
+            expectations.expect(map != nullptr && map->channel == 1 &&
+                                    map->output == runtime::DepthMapOutput::CircleOfConfusion &&
+                                    map->mode == kDefocusModeDepth,
+                                "Z Defocus reads the picked G channel into a circle of confusion");
+            expectations.expect(
+                gather != nullptr && gatherEffect != nullptr && dilates == 1 && boxes == 1 &&
+                    gather->slotImages[runtime::kDefocusTileSlot] == 0 &&
+                    gather->slotImages[runtime::kDefocusPrefilterSlot] == 1 &&
+                    gather->slotImages[runtime::kDefocusBokehSlot] == -1 &&
+                    gatherEffect->fieldImages.size() == 2 &&
+                    gather->maxSize.id == params.at("maxSize") &&
+                    std::get<double>(gather->maxSize.source) == 12.0,
+                "the gather reads the tile maximum (carrying the map) and the prefilter");
+        }
+    }
+    {
+        auto fixture = recipeFixture(kZDefocusNodeType);
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr && kernelsOf(*result.plan, node).empty(),
+                            "Z Defocus without a depth passes its input through");
+    }
+    {
+        auto fixture = recipeFixture(kZDefocusNodeType, {{"mode", kDefocusModeUniform}});
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        const runtime::DefocusKernel* gather = nullptr;
+        if (result.plan)
+            for (const auto* effect : kernelsOf(*result.plan, node))
+                if (const auto* item = std::get_if<runtime::DefocusKernel>(&effect->kernel))
+                    gather = item;
+        expectations.expect(gather != nullptr && gather->slotImages[runtime::kDefocusTileSlot] == -1 &&
+                                gather->slotImages[runtime::kDefocusPrefilterSlot] == 0,
+                            "Uniform blurs without a depth: only the prefilter slot");
+    }
+    {
+        auto fixture = recipeFixture(kZDefocusNodeType, {{"depthChannel", std::string("Z")}},
+                                     {"depth"});
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan == nullptr,
+                            "a named channel of an Image is a topology failure");
+    }
+    {
+        auto fixture = recipeFixture(kZDefocusNodeType, {}, {"depth", "mask"});
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        bool mixed = false;
+        if (result.plan)
+            for (const auto* effect : kernelsOf(*result.plan, node))
+                if (const auto* item = std::get_if<runtime::ImageCombineKernel>(&effect->kernel))
+                    mixed = mixed || item->mode == runtime::ImageCombineMode::Mix;
+        expectations.expect(mixed, "an effect mask mixes Z Defocus back with its input");
+    }
+    {
+        auto fixture = recipeFixture(kDepthFogNodeType,
+                                     {{"falloff", kFogFalloffExponential}, {"density", 0.25}},
+                                     {"depth"});
+        const auto node = fixture.node;
+        const auto params = fixture.parameters;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr, "Depth Fog compiles");
+        if (result.plan) {
+            const runtime::DepthMapKernel* map = nullptr;
+            const runtime::CompiledImageEffect* mix = nullptr;
+            const auto effects = kernelsOf(*result.plan, node);
+            for (const auto* effect : effects) {
+                if (const auto* item = std::get_if<runtime::DepthMapKernel>(&effect->kernel))
+                    map = item;
+                if (const auto* item = std::get_if<runtime::ImageCombineKernel>(&effect->kernel);
+                    item != nullptr && item->mode == runtime::ImageCombineMode::Mix)
+                    mix = effect;
+            }
+            expectations.expect(map != nullptr && map->output == runtime::DepthMapOutput::Fog &&
+                                    map->falloff == kFogFalloffExponential &&
+                                    map->density.id == params.at("density") && map->channel == 0,
+                                "Depth Fog reads the first channel into an exponential fog factor");
+            expectations.expect(mix != nullptr && mix->maskInput.has_value() &&
+                                    !effects.empty() && effects.back() == mix,
+                                "the fog layer mixes over the input by the fog factor");
+        }
+    }
+    {
+        auto fixture = recipeFixture(kDepthFogNodeType);
+        const auto node = fixture.node;
+        auto result = compileRecipe(std::move(fixture.project));
+        expectations.expect(result.plan != nullptr && kernelsOf(*result.plan, node).empty(),
+                            "Depth Fog without a depth passes its input through");
+    }
+}

@@ -82,6 +82,10 @@ OperationIndex RecipeEmitter::effect(const OperationIndex input, ImageEffectKern
     return index;
 }
 
+void RecipeEmitter::setImages(const OperationIndex effect, std::vector<OperationIndex> images) {
+    std::get<CompiledImageEffect>(operations_[effect.value()]).fieldImages = std::move(images);
+}
+
 OperationIndex RecipeEmitter::merge(
     const std::initializer_list<std::pair<OperationIndex, core::BlendMode>> entries) {
     return merge(std::vector<std::pair<OperationIndex, core::BlendMode>>(entries));

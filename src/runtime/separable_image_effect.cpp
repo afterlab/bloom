@@ -121,6 +121,8 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
                 // zero and takes the maximum. The device program performs the same operations.
                 if (erode)
                     sum[3] = 1.0F;
+                // #483: an Rgba Dilate carries the centre tap's colour (zero outside the input).
+                std::array<float, 3> centre{};
                 for (std::int64_t tap = -support; tap <= support; ++tap) {
                     const auto shifted = [](const std::int64_t value, const std::int64_t delta) {
                         if (delta < 0 && value < std::numeric_limits<std::int64_t>::min() - delta)
@@ -151,6 +153,8 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
                     const auto p = *sample.value();
                     if (morphology) {
                         sum[3] = std::max(sum[3], weight * p.alpha());
+                        if (tap == 0)
+                            centre = {p.red(), p.green(), p.blue()};
                         continue;
                     }
                     if (coverage) {
@@ -165,7 +169,9 @@ ImageEffectResult applySeparableBlur(const PreparedSeparableBlur& blur,
                 const auto alpha = std::clamp(sum[3], 0.0F, 1.0F);
                 auto pixel =
                     coverage ? render::Rgba32f::fromPremultiplied(alpha, alpha, alpha, alpha)
-                             : render::Rgba32f::fromPremultiplied(sum[0], sum[1], sum[2], alpha);
+                    : morphology
+                        ? render::Rgba32f::fromPremultiplied(centre[0], centre[1], centre[2], alpha)
+                        : render::Rgba32f::fromPremultiplied(sum[0], sum[1], sum[2], alpha);
                 if (!pixel)
                     return failed(EvaluationDiagnosticCode::InvalidPixel,
                                   "Blur produced nonfinite HDR pixels");
@@ -192,6 +198,7 @@ render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const flo
     const bool coverage = channels == BlurChannels::Coverage;
     const bool erode = kind == SeparableBlurKind::Erode;
     const bool dilate = kind == SeparableBlurKind::Dilate;
+    const bool carry = dilate && !coverage;
     if (coefficients.empty() || coefficients.size() > 2 * kMaximumSeparableBlurSupport + 1 ||
         coefficients.size() % 2 != 1 ||
         !validSeparableBlurKernelShape(SeparableBlurKernel{kind, {}, edge, channels}))
@@ -215,7 +222,8 @@ render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const flo
         // folds w * a by maximum from 0.
         shader += ");\nvec4 bloom_separable_blur(ivec2 c) {\n"
                   " ivec2 size = imageSize(bloom_ocio_input);\n precise float m = " +
-                  std::string(erode ? "1.0" : "0.0") + ";\n for (int i = -" + support +
+                  std::string(erode ? "1.0" : "0.0") + ";\n" +
+                  std::string(carry ? " vec3 centre = vec3(0.0);\n" : "") + " for (int i = -" + support +
                   "; i <= " + support + "; ++i) {\n  ivec2 p = c + ivec2(" +
                   (vertical ? std::string("0, i") : std::string("i, 0")) +
                   ");\n  float w = bloom_blur_weights[i + " + support + "];\n";
@@ -231,10 +239,16 @@ render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const flo
             if (edge != BlurEdgeMode::Clamp)
                 shader += "  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, size))) "
                           "continue;\n";
-            shader += "  precise float t = w * imageLoad(bloom_ocio_input, p).a;\n"
-                      "  m = max(m, t);\n";
+            // #483: an Rgba Dilate carries the centre tap's colour (zero outside the input).
+            shader += carry ? "  vec4 s = imageLoad(bloom_ocio_input, p);\n"
+                              "  precise float t = w * s.a;\n"
+                              "  m = max(m, t);\n"
+                              "  if (i == 0) { centre = s.rgb; }\n"
+                            : "  precise float t = w * imageLoad(bloom_ocio_input, p).a;\n"
+                              "  m = max(m, t);\n";
         }
-        shader += " }\n return vec4(clamp(m, 0.0, 1.0));\n}\n";
+        shader += carry ? " }\n return vec4(centre, clamp(m, 0.0, 1.0));\n}\n"
+                        : " }\n return vec4(clamp(m, 0.0, 1.0));\n}\n";
     } else {
         shader += ");\nvec4 bloom_separable_blur(ivec2 c) {\n"
                   " ivec2 size = imageSize(bloom_ocio_input);\n precise vec4 sum = vec4(0.0);\n"
@@ -265,7 +279,8 @@ render::OcioGpuProgramResult buildSeparableBlurProgram(const std::span<const flo
     program.resourcePrefix = "bloom_blur_";
     program.shaderText = std::move(shader);
     program.semanticsId = erode      ? "bloom.render.separable-erode.coverage.v1"
-                          : dilate   ? "bloom.render.separable-dilate.coverage.v1"
+                          : dilate   ? (coverage ? "bloom.render.separable-dilate.coverage.v1"
+                                                 : "bloom.render.separable-dilate.carry.v1")
                           : coverage ? "bloom.render.separable-blur.coverage.v1"
                                      : "bloom.render.separable-blur.v1";
     program.shaderTextDigest = render::computeOcioGpuShaderTextDigest(program.shaderText);

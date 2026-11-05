@@ -3,6 +3,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "cryptomatte.hpp"
+#include "depth_effect_image_effect.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
@@ -529,15 +530,28 @@ enum class ScalarDomain : std::uint8_t {
                                   effect.secondaryInput->value() < index;
                 if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel))
                     validKernel = discrete->quarterTurns <= 3;
-                // #525: only a field raster reads images through its program, at most four.
-                validKernel =
-                    validKernel &&
-                    (effect.fieldImages.empty() ||
-                     (std::holds_alternative<FieldRasterKernel>(effect.kernel) &&
-                      effect.fieldImages.size() <= core::field::kMaxFieldImages &&
-                      std::ranges::all_of(effect.fieldImages, [index](const OperationIndex image) {
-                          return image.value() < index;
-                      })));
+                // #525: only a field raster reads images through its program, at most four; #483 a
+                // defocus reads its four slots, each named once.
+                const auto earlier = [index](const OperationIndex image) {
+                    return image.value() < index;
+                };
+                if (const auto* defocus = std::get_if<DefocusKernel>(&effect.kernel)) {
+                    std::size_t named = 0;
+                    for (const auto slot : defocus->slotImages) {
+                        validKernel = validKernel && slot >= -1 &&
+                                      slot < static_cast<std::int8_t>(effect.fieldImages.size());
+                        named += slot >= 0 ? 1 : 0;
+                    }
+                    validKernel = validKernel && named == effect.fieldImages.size() &&
+                                  std::ranges::all_of(effect.fieldImages, earlier);
+                } else {
+                    validKernel =
+                        validKernel &&
+                        (effect.fieldImages.empty() ||
+                         (std::holds_alternative<FieldRasterKernel>(effect.kernel) &&
+                          effect.fieldImages.size() <= core::field::kMaxFieldImages &&
+                          std::ranges::all_of(effect.fieldImages, earlier)));
+                }
                 if (const auto* pointwise = std::get_if<PointwiseImageKernel>(&effect.kernel)) {
                     const bool invert = pointwise->effect == PointwiseImageEffect::Invert;
                     validKernel = static_cast<std::uint8_t>(pointwise->effect) <=
@@ -2226,8 +2240,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<ResizeFitKernel>(effect->kernel) ||
                                std::holds_alternative<Transform2DKernel>(effect->kernel) ||
                                std::holds_alternative<SeparableBlurKernel>(effect->kernel) ||
-                               std::holds_alternative<DirectionalBlurKernel>(effect->kernel)))
+                               std::holds_alternative<DirectionalBlurKernel>(effect->kernel) ||
+                               std::holds_alternative<DepthMapKernel>(effect->kernel) ||
+                               std::holds_alternative<DefocusKernel>(effect->kernel))) {
                     fullSupport[effect->input.value()] = true;
+                    // #483: the defocus gather reads its depth map, tile maximum, prefiltered
+                    // colour and bokeh image around every pixel.
+                    for (const auto image : effect->fieldImages)
+                        fullSupport[image.value()] = true;
+                }
             }
             for (std::size_t i = fullSupport.size(); i-- > 0;)
                 if (fullSupport[i])
@@ -3399,10 +3420,37 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      ++slot)
                                     fieldSlots[slot] =
                                         slots[effect.fieldImages[slot].value()].get();
+                                const auto gradeKind =
+                                    preparedEffect->colorGrade
+                                        ? std::optional{preparedEffect->colorGrade->kind}
+                                        : std::nullopt;
+                                // #483: a defocus reads its slots in DefocusKernel::slotImages order.
+                                std::array<const render::Rgba32fImage*, kDefocusSlots>
+                                    defocusSlots{};
+                                if (const auto* defocus =
+                                        std::get_if<DefocusKernel>(&effect.kernel))
+                                    for (std::size_t slot = 0; slot < defocusSlots.size(); ++slot)
+                                        if (defocus->slotImages[slot] >= 0)
+                                            defocusSlots[slot] =
+                                                slots[effect
+                                                          .fieldImages[static_cast<std::size_t>(
+                                                              defocus->slotImages[slot])]
+                                                          .value()]
+                                                    .get();
                                 auto result =
-                                    preparedEffect->colorGrade &&
-                                            preparedEffect->colorGrade->kind ==
-                                                detail::ColorGradeKind::FieldRaster
+                                    gradeKind == detail::ColorGradeKind::DepthMap
+                                        ? detail::applyDepthMap(
+                                              *preparedEffect->colorGrade, *slots[index],
+                                              resolved.horizontalScale, effectPixelBudget,
+                                              cancellation, operationIndex, progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::Defocus
+                                        ? detail::applyDefocus(
+                                              *preparedEffect->colorGrade, *slots[index],
+                                              std::span<const render::Rgba32fImage* const>(
+                                                  defocusSlots.data(), defocusSlots.size()),
+                                              resolved.horizontalScale, effectPixelBudget,
+                                              cancellation, operationIndex, progress, rowBands)
+                                    : gradeKind == detail::ColorGradeKind::FieldRaster
                                         ? detail::applyFieldRaster(
                                               *preparedEffect->colorGrade, *slots[index],
                                               std::span<const render::Rgba32fImage* const>(

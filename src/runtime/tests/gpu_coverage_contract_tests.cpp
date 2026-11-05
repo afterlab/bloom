@@ -34,6 +34,7 @@
 #include "gpu_coverage_video_support.hpp"
 #include "gpu_coverage_working_space_support.hpp"
 #include "gpu_route_proof_io.hpp"
+#include "depth_effect_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "grade_curves_test_support.hpp"
 #include "merge_entry_test_support.hpp"
@@ -1778,6 +1779,81 @@ displayProofRunner(const bool customView) {
                              "exposure falloff, full frame and ROI");
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #483 Depth effects: Z Defocus and Depth Fog through the production chains (the depth map,
+    // the tile maximum, the prefilter, the bokeh atlas and the gather; the fog factor and its Mix)
+    // over the HDR, partial-alpha gradient beauty and three exact depth bands, full frame and ROI.
+    const auto runDepth = [](const std::vector<bloom::depth_test::DepthValues>& variants,
+                             std::uint64_t idBase, std::string evidence) {
+        FixtureRun combined;
+        combined.prepared = true;
+        for (const auto& values : variants) {
+            const auto plan = bloom::depth_test::depthPlan(values, idBase).plan;
+            idBase += 100;
+            auto request = requestFor(*plan);
+            auto frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+            const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 9, 7);
+            request.roi = *roiWindow.value();
+            frame = runBuilderWithRequest(plan, request);
+            combined.prepared = combined.prepared && frame.prepared;
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        combined.evidence = std::move(evidence);
+        return combined;
+    };
+    {
+        using bloom::depth_test::DepthValues;
+        using bloom::depth_test::Effect;
+        DepthValues lens;
+        DepthValues uniform;
+        uniform.mode = bloom::document::kDefocusModeUniform;
+        uniform.shape = bloom::document::kBokehPolygon;
+        DepthValues bokeh;
+        bokeh.shape = bloom::document::kBokehImage;
+        bokeh.bokeh = true;
+        bokeh.highlightGain = 2.0;
+        bokeh.chromatic = 0.5;
+        DepthValues physical;
+        physical.mode = bloom::document::kDefocusModePhysical;
+        physical.quality = bloom::document::kDefocusQualityHigh;
+        physical.focusFrom = bloom::document::kFocusFromPoint;
+        DepthValues mistLens;
+        mistLens.mist = true;
+        mistLens.nearDepth = 1.0;
+        mistLens.farDepth = 40.0;
+        DepthValues fog;
+        fog.effect = Effect::Fog;
+        DepthValues fogCurve = fog;
+        fogCurve.falloff = bloom::document::kFogFalloffCurve;
+        fogCurve.mist = true;
+        DepthValues fogImage = fog;
+        fogImage.fogImage = true;
+        fogImage.fillEmpty = true;
+        const auto addDepth = [&add, runDepth](std::string id, std::vector<DepthValues> variants,
+                                               const std::uint64_t idBase, std::string evidence) {
+            add(
+                std::move(id), GpuCoverageFixtureCriterion::Prepared,
+                "src/runtime depth effect tests",
+                [runDepth, variants = std::move(variants), idBase,
+                 evidence = std::move(evidence)] { return runDepth(variants, idBase, evidence); },
+                {}, FixturePrerequisite::PackagedShaderTools);
+        };
+        addDepth("effect.DepthMapKernel", {lens, physical, mistLens, fog, fogCurve}, 483000,
+                 "production depth map: Z, mist and physical circles of confusion, a picked "
+                 "focus point, linear and curve fog factors, full frame and ROI");
+        addDepth("effect.DefocusKernel", {lens, uniform, bokeh, physical}, 483600,
+                 "production defocus gather: a depth disk, a uniform polygon, an image bokeh with "
+                 "highlight boost and chromatic bokeh through the atlas and a high-quality "
+                 "physical lens, full frame and ROI");
+        addDepth("node.bloom.z-defocus", {lens, bokeh}, 484200,
+                 "production Z Defocus node: a depth disk and an image bokeh, full frame and ROI");
+        addDepth("node.bloom.depth-fog", {fog, fogImage}, 484600,
+                 "production Depth Fog node: a colour fog and a fog image with empty depth "
+                 "filled, full frame and ROI");
+    }
     // #494 Grade: the wheels and primaries through the production builder's resident program.
     const auto grade = [](const std::array<double, 22> values) {
         return [=](const std::uint64_t idBase) -> ImageEffectKernel {

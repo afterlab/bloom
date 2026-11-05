@@ -13,6 +13,7 @@
 // are skipped.
 
 #include "compositing_recipe_test_support.hpp"
+#include "depth_effect_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "gpu_composite_native_support.hpp"
 #include "grade_curves_test_support.hpp"
@@ -1950,6 +1951,135 @@ void runBatchedChains(Expectations& expectations, GpuDevice& device, GpuSceneCac
                         "batched chain: an idle executor has no fence to wait on");
 }
 
+// #483 Depth effects: Z Defocus and Depth Fog through the production chains against the CPU
+// oracle at the strict gate: colour within 2e-6, alpha exact. The depth is exact solid bands, so
+// the circle of confusion, the gather's weights and its coverage are the CPU's bit for bit; a fog
+// layer keeps its input's alpha, so the Mix's alpha is exact whatever its factor's exp or sqrt
+// rounds to (a fog that fills empty depth is shown with a linear falloff). The windows, resident
+// dispatches with no readback, warm reuse with zero dispatches and a changed value re-running only
+// the chain after it (the beauty and, for a lens change, the colour prefilter stay cached) hold.
+void runDepthEffects(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::depth_test::DepthValues;
+    using bloom::depth_test::Effect;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    struct Case final {
+        DepthValues values;
+        DepthValues changed;
+        const char* name;
+    };
+    std::vector<Case> cases;
+    {
+        DepthValues lens;
+        DepthValues lensChanged = lens;
+        lensChanged.focusDistance = 16.0;
+        cases.push_back({lens, lensChanged, "defocus depth disk"});
+        DepthValues uniform;
+        uniform.mode = bloom::document::kDefocusModeUniform;
+        uniform.shape = bloom::document::kBokehPolygon;
+        DepthValues uniformChanged = uniform;
+        uniformChanged.highlightGain = 1.5;
+        cases.push_back({uniform, uniformChanged, "defocus uniform polygon"});
+        DepthValues bokeh;
+        bokeh.shape = bloom::document::kBokehImage;
+        bokeh.bokeh = true;
+        bokeh.highlightGain = 2.0;
+        bokeh.chromatic = 0.5;
+        bokeh.solidInput = true;
+        DepthValues bokehChanged = bokeh;
+        bokehChanged.focusDistance = 4.0;
+        cases.push_back({bokeh, bokehChanged, "defocus image bokeh, boost and chromatic"});
+        DepthValues physical;
+        physical.mode = bloom::document::kDefocusModePhysical;
+        physical.quality = bloom::document::kDefocusQualityHigh;
+        physical.focusFrom = bloom::document::kFocusFromPoint;
+        DepthValues physicalChanged = physical;
+        physicalChanged.edgeExpand = 2;
+        cases.push_back({physical, physicalChanged, "defocus physical lens from a point"});
+        DepthValues mist;
+        mist.mist = true;
+        mist.nearDepth = 1.0;
+        mist.farDepth = 40.0;
+        DepthValues mistChanged = mist;
+        mistChanged.focusDistance = 20.0;
+        cases.push_back({mist, mistChanged, "defocus from mist"});
+    }
+    for (const auto falloff :
+         {bloom::document::kFogFalloffLinear, bloom::document::kFogFalloffQuadratic,
+          bloom::document::kFogFalloffInverseQuadratic, bloom::document::kFogFalloffExponential,
+          bloom::document::kFogFalloffExponentialSquared, bloom::document::kFogFalloffCurve}) {
+        DepthValues fog;
+        fog.effect = Effect::Fog;
+        fog.falloff = falloff;
+        fog.mist = falloff == bloom::document::kFogFalloffCurve;
+        fog.fillEmpty = falloff == bloom::document::kFogFalloffLinear ||
+                        falloff == bloom::document::kFogFalloffQuadratic;
+        fog.fogImage = falloff == bloom::document::kFogFalloffQuadratic ||
+                       falloff == bloom::document::kFogFalloffExponential;
+        DepthValues changed = fog;
+        changed.nearDepth = fog.nearDepth + 1.0;
+        cases.push_back({fog, changed, "fog"});
+    }
+    std::uint64_t id = 48300;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("depth native (") + item.name + " " +
+                                 std::to_string(item.values.falloff) + "): ";
+        const auto plan = bloom::depth_test::depthPlan(item.values, id).plan;
+        const auto changedPlan = bloom::depth_test::depthPlan(item.changed, id).plan;
+        id += 100;
+        const auto request = requestFor(*plan);
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, changed.scene);
+        const auto rerunDispatches =
+            executor.executor->counters().dispatches - coldCounters.dispatches;
+        expectations.expect(
+            rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail,
+                       AlphaGate::Exact) &&
+                rerunDispatches > 0 && rerunDispatches < coldCounters.dispatches,
+            name + "a changed value re-runs only the chain after it, with CPU parity: " + detail +
+                ", " + std::to_string(rerunDispatches) + " of " +
+                std::to_string(coldCounters.dispatches) + " dispatches");
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runBatchedChains(expectations, device, cache);
@@ -1967,6 +2097,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runChannelSelects(expectations, device, cache);
     runRecipes(expectations, device, cache);
     runFields(expectations, device, cache);
+    runDepthEffects(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

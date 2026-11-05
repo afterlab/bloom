@@ -35,7 +35,11 @@ enum class ColorGradeKind : std::uint8_t {
     Vignette,
     // #525: a field raster (field_raster.hpp); the table is a field program's, its geometry
     // appended where it is applied.
-    FieldRaster
+    FieldRaster,
+    // #483: a depth map and Z Defocus's gather (depth_effect_image_effect.hpp), each with its
+    // geometry appended where it is applied.
+    DepthMap,
+    Defocus
 };
 
 // The packed table, always a whole number of vec4s:

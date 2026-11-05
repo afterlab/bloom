@@ -568,6 +568,72 @@ struct MaskDistanceKernel final {
     friend bool operator==(const MaskDistanceKernel&, const MaskDistanceKernel&) = default;
 };
 
+// #483 Depth effects (docs/architecture/image-filters.md, "Depth effects"). A depth map reads one
+// channel of its input as depth and gives, per pixel, either Z Defocus's signed circle of confusion
+// (in evaluation pixels: negative nearer than the focus, positive farther; the image (c, 0, 0,
+// min(|c| / R, 1)) with R the widest blur) or Depth Fog's fog factor (the Mask transport). A grade
+// kind whose prepared table gains the input's geometry where it is applied; the Choice values are
+// document::depth_parameters' stored values.
+enum class DepthMapOutput : std::uint8_t { CircleOfConfusion, Fog };
+struct DepthMapKernel final {
+    DepthMapOutput output = DepthMapOutput::CircleOfConfusion;
+    // 0 R, 1 G, 2 B (each unpremultiplied), 3 A.
+    std::uint8_t channel = 0;
+    std::int64_t interpretation = 0;
+    bool invert = false;
+    std::int64_t mistFalloff = 0;
+    std::int64_t background = 0;
+    // Z Defocus.
+    std::int64_t mode = 0;
+    std::int64_t focusFrom = 0;
+    std::int64_t blurRegion = 0;
+    std::int64_t units = 0;
+    std::int64_t edgeExpand = 0;
+    // Depth Fog.
+    std::int64_t falloff = 0;
+    CompiledScalarParameter nearDistance{{}, 0.0};
+    CompiledScalarParameter farDistance{{}, 1.0};
+    CompiledScalarParameter focusDistance{{}, 10.0};
+    CompiledVec2Parameter focusPoint{{}, document::Vec2d{}};
+    CompiledScalarParameter depthOfField{{}, 0.0};
+    CompiledScalarParameter size{{}, 16.0};
+    CompiledScalarParameter maxSize{{}, 64.0};
+    CompiledScalarParameter focalLength{{}, 50.0};
+    CompiledScalarParameter sensorWidth{{}, 36.0};
+    CompiledScalarParameter fStop{{}, 2.8};
+    CompiledScalarParameter amount{{}, 1.0};
+    CompiledScalarParameter start{{}, 0.0};
+    CompiledScalarParameter end{{}, 1.0};
+    CompiledScalarParameter density{{}, 1.0};
+    std::optional<CompiledPathParameter> curve{};
+    friend bool operator==(const DepthMapKernel&, const DepthMapKernel&) = default;
+};
+// #483 Z Defocus's gather: a variable-radius lens blur of the input by a circle of confusion map
+// (absent in Uniform mode, where every pixel's radius is `size`). Its slots: the tile maximum (a
+// colour-carrying Dilate of the map: the neighbourhood maximum in alpha, each pixel's own signed
+// circle of confusion in red), the input box-prefiltered at the widest ring spacing and the bokeh
+// image. `slotImages` index CompiledImageEffect::fieldImages (-1 absent) in that order. The output
+// is the input's data window grown by the widest reach.
+inline constexpr std::size_t kDefocusTileSlot = 0;
+inline constexpr std::size_t kDefocusPrefilterSlot = 1;
+inline constexpr std::size_t kDefocusBokehSlot = 2;
+inline constexpr std::size_t kDefocusSlots = 3;
+struct DefocusKernel final {
+    std::int64_t mode = 0;
+    std::int64_t shape = 0;
+    std::int64_t blades = 6;
+    std::int64_t quality = 1;
+    std::array<std::int8_t, kDefocusSlots> slotImages{-1, -1, -1};
+    CompiledScalarParameter size{{}, 16.0};
+    CompiledScalarParameter maxSize{{}, 64.0};
+    CompiledScalarParameter rotation{{}, 0.0};
+    CompiledScalarParameter roundness{{}, 0.0};
+    CompiledScalarParameter highlightGain{{}, 0.0};
+    CompiledScalarParameter highlightThreshold{{}, 1.0};
+    CompiledScalarParameter chromatic{{}, 0.0};
+    friend bool operator==(const DefocusKernel&, const DefocusKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -575,7 +641,7 @@ using ImageEffectKernel =
                  LevelsKernel, CurvesKernel, HueSaturationKernel, ChannelSelectKernel,
                  ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
                  AlphaAssociationKernel, ColorizeKernel, VignetteKernel, FieldRasterKernel,
-                 MaskDistanceKernel>;
+                 MaskDistanceKernel, DepthMapKernel, DefocusKernel>;
 
 // #525: every operand of a field program, in instruction order and, within one, scalars, vectors,
 // the curve, then the ramp.
@@ -668,6 +734,42 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
         forEachFieldOperand(field->program, visit);
         return true;
     }
+    // #483: near and far, then the circle of confusion's focus distance, focus point, in-focus
+    // range, size, maximum size, focal length, sensor width and f-stop, or the fog's amount,
+    // start, end, density and (when lowered) curve.
+    if (const auto* depth = std::get_if<DepthMapKernel>(&kernel)) {
+        visit(depth->nearDistance);
+        visit(depth->farDistance);
+        if (depth->output == DepthMapOutput::CircleOfConfusion) {
+            visit(depth->focusDistance);
+            visit(depth->focusPoint);
+            visit(depth->depthOfField);
+            visit(depth->size);
+            visit(depth->maxSize);
+            visit(depth->focalLength);
+            visit(depth->sensorWidth);
+            visit(depth->fStop);
+        } else {
+            visit(depth->amount);
+            visit(depth->start);
+            visit(depth->end);
+            visit(depth->density);
+            if (depth->curve)
+                visit(*depth->curve);
+        }
+        return true;
+    }
+    // #483: size, maximum size, rotation, roundness, highlight gain and threshold, chromatic.
+    if (const auto* defocus = std::get_if<DefocusKernel>(&kernel)) {
+        visit(defocus->size);
+        visit(defocus->maxSize);
+        visit(defocus->rotation);
+        visit(defocus->roundness);
+        visit(defocus->highlightGain);
+        visit(defocus->highlightThreshold);
+        visit(defocus->chromatic);
+        return true;
+    }
     return false;
 }
 
@@ -680,7 +782,9 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<AlphaAssociationKernel>(kernel) ||
            std::holds_alternative<ColorizeKernel>(kernel) ||
            std::holds_alternative<VignetteKernel>(kernel) ||
-           std::holds_alternative<FieldRasterKernel>(kernel);
+           std::holds_alternative<FieldRasterKernel>(kernel) ||
+           std::holds_alternative<DepthMapKernel>(kernel) ||
+           std::holds_alternative<DefocusKernel>(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
@@ -698,7 +802,8 @@ struct CompiledImageEffect final {
     // that layer's blend mode and clock through it (see mergeEntryLayerOutput).
     bool trackMatte = false;
     // #525: a FieldRasterKernel's image slots, in slot order (an Image Field's image, a mask Shape
-    // Distance's distance image), each sampled by its own data window.
+    // Distance's distance image), each sampled by its own data window; #483 a DefocusKernel's
+    // (DefocusKernel::slotImages).
     std::vector<OperationIndex> fieldImages{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };

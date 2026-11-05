@@ -140,6 +140,12 @@ BLOOM_GPU_REQUIRED_EFFECT(FieldRasterKernel,
                           "and output modes (#525)");
 BLOOM_GPU_REQUIRED_EFFECT(MaskDistanceKernel,
                           "exact signed distance of a mask for Shape Distance (#525)");
+BLOOM_GPU_REQUIRED_EFFECT(DepthMapKernel,
+                          "depth map: Z Defocus's circle of confusion or Depth Fog's fog factor "
+                          "from any depth interpretation (#483)");
+BLOOM_GPU_REQUIRED_EFFECT(DefocusKernel,
+                          "Z Defocus scatter-as-gather lens blur with bokeh shape or image, "
+                          "highlight boost and chromatic bokeh (#483)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT

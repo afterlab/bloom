@@ -9,6 +9,7 @@
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -1948,6 +1949,7 @@ int main() {
         testAlphaAssociationLowering(expectations);
         testColorizeLowering(expectations);
         testVignetteLowering(expectations);
+        testDepthEffectLowering(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);
         testFieldSampleDrivesAValue(expectations);

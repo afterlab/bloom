@@ -47,6 +47,8 @@ class RecipeEmitter final {
     [[nodiscard]] OperationIndex effect(OperationIndex input, ImageEffectKernel kernel,
                                         std::optional<OperationIndex> secondary = {},
                                         std::optional<OperationIndex> mask = {});
+    // #483: the images an effect reads beside its input (CompiledImageEffect::fieldImages).
+    void setImages(OperationIndex effect, std::vector<OperationIndex> images);
     // `entries` are top first (the Merge's own order); each is a plain image with an explicit mode.
     [[nodiscard]] OperationIndex
     merge(std::initializer_list<std::pair<OperationIndex, core::BlendMode>> entries);

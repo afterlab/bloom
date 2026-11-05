@@ -64,6 +64,7 @@ target_sources(
         cryptomatte_matte_list.cpp
         snapshot_compiler.cpp
         compositing_recipes.cpp
+        depth_effect_recipes.cpp
         compositing_recipes.hpp
         plan_time_scopes.cpp
         profiler_gpu_reader.cpp
@@ -157,6 +158,7 @@ target_sources(
         color_grade_curves.cpp
         color_grade_image_effect.cpp
         vignette_image_effect.cpp
+        depth_effect_image_effect.cpp
         field_raster.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp

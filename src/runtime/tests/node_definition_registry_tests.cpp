@@ -152,8 +152,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Hue/Saturation; #479 adds Separate Channels and Combine Channels; #480 adds Pass and Image to
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
     // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette; #525 adds the
-    // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask.
-    expectations.expect(registry.definitions().size() == 174,
+    // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
+    // Fog.
+    expectations.expect(registry.definitions().size() == 176,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -550,7 +551,11 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                             [](const auto& definition) {
                                 // #525: Image Field, Shape Distance and Rasterize Field's extent
                                 // read an image or a mask, so they take every pixel kind too.
+                                // #483: a depth effect's depth reads an Image, a Mask or a
+                                // channel set.
                                 return definition.key.typeId != "bloom.image-preview" &&
+                                       definition.key.typeId != "bloom.z-defocus" &&
+                                       definition.key.typeId != "bloom.depth-fog" &&
                                        definition.key.typeId != "bloom.field-from-image" &&
                                        definition.key.typeId != "bloom.field-shape-distance" &&
                                        definition.key.typeId != "bloom.field-rasterize" &&
@@ -1020,18 +1025,19 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 14>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 16>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
                                          "bloom.ocio-file-transform", "bloom.gaussian-blur",
-                                         "bloom.box-blur", "bloom.vignette", "bloom.curves"},
+                                         "bloom.box-blur", "bloom.vignette", "bloom.curves",
+                                         "bloom.z-defocus", "bloom.depth-fog"},
         [&](const std::string_view type) {
             return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 14,
+    expectations.expect(shaped && named && masked == 16,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);

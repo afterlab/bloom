@@ -430,12 +430,60 @@ void morphologyTests() {
         require(runtime::detail::prepareSeparableBlur(identity, 0.0, 1.0, 1.0)->identity(),
                 "morphology radius zero is an exact identity");
         const auto rgba = kernel(kind, runtime::BlurEdgeMode::Clamp);
-        require(!runtime::detail::prepareSeparableBlur(rgba, 1.0, 1.0, 1.0) &&
-                    !runtime::detail::buildSeparableBlurProgram(std::array{1.0F, 1.0F, 1.0F},
-                                                                false, runtime::BlurEdgeMode::Clamp,
-                                                                runtime::BlurChannels::Rgba, kind)
-                         .succeeded(),
-                "morphology refuses the Rgba channel policy on both routes");
+        if (erode) {
+            require(!runtime::detail::prepareSeparableBlur(rgba, 1.0, 1.0, 1.0) &&
+                        !runtime::detail::buildSeparableBlurProgram(
+                             std::array{1.0F, 1.0F, 1.0F}, false, runtime::BlurEdgeMode::Clamp,
+                             runtime::BlurChannels::Rgba, kind)
+                             .succeeded(),
+                    "Erode refuses the Rgba channel policy on both routes");
+            continue;
+        }
+        // #483: an Rgba Dilate dilates the alpha as the Coverage Dilate does and carries each
+        // pixel's own colour (zero in the transparent halo), on both routes.
+        for (const auto edge : {runtime::BlurEdgeMode::Transparent, runtime::BlurEdgeMode::Clamp}) {
+            auto carry = kernel(kind, edge);
+            auto matte = kernel(kind, edge);
+            matte.channels = runtime::BlurChannels::Coverage;
+            const auto carried = runtime::detail::prepareSeparableBlur(carry, 1.5, 1.0, 1.0);
+            const auto covered = runtime::detail::prepareSeparableBlur(matte, 1.5, 1.0, 1.0);
+            require(carried && covered && carried->channels == runtime::BlurChannels::Rgba,
+                    "the colour-carrying Dilate prepares");
+            const auto a = runtime::detail::applySeparableBlur(
+                *carried, input, 65536, {}, runtime::OperationIndex::fromRaw(0), {});
+            const auto b = runtime::detail::applySeparableBlur(
+                *covered, input, 65536, {}, runtime::OperationIndex::fromRaw(0), {});
+            require(a.image && b.image &&
+                        a.image->descriptor()->dataWindow() == b.image->descriptor()->dataWindow(),
+                    "the colour-carrying Dilate covers the Coverage Dilate's window");
+            const auto window = a.image->descriptor()->dataWindow();
+            for (auto y = window.originY(); y < window.maxYExclusive(); ++y)
+                for (auto x = window.originX(); x < window.maxXExclusive(); ++x) {
+                    const auto got = a.image->read(x, y);
+                    const auto alpha = b.image->read(x, y);
+                    const auto own = input.read(x, y);
+                    const float red = own ? own.value()->red() : 0.0F;
+                    const float green = own ? own.value()->green() : 0.0F;
+                    require(got && alpha && got.value()->alpha() == alpha.value()->alpha() &&
+                                got.value()->red() == red && got.value()->green() == green,
+                            "the colour-carrying Dilate keeps each pixel's colour and dilates "
+                            "its alpha");
+                }
+            const auto program = runtime::detail::buildSeparableBlurProgram(
+                carried->horizontal, false, edge, runtime::BlurChannels::Rgba, kind);
+            const auto coverageProgram = runtime::detail::buildSeparableBlurProgram(
+                covered->horizontal, false, edge, runtime::BlurChannels::Coverage, kind);
+            require(program.succeeded() && coverageProgram.succeeded() &&
+                        program.program()->semanticsId ==
+                            "bloom.render.separable-dilate.carry.v1" &&
+                        program.program()->contentIdentity !=
+                            coverageProgram.program()->contentIdentity &&
+                        program.program()->shaderText.find("return vec4(centre, clamp(m, 0.0, "
+                                                           "1.0));") != std::string::npos &&
+                        coverageProgram.program()->shaderText.find("centre") == std::string::npos,
+                    "the colour-carrying Dilate has its own device program; the Coverage "
+                    "Dilate's text is unchanged");
+        }
     }
     auto invalid = kernel(static_cast<runtime::SeparableBlurKind>(4), runtime::BlurEdgeMode::Clamp);
     invalid.channels = runtime::BlurChannels::Coverage;
