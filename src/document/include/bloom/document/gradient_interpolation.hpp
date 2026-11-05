@@ -1,12 +1,12 @@
 #pragma once
 
 // #546: how a gradient blends between its stops -- its interpolation, its colour mode and, for HSV
-// and HSL, its hue direction -- and the one definition of the colour they give. Blender's Color
-// Ramp (BKE_colorband_evaluate, key_curve_position_weights, colorband_hue_interp and its
+// and HSL, its hue direction -- and the one definition of the colour they give. The established
+// colour ramp (BKE_colorband_evaluate, key_curve_position_weights, colorband_hue_interp and its
 // rgb_to_hsv / rgb_to_hsl / hsv_to_rgb / hsl_to_rgb) is the reference for Ease, Cardinal, B-Spline,
 // the HSV and HSL blends and the four hue directions; Exponential is the exponential easing of
-// Blender's F-Curves with its automatic (ease in) direction, the one Bloom's Exponential keyframe
-// easing applies, written out so CPU and GPU evaluate the same operations.
+// the reference's F-Curves with its automatic (ease in) direction, the one Bloom's Exponential
+// keyframe easing applies, written out so CPU and GPU evaluate the same operations.
 //
 // The evaluation is a template over the scalar type: the document evaluates in binary64 (the
 // editor's bar, Glow's octave tints), the CPU reference in binary32 with the operations the native

@@ -654,8 +654,8 @@ Colorize's Gradient Map. A double-click on its name resets it, and its right-cli
 Reset Gradient and the gradient's key. #546: under the Stop row a "Color mode" dropdown (RGB, HSV,
 HSL) and an "Interpolation" dropdown (Constant, Linear, Ease, Cardinal, B-Spline, Exponential)
 choose how the colour blends between stops; for HSV and HSL the second row reads "Hue" and its
-dropdown (Near, Far, Clockwise, Counter-clockwise) takes the Interpolation one's place, as in
-Blender's Color Ramp, each option with a tooltip saying what it does. A choice is one edit ("Set
+dropdown (Near, Far, Clockwise, Counter-clockwise) takes the Interpolation one's place, as in an
+established colour ramp, each option with a tooltip saying what it does. A choice is one edit ("Set
 Gradient Blend") of the whole gradient, its stops untouched, and the bar is drawn in the chosen blend.
 #543: under the blend rows its Values disclosure shows a row
 for each stop's colour ("Stop 2 color", a chip) and position ("Stop 2 position", in percent), each

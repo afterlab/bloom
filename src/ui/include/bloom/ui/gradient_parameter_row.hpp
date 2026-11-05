@@ -15,7 +15,7 @@
 //
 // #546: under the Stop row, a Color mode dropdown (RGB, HSV, HSL) and either an Interpolation
 // dropdown (Constant, Linear, Ease, Cardinal, B-Spline, Exponential) for RGB or a Hue dropdown
-// (Near, Far, Clockwise, Counter-clockwise) for HSV and HSL, as Blender's Color Ramp offers them;
+// (Near, Far, Clockwise, Counter-clockwise) for HSV and HSL, as an established colour ramp offers them;
 // each choice is one edit, and the bar is drawn in the chosen blend.
 //
 // Colorize's Gradient Map, the Linear and Radial Gradient generators' colours and Glow's tint

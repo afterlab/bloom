@@ -105,7 +105,7 @@ GradientParameterRow::GradientParameterRow(CompositionSession& session,
     position_->setDecimals(1);
     position_->setSingleStep(1.0);
     position_->setUnit(QStringLiteral("%"));
-    // #546: how the colour blends between stops, as Blender's Color Ramp offers it.
+    // #546: how the colour blends between stops, as an established colour ramp offers it.
     const auto dropdown = [this, &prefix](const char* suffix, const QString& accessible,
                                           const QString& tip) {
         auto* box = new kit::KDropdown(this);
@@ -501,8 +501,9 @@ void GradientParameterRow::rebuildStopRows(const std::size_t stops) {
 }
 
 int GradientParameterRow::stopRowsTop() const {
-    // The bar, the Stop row, the Color mode and Interpolation (or Hue) rows, the Values button.
-    return editor_->sizeHint().height() + 4 * (small() + control());
+    // The bar, then the Stop, Color mode, Interpolation (or Hue) and Values rows.
+    constexpr int kRowsBelowBar = 4;
+    return editor_->sizeHint().height() + kRowsBelowBar * (small() + control());
 }
 
 void GradientParameterRow::setLabelWidth(const int width) {

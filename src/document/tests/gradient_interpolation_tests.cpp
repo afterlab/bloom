@@ -1,5 +1,5 @@
 // #546: the gradient interpolation, colour and hue modes against an independent port of the
-// reference (Blender's BKE_colorband_evaluate) in binary64: every interpolation in RGB before the
+// reference colour ramp (BKE_colorband_evaluate) in binary64: every interpolation in RGB before the
 // first stop, inside a segment and after the last stop, HSV and HSL in every hue direction, and the
 // names and validity of the modes.
 

@@ -807,7 +807,8 @@ portable CPU reference remains the supported fallback.
 
 A gradient value carries an interpolation, a colour mode and a hue direction (#546,
 `document::GradientModes`, `gradient_interpolation.hpp`); Linear in RGB is the blend above and
-keeps its exact operations. Blender's Color Ramp (`BKE_colorband_evaluate`) is the reference:
+keeps its exact operations. The established colour-ramp definition (`BKE_colorband_evaluate`) is
+the reference:
 
 - **Constant** holds the earlier stop's colour up to the next stop. **Ease** shapes the local
   factor as `3u^2 - 2u^3`. **Exponential**, which the reference's Color Ramp lacks, is the

@@ -263,8 +263,9 @@ Gradient Map shows its **Gradient** as an editable bar with a stop under it for 
   stop), **Cardinal** (a smooth curve through the stops), **B-Spline** (a smooth curve near the
   stops) or **Exponential** (stays near a stop's colour, then turns quickly). In HSV and HSL,
   **Hue** sets which way the hue turns: **Near** (the shorter way), **Far** (the longer way),
-  **Clockwise** or **Counter-clockwise**. These work as Blender's Color Ramp does, and the same
-  controls appear on every gradient (Linear and Radial Gradient's colours, Glow's tint gradient).
+  **Clockwise** or **Counter-clockwise**. These follow the established colour-ramp definitions,
+  and the same controls appear on every gradient (Linear and Radial Gradient's colours, Glow's tint
+  gradient).
 
 The diamond beside the gradient keys the whole gradient at the playhead. Between two keys with the
 same number of stops each stop moves and changes colour smoothly; adding or removing a stop between
