@@ -513,6 +513,11 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                                     << '\n';
                             return admissionFailure(gpuOutcome.diagnostic.code);
                         }
+                        if (gpuOutcome.status != runtime::GpuProcessFrameStatus::Evaluated)
+                            std::clog << "Bloom export: frame taking the CPU reference path: "
+                                      << "status " << static_cast<int>(gpuOutcome.status)
+                                      << ", code " << static_cast<int>(gpuOutcome.diagnostic.code)
+                                      << ": " << gpuOutcome.diagnostic.message << '\n';
                         gpuProvenance.status = gpuOutcome.status;
                         gpuProvenance.counters = gpuOutcome.counters;
                         gpuProvenance.deviceOwnershipEpoch = gpuOutcome.deviceOwnershipEpoch;
