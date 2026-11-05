@@ -440,6 +440,32 @@ OperationResult ConnectPorts::apply(document::Draft& draft) const {
     if (sourceKind && inputKind && !graph.acceptsConnection(*sourceKind, destination_, registry_))
         return OperationResult::rejected(OperationIssueCode::SocketKindMismatch,
                                          "Connected socket kinds do not match");
+    // #543: the first link into a gradient stop's socket binds the stop's own link record: a
+    // parameter holding only the driver, bound under the socket's name beside the gradient.
+    if (const auto* fixed = std::get_if<document::NodeInputRef>(&destination_);
+        fixed != nullptr && detail::parameterSocketBinding(graph, destination_) == nullptr)
+        if (const auto stop = document::parseGradientStopPort(fixed->port)) {
+            auto* node = graph.findNode(fixed->nodeId);
+            if (node == nullptr ||
+                std::ranges::none_of(node->parameters, [&](const document::ParameterBinding& b) {
+                    return b.role == stop->role;
+                }))
+                return OperationResult::rejected(
+                    OperationIssueCode::InvalidTarget,
+                    "Edit the gradient before linking one of its stops");
+            const auto parameterId = draft.ids().allocateParameter();
+            if (!parameterId)
+                return detail::exhaustedIds();
+            if (!composition->parameters().insert(
+                    {*parameterId, std::string(document::gradientStopSchemaKey(stop->component)),
+                     document::DriverBindingSource{source_.nodeId, source_.port}}))
+                return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                                 "Driver binding could not be applied");
+            node->parameters.push_back({fixed->port, *parameterId});
+            if (const auto failure = detail::validateGraph(*composition, registry_))
+                return *failure;
+            return neutral(OperationResult::applied({{"parameter", *parameterId}}));
+        }
     // Task S7: a link into an operand socket is the PARAMETER's driver binding, not an edge. One
     // authored value, one durable record of where it comes from -- so there is nothing for an edge
     // and a binding to disagree about, and DisconnectInput has one thing to undo.
@@ -647,6 +673,19 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
         if (!std::holds_alternative<document::DriverBindingSource>(parameter->source))
             return OperationResult::noChange();
         const auto* fixed = std::get_if<document::NodeInputRef>(&input_);
+        // #543: unlinking a gradient stop removes its link record; the stop keeps the colour and
+        // position it was authored with.
+        if (fixed != nullptr && document::parseGradientStopPort(fixed->port)) {
+            const auto parameterId = binding->parameterId;
+            auto* node = graph.findNode(fixed->nodeId);
+            std::erase_if(node->parameters, [&](const document::ParameterBinding& candidate) {
+                return candidate.parameterId == parameterId;
+            });
+            static_cast<void>(composition->parameters().erase(parameterId));
+            if (const auto failure = detail::validateGraph(*composition, registry_))
+                return *failure;
+            return neutral(OperationResult::applied());
+        }
         auto fallback = fixed == nullptr ? std::nullopt
                                          : detail::registeredDefault(graph, fixed->nodeId,
                                                                      binding->role, registry_);
@@ -677,6 +716,54 @@ OperationResult DisconnectInput::apply(document::Draft& draft) const {
     if (const auto failure = detail::validateGraph(*composition, registry_))
         return *failure;
     return neutral(OperationResult::applied());
+}
+
+std::string_view RemapGradientStopLinks::typeId() const noexcept {
+    return "bloom.node.remap-gradient-stop-links";
+}
+OperationResult RemapGradientStopLinks::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    auto* node = composition ? composition->graph().findNode(nodeId_) : nullptr;
+    if (node == nullptr)
+        return detail::invalidTarget();
+    const auto reachableBefore = document::RenderReachability::of(*composition, registry_);
+    std::vector<document::ParameterBinding> kept;
+    std::vector<document::ParameterId> removed;
+    bool changed = false;
+    for (auto binding : node->parameters) {
+        auto stop = document::parseGradientStopPort(binding.role);
+        if (!stop || stop->role != gradientRole_ || stop->stop >= newIndexOfOld_.size()) {
+            kept.push_back(std::move(binding));
+            continue;
+        }
+        const auto target = newIndexOfOld_[stop->stop];
+        if (!target || *target >= document::kMaximumGradientStops) {
+            removed.push_back(binding.parameterId);
+            changed = true;
+            continue;
+        }
+        if (*target != stop->stop) {
+            binding.role = document::gradientStopPortName(gradientRole_, *target, stop->component);
+            changed = true;
+        }
+        kept.push_back(std::move(binding));
+    }
+    if (!changed)
+        return OperationResult::noChange();
+    std::set<std::string_view> roles;
+    for (const auto& binding : kept)
+        if (!roles.insert(binding.role).second)
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "Two stop links would land on one stop");
+    node->parameters = std::move(kept);
+    for (const auto id : removed)
+        static_cast<void>(composition->parameters().erase(id));
+    if (const auto failure = detail::validateGraph(*composition, registry_))
+        return *failure;
+    auto result = OperationResult::applied();
+    result.affectedTimes =
+        detail::unreachableEditFootprint(*composition, *reachableBefore, {nodeId_}, registry_);
+    return result;
 }
 
 std::string_view DissolveNode::typeId() const noexcept { return "bloom.node.dissolve"; }

@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::commands {
 // Checks the exact operation and final document validation on an isolated draft. Never publishes,
@@ -220,6 +221,32 @@ class DisconnectInput final : public Operation {
   private:
     document::CompositionId compositionId_;
     document::InputPortRef input_;
+    const document::NodeDefinitionRegistry& registry_;
+};
+
+// #543: moves a gradient's stop links with their stops after an edit reorders or removes stops.
+// `newIndexOfOld[i]` is the stored index stop `i` now has, or nullopt when it was removed (its
+// links go with it); a stop past the end of the list keeps its index. One transaction with the
+// gradient's new value, so a link never names a stop it did not follow.
+class RemapGradientStopLinks final : public Operation {
+  public:
+    RemapGradientStopLinks(
+        document::CompositionId compositionId, document::NodeId nodeId, std::string gradientRole,
+        std::vector<std::optional<std::uint32_t>> newIndexOfOld,
+        const document::NodeDefinitionRegistry& registry = document::builtInNodeDefinitions())
+        : compositionId_(compositionId), nodeId_(nodeId), gradientRole_(std::move(gradientRole)),
+          newIndexOfOld_(std::move(newIndexOfOld)), registry_(registry) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
+
+  private:
+    document::CompositionId compositionId_;
+    document::NodeId nodeId_;
+    std::string gradientRole_;
+    std::vector<std::optional<std::uint32_t>> newIndexOfOld_;
     const document::NodeDefinitionRegistry& registry_;
 };
 
