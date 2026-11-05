@@ -775,8 +775,10 @@ Linear `t` is projection onto the start-to-end vector. Radial `t` is distance fr
 the start-to-end distance. Horizontal distances are multiplied by physical pixel aspect in both
 formulas. A zero-length vector chooses the first stop's color. Clamp confines `t` to `[0,1]`,
 Repeat uses its fractional part, and Mirror folds over period two. The gradient is sampled at the
-frame (a keyed gradient through `sampleGradientCurve`) and its stops sorted by position, ties kept
-in stored order. Up to the first stop the first color holds, from the last stop the last color
+frame (a keyed gradient through `sampleGradientCurve`), each stop a value node drives then takes the
+driven colour or position from the frame's value graph (#543, `CompiledGradientParameter::drivers`,
+project-format.md "Gradient Stop Links In Document 1.40"), and its stops are sorted by position,
+ties kept in stored order. Up to the first stop the first color holds, from the last stop the last color
 holds, and between them the phase finds the last stop at or before it and its successor; two stops
 at one position make a hard edge. Each stop carries the Float32 reciprocal of its span to the next
 (zero for an empty span), and the local factor is `(phase - position) * inverseSpan` in Float32.
@@ -791,8 +793,8 @@ premultiplied pixel. ROI clips the requested output while preserving full source
 the composition display window.
 
 The CPU evaluator shades rows with the shared cancellation and pixel budget gate. The GPU scene
-preparer resolves the same animation operands and windows and emits a semantic key containing every
-sorted stop (position, reciprocal span, straight color), endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
+preparer resolves the same animation operands, driven stops and windows and emits a semantic key
+containing every sorted stop (position, reciprocal span, straight color), endpoints, repeat mode, scales, extent, pixel aspect, and the pinned GradientV1
 shader digest. GradientV1 reads the stop table from a storage-buffer binding (two `vec4` per stop:
 position and reciprocal span, then the straight color; the stop count in its push constants) and
 refuses an empty, oversized, unsorted or non-finite table as Unsupported. The native operation

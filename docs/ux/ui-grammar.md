@@ -651,7 +651,17 @@ Radial Gradient's start and end, joined by a line, on the node's own width and h
 diamond, then a Stop row with the selected stop's colour chip and its position in percent -- a
 Linear or Radial Gradient's Colors above its pad, Glow's Tint gradient above its angle dial, and
 Colorize's Gradient Map. A double-click on its name resets it, and its right-click menu offers
-Reset Gradient and the gradient's key. Properties' Layer Transform section turns rotation
+Reset Gradient and the gradient's key. #543: under the Stop row its Values disclosure shows a row
+for each stop's colour ("Stop 2 color", a chip) and position ("Stop 2 position", in percent), each
+with its socket on a node card, so a value node links to a stop as to any other value. A linked row
+always shows, reads "Linked to <node>" in place of its control (its tooltip adds the driven value)
+and keeps its socket and wire; the stop's handle on the bar is ringed with a dashed outline and a dot
+in the link's socket colour (Colour for a colour link, Scalar for a position) and drawn at the
+driven colour and position; the Stop row's chip or position field of a linked stop is disabled
+("Linked"). A linked position is not dragged, stepped, distributed or reversed, and a linked colour
+opens no picker. The gradient stores its stops in the order they were added (a new stop goes after
+the others), so a stop keeps its index while it moves; moving a stop past another keeps its links on
+it, and removing a stop removes its links and renumbers the later ones, in the same undo step. Properties' Layer Transform section turns rotation
 on a `KAngleDial` beside its field. A layer, shape, text box or solid is still dragged in the Viewer
 with its native handles. Every grading graph (Levels, Curves, the contrast picture) is one
 uniform grey with a grid line every quarter: no lighter 0..1 box and no dark band past 1.
@@ -1576,7 +1586,9 @@ the bar (it returns if the pointer comes back first) or by Delete, keeps its min
 its owner for a stop's colour on a double-click or Enter, moves the selected stop by the arrow keys
 (Shift or Page ten times as far) and offers Add Stop, Remove Stop, Distribute Evenly and Reverse on
 its menu. Each of them draws its focus ring on its active part and treats a drag, a run of keys or
-one menu action as one edit.
+one menu action as one edit. #543: `KGradientEditor` numbers each stop with its index in the list it
+was given (`Stop::origin`) and keeps that number through moves and removals, and draws a stop marked
+`colorLinked` or `positionLinked` as linked, leaving its linked part alone.
 
 ## MCP Server panel
 

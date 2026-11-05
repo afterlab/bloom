@@ -733,9 +733,10 @@ aliases its input. Spacing is bounded to `[0, 1024]` pixels and the decay to `(0
   uses `tint`. `tintGradient` (node schema 2, #541) is an animatable gradient value of 1 to 64 stops
   (default white at 0 and (1, 0.5, 0.25) at 1), edited on the card and in Properties with the
   gradient editor; a constant gradient folds to constant octave tints, and a keyed one samples at
-  the frame through a value-graph gradient sample per octave. Its two-stop default is exactly schema
-  1's `tint + (outerTint - tint) * j / (n - 1)`, which a schema 1 Glow opens as (project-format.md,
-  "Gradient Colour Pairs In Document 1.39").
+  the frame through a value-graph gradient sample per octave, as does one whose stops a value node
+  drives (#543, project-format.md "Gradient Stop Links In Document 1.40"). Its two-stop default is
+  exactly schema 1's `tint + (outerTint - tint) * j / (n - 1)`, which a schema 1 Glow opens as
+  (project-format.md, "Gradient Colour Pairs In Document 1.39").
 - Lens dirt: an optional `dirt` Image input adds the glow times the dirt's Rec. 709 luma coverage
   (Multiply Alpha, Luma), its colour scaled by `dirtAmount` (`[0, 1000]`, default 1), as Unreal
   Engine's bloom dirt mask does.
@@ -902,7 +903,9 @@ the track-matte Luma and Luma Key use. Each mode gives a colour `c`:
   by position instead of the three-colour ramp: `c = c_0` for `t <= p_0`, `c = c_last` for
   `t >= p_last`, and otherwise `c = c_i + ((t - p_i) / (p_{i+1} - p_i))(c_{i+1} - c_i)` for the last
   stop with `p_i <= t` (two stops at one position make a hard edge: the later one wins from there
-  on). A stop's alpha is kept in the gradient but unused: Colorize keeps the pixel's alpha.
+  on). A stop's alpha is kept in the gradient but unused: Colorize keeps the pixel's alpha. A stop a
+  value node drives (#543) takes its driven colour or position at the frame before the stops are
+  ordered, on the CPU reference and in the stop table the fixed program reads alike.
 - **Black & White** takes the largest, middle and smallest channel of `s` and
   `grey = min + (mid - min) * secondary + (max - mid) * primary`, `c = (grey, grey, grey)`. The
   primary weight belongs to the largest channel (Reds, Greens or Blues) and the secondary to the pair

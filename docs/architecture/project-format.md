@@ -1,8 +1,10 @@
 # Bloom Project Format
 
-The current document schema is 1.39. It moves the Linear and Radial Gradient generators' start and
-end colours and Glow's tint and outer tint onto gradient values, and opens an older document's
-colour pairs as two-stop gradients (see "Gradient Colour Pairs In Document 1.39"). Document 1.38
+The current document schema is 1.40. It lets a value node drive a gradient stop's colour or
+position through a stop link (see "Gradient Stop Links In Document 1.40"). Document 1.39 moved the
+Linear and Radial Gradient generators' start and end colours and Glow's tint and outer tint onto
+gradient values, and opens an older document's colour pairs as two-stop gradients (see "Gradient
+Colour Pairs In Document 1.39"). Document 1.38
 added the gradient value -- a multi-stop colour ramp, a parameter constant and a whole-value
 animation curve -- that Colorize's Gradient Map maps through (see "Gradient Values In Document
 1.38"). Document 1.37 let a Merge entry own its layer controls -- a
@@ -1698,8 +1700,9 @@ The Linear and Radial Gradient generators and Glow draw their colour ramps from 
   `j / (n - 1)`; `tint` stays the colour of every octave with the gradient off.
 
 These gradients may hold any finite colour (HDR and signed colour stay authorable, as the colours
-they replace could); Colorize's keeps its `+-1e6` domain. Neither has a socket: a gradient is not a
-socket kind.
+they replace could); Colorize's keeps its `+-1e6` domain. A gradient as a whole has no socket (a
+gradient is not a socket kind); from 1.40 each of its stops does (see "Gradient Stop Links In
+Document 1.40").
 
 Opening a document older than 1.39 converts each schema 1 node in the decoded envelope before
 reconstruction (`migrateLegacyGradientColorPairs`, the open path only, before the Glow controls
@@ -1720,9 +1723,10 @@ migration), so it renders as it did:
   easing and default handles, keeps that interpolation and easing; Hold everywhere stays Hold; any
   other segment is Linear between the two keys' values, so the colours are exact at every key and a
   Linear pair is exact throughout.
-- A colour driven through its socket by a value node has no gradient counterpart (a gradient has
-  no socket): its stop opens at the colour's default and a removed role's edge is dropped. A Glow's
-  driven `tint` keeps its socket and edge and still tints the glow with the gradient off.
+- A colour driven through its socket by a value node stays driven (#543): its stop opens at the
+  colour's default and takes a stop link with the colour's driver (the first colour's on stop 0, the
+  second's on stop 1), so the document renders as before. A Glow's driven `tint` also keeps its own
+  driver and still tints the glow with the gradient off.
 
 The node's bindings are re-sorted by role and the allocator's parameter, curve and keyframe high
 water advance. A schema 1 node missing its first colour is not converted and fails as an
@@ -1730,6 +1734,39 @@ unsupported node version, and a document claiming 1.39 that carries a schema 1 g
 refused the same way. The `1.38` -> `1.39` DOM step `migrateGradientColorPairsV1_38` only advances
 the version. The schema artifacts are `document-1.39.schema.json` and `manifest-1.39.schema.json`;
 the schema check restores the 1.38 artifacts from them exactly.
+
+## Gradient Stop Links In Document 1.40
+
+A value node may drive a gradient stop's colour or position (issue #543), on Linear and Radial
+Gradient's `gradient`, Glow's `tintGradient` and Colorize's `gradient`. Each driven component is its
+own parameter, a stop link:
+
+- Its schema key is `bloom.gradient.stop-color` (driven by a Color output) or
+  `bloom.gradient.stop-position` (a Scalar output, or an Integer or Boolean one through the usual
+  promotion), and its source is a driver (`{"kind": "driver", "sourceNodeId", "outputPort"}`) and
+  nothing else.
+- It is bound on the gradient's node under the stop's socket name,
+  `<gradient role>.stops[<index>].color` or `.position` (`document::gradientStopPortName`), beside the
+  gradient's own binding, which it needs. `<index>` is the stop's stored index, a decimal from 0 to
+  63 with no leading zero; a stop link binds only a stop socket and a stop socket only a stop link.
+- It is validated, ordered, cycle-checked and reached for rendering exactly as any driven
+  parameter is: its socket kind is Color or Scalar, and a link from an undeclared output, from a
+  sink or one that closes a loop is refused.
+
+At each frame the gradient is sampled (its constant, or its curve at the frame) and each link then
+sets its stop's colour, or its position clamped to `[0, 1]`; a link on a stop the gradient does not
+have at that time changes nothing. A driven value that is not finite, or a colour whose alpha leaves
+`[0, 1]`, makes the gradient not evaluable at that frame. The authored stop keeps its colour and
+position under the link, and unlinking (DisconnectInput on the socket) removes the link record so
+the stop renders as authored again. An edit that reorders or removes stops moves the links with
+their stops in the same transaction (`commands::RemapGradientStopLinks`); a removed stop's links go
+with it.
+
+The document shape is 1.39's (parameters and bindings are generic). The `1.39` -> `1.40` DOM step
+`migrateGradientStopLinksV1_39` only advances the version; a document claiming 1.39 or older that
+carries a stop link is refused at its `schemaKey` (`UnsupportedParameterSource`). The schema
+artifacts are `document-1.40.schema.json` and `manifest-1.40.schema.json`; the schema check restores
+the 1.39 artifacts from them exactly.
 
 ## Gradient Values In Document 1.38
 
