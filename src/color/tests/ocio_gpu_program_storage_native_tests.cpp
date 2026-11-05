@@ -129,6 +129,22 @@ void testRetainedBuffers(Expectations& expectations, const GpuDeviceCreationOpti
     }
     device.retireProcessingPhase(phase.lease->id(), true);
     phase.lease.reset();
+    // #544: an effect output image refused for device room is a typed budget refusal the frame
+    // waits on at its boundary, not an allocation failure that sends it to the CPU path.
+    phase = budget.reserve({.deviceWorkingBytes = 1});
+    if (!phase.lease || !device.retainProcessingPhase(phase.lease)) {
+        expectations.expect(false, "a one-byte effect-output phase is retained");
+        return;
+    }
+    const auto starved = retained->beginEffect(input, {}, kBudget);
+    const auto outputRefusal = device.nativeImageStorageRefusal();
+    expectations.expect(
+        starved.code == bloom::render::GpuOcioProgramDiagnosticCode::OverBudget && outputRefusal &&
+            outputRefusal->domain == bloom::render::GpuProcessingPhaseDomain::Device &&
+            outputRefusal->phaseId == phase.lease->id() && budget.snapshot().ownedNativeImages == 0,
+        "an effect output refused for device room is a typed over-budget refusal");
+    device.retireProcessingPhase(phase.lease->id(), true);
+    phase.lease.reset();
     std::vector<std::shared_ptr<GpuOcioProgram>> aliases(256, retained);
     retained.reset();
     std::thread foreign([held = std::move(aliases)]() mutable { held.clear(); });

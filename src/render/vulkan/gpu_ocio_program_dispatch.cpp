@@ -129,7 +129,8 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
         imageImpl->displayWindow = inputImpl->displayWindow;
         imageImpl->pixelAspect = inputImpl->pixelAspect;
         if (!createDisplayImage(state, inputImpl->width, inputImpl->height, *imageImpl)) {
-            fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
+            fail(state.imageStorageRefusal ? GpuOcioProgramDiagnosticCode::OverBudget
+                                           : GpuOcioProgramDiagnosticCode::AllocationFailed,
                  "the display output image could not be created");
             return;
         }
@@ -165,7 +166,10 @@ void GpuOcioProgram::Impl::beginImpl(const bool display, std::shared_ptr<const G
         imageImpl->displayWindow = inputImpl->displayWindow;
         imageImpl->pixelAspect = inputImpl->pixelAspect;
         if (!createResidentImage(state, inputImpl->width, inputImpl->height, *imageImpl)) {
-            fail(GpuOcioProgramDiagnosticCode::AllocationFailed,
+            // #544: a typed refusal for device room is a budget wait the frame can retry once
+            // the room comes back, never a reason to render the frame on the CPU reference path.
+            fail(state.imageStorageRefusal ? GpuOcioProgramDiagnosticCode::OverBudget
+                                           : GpuOcioProgramDiagnosticCode::AllocationFailed,
                  "the effect output image could not be created");
             return;
         }

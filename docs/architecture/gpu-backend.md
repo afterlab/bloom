@@ -1491,7 +1491,9 @@ room the cache left (a final render frame failed its own 1.3 GB byte limit and w
 When the retry is still refused (the device is full of other work, or of another application's
 memory), the final render evaluator returns `AwaitingCapacity` instead of an over-budget failure,
 so the export waits at the frame boundary and runs the frame again on the GPU; before, the frame
-went to the CPU reference path.
+went to the CPU reference path. An OCIO effect's (or display's) output image refused that way is
+the same typed over-budget refusal, not an allocation failure: before, that one refusal reported
+the device unavailable and sent a CG comp export frame to the CPU reference path.
 
 **Purge returns device memory (#544).** Purge preview cache (and the media purge, which clears the
 same store) clears the resident scene cache on the service owner, then frees all parked native
