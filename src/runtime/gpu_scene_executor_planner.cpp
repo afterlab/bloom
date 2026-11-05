@@ -181,11 +181,14 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     }
 
     if (const auto* uploadCommand = std::get_if<GpuSceneUploadCommand>(&command)) {
-        if ((uploadCommand->image == nullptr) == (uploadCommand->samples == nullptr)) {
+        if (static_cast<int>(uploadCommand->image != nullptr) +
+                static_cast<int>(uploadCommand->samples != nullptr) +
+                static_cast<int>(uploadCommand->channels != nullptr) !=
+            1) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
-                                  "an upload command needs exactly one source image or native "
-                                  "sample set");
+                                  "an upload command needs exactly one source image, native "
+                                  "sample set or data-channel set");
         }
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(uploadCommand->descriptor.dataWindow(), bytes)) {
@@ -200,6 +203,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cacheOnComplete = true;
         step.uploadSource = uploadCommand->image;
         step.uploadSamples = uploadCommand->samples;
+        step.uploadChannels = uploadCommand->channels;
         step.uploadDescriptor = uploadCommand->descriptor;
         steps.push_back(std::move(step));
         color[index] = 2;
@@ -457,29 +461,40 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     }
 
     if (const auto* cryptomatte = std::get_if<GpuSceneCryptomatteCommand>(&command)) {
+        // #549: the previous rank layer's pass first, then this layer's upload.
+        const bool accumulates = cryptomatte->accumulator != kInvalidGpuSceneCommand;
+        if (accumulates) {
+            if (const auto plan = planCommand(cryptomatte->accumulator, color);
+                plan.code != GpuSceneExecutorDiagnosticCode::None) {
+                return plan;
+            }
+        }
         if (const auto plan = planCommand(cryptomatte->input, color);
             plan.code != GpuSceneExecutorDiagnosticCode::None) {
             return plan;
         }
-        if (color[cryptomatte->input] != 2) {
+        if (color[cryptomatte->input] != 2 || (accumulates && color[cryptomatte->accumulator] != 2)) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "a Cryptomatte input was not planned");
         }
-        const auto inputDescriptor = expectedDescriptorOf(*scene, cryptomatte->input, 0);
-        std::uint64_t stacked = 0;
+        const auto extentMatches = [&](const GpuSceneCommandIndex other) {
+            const auto descriptor = expectedDescriptorOf(*scene, other, 0);
+            return descriptor.has_value() &&
+                   descriptor->data.extent().width() == cryptomatte->outputWindow.extent().width() &&
+                   descriptor->data.extent().height() == cryptomatte->outputWindow.extent().height();
+        };
         const bool geometryMatches =
-            inputDescriptor.has_value() && cryptomatte->rankCount != 0 &&
-            inputDescriptor->data.extent().width() == cryptomatte->outputWindow.extent().width() &&
-            !(cryptomatte->outputWindow.extent().height() >
-              std::numeric_limits<std::uint64_t>::max() / cryptomatte->rankCount) &&
-            (stacked = static_cast<std::uint64_t>(cryptomatte->outputWindow.extent().height()) *
-                       cryptomatte->rankCount,
-             inputDescriptor->data.extent().height() == stacked);
+            cryptomatte->rankCount != 0 && cryptomatte->rankCount <= 2 &&
+            extentMatches(cryptomatte->input) &&
+            (!accumulates || (extentMatches(cryptomatte->accumulator) &&
+                              std::holds_alternative<GpuSceneCryptomatteCommand>(
+                                  scene->commands()[cryptomatte->accumulator])));
         if (!geometryMatches) {
             color[index] = 2;
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
-                                  "a Cryptomatte command does not stack its rank count");
+                                  "a Cryptomatte command does not read one or two ranks of a "
+                                  "layer of its extent");
         }
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(cryptomatte->outputWindow, bytes)) {
@@ -498,6 +513,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.kind = GpuSceneExecutorStepKind::CryptomatteCoverage;
         step.command = index;
         step.input = cryptomatte->input;
+        step.destination = cryptomatte->accumulator;
         step.cacheKey = key;
         step.cacheOnComplete = true;
         step.outputWindow = cryptomatte->outputWindow;
@@ -505,6 +521,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.cryptomatteRankCount = cryptomatte->rankCount;
         step.cryptomatteIds = cryptomatte->ids;
         step.cryptomattePreview = cryptomatte->preview;
+        step.cryptomatteFinish = cryptomatte->finish;
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

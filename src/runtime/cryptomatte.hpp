@@ -109,29 +109,31 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, core::RationalTime tim
                   std::size_t hostByteBudget, bool allowRevisionInsertion,
                   LinearPassRetention* linearPass = nullptr, const ChannelSourceClock& clock = {});
 
-// The host decode layout of every rank pair: one image per rank on the union window of the rank
-// channels in the anchor source's frame, R = the ID's exact bits, G = coverage, B = 0, A = 1, with
-// zero outside a channel's own window. A non-finite ID or coverage is repaired to 0 and counted.
+// The host decode layout of the type's rank layers (#549), as the file stores them: one data image
+// per rank layer on the union window of the rank channels in the anchor source's frame, its planes
+// the (ID, coverage) channels of ranks 2k and 2k + 1 (the last layer of an odd rank count holds one
+// pair), with zero outside a channel's own window. A non-finite ID or coverage is repaired to 0 and
+// counted. The ID planes keep the IDs' exact bits. The layers depend only on the sources and rank
+// channels, not on the selection: every matte of the type reads the same layers, and each layer is
+// one frame-sized GPU upload (CryptomatteCoverageV1 accumulates them in rank order).
 struct CryptomatteGather final {
-    std::vector<std::shared_ptr<const render::Rgba32fImage>> ranks;
+    std::vector<std::shared_ptr<const render::ChannelSetImage>> layers;
+    std::uint32_t rankCount = 0;
     std::vector<std::uint32_t> ids;
     CryptomatteManifest manifest;
     std::uint64_t repairedPixels = 0;
     std::string diagnostic;
     bool cancelled = false;
     media::ImageDiagnosticCode code = media::ImageDiagnosticCode::None;
+
+    // The (ID bits as a float, coverage) of `rank` at `pixel`, the row-major index in the layers'
+    // data window.
+    [[nodiscard]] std::pair<float, float> rankPair(std::uint32_t rank,
+                                                   std::size_t pixel) const noexcept;
 };
 [[nodiscard]] CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection,
                                                   std::size_t budget,
                                                   const CancellationToken& cancel);
-
-// GPU host preparation: the gathered ranks stacked vertically into ONE upload image (rank r
-// occupies rows [origin + r * height, origin + (r + 1) * height)) on the gather's data window
-// origin and display window, exactly the CryptomatteCoverageV1 source layout. Bits are copied
-// verbatim.
-[[nodiscard]] media::ImageResult<render::Rgba32fImage>
-stackCryptomatteRanks(const CryptomatteGather& gather, std::size_t budget,
-                      const CancellationToken& cancel);
 
 // CPU reference: the full-resolution matte (premultiplied white x coverage) from the gather.
 [[nodiscard]] media::ImageResult<render::Rgba32fImage>

@@ -162,6 +162,11 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
                           std::is_same_v<T, GpuScenePointResampleCommand> ||
                           std::is_same_v<T, GpuSceneCryptomatteCommand> ||
                           std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
+                if constexpr (std::is_same_v<T, GpuSceneCryptomatteCommand>) {
+                    // #549: the previous rank layer's pass.
+                    if (item.accumulator != kInvalidGpuSceneCommand)
+                        item.accumulator = static_cast<GpuSceneCommandIndex>(item.accumulator + base);
+                }
                 // The OCIO ProcessEffect, the point-resample gather, and the composition output are
                 // input-bearing: their resident input is the upstream command, so the splice must
                 // remap that dependency exactly like an affine or translation. Their immutable

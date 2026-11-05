@@ -129,13 +129,16 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
         memo.emplace(key, index);
         return index;
     };
-    GpuSceneUploadCommand upload{.sourceOperation = operationIndex,
-                                 .image = std::move(leaf.image),
-                                 .descriptor = *leaf.descriptor,
-                                 .samples = std::move(leaf.samples),
-                                 .semanticKey = uploadKey};
-    GpuSceneCommandIndex current = emitOnce(uploadKey, std::move(upload));
+    GpuSceneCommandIndex current = kInvalidGpuSceneCommand;
     std::string currentKey = uploadKey;
+    if (!leaf.cryptomatte.has_value()) {
+        GpuSceneUploadCommand upload{.sourceOperation = operationIndex,
+                                     .image = std::move(leaf.image),
+                                     .descriptor = *leaf.descriptor,
+                                     .samples = std::move(leaf.samples),
+                                     .semanticKey = uploadKey};
+        current = emitOnce(uploadKey, std::move(upload));
+    }
     // The window the resample reads: the matte for a Cryptomatte leaf, else the upload.
     auto currentWindow = leaf.descriptor->dataWindow();
     // #381: the footage interpretation pass over the full-resolution stored samples, before any
@@ -163,32 +166,58 @@ emitMediaLeafCommands(const OperationIndex operationIndex, GpuSceneUploadLeafRes
         current = emitOnce(currentKey, std::move(pass));
     }
     if (leaf.cryptomatte.has_value()) {
-        const auto& matte = leaf.cryptomatte->output;
-        GpuSceneCryptomatteCommand coverage{.index = kInvalidGpuSceneCommand,
-                                            .sourceOperation = operationIndex,
-                                            .input = current,
-                                            .inputKey = currentKey,
-                                            .rankCount = leaf.cryptomatte->rankCount,
-                                            .ids = leaf.cryptomatte->ids,
-                                            .outputWindow = matte.dataWindow(),
-                                            .displayWindow = matte.displayWindow(),
-                                            .pixelAspect = matte.pixelAspect(),
-                                            .semanticKey = {},
-                                            .preview = leaf.cryptomatte->preview};
-        coverage.semanticKey = makeGpuSceneCryptomatteSemanticKey(
-            coverage.inputKey, coverage.rankCount, coverage.ids, coverage.outputWindow,
-            coverage.displayWindow, coverage.pixelAspect, "cryptomatte-coverage-v1",
-            coverage.preview);
-        currentKey = coverage.semanticKey;
-        currentWindow = coverage.outputWindow;
-        if (!memo.contains(currentKey)) {
-            const auto extent = matte.dataWindow().extent();
-            if (const auto error =
-                    charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
-                return error;
+        // #549: every rank layer is its own frame-sized data upload, shared by every matte of the
+        // type (its key ignores the selection), and one CryptomatteCoverageV1 pass per layer
+        // accumulates the layer's ranks onto the previous pass in rank order.
+        const auto& plan = *leaf.cryptomatte;
+        const auto& matte = plan.output;
+        GpuSceneCommandIndex state = kInvalidGpuSceneCommand;
+        std::string stateKey;
+        for (std::size_t layer = 0; layer < plan.layers.size(); ++layer) {
+            const auto& rankLayer = plan.layers[layer];
+            const GpuSceneCommandIndex upload = emitOnce(
+                rankLayer.uploadSemanticKey,
+                GpuSceneUploadCommand{.sourceOperation = operationIndex,
+                                      .image = nullptr,
+                                      .descriptor = *leaf.descriptor,
+                                      .samples = nullptr,
+                                      .channels = rankLayer.channels,
+                                      .semanticKey = rankLayer.uploadSemanticKey});
+            const auto firstRank = static_cast<std::uint32_t>(layer * 2);
+            GpuSceneCryptomatteCommand coverage{
+                .index = kInvalidGpuSceneCommand,
+                .sourceOperation = operationIndex,
+                .input = upload,
+                .inputKey = rankLayer.uploadSemanticKey,
+                .accumulator = state,
+                .accumulatorKey = stateKey,
+                .rankCount = plan.rankCount > firstRank
+                                 ? std::min<std::uint32_t>(2, plan.rankCount - firstRank)
+                                 : 0,
+                .ids = plan.ids,
+                .outputWindow = matte.dataWindow(),
+                .displayWindow = matte.displayWindow(),
+                .pixelAspect = matte.pixelAspect(),
+                .semanticKey = {},
+                .preview = plan.preview,
+                .finish = layer + 1 == plan.layers.size()};
+            coverage.semanticKey = makeGpuSceneCryptomatteSemanticKey(
+                coverage.inputKey, coverage.rankCount, coverage.ids, coverage.outputWindow,
+                coverage.displayWindow, coverage.pixelAspect, "cryptomatte-coverage-v1",
+                coverage.preview, coverage.accumulatorKey, coverage.finish);
+            stateKey = coverage.semanticKey;
+            if (!memo.contains(stateKey)) {
+                const auto extent = matte.dataWindow().extent();
+                if (const auto error =
+                        charge(extent.width(), extent.height(), sizeof(render::Rgba32f))) {
+                    return error;
+                }
             }
+            state = emitOnce(stateKey, std::move(coverage));
         }
-        current = emitOnce(currentKey, std::move(coverage));
+        current = state;
+        currentKey = stateKey;
+        currentWindow = matte.dataWindow();
     }
     // A proxied leaf (identity or non-identity) keeps the full-resolution upload and gathers the
     // proxy on the GPU; a non-identity transform then runs the OCIO CST over that proxy geometry.

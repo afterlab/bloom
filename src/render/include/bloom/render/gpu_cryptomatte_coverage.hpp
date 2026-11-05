@@ -2,18 +2,19 @@
 
 // Bloom-owned, Qt-free and Vulkan-free GPU Cryptomatte coverage: CryptomatteCoverageV1 (#364).
 //
-// The operation reads ONE resident, device-bound RGBA32F source holding the Cryptomatte rank
-// pairs of a layer stacked vertically (rank r occupies rows [r * height, (r + 1) * height)): R is
-// the ID's exact float bits and G its coverage (B = 0, A = 1). It publishes a new resident
-// RGBA32F image of `width` x `height` whose every lane is the matte coverage:
-//   c = 0
-//   for r in 0 .. rankCount-1:          (rank order, exactly as the CPU reference)
-//       id = floatBitsToUint(source[x][y + r * height].r)
-//       c  = clamp(c + (id in ids ? source[x][y + r * height].g : 0), 0, 1)
+// One pass reads ONE resident, device-bound RGBA32F rank layer of a Cryptomatte type as the file
+// stores it (#549): R/G the ID's exact float bits and the coverage of rank 2k, B/A those of rank
+// 2k + 1 (`rankCount` is 1 when the type's last layer holds one rank). It accumulates onto the
+// `accumulator` the previous layer's pass published (nothing for the first layer) and publishes a
+// new resident RGBA32F image of the layer's extent:
+//   c = accumulator ? accumulator[x][y].r : 0
+//   for each of the layer's ranks, in rank order (exactly as the CPU reference):
+//       c = clamp(c + (floatBitsToUint(id) in ids ? coverage : 0), 0, 1)
 //   out[x][y] = (c, c, c, c)              (premultiplied white x coverage, the ADR 0028 Mask)
-// The selected IDs are uploaded once as a bounded uint32 storage buffer. The kernel performs only
-// bit comparisons, one Float32 add per matching rank and a clamp, so it is bit-identical to the
-// CPU reference in src/runtime/cryptomatte.cpp.
+// so a type of N rank layers is N passes, each over one frame-sized upload. The selected IDs are
+// uploaded once as a bounded uint32 storage buffer. The kernel performs only bit comparisons, one
+// Float32 add per matching rank and a clamp, and the state between layers is binary32, so the last
+// pass is bit-identical to the CPU reference in src/runtime/cryptomatte.cpp.
 //
 // This header is intentionally narrow. It does not create a device or a service; it consumes the
 // existing GpuDevice and GpuImage. Native work runs on the device owner thread and fails closed
@@ -33,18 +34,22 @@
 
 namespace bloom::render {
 
-// Immutable inputs for one coverage pass. `source` is the stacked rank image (width x height *
-// rankCount data window); `output` is the published descriptor whose data window has the source's
-// width, height and origin, and whose display window/pixel aspect are preserved verbatim.
+// Immutable inputs for one coverage pass. `source` is one rank layer and `accumulator` (null for
+// the first layer) the previous layer's output; both have `output`'s data-window extent. `output`'s
+// display window and pixel aspect are preserved verbatim. `finish` marks the type's last layer:
+// only there does the preview clamp its colour to alpha (a matte is final after every layer).
 struct GpuCryptomatteCoverageRequest final {
     std::shared_ptr<const GpuImage> source;
     Rgba32fImageDescriptor output;
+    // The ranks this layer holds: 1 or 2.
     std::uint32_t rankCount = 0;
     std::vector<std::uint32_t> ids;
     // The ID-colour preview (the Viewer's Cryptomatte preview) instead of the matte: every rank
     // adds coverage x its ID's colour (a selected ID brightened halfway to white), alpha is the
     // coverage of every ID, colour clamped to alpha.
     bool preview = false;
+    std::shared_ptr<const GpuImage> accumulator = {};
+    bool finish = true;
 };
 
 // Per-call ceilings. Defaults are effectively unbounded so the real bounds are the live device

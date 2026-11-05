@@ -160,24 +160,25 @@ CryptomattePick pickCryptomatte(const SnapshotCompiler& compiler,
     }
     const auto gather =
         detail::gatherCryptomatte(selection, std::numeric_limits<std::size_t>::max(), cancellation);
-    if (gather.ranks.empty()) {
+    if (gather.layers.empty()) {
         pick.diagnostic = gather.cancelled ? "Cancelled" : gather.diagnostic;
         return pick;
     }
-    const auto* descriptor = gather.ranks.front()->descriptor();
-    const auto display = descriptor->displayWindow();
+    const auto& layer = *gather.layers.front();
+    const auto window = layer.dataWindow();
+    const auto display = layer.displayWindow();
     const auto sampleX = display.originX() + x;
     const auto sampleY = display.originY() + y;
-    if (!descriptor->dataWindow().contains(sampleX, sampleY))
+    if (!window.contains(sampleX, sampleY))
         return pick;
-    for (const auto& rank : gather.ranks) {
-        const auto pixel = rank->read(sampleX, sampleY);
-        if (!pixel)
-            continue;
-        const auto coverage = pixel.value()->green();
+    const auto pixel =
+        static_cast<std::size_t>(sampleY - window.originY()) * window.extent().width() +
+        static_cast<std::size_t>(sampleX - window.originX());
+    for (std::uint32_t rank = 0; rank < gather.rankCount; ++rank) {
+        const auto [id, coverage] = gather.rankPair(rank, pixel);
         if (coverage > pick.coverage) {
             pick.coverage = coverage;
-            pick.id = std::bit_cast<std::uint32_t>(pixel.value()->red());
+            pick.id = std::bit_cast<std::uint32_t>(id);
         }
     }
     if (!pick.id)

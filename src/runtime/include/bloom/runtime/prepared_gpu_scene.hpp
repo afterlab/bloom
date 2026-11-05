@@ -61,6 +61,7 @@
 
 namespace bloom::render {
 class Rgba32fImage;
+class ChannelSetImage;
 class NativeSampleImage;
 } // namespace bloom::render
 
@@ -259,6 +260,9 @@ struct GpuSceneUploadCommand final {
     // result equals render::convertNativeSamples(*samples) rebased to `descriptor`. Exactly one of
     // `image` and `samples` is set.
     std::shared_ptr<const render::NativeSampleImage> samples = {};
+    // #549: or data channels whose exact bits the upload keeps (a Cryptomatte rank layer): its
+    // planes become the RGBA lanes of the resident image. Exactly one of the three is set.
+    std::shared_ptr<const render::ChannelSetImage> channels = {};
     // Source identity: validated asset/sequence/frame identity, interpretation and input/working
     // colour space, config/processor revision, and the proxy/composition descriptor the converted
     // image was produced for. It never contains a node ID, plan index, or frame time.
@@ -382,15 +386,20 @@ struct GpuScenePointResampleCommand final {
     std::string semanticKey;
 };
 
-// #364: one CryptomatteCoverageV1 pass. `input` is the uploaded stack of `rankCount` rank-pair
-// images (R = ID bits, G = coverage) of `outputWindow`'s extent; the output is the premultiplied
-// white coverage of the selected `ids` over `outputWindow` (the anchor source's data window) with
-// `displayWindow` and `pixelAspect` preserved. Bit-exact with the CPU reference.
+// #364/#549: one CryptomatteCoverageV1 pass over one rank layer. `input` is the uploaded layer
+// (R/G = ID bits and coverage of rank 2k, B/A those of rank 2k + 1) of `outputWindow`'s extent and
+// `rankCount` (1 or 2) the ranks it holds; `accumulator` is the previous layer's pass (invalid for
+// the first layer) and `finish` marks the type's last layer. The last pass's output is the
+// premultiplied white coverage of the selected `ids` over `outputWindow` (the anchor source's data
+// window) with `displayWindow` and `pixelAspect` preserved. Bit-exact with the CPU reference.
 struct GpuSceneCryptomatteCommand final {
     GpuSceneCommandIndex index = kInvalidGpuSceneCommand;
     OperationIndex sourceOperation = OperationIndex::fromRaw(0);
     GpuSceneCommandIndex input = kInvalidGpuSceneCommand;
     std::string inputKey;
+    GpuSceneCommandIndex accumulator = kInvalidGpuSceneCommand;
+    // The accumulator's own key; empty for the first layer.
+    std::string accumulatorKey;
     std::uint32_t rankCount = 0;
     std::vector<std::uint32_t> ids;
     render::ImageWindow outputWindow;
@@ -399,6 +408,7 @@ struct GpuSceneCryptomatteCommand final {
     std::string semanticKey;
     // #364 Viewer preview: the ID-colour preview instead of the matte (same kernel, mode 1).
     bool preview = false;
+    bool finish = true;
 };
 
 using GpuSceneCommand =
@@ -576,9 +586,13 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     const std::string& inputKey, const std::uint32_t rankCount,
     const std::vector<std::uint32_t>& ids, const render::ImageWindow& outputWindow,
     const render::ImageWindow& displayWindow, const core::PixelAspectRatio& pixelAspect,
-    const std::string& artifactDigest, const bool preview = false) {
-    std::string key = preview ? "cryptomatte-preview-v1|in=" : "cryptomatte-coverage-v1|in=";
+    const std::string& artifactDigest, const bool preview, const std::string& accumulatorKey,
+    const bool finish) {
+    std::string key = preview ? "cryptomatte-preview-v2|in=" : "cryptomatte-coverage-v2|in=";
     key.append(inputKey);
+    key.append("|state=");
+    key.append(accumulatorKey);
+    key.append(finish ? "|finish" : "|partial");
     key.append("|ranks=");
     key.append(std::to_string(rankCount));
     key.append("|ids=");

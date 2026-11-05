@@ -778,8 +778,8 @@ displayProofRunner(const bool customView) {
             }
             return combined;
         });
-    // #364: Cryptomatte through the production rank gather, stacked upload, CryptomatteCoverageV1
-    // and proxy resample: names resolved through the manifest, names resolved by hash without one,
+    // #364: Cryptomatte through the production rank gather, one data upload and one
+    // CryptomatteCoverageV1 pass per rank layer (#549) and proxy resample: names resolved through the manifest, names resolved by hash without one,
     // a raw ID, and the Image output (beauty x matte through the MultiplyAlpha combine).
     const auto runCryptomatte = [](const bool manifest, std::vector<std::string> mattes,
                                    const bool imageOutput, const std::uint64_t idBase,

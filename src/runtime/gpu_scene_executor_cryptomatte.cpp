@@ -1,6 +1,7 @@
-// CryptomatteCoverageV1 execution for GpuSceneExecutor (#364): validate a Cryptomatte step and
-// dispatch one coverage pass over the resident rank stack on the device owner thread, then hand
-// the resident matte back. Only the selected IDs leave the host; the pixels stay on the device.
+// CryptomatteCoverageV1 execution for GpuSceneExecutor (#364, #549): validate a Cryptomatte step
+// and dispatch one coverage pass over one resident rank layer (onto the previous layer's pass, the
+// step's destination) on the device owner thread, then hand the resident matte back. Only the
+// selected IDs leave the host; the pixels stay on the device.
 
 #include <bloom/runtime/gpu_scene_executor.hpp>
 
@@ -25,8 +26,11 @@ GpuSceneExecutor::Impl::startCryptomatteCoverageStep(const GpuSceneExecutorStep&
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                               "the Cryptomatte pipeline is not initialized");
     }
+    const bool accumulates = step.destination != kInvalidGpuSceneCommand;
     if (step.input == kInvalidGpuSceneCommand ||
         static_cast<std::size_t>(step.input) >= images.size() || images[step.input] == nullptr ||
+        (accumulates && (static_cast<std::size_t>(step.destination) >= images.size() ||
+                         images[step.destination] == nullptr)) ||
         !step.cryptomatteOutput.has_value()) {
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                               "a Cryptomatte step is incomplete before dispatch");
@@ -37,6 +41,8 @@ GpuSceneExecutor::Impl::startCryptomatteCoverageStep(const GpuSceneExecutorStep&
         .rankCount = step.cryptomatteRankCount,
         .ids = step.cryptomatteIds,
         .preview = step.cryptomattePreview,
+        .accumulator = accumulates ? images[step.destination] : nullptr,
+        .finish = step.cryptomatteFinish,
     };
     const auto native = cryptomatteCoverage->begin(parameters, remainingBudget());
     if (native.code != render::GpuCryptomatteCoverageDiagnosticCode::None) {

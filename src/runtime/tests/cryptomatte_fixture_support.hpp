@@ -60,10 +60,13 @@ inline const std::array<std::vector<std::pair<int, float>>, kWidth * kHeight> kP
 // `manifestText`, when non-empty, is written verbatim as the manifest (a malformed-manifest case).
 // `objectShift` rotates which object each coverage entry names (a second sequence frame), and
 // `beauty = false` writes a sidecar-style file with only the Cryptomatte ranks (no RGB).
+// `rankPairs` (1 to 4) is the number of (ID, coverage) ranks written: an odd count leaves the last
+// rank layer with only its R/G pair (#549).
 inline void writeCryptomatteExr(const std::filesystem::path& path, const bool manifest,
                                 const std::string& layer = "CryptoObject",
                                 const std::string& manifestText = {},
-                                const std::size_t objectShift = 0, const bool beauty = true) {
+                                const std::size_t objectShift = 0, const bool beauty = true,
+                                const std::size_t rankPairs = 4) {
     const Imath::Box2i window(Imath::V2i(0, 0), Imath::V2i(kWidth - 1, kHeight - 1));
     Imf::Header header(window, window);
     header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
@@ -103,25 +106,28 @@ inline void writeCryptomatteExr(const std::filesystem::path& path, const bool ma
             planes[2].second[index] = 0.25F;
         }
     }
-    for (int rankLayer = 0; rankLayer < 2; ++rankLayer) {
+    for (std::size_t rankLayer = 0; rankLayer * 2 < rankPairs; ++rankLayer) {
         const auto prefix = layer + (rankLayer == 0 ? "00." : "01.");
+        const bool second = rankLayer * 2 + 1 < rankPairs;
         auto& id0 = plane(prefix + "R");
         auto& coverage0 = plane(prefix + "G");
-        auto& id1 = plane(prefix + "B");
-        auto& coverage1 = plane(prefix + "A");
+        std::vector<float> unusedId(samples, 0.0F);
+        std::vector<float> unusedCoverage(samples, 0.0F);
+        auto& id1 = second ? plane(prefix + "B") : unusedId;
+        auto& coverage1 = second ? plane(prefix + "A") : unusedCoverage;
         for (std::size_t pixel = 0; pixel < samples; ++pixel) {
             const auto& entries = kPixels[pixel];
             const auto put = [&](const std::size_t rank, std::vector<float>& id,
                                  std::vector<float>& coverage) {
-                if (rank < entries.size()) {
+                if (rank < entries.size() && rank < rankPairs) {
                     id[pixel] = std::bit_cast<float>(runtime::cryptomatteNameId(
                         kObjects[(static_cast<std::size_t>(entries[rank].first) + objectShift) %
                                  kObjects.size()]));
                     coverage[pixel] = entries[rank].second;
                 }
             };
-            put(static_cast<std::size_t>(rankLayer) * 2, id0, coverage0);
-            put(static_cast<std::size_t>(rankLayer) * 2 + 1, id1, coverage1);
+            put(rankLayer * 2, id0, coverage0);
+            put(rankLayer * 2 + 1, id1, coverage1);
         }
     }
     for (const auto& [name, values] : planes)

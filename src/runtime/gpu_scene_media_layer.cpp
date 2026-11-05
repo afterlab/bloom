@@ -6,6 +6,7 @@
 
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/image.hpp>
+#include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/native_samples.hpp>
 
 #include <cstddef>
@@ -32,15 +33,21 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     }
     // #422: a leaf uploads either a host RGBA32F image or native samples SampleConvertV1 widens on
     // the device, never both.
+    // #549: a Cryptomatte leaf uploads its rank layers instead, each as a data-channel upload.
     const bool hasImage = outcome.image != nullptr && outcome.image->descriptor() != nullptr;
     const bool hasSamples = outcome.samples != nullptr;
-    if (!outcome.failure.empty() || hasImage == hasSamples) {
+    const bool hasLayers = outcome.cryptomatte.has_value() && !outcome.cryptomatte->layers.empty();
+    if (!outcome.failure.empty() ||
+        static_cast<int>(hasImage) + static_cast<int>(hasSamples) + static_cast<int>(hasLayers) !=
+            1 ||
+        (hasLayers && !outcome.uploadDescriptor.has_value())) {
         return GpuSceneLeafFailure{outcome.failureCode,
                                    outcome.failure.empty() ? "Media source could not be prepared"
                                                            : outcome.failure};
     }
-    const auto descriptor = outcome.uploadDescriptor.value_or(
-        hasImage ? *outcome.image->descriptor() : outcome.samples->descriptor());
+    const auto descriptor = outcome.uploadDescriptor.has_value() ? *outcome.uploadDescriptor
+                            : hasImage ? *outcome.image->descriptor()
+                                       : outcome.samples->descriptor();
     // The layer transform samples the PROXY image the media source publishes, exactly as the CPU
     // evaluator does: under a fractional proxy the leaf's output window is the point-resample
     // output, not the full-resolution raw upload. At unit scale the two are identical.
@@ -51,10 +58,15 @@ finishUploadLeaf(const MediaUploadOutcome& outcome, GpuSceneUploadLeafResult& re
     result.bounds.local = outcome.frameBounds.value_or(boundsForWindow(leafWindow, hScale, vScale));
     result.bounds.output = result.bounds.local;
     result.outputWindow = leafWindow;
-    if (const auto error =
-            hasImage
-                ? chargeBytes(outcome.image->pixels().data(), outcome.image->pixelStorageByteCost())
-                : chargeBytes(outcome.samples->backingIdentity(), outcome.samples->byteCount())) {
+    if (hasLayers) {
+        for (const auto& layer : outcome.cryptomatte->layers) {
+            if (const auto error = chargeBytes(layer.channels.get(), layer.channels->byteCost()))
+                return error;
+        }
+    } else if (const auto error = hasImage ? chargeBytes(outcome.image->pixels().data(),
+                                                         outcome.image->pixelStorageByteCost())
+                                           : chargeBytes(outcome.samples->backingIdentity(),
+                                                         outcome.samples->byteCount())) {
         return error;
     }
     result.image = outcome.image;

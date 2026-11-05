@@ -2075,7 +2075,8 @@ bloom_add_test(
 set_tests_properties(bloom.runtime.gpu_roi_media_color_native PROPERTIES SKIP_RETURN_CODE 77)
 
 # #364 Cryptomatte: a real multi-rank Cryptomatte EXR (manifest and no manifest) prepared by the
-# production builder (stacked rank upload, CryptomatteCoverageV1, proxy PointResampleV1) and run by the
+# production builder (one data upload and one CryptomatteCoverageV1 pass per rank layer, proxy
+# PointResampleV1) and run by the
 # production executor on a real device, compared bit for bit with the CPU oracle; selection-edit cache
 # identity, preparation and native cancellation, and the pixel budget. Without a device it skips unless
 # --require-device.

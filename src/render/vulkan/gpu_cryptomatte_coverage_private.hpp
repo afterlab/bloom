@@ -31,10 +31,11 @@
 
 namespace bloom::render {
 
-// 3 bindings: stacked rank source image, output image, selected-ID buffer.
-inline constexpr std::uint32_t kCryptomatteCoverageBindingCount = 3;
-// Five tightly packed uint32 push constants: output width/height, rank count, ID count, mode.
-inline constexpr std::uint32_t kCryptomatteCoveragePushBytes = 20;
+// 4 bindings: rank layer image, output image, selected-ID buffer, previous layer's state image.
+inline constexpr std::uint32_t kCryptomatteCoverageBindingCount = 4;
+// Seven tightly packed uint32 push constants: output width/height, rank count, ID count, mode,
+// accumulate, finish.
+inline constexpr std::uint32_t kCryptomatteCoveragePushBytes = 28;
 
 struct CryptomatteCoveragePush final {
     std::uint32_t outputWidth;
@@ -42,6 +43,8 @@ struct CryptomatteCoveragePush final {
     std::uint32_t rankCount;
     std::uint32_t idCount;
     std::uint32_t mode;
+    std::uint32_t accumulate;
+    std::uint32_t finish;
 };
 static_assert(sizeof(CryptomatteCoveragePush) == kCryptomatteCoveragePushBytes);
 
@@ -92,6 +95,7 @@ enum class ReservationState : std::uint8_t {
 struct ResourceSet final {
     std::shared_ptr<DeviceAllocatorState> deviceState;
     std::shared_ptr<const GpuImage> source;
+    std::shared_ptr<const GpuImage> accumulator;
     CompositeBuffer ids;
     std::unique_ptr<GpuImage> resident;
     CompositePipeline pipeline;
@@ -113,6 +117,7 @@ struct ResourceSet final {
         descriptorPool = vk::raii::DescriptorPool{nullptr};
         pipeline = CompositePipeline{};
         ids.release();
+        accumulator.reset();
         source.reset();
     }
 
@@ -210,6 +215,7 @@ struct GpuCryptomatteCoverage::Impl final {
     // submits one dispatch. Returns false and sets jobDiagnostic on any failure (resources remain
     // owned by Impl for the caller to free).
     [[nodiscard]] bool launchJob(const std::shared_ptr<const GpuImage>& source,
+                                 const std::shared_ptr<const GpuImage>& accumulator, bool finish,
                                  ImageWindow outputWindow, ImageWindow displayWindow,
                                  core::PixelAspectRatio pixelAspect, std::uint32_t rankCount,
                                  std::span<const std::uint32_t> ids, bool preview,

@@ -23,6 +23,7 @@
 // Media decode/source validation stays on the CPU worker and is deliberately not part of this
 // API; this op never touches the filesystem.
 
+#include <bloom/render/channel_set_image.hpp>
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
 #include <bloom/render/image.hpp>
@@ -74,6 +75,13 @@ struct GpuImageUploadDiagnostic final {
 // SampleConvertV1 dispatch converts them into the resident RGBA32F image on the device, so the host
 // never builds the float frame. The resident image's descriptor is the samples' descriptor (or
 // `descriptorOverride`, whose data-window extent must match it).
+//
+// #549: or `channels`, data channels whose exact float bits must survive (Cryptomatte ID hashes
+// and coverage): its first four planes become the R, G, B and A lanes of the resident RGBA32F
+// image (a missing lane is 0), interleaved into the staging buffer as they are. The resident image
+// is a data image, not premultiplied colour; only a kernel that reads data lanes consumes it. Its
+// descriptor is the set's windows and pixel aspect (or `descriptorOverride`, whose data-window
+// extent must match the set's).
 struct GpuImageUploadParameters final {
     std::shared_ptr<const Rgba32fImage> source;
     // Exact already-retained request authority; null only for an explicitly rootless device.
@@ -94,6 +102,7 @@ struct GpuImageUploadParameters final {
     // an earlier opted-in job is released.
     bool reuseStagingWithinScene = false;
     std::shared_ptr<const NativeSampleImage> samples = {};
+    std::shared_ptr<const ChannelSetImage> channels = {};
 };
 
 // Separately bounded image and staging ceilings. The per-call byteBudget is the peak allowance and

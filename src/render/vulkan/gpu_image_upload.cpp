@@ -5,6 +5,7 @@
 #include <bloom/render/image.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <functional>
 
@@ -52,6 +53,39 @@ void copyIntoStaging(
         const std::size_t offset = chunk * kStagingCopyChunkBytes;
         std::memcpy(destination + offset, source + offset,
                     std::min(kStagingCopyChunkBytes, bytes - offset));
+    });
+}
+
+// #549: interleaves the planes of a data-channel set into RGBA32F staging texels (plane k is lane k,
+// a missing lane 0), chunked through `parallelFor` like the float copy. The bits are copied as
+// they are.
+void interleaveIntoStaging(
+    float* const destination, const ChannelSetImage& channels, const std::size_t pixels,
+    const std::function<void(std::size_t, const std::function<void(std::size_t)>&)>& parallelFor) {
+    constexpr std::size_t kChunkPixels = kStagingCopyChunkBytes / (4 * sizeof(float));
+    const std::size_t lanes = channels.channels().size();
+    // The staging memory may be write-combined, so every texel is written once, in order.
+    std::array<const float*, 4> planes{};
+    for (std::size_t lane = 0; lane < lanes; ++lane)
+        planes[lane] = channels.plane(lane).data();
+    const auto copyRange = [&](const std::size_t begin, const std::size_t end) {
+        for (std::size_t pixel = begin; pixel < end; ++pixel) {
+            const std::array<float, 4> texel{
+                planes[0] != nullptr ? planes[0][pixel] : 0.0F,
+                planes[1] != nullptr ? planes[1][pixel] : 0.0F,
+                planes[2] != nullptr ? planes[2][pixel] : 0.0F,
+                planes[3] != nullptr ? planes[3][pixel] : 0.0F};
+            std::memcpy(destination + pixel * 4, texel.data(), sizeof(texel));
+        }
+    };
+    const std::size_t chunks = (pixels + kChunkPixels - 1) / kChunkPixels;
+    if (!parallelFor || chunks < 2) {
+        copyRange(0, pixels);
+        return;
+    }
+    parallelFor(chunks, [&](const std::size_t chunk) {
+        const std::size_t begin = chunk * kChunkPixels;
+        copyRange(begin, std::min(pixels, begin + kChunkPixels));
     });
 }
 
@@ -359,19 +393,41 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
     }
     impl.control->imageStorageRefusal.reset();
     impl.control->bufferStorageRefusal.reset();
+    if (static_cast<int>(parameters.source != nullptr) +
+            static_cast<int>(parameters.samples != nullptr) +
+            static_cast<int>(parameters.channels != nullptr) >
+        1) {
+        return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                "an upload carries one of a float image, native samples or data "
+                                "channels");
+    }
     if (parameters.samples != nullptr) {
-        if (parameters.source != nullptr) {
-            return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
-                                    "an upload carries either a float image or native samples");
-        }
         return impl.beginSamples(parameters, byteBudget);
     }
-    if (parameters.source == nullptr) {
+    if (parameters.source == nullptr && parameters.channels == nullptr) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload source is null");
     }
-    const Rgba32fImage& source = *parameters.source;
-    const Rgba32fImageDescriptor* const sourceDescriptor = source.descriptor();
+    // #549: data channels upload through the float path with their planes interleaved as the
+    // RGBA lanes; only a premultiplied float image may cross as binary16.
+    const Rgba32fImage* const sourceImage = parameters.source.get();
+    const ChannelSetImage* const channelSet = parameters.channels.get();
+    std::optional<Rgba32fImageDescriptor> channelDescriptor;
+    if (channelSet != nullptr) {
+        if (channelSet->channels().empty() || channelSet->channels().size() > 4) {
+            return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                    "a data-channel upload carries one to four planes");
+        }
+        auto created = Rgba32fImageDescriptor::create(
+            channelSet->dataWindow(), channelSet->displayWindow(), channelSet->pixelAspect());
+        if (!created) {
+            return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                    "the data-channel upload window is invalid");
+        }
+        channelDescriptor = *created.value();
+    }
+    const Rgba32fImageDescriptor* const sourceDescriptor =
+        sourceImage != nullptr ? sourceImage->descriptor() : &*channelDescriptor;
     if (sourceDescriptor == nullptr) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload source has no descriptor");
@@ -389,9 +445,17 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
                                 "the upload source data window is empty");
     }
     const std::uint64_t pixels = static_cast<std::uint64_t>(width) * height;
-    if (source.pixels().size() != pixels) {
+    if (sourceImage != nullptr && sourceImage->pixels().size() != pixels) {
         return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
                                 "the upload source pixel count does not match its data window");
+    }
+    if (channelSet != nullptr) {
+        for (std::size_t lane = 0; lane < channelSet->channels().size(); ++lane) {
+            if (channelSet->plane(lane).size() != pixels) {
+                return uploadDiagnostic(GpuImageUploadDiagnosticCode::InvalidArgument,
+                                        "a data-channel plane does not match its data window");
+            }
+        }
     }
     const std::uint64_t imageBytes = pixels * sizeof(Rgba32f);
     if (imageBytes > impl.budgets.maxImageBytes) {
@@ -487,8 +551,13 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
         // widens it into the RGBA32F resident image; anything else is copied as RGBA32F.
         auto* const stagingBytes = static_cast<std::byte*>(stagingInfo.pMappedData);
         const auto copyFloat = [&] {
+            if (channelSet != nullptr) {
+                interleaveIntoStaging(reinterpret_cast<float*>(stagingBytes), *channelSet,
+                                      static_cast<std::size_t>(pixels), parameters.parallelFor);
+                return;
+            }
             copyIntoStaging(stagingBytes,
-                            reinterpret_cast<const std::byte*>(source.pixels().data()),
+                            reinterpret_cast<const std::byte*>(sourceImage->pixels().data()),
                             static_cast<std::size_t>(imageBytes), parameters.parallelFor);
         };
         if (impl.halfSupport < 0)
@@ -509,9 +578,9 @@ GpuImageUploadDiagnostic GpuImageUpload::begin(const GpuImageUploadParameters& p
             return createUploadHalfImage(*impl.control, width, height, impl.staging.half);
         };
         bool halfStaged =
-            impl.halfSupport == 1 &&
+            impl.halfSupport == 1 && sourceImage != nullptr &&
             packIntoStagingAsHalf(reinterpret_cast<std::uint16_t*>(stagingBytes),
-                                  reinterpret_cast<const float*>(source.pixels().data()),
+                                  reinterpret_cast<const float*>(sourceImage->pixels().data()),
                                   static_cast<std::size_t>(imageBytes / sizeof(float)),
                                   parameters.parallelFor) &&
             acquireHalfImage();

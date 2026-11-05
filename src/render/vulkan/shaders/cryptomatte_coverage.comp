@@ -1,28 +1,32 @@
 #version 460
-// Bloom CryptomatteCoverageV1 compute shader (#364). Offline-generated/embedded; do not edit at
-// runtime.
+// Bloom CryptomatteCoverageV1 compute shader (#364, #549). Offline-generated/embedded; do not edit
+// at runtime.
 //
 // Reproduces the Cryptomatte CPU reference (src/runtime/cryptomatte.cpp
-// accumulateCryptomatteCoverage) bit for bit. The source stacks the rank pairs of one layer
-// vertically: rank r occupies rows [r * outputHeight, (r + 1) * outputHeight), with R = the ID's
-// exact float bits and G = its coverage. For every output pixel, in rank order:
-//   c = 0
-//   c = clamp(c + (floatBitsToUint(rank.r) is a selected ID ? rank.g : 0), 0, 1)
+// accumulateCryptomatteCoverage) bit for bit. One dispatch reads ONE rank layer of the type as it
+// is stored (`<name>NN`: R = ID bits and G = coverage of rank 2k, B = ID bits and A = coverage of
+// rank 2k + 1) and accumulates its `rankCount` (1 or 2) ranks onto the state the previous layer's
+// dispatch left in `bloom_crypto_state` (or onto zero for the first layer, `accumulate` = 0). For
+// every output pixel, in rank order:
+//   c = accumulate ? state.r : 0
+//   c = clamp(c + (floatBitsToUint(id) is a selected ID ? coverage : 0), 0, 1)
 // and the output stores (c, c, c, c): the premultiplied white Mask (ADR 0028). Only bit
-// comparisons, one binary32 add per rank and a clamp occur, so no contraction or rounding differs
-// from the CPU.
+// comparisons, one binary32 add per rank and a clamp occur, and the state between layers is stored
+// as binary32, so no contraction or rounding differs from the CPU.
 //
 // Mode 1 is the ID-colour preview (the Viewer's Cryptomatte preview, src/runtime/cryptomatte.cpp
 // cryptomattePreviewImage): every rank adds coverage x its ID's colour, where the colour channel k
 // is 0.15 + byte_k * s of the ID bits (bits 16..23, 8..15, 0..7), s being the binary32 constant
 // 0x3B5A740E (0.85 / 255, written as bits so no division or decimal rounding can differ), and a
 // selected ID is brightened to 0.5 * colour + 0.5; alpha accumulates as the matte does over every
-// ID, and the colour is clamped to alpha so the pixel stays premultiplied.
+// ID. Between layers the state holds the unclamped colour and the alpha; the last layer
+// (`finish` = 1) clamps the colour to alpha so the pixel stays premultiplied.
 //
 // 2D FLATTENED DISPATCH, as PointResampleV1: the output pixel space is flattened row-major into
 // 256-wide workgroups; invocations past the pixel count return immediately.
 //
-// Binding 2 layout: uint ids[max(1, idCount)], the selected Cryptomatte IDs.
+// Binding 2 layout: uint ids[max(1, idCount)], the selected Cryptomatte IDs. Binding 3 is the
+// previous layer's state (bound to the rank layer itself and unread when `accumulate` = 0).
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, rgba32f) uniform readonly image2D bloom_crypto_ranks;
@@ -30,6 +34,7 @@ layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D bloom_crypto_out
 layout(set = 0, binding = 2, std430) readonly buffer BloomCryptoIds {
     uint ids[];
 } bloom_crypto_ids;
+layout(set = 0, binding = 3, rgba32f) uniform readonly image2D bloom_crypto_state;
 
 layout(push_constant) uniform BloomCryptoPushConstants {
     uint outputWidth;
@@ -37,7 +42,20 @@ layout(push_constant) uniform BloomCryptoPushConstants {
     uint rankCount;
     uint idCount;
     uint mode;
+    uint accumulate;
+    uint finish;
 } bloom_crypto_push;
+
+bool bloom_crypto_selected(uint id)
+{
+    bool selected = false;
+    for (uint index = 0u; index < bloom_crypto_push.idCount; ++index) {
+        if (bloom_crypto_ids.ids[index] == id) {
+            selected = true;
+        }
+    }
+    return selected;
+}
 
 float bloom_crypto_channel(uint id, uint shift)
 {
@@ -54,47 +72,36 @@ void main()
     if (linear >= total) {
         return;
     }
-    uint column = linear % bloom_crypto_push.outputWidth;
-    uint row = linear / bloom_crypto_push.outputWidth;
+    ivec2 pixel = ivec2(linear % bloom_crypto_push.outputWidth,
+                        linear / bloom_crypto_push.outputWidth);
+    vec4 layer = imageLoad(bloom_crypto_ranks, pixel);
+    vec4 state = bloom_crypto_push.accumulate != 0u ? imageLoad(bloom_crypto_state, pixel)
+                                                    : vec4(0.0);
     if (bloom_crypto_push.mode == 1u) {
-        precise vec3 colour = vec3(0.0);
-        precise float alpha = 0.0;
+        precise vec3 colour = state.rgb;
+        precise float alpha = state.a;
         for (uint rank = 0u; rank < bloom_crypto_push.rankCount; ++rank) {
-            vec4 pair = imageLoad(bloom_crypto_ranks,
-                                  ivec2(column, row + rank * bloom_crypto_push.outputHeight));
-            uint id = floatBitsToUint(pair.r);
-            bool selected = false;
-            for (uint index = 0u; index < bloom_crypto_push.idCount; ++index) {
-                if (bloom_crypto_ids.ids[index] == id) {
-                    selected = true;
-                }
-            }
+            vec2 pair = rank == 0u ? layer.rg : layer.ba;
+            uint id = floatBitsToUint(pair.x);
             precise vec3 tint = vec3(bloom_crypto_channel(id, 16u), bloom_crypto_channel(id, 8u),
                                      bloom_crypto_channel(id, 0u));
-            if (selected) {
+            if (bloom_crypto_selected(id)) {
                 tint = tint * 0.5 + vec3(0.5);
             }
-            precise vec3 term = tint * pair.g;
+            precise vec3 term = tint * pair.y;
             colour = colour + term;
-            precise float sum = alpha + pair.g;
+            precise float sum = alpha + pair.y;
             alpha = clamp(sum, 0.0, 1.0);
         }
-        imageStore(bloom_crypto_output, ivec2(column, row), vec4(min(colour, vec3(alpha)), alpha));
+        vec3 stored = bloom_crypto_push.finish != 0u ? min(colour, vec3(alpha)) : colour;
+        imageStore(bloom_crypto_output, pixel, vec4(stored, alpha));
         return;
     }
-    precise float coverage = 0.0;
+    precise float coverage = state.r;
     for (uint rank = 0u; rank < bloom_crypto_push.rankCount; ++rank) {
-        vec4 pair = imageLoad(bloom_crypto_ranks,
-                              ivec2(column, row + rank * bloom_crypto_push.outputHeight));
-        uint id = floatBitsToUint(pair.r);
-        bool selected = false;
-        for (uint index = 0u; index < bloom_crypto_push.idCount; ++index) {
-            if (bloom_crypto_ids.ids[index] == id) {
-                selected = true;
-            }
-        }
-        precise float sum = coverage + (selected ? pair.g : 0.0);
+        vec2 pair = rank == 0u ? layer.rg : layer.ba;
+        precise float sum = coverage + (bloom_crypto_selected(floatBitsToUint(pair.x)) ? pair.y : 0.0);
         coverage = clamp(sum, 0.0, 1.0);
     }
-    imageStore(bloom_crypto_output, ivec2(column, row), vec4(coverage));
+    imageStore(bloom_crypto_output, pixel, vec4(coverage));
 }

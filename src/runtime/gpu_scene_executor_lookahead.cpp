@@ -89,7 +89,8 @@ void GpuSceneExecutor::Impl::startLookahead() noexcept {
         return;
     }
     const GpuSceneExecutorStep& step = steps[lookaheadScan];
-    if (step.uploadSource == nullptr && step.uploadSamples == nullptr) {
+    if (step.uploadSource == nullptr && step.uploadSamples == nullptr &&
+        step.uploadChannels == nullptr) {
         return;
     }
     const std::uint64_t held = liveBytes > std::numeric_limits<std::uint64_t>::max() - *inFlight

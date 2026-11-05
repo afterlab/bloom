@@ -7,33 +7,37 @@
   "shader": {
     "language": "GLSL_460",
     "stage": "compute",
-    "sha256": "afaaf885c1d92593aefed72185a4939c7c259fd5b5486469bb8adf1e8724a7ee",
-    "spirvSha256": "f6db585a82aa0c54aeee5de1c4f023622384af4c33488fe2ba28123a105e5668",
+    "sha256": "def79958788aeb3d2205db76f324d0c2f22b8b222506b0fdf1a21167ad044056",
+    "spirvSha256": "d97456bbb7ef424cc62b262268fec6f3779ebd3d0f60d34fb8303354fe865353",
     "localSizeX": 256,
     "localSizeY": 1,
     "localSizeZ": 1
   },
   "bindings": [
     {"set": 0, "binding": 0, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
-     "role": "stacked-cryptomatte-rank-pairs (R = ID bits, G = coverage)"},
+     "role": "one-cryptomatte-rank-layer (R = ID bits, G = coverage of rank 2k; B = ID bits, A = coverage of rank 2k + 1)"},
     {"set": 0, "binding": 1, "kind": "storage-image", "access": "writeonly", "format": "rgba32f",
      "role": "premultiplied-white-coverage-mask (mode 0) or premultiplied ID-colour preview (mode 1)"},
     {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readonly", "element": "uint",
-     "role": "selected-cryptomatte-ids", "layout": "ids[max(1, idCount)]"}
+     "role": "selected-cryptomatte-ids", "layout": "ids[max(1, idCount)]"},
+    {"set": 0, "binding": 3, "kind": "storage-image", "access": "readonly", "format": "rgba32f",
+     "role": "previous-layer-state (the matte, or the unclamped preview colour and alpha); unread when accumulate = 0"}
   ],
   "pushConstant": {
-    "byteCount": 20,
+    "byteCount": 28,
     "fields": [
       {"name": "outputWidth", "type": "uint32"},
       {"name": "outputHeight", "type": "uint32"},
       {"name": "rankCount", "type": "uint32"},
       {"name": "idCount", "type": "uint32"},
-      {"name": "mode", "type": "uint32", "values": "0 = premultiplied white matte, 1 = ID-colour preview"}
+      {"name": "mode", "type": "uint32", "values": "0 = premultiplied white matte, 1 = ID-colour preview"},
+      {"name": "accumulate", "type": "uint32", "values": "0 = first rank layer (state zero), 1 = continue from binding 3"},
+      {"name": "finish", "type": "uint32", "values": "1 = last rank layer: the preview colour is clamped to alpha"}
     ]
   },
   "contracts": {
-    "numeric": "bit-exact against the Cryptomatte CPU reference (src/runtime/cryptomatte.cpp): in rank order c = clamp(c + (ID bits selected ? coverage : 0), 0, 1) in binary32, then (c, c, c, c)",
-    "preview": "mode 1 matches the CPU cryptomattePreviewImage: per rank colour += tint x coverage with tint_k = 0.15 + byte_k * 0x3B5A740E (the binary32 bits of 0.85 / 255) (0.5 * tint + 0.5 when selected), alpha = clamp(alpha + coverage, 0, 1), colour clamped to alpha",
+    "numeric": "bit-exact against the Cryptomatte CPU reference (src/runtime/cryptomatte.cpp): in rank order c = clamp(c + (ID bits selected ? coverage : 0), 0, 1) in binary32, then (c, c, c, c); one dispatch per rank layer, the state between layers stored as binary32",
+    "preview": "mode 1 matches the CPU cryptomattePreviewImage: per rank colour += tint x coverage with tint_k = 0.15 + byte_k * 0x3B5A740E (the binary32 bits of 0.85 / 255) (0.5 * tint + 0.5 when selected), alpha = clamp(alpha + coverage, 0, 1), colour clamped to alpha after the last rank layer",
     "idIdentity": "IDs are compared as exact uint32 bits (floatBitsToUint); the host upload carries the source float bits unchanged",
     "cpuFallback": "an invalid geometry, a device-limit or budget refusal, a foreign device, or a wrong thread fails closed with an explicit diagnostic; no silent CPU substitution"
   }

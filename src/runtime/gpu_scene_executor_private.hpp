@@ -107,6 +107,8 @@ struct GpuSceneExecutorStep final {
     // #422: or the native samples SampleConvertV1 converts on the device (exactly one is set),
     // retained the same way.
     std::shared_ptr<const render::NativeSampleImage> uploadSamples;
+    // #549: or the data channels of a Cryptomatte rank layer, retained the same way.
+    std::shared_ptr<const render::ChannelSetImage> uploadChannels;
     std::optional<render::Rgba32fImageDescriptor> uploadDescriptor;
     // Translation output data window plus GPU-local translation and opacity.
     std::optional<render::ImageWindow> outputWindow;
@@ -142,6 +144,8 @@ struct GpuSceneExecutorStep final {
     std::uint32_t cryptomatteRankCount = 0;
     std::vector<std::uint32_t> cryptomatteIds;
     bool cryptomattePreview = false;
+    // The type's last rank layer (the previous layer's pass is `destination`).
+    bool cryptomatteFinish = true;
 };
 
 namespace gpu_scene_executor_detail {
@@ -264,7 +268,8 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         return makeGpuSceneCryptomatteSemanticKey(
             cryptomatte->inputKey, cryptomatte->rankCount, cryptomatte->ids,
             cryptomatte->outputWindow, cryptomatte->displayWindow, cryptomatte->pixelAspect,
-            std::string{kCryptomatteCoverageArtifactToken}, cryptomatte->preview);
+            std::string{kCryptomatteCoverageArtifactToken}, cryptomatte->preview,
+            cryptomatte->accumulatorKey, cryptomatte->finish);
     }
     if (std::get_if<GpuSceneBlendCommand>(&command) != nullptr) {
         return {};

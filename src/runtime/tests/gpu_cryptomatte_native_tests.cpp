@@ -2,12 +2,14 @@
 //
 // A real multi-rank Cryptomatte OpenEXR (two CryptoObject rank layers, with and without the
 // manifest) is resolved through the production media pipeline. The production CpuGpuSceneBuilder
-// gathers the rank pairs into one stacked upload and emits a CryptomatteCoverageV1 command (plus a
-// PointResampleV1 under a proxy); the production GpuSceneExecutor runs it on a real device and the
+// gathers the rank layers and emits one data upload and one CryptomatteCoverageV1 pass per layer
+// (plus a PointResampleV1 under a proxy); the production GpuSceneExecutor runs it on a real device and the
 // result is compared BIT FOR BIT with the unchanged CpuCompositionEvaluator oracle.
 //
-// It also proves the cache identity (an edited selection keeps the rank upload and re-dispatches
-// only the coverage pass; an unchanged selection is a warm hit), cancellation and the pixel budget.
+// It also proves the cache identity (an edited selection keeps the rank layer uploads and
+// re-dispatches only the coverage passes; an unchanged selection is a warm hit), that two mattes of
+// one type share one gather and one upload per rank layer (#549), one to four ranks (an odd count
+// leaves a one-rank last layer), cancellation and the pixel budget.
 //
 // Without a device it SKIPs (exit 77) unless --require-device is passed.
 
@@ -190,7 +192,8 @@ struct Harness final {
 void testParity(Expectations& expectations, Harness& harness,
                 const bloom::document::AssetRecord& asset, std::vector<std::string> mattes,
                 const bool imageOutput, const bool proxy, const std::uint64_t idBase,
-                const std::string& label, const bool preview = false) {
+                const std::string& label, const bool preview = false,
+                const std::uint32_t rankPairs = 4) {
     auto context = GpuSceneMediaContext::fromEvaluator(harness.evaluator);
     context.assetBaseDirectory = harness.directory;
     const CpuGpuSceneBuilder builder(nullptr, context);
@@ -202,12 +205,33 @@ void testParity(Expectations& expectations, Harness& harness,
         std::cerr << label << " prepare diagnostic: " << prepared.diagnostic.message << "\n";
         return;
     }
-    const auto* upload = first<GpuSceneUploadCommand>(*prepared.scene);
-    const auto* coverage = first<GpuSceneCryptomatteCommand>(*prepared.scene);
-    expectations.expect(upload != nullptr && coverage != nullptr && coverage->rankCount == 4 &&
-                            upload->descriptor.dataWindow().extent().height() ==
-                                coverage->outputWindow.extent().height() * coverage->rankCount,
-                        label + ": emits the stacked four-rank upload and a CryptomatteCoverageV1");
+    // #549: one frame-sized data upload per rank layer and one CryptomatteCoverageV1 pass per
+    // layer, each pass continuing from the previous one, the last one finishing.
+    std::vector<const GpuSceneUploadCommand*> layerUploads;
+    std::vector<const GpuSceneCryptomatteCommand*> passes;
+    for (const auto& command : prepared.scene->commands()) {
+        if (const auto* upload = std::get_if<GpuSceneUploadCommand>(&command);
+            upload != nullptr && upload->channels != nullptr)
+            layerUploads.push_back(upload);
+        if (const auto* pass = std::get_if<GpuSceneCryptomatteCommand>(&command))
+            passes.push_back(pass);
+    }
+    const auto layers = (rankPairs + 1) / 2;
+    bool chained = passes.size() == layers && layerUploads.size() == layers;
+    std::uint32_t ranks = 0;
+    for (std::size_t index = 0; chained && index < passes.size(); ++index) {
+        const auto& pass = *passes[index];
+        const auto& upload = *layerUploads[index];
+        ranks += pass.rankCount;
+        chained = upload.image == nullptr && upload.samples == nullptr &&
+                  upload.descriptor.dataWindow().extent() == pass.outputWindow.extent() &&
+                  pass.finish == (index + 1 == passes.size()) &&
+                  (index == 0 ? pass.accumulator == bloom::runtime::kInvalidGpuSceneCommand
+                              : pass.accumulatorKey == passes[index - 1]->semanticKey);
+    }
+    expectations.expect(chained && ranks == rankPairs,
+                        label + ": emits one frame-sized upload and one coverage pass per rank "
+                                "layer");
     expectations.expect((first<GpuScenePointResampleCommand>(*prepared.scene) != nullptr) == proxy,
                         label + ": a proxy adds the PointResampleV1 after the coverage pass");
 
@@ -227,8 +251,8 @@ void testParity(Expectations& expectations, Harness& harness,
     expectations.expect(cold.ready, label + ": cold run completes");
     if (!cold.ready)
         return;
-    expectations.expect(cold.countersAtReady.cryptomatteDispatches == 1,
-                        label + ": exactly one native CryptomatteCoverageV1 dispatch ran");
+    expectations.expect(cold.countersAtReady.cryptomatteDispatches == layers,
+                        label + ": one native CryptomatteCoverageV1 dispatch ran per rank layer");
     expectations.expect(cold.countersAtReady.readbacks == 0,
                         label + ": the executor performs no full-frame readback");
     const auto readback = readbackResidentImage(*cold.image, kSceneBudget);
@@ -269,9 +293,9 @@ void testSelectionEdit(Expectations& expectations, Harness& harness,
     const auto* firstCoverage = first<GpuSceneCryptomatteCommand>(*first_.scene);
     const auto* secondCoverage = first<GpuSceneCryptomatteCommand>(*second.scene);
     const auto* againCoverage = first<GpuSceneCryptomatteCommand>(*again.scene);
-    expectations.expect(firstUpload && secondUpload &&
+    expectations.expect(firstUpload && secondUpload && firstUpload->channels != nullptr &&
                             firstUpload->semanticKey == secondUpload->semanticKey,
-                        "selection edit: the rank upload identity ignores the selection");
+                        "selection edit: the rank layer upload identity ignores the selection");
     expectations.expect(firstCoverage && secondCoverage && againCoverage &&
                             firstCoverage->semanticKey != secondCoverage->semanticKey &&
                             firstCoverage->semanticKey == againCoverage->semanticKey,
@@ -292,8 +316,9 @@ void testSelectionEdit(Expectations& expectations, Harness& harness,
     const auto afterFloor = executor.executor->counters();
     expectations.expect(cubeRun.ready && floorRun.ready, "selection edit: both runs complete");
     expectations.expect(afterFloor.uploads == afterCube.uploads &&
-                            afterFloor.cryptomatteDispatches == afterCube.cryptomatteDispatches + 1,
-                        "selection edit: the resident upload is reused; only coverage re-runs");
+                            afterFloor.cryptomatteDispatches == afterCube.cryptomatteDispatches + 2,
+                        "selection edit: the resident rank layers are reused; only their two "
+                        "coverage passes re-run");
     auto oracleRequest = request(*floor, false);
     oracleRequest.bypassOperationCache = true;
     const auto frame = harness.evaluator.evaluate(floor, oracleRequest, {});
@@ -303,6 +328,87 @@ void testSelectionEdit(Expectations& expectations, Harness& harness,
     expectations.expect(frame.frame() != nullptr && readback.hasValue() &&
                             pixelsExact(readback.pixels, frame.frame()->processImage().pixels()),
                         "selection edit: the edited matte is bit-identical to the CPU oracle");
+}
+
+// #549: two mattes of one type in one build gather the rank layers once and share their uploads:
+// the scene holds one upload per layer, each read by both mattes' passes, and both mattes are
+// bit-identical to the CPU oracle.
+void testSharedLayers(Expectations& expectations, Harness& harness,
+                      const bloom::document::AssetRecord& asset) {
+    using bloom::document::NodeId;
+    using bloom::document::ParameterId;
+    auto context = GpuSceneMediaContext::fromEvaluator(harness.evaluator);
+    context.assetBaseDirectory = harness.directory;
+    const CpuGpuSceneBuilder builder(nullptr, context);
+    std::vector<CompiledOperation> operations;
+    const auto mattes = std::vector<std::vector<std::string>>{{"cube"}, {"floor", "sky"}};
+    std::vector<bloom::runtime::CompiledMergeInput> inputs;
+    for (std::size_t index = 0; index < mattes.size(); ++index) {
+        const auto base = 98100 + index * 100;
+        const LayerIds ids{ParameterId::fromRaw(base + 0), ParameterId::fromRaw(base + 1),
+                           ParameterId::fromRaw(base + 2), ParameterId::fromRaw(base + 3),
+                           ParameterId::fromRaw(base + 4), ParameterId::fromRaw(base + 5)};
+        bloom::runtime::CompiledCryptomatte cryptomatte;
+        cryptomatte.sourceNodeId = NodeId::fromRaw(base + 20);
+        cryptomatte.channels.sources.push_back(bloom::runtime::CompiledChannelSource{
+            NodeId::fromRaw(98010), asset, 0, 0, 0, {}, {}});
+        bloom::runtime::CompiledChannelStep source;
+        source.kind = bloom::runtime::CompiledChannelStepKind::Source;
+        source.nodeId = NodeId::fromRaw(98010);
+        cryptomatte.channels.steps.push_back(source);
+        cryptomatte.layer = "CryptoObject";
+        cryptomatte.mattes = mattes[index];
+        const auto matteIndex = OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(std::move(cryptomatte));
+        const auto layerIndex = OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(layerOutput(NodeId::fromRaw(base + 11),
+                                            bloom::document::LayerId::fromRaw(base + 12),
+                                            matteIndex, ids, LayerValues{.position = {0.0, 0.0}}));
+        inputs.push_back(bloom::runtime::CompiledMergeInput{
+            bloom::document::LayerSlotId::fromRaw(base + 14),
+            bloom::document::LayerId::fromRaw(base + 12), layerIndex});
+    }
+    const auto mergeIndex = OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(CompiledMerge{NodeId::fromRaw(98013), std::move(inputs)});
+    const auto outputIndex = OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(CompiledCompositionOutput{NodeId::fromRaw(98015), mergeIndex});
+    const auto plan = publish(CompiledCompositionPlanDefinition{
+        bloom::document::Revision::fromRaw(7), kProjectId, kCompositionId, format(8, 8),
+        std::move(operations), outputIndex});
+    const auto prepared = builder.build(plan, request(*plan, false));
+    expectations.expect(prepared.hasValue(), "shared layers: prepares");
+    if (!prepared)
+        return;
+    std::size_t uploads = 0;
+    std::size_t passes = 0;
+    for (const auto& command : prepared.scene->commands()) {
+        uploads += std::holds_alternative<GpuSceneUploadCommand>(command) ? 1U : 0U;
+        passes += std::holds_alternative<GpuSceneCryptomatteCommand>(command) ? 1U : 0U;
+    }
+    expectations.expect(uploads == 2 && passes == 4,
+                        "shared layers: two mattes read one upload per rank layer");
+    expectations.expect(prepared.scene->mediaStatistics().imageConversions == 1,
+                        "shared layers: the rank layers are gathered once per build");
+    auto cache = GpuSceneCache::create(harness.device, GpuSceneCacheBudgets{});
+    auto executor = cache ? GpuSceneExecutor::create(harness.device, *cache.cache)
+                          : decltype(GpuSceneExecutor::create(harness.device, *cache.cache)){};
+    if (!cache || !executor) {
+        expectations.expect(false, "shared layers: executor creates");
+        return;
+    }
+    const auto run = runScene(*executor.executor, prepared.scene, kSceneBudget);
+    expectations.expect(run.ready && run.countersAtReady.uploads == 2 &&
+                            run.countersAtReady.cryptomatteDispatches == 4,
+                        "shared layers: two uploads and four coverage passes ran");
+    auto oracleRequest = request(*plan, false);
+    oracleRequest.bypassOperationCache = true;
+    const auto frame = harness.evaluator.evaluate(plan, oracleRequest, {});
+    const auto readback = run.ready
+                              ? readbackResidentImage(*run.image, kSceneBudget)
+                              : decltype(readbackResidentImage(*run.image, kSceneBudget)){};
+    expectations.expect(frame.frame() != nullptr && readback.hasValue() &&
+                            pixelsClose(readback.pixels, frame.frame()->processImage().pixels()),
+                        "shared layers: the composited mattes match the CPU oracle");
 }
 
 void testCancellationAndBudget(Expectations& expectations, Harness& harness,
@@ -375,6 +481,12 @@ int main(const int argc, char** argv) {
         bloom::cryptomatte_fixture::writeCryptomatteExr(directory / "plain.exr", false);
         const auto manifest = imageAsset(directory / "manifest.exr", "manifest", 710);
         const auto plain = imageAsset(directory / "plain.exr", "plain", 711);
+        bloom::cryptomatte_fixture::writeCryptomatteExr(directory / "three.exr", true,
+                                                        "CryptoObject", {}, 0, true, 3);
+        bloom::cryptomatte_fixture::writeCryptomatteExr(directory / "one.exr", true,
+                                                        "CryptoObject", {}, 0, true, 1);
+        const auto threeRanks = imageAsset(directory / "three.exr", "three", 712);
+        const auto oneRank = imageAsset(directory / "one.exr", "one", 713);
 
         CpuCompositionEvaluator evaluator;
         evaluator.setAssetBaseDirectory(directory);
@@ -406,7 +518,14 @@ int main(const int argc, char** argv) {
                    "ID-colour preview", true);
         testParity(expectations, harness, plain, {"floor"}, false, true, 93600,
                    "ID-colour preview under a proxy", true);
+        testParity(expectations, harness, threeRanks, {"cube", "floor"}, false, false, 93700,
+                   "three ranks (a one-rank last layer)", false, 3);
+        testParity(expectations, harness, threeRanks, {"sky"}, false, true, 93800,
+                   "ID-colour preview over three ranks under a proxy", true, 3);
+        testParity(expectations, harness, oneRank, {"sphere", "cube"}, false, false, 93900,
+                   "one rank (one layer, one pass)", false, 1);
         testSelectionEdit(expectations, harness, manifest);
+        testSharedLayers(expectations, harness, manifest);
         testCancellationAndBudget(expectations, harness, manifest);
         if (!expectations.ok()) {
             std::cerr << "FAIL: native Cryptomatte expectations failed\n";

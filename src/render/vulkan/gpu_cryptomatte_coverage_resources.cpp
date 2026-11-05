@@ -260,7 +260,7 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
     resourcesLive = true;
     resources.deviceState = control;
     noteCryptomatteCoverageResourceSetCreated();
-    constexpr bool kBindings[kCryptomatteCoverageBindingCount] = {true, true, false};
+    constexpr bool kBindings[kCryptomatteCoverageBindingCount] = {true, true, false, true};
     std::string reason;
     if (!createCompositePipeline(*control, vulkan_detail::kCryptomatteCoverageSpirvCode,
                                  vulkan_detail::kCryptomatteCoverageSpirvByteCount, kBindings,
@@ -271,7 +271,7 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
         return false;
     }
 
-    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 2},
+    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 3},
                                vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 1}};
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
@@ -349,7 +349,8 @@ bool GpuCryptomatteCoverage::Impl::createPipelines() {
 }
 
 bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImage>& source,
-                                             const ImageWindow outputWindow,
+                                             const std::shared_ptr<const GpuImage>& accumulator,
+                                             const bool finish, const ImageWindow outputWindow,
                                              const ImageWindow displayWindow,
                                              const core::PixelAspectRatio pixelAspect,
                                              const std::uint32_t rankCount,
@@ -456,6 +457,7 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     }
 
     resources.source = source;
+    resources.accumulator = accumulator;
     resources.resident = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
     lastJobBytes = retainedActual > peakActual ? retainedActual : peakActual;
 
@@ -502,6 +504,12 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     vk::DescriptorImageInfo outputInfo{};
     outputInfo.imageView = outputRaw->view;
     outputInfo.imageLayout = vk::ImageLayout::eGeneral;
+    // The first layer has no state; its rank layer is bound in that slot and never read.
+    vk::DescriptorImageInfo stateInfo{};
+    stateInfo.imageView = resources.accumulator != nullptr
+                              ? gpuImageImpl(*resources.accumulator)->view
+                              : sourceRaw->view;
+    stateInfo.imageLayout = vk::ImageLayout::eGeneral;
     vk::DescriptorBufferInfo idsInfo{};
     idsInfo.buffer = resources.ids.buffer;
     idsInfo.range = VK_WHOLE_SIZE;
@@ -521,6 +529,9 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = vk::DescriptorType::eStorageBuffer;
     writes[2].pBufferInfo = &idsInfo;
+    writes[3] = writes[0];
+    writes[3].dstBinding = 3;
+    writes[3].pImageInfo = &stateInfo;
     dispatcher->vkUpdateDescriptorSets(rawDevice, static_cast<std::uint32_t>(writes.size()),
                                        reinterpret_cast<const VkWriteDescriptorSet*>(writes.data()),
                                        0, nullptr);
@@ -555,8 +566,13 @@ bool GpuCryptomatteCoverage::Impl::launchJob(const std::shared_ptr<const GpuImag
     resources.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                                *resources.pipeline.pipelineLayout, 0,
                                                {*resources.descriptorSet}, {});
-    const CryptomatteCoveragePush push{outputWidth, outputHeight, rankCount,
-                                       static_cast<std::uint32_t>(ids.size()), preview ? 1U : 0U};
+    const CryptomatteCoveragePush push{outputWidth,
+                                       outputHeight,
+                                       rankCount,
+                                       static_cast<std::uint32_t>(ids.size()),
+                                       preview ? 1U : 0U,
+                                       resources.accumulator != nullptr ? 1U : 0U,
+                                       finish ? 1U : 0U};
     resources.commandBuffer.pushConstants(*resources.pipeline.pipelineLayout,
                                           vk::ShaderStageFlagBits::eCompute, 0,
                                           sizeof(CryptomatteCoveragePush), &push);

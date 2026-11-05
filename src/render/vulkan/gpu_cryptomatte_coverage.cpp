@@ -225,13 +225,23 @@ GpuCryptomatteCoverage::begin(const GpuCryptomatteCoverageRequest& parameters,
     const auto outputWindow = parameters.output.dataWindow();
     const std::uint32_t outputWidth = outputWindow.extent().width();
     const std::uint32_t outputHeight = outputWindow.extent().height();
-    std::uint64_t stackedHeight = 0;
-    if (parameters.rankCount == 0 || outputWidth == 0 || outputHeight == 0 ||
-        compositeMultiplyOverflows(outputHeight, parameters.rankCount, stackedHeight) ||
-        sourceWindow->extent().width() != outputWidth ||
-        sourceWindow->extent().height() != stackedHeight) {
+    if (parameters.rankCount == 0 || parameters.rankCount > 2 || outputWidth == 0 ||
+        outputHeight == 0 || sourceWindow->extent().width() != outputWidth ||
+        sourceWindow->extent().height() != outputHeight) {
         return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::InvalidArgument,
-                              "the Cryptomatte rank source does not stack rankCount output frames");
+                              "the Cryptomatte rank layer does not hold one or two ranks of the "
+                              "output extent");
+    }
+    if (parameters.accumulator != nullptr) {
+        const auto stateWindow = parameters.accumulator->isValid()
+                                     ? parameters.accumulator->dataWindow()
+                                     : std::optional<ImageWindow>{};
+        if (!stateWindow.has_value() || stateWindow->extent().width() != outputWidth ||
+            stateWindow->extent().height() != outputHeight) {
+            return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::InvalidArgument,
+                                  "the previous Cryptomatte layer's state does not match the "
+                                  "output extent");
+        }
     }
     std::uint64_t metadataBytes = 0;
     std::uint64_t imageBytes = 0;
@@ -284,7 +294,9 @@ GpuCryptomatteCoverage::begin(const GpuCryptomatteCoverageRequest& parameters,
             GpuCryptomatteCoverageDiagnosticCode::OverBudget,
             "the Cryptomatte dispatch exceeds the device workgroup grid capacity");
     }
-    if (!compositeImageBelongsTo(gpuImageImpl(*parameters.source), impl.control)) {
+    if (!compositeImageBelongsTo(gpuImageImpl(*parameters.source), impl.control) ||
+        (parameters.accumulator != nullptr &&
+         !compositeImageBelongsTo(gpuImageImpl(*parameters.accumulator), impl.control))) {
         return makeDiagnostic(GpuCryptomatteCoverageDiagnosticCode::InvalidArgument,
                               "the Cryptomatte rank source does not belong to this device");
     }
@@ -327,7 +339,7 @@ GpuCryptomatteCoverage::begin(const GpuCryptomatteCoverageRequest& parameters,
         impl.releaseClaim();
         return diagnostic;
     }
-    if (!impl.launchJob(parameters.source, outputWindow, parameters.output.displayWindow(),
+    if (!impl.launchJob(parameters.source, parameters.accumulator, parameters.finish, outputWindow, parameters.output.displayWindow(),
                         parameters.output.pixelAspect(), parameters.rankCount, parameters.ids,
                         parameters.preview, byteBudget)) {
         const auto diagnostic = impl.jobDiagnostic;

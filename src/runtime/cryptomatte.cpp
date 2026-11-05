@@ -1,6 +1,7 @@
 #include "cryptomatte.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <charconv>
 #include <cmath>
@@ -354,7 +355,7 @@ selectCryptomatte(const CompiledCryptomatte& cryptomatte, const core::RationalTi
             channels, [&](const ResolvedChannel& channel) { return channel.name == name; });
     };
     OperationKey gatherKey;
-    gatherKey.add(std::string{"cryptomatte-ranks-v1"});
+    gatherKey.add(std::string{"cryptomatte-rank-layers-v2"});
     for (const auto& source : result.channels.sources)
         gatherKey.add(source.decodeKey);
     for (const auto& rank : result.ranks) {
@@ -461,129 +462,121 @@ CryptomatteGather gatherCryptomatte(const CryptomatteSelection& selection, const
     }
     const auto window = *union_;
     const auto width = static_cast<std::size_t>(window.extent().width());
-    const auto sample = [&](const ResolvedChannel& channel, const std::int64_t x,
-                            const std::int64_t y) {
-        if (!channel.source)
-            return channel.constant;
+    const auto height = static_cast<std::size_t>(window.extent().height());
+    const auto pixels = width * height;
+    // One plane on the union window: the channel's samples where its own window covers the pixel,
+    // zero elsewhere, or the channel's constant.
+    const auto fill = [&](const ResolvedChannel& channel, std::vector<float>& plane) {
+        plane.assign(pixels, 0.0F);
+        if (!channel.source) {
+            std::ranges::fill(plane, channel.constant);
+            return true;
+        }
         const auto& set = sets[*channel.source];
-        const auto plane = set->find(channel.sourceChannel);
+        const auto index = set ? set->find(channel.sourceChannel) : std::nullopt;
+        if (!index)
+            return true;
+        const auto source = set->plane(*index);
         const auto channelWindow = set->dataWindow();
-        if (!plane || !channelWindow.contains(x, y))
-            return 0.0F;
-        return set->plane(*plane)[static_cast<std::size_t>(y - channelWindow.originY()) *
-                                      channelWindow.extent().width() +
-                                  static_cast<std::size_t>(x - channelWindow.originX())];
+        const auto left = std::max(window.originX(), channelWindow.originX());
+        const auto right = std::min(window.maxXExclusive(), channelWindow.maxXExclusive());
+        const auto top = std::max(window.originY(), channelWindow.originY());
+        const auto bottom = std::min(window.maxYExclusive(), channelWindow.maxYExclusive());
+        const auto channelWidth = static_cast<std::size_t>(channelWindow.extent().width());
+        for (auto y = top; y < bottom && left < right; ++y) {
+            if (cancelled())
+                return false;
+            const auto from = static_cast<std::size_t>(y - channelWindow.originY()) * channelWidth +
+                              static_cast<std::size_t>(left - channelWindow.originX());
+            const auto to = static_cast<std::size_t>(y - window.originY()) * width +
+                            static_cast<std::size_t>(left - window.originX());
+            std::copy_n(source.begin() + static_cast<std::ptrdiff_t>(from),
+                        static_cast<std::size_t>(right - left),
+                        plane.begin() + static_cast<std::ptrdiff_t>(to));
+        }
+        return true;
     };
-    for (std::size_t rank = 0; rank * 2 + 1 < selection.rankChannels.size(); ++rank) {
-        const auto& idChannel = selection.rankChannels[rank * 2];
-        const auto& coverageChannel = selection.rankChannels[rank * 2 + 1];
-        auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), remaining);
-        if (!builder) {
+    const auto rankCount = selection.rankChannels.size() / 2;
+    for (std::size_t first = 0; first < rankCount; first += 2) {
+        const auto ranks = std::min<std::size_t>(2, rankCount - first);
+        std::vector<render::ChannelDescriptor> descriptors;
+        std::vector<std::vector<float>> planes(ranks * 2);
+        for (std::size_t rank = 0; rank < ranks; ++rank) {
+            const auto& idChannel = selection.rankChannels[(first + rank) * 2];
+            const auto& coverageChannel = selection.rankChannels[(first + rank) * 2 + 1];
+            auto& id = planes[rank * 2];
+            auto& coverage = planes[rank * 2 + 1];
+            if (!fill(idChannel, id) || !fill(coverageChannel, coverage)) {
+                result.cancelled = true;
+                return result;
+            }
+            for (std::size_t pixel = 0; pixel < pixels; ++pixel) {
+                if (!std::isfinite(id[pixel]) || !std::isfinite(coverage[pixel])) {
+                    id[pixel] = std::isfinite(id[pixel]) ? id[pixel] : 0.0F;
+                    coverage[pixel] = std::isfinite(coverage[pixel]) ? coverage[pixel] : 0.0F;
+                    ++result.repairedPixels;
+                }
+            }
+            descriptors.push_back({idChannel.name, selection.layer, render::ChannelRole::Id,
+                                   render::ChannelSampleKind::Float,
+                                   render::ChannelValueEncoding::Data});
+            descriptors.push_back({coverageChannel.name, selection.layer,
+                                   render::ChannelRole::Coverage, render::ChannelSampleKind::Float,
+                                   render::ChannelValueEncoding::Data});
+        }
+        auto layer = render::ChannelSetImage::create(window, *display.value(),
+                                                     core::PixelAspectRatio::square(),
+                                                     std::move(descriptors), std::move(planes), {},
+                                                     remaining);
+        if (!layer) {
             result.diagnostic = "The Cryptomatte ranks exceed the pixel storage budget";
             result.code = media::ImageDiagnosticCode::PixelBudgetExceeded;
             return result;
         }
-        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
-            if (cancelled()) {
-                result.cancelled = true;
-                return result;
-            }
-            auto row = builder.value()->row(y);
-            for (std::size_t column = 0; column < width; ++column) {
-                const auto x = window.originX() + static_cast<std::int64_t>(column);
-                auto id = sample(idChannel, x, y);
-                auto coverage = sample(coverageChannel, x, y);
-                if (!std::isfinite(id) || !std::isfinite(coverage)) {
-                    id = std::isfinite(id) ? id : 0.0F;
-                    coverage = std::isfinite(coverage) ? coverage : 0.0F;
-                    ++result.repairedPixels;
-                }
-                const auto pixel = render::Rgba32f::fromPremultiplied(id, coverage, 0.0F, 1.0F);
-                (*row.value())[column] = *pixel.value();
-            }
-        }
-        auto frozen = std::move(*builder.value()).freeze();
-        if (!frozen) {
-            result.diagnostic = "Cryptomatte rank validation failed";
-            return result;
-        }
-        const auto cost = frozen.value()->pixelStorageByteCost();
+        const auto cost = layer.value()->byteCost();
         remaining = cost < remaining ? remaining - cost : 0;
-        result.ranks.push_back(
-            std::make_shared<const render::Rgba32fImage>(std::move(*frozen.value())));
+        result.layers.push_back(
+            std::make_shared<const render::ChannelSetImage>(std::move(*layer.value())));
     }
+    result.rankCount = static_cast<std::uint32_t>(rankCount);
     return result;
 }
 
-media::ImageResult<render::Rgba32fImage> stackCryptomatteRanks(const CryptomatteGather& gather,
-                                                               const std::size_t budget,
-                                                               const CancellationToken& cancel) {
-    if (gather.ranks.empty())
-        return {{}, gather.diagnostic.empty() ? "The Cryptomatte has no ranks" : gather.diagnostic};
-    const auto* first = gather.ranks.front()->descriptor();
-    const auto window = first->dataWindow();
-    const auto height = static_cast<std::uint64_t>(window.extent().height());
-    const auto rankCount = static_cast<std::uint64_t>(gather.ranks.size());
-    const auto stackedWindow = render::ImageWindow::create(
-        window.originX(), window.originY(), window.extent().width(), height * rankCount);
-    if (!stackedWindow)
-        return {{}, "The Cryptomatte rank stack is too large"};
-    const auto descriptor = render::Rgba32fImageDescriptor::create(
-        *stackedWindow.value(), first->displayWindow(), first->pixelAspect());
-    if (!descriptor)
-        return {{}, "The Cryptomatte rank stack is too large"};
-    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
-    if (!builder)
-        return {{},
-                "The Cryptomatte ranks exceed the pixel storage budget",
-                false,
-                media::ImageDiagnosticCode::PixelBudgetExceeded};
-    const auto width = static_cast<std::size_t>(window.extent().width());
-    for (std::uint64_t rank = 0; rank < rankCount; ++rank) {
-        const auto& source = *gather.ranks[rank];
-        for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
-            if (cancel.isCancellationRequested())
-                return {{}, {}, true, media::ImageDiagnosticCode::Cancelled};
-            const auto target = y + static_cast<std::int64_t>(rank * height);
-            auto row = builder.value()->row(target);
-            const auto pixels = source.pixels();
-            const auto offset = static_cast<std::size_t>(y - window.originY()) * width;
-            if (!row || pixels.size() < offset + width)
-                return {{}, "Cryptomatte rank stack validation failed"};
-            std::ranges::copy(pixels.subspan(offset, width), row.value()->begin());
-        }
-    }
-    auto frozen = std::move(*builder.value()).freeze();
-    if (!frozen)
-        return {{}, "Cryptomatte rank stack validation failed"};
-    return {std::move(*frozen.value()), {}};
+std::pair<float, float> CryptomatteGather::rankPair(const std::uint32_t rank,
+                                                    const std::size_t pixel) const noexcept {
+    const auto& layer = *layers[rank / 2];
+    const auto lane = static_cast<std::size_t>(rank % 2) * 2;
+    return {layer.plane(lane)[pixel], layer.plane(lane + 1)[pixel]};
 }
 
 media::ImageResult<render::Rgba32fImage> cryptomatteCoverageImage(const CryptomatteGather& gather,
                                                                   const std::size_t budget,
                                                                   const CancellationToken& cancel) {
-    if (gather.ranks.empty())
+    if (gather.layers.empty())
         return {{}, gather.diagnostic.empty() ? "The Cryptomatte has no ranks" : gather.diagnostic};
-    const auto* descriptor = gather.ranks.front()->descriptor();
-    auto builder = render::Rgba32fImageBuilder::create(*descriptor, budget);
+    const auto& first = *gather.layers.front();
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        first.dataWindow(), first.displayWindow(), first.pixelAspect());
+    if (!descriptor)
+        return {{}, "Cryptomatte matte validation failed"};
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
     if (!builder)
         return {{},
                 "The Cryptomatte matte exceeds the pixel storage budget",
                 false,
                 media::ImageDiagnosticCode::PixelBudgetExceeded};
-    const auto window = descriptor->dataWindow();
+    const auto window = first.dataWindow();
     const auto width = static_cast<std::size_t>(window.extent().width());
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
         if (cancel.isCancellationRequested())
             return {{}, {}, true, media::ImageDiagnosticCode::Cancelled};
         auto row = builder.value()->row(y);
+        const auto offset = static_cast<std::size_t>(y - window.originY()) * width;
         for (std::size_t column = 0; column < width; ++column) {
-            const auto x = window.originX() + static_cast<std::int64_t>(column);
             float coverage = 0.0F;
-            for (const auto& rank : gather.ranks) {
-                const auto pixel = rank->read(x, y);
-                coverage = accumulateCryptomatteCoverage(coverage, pixel.value()->red(),
-                                                         pixel.value()->green(), gather.ids);
+            for (std::uint32_t rank = 0; rank < gather.rankCount; ++rank) {
+                const auto [id, value] = gather.rankPair(rank, offset + column);
+                coverage = accumulateCryptomatteCoverage(coverage, id, value, gather.ids);
             }
             const auto pixel =
                 render::Rgba32f::fromPremultiplied(coverage, coverage, coverage, coverage);
@@ -599,27 +592,30 @@ media::ImageResult<render::Rgba32fImage> cryptomatteCoverageImage(const Cryptoma
 media::ImageResult<render::Rgba32fImage>
 cryptomattePreviewImage(const CryptomatteGather& gather, const std::size_t budget,
                         const CancellationToken& cancel) {
-    if (gather.ranks.empty())
+    if (gather.layers.empty())
         return {{}, gather.diagnostic.empty() ? "The Cryptomatte has no ranks" : gather.diagnostic};
-    const auto* descriptor = gather.ranks.front()->descriptor();
-    auto builder = render::Rgba32fImageBuilder::create(*descriptor, budget);
+    const auto& first = *gather.layers.front();
+    const auto descriptor = render::Rgba32fImageDescriptor::create(
+        first.dataWindow(), first.displayWindow(), first.pixelAspect());
+    if (!descriptor)
+        return {{}, "Cryptomatte preview validation failed"};
+    auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), budget);
     if (!builder)
         return {{}, "The Cryptomatte preview exceeds the pixel storage budget", false,
                 media::ImageDiagnosticCode::PixelBudgetExceeded};
-    const auto window = descriptor->dataWindow();
+    const auto window = first.dataWindow();
     const auto width = static_cast<std::size_t>(window.extent().width());
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
         if (cancel.isCancellationRequested())
             return {{}, {}, true, media::ImageDiagnosticCode::Cancelled};
         auto row = builder.value()->row(y);
+        const auto offset = static_cast<std::size_t>(y - window.originY()) * width;
         for (std::size_t column = 0; column < width; ++column) {
-            const auto x = window.originX() + static_cast<std::int64_t>(column);
             std::array<float, 3> colour{};
             float alpha = 0.0F;
-            for (const auto& rank : gather.ranks) {
-                const auto pixel = rank->read(x, y);
-                const auto bits = std::bit_cast<std::uint32_t>(pixel.value()->red());
-                const float coverage = pixel.value()->green();
+            for (std::uint32_t rank = 0; rank < gather.rankCount; ++rank) {
+                const auto [id, coverage] = gather.rankPair(rank, offset + column);
+                const auto bits = std::bit_cast<std::uint32_t>(id);
                 auto tint = cryptomatteIdColour(bits);
                 if (std::ranges::find(gather.ids, bits) != gather.ids.end())
                     for (auto& channel : tint)
@@ -651,7 +647,7 @@ evaluateCryptomatte(const CryptomatteSelection& selection,
     const auto gather = gatherCryptomatte(selection, budget, cancel);
     if (gather.cancelled)
         return {{}, {}, true, media::ImageDiagnosticCode::Cancelled};
-    if (gather.ranks.empty())
+    if (gather.layers.empty())
         return {{}, gather.diagnostic, false, gather.code};
     auto coverage = selection.preview ? cryptomattePreviewImage(gather, budget, cancel)
                                       : cryptomatteCoverageImage(gather, budget, cancel);

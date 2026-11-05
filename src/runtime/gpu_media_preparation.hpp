@@ -41,9 +41,14 @@
 #include <unordered_map>
 
 namespace bloom::render {
+class ChannelSetImage;
 class Rgba32fImage;
 class NativeSampleImage;
 } // namespace bloom::render
+
+namespace bloom::runtime::detail {
+struct CryptomatteGather;
+} // namespace bloom::runtime::detail
 
 namespace bloom::runtime {
 
@@ -61,6 +66,12 @@ class GpuSceneBuildUploads final {
     findSamples(const std::string& key) const;
     void shareSamples(const std::string& key,
                       std::shared_ptr<const render::NativeSampleImage> samples);
+    // #549: a Cryptomatte type's gathered rank layers, shared by every matte of that type in the
+    // build (each matte resolves its own IDs through the gather's manifest).
+    [[nodiscard]] std::shared_ptr<const detail::CryptomatteGather>
+    findCryptomatte(const std::string& key) const;
+    void shareCryptomatte(const std::string& key,
+                          std::shared_ptr<const detail::CryptomatteGather> gather);
     // Image source revisions captured by earlier leaves of this build.
     [[nodiscard]] detail::ImageSourceRevisionMemo& revisions() noexcept { return revisions_; }
 
@@ -69,6 +80,7 @@ class GpuSceneBuildUploads final {
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<const render::Rgba32fImage>> images_;
     std::unordered_map<std::string, std::shared_ptr<const render::NativeSampleImage>> samples_;
+    std::unordered_map<std::string, std::shared_ptr<const detail::CryptomatteGather>> cryptomattes_;
 };
 
 } // namespace bloom::runtime
@@ -98,19 +110,27 @@ struct MediaResamplePlan final {
     double verticalScale = 1.0;
 };
 
-// #364: a CryptomatteCoverageV1 pass over the stacked rank upload. `output` is the full-resolution
-// matte descriptor (the upload's data window origin and width, one rank's height, the composition
-// display window and pixel aspect); any proxy resample then reads the matte, not the upload.
+// #364/#549: the CryptomatteCoverageV1 passes over the type's rank layers. Each layer is its own
+// frame-sized data upload (`layers`, the upload command identity beside each, independent of the
+// selection), and one pass per layer accumulates its ranks in rank order. `output` is the
+// full-resolution matte descriptor (the layers' data window, the composition display window and
+// pixel aspect); any proxy resample then reads the matte, not the uploads.
+struct MediaCryptomatteLayer final {
+    std::shared_ptr<const render::ChannelSetImage> channels;
+    std::string uploadSemanticKey;
+};
 struct MediaCryptomattePlan final {
     render::Rgba32fImageDescriptor output;
     std::uint32_t rankCount = 0;
     std::vector<std::uint32_t> ids;
     bool preview = false;
+    std::vector<MediaCryptomatteLayer> layers;
 };
 
 struct MediaUploadOutcome final {
     // Exactly one of `image` and `samples` (#422: the decoded samples in their native layout,
-    // converted to RGBA32F on the device by SampleConvertV1) carries the upload's host pixels.
+    // converted to RGBA32F on the device by SampleConvertV1) carries the upload's host pixels; a
+    // Cryptomatte leaf sets neither and uploads `cryptomatte->layers` instead (#549).
     std::shared_ptr<const render::Rgba32fImage> image;
     std::shared_ptr<const render::NativeSampleImage> samples;
     // Request geometry for the upload command. Raw source storage keeps its native descriptor;
