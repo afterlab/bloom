@@ -396,7 +396,9 @@ QSettings under `viewer/project-display-view/<SHA-256 of the project path>/<conf
 returns when the project is reopened. The application begins the memory for each installed project
 (New or Open) before rebinding the session, and moves it to the new path after a successful Save
 As. An unsaved project keeps its choice in memory only. A project with no remembered pair (new, or
-saved before this behavior) starts on the Viewer default. The earlier per-Viewer
+saved before this behavior) starts on the Viewer default. A Viewer in a secondary workspace window
+(#536) has its own display/view instead, kept with that window's layout and starting on the Viewer
+default; see [Workspace windows](workspace-layout.md#workspace-windows). The earlier per-Viewer
 `viewer/display-view/<revision>/<area>` keys are no longer read. The color picker's inverse remains pinned to the config's sRGB authoring pair; it is not
 changed by the review display selection.
 

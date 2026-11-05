@@ -105,8 +105,20 @@ An unavailable editor type is localized to its area. Bloom preserves the missing
 shows an unavailable-editor placeholder, and lets the artist select a registered editor. Other
 areas continue to restore normally.
 
-Editor-internal session state, pinned context, zoom, scroll positions, detached windows, and
-multi-monitor geometry are not yet part of schema version 2.
+Schema version 3 (#536) adds two things to the same document, both session state:
+
+- an optional `state` object on an area node, the editor's own session state when its editor
+  implements `EditorSessionStateProvider`. Today only the Viewer writes one (its pin and its own
+  display/view; see [Workspace windows](#workspace-windows)). A `state` that is present but not an
+  object makes the layout invalid; an editor that does not recognise a field ignores it.
+  Workspace presets never carry it (`saveLayoutState(false)`).
+- on the application's layout only, a `windows` array, one entry per secondary workspace window:
+  `{id, layout, placement}`, where `layout` is that window's own complete layout document and
+  `placement` is `{screen, x, y, width, height, fullScreen, maximized}` (the normal geometry while
+  full screen or maximized).
+
+Zoom and scroll positions are still not saved. Readers accept schemas 1 to 3. A schema-2 layout
+restores unchanged; only a schema-1 layout is replaced with the Default preset.
 
 ## Authored default and Version 2 migration
 
@@ -146,6 +158,89 @@ by pending default-layout work. Minimum widths continue to apply normally. The t
 uses the sum of its token-defined columns; metric audits verify full menus at 1600 and 1920 pixels.
 The main-window migration test starts with a valid one-area version-1 layout without Assets and
 asserts the Default preset's four areas, including Assets, with the preset named Default.
+
+## Workspace windows
+
+**Window → New Window** (`newWindowAction`) opens a `WorkspaceWindow`: a top-level window with its
+own `WorkspaceHost` and no menu bar or toolbar, opening with a single Viewer. It works on the same
+`CompositionSession`, project, playhead, selection, active composition, undo stack and command
+system as the main window; it holds no state of its own beyond its layout and placement. The main
+window's application actions are added to every secondary window, so a `Qt::WindowShortcut` (Undo,
+Save, F11, the panel commands) fires in whichever window has focus. On macOS the menu bar is the
+global parentless `QMenuBar`, so it serves every window.
+
+Each window's areas, splits, joins and Fullscreen work exactly as in the main window. Window-menu
+panel commands act on the active workspace host: the host of the window most recently activated.
+Exactly one area across all windows paints the active highlight: activating a window moves the
+highlight to its active area, and every other host is told `setActiveHighlightEnabled(false)`.
+
+Closing a secondary window closes only it, retiring its native surfaces through the host's
+retirement gate first. Closing the main window or quitting closes every window, after the one
+unsaved-changes prompt the main window already shows.
+
+**F11** (View → Full Screen) acts on the window it is pressed in, going borderless full screen on
+that window's monitor. On Windows a double-click on a secondary window's title bar does the same
+(`WM_NCLBUTTONDBLCLK` on the caption). On Linux the title bar belongs to the window manager or the
+compositor's server-side decoration, which maximizes on double-click; F11 is the supported
+equivalent there. On macOS the title bar's green button gives the platform full screen.
+
+### Tear-off and docking
+
+Dragging a panel by its header background carries the `application/x-bloom-panel` MIME type with
+the source area ID. Over another area, a Selection-wash dock indicator covers the half nearest the
+pointer (`EditorArea::dockEdgeAt`: left, right, top or bottom by distance relative to the area's
+extent); a drop there moves the panel beside that area (`WorkspaceHost::dockPanel`). A drag that is
+released over no Bloom window tears the panel off into a new window at the release point. The
+header menu's **Move to New Window** (`panelMoveToNewWindowAction`) does the same without a drag.
+A window's only panel, and any panel while one is maximized, cannot move; the item is disabled
+with the reason in its tooltip. A moved panel keeps its editor type and its editor session state;
+the window it leaves closes when it has no panel left. Moving panels is an undo-free UI action and
+is saved with the layout like any other change.
+
+### Persistence and placement
+
+The application's layout document carries the `windows` array described above. Restoring re-opens
+each valid entry (at most 64; a malformed entry is skipped, never fatal), then makes the main
+window's workspace active again.
+
+A saved placement is resolved against the screens present (`resolveWindowPlacement`):
+
+1. If the named screen exists and the saved frame overlaps it, the frame stays, fitted inside that
+   screen's available area.
+2. Otherwise the frame goes to the screen it overlaps most, fitted inside it.
+3. Otherwise (its monitor is gone and the frame is off every screen) it is centred on the primary
+   screen, shrunk to fit, and reported as relocated.
+
+On Wayland a client cannot position its own windows (`platformPositionsWindows()` is false). Bloom
+restores the size, the screen as a hint and full screen, and the compositor chooses the position.
+A tear-off there opens where the compositor places it, since a drag released outside reports no
+position.
+
+### Viewer pin and per-window display
+
+A Viewer follows the session's active composition by default. Its header's pin control
+(`viewerPinButton`) offers **Follow Active Composition**, **Pin to Composition** and **Pin to
+Selected Node** (the node's first Image or Mask output, shown through the #490 channel-inspection
+route). A pinned Viewer shows the filled Accent pin and a "Pinned" label (with the node name for a
+node pin). It keeps showing its target when the active composition changes, evaluating that
+composition from the live document snapshot. Pinned to another composition, it is a reference
+view: no layer bounds, overlays or direct manipulation, only pan, zoom and ROI. A pin whose
+composition or node is deleted falls back to Follow, and a pin is restored only for the same
+project.
+
+A pinned Viewer and every Viewer in a secondary window get their own `CompositionPreviewController`
+from the application's `ViewerPreviewPool`. Each controller shares the one preview pipeline, frame
+cache, GPU display submitter and processing policy, so there is no fixed per-window cap. Only the
+main controller scopes the shared cache's retention range. Each window's Viewer has its own OCIO
+display/view, which starts on the project's Viewer default. Because display and view are part of
+`PreviewFrameCacheKey`, two windows showing one frame through different transforms never share a
+cache entry. The main window's Viewers keep the per-project display/view memory.
+
+Every window owns its native surfaces (and swapchains) and shares the device and caches.
+`MainWindow::liveNativeSurfaces()` reports the surfaces of every window to the publication sink and
+to shutdown retirement. Per-monitor scale changes reach each window's Viewer through the existing
+`DevicePixelRatioChange` handling, which resizes only that window's surface. No new
+per-window frame retention is added, so Viewer memory behavior (#463) is unchanged.
 
 ## Workspace presets
 
@@ -187,7 +282,7 @@ platform-owned.
 The following remain deferred:
 
 - drag-from-corner splitting and drag-to-merge gestures (joining from the divider menu exists)
-- tabs, floating areas, and detached windows
+- tabs within an area
 - per-workspace content beyond the arrangement (a preset stores panel arrangement only)
 - per-editor internal session-state migration
 - keymap customization

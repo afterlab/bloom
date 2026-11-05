@@ -43,5 +43,44 @@ enlarges the focused panel to the whole workspace. While it is full screen it is
 shown, so it has no highlighted border. Choose **Exit Fullscreen** to bring the other panels back;
 the highlight returns on the panel that has focus. Split, close and join wait until you exit.
 
+## More windows
+
+**Window → New Window** opens another window on the same project, for example for a second
+monitor. It starts with one Viewer and has no menu bar or toolbar; everything else works as in the
+main window: split, join and arrange its panels, and use your shortcuts there. Undo, the playhead,
+the selection and the active composition are shared by every window. Closing a window closes only
+it; closing the main window or quitting closes them all, asking once about unsaved changes.
+
+To move a panel into its own window, drag its header (the empty part, not a control) outside every
+Bloom window and release, or choose **Move to New Window** from the header menu. To put it back,
+drag its header over a panel in any window: the highlighted half shows where it goes. A window's
+only panel stays in it.
+
+Press **F11** in a window to make that window full screen on its monitor, and press it again to
+come back. On Windows, double-clicking a window's title bar does the same; on Linux the title bar
+belongs to your desktop, so use F11. On macOS the green title-bar button makes a window full screen.
+
+Each window's Viewer has its own display and view (the footer's Display / View), starting on the
+project's Viewer default, so one monitor can show a review transform while another shows the plain
+view.
+
+Bloom remembers your windows, their panels, monitors, positions and sizes. If a monitor is missing
+next time, its windows open on a monitor that is there. On Wayland the desktop chooses where
+windows open; Bloom restores their size and full screen.
+
+## Pin a Viewer
+
+A Viewer shows the active composition. To keep it on one thing, use the pin button next to the
+composition in the Viewer's header:
+
+- **Pin to Composition** keeps showing that composition whatever becomes active. Pinned to a
+  composition you are not editing, the Viewer is for reference: you can pan, zoom and set a region,
+  but not select or move layers.
+- **Pin to Selected Node** shows the selected node's image output.
+- **Follow Active Composition** goes back to following.
+
+A pinned Viewer shows a filled pin and **Pinned**. A pin to something you delete goes back to
+following.
+
 Bloom saves the arrangement and restores it next time. Changing it after choosing a workspace preset
 shows the preset as edited; see [Workspace presets](workspace-presets.md).

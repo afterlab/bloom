@@ -145,7 +145,13 @@ at its `setElideFloor` width, no longer fits) or a priority row: controls in Lea
 (`beginCentre`) and Trailing groups separated by `Spacing::ChromeGroupGap` (12), the Center group
 centered while it fits, and controls that carry a collapse rank (`setCollapse`) or a compact form
 (`setCompactForm`) giving way in rank order into an icon overflow button whose menu offers each
-collapsed control as its own action or submenu. The row publishes `collapseThreshold` (the width
+collapsed control as its own action or submenu. In a header that overflow button is a header
+button like Fullscreen beside it (#536): the vertical dots (`ContextMenu`, `dots-three-vertical`)
+in the Chrome role's Bold weight and IconMedium box, `Foreground` ink on the resting Secondary
+plate, with only the shared hover and pressed states. It is never filled, white or Accent at rest.
+A footer's overflow keeps the Control role. The UI grammar audit checks every visible header
+overflow's glyph, box, resting state and plate against the Fullscreen button. The row publishes
+`collapseThreshold` (the width
 everything needs), `collapsed` and `collapseLevel`; a control that changes width re-lays the row
 out. A panel declares `contentMinimumHeight` when its content cannot shrink to nothing; the panel
 minimum is header + footer + that floor.
@@ -451,20 +457,31 @@ Phosphor assets; the four added shape glyphs are Bloom-authored SVG paths.
 
 The viewer surrounds its composition with `Color::Canvas` (`#131313`) and uses
 `Color::CompositionFrame` (`#454545`) at `kCompositionFrameWidth` (1 logical pixel) for the
-frame outline. `ViewerWorkPadding` reserves breathing room around the frame on every side; the
-canvas has no tool column (ADR 0031). Image fitting, picking, selection overlays and panning all
-use this same padded rectangle. View > Background (the surround) and the Transparency Grid remain
+frame outline. The image work area is the whole content area: Fit scales the frame to exactly
+fill the Viewer's width or height, whichever limits, with no padding (#536), in a docked panel, a
+separate window and full screen alike, and stays exact as the Viewer resizes. The canvas has no
+tool column (ADR 0031). Image fitting, picking, selection overlays and panning all use this same
+rectangle. View > Background (the surround) and the Transparency Grid remain
 presentation preferences.
 
 ### Viewer header and footer
 
 The header holds the panel switcher, then two selectors that say what they select: the
-composition shown (`viewerCompositionSelector`) and the selected layer (`viewerObjectSelector`),
-each item's tooltip naming its role ("Composition shown in the Viewer: …", "Selected layer: …").
+composition shown (`viewerCompositionSelector`), the pin control, and the selected layer
+(`viewerObjectSelector`), each item's tooltip naming its role ("Composition shown in the Viewer: …", "Selected layer: …").
 Empty, they read "No composition" and "No layers" (or "No layer selected" when a composition has
 layers and none is selected), disabled and muted. They elide down to `DropdownWidth` before the
 View, Select and Add menus collapse into the "…" overflow. The composition commands live in the
 application's Composition menu only.
+
+The pin control (`viewerPinButton`, #536) is a checkable `KIconButton` with the Phosphor
+`push-pin` glyph and an instant popup (`viewerPinMenu`) of three exclusive items: Follow Active
+Composition (`viewerFollowAction`), Pin to Composition (`viewerPinCompositionAction`) and Pin to
+Selected Node (`viewerPinNodeAction`), each disabled with its reason when unavailable. Following,
+it shows the outline glyph in `Foreground` ink and no label. Pinned, it shows the filled glyph in
+Accent with the `viewerPinLabel` reading "Pinned" (or "Pinned: <node>"), so the mode is never
+conveyed by colour alone; its tooltip and accessible name give the full description. While pinned,
+choosing a composition in the selector re-pins to it.
 
 The footer (`viewerFooter`) is a priority row of three groups:
 
@@ -820,7 +837,6 @@ See [Workspace Layout](../architecture/workspace-layout.md) for the migration co
 | `TimelineSwitchColumn` | 28 | The Shy switch after the name: one `ToggleCell` and its XS gap |
 | `TimelineLeftColumn` | 744 | Leading switches + default name + Shy + three 100px dropdown columns |
 | `GizmoHandle / GizmoRotateZone` | 8 / 16 | Viewer transform handles / outside-corner rotation radius |
-| `ViewerWorkPadding` | 48 | Padded image work area |
 | `StatusSeparatorHeight` | 12 | The hairline between two status bar segments. |
 | `StatusActivityMinWidth` | 160 | The least room the status bar's Activity text keeps before whole segments collapse. |
 | `DropdownWidthWorkspace` | 160 | The toolbar's Workspace field. |
@@ -943,8 +959,13 @@ children (Accent while the panel is active); the stylesheet gives the panel only
 Exactly one panel paints the Accent border, and none does while a panel is maximized (it is the only
 one visible); restoring paints it again on the focused panel. The panel header's right-click menu
 (`panelOptionsMenu`) reads Split Right (`panelSplitRightAction`), Split Down
-(`panelSplitDownAction`), Fullscreen, Close; the Window menu has Split Active Area Right
-(`splitAreaRightAction`) and Split Active Area Down (`splitAreaDownAction`). The divider between two
+(`panelSplitDownAction`), Fullscreen, Move to New Window (`panelMoveToNewWindowAction`), Close; the
+Window menu opens with New Window (`newWindowAction`) and a separator, then Split Active Area Right
+(`splitAreaRightAction`) and Split Active Area Down (`splitAreaDownAction`). The one Accent border
+spans every window: only the active window's active panel paints it. A secondary window
+(`bloomWorkspaceWindow`) has no menu bar or toolbar. Dragging a panel by its header background
+shows a dock indicator over the target panel's nearest half: a `Selection` wash at
+`kSelectionWashOpacity` with an Accent `SelectionEdge` border. The divider between two
 panels (`workspaceDivider`) shows the split resize cursor and drags as before; its right-click menu
 (`workspaceDividerMenu`) offers Join Left and Join Right on a vertical divider, Join Up and Join
 Down on a horizontal one (`workspaceJoin<Direction>Action`). Join X expands the panel on the other

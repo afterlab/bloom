@@ -137,6 +137,10 @@ The initial implementation compared the product requirements against:
 2. A custom split-area tree with area split, merge, and editor replacement behavior.
 
 The custom split-area tree now proves editor replacement, stable layout serialization, keyboard and
-mouse focus, resizing, close, joining across a divider, and non-destructive panel maximization.
-Multi-monitor floating windows, detached areas, high-DPI transitions, and equivalent behavior on
-Linux, macOS, and Windows remain acceptance gates rather than completed claims.
+mouse focus, resizing, close, joining across a divider, non-destructive panel maximization, and
+secondary workspace windows on the same session with tear-off, re-docking, per-window full screen,
+per-window Viewer display, pinned Viewers and saved placement with a missing-monitor fallback
+([Workspace windows](../architecture/workspace-layout.md#workspace-windows)). Linux behavior is
+covered by offscreen tests; macOS global menu and full screen, the Windows title-bar double-click,
+and per-monitor scale changes on real multi-monitor hardware still need verification on each
+platform.
