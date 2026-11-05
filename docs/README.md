@@ -26,6 +26,7 @@ provide research or rationale, but they are not binding until adopted here.
 6. [`architecture/module-system.md`](architecture/module-system.md),
    [`architecture/layer-graph-model.md`](architecture/layer-graph-model.md),
    [`architecture/value-node-library.md`](architecture/value-node-library.md),
+   [`architecture/fields.md`](architecture/fields.md),
    [`architecture/animation-and-time.md`](architecture/animation-and-time.md),
    [`architecture/layer-alignment.md`](architecture/layer-alignment.md),
    [`architecture/evaluation-primitives.md`](architecture/evaluation-primitives.md),
@@ -82,6 +83,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   primaries, the Levels histogram handles, per-channel grades for colour and render passes, clamp,
   the curve graph, hue curves, HDR curves, normalizing a depth pass, and Colorize (fill, tint,
   tritone, gradient map and black and white).
+- [Fields](user-guide/fields.md) — noise, cells, patterns, distances and forces as procedural
+  fields, their image and mask outputs, Rasterize Field, Field Sample, and the fractal noise
+  controls under their familiar names.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
   channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard

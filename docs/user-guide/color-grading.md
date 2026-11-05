@@ -242,7 +242,9 @@ section with the nodes above. Choose what it does with **Mode**:
 | **Black & White** | Turns the image grey, with a slider for how bright each of **Reds**, **Yellows**, **Greens**, **Cyans**, **Blues** and **Magentas** become (from -200% to 300%). |
 
 **Amount** blends the result with the original colour: 100% is the full effect, 0% leaves the image
-unchanged. The default Midpoint, 0.18, is mid grey in scene-linear light.
+unchanged. **Input** also takes a [field](fields.md) directly: a Noise's value or a Voronoi's cell
+id is drawn over the whole composition as grey and mapped, so Voronoi cell id into a Gradient Map
+makes stained glass. The default Midpoint, 0.18, is mid grey in scene-linear light.
 
 On the card, Tint and Tritone show the gradient they map through, drawn from the node's own
 colours, with a stop under it for each colour. Click a stop, or a colour swatch below the gradient,

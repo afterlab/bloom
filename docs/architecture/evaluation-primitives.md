@@ -581,7 +581,7 @@ unchanged and the new text and shape pixel pins keep passing.
 | Neighborhood filters | `src/render` | blur, sharpen, convolution, halo computation | Essential compositor |
 | Reduction and analysis | `src/render` | bounds, histogram, statistics, tracking inputs | Advanced |
 | Temporal | `src/runtime` and `src/render` | time mapping, frame blending, motion, bounded history | Motion/VFX |
-| Procedural | `src/core` or owning domain | versioned hash, random, noise, paths | Motion design |
+| Procedural | `src/core` or owning domain | versioned hash, random, noise, paths; field programs ([fields.md](fields.md)) | Motion design |
 | Optional domain | contributing module | geometry fields, 3D scenes, materials, simulations | Pipeline-specific |
 
 ## Color And Alpha Contract
