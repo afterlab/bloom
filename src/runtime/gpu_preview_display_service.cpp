@@ -92,6 +92,32 @@ void waitForWake(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
     });
 }
 
+// #386: when the only thing the owner waits for is the resident scene executor's in-flight native
+// job (the active stage's, or the stage ahead's), block on that job's own fence instead of a timed
+// condition wait, so the next dispatch starts the moment the GPU finishes. The wait is bounded so a
+// notification (a new request, a cancellation, a stop) is seen within a millisecond. A display or
+// transfer fence keeps the condition wait. `stalled` is set when a signal let nothing progress (an
+// injected stall), so the next wait is the condition wait. Returns false when it did not wait.
+[[nodiscard]] bool waitForResidentFence(const std::shared_ptr<detail::PreviewDisplayServiceCore>& core,
+                                        const std::uint64_t observedGeneration, bool& stalled) {
+    if (std::exchange(stalled, false) || core->residentExecutor == nullptr ||
+        core->residentExecutor->state() != GpuSceneExecutorJobState::Pending || core->nativeInFlight)
+        return false;
+    const auto& active = core->residentNativeActive;
+    if (active != nullptr && (active->residentPhase == detail::ResidentNativePhase::Display ||
+                              active->residentPhase == detail::ResidentNativePhase::Transfer ||
+                              active->residentPhase == detail::ResidentNativePhase::Retiring))
+        return false;
+    {
+        std::lock_guard lock(core->wakeMutex);
+        if (core->wakeGeneration != observedGeneration ||
+            core->stopping.load(std::memory_order_acquire))
+            return true; // Notified meanwhile: iterate at once.
+    }
+    stalled = core->residentExecutor->waitForNative(std::chrono::milliseconds(1));
+    return true;
+}
+
 // The single drain path, including the exception path: no ownership deadline and no early release.
 // Native is cancelled/quarantined first, then the loop waits for actual child terminality and
 // native retirement before any completion is consumed. The poll interval is responsiveness only,
@@ -169,6 +195,7 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
         return;
     }
     try {
+        bool fenceStalled = false;
         while (true) {
             std::uint64_t observed = 0;
             {
@@ -218,8 +245,17 @@ void runServiceLoop(const std::shared_ptr<detail::PreviewDisplayServiceCore>& co
             charge(core->counterOwnerServiceNanoseconds);
             // A step that started, completed or changed phase lets the next one start at once;
             // only a pending fence or an idle owner waits.
-            if (!progressed) {
-                waitForWake(core, observed, /*wakeOnStopping=*/true);
+            if (progressed) {
+                fenceStalled = false;
+            } else {
+                bool waited = false;
+                try {
+                    waited = waitForResidentFence(core, observed, fenceStalled);
+                } catch (...) { // NOLINT(bugprone-empty-catch)
+                    // A failed wait falls back to the condition wait below.
+                }
+                if (!waited)
+                    waitForWake(core, observed, /*wakeOnStopping=*/true);
                 charge(core->counterOwnerWaitNanoseconds);
             }
         }

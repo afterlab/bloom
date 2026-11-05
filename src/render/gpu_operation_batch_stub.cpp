@@ -36,4 +36,6 @@ bool GpuOperationBatch::hasUnretiredSubmission() const noexcept { return false; 
 bool GpuOperationBatch::teardownDrainIncomplete() noexcept { return false; }
 std::vector<GpuImage> GpuOperationBatch::takeImages() { return {}; }
 void GpuOperationBatch::cancel() noexcept {}
+bool GpuOperationBatch::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

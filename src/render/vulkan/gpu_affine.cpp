@@ -1,3 +1,4 @@
+#include "gpu_fence_wait_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_affine.hpp>
 
@@ -647,6 +648,12 @@ bool GpuAffine::teardownDrainIncomplete() noexcept {
     // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
     // resident is retained in the bounded pool, and false again once the rightful owner drains it.
     return affine_detail::affineResidentOrphaned() > 0;
+}
+
+bool GpuAffine::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (impl_ == nullptr || !(impl_->queueSubmitted))
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->control, static_cast<VkFence>(*impl_->fence), timeoutNanoseconds);
 }
 
 } // namespace bloom::render

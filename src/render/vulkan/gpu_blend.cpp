@@ -1,7 +1,9 @@
+#include "gpu_fence_wait_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_blend.hpp>
 
 #include "gpu_blend_fault.hpp"
+#include "gpu_blend_plan_private.hpp"
 #include "gpu_blend_private.hpp"
 
 #include <array>
@@ -22,34 +24,6 @@ constexpr std::uint64_t kDrainTimeoutNanoseconds = 2ULL * 1000ULL * 1000ULL * 10
 [[nodiscard]] GpuBlendDiagnostic makeDiagnostic(const GpuBlendDiagnosticCode code,
                                                 std::string message) {
     return blendDiagnostic(code, std::move(message));
-}
-
-// The kernel adds a per-axis int32 source offset to an int32 destination-local coordinate. An
-// int64 origin difference can be far outside int32 (even overflowing int64), and narrowing it would
-// silently wrap the source position and report a false overlap. This computes either an exact
-// representable offset for a genuinely overlapping axis, or a sentinel guaranteed to be out of the
-// source window for a non-overlapping/unrepresentable one, and fails closed when the extents are
-// too large for destLocal + offset to stay in int32.
-[[nodiscard]] bool safeSourceOffset(const std::int64_t destinationOrigin,
-                                    const std::int64_t sourceOrigin,
-                                    const std::uint32_t outputExtent,
-                                    const std::uint32_t sourceExtent, std::int32_t& out) noexcept {
-    const auto outputExtent64 = static_cast<std::int64_t>(outputExtent);
-    const auto sourceExtent64 = static_cast<std::int64_t>(sourceExtent);
-    if (outputExtent64 + sourceExtent64 >
-        static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max())) {
-        return false;
-    }
-    std::int64_t delta = 0;
-    // Overlap on this axis is exactly delta in (-outputExtent, sourceExtent); a subtraction
-    // overflow or anything outside that range cannot overlap and is forced transparent.
-    if (__builtin_sub_overflow(destinationOrigin, sourceOrigin, &delta) ||
-        delta <= -outputExtent64 || delta >= sourceExtent64) {
-        out = static_cast<std::int32_t>(-(outputExtent64 + sourceExtent64));
-        return true;
-    }
-    out = static_cast<std::int32_t>(delta);
-    return true;
 }
 
 } // namespace
@@ -287,90 +261,24 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
         return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
                               "a blend input has no data window");
     }
-    const std::uint32_t destWidth = destinationWindow->extent().width();
-    const std::uint32_t destHeight = destinationWindow->extent().height();
-    const std::uint32_t sourceWidth = sourceWindow->extent().width();
-    const std::uint32_t sourceHeight = sourceWindow->extent().height();
-    if (destWidth == 0 || destHeight == 0 || sourceWidth == 0 || sourceHeight == 0) {
-        return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument, "an extent is empty");
-    }
-    // A BlendMode that does not round-trip through the durable stored mapping is a caller bug, not
-    // a request to render Normal. Reject it here: the shader's separable helper falls through to
-    // the source value for an unknown mode, so it must never receive one.
-    const std::int64_t storedMode = core::blendModeStoredValue(parameters.mode);
-    if (!parameters.imageCombine && !core::blendModeFromStoredValue(storedMode).has_value()) {
-        return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
-                              "the blend mode is not a known core::BlendMode value");
-    }
-    if (parameters.imageCombine &&
-        (static_cast<std::uint8_t>(parameters.imageCombine->kind) >
-             static_cast<std::uint8_t>(GpuImageCombineKind::SetChannel) ||
-         static_cast<std::uint8_t>(parameters.imageCombine->channel) >
-             static_cast<std::uint8_t>(ImageCoverageChannel::Luma) ||
-         !std::isfinite(parameters.imageCombine->factor) ||
-         parameters.imageCombine->factor < 0.0F || parameters.imageCombine->factor > 1.0F)) {
-        return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
-                              "the image combine kind, channel or factor is invalid");
-    }
-    // #479: only Set Channel writes a slot or premultiplies, and it never inverts or masks.
-    if (parameters.imageCombine &&
-        (parameters.imageCombine->kind == GpuImageCombineKind::SetChannel
-             ? parameters.imageCombine->slot > 3 || parameters.imageCombine->invert ||
-                   parameters.imageCombine->mask != GpuImageCombineParameters::Mask::None
-             : parameters.imageCombine->slot != 0 || parameters.imageCombine->premultiply)) {
-        return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
-                              "the image combine slot does not match its mode");
-    }
     const bool maskPresent = parameters.imageCombine &&
                              parameters.imageCombine->mask == GpuImageCombineParameters::Mask::Present;
-    if (parameters.imageCombine &&
-        (static_cast<std::uint8_t>(parameters.imageCombine->mask) >
-             static_cast<std::uint8_t>(GpuImageCombineParameters::Mask::Absent) ||
-         (parameters.imageCombine->mask != GpuImageCombineParameters::Mask::None &&
-          parameters.imageCombine->kind != GpuImageCombineKind::Mix) ||
-         maskPresent != (parameters.mask != nullptr) ||
-         (maskPresent && (!parameters.mask->isValid() || !parameters.mask->dataWindow())))) {
+    const bool maskSupplied = parameters.mask != nullptr;
+    blend_plan_detail::BlendPlan plan;
+    if (auto refused = blend_plan_detail::planBlend(
+            *sourceWindow, *destinationWindow,
+            maskSupplied && parameters.mask->isValid() ? parameters.mask->dataWindow()
+                                                       : std::nullopt,
+            parameters.mode, parameters.imageCombine, maskSupplied, plan);
+        refused.code != GpuBlendDiagnosticCode::None) {
+        return refused;
+    }
+    if (maskPresent && !compositeImageBelongsTo(gpuImageImpl(*parameters.mask), impl.control))
         return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
-                              "the image combine mask does not match its mode");
-    }
-    std::int32_t maskOffsetX = 0;
-    std::int32_t maskOffsetY = 0;
-    std::uint32_t maskWidth = 0;
-    std::uint32_t maskHeight = 0;
-    if (maskPresent) {
-        const auto maskWindow = *parameters.mask->dataWindow();
-        maskWidth = maskWindow.extent().width();
-        maskHeight = maskWindow.extent().height();
-        if (maskWidth == 0 || maskHeight == 0 ||
-            !safeSourceOffset(destinationWindow->originX(), maskWindow.originX(), destWidth,
-                              maskWidth, maskOffsetX) ||
-            !safeSourceOffset(destinationWindow->originY(), maskWindow.originY(), destHeight,
-                              maskHeight, maskOffsetY))
-            return makeDiagnostic(GpuBlendDiagnosticCode::Unsupported,
-                                  "the mask extent is empty or too large for a safe offset");
-        if (!compositeImageBelongsTo(gpuImageImpl(*parameters.mask), impl.control))
-            return makeDiagnostic(GpuBlendDiagnosticCode::InvalidArgument,
-                                  "the image combine mask does not belong to this device");
-    }
-    // Resolve the int32 shader offsets safely BEFORE any driver resource is created. A huge int64
-    // origin difference is either represented exactly (overlap) or forced transparent (no overlap),
-    // never narrowed and wrapped.
-    std::int32_t sourceOffsetX = 0;
-    std::int32_t sourceOffsetY = 0;
-    if (!safeSourceOffset(destinationWindow->originX(), sourceWindow->originX(), destWidth,
-                          sourceWidth, sourceOffsetX) ||
-        !safeSourceOffset(destinationWindow->originY(), sourceWindow->originY(), destHeight,
-                          sourceHeight, sourceOffsetY)) {
-        return makeDiagnostic(GpuBlendDiagnosticCode::Unsupported,
-                              "the source/destination extents are too large for a safe int32 "
-                              "source offset");
-    }
-    std::uint64_t imageBytes = 0;
-    if (compositeMultiplyOverflows(destWidth, destHeight, imageBytes) ||
-        compositeMultiplyOverflows(imageBytes, sizeof(Rgba32f), imageBytes)) {
-        return makeDiagnostic(GpuBlendDiagnosticCode::OverBudget,
-                              "the blend request overflows the byte arithmetic");
-    }
+                              "the image combine mask does not belong to this device");
+    const std::uint32_t destWidth = plan.destWidth;
+    const std::uint32_t destHeight = plan.destHeight;
+    const std::uint64_t imageBytes = plan.imageBytes;
     const std::uint64_t allowedImage =
         byteBudget < impl.budgets.maxImageBytes ? byteBudget : impl.budgets.maxImageBytes;
     if (imageBytes > allowedImage || sizeof(std::uint32_t) > impl.budgets.maxMetadataBytes) {
@@ -403,18 +311,14 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
         return impl.createDiagnostic;
     }
 
-    // Normal is the exact retained fma source-over and Add is the exact premultiplied sum, so both
-    // stay on the exact Float32 kernel. The general modes (Multiply .. Mask) use the exact Float64
-    // companion when it was selected, and the compensated-Float32 portable kernel otherwise; both
+    // Normal and Add stay on the exact Float32 kernel; the general modes use the exact Float64
+    // companion when it was selected and the compensated-Float32 portable kernel otherwise; both
     // hold the documented 2e-6 absolute-or-relative gate, so no device is left on the CPU path.
-    const bool generalMode =
-        parameters.mode != core::BlendMode::Normal && parameters.mode != core::BlendMode::Add;
-    const CompositePipeline& selected = parameters.imageCombine
-                                            ? impl.pipelineImageCombine
-                                            : generalMode
-                                                  ? (impl.generalUsesF64 ? impl.pipelineF64
-                                                                         : impl.pipelinePortable)
-                                                  : impl.pipeline;
+    const CompositePipeline& selected =
+        plan.kernel == blend_plan_detail::BlendKernel::ImageCombine ? impl.pipelineImageCombine
+        : plan.kernel == blend_plan_detail::BlendKernel::General
+            ? (impl.generalUsesF64 ? impl.pipelineF64 : impl.pipelinePortable)
+            : impl.pipeline;
 
     impl.clearJob();
     const std::uint32_t zeroFlag = 0;
@@ -547,39 +451,12 @@ GpuBlendDiagnostic GpuBlend::beginBlend(const GpuBlendParameters& parameters,
     impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *selected.pipeline);
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *selected.pipelineLayout,
                                           0, {targetSet}, {});
-    // An absent matte declares an empty source extent: the shader's window test then rejects every
-    // tap, which is the CPU reference's transparent-black matte outside any data window.
-    const bool matteAbsent = parameters.imageCombine && parameters.imageCombine->matteAbsent;
-    const BlendPush push{destWidth,
-                         destHeight,
-                         matteAbsent ? 0U : sourceWidth,
-                         matteAbsent ? 0U : sourceHeight,
-                         matteAbsent ? 0 : sourceOffsetX,
-                         matteAbsent ? 0 : sourceOffsetY,
-                         parameters.imageCombine
-                             ? 8U + static_cast<std::uint32_t>(parameters.imageCombine->kind)
-                             : static_cast<std::uint32_t>(storedMode)};
     if (parameters.imageCombine) {
-        // Bits 0-2 of the channel word select the channel and bit 3 the inverted coverage; Set
-        // Channel (#479) adds its slot in bits 4-5 and its premultiply in bit 6.
-        const ImageCombinePush combined{
-            push,
-            parameters.imageCombine->factor,
-            static_cast<std::uint32_t>(parameters.imageCombine->channel) |
-                (parameters.imageCombine->invert ? kImageCombineInvertBit : 0U) |
-                (static_cast<std::uint32_t>(parameters.imageCombine->slot)
-                 << kImageCombineSlotShift) |
-                (parameters.imageCombine->premultiply ? kImageCombinePremultiplyBit : 0U),
-            maskWidth,
-            maskHeight,
-            maskOffsetX,
-            maskOffsetY,
-            static_cast<std::uint32_t>(parameters.imageCombine->mask)};
         impl.commandBuffer.pushConstants(*selected.pipelineLayout, vk::ShaderStageFlagBits::eCompute,
-                                         0, sizeof(ImageCombinePush), &combined);
+                                         0, sizeof(ImageCombinePush), &plan.combine);
     } else {
         impl.commandBuffer.pushConstants(*selected.pipelineLayout, vk::ShaderStageFlagBits::eCompute,
-                                         0, sizeof(BlendPush), &push);
+                                         0, sizeof(BlendPush), &plan.push);
     }
     // One invocation per destination pixel: X tiles the row in 256-wide groups, Y is the row.
     const auto groups = static_cast<std::uint32_t>(
@@ -718,6 +595,12 @@ bool GpuBlend::teardownDrainIncomplete() noexcept {
     // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
     // resident is retained in the bounded pool, and false again once the rightful owner drains it.
     return blend_detail::blendResidentOrphaned() > 0;
+}
+
+bool GpuBlend::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (impl_ == nullptr || !(impl_->queueSubmitted))
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->control, static_cast<VkFence>(*impl_->fence), timeoutNanoseconds);
 }
 
 } // namespace bloom::render

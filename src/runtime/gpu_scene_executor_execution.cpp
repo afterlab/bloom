@@ -521,8 +521,10 @@ GpuSceneExecutor::Impl::~Impl() {
     // resources for as long as the submission may reference them. Only after the pipelines are gone
     // does ordinary member destruction release the executor's own metadata and pins. No separate
     // global registry, leak list, or allocation from this noexcept destructor is used.
-    ocioPrograms.clear();
+    // The batch first (#386): a submission it recorded reads retained OCIO programs, and its own
+    // drain or quarantine releases them.
     operationBatch.reset();
+    ocioPrograms.clear();
     upload.reset();
     lookaheadUpload.reset();
     affine.reset();

@@ -1,3 +1,4 @@
+#include "gpu_fence_wait_private.hpp"
 #include "gpu_ocio_program_private.hpp"
 #include "ocio_gpu_program_fault.hpp"
 
@@ -97,6 +98,10 @@ bool GpuOcioProgram::Impl::retirementReady(vulkan_detail::DeviceAllocatorState& 
     }
     if (!queueSubmitted) {
         return true;
+    }
+    // #386: a batch submission is proven by the batch that recorded it, never by this fence.
+    if (batchOwned) {
+        return false;
     }
     if (auto phase = submittedPhase.lock();
         phase && phase->isUnproven() && phase == state.processingPhase) {
@@ -282,6 +287,11 @@ GpuOcioProgramPollResult GpuOcioProgram::poll() {
         return impl.jobState == GpuOcioProgramJobState::Ready ? GpuOcioProgramPollResult::Ready
                                                               : GpuOcioProgramPollResult::Failure;
     }
+    // #386: the program has no job of its own while a batch submission reads it; only the batch
+    // proves that submission retired.
+    if (impl.batchOwned) {
+        return GpuOcioProgramPollResult::Failure;
+    }
     const VkFence rawFence = static_cast<VkFence>(*impl.fence);
     const VkResult observed = impl.control->device.getDispatcher()->vkGetFenceStatus(
         static_cast<VkDevice>(*impl.control->device), rawFence);
@@ -388,6 +398,12 @@ void GpuOcioProgram::cancel() noexcept {
 }
 bool GpuOcioProgram::teardownDrainIncomplete() noexcept {
     return ocio_program_detail::teardownIncomplete();
+}
+
+bool GpuOcioProgram::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (impl_ == nullptr || !(impl_->queueSubmitted && !impl_->batchOwned))
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->control, static_cast<VkFence>(*impl_->fence), timeoutNanoseconds);
 }
 
 } // namespace bloom::render

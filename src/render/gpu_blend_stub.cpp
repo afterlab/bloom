@@ -61,4 +61,6 @@ GpuImage GpuBlend::takeImage() noexcept { return GpuImage{}; }
 void GpuBlend::cancel() noexcept {}
 bool GpuBlend::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuBlend::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

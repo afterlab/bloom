@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -85,7 +86,9 @@ using bloom::runtime::GpuOcioProgramPreparer;
 using bloom::runtime::GpuSceneCache;
 using bloom::runtime::GpuSceneCacheBudgets;
 using bloom::runtime::GpuSceneExecutor;
+using bloom::runtime::GpuSceneExecutorBudgets;
 using bloom::runtime::GpuSceneExecutorDiagnosticCode;
+using bloom::runtime::GpuSceneExecutorJobState;
 using bloom::runtime::GpuSceneExecutorPollResult;
 using bloom::runtime::GpuSceneMediaContext;
 using bloom::runtime::GpuSceneOcioContext;
@@ -1841,8 +1844,103 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     }
 }
 
+// #386: a whole effect chain (blurs and other OCIO effect programs, image combines and blends,
+// translations and source-overs) records into shared native batches. The batched run publishes
+// exactly the serial run's pixels with fewer submissions, keeps CPU parity, and each OCIO program a
+// batch reads stays busy until that batch's fence is proven.
+void runBatchedChains(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::recipe_test::Recipe;
+    using bloom::recipe_test::RecipeValues;
+    using bloom::runtime::detail::GlowMode;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    RecipeValues physical;
+    physical.solidInput = true;
+    physical.mode = GlowMode::Physical;
+    RecipeValues streak;
+    streak.solidInput = true;
+    streak.mode = GlowMode::Streak;
+    const std::array<std::pair<Recipe, RecipeValues>, 4> chains{
+        std::pair{Recipe::Glow, physical}, std::pair{Recipe::Glow, streak},
+        std::pair{Recipe::LightWrap, RecipeValues{}}, std::pair{Recipe::DropShadow, RecipeValues{}}};
+    std::uint64_t id = 19600;
+    for (const auto& [recipe, values] : chains) {
+        const auto plan = bloom::recipe_test::recipePlan(recipe, values, id).plan;
+        id += 100;
+        const auto request = requestFor(*plan);
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        expectations.expect(oracle.frame() && prepared, "batched chain: scene and oracle prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        std::array<RunOutcome, 2> runs;
+        std::array<bloom::runtime::GpuSceneExecutorCounters, 2> counters;
+        for (std::size_t mode = 0; mode < 2; ++mode) {
+            cache.clear();
+            GpuSceneExecutorBudgets budgets;
+            budgets.enableNativeBatches = mode == 1;
+            auto executor = GpuSceneExecutor::create(device, cache, budgets);
+            expectations.expect(executor.hasValue(), "batched chain: executor creates");
+            if (!executor)
+                return;
+            runs[mode] = runScene(*executor.executor, prepared.scene);
+            counters[mode] = executor.executor->counters();
+        }
+        const auto& serial = counters[0];
+        const auto& batched = counters[1];
+        std::string detail;
+        expectations.expect(runs[0].pollResult == GpuSceneExecutorPollResult::Ready &&
+                                runs[1].pollResult == GpuSceneExecutorPollResult::Ready &&
+                                runs[0].pixels == runs[1].pixels,
+                            "batched chain: batched and serial GPU pixels are byte-exact");
+        expectations.expect(parity(runs[1].pixels, oracle.frame()->processImage().pixels(), detail),
+                            "batched chain: batched pixels keep CPU parity: " + detail);
+        expectations.expect(
+            serial.nativeSubmissions == serial.dispatches && batched.nativeBatches > 0 &&
+                batched.nativeSubmissions < serial.nativeSubmissions &&
+                batched.dispatches == serial.dispatches &&
+                batched.ocioEffectDispatches == serial.ocioEffectDispatches &&
+                batched.blendDispatches == serial.blendDispatches && batched.readbacks == 0,
+            "batched chain: the same kernels run in fewer submissions (" +
+                std::to_string(serial.nativeSubmissions) + " -> " +
+                std::to_string(batched.nativeSubmissions) + ")");
+    }
+
+    // A program a pending batch reads is busy: its owner can neither begin it nor see it retired.
+    cache.clear();
+    const auto plan = bloom::recipe_test::recipePlan(Recipe::Glow, physical, id).plan;
+    const auto prepared = builder.build(plan, requestFor(*plan));
+    auto executor = GpuSceneExecutor::create(device, cache);
+    if (!prepared || !executor) {
+        expectations.expect(false, "batched chain: ownership scene prepares");
+        return;
+    }
+    expectations.expect(executor.executor->begin(prepared.scene, kSceneBudget).code ==
+                            GpuSceneExecutorDiagnosticCode::None,
+                        "batched chain: ownership scene begins");
+    bool sawBatch = false;
+    for (;;) {
+        const auto before = executor.executor->counters().nativeBatches;
+        const auto poll = executor.executor->poll();
+        if (executor.executor->counters().nativeBatches > before)
+            sawBatch = true;
+        if (poll != GpuSceneExecutorPollResult::Pending)
+            break;
+        // The event-driven wait returns once the in-flight job's fence signals.
+        static_cast<void>(executor.executor->waitForNative(std::chrono::milliseconds(100)));
+    }
+    expectations.expect(sawBatch && executor.executor->state() == GpuSceneExecutorJobState::Ready,
+                        "batched chain: the event-driven fence wait drives the scene to Ready");
+    static_cast<void>(executor.executor->takeImage());
+    expectations.expect(!executor.executor->waitForNative(std::chrono::milliseconds(1)),
+                        "batched chain: an idle executor has no fence to wait on");
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
+    runBatchedChains(expectations, device, cache);
     runCst(expectations, device, cache, from, to);
     runPointwise(expectations, device, cache);
     runPointwiseExtremeAlpha(expectations, device, cache);

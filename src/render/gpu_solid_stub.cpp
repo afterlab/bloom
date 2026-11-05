@@ -87,4 +87,6 @@ GpuImageReadback GpuSolid::readback() noexcept { return readbackResidentImage(Gp
 void GpuSolid::cancel() noexcept {}
 bool GpuSolid::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuSolid::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

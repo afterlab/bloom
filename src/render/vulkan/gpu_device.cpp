@@ -574,6 +574,8 @@ DeviceAllocatorState::~DeviceAllocatorState() {
     }
     if (parkedProcessingPhase)
         parkedProcessingPhase->markUnproven();
+    // The batch pipelines belong to `device`, which is cleared below.
+    operationBatchPipelines.reset();
     if (allocator != VK_NULL_HANDLE) {
         closeStorageReuse(*this);
         vmaDestroyAllocator(allocator);

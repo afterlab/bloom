@@ -1,3 +1,4 @@
+#include "gpu_fence_wait_private.hpp"
 #include "gpu_native_buffer_allocation_private.hpp"
 #include "gpu_path_coverage_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
@@ -551,6 +552,12 @@ GpuPathCoverageDiagnostic GpuPathCoverage::begin(const GpuPathCoverageParameters
     impl.submittedAt = std::chrono::steady_clock::now();
     impl.jobDiagnostic = {};
     return {};
+}
+
+bool GpuPathCoverage::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (impl_ == nullptr || !(impl_->submitted))
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->control, static_cast<VkFence>(*impl_->jobFence), timeoutNanoseconds);
 }
 
 } // namespace bloom::render

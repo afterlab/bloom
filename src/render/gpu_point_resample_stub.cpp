@@ -48,4 +48,6 @@ GpuImage GpuPointResample::take() noexcept { return GpuImage{}; }
 void GpuPointResample::cancel() noexcept {}
 bool GpuPointResample::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuPointResample::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

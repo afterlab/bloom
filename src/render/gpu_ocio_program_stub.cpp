@@ -64,4 +64,6 @@ std::uint64_t GpuOcioProgram::lastJobAllocationBytes() const noexcept { return 0
 void GpuOcioProgram::cancel() noexcept {}
 bool GpuOcioProgram::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuOcioProgram::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

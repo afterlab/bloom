@@ -415,4 +415,43 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollNative() {
     return GpuSceneExecutorPollResult::Failure;
 }
 
+bool GpuSceneExecutor::waitForNative(const std::chrono::nanoseconds timeout) noexcept {
+    if (impl_ == nullptr || !impl_->onOwnerThread() || timeout.count() <= 0)
+        return false;
+    Impl& impl = *impl_;
+    const auto nanoseconds = static_cast<std::uint64_t>(timeout.count());
+    if (!impl.nativeInFlight) {
+        // Only a lookahead upload can be pending beside an idle main job.
+        return impl.lookaheadOutstanding() && impl.lookaheadUpload != nullptr &&
+               impl.lookaheadUpload->waitForSubmission(nanoseconds);
+    }
+    switch (impl.nativeKind) {
+    case Impl::NativeKind::Batch:
+        return impl.operationBatch != nullptr && impl.operationBatch->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::Solid:
+        return impl.solid->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::Composite:
+        return impl.composite->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::Upload:
+        return impl.upload->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::Affine:
+        return impl.affine->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::Blend:
+        return impl.blend->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::PointResample:
+        return impl.pointResample->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::CryptomatteCoverage:
+        return impl.cryptomatteCoverage != nullptr &&
+               impl.cryptomatteCoverage->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::PathCoverage:
+        return impl.pathCoverage != nullptr && impl.pathCoverage->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::Ocio:
+        return impl.nativeOcioProgram != nullptr &&
+               impl.nativeOcioProgram->waitForSubmission(nanoseconds);
+    case Impl::NativeKind::None:
+        break;
+    }
+    return false;
+}
+
 } // namespace bloom::runtime

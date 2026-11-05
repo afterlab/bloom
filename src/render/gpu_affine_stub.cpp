@@ -50,4 +50,6 @@ GpuImage GpuAffine::takeImage() noexcept { return GpuImage{}; }
 void GpuAffine::cancel() noexcept {}
 bool GpuAffine::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuAffine::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

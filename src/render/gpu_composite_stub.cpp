@@ -71,4 +71,6 @@ GpuImage GpuComposite::takeImage() noexcept { return GpuImage{}; }
 void GpuComposite::cancel() noexcept {}
 bool GpuComposite::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuComposite::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

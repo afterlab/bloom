@@ -98,4 +98,6 @@ std::uint64_t GpuImageUpload::sampleConvertedUploads() const noexcept { return 0
 
 bool GpuImageUpload::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuImageUpload::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

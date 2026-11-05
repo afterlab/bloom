@@ -1,10 +1,13 @@
 #pragma once
 
 #include <bloom/render/gpu_affine.hpp>
+#include <bloom/render/gpu_blend.hpp>
 #include <bloom/render/gpu_composite.hpp>
+#include <bloom/render/gpu_ocio_program.hpp>
 #include <bloom/render/gpu_solid.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -84,9 +87,31 @@ struct GpuBatchSourceOver final {
     GpuBatchImageRef source;
     GpuBatchImageRef destination;
 };
+// #386: one two-input blend or image combine, with the same kernels, push values and status word as
+// GpuBlend::beginBlend (the general modes use the Float64 companion when the device enabled
+// shaderFloat64, exactly like GpuBlend's Auto policy). `mask` is Image Mix's resident Mask
+// (GpuImageCombineParameters::Mask::Present) and is empty otherwise.
+struct GpuBatchBlend final {
+    GpuBatchImageRef source;
+    GpuBatchImageRef destination;
+    core::BlendMode mode = core::BlendMode::Normal;
+    std::optional<GpuImageCombineParameters> imageCombine{};
+    std::optional<GpuBatchImageRef> mask{};
+};
+// #386: one OCIO ProcessEffect dispatch of a retained effect-arm program, recorded into the batch's
+// command buffer with the program's own pipeline, descriptor sets, uniform and status buffers. The
+// output has the input's geometry, as GpuOcioProgram::beginEffect. The program is borrowed: it must
+// be idle (no job of its own, nothing unretired) when the batch begins, it may appear at most once
+// in a batch, and it reports an unretired submission until the batch's fence is proven, so its
+// owner cannot evict or reuse it while the batch can still read it.
+struct GpuBatchOcioEffect final {
+    GpuBatchImageRef source;
+    GpuOcioProgram* program = nullptr;
+    std::vector<std::byte> uniformBytes;
+};
 using GpuBatchOperation =
     std::variant<GpuBatchSolid, GpuBatchTranslation, GpuBatchAffine, GpuBatchSourceOver,
-                 GpuBatchGradient>;
+                 GpuBatchGradient, GpuBatchBlend, GpuBatchOcioEffect>;
 
 enum class GpuOperationBatchCode : std::uint8_t {
     None,
@@ -141,6 +166,10 @@ class GpuOperationBatch final {
     [[nodiscard]] GpuOperationBatchDiagnostic diagnostic() const;
     [[nodiscard]] GpuOperationBatchStatistics statistics() const noexcept;
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // #386: blocks the owner thread until this object's submission's fence signals (or the
+    // device is lost), at most `timeoutNanoseconds`. True when it did; the next poll() observes
+    // it. False with nothing submitted or off the owner thread. Changes no state.
+    [[nodiscard]] bool waitForSubmission(std::uint64_t timeoutNanoseconds) noexcept;
     [[nodiscard]] static bool teardownDrainIncomplete() noexcept;
     [[nodiscard]] std::vector<GpuImage> takeImages();
     void cancel() noexcept;

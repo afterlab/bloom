@@ -55,4 +55,6 @@ GpuImage GpuCryptomatteCoverage::take() noexcept { return GpuImage{}; }
 void GpuCryptomatteCoverage::cancel() noexcept {}
 bool GpuCryptomatteCoverage::teardownDrainIncomplete() noexcept { return false; }
 
+bool GpuCryptomatteCoverage::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

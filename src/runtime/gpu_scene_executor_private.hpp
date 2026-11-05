@@ -659,6 +659,10 @@ struct GpuSceneExecutor::Impl final {
     std::map<core::Sha256Digest, OcioProgramEntry> ocioPrograms;
     std::uint64_t ocioProgramBytes = 0;
     std::uint64_t ocioProgramSerial = 0;
+    // #386: the serial when the current scene began (programs above it are the scene's own), and
+    // the programs a batch being assembled already holds (never evicted under it).
+    std::uint64_t ocioJobSerialStart = 0;
+    const std::vector<const render::GpuOcioProgram*>* ocioBatchPins = nullptr;
 };
 
 } // namespace bloom::runtime

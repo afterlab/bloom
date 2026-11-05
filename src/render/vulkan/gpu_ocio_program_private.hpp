@@ -211,6 +211,10 @@ struct GpuOcioProgram::Impl final {
 
     GpuOcioProgramJobState jobState = GpuOcioProgramJobState::Idle;
     bool queueSubmitted = false;
+    // #386: set (with queueSubmitted) while a GpuOperationBatch submission records this program's
+    // dispatch. Only that batch clears both, after its own fence proof or device loss; the
+    // program's own fence says nothing about that submission.
+    bool batchOwned = false;
     bool deviceLost = false;
     std::uint32_t jobPixelCount = 0;
     std::uint32_t jobWidth = 0;
@@ -221,6 +225,14 @@ struct GpuOcioProgram::Impl final {
     GpuOcioProgramDiagnostic createDiagnostic;
 
     std::shared_ptr<const GpuImage> inputRetained;
+};
+
+// #386: the render-private access GpuOperationBatch uses to record a program's effect dispatch.
+struct GpuOcioProgramBatchAccess final {
+    using ProgramImpl = GpuOcioProgram::Impl;
+    [[nodiscard]] static GpuOcioProgram::Impl* impl(GpuOcioProgram& program) noexcept {
+        return program.impl_.get();
+    }
 };
 
 } // namespace bloom::render

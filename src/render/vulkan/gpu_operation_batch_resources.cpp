@@ -1,4 +1,6 @@
 #include "gpu_composite_offsets_private.hpp"
+#include "gpu_blend_plan_private.hpp"
+#include "gpu_ocio_program_dispatch_plan.hpp"
 #include "gpu_operation_batch_private.hpp"
 #include "gpu_translation_axis_private.hpp"
 #include <bloom/render/processing_host_storage.hpp>
@@ -34,32 +36,60 @@ bool State::initialize() {
         fail(GpuOperationBatchCode::Unsupported, "batch compute workgroup size is unsupported");
         return false;
     }
-    constexpr bool solidBindings[] = {true};
-    constexpr bool gradientBindings[] = {true, false};
-    constexpr bool translationBindings[] = {true, true, false, false, false};
-    constexpr bool affineBindings[] = {true, true, false, false};
-    constexpr bool overBindings[] = {true, true, true, false};
-    std::string reason;
-    if (!createCompositePipeline(*control, vulkan_detail::kSolidSpirvCode,
-                                 vulkan_detail::kSolidSpirvByteCount, solidBindings, 1, 24, reason,
-                                 pipelines[0]) ||
-        !createCompositePipeline(*control, vulkan_detail::kTranslationOpacitySpirvCode,
-                                 vulkan_detail::kTranslationOpacitySpirvByteCount,
-                                 translationBindings, 5, 20, reason, pipelines[1]) ||
-        !createCompositePipeline(*control, vulkan_detail::kAffineBilinearSpirvCode,
-                                 vulkan_detail::kAffineBilinearSpirvByteCount, affineBindings, 4,
-                                 kAffinePushBytes, reason, pipelines[2]) ||
-        !createCompositePipeline(*control, vulkan_detail::kSourceOverSpirvCode,
-                                 vulkan_detail::kSourceOverSpirvByteCount, overBindings, 4, 24,
-                                 reason, pipelines[3]) ||
-        !createCompositePipeline(*control, vulkan_detail::kGradientSpirvCode,
-                                 vulkan_detail::kGradientSpirvByteCount, gradientBindings, 2, 80,
-                                 reason, pipelines[4]))
-        return false;
+    if (!control->operationBatchPipelines) {
+        constexpr bool solidBindings[] = {true};
+        constexpr bool gradientBindings[] = {true, false};
+        constexpr bool translationBindings[] = {true, true, false, false, false};
+        constexpr bool affineBindings[] = {true, true, false, false};
+        constexpr bool overBindings[] = {true, true, true, false};
+        constexpr bool blendBindings[kBlendBindingCount] = {true, true, true, false};
+        constexpr bool combineBindings[kImageCombineBindingCount] = {true, true, true, false, true};
+        auto created = std::make_shared<Pipelines>();
+        auto& base = created->base;
+        // GpuBlend's Auto policy: the general modes use the exact Float64 companion when the
+        // device enabled shaderFloat64, and the portable compensated-Float32 kernel otherwise.
+        created->generalUsesF64 = control->shaderFloat64;
+        std::string reason;
+        if (!createCompositePipeline(*control, vulkan_detail::kSolidSpirvCode,
+                                     vulkan_detail::kSolidSpirvByteCount, solidBindings, 1, 24,
+                                     reason, base[0]) ||
+            !createCompositePipeline(*control, vulkan_detail::kTranslationOpacitySpirvCode,
+                                     vulkan_detail::kTranslationOpacitySpirvByteCount,
+                                     translationBindings, 5, 20, reason, base[1]) ||
+            !createCompositePipeline(*control, vulkan_detail::kAffineBilinearSpirvCode,
+                                     vulkan_detail::kAffineBilinearSpirvByteCount, affineBindings,
+                                     4, kAffinePushBytes, reason, base[2]) ||
+            !createCompositePipeline(*control, vulkan_detail::kSourceOverSpirvCode,
+                                     vulkan_detail::kSourceOverSpirvByteCount, overBindings, 4, 24,
+                                     reason, base[3]) ||
+            !createCompositePipeline(*control, vulkan_detail::kGradientSpirvCode,
+                                     vulkan_detail::kGradientSpirvByteCount, gradientBindings, 2,
+                                     80, reason, base[4]) ||
+            !createCompositePipeline(*control, vulkan_detail::kBlendSpirvCode,
+                                     vulkan_detail::kBlendSpirvByteCount, blendBindings,
+                                     kBlendBindingCount, kBlendPushBytes, reason,
+                                     created->blend) ||
+            !createCompositePipeline(*control, vulkan_detail::kBlendPortableSpirvCode,
+                                     vulkan_detail::kBlendPortableSpirvByteCount, blendBindings,
+                                     kBlendBindingCount, kBlendPushBytes, reason,
+                                     created->blendPortable) ||
+            !createCompositePipeline(*control, vulkan_detail::kImageCombineSpirvCode,
+                                     vulkan_detail::kImageCombineSpirvByteCount, combineBindings,
+                                     kImageCombineBindingCount, kImageCombinePushBytes, reason,
+                                     created->imageCombine) ||
+            (created->generalUsesF64 &&
+             !createCompositePipeline(*control, vulkan_detail::kBlendF64SpirvCode,
+                                      vulkan_detail::kBlendF64SpirvByteCount, blendBindings,
+                                      kBlendBindingCount, kBlendPushBytes, reason,
+                                      created->blendF64)))
+            return false;
+        control->operationBatchPipelines = std::move(created);
+    }
+    pipelines = control->operationBatchPipelines;
     const VkDevice device = static_cast<VkDevice>(*control->device);
     const auto* api = control->device.getDispatcher();
     const std::array poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3 * kGpuOperationBatchCapacity},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4 * kGpuOperationBatchCapacity},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * kGpuOperationBatchCapacity}};
     const VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                               nullptr,
@@ -255,6 +285,98 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 return false;
             }
 
+        } else if (const auto* blend = std::get_if<GpuBatchBlend>(&operations[index])) {
+            job.source = resolve(blend->source, index, job.sourcePin);
+            job.destination = resolve(blend->destination, index, job.destinationPin);
+            if (blend->mask)
+                job.mask = resolve(*blend->mask, index, job.maskPin);
+            if (!job.source || !job.destination || !job.source->dataWindow ||
+                !job.destination->dataWindow || (blend->mask && !job.mask)) {
+                fail(GpuOperationBatchCode::InvalidRequest,
+                     "batch blend input is non-topological, foreign, pending, or has no window");
+                return false;
+            }
+            blend_plan_detail::BlendPlan plan;
+            const auto planned = blend_plan_detail::planBlend(
+                *job.source->dataWindow, *job.destination->dataWindow,
+                job.mask ? job.mask->dataWindow : std::nullopt, blend->mode, blend->imageCombine,
+                blend->mask.has_value(), plan);
+            if (planned.code != GpuBlendDiagnosticCode::None) {
+                fail(planned.code == GpuBlendDiagnosticCode::OverBudget
+                         ? GpuOperationBatchCode::OverBudget
+                     : planned.code == GpuBlendDiagnosticCode::Unsupported
+                         ? GpuOperationBatchCode::Unsupported
+                         : GpuOperationBatchCode::InvalidRequest,
+                     "batch blend parameters were refused");
+                return false;
+            }
+            job.pipeline = plan.kernel == blend_plan_detail::BlendKernel::ImageCombine
+                               ? &pipelines->imageCombine
+                           : plan.kernel == blend_plan_detail::BlendKernel::General
+                               ? (pipelines->generalUsesF64 ? &pipelines->blendF64
+                                                            : &pipelines->blendPortable)
+                               : &pipelines->blend;
+            if (blend->imageCombine)
+                pack(job, plan.combine);
+            else
+                pack(job, plan.push);
+            window = job.destination->dataWindow;
+            display = job.destination->displayWindow;
+            aspect = job.destination->pixelAspect;
+            requestedMetadata = sizeof(std::uint32_t);
+        } else if (const auto* effect = std::get_if<GpuBatchOcioEffect>(&operations[index])) {
+            auto* program =
+                effect->program ? GpuOcioProgramBatchAccess::impl(*effect->program) : nullptr;
+            if (program == nullptr || !program->onOwnerThread() || program->control != control ||
+                program->displayArm || program->queueSubmitted || program->deviceLost ||
+                program->jobState != GpuOcioProgramJobState::Idle ||
+                program->expectedGeneration != expectedGeneration ||
+                program->authorityDiagnostic().code != GpuOcioProgramDiagnosticCode::None) {
+                fail(GpuOperationBatchCode::InvalidRequest,
+                     "batch OCIO program is busy, foreign or not an effect program");
+                return false;
+            }
+            for (std::uint32_t earlier = 0; earlier < index; ++earlier) {
+                if (jobs[earlier].ocio == program) {
+                    fail(GpuOperationBatchCode::InvalidRequest,
+                         "a batch may dispatch each OCIO program once");
+                    return false;
+                }
+            }
+            const auto& bytes = effect->uniformBytes.empty() ? program->desc.uniformBufferData
+                                                             : effect->uniformBytes;
+            if (bytes.size() != program->desc.uniformBufferSize) {
+                fail(GpuOperationBatchCode::InvalidRequest,
+                     "batch OCIO uniform bytes do not match the declared UBO size");
+                return false;
+            }
+            job.ocio = program;
+            job.uniform.assign(bytes.begin(), bytes.end());
+            job.source = resolve(effect->source, index, job.sourcePin);
+            if (!job.source || !job.source->dataWindow || job.source->width == 0 ||
+                job.source->height == 0) {
+                fail(GpuOperationBatchCode::InvalidRequest,
+                     "batch OCIO input is non-topological, foreign, pending, or has no window");
+                return false;
+            }
+            const std::uint64_t pixels =
+                static_cast<std::uint64_t>(job.source->width) * job.source->height;
+            const auto grid = ocio_program_detail::planOcioDispatch(
+                pixels, ocio_program_detail::kWorkgroupSizeX, program->maxWorkGroupCountX,
+                program->maxWorkGroupCountY);
+            if (!grid.valid() || pixels > std::numeric_limits<std::uint32_t>::max()) {
+                fail(GpuOperationBatchCode::Unsupported,
+                     "batch OCIO geometry cannot be covered by a capacity-safe dispatch");
+                return false;
+            }
+            job.groupsX = grid.groupsX;
+            job.groupsY = grid.groupsY;
+            const std::array<std::uint32_t, 3> push{static_cast<std::uint32_t>(pixels),
+                                                     job.source->width, job.source->height};
+            pack(job, push);
+            window = job.source->dataWindow;
+            display = job.source->displayWindow;
+            aspect = job.source->pixelAspect;
         } else {
             const GpuBatchImageRef* source = nullptr;
             float opacity = 1;
@@ -377,7 +499,8 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
             return createCompositeBuffer(control, bytes, host, data, job.metadata[slot], true);
         };
         const std::uint32_t zero = 0;
-        if (job.kind != 0 && job.kind != 4 && !buffer(2, sizeof(zero), true, &zero)) {
+        if (job.kind != 0 && job.kind != 4 && job.kind != kOcioEffectKind &&
+            !buffer(2, sizeof(zero), true, &zero)) {
             fail(GpuOperationBatchCode::AllocationFailed, "batch status backing was refused");
             return false;
         }

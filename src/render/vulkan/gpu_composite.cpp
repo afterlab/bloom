@@ -1,3 +1,4 @@
+#include "gpu_fence_wait_private.hpp"
 #include "gpu_translation_axis_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_composite.hpp>
@@ -675,6 +676,12 @@ bool GpuComposite::teardownDrainIncomplete() noexcept {
     // Recoverable pressure, not a permanent fuse: true while a foreign-released or unproven
     // resident is retained in the bounded pool, and false again once the rightful owner drains it.
     return composite_detail::compositeResidentOrphaned() > 0;
+}
+
+bool GpuComposite::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (impl_ == nullptr || !(impl_->queueSubmitted))
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->control, static_cast<VkFence>(*impl_->fence), timeoutNanoseconds);
 }
 
 } // namespace bloom::render

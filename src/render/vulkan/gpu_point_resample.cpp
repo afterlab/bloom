@@ -1,3 +1,4 @@
+#include "gpu_fence_wait_private.hpp"
 #include <bloom/render/gpu_point_resample.hpp>
 
 #include "gpu_point_resample_private.hpp"
@@ -487,6 +488,12 @@ void GpuPointResample::cancel() noexcept {
 
 bool GpuPointResample::teardownDrainIncomplete() noexcept {
     return pointResampleTeardownIncomplete();
+}
+
+bool GpuPointResample::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (impl_ == nullptr || !(impl_->queueSubmitted))
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->control, static_cast<VkFence>(*impl_->resources.fence), timeoutNanoseconds);
 }
 
 } // namespace bloom::render

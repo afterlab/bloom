@@ -49,6 +49,7 @@ struct State;
 }
 namespace bloom::render::operation_batch_detail {
 struct State;
+struct Pipelines;
 }
 
 namespace bloom::render::ocio_program_detail {
@@ -218,6 +219,10 @@ struct DeviceAllocatorState final {
     vk::raii::Queue presentQueue{nullptr};
     VmaAllocator allocator = VK_NULL_HANDLE;
     NativeStorageReuse storageReuse;
+    // #386: the batch owner's compute pipelines, created once per device generation and shared by
+    // every batch owner it creates (an executor releases its owner after each scene). The
+    // destructor releases them before it clears `device`. Owner thread only.
+    std::shared_ptr<operation_batch_detail::Pipelines> operationBatchPipelines;
 
     // Nonzero private domain-control mask intersects real image requirements; 0 is unmodified.
     std::uint32_t nativeImageMemoryTypeMaskForTests = 0;

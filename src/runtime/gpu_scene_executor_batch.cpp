@@ -25,9 +25,33 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
             return render::GpuBatchImageRef{images[index], render::kGpuBatchExternalImage};
         return std::nullopt;
     };
+    // A batch retains every output until its one fence, so a run stops before its outputs would
+    // outgrow the headroom beside the live pins (the serial path frees intermediates as it goes).
+    const std::uint64_t held = liveBytes + lookaheadBytes;
+    const std::uint64_t batchBudget = requestBudget > held ? requestBudget - held : 0;
+    std::uint64_t plannedBytes = 0;
+    std::uint64_t lastOutputBytes = 0;
+    const auto outputBytes = [this, &lastOutputBytes](const GpuSceneExecutorStep& step) {
+        std::optional<render::ImageWindow> window;
+        if (step.command != kInvalidGpuSceneCommand)
+            if (const auto expected =
+                    gpu_scene_executor_detail::expectedDescriptorOf(*scene, step.command, 0))
+                window = expected->data;
+        if (!window)
+            window = step.solidDataWindow ? step.solidDataWindow : step.outputWindow;
+        std::uint64_t bytes = lastOutputBytes;
+        if (window)
+            static_cast<void>(gpu_scene_executor_detail::checkedImageBytes(*window, bytes));
+        lastOutputBytes = bytes;
+        return bytes;
+    };
+    std::vector<const render::GpuOcioProgram*> batchPrograms;
     for (std::size_t index = cursor;
          index < steps.size() && operations.size() < render::kGpuOperationBatchCapacity; ++index) {
         const auto& step = steps[index];
+        const std::uint64_t stepBytes = outputBytes(step);
+        if (!operations.empty() && plannedBytes + stepBytes > batchBudget)
+            break;
         if (step.kind == GpuSceneExecutorStepKind::Gradient) {
             if (!step.gradient)
                 return std::nullopt;
@@ -64,9 +88,43 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
             if (!source || !destination)
                 return std::nullopt;
             operations.emplace_back(render::GpuBatchSourceOver{*source, *destination});
+        } else if (step.kind == GpuSceneExecutorStepKind::Blend) {
+            // #386: blends and image combines join the run with GpuBlend's kernels.
+            const auto source = ref(step.input);
+            const auto destination = ref(step.destination);
+            std::optional<render::GpuBatchImageRef> mask;
+            if (step.mask != kInvalidGpuSceneCommand) {
+                mask = ref(step.mask);
+                if (!mask)
+                    break;
+            }
+            if (!source || !destination)
+                break;
+            operations.emplace_back(render::GpuBatchBlend{*source, *destination, step.blendMode,
+                                                          step.imageCombine, mask});
+        } else if (step.kind == GpuSceneExecutorStepKind::OcioEffect) {
+            // #386: an OCIO effect joins the run with its retained program. A program dispatches
+            // once per batch; a second use, or one that cannot be acquired, ends the run there and
+            // takes the ordinary path (which reports any acquisition refusal).
+            const auto source = ref(step.input);
+            if (!source || step.ocioCommand == nullptr)
+                break;
+            ocioBatchPins = &batchPrograms;
+            render::GpuOcioProgram* const program = acquireOcioProgram(*step.ocioCommand);
+            ocioBatchPins = nullptr;
+            if (program == nullptr || program->hasUnretiredSubmission() ||
+                program->state() != render::GpuOcioProgramJobState::Idle ||
+                std::find(batchPrograms.begin(), batchPrograms.end(), program) !=
+                    batchPrograms.end())
+                break;
+            batchPrograms.push_back(program);
+            const auto& data = step.ocioCommand->program().uniformBufferData;
+            operations.emplace_back(render::GpuBatchOcioEffect{
+                *source, program, std::vector<std::byte>(data.begin(), data.end())});
         } else {
             break; // Ineligible operations retain their individual native GPU path.
         }
+        plannedBytes += stepBytes;
         if (step.command != kInvalidGpuSceneCommand)
             produced[step.command] = static_cast<std::uint32_t>(operations.size() - 1);
         // GradientV1 uses this native owner even when optional multi-operation batching is
@@ -88,9 +146,7 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
         queueTimingStarted = queueTimingSample.status == render::GpuQueueTimingStatus::Active;
     }
     const auto started = std::chrono::steady_clock::now();
-    // A reserved lookahead upload (#405) is held beside the live pins.
-    const std::uint64_t held = liveBytes + lookaheadBytes;
-    const std::uint64_t batchBudget = requestBudget > held ? requestBudget - held : 0;
+    // A reserved lookahead upload (#405) is held beside the live pins (batchBudget above).
     auto native = operationBatch->begin(operations, batchBudget);
     if (requiredGradient && operations.size() > 1 &&
         (native.code == render::GpuOperationBatchCode::OverBudget ||
@@ -140,6 +196,10 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
                 ++counters.affineDispatches;
             else if (step.kind == GpuSceneExecutorStepKind::SourceOver)
                 ++counters.sourceOverDispatches;
+            else if (step.kind == GpuSceneExecutorStepKind::Blend)
+                ++counters.blendDispatches;
+            else if (step.kind == GpuSceneExecutorStepKind::OcioEffect)
+                ++counters.ocioEffectDispatches;
         }
     }
     if (native.code != render::GpuOperationBatchCode::None) {

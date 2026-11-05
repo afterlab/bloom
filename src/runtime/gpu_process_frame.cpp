@@ -327,6 +327,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
     const auto startedAt = std::chrono::steady_clock::now();
     GpuSceneExecutorPollResult poll = GpuSceneExecutorPollResult::Pending;
     bool deadlineExceeded = false;
+    bool fenceWaited = false;
     for (;;) {
         if (cancellation.isCancellationRequested() || stopRequested.load()) {
             executor->cancel();
@@ -342,6 +343,7 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         if (gpuSceneExecutorStepProgress(executor->counters()) != progressBefore &&
             std::chrono::steady_clock::now() - startedAt < options.nativeDeadline) {
             keepRoomForNextPhase();
+            fenceWaited = false;
             continue;
         }
         if (std::chrono::steady_clock::now() - startedAt >= options.nativeDeadline) {
@@ -361,8 +363,13 @@ GpuProcessFrameOutcome GpuProcessFrameEvaluator::Impl::runRequestImpl(
         // Work elsewhere waits for device memory: give it back now, not after this request.
         if (deviceReclaim->pending())
             reportDevice();
-        // Waiting on a fence: GPU steps retire in microseconds, so the wait is as short.
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        // Waiting on a fence (#386): block on the job's own fence, so the next step starts the
+        // moment the GPU finishes; the wait is bounded so cancellation and the deadline are still
+        // observed. Without a native fence to wait on, yield briefly.
+        // A signal that did not let the poll progress (an injected stall) yields instead.
+        fenceWaited = !fenceWaited && executor->waitForNative(std::chrono::milliseconds(2));
+        if (!fenceWaited)
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
     // An image ceiling can refuse a later scene step after every earlier native submission has

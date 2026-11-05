@@ -48,6 +48,7 @@
 #include <bloom/runtime/gpu_scene_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -240,12 +241,13 @@ struct GpuSceneExecutorBudgets final {
     // Structural ceilings validated before any Vulkan work.
     std::uint64_t maxCommands = 4096;
     std::uint64_t maxCoverageBytes = 256ULL * 1024ULL * 1024ULL;
-    // OCIO native-program cache: at most this many entries, least recently used evicted first.
+    // OCIO native-program cache: every program the current scene uses stays, plus at most this many
+    // others, least recently used evicted first (#386).
     // Retained bytes are the programs' ACTUAL VMA allocations (never a descriptor-declared sample
     // estimate). No fixed byte ceiling by default (#474): usable VRAM is the only device ceiling,
     // and the programs give their bytes back on demand (reclaimOcioPrograms). The per-program
     // ceilings are forwarded to render::GpuOcioProgram::create.
-    std::uint64_t maxOcioPrograms = 8;
+    std::uint64_t maxOcioPrograms = 64;
     std::uint64_t maxOcioRetainedProgramBytes = std::numeric_limits<std::uint64_t>::max();
     // No fixed per-program ceiling on the job's output image (#425, #474): a 4320p RGBA32F effect
     // output alone is 506 MiB, and a fixed 512 MiB refused it beside the program's LUTs and sent
@@ -345,6 +347,12 @@ class GpuSceneExecutor final {
     // artificial polling interval between serial operations without increasing native concurrency.
     // While ownerDrainRequired() is true this only advances owner-thread retirement.
     [[nodiscard]] GpuSceneExecutorPollResult poll();
+
+    // #386: the event-driven wait between polls. Blocks the owner thread until the in-flight
+    // native job's fence (or the upload lookahead's) signals, at most `timeout`; true when one did,
+    // so the next poll() makes progress. False at once when no native submission is pending, off
+    // the owner thread, or while an injected fault holds a job pending. Changes no state.
+    [[nodiscard]] bool waitForNative(std::chrono::nanoseconds timeout) noexcept;
 
     // The resident output image while Ready; nullptr otherwise. Ownership stays with the executor.
     [[nodiscard]] const render::GpuImage* image() const noexcept;

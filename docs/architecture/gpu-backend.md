@@ -946,13 +946,25 @@ synchronous fence wait hidden inside a task function is not a valid interim impl
 ### Bounded Native Command Batches
 
 The production scene executor records two to sixty-four consecutive eligible Solid, gradient,
-translation, affine and source-over kernels into one command buffer with explicit dependencies and
-one fence. Other kernels (upload, blur and OCIO programs, blend, coverage, point resample) delimit
-those runs and keep one submission and fence each. Between steps neither owner waits on a clock:
-the preview service and the export evaluator start the next step as soon as a poll made progress
-and wait 50 microseconds only while a fence is pending. Inputs may reference
-earlier batch outputs or Ready images from the exact device generation; every GPU status word is
-validated before outputs leave the native batch owner.
+translation, affine, source-over, blend (every blend mode and image combine, masked or not) and
+OCIO program kernels into one command buffer with explicit dependencies and one fence (#386).
+Blur, grade and the glow and light-wrap parts run as OCIO programs, so an effect chain is one
+submission instead of one per step. A batched blend uses the same plan (`planBlend`), kernel and
+push constants as `GpuBlend`; a batched OCIO program records the program's own pipeline, uniforms
+and status word, is marked submitted until the batch retires, and cannot be polled, retired or
+reused by another step meanwhile. A run stops before the step whose output would exceed the
+executor's batch allowance, and the batch pipelines are created once per device generation. The
+executor keeps every OCIO program its current scene uses plus up to `maxOcioPrograms` (64) more,
+least recently used first, so a frame never recompiles its own effects. Upload, coverage and point
+resample still delimit runs and keep one submission and fence each.
+
+Between steps neither owner waits on a clock: the preview service and the export evaluator start
+the next step as soon as a poll made progress. With a fence pending they wait on the fence itself
+(`GpuSceneExecutor::waitForNative`, which every native kind implements as `waitForSubmission`, for
+at most 1 ms in the preview owner and 2 ms in the export loop) and fall back to a 50-microsecond
+wait only when the owner has other work (a display or transfer in flight) or a fence wait made no
+progress. Inputs may reference earlier batch outputs or Ready images from the exact device
+generation; every GPU status word is validated before outputs leave the native batch owner.
 
 All image and buffer backings reserve and reconcile against the existing phase. Translation-axis
 scratch first transfers the native phase's separately reserved processing-metadata allowance in

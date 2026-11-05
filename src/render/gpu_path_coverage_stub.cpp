@@ -93,4 +93,6 @@ void drainPathCoverageResidentOrphansOnOwnerThread() noexcept {}
 
 } // namespace path_coverage_detail
 
+bool GpuPathCoverage::waitForSubmission(std::uint64_t) noexcept { return false; }
+
 } // namespace bloom::render

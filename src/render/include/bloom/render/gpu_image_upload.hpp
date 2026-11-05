@@ -127,6 +127,10 @@ class GpuImageUpload final {
     // True while a submitted copy's fence has not been PROVEN retired. No allocation or Vulkan
     // call; a Failure poll with this true is unproven and must be drained.
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // #386: blocks the owner thread until this object's submission's fence signals (or the
+    // device is lost), at most `timeoutNanoseconds`. True when it did; the next poll() observes
+    // it. False with nothing submitted or off the owner thread. Changes no state.
+    [[nodiscard]] bool waitForSubmission(std::uint64_t timeoutNanoseconds) noexcept;
     // The actual VMA bytes the most recent accepted job retained during the job (resident image
     // plus its transient staging buffer), or 0 before the first job. Real allocator sizes, never a
     // requested extent.

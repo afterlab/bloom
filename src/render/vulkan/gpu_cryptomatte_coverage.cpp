@@ -1,3 +1,4 @@
+#include "gpu_fence_wait_private.hpp"
 #include <bloom/render/gpu_cryptomatte_coverage.hpp>
 
 #include "gpu_cryptomatte_coverage_private.hpp"
@@ -476,6 +477,12 @@ void GpuCryptomatteCoverage::cancel() noexcept {
 
 bool GpuCryptomatteCoverage::teardownDrainIncomplete() noexcept {
     return cryptomatteCoverageTeardownIncomplete();
+}
+
+bool GpuCryptomatteCoverage::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (impl_ == nullptr || !(impl_->queueSubmitted))
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->control, static_cast<VkFence>(*impl_->resources.fence), timeoutNanoseconds);
 }
 
 } // namespace bloom::render

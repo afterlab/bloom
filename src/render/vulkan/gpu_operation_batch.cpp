@@ -1,3 +1,4 @@
+#include "gpu_fence_wait_private.hpp"
 #include "gpu_operation_batch_private.hpp"
 #include <bloom/core/telemetry_counters.hpp>
 
@@ -18,9 +19,37 @@ void State::fail(const GpuOperationBatchCode code, const char* message) noexcept
         diagnostic.message.clear();
     }
 }
+// #386: each OCIO program a submission (or an uncertain submission) reads reports it as its own
+// unretired submission until this batch proves its fence, so its owner can neither reuse nor evict
+// it.
+void State::markOcioPrograms() noexcept {
+    for (std::uint32_t index = 0; index < count; ++index) {
+        auto& job = jobs[index];
+        if (job.ocio != nullptr) {
+            job.ocio->queueSubmitted = true;
+            job.ocio->batchOwned = true;
+            job.ocio->submittedPhase = control->processingPhase;
+            job.ocioMarked = true;
+        }
+    }
+}
+void State::releaseOcioPrograms() noexcept {
+    for (std::uint32_t index = 0; index < count; ++index) {
+        auto& job = jobs[index];
+        if (job.ocio != nullptr && job.ocioMarked) {
+            job.ocio->batchOwned = false;
+            job.ocio->queueSubmitted = false;
+            if (lost)
+                job.ocio->deviceLost = true;
+        }
+        job.ocioMarked = false;
+    }
+}
 void State::clear(const bool restorePrefix) noexcept {
     if (submitted)
         return;
+    // Only reached after proof (or before any submission): the programs' marks go first.
+    releaseOcioPrograms();
     // Reset recorded references before backing destruction. This is called only after proof, or
     // before any submission; an unknown fence never reaches this release path.
     if (command != VK_NULL_HANDLE)
@@ -42,8 +71,13 @@ void State::clear(const bool restorePrefix) noexcept {
         }
         job.sourcePin.reset();
         job.destinationPin.reset();
+        job.maskPin.reset();
         job.source = nullptr;
         job.destination = nullptr;
+        job.mask = nullptr;
+        job.pipeline = nullptr;
+        job.ocio = nullptr;
+        job.uniform.clear();
     }
     count = 0;
 }
@@ -76,11 +110,14 @@ bool State::submit() {
         // A failed submission with no device-loss proof cannot authorize serial retry or backing
         // destruction. Preserve the exact owner until an actual fence or loss proves retirement.
         submitted = !lost;
+        if (submitted)
+            markOcioPrograms();
         fail(lost ? GpuOperationBatchCode::DeviceLost : GpuOperationBatchCode::DeviceUnavailable,
              "native batch submission failed");
         return false;
     }
     submitted = true;
+    markOcioPrograms();
     state = GpuOperationBatchState::Pending;
     statistics.submissions = 1;
     statistics.dispatches = count;
@@ -144,6 +181,25 @@ void State::poll() noexcept {
         return;
     }
     for (std::uint32_t index = 0; index < count; ++index) {
+        if (auto* program = jobs[index].ocio) {
+            std::uint32_t flag = 0;
+            if (vmaInvalidateAllocation(control->allocator, program->status.allocation, 0,
+                                        static_cast<VkDeviceSize>(
+                                            ocio_program_detail::kStatusBytes)) != VK_SUCCESS) {
+                fail(GpuOperationBatchCode::StatusRejected,
+                     "batch OCIO status visibility failed after retirement");
+                clear(false);
+                return;
+            }
+            std::memcpy(&flag, program->statusMapped, sizeof(flag));
+            if (flag != 0) {
+                fail(GpuOperationBatchCode::StatusRejected,
+                     "batch OCIO kernel status rejected all outputs");
+                clear(false);
+                return;
+            }
+            continue;
+        }
         const auto& status = jobs[index].metadata[2];
         if (!status.armed)
             continue;
@@ -316,6 +372,13 @@ GpuOperationBatchStatistics GpuOperationBatch::statistics() const noexcept {
 }
 bool GpuOperationBatch::hasUnretiredSubmission() const noexcept {
     return impl_ && impl_->state && (!impl_->state->owner() || impl_->state->submitted);
+}
+bool GpuOperationBatch::waitForSubmission(const std::uint64_t timeoutNanoseconds) noexcept {
+    if (!impl_ || !impl_->state || !impl_->state->submitted ||
+        impl_->state->fault != operation_batch_detail::PollFault::None)
+        return false;
+    return fence_wait_detail::waitForNativeFence(*impl_->state->control, impl_->state->fence,
+                                                 timeoutNanoseconds);
 }
 bool GpuOperationBatch::teardownDrainIncomplete() noexcept {
     return operation_batch_detail::orphanCount.load(std::memory_order_acquire) != 0;

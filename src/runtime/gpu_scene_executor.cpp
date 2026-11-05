@@ -310,6 +310,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
     }
 
     impl.cursor = 0;
+    impl.ocioJobSerialStart = impl.ocioProgramSerial;
     impl.state = GpuSceneExecutorJobState::Pending;
     impl.diagnostic = {};
     ++impl.counters.sceneBegins;

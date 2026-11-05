@@ -10,6 +10,7 @@
 #include "gpu_ocio_program_retained_bytes.hpp"
 #include "gpu_scene_executor_private.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -97,15 +98,31 @@ GpuSceneExecutor::Impl::acquireOcioProgram(const PreparedGpuOcioCommand& command
                            "the OCIO program's retained allocation exceeds the cache byte budget");
         return nullptr;
     }
-    while (!ocioPrograms.empty() &&
-           (ocioPrograms.size() >= budgets.maxOcioPrograms ||
-            ocioProgramBytes > budgets.maxOcioRetainedProgramBytes - retainedBytes)) {
-        auto victim = ocioPrograms.begin();
+    // #386: the cache keeps every program the current scene uses (a frame that reused fewer slots
+    // than it has programs recompiled pipelines every frame) and up to maxOcioPrograms others,
+    // least recently used first. A program a batch or job may still read is never evicted.
+    const auto evictable = [this](const OcioProgramEntry& entry) {
+        const auto* program = entry.program.get();
+        return program != nullptr && entry.serial <= ocioJobSerialStart &&
+               program != nativeOcioProgram && !program->hasUnretiredSubmission() &&
+               (ocioBatchPins == nullptr ||
+                std::find(ocioBatchPins->begin(), ocioBatchPins->end(), program) ==
+                    ocioBatchPins->end());
+    };
+    while (!ocioPrograms.empty()) {
+        std::uint64_t usedThisScene = 0;
+        auto victim = ocioPrograms.end();
         for (auto candidate = ocioPrograms.begin(); candidate != ocioPrograms.end(); ++candidate) {
-            if (candidate->second.serial < victim->second.serial) {
+            if (candidate->second.serial > ocioJobSerialStart)
+                ++usedThisScene;
+            if (evictable(candidate->second) &&
+                (victim == ocioPrograms.end() || candidate->second.serial < victim->second.serial))
                 victim = candidate;
-            }
         }
+        const bool overCount = ocioPrograms.size() - usedThisScene >= budgets.maxOcioPrograms;
+        const bool overBytes = ocioProgramBytes > budgets.maxOcioRetainedProgramBytes - retainedBytes;
+        if ((!overCount && !overBytes) || victim == ocioPrograms.end())
+            break;
         ocioProgramBytes -= victim->second.retainedBytes;
         ocioPrograms.erase(victim);
         ++counters.ocioProgramEvictions;

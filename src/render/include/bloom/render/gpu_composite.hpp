@@ -131,6 +131,10 @@ class GpuComposite final {
     [[nodiscard]] const GpuCompositeDiagnostic& diagnostic() const noexcept;
     [[nodiscard]] bool isBoundTo(GpuDevice& device) const noexcept;
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // #386: blocks the owner thread until this object's submission's fence signals (or the
+    // device is lost), at most `timeoutNanoseconds`. True when it did; the next poll() observes
+    // it. False with nothing submitted or off the owner thread. Changes no state.
+    [[nodiscard]] bool waitForSubmission(std::uint64_t timeoutNanoseconds) noexcept;
     [[nodiscard]] std::uint64_t lastJobAllocationBytes() const noexcept;
 
     // Both validate geometry/budgets/device limits, prepare host metadata, create the resident

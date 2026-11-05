@@ -135,6 +135,10 @@ class GpuOcioProgram final {
     [[nodiscard]] GpuDisplayImage takeDisplayOutput() noexcept;
 
     [[nodiscard]] bool hasUnretiredSubmission() const noexcept;
+    // #386: blocks the owner thread until this object's submission's fence signals (or the
+    // device is lost), at most `timeoutNanoseconds`. True when it did; the next poll() observes
+    // it. False with nothing submitted or off the owner thread. Changes no state.
+    [[nodiscard]] bool waitForSubmission(std::uint64_t timeoutNanoseconds) noexcept;
     // Owner-only failed-job cleanup after actual retirement. Never consumes Ready or unknown work.
     [[nodiscard]] bool discardRetiredFailure(GpuDevice& device) noexcept;
     // Actual VMA bytes of the persistent LUT textures + uniform buffer + status buffer owned by
@@ -152,6 +156,9 @@ class GpuOcioProgram final {
 
   private:
     struct Impl;
+    // #386: GpuOperationBatch records an effect dispatch of this program into its own command
+    // buffer (render-private).
+    friend struct GpuOcioProgramBatchAccess;
     explicit GpuOcioProgram(std::unique_ptr<Impl> impl) noexcept;
     void releaseImpl() noexcept;
 

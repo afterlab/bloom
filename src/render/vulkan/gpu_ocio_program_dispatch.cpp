@@ -363,6 +363,9 @@ bool GpuOcioProgram::Impl::drainAndRetire() noexcept {
     if (!queueSubmitted) {
         return true;
     }
+    if (batchOwned) {
+        return false; // #386: only the recording batch proves its submission.
+    }
     if (deviceLost) {
         queueSubmitted = false;
         return true;
