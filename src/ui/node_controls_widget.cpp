@@ -3,9 +3,11 @@
 #include "properties_registry_row.hpp"
 #include "properties_value_edits.hpp"
 
+#include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/ui/composition_session.hpp>
+#include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/point_pad.hpp>
@@ -400,6 +402,7 @@ struct Controls final {
     QString padLabel;
     std::vector<RangeRow::Spec> ranges;
     std::vector<AngleDialRow::Spec> angles;
+    std::vector<GradientParameterRow::Spec> gradients;
 };
 
 [[nodiscard]] std::optional<Controls> controlsFor(const std::string_view typeId) {
@@ -417,6 +420,16 @@ struct Controls final {
         // Clockwise from up, as the shadow is cast.
         controls.angles.push_back(angle("direction", "bloom.drop-shadow.direction", false, false));
     } else if (typeId == "bloom.glow") {
+        // The octaves' colours with the gradient on: the tightest octave the start, the widest
+        // the end.
+        controls.gradients.push_back(
+            {"tintGradient", std::string(document::kGlowTintSchemaKey),
+             QCoreApplication::translate("NodeControls", "Tint gradient"),
+             QCoreApplication::translate("NodeControls",
+                                         "With Gradient on, the octaves' colours: the tightest "
+                                         "octave takes the left end, the widest the right."),
+             QStringLiteral("glowTintGradient"),
+             {}});
         // A streak's angle is clockwise from screen right.
         controls.angles.push_back(angle("angle", "bloom.glow.angle", true, false));
     } else if (typeId == "bloom.layer-output") {
@@ -428,6 +441,14 @@ struct Controls final {
         controls.padLabel = QCoreApplication::translate("NodeControls", "Move");
         controls.angles.push_back(angle("rotation", "bloom.transform-2d.rotation", false, false));
     } else if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient") {
+        controls.gradients.push_back(
+            {"gradient", std::string(document::kColorOperandParameterSchemaKey),
+             QCoreApplication::translate("NodeControls", "Colors"),
+             QCoreApplication::translate("NodeControls",
+                                         "The colours from the start point (left) to the end "
+                                         "point (right)."),
+             QStringLiteral("generatorGradient"),
+             {}});
         controls.points = {{"start", QCoreApplication::translate("NodeControls", "Start"), false},
                            {"end", QCoreApplication::translate("NodeControls", "End"), false}};
         controls.connected = true;
@@ -499,6 +520,8 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
             spec.frame = [this] { return compositionFrame(session_); };
         pad_ = new PointPadRow(session_, node_, std::move(spec), this);
     }
+    for (auto& gradient : controls.gradients)
+        gradients_.push_back(new GradientParameterRow(session_, node_, std::move(gradient), this));
     for (auto& range : controls.ranges)
         ranges_.push_back(new RangeRow(session_, node_, std::move(range), this));
     for (auto& angle : controls.angles) {
@@ -514,7 +537,10 @@ NodeControlsCardWidget::NodeControlsCardWidget(CompositionSession& session,
 
 bool NodeControlsCardWidget::showsRole(const std::string_view role) const {
     // The pad's points keep their own X/Y rows (the exact numbers, keys and sockets); a range or
-    // an angle row is drawn here.
+    // an angle row or a gradient row is drawn here.
+    for (const auto* gradient : gradients_)
+        if (gradient->role() == role)
+            return false;
     for (const auto* range : ranges_)
         if (range->draws(role))
             return false;
@@ -536,6 +562,8 @@ std::optional<int> NodeControlsCardWidget::socketY(const std::string_view role) 
 
 int NodeControlsCardWidget::heightAt(const int width) const {
     int height = 0;
+    for (const auto* gradient : gradients_)
+        height += gradient->heightHint() + small();
     if (pad_ != nullptr)
         height += pad_->heightAt(width) + small();
     for (const auto* range : ranges_)
@@ -549,6 +577,8 @@ int NodeControlsCardWidget::minimumWidthHint() const {
     int width = kit::px(kit::Size::DropdownWidthExpanded) - kit::px(kit::Size::Control);
     if (pad_ != nullptr)
         width = std::max(width, pad_->minimumWidthHint());
+    for (const auto* gradient : gradients_)
+        width = std::max(width, gradient->minimumWidthHint());
     for (const auto* range : ranges_)
         width = std::max(width, range->minimumWidthHint());
     for (const auto* angle : angles_)
@@ -569,11 +599,18 @@ void NodeControlsCardWidget::resizeEvent(QResizeEvent* event) {
 void NodeControlsCardWidget::place() {
     // One label column for every row, wide enough for the longest name: labels never truncate.
     int labels = 0;
+    for (const auto* gradient : gradients_)
+        labels = std::max(labels, gradient->labelWidthHint());
     for (const auto* range : ranges_)
         labels = std::max(labels, range->labelWidthHint());
     for (const auto* angle : angles_)
         labels = std::max(labels, angle->labelWidthHint());
     int y = 0;
+    for (auto* gradient : gradients_) {
+        gradient->setLabelWidth(labels);
+        gradient->setGeometry(0, y, width(), gradient->heightHint());
+        y += gradient->heightHint() + small();
+    }
     if (pad_ != nullptr) {
         const int h = pad_->heightAt(width());
         pad_->setGeometry(0, y, width(), h);
@@ -594,6 +631,8 @@ void NodeControlsCardWidget::place() {
 void NodeControlsCardWidget::refresh() {
     const auto* composition = session_.composition();
     const bool locked = composition == nullptr || composition->nodeLocked(node_);
+    for (auto* gradient : gradients_)
+        gradient->refresh(locked);
     if (pad_ != nullptr)
         pad_->refresh(locked);
     for (auto* range : ranges_)

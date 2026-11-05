@@ -16,8 +16,11 @@
 //   start and end, a Transform 2D's pivot and offset. The numbers stay in the node's own X/Y rows
 //   beside it, with their diamonds and sockets.
 //
-// Colorize's Gradient Map has its own multi-stop gradient row (GradientParameterRow,
-// colorize_widget.hpp). Every control is a session value edit (ADR 0017): a drag is one command on
+// - GradientParameterRow (gradient_parameter_row.hpp): a multi-stop gradient value on a
+//   kit::KGradientEditor. The Linear and Radial Gradient generators' colours and Glow's tint
+//   gradient; Colorize's Gradient Map draws the same row on its own card.
+//
+// Every control is a session value edit (ADR 0017): a drag is one command on
 // release, a key at the playhead when the value is animated.
 
 #include <bloom/document/ids.hpp>
@@ -36,6 +39,7 @@
 
 namespace bloom::ui {
 
+class GradientParameterRow;
 class GradingValueRow;
 namespace kit {
 class KAngleDial;
@@ -188,6 +192,9 @@ class NodeControlsCardWidget final : public NodeCardWidget {
     [[nodiscard]] const std::vector<AngleDialRow*>& angleRows() const noexcept { return angles_; }
     [[nodiscard]] const std::vector<RangeRow*>& rangeRows() const noexcept { return ranges_; }
     [[nodiscard]] PointPadRow* padRow() const noexcept { return pad_; }
+    [[nodiscard]] const std::vector<GradientParameterRow*>& gradientRows() const noexcept {
+        return gradients_;
+    }
     void refresh();
 
   protected:
@@ -198,6 +205,7 @@ class NodeControlsCardWidget final : public NodeCardWidget {
     CompositionSession& session_;
     document::NodeId node_;
     PointPadRow* pad_ = nullptr;
+    std::vector<GradientParameterRow*> gradients_;
     std::vector<RangeRow*> ranges_;
     std::vector<AngleDialRow*> angles_;
 };

@@ -65,20 +65,26 @@ constexpr double kSlotPitch = 12.0;
 // wide as a label beside two position cells.
 constexpr double kDialSide = 50.0;
 constexpr double kPadMaxHeight = 208.0;
+// A gradient row (gradient_parameter_row.cpp) is the gradient editor (Size::Control bar,
+// Size::IconLarge handle band, Spacing::XXS), Spacing::XS and its Stop row (Size::Control).
+constexpr double kGradientRow = 78.0;
 constexpr double kPadCardWidth = 336.0;
 
 struct NodeControlsEstimate final {
     int angles = 0;
     int ranges = 0;
     bool pad = false;
+    int gradients = 0;
 };
 
 [[nodiscard]] NodeControlsEstimate nodeControlsEstimate(const std::string_view typeId) {
     if (typeId == "bloom.transform-2d")
         return {1, 0, true};
     if (typeId == "bloom.linear-gradient" || typeId == "bloom.radial-gradient")
-        return {0, 0, true};
-    if (typeId == "bloom.drop-shadow" || typeId == "bloom.glow" || typeId == "bloom.layer-output" ||
+        return {0, 0, true, 1};
+    if (typeId == "bloom.glow")
+        return {1, 0, false, 1};
+    if (typeId == "bloom.drop-shadow" || typeId == "bloom.layer-output" ||
         typeId == "bloom.hue-shift" || typeId == "bloom.rotate-2d" ||
         typeId == "bloom.polar-to-cartesian" || typeId == "bloom.degrees-to-radians" ||
         typeId == "bloom.radians-to-degrees")
@@ -286,6 +292,7 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +
+                            static_cast<double>(controls.gradients) * (kGradientRow - kRow + kSmall) +
                             (controls.pad ? kPadMaxHeight + kSmall : 0.0);
     if (controlsHeight > 0.0)
         controlsHeight += kPadding;

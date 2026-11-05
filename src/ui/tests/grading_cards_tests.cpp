@@ -13,6 +13,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QGraphicsProxyWidget>
 #include <QImage>
 #include <QLabel>
@@ -27,10 +28,12 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/parameter.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grade_wheels.hpp>
+#include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
@@ -48,6 +51,8 @@
 
 #include <cmath>
 #include <iostream>
+#include <string_view>
+#include <tuple>
 
 using namespace bloom;
 
@@ -198,11 +203,19 @@ struct CardFixture final {
     ui::node_editor::NodeItem* item = nullptr;
 };
 
-void capture(ui::node_editor::NodeItem& item, ui::NodeGraphEditor& editor, const QString& name) {
+void capture(CardFixture& fixture, const QString& name) {
     const auto directory = qEnvironmentVariable("BLOOM_GRAMMAR_ARTIFACT_DIR");
-    if (directory.isEmpty())
+    if (directory.isEmpty() || fixture.item == nullptr)
         return;
     QDir().mkpath(directory);
+    // The colour chips and gradient bars draw in display colour once the converter lands.
+    QElapsedTimer converter;
+    converter.start();
+    while (!fixture.session.colorConverterReady() && converter.elapsed() < 5'000)
+        QApplication::processEvents(QEventLoop::AllEvents, 20);
+    QApplication::processEvents();
+    auto& item = *fixture.item;
+    auto& editor = *fixture.editor;
     const QRectF source = item.mapRectToScene(item.cardRect()).adjusted(-24, -24, 24, 24);
     constexpr qreal scale = 2.0;
     QImage image((source.size() * scale).toSize(), QImage::Format_ARGB32_Premultiplied);
@@ -241,7 +254,7 @@ void everyCard() {
         }
         if (!cardContentFits(*fixture.item, name))
             ++failures;
-        capture(*fixture.item, *fixture.editor, QString::fromLatin1(name));
+        capture(fixture, QString::fromLatin1(name));
     }
 }
 
@@ -400,7 +413,7 @@ void colorizeCard() {
         }
         if (!cardContentFits(*fixture.item, name))
             ++failures;
-        capture(*fixture.item, *fixture.editor, QString::fromLatin1(name));
+        capture(fixture, QString::fromLatin1(name));
         const bool ramp = value == document::kColorizeTritone;
         const bool map = value == document::kColorizeGradientMap;
         expect(card->colorRow("fillColor")->isVisibleTo(card) == (value == document::kColorizeFill) &&
@@ -462,8 +475,9 @@ void colorizeCard() {
 }
 
 std::optional<document::GradientValue> storedGradient(ui::CompositionSession& session,
-                                                      const document::NodeId node) {
-    const auto id = ui::nodeRoleParameter(session, node, "gradient");
+                                                      const document::NodeId node,
+                                                      const std::string_view role = "gradient") {
+    const auto id = ui::nodeRoleParameter(session, node, role);
     const auto value = id ? session.liveValue(*id) : std::nullopt;
     const auto* gradient = value ? std::get_if<document::GradientValue>(&*value) : nullptr;
     return gradient ? std::optional(*gradient) : std::nullopt;
@@ -557,7 +571,7 @@ void colorizeGradientMap() {
            "the playhead returns");
     expect(storedGradient(fixture.session, fixture.node) == keyed,
            "the first key keeps the gradient it was set with");
-    capture(*fixture.item, *fixture.editor, QStringLiteral("colorize-gradient-map-stops"));
+    capture(fixture, QStringLiteral("colorize-gradient-map-stops"));
 }
 
 // #541: an angle turns on a dial, a range drags both its ends on one track and a gradient's start
@@ -600,7 +614,7 @@ void nodeControlCards() {
         const bool generator = type == "bloom.linear-gradient" || type == "bloom.radial-gradient";
         if (!cardContentFits(*fixture.item, name, !generator))
             ++failures;
-        capture(*fixture.item, *fixture.editor, QString::fromLatin1(name));
+        capture(fixture, QString::fromLatin1(name));
     }
 
     {
@@ -683,6 +697,46 @@ void nodeControlCards() {
                    std::abs(moved->y - (before.y() + 20.0 * units)) < 1e-6 &&
                    fixture.stack.size() == commands + 1,
                "dragging the end point moves the gradient's end as one command");
+    }
+    // The generators' colours and Glow's tint gradient: a gradient row on the card, its value
+    // kept off the generic rows, a press on the bar adding a stop as one command.
+    for (const auto& [type, role, initial] :
+         {std::tuple{std::string_view("bloom.linear-gradient"), std::string_view("gradient"),
+                     document::defaultGeneratorGradient()},
+          std::tuple{std::string_view("bloom.radial-gradient"), std::string_view("gradient"),
+                     document::defaultGeneratorGradient()},
+          std::tuple{std::string_view("bloom.glow"), std::string_view("tintGradient"),
+                     document::defaultGlowTintGradient()}}) {
+        CardFixture fixture(type);
+        auto* card = fixture.item ? qobject_cast<ui::NodeControlsCardWidget*>(
+                                        fixture.item->cardWidget())
+                                  : nullptr;
+        if (card == nullptr || card->gradientRows().size() != 1) {
+            expect(false, "the card draws one gradient row");
+            continue;
+        }
+        auto* row = card->gradientRows().front();
+        QApplication::processEvents();
+        expect(row->role() == role && !card->showsRole(role) && row->isVisible(),
+               "the gradient row draws the gradient in place of a generic row");
+        auto& editor = *row->editor();
+        expect(storedGradient(fixture.session, fixture.node, role) == initial &&
+                   editor.stops().size() == initial.stops.size(),
+               "a new node binds its default gradient and the editor shows its stops");
+        const auto bar = editor.barRect();
+        const auto commands = fixture.stack.size();
+        const QPointF at(bar.left() + bar.width() * 0.5, bar.center().y());
+        mouse(editor, QEvent::MouseButtonPress, at);
+        mouse(editor, QEvent::MouseButtonRelease, at);
+        const auto gradient = storedGradient(fixture.session, fixture.node, role);
+        expect(fixture.stack.size() == commands + 1 && gradient && gradient->stops.size() == 3 &&
+                   std::abs(gradient->stops[1].position - 0.5) < 1e-6,
+               "a press on the gradient bar adds a stop as one command");
+        expect(fixture.session.undo() &&
+                   storedGradient(fixture.session, fixture.node, role) == initial,
+               "one undo restores the gradient");
+        QApplication::processEvents();
+        expect(row->reset(), "the gradient row resets to the node's default");
     }
 }
 

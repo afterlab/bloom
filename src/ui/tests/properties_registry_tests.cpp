@@ -39,6 +39,7 @@
 #include <bloom/ui/properties_editor.hpp>
 #include <iostream>
 #include <limits>
+#include <string_view>
 #include <vector>
 using namespace bloom;
 namespace {
@@ -998,6 +999,11 @@ void recipeRows() {
         for (const auto* role : roles)
             present = present && row(properties, role) != nullptr;
         expect(present, "a recipe presents every value control");
+        // #541: Glow's tint gradient is the card widget's gradient editor, in Properties too.
+        if (std::string_view(type) == "bloom.glow")
+            expect(properties.findChild<QWidget*>(QStringLiteral("glowTintGradientEditor")) !=
+                       nullptr,
+                   "Properties edits Glow's tint gradient on a gradient editor");
         auto* toggleRow = row(properties, flag);
         auto* toggle = toggleRow ? toggleRow->findChild<ui::kit::KSwitch*>() : nullptr;
         expect(toggle != nullptr && !toggle->isChecked(), "a recipe presents an unset switch");
