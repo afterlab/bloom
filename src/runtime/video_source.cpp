@@ -538,7 +538,7 @@ convertSelectedVideo(const VideoSourceSelection& selection,
     };
     if (auto* error = std::get_if<std::string>(&interpreted))
         return failed(*error);
-    if (selection.inputProcessor) {
+    if (selection.inputProcessor && !selection.inputProcessor->isIdentity()) {
         auto converted = applyInputProcessorPremultiplied(
             std::get<render::Rgba32fImage>(interpreted), *selection.inputProcessor, budget, cancel);
         if (auto* error = std::get_if<std::string>(&converted))

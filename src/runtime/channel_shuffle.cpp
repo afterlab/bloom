@@ -346,10 +346,14 @@ gatherChannelShuffle(const ChannelShuffleSelection& selection, const bool conver
         slots[slot].plane = set->plane(*plane).data();
         slots[slot].window = set->dataWindow();
     }
+    // An identity transform converts nothing, so associated samples keep their stored values
+    // with no alpha round trip, as on the GPU route (#545).
     const color::CpuColorSpaceProcessor* processor =
         convert && selection.colourSource
             ? selection.sources[*selection.colourSource].inputProcessor.get()
             : nullptr;
+    if (processor != nullptr && processor->isIdentity())
+        processor = nullptr;
     const bool associated = selection.associated;
     const float nonFinite = std::isfinite(selection.nonFinite) ? selection.nonFinite : 0.0F;
     const auto width = static_cast<std::size_t>(dataWindow.extent().width());

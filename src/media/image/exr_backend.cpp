@@ -562,7 +562,7 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
                  ? layout->alphaAssociation
                  : interpretation.alphaAssociation) == ImageAlphaAssociation::Premultiplied;
         const bool stored = interpretation.storedSamples;
-        const bool convert =
+        bool convert =
             !stored && (!interpretation.inputColorSpaceId.empty() ||
                         interpretation.colorSpace == ImageColorSpace::Srgb || processor != nullptr);
         std::shared_ptr<const color::CpuInputProcessor> compatibilityProcessor;
@@ -591,6 +591,12 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::ColorSpaceUnavailable,
                 "Input color processor could not be prepared");
+        // An identity input transform (the input space is the working space) has nothing to
+        // convert: the samples are kept as decoded, with no un-premultiply/premultiply round trip
+        // that would move partial-alpha colour by an ULP. The GPU route uploads the same samples
+        // (#545).
+        if (convert && processor && processor->isIdentity())
+            convert = false;
 
         const auto bandSamples =
             static_cast<std::size_t>(chunkRows) * static_cast<std::size_t>(width);

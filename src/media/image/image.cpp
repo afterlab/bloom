@@ -191,7 +191,8 @@ ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 applyInputProcessor(const std::shared_ptr<const render::Rgba32fImage>& image,
                     const std::shared_ptr<const color::CpuColorSpaceProcessor>& processor,
                     const CancelImageWork& cancel, const std::size_t pixelBudget) {
-    if (!processor)
+    // An identity transform keeps the decoded samples as they are (no alpha round trip, #545).
+    if (!processor || processor->isIdentity())
         return {image, {}};
     if (!image || image->descriptor() == nullptr)
         return {{},

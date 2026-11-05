@@ -21,7 +21,8 @@ namespace bloom::media::cache {
 // (docs/architecture/media-io.md "Disk cache": "cache key includes the decoder's identity so a
 // decoder upgrade invalidates entries").
 // 4: ADR 0026 multipart and layered OpenEXR decode with part and layer selection.
-inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-4";
+// 5: an identity input transform keeps premultiplied OpenEXR samples as stored (#545).
+inline constexpr std::string_view kImageDecoderIdentity = "bloom-image-decode-5";
 
 // The inputs that make a decoded image's on-disk identity: everything selectImageSource() /
 // selectThumbnail() already resolve per docs/architecture/media-io.md's cache-key contract (asset

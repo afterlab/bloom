@@ -65,7 +65,7 @@ bands.
   layer from the probed part before decoding and keying: a part with no root color layer (for
   example a layered render's `ViewLayer.Combined`) defaults to its first color layer, identically in the Viewer, RAM Preview,
   export and headless render, and the resolved name is the cache identity; an explicit name is never
-  replaced, so a layer the file lost is still reported missing. The decoded-image identity is `bloom-image-decode-4`,
+  replaced, so a layer the file lost is still reported missing. The decoded-image identity is `bloom-image-decode-5`,
   and a non-default part or layer is part of the memory, raw-upload and disk keys.
 - *Channel sets.* `decodeImageChannels()` returns a `render::ChannelSetImage`: the named channels of
   one part (all, or a selection in order) as planar Float32 over the shared data window, with the
@@ -102,6 +102,11 @@ bands.
 - *Alpha association.* A new image layer or node-canvas image source inherits the asset's probed
   association: `premultiply` is on only for straight-alpha assets, so a premultiplied EXR is never
   multiplied by alpha twice. Existing layers keep their authored value.
+- *Identity input transform (#545).* When the resolved input color space is the working space,
+  nothing is converted: a premultiplied EXR (and a provider still, a footage-interpreted image or
+  a shuffled Colour mapping) keeps its decoded samples, with no un-premultiply and re-premultiply
+  round trip that would move partial-alpha color by an ULP. The GPU route uploads the same raw
+  samples and emits no color command, so both evaluate the identical pixels.
 - *Windows.* The probe records the frame (display window) and the data window's offset inside it.
   CPU evaluation and GPU preparation publish the data window at that offset, scaled by the shared
   PointResampleV1 window rule (`render::pointResampleProxyWindow`), and an image source whose data

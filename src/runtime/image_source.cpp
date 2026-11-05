@@ -554,7 +554,7 @@ media::ImageResult<render::Rgba32fImage> evaluateImageSource(
                 applyFootagePass(*selected.footagePass, **stored.value, budget, cancelled);
             if (auto* error = std::get_if<std::string>(&interpreted))
                 return {{}, *error, cancel.isCancellationRequested()};
-            if (selected.inputProcessor) {
+            if (selected.inputProcessor && !selected.inputProcessor->isIdentity()) {
                 auto converted =
                     applyInputProcessorPremultiplied(std::get<render::Rgba32fImage>(interpreted),
                                                      *selected.inputProcessor, budget, cancelled);
