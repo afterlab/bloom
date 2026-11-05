@@ -585,6 +585,76 @@ void snapshotJsonShape() {
            "no stray commas");
 }
 
+// Schema 5: the Viewer's displayed frame, the GPU preview route's counters, the RAM Preview range
+// and its longest contiguous run, and the device claims reach the snapshot and its JSON as the hook
+// published them, and stay absent (null) without it.
+void viewerAndFillInputsReachTheSnapshot() {
+    ProfilerSampler sampler;
+    ProfilerSnapshot snapshot;
+    expect(sampler.sampleNow() && sampler.readLatest(snapshot, 0), "a bare sample");
+    expect(!snapshot.viewer.freshness.present && !snapshot.viewer.provider.present &&
+               !snapshot.viewer.cpuFallbacks.present &&
+               !snapshot.workload.ramPreviewSpanFrames.present &&
+               !snapshot.gpu.admissionClaimBytes.present,
+           "the Viewer, fill-span and device-claim figures are absent without the hook");
+    const auto bare = profilerSnapshotJson(snapshot);
+    expect(bare.find("\"viewer\":{\"freshness\":null,\"provider\":null,\"frame\":null,"
+                     "\"playheadFrame\":null,\"cpuFallbacks\":null") != std::string::npos,
+           "absent Viewer figures are null");
+
+    ProfilerHostInputs inputs;
+    inputs.viewer.freshness =
+        ProfilerMetric<ProfilerFrameFreshness>::of(ProfilerFrameFreshness::Current);
+    inputs.viewer.provider =
+        ProfilerMetric<ProfilerDisplayProvider>::of(ProfilerDisplayProvider::GpuResident);
+    inputs.viewer.frame = ProfilerCount::of(12);
+    inputs.viewer.playheadFrame = ProfilerCount::of(13);
+    inputs.viewer.cpuFallbacks = ProfilerCount::of(3);
+    for (auto& reason : inputs.viewer.cpuFallbacksByReason)
+        reason = ProfilerCount::of(0);
+    inputs.viewer.cpuFallbacksByReason[4] = ProfilerCount::of(3);
+    inputs.viewer.gpuAdmissionRefusals = ProfilerCount::of(0);
+    inputs.viewer.gpuCompletions = ProfilerCount::of(41);
+    inputs.viewer.capacityWaits = ProfilerCount::of(2);
+    inputs.ramPreviewCaching = ProfilerMetric<bool>::of(true);
+    inputs.ramPreviewTotalFrames = ProfilerCount::of(48);
+    inputs.ramPreviewSpanFirstFrame = ProfilerCount::of(0);
+    inputs.ramPreviewSpanFrames = ProfilerCount::of(17);
+    inputs.deviceAdmissionClaimBytes = ProfilerBytes::of(3 * kGiB);
+    inputs.deviceUsableBytes = ProfilerBytes::of(20 * kGiB);
+    sampler.publishHostInputs(inputs);
+    expect(sampler.sampleNow() && sampler.readLatest(snapshot, 1), "a sample with the hook");
+    expect(snapshot.viewer.freshness.value == ProfilerFrameFreshness::Current &&
+               snapshot.viewer.provider.value == ProfilerDisplayProvider::GpuResident &&
+               snapshot.viewer.cpuFallbacks.value == 3 &&
+               snapshot.viewer.cpuFallbacksByReason[4].value == 3 &&
+               snapshot.viewer.gpuCompletions.value == 41 &&
+               snapshot.viewer.capacityWaits.value == 2,
+           "the Viewer figures arrive");
+    expect(snapshot.workload.ramPreviewCaching.value &&
+               snapshot.workload.ramPreviewTotalFrames.value == 48 &&
+               snapshot.workload.ramPreviewSpanFirstFrame.present &&
+               snapshot.workload.ramPreviewSpanFrames.value == 17,
+           "the fill range and its contiguous run arrive");
+    expect(snapshot.gpu.admissionClaimBytes.value == 3 * kGiB &&
+               snapshot.gpu.usableBytes.value == 20 * kGiB,
+           "the device claims arrive");
+    const auto json = profilerSnapshotJson(snapshot);
+    expect(json.find("\"freshness\":\"current\",\"provider\":\"gpuResident\",\"frame\":12,"
+                     "\"playheadFrame\":13,\"cpuFallbacks\":3,"
+                     "\"cpuFallbacksByReason\":{\"gpuUnavailable\":0,") != std::string::npos &&
+               json.find("\"unsupportedGpuSubset\":3,") != std::string::npos &&
+               json.find("\"gpuCompletions\":41,\"capacityWaits\":2}") != std::string::npos,
+           "the Viewer section serializes with names");
+    expect(json.find("\"ramPreviewCaching\":true,\"ramPreviewTotalFrames\":48,"
+                     "\"ramPreviewSpanFirstFrame\":0,\"ramPreviewSpanFrames\":17") !=
+               std::string::npos,
+           "the fill span serializes");
+    expect(json.find("\"admissionClaimBytes\":" + std::to_string(3 * kGiB) +
+                     ",\"usableBytes\":" + std::to_string(20 * kGiB)) != std::string::npos,
+           "the device claims serialize");
+}
+
 void absentFieldsStayAbsent() {
     ProfilerSampler sampler;
     ProfilerSnapshot snapshot;
@@ -838,6 +908,7 @@ int main() try {
     schedulerCopyRespectsSlots();
     ledgerAdapterReadsAccessors();
     absentFieldsStayAbsent();
+    viewerAndFillInputsReachTheSnapshot();
     sampleCost();
     if (failures == 0)
         std::cout << "profiler sampler: all checks passed\n";

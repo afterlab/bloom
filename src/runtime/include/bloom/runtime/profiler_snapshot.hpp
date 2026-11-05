@@ -33,7 +33,9 @@ namespace bloom::runtime {
 // 2: pool counters and executor busy time can be absent (a source that does not count them).
 // 3: pools report cumulative evicted bytes (ProfilerPool::evictedBytes).
 // 4: this process's memory in swap (ProfilerMemory::processSwappedBytes).
-inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 4;
+// 5: the Viewer's displayed frame and the GPU preview route's CPU fallbacks (ProfilerViewer),
+//    the RAM Preview range and its longest contiguous cached run, and device admission claims.
+inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 5;
 
 inline constexpr std::size_t kProfilerNameCapacity = 48;
 inline constexpr std::size_t kProfilerMaximumPools = 32;
@@ -162,6 +164,10 @@ struct ProfilerGpu final {
     ProfilerCount submits{};
     // Device utilization in 0..1, where the platform reports one.
     ProfilerRatio utilization{};
+    // Device bytes admission has granted to running work, and the device capacity it admits
+    // against (the driver's live budget minus the VRAM headroom).
+    ProfilerBytes admissionClaimBytes{};
+    ProfilerBytes usableBytes{};
 };
 
 // ---- CPU ------------------------------------------------------------------------------------
@@ -256,6 +262,12 @@ struct ProfilerWorkload final {
     // RAM Preview: frames cached now and the fill rate in frames per second.
     ProfilerCount ramPreviewCachedFrames{};
     ProfilerRatio ramPreviewFillFps{};
+    // RAM Preview: whether a fill is running, the frames of its range, and the longest run of
+    // consecutive cached frames (its first frame index on the composition grid and its length).
+    ProfilerMetric<bool> ramPreviewCaching{};
+    ProfilerCount ramPreviewTotalFrames{};
+    ProfilerCount ramPreviewSpanFirstFrame{};
+    ProfilerCount ramPreviewSpanFrames{};
     // Export throughput in frames per second; absent while nothing exports.
     ProfilerRatio exportFps{};
 };
@@ -275,6 +287,46 @@ struct ProfilerPressure final {
     ProfilerCount admissionRefusals{};
     // Cumulative evicted bytes, indexed by ProfilerEvictionCause.
     std::array<ProfilerBytes, kProfilerEvictionCauseCount> evictionBytes{};
+};
+
+// ---- Viewer ---------------------------------------------------------------------------------
+
+// How the Viewer's displayed frame relates to what it should show: no frame yet, the frame of the
+// current request, or an earlier frame kept while the current one renders.
+enum class ProfilerFrameFreshness : std::uint8_t { None, Current, Stale };
+inline constexpr std::size_t kProfilerFrameFreshnessCount = 3;
+
+// Which display arm produced the displayed frame. GpuNeutral names the display transform only: its
+// scene was evaluated on the CPU. GpuResident and GpuPreparedPacked are GPU scene evaluation.
+enum class ProfilerDisplayProvider : std::uint8_t {
+    CpuReference,
+    CpuOcio,
+    GpuNeutral,
+    GpuResident,
+    GpuPreparedPacked,
+};
+inline constexpr std::size_t kProfilerDisplayProviderCount = 5;
+
+// Why a GPU preview request took the CPU path, in the GPU preview display service's order.
+inline constexpr std::size_t kProfilerCpuFallbackReasonCount = 7;
+
+struct ProfilerViewer final {
+    // The displayed frame; absent while the Viewer has no frame (freshness is still present).
+    ProfilerMetric<ProfilerFrameFreshness> freshness{};
+    ProfilerMetric<ProfilerDisplayProvider> provider{};
+    // The displayed frame's and the playhead's frame index on the composition's frame grid
+    // (nearest frame); absent without a displayed frame or an active composition.
+    ProfilerCount frame{};
+    ProfilerCount playheadFrame{};
+    // Cumulative GPU preview route counters; absent without a GPU preview service. A CPU fallback
+    // is a request that took the full CPU path, counted by reason; admission refusals are
+    // requests the scheduler's GPU admission sent to the CPU before any stage work; completions
+    // are resident GPU frames published; capacity waits are frames that waited for device room.
+    ProfilerCount cpuFallbacks{};
+    std::array<ProfilerCount, kProfilerCpuFallbackReasonCount> cpuFallbacksByReason{};
+    ProfilerCount gpuAdmissionRefusals{};
+    ProfilerCount gpuCompletions{};
+    ProfilerCount capacityWaits{};
 };
 
 // ---- Processes ------------------------------------------------------------------------------
@@ -313,6 +365,7 @@ struct ProfilerSnapshot final {
     ProfilerWorkload workload{};
     ProfilerPressure pressure{};
     ProfilerProcesses processes{};
+    ProfilerViewer viewer{};
 };
 
 static_assert(std::is_trivially_copyable_v<ProfilerSnapshot>,

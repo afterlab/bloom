@@ -438,7 +438,9 @@ void parityTools(std::vector<ReferenceEntry>& out) {
 
     simple("profiler.snapshot", "telemetry",
            "Bloom's runtime telemetry now: memory, GPU, CPU per executor pool, tasks, stage "
-           "timings, playback and RAM Preview rates, and helper processes.",
+           "timings, playback and RAM Preview rates, the RAM Preview's contiguous cached run, the "
+           "Viewer's displayed frame and the GPU preview route's CPU fallbacks, device admission "
+           "claims, and helper processes.",
            "Absent values are null, never 0. Counters are cumulative, so rates come from two "
            "snapshots. snapshot.schemaVersion names the field set. Read-only; holds no session "
            "lease, so it answers while a project opens.",

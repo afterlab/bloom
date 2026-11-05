@@ -33,7 +33,14 @@ the bucket index). Schema 2 made pool counters (entries, hits, misses, stores, e
 refusals) and executor busy time `ProfilerMetric`s, so a source that does not count them reports
 them absent rather than zero. Schema 3 added each pool's cumulative evicted bytes
 (`ProfilerPool::evictedBytes`). Schema 4 added this process's memory in swap
-(`ProfilerMemory::processSwappedBytes`).
+(`ProfilerMemory::processSwappedBytes`). Schema 5 (#540) added the Viewer (`ProfilerViewer`: the
+displayed frame's freshness, display provider and frame index, the playhead's frame index, and the
+GPU preview route's cumulative CPU fallbacks by reason, admission refusals, completions and
+capacity waits), the RAM Preview's state, range and longest contiguous cached run
+(`ramPreviewCaching`, `ramPreviewTotalFrames`, `ramPreviewSpanFirstFrame`,
+`ramPreviewSpanFrames`), and the device admission claims and usable capacity
+(`ProfilerGpu::admissionClaimBytes`, `usableBytes`), so an agent reading `profiler.snapshot` can
+check a shot for CPU fallbacks, fill order and claims without the benchmark harness.
 
 ## Sampler
 
@@ -74,6 +81,10 @@ Sources, each read at the sampler rate unless noted:
 | Stage histograms | the telemetry counters (below) |
 | Helper processes | the telemetry counters' helper registry; each listed pid is read through Linux `/proc/<pid>/statm` and `/proc/<pid>/stat` (fixed buffers), macOS `proc_pidinfo(PROC_PIDTASKINFO)`, Windows `GetProcessMemoryInfo`, `GetProcessTimes` and `GetExitCodeProcess`. A process that is gone or a zombie is listed as not alive with absent figures |
 | Playback fps, dropped frames, RAM Preview cached frames and fill rate, export fps | the UI-side hook (below) |
+| RAM Preview caching state, range frames and longest contiguous run | the UI-side hook: `RamPreviewController::isCaching()`, `totalFrameCount()` and `longestRetainedRun()` |
+| Viewer frame (freshness, provider, frame index) and playhead frame | the UI-side hook: `CompositionPreviewController::state()` (the displayed frame's provenance provider and its request time) and the session's current time, as nearest frame indices on the composition grid |
+| GPU preview route counters (CPU fallbacks by reason, admission refusals, completions, capacity waits) | the UI-side hook: `GpuPreviewDisplayService::status().counters`; absent without the service |
+| Device admission claims and usable capacity | the UI-side hook: `GpuProcessingPhasePolicy::usableCapacity()` (`deviceClaimBytes`, `deviceUsableBytes` once the device is ready) |
 | Admission waits and refusals | the telemetry counters: `GpuProcessingPhasePolicy::reserve()` counts each `AwaitingCapacity` answer (a waiting request retries, so each retry that waits again counts) and each `BudgetRefused` answer |
 | Evicted bytes by cause | the telemetry counters (below, "Eviction causes") |
 
@@ -180,6 +191,7 @@ adapter and the playback, RAM Preview and export controllers, and publishes thos
 sampler with `publishHostInputs()` (a second seqlock), which the next sample merges. Playback fps
 is the rate of playhead advances while playing, the RAM Preview fill rate the rate of newly cached
 frames while caching, and export fps the rate of completed frames of the running job. It also
+publishes the Viewer's displayed frame and the GPU preview service's counters (schema 5), and
 reports whether any of the three runs (`ProfilerHostInputs::hostBusy`), which holds back the idle
 baseline. No Qt object is read off the UI thread.
 

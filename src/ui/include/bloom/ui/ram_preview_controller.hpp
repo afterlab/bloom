@@ -106,6 +106,12 @@ class RamPreviewController final : public QObject {
     [[nodiscard]] const std::optional<PlayableSpan>& playableSpan() const noexcept {
         return playableSpan_;
     }
+    // The longest run of consecutive retained frames as half-open composition frame indices
+    // (earliest on ties); empty when nothing is retained.
+    [[nodiscard]] std::optional<std::pair<std::uint64_t, std::uint64_t>>
+    longestRetainedRun() const noexcept {
+        return coverageIndex_.longest();
+    }
     [[nodiscard]] std::optional<Completion> lastCompletion() const noexcept {
         return lastCompletion_;
     }

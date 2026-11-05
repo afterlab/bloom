@@ -7,8 +7,9 @@
 // It is also the UI-side hook for what only the UI owns. On every feed tick, on the UI thread, it
 // reads the memory budget ledger through readProfilerLedger() (the pool holding must be read on
 // the thread that polls the ledger; the ledger state only after the ledger applied a sample) and
-// the playback, RAM Preview and export controllers, and publishes those values into the sampler
-// with publishHostInputs(). It never reads a Qt object off the UI thread and never mutates
+// the playback, RAM Preview and export controllers, the Viewer's displayed frame and the GPU
+// preview service's counters, and publishes those values into the sampler with
+// publishHostInputs(). It never reads a Qt object off the UI thread and never mutates
 // budgets, caches or scheduling.
 
 #include <bloom/runtime/profiler_sampler.hpp>
@@ -22,6 +23,7 @@
 #include <optional>
 
 namespace bloom::runtime {
+class GpuPreviewDisplayService;
 class GpuProcessingPhasePolicy;
 class MemoryBudgetLedger;
 } // namespace bloom::runtime
@@ -46,6 +48,8 @@ struct ProfilerUiSources final {
     // Host bytes admission has granted to running work (its claims minus the preview retention
     // they include); read with the ledger on each tick.
     const runtime::GpuProcessingPhasePolicy* admission = nullptr;
+    // The GPU preview route's CPU-fallback, admission and completion counters (schema 5).
+    const runtime::GpuPreviewDisplayService* previewService = nullptr;
 };
 
 // The sampler's GPU source: Bloom's own device images from the render module's process-wide

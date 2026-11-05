@@ -233,6 +233,13 @@ void ProfilerSampler::sample() noexcept {
     workload.ramPreviewCachedFrames = inputs_.ramPreviewCachedFrames;
     workload.ramPreviewFillFps = inputs_.ramPreviewFillFps;
     workload.exportFps = inputs_.exportFps;
+    workload.ramPreviewCaching = inputs_.ramPreviewCaching;
+    workload.ramPreviewTotalFrames = inputs_.ramPreviewTotalFrames;
+    workload.ramPreviewSpanFirstFrame = inputs_.ramPreviewSpanFirstFrame;
+    workload.ramPreviewSpanFrames = inputs_.ramPreviewSpanFrames;
+    snapshot.gpu.admissionClaimBytes = inputs_.deviceAdmissionClaimBytes;
+    snapshot.gpu.usableBytes = inputs_.deviceUsableBytes;
+    snapshot.viewer = inputs_.viewer;
 
     // ---- Pressure: admission answers and evicted bytes by cause (always counted).
     const auto admission = telemetry::admissionTotals();

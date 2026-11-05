@@ -140,6 +140,14 @@ constexpr std::array<std::string_view, kProfilerTaskExecutorCount> kExecutorName
     "cpu", "blockingIo", "gpu"};
 constexpr std::array<std::string_view, kProfilerEvictionCauseCount> kCauseNames{
     "ceiling", "memoryPressure", "admission", "purge"};
+constexpr std::array<std::string_view, kProfilerFrameFreshnessCount> kFreshnessNames{
+    "none", "current", "stale"};
+constexpr std::array<std::string_view, kProfilerDisplayProviderCount> kProviderNames{
+    "cpuReference", "cpuOcio", "gpuNeutral", "gpuResident", "gpuPreparedPacked"};
+// GpuPreviewCpuFallbackReason, in its order.
+constexpr std::array<std::string_view, kProfilerCpuFallbackReasonCount> kFallbackReasonNames{
+    "gpuUnavailable",       "nonNeutralRequest", "notWorthwhile", "ineligible",
+    "unsupportedGpuSubset", "nativeFailure",     "nativeTimeout"};
 
 template <typename Array> std::string_view nameAt(const Array& names, const auto value) {
     const auto index = static_cast<std::size_t>(value);
@@ -219,6 +227,8 @@ void writeGpu(Writer& json, const ProfilerGpu& gpu) {
     json.metric("readbackBytes", gpu.readbackBytes);
     json.metric("submits", gpu.submits);
     json.metric("utilization", gpu.utilization);
+    json.metric("admissionClaimBytes", gpu.admissionClaimBytes);
+    json.metric("usableBytes", gpu.usableBytes);
     json.end('}');
 }
 
@@ -294,6 +304,10 @@ void writeWorkload(Writer& json, const ProfilerWorkload& workload) {
     json.metric("ramPreviewCachedFrames", workload.ramPreviewCachedFrames);
     json.metric("ramPreviewFillFps", workload.ramPreviewFillFps);
     json.metric("exportFps", workload.exportFps);
+    json.metric("ramPreviewCaching", workload.ramPreviewCaching);
+    json.metric("ramPreviewTotalFrames", workload.ramPreviewTotalFrames);
+    json.metric("ramPreviewSpanFirstFrame", workload.ramPreviewSpanFirstFrame);
+    json.metric("ramPreviewSpanFrames", workload.ramPreviewSpanFrames);
     json.end('}');
 }
 
@@ -330,6 +344,31 @@ void writeProcesses(Writer& json, const ProfilerProcesses& processes) {
     json.end('}');
 }
 
+void writeViewer(Writer& json, const ProfilerViewer& viewer) {
+    json.key("viewer");
+    json.begin('{');
+    if (viewer.freshness.present)
+        json.text("freshness", nameAt(kFreshnessNames, viewer.freshness.value));
+    else
+        json.metric("freshness", ProfilerCount{});
+    if (viewer.provider.present)
+        json.text("provider", nameAt(kProviderNames, viewer.provider.value));
+    else
+        json.metric("provider", ProfilerCount{});
+    json.metric("frame", viewer.frame);
+    json.metric("playheadFrame", viewer.playheadFrame);
+    json.metric("cpuFallbacks", viewer.cpuFallbacks);
+    json.key("cpuFallbacksByReason");
+    json.begin('{');
+    for (std::size_t reason = 0; reason < kProfilerCpuFallbackReasonCount; ++reason)
+        json.metric(kFallbackReasonNames[reason], viewer.cpuFallbacksByReason[reason]);
+    json.end('}');
+    json.metric("gpuAdmissionRefusals", viewer.gpuAdmissionRefusals);
+    json.metric("gpuCompletions", viewer.gpuCompletions);
+    json.metric("capacityWaits", viewer.capacityWaits);
+    json.end('}');
+}
+
 } // namespace
 
 std::string profilerSnapshotJson(const ProfilerSnapshot& snapshot) {
@@ -349,6 +388,7 @@ std::string profilerSnapshotJson(const ProfilerSnapshot& snapshot) {
     writeWorkload(json, snapshot.workload);
     writePressure(json, snapshot.pressure);
     writeProcesses(json, snapshot.processes);
+    writeViewer(json, snapshot.viewer);
     json.end('}');
     return out;
 }

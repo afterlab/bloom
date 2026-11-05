@@ -42,6 +42,15 @@ struct ProfilerHostInputs final {
     ProfilerCount ramPreviewCachedFrames{};
     ProfilerRatio ramPreviewFillFps{};
     ProfilerRatio exportFps{};
+    ProfilerMetric<bool> ramPreviewCaching{};
+    ProfilerCount ramPreviewTotalFrames{};
+    ProfilerCount ramPreviewSpanFirstFrame{};
+    ProfilerCount ramPreviewSpanFrames{};
+    // Device admission: claims granted to running work and the capacity admitted against.
+    ProfilerBytes deviceAdmissionClaimBytes{};
+    ProfilerBytes deviceUsableBytes{};
+    // The Viewer's displayed frame and the GPU preview route's counters.
+    ProfilerViewer viewer{};
     // Playback, a RAM Preview fill or an export is running: the idle baseline waits for none.
     bool hostBusy = false;
 };
