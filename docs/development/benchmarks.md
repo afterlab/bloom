@@ -408,10 +408,14 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
-lists in `knownFailures` the checks an open issue makes fail (#544: the light 2K shot's GPU busy
-over a 3 s fill, which the preview service's one-dispatch-at-a-time owner thread bounds, the
-Noise shot's half-second fill, and the Cryptomatte shot's fill, which also decodes and uploads its
-rank images on the host every frame). On 2026-11-06 (RTX 4090, 12 frames) `cryptomatte-mattes-2k`
+lists in `knownFailures` the checks an open issue makes fail (#386: the Cryptomatte shot's GPU busy
+over its fill, which decodes and uploads its rank images on the host every frame, #549; and the
+Noise shot's GPU busy, which its fill is too short to judge: on 2026-11-06 it filled 24 frames in
+0.4 s, so the 200 ms `nvidia-smi` samples, each itself an average over the driver's own window,
+caught two or three readings at 31% average and 50% peak; a fair judgement needs a longer work area,
+which would change the scenario's baseline, so the marker stays and the check is not weakened). The
+light 2K shot's GPU-busy marker was removed when #386's bounded blend and OCIO batches and fence
+waits made it pass (64% busy, 2026-11-06). On 2026-11-06 (RTX 4090, 12 frames) `cryptomatte-mattes-2k`
 showed its first frame in 4.9 s, filled at 2.8 fps with the GPU 19% busy, played cached at 24 fps,
 exported its 4 frames on the GPU with no CPU fallback, and passed every other check.
 
@@ -530,7 +534,8 @@ reference frames are deleted after each scenario unless `--keep-outputs` is give
 than the threshold (percent, default 10) is a regression and fails the run. The suite runs on the
 RTX 4090 workstation and, when it is used, on the RTX 5080 bench host.
 
-Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and after its follow-up](benchmark-results-2026-11-05-scenarios.md).
+Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and after its follow-up](benchmark-results-2026-11-05-scenarios.md);
+[the same machine, before and after #386](benchmark-results-2026-11-06-386.md).
 
 ## Node cost
 

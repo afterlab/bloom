@@ -1851,7 +1851,10 @@ took 0.182 s a frame from HEVC Main 10 and 0.138 s from H.264 with NVDEC, agains
 in software (before the change, and with `BLOOM_VIDEO_HARDWARE_DECODE=0` after it), with no
 CPU-fallback frame either way; cold Viewer playback, which the GPU bounds, moved from 17.8 to 20.5
 frames/s for H.264 and stayed within run-to-run noise for HEVC Main 10 (18.1 against 17.6, with a
-wider spread) and AV1 (22). The older export-side VA-API execution key keeps its
+wider spread) and AV1 (22). On 2026-11-06 (#386) the 2160p H.264 benchmark project B played at real
+time with either route and its RAM-preview fill, bound by the frames' scene work rather than
+decode, was not faster with NVDEC (about 62 against 70 frames/s, with 1.1 CPU cores busy);
+[results](../development/benchmark-results-2026-11-06-386.md). The older export-side VA-API execution key keeps its
 Development/Incomplete decode declarations, which are not selectable. Hardware provides
 acceleration only; it never changes project semantics.
 Each successful video source selection, on the CPU and GPU routes alike, publishes a

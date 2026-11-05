@@ -51,16 +51,14 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
 # The open issues behind the failures measured on 2026-11-05 (benchmark-results-2026-11-05-
 # scenarios.md). After the #544 fixes the final render no longer falls back to the CPU, the fills
 # no longer starve on capacity waits and land in frame order, and image sequences publish frames
-# side by side; this check is what is left of #544.
-SHORT_FILL_BUSY = ("#544: the light 2K shot's 3 s fill keeps the GPU about half busy on average "
-                   "(40-55%): the resident preview service runs each frame's scene dispatches one "
-                   "at a time on its owner thread, so frames wait for it, not for decode")
-MATTE_FILL_BUSY = ("#544: the Cryptomatte shot fills at about 3 fps with the GPU about 20% busy "
-                   "(2026-11-06): the resident preview service runs each frame's dispatches one at "
-                   "a time on its owner thread, and every frame first decodes and uploads the "
-                   "multilayer EXR's Cryptomatte rank images on the host")
-NOISE_FILL_BUSY = ("#544: the Noise shot fills its 24 frames in about half a second (45 fps on "
-                   "2026-11-05), too short to keep the GPU half busy on average")
+# side by side. The GPU-busy check moved to #386, whose batched submissions and fence waits made
+# the light 2K shot pass it (64% busy on 2026-11-06); what is left of it is listed here.
+MATTE_FILL_BUSY = ("#386: the Cryptomatte shot fills at about 3 fps with the GPU about 19% busy "
+                   "(2026-11-06): every frame first decodes and uploads the multilayer EXR's "
+                   "Cryptomatte rank images on the host (#549)")
+NOISE_FILL_BUSY = ("#386: the Noise shot fills its 24 frames in about 0.4 s (59 fps on "
+                   "2026-11-06), two or three GPU utilisation samples: too short to judge the "
+                   "average busy fairly (31%, peak 50%)")
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass
     # with one large Glow (the effect-chain admission case of #539).
@@ -69,7 +67,6 @@ SCENARIOS = {
                        "Physical Glow.",
         "tier": "1080p",
         "frames": 48,
-        "knownFailures": {"gpu-busy-during-fill": SHORT_FILL_BUSY},
         "layers": [
             {"name": "Plate", "media": "png16"},
             {"name": "CG beauty", "media": "exr_multilayer", "blend": "screen",
