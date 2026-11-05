@@ -1088,14 +1088,17 @@ int runPackedBenchProject(const TestOptions& options, const bool half) {
     const auto claims = policy->snapshot().reservations;
     // #477: sequence read-ahead captures stored, captures a frame withdrew or waited for instead
     // of reading the same file a second time, and capture starts held back while frames read
-    // their own sources (process totals).
+    // their own sources (process totals); #386: members decoded ahead of their frame, and decodes
+    // not run because the transport had passed their frame.
     const auto readAhead = evaluator.sequenceReadAhead()
                                ? evaluator.sequenceReadAhead()->statistics()
                                : runtime::ImageSequenceReadAhead::Statistics{};
     json << ",\"readAheadCaptured\":" << readAhead.captured
          << ",\"readAheadWithdrawn\":" << readAhead.withdrawn
          << ",\"readAheadAwaited\":" << readAhead.awaited
-         << ",\"readAheadDeferred\":" << readAhead.deferred;
+         << ",\"readAheadDeferred\":" << readAhead.deferred
+         << ",\"readAheadDecoded\":" << readAhead.decoded
+         << ",\"readAheadDecodesSkipped\":" << readAhead.decodesSkipped;
     json << ",\"windowCpuSeconds\":" << benchProcessCpuSeconds() - cpuBefore
          << ",\"uploadBytes\":"
          << core::telemetry::gpuTransferTotals().uploadBytes - transfersBefore.uploadBytes

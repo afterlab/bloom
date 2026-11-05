@@ -258,7 +258,9 @@ Every measurement is a fresh process.
   captures, `readAheadWithdrawn` the queued captures a frame withdrew to read the file itself, and
   `readAheadAwaited` the captures in flight a frame waited for instead of reading the file again,
   and `readAheadDeferred` the times a worker with queued captures waited for frames' own source
-  reads (process totals).
+  reads; `readAheadDecoded` the members whose native samples it decoded ahead of their frame and
+  `readAheadDecodesSkipped` the decodes it did not run because the transport had passed their
+  frame (#386; process totals).
 - **Host preparation** (#422): `windowCpuSeconds` is the process CPU time over the measured window
   (fills and playback), `uploadBytes` the host-to-device bytes uploaded in it (from the GPU
   transfer telemetry), and `decodeStageSeconds` and `colourConvertStageSeconds` the summed wall time
