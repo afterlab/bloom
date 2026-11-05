@@ -117,9 +117,9 @@ the in-app server: `bloom-mcp` implements `project.save`, `project.save-as`, `pr
 Other refusals are `bloom.mcp.unknown-target`, `bloom.mcp.invalid-argument`, `bloom.mcp.busy` and
 `bloom.mcp.failed`, each with a message that says what to do.
 
-Some of what you do in the window has no tool, on purpose: arranging panels (split, close,
-maximize, Reset Workspace, full screen, the toolbar), zooming and scrolling editors other than the
-Viewer, and the Viewer's guide overlays except through `preferences.set`; quitting Bloom;
+Some of what you do in the window has no tool, on purpose: arranging panels (split, join,
+close, maximize, Reset Workspace, full screen, the toolbar), zooming and scrolling editors other
+than the Viewer, and the Viewer's guide overlays except through `preferences.set`; quitting Bloom;
 starting, stopping or configuring the MCP server and its token; running Python in the Script
 editor (use `transact`); the Help menu's links; and the recovery question Bloom asks at launch
 after a crash.

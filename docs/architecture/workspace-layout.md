@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-10-30
+Updated: 2026-11-05
 
 ## Purpose
 
@@ -40,19 +40,49 @@ boundary.
 The first slice supports:
 
 - replace the editor type in any area
-- split the active area left/right or top/bottom
+- split an area right or down (the new area opens to the right of it, or below it)
 - close an area while preserving at least one leaf
+- join two areas across the divider between them
 - maximize and restore an area without rewriting the underlying tree
 - reset the Compositing workspace to the Default preset
 - save and restore topology, proportions, area IDs, active area, and editor type IDs
 
-Split, close, maximize, restore, and reset are available through visible Window-menu actions. Area
-headers may expose the same actions. No dedicated default shortcut is assigned yet; shortcut and
-remapping policy needs a cross-platform keymap design.
+Split, close, maximize, restore, and reset are available through visible Window-menu actions
+(Split Active Area Right, Split Active Area Down). An area header's right-click menu offers Split
+Right, Split Down, Fullscreen and Close for that area. No dedicated default shortcut is assigned
+yet; shortcut and remapping policy needs a cross-platform keymap design.
 
-While one area is maximized, off-path branches are hidden but remain in the tree. Split and close
-are disabled until the layout is restored. Maximizing must not change serialized topology,
-proportions, editor choices, or project state.
+While one area is maximized, off-path branches are hidden but remain in the tree. Split, close and
+join are disabled until the layout is restored. Maximizing must not change serialized topology,
+proportions, editor choices, or project state. The maximized area is the only one visible, so no
+area paints the active highlight while it is maximized; the active area, keyboard focus and the
+area's `active` property are unchanged (`EditorArea::setActiveHighlightSuppressed`). Restoring
+paints the highlight again on the area that is active then.
+
+Exactly one area is highlighted as active at any time outside maximization. Every path that replaces
+or rearranges the tree (reset, restore, `applyArrangement()`) clears the previous active area's
+highlight before it activates the new one, so an area a preset keeps never retains a stale
+highlight.
+
+### Joining areas
+
+Each divider between two areas is a `QSplitterHandle` that keeps its resize cursor and drag. Its
+right-click menu offers the two joins of its orientation; **Join X** means the area on the other
+side expands toward X and takes over the area on that side:
+
+| Divider | Join | Survivor | Closes |
+| --- | --- | --- | --- |
+| Vertical (areas side by side) | Join Left | right area | left area |
+| Vertical | Join Right | left area | right area |
+| Horizontal (areas stacked) | Join Up | bottom area | top area |
+| Horizontal | Join Down | top area | bottom area |
+
+A join is offered only when both sides of the divider are single areas, which then share that whole
+edge. Otherwise, and while an area is maximized, the items are disabled and their tooltip gives the
+reason. `WorkspaceHost::joinAreas()` closes the other area through the same path as Close (its
+editor and editor state are dropped), gives its room to the survivor, and makes the survivor the
+active, focused area. The survivor keeps its editor and that editor's state. The change emits
+`layoutChanged()` and is saved with the workspace like a split or a close.
 
 ## Persistence Contract
 
@@ -156,7 +186,7 @@ platform-owned.
 
 The following remain deferred:
 
-- drag-from-corner splitting and drag-to-merge gestures
+- drag-from-corner splitting and drag-to-merge gestures (joining from the divider menu exists)
 - tabs, floating areas, and detached windows
 - per-workspace content beyond the arrangement (a preset stores panel arrangement only)
 - per-editor internal session-state migration

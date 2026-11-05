@@ -71,6 +71,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [The Toolbar](user-guide/toolbar.md) — the tools, the active tool's options, and aligning
   and distributing layers.
 - [Workspace presets](user-guide/workspace-presets.md) — the Workspace picker, your own layouts and how the Export panel opens.
+- [Arranging panels](user-guide/panels.md) — splitting, joining, closing and full-screen panels.
 - [The status bar](user-guide/status-bar.md) — the labelled groups along the bottom of the window.
 - [Ways to apply an effect](user-guide/ways-to-apply-an-effect.md) — every Merge entry is a layer,
   adjustment layers, Layer nodes, nested Merges and the graphs that give the same pixels.

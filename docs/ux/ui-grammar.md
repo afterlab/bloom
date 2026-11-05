@@ -940,6 +940,16 @@ DPR 1 and 1.5. Changed geometry tests use the viewer's real padded mapping.
 
 Every panel's single border is painted by `KPanelFrame`, an overlay raised above the panel's
 children (Accent while the panel is active); the stylesheet gives the panel only its background.
+Exactly one panel paints the Accent border, and none does while a panel is maximized (it is the only
+one visible); restoring paints it again on the focused panel. The panel header's right-click menu
+(`panelOptionsMenu`) reads Split Right (`panelSplitRightAction`), Split Down
+(`panelSplitDownAction`), Fullscreen, Close; the Window menu has Split Active Area Right
+(`splitAreaRightAction`) and Split Active Area Down (`splitAreaDownAction`). The divider between two
+panels (`workspaceDivider`) shows the split resize cursor and drags as before; its right-click menu
+(`workspaceDividerMenu`) offers Join Left and Join Right on a vertical divider, Join Up and Join
+Down on a horizontal one (`workspaceJoin<Direction>Action`). Join X expands the panel on the other
+side toward X over the panel on that side. When a side is itself split the items are disabled and
+their tooltip says why.
 Panels are square (`Radius::Panel` is 0); a non-zero radius would also have the frame fill the
 corner wedges outside the curve. Header and footer share ChromePadding. Viewer declares
 View, Select, Add; Composition commands live in the application's Composition menu. Only

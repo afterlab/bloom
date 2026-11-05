@@ -91,7 +91,11 @@ panel has an editor header and its editor type may be replaced without recreatin
 data.
 
 The current working implementation uses one custom recursive split tree. Every leaf is the same
-editor-area type and gives the artist an editor selector plus split, close, and maximize controls.
+editor-area type and gives the artist an editor selector plus split (Split Right, Split Down),
+close, and maximize controls. The divider between two panels resizes them on drag and, on
+right-click, offers Join Left/Right (side by side) or Join Up/Down (stacked): the panel on the other
+side expands toward that direction over its neighbour. A maximized panel shows no active highlight;
+it returns on the focused panel when the panel is restored.
 The accepted product model is:
 
 - an area hosts one replaceable editor implementation
@@ -133,6 +137,6 @@ The initial implementation compared the product requirements against:
 2. A custom split-area tree with area split, merge, and editor replacement behavior.
 
 The custom split-area tree now proves editor replacement, stable layout serialization, keyboard and
-mouse focus, resizing, close, and non-destructive panel maximization. Multi-monitor floating
-windows, detached areas, high-DPI transitions, and equivalent behavior on Linux, macOS, and Windows
-remain acceptance gates rather than completed claims.
+mouse focus, resizing, close, joining across a divider, and non-destructive panel maximization.
+Multi-monitor floating windows, detached areas, high-DPI transitions, and equivalent behavior on
+Linux, macOS, and Windows remain acceptance gates rather than completed claims.
