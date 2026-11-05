@@ -159,7 +159,8 @@ for confirmation; both clear only rebuildable derived data.
   coverage and resident GPU scene stores. Any preview or RAM preview frame still
   being prepared is retired first. The frame on screen stays valid; the next frame you ask for is
   computed again, so the preview cache's held-bytes reading drops to empty and refills only as you
-  work.
+  work. The graphics memory those stores held goes back to the device at once, and the status bar
+  says how much (for example "Preview cache purged; 11.8 GB of graphics memory returned").
 - **Purge media cache** clears the on-disk decoded-frame store, the evaluator's in-memory decoded
   still-image and decoded-video media, retained source revisions and completed RAM preview frames,
   and the resident GPU scene store

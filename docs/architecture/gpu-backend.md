@@ -1456,7 +1456,61 @@ with nothing left to evict, for an unsupported subset and for device loss.
 **Idle means small (#539).** When the preview owner has had no preview work for
 `idleTrimDelay` (one second), it gives back retained device memory: the reusable scene cache and
 all parked native storage. What is on screen and the finished frames the UI holds stay; the next
-frame re-creates what it needs (`idleTrims`, `idleTrimmedBytes`).
+frame re-creates what it needs (`idleTrims`, `idleTrimmedBytes`). The final render evaluator does
+the same (#544): after its `idleTrimDelay` (one second) with no frame queued, running or preparing,
+it gives its scene cache back (`GpuProcessFrameEvaluator::retentionStats`), so an application that
+exported once no longer keeps that memory until the next export.
+
+**Retention gives way inside the allocation (#544).** A running scene publishes each finished
+intermediate to the scene cache, so at 4K one frame of a heavy comp filled the device with its own
+retention (about 17.8 GB of 107 entries, almost none pinned). The next native allocation was then
+refused, the whole frame failed, released its storage, waited, prepared its sources again and
+refilled the same cache: the Viewer's first frame took 40 to 99 s, a RAM fill cached nothing for
+minutes, and on the final render route the failed frame fell back to the CPU reference path (a
+9-minute 4K frame). Now, when the root refuses a phase's device-local native image or buffer for
+room, the device asks its owner's reusable retention to give way inside that allocation
+(`GpuDevice::setDeviceRoomReclaimer`) and tries once more. The preview owner frees parked native
+storage, then the scene cache's least recently used unpinned entries (freeing what they park), and
+measures the device again; the final render evaluator evicts its scene cache. Each gives back at
+least the allocation plus however far the claims already exceed the capacity, and at least half of
+what it retains (`deviceRoomGiveWay`), so the scene's next steps fit too while the most recently
+used half stays for reuse (`deviceRoomReclaims`, `deviceRoomReclaimedBytes`). Published
+device-local retention is counted (`retainedNativeImageBytes`): it still counts as claims, so it
+still gates admission, but it no longer cuts a phase's executor ceiling, which before shrank to the
+room the cache left (a final render frame failed its own 1.3 GB byte limit and went to the CPU).
+When the retry is still refused (the device is full of other work, or of another application's
+memory), the final render evaluator returns `AwaitingCapacity` instead of an over-budget failure,
+so the export waits at the frame boundary and runs the frame again on the GPU; before, the frame
+went to the CPU reference path.
+
+**Purge returns device memory (#544).** Purge preview cache (and the media purge, which clears the
+same store) clears the resident scene cache on the service owner, then frees all parked native
+storage, which the cleared entries had moved into, measures the device again and reports the bytes
+that actually went back (for example "Preview cache purged; 11.8 GB of graphics memory
+returned"). Before, the clear moved the images into parked storage and the memory stayed allocated
+until an idle trim, which never came while a fill waited for capacity. Purging six frames into a `cg-comp-4k` fill, the
+instance's device memory (`nvidia-smi`) fell from 12.0 GiB to 0.17 GiB within 0.3 s.
+
+**Measured (#544).** The scenario suite ([results](../development/benchmark-results-2026-11-05-scenarios.md#after-544))
+on the RTX 4090 profile, one run each, before on main `8626d3918` and after on the #544 change:
+
+| | Before | After |
+|---|---|---|
+| `cg-comp-4k` first Viewer frame (fill / playback / scrub) | 47.6 / 62.4 / 98.9 s | 5.9 / 6.1 / 5.9 s |
+| `cg-comp-4k` fill | stalled, 1 of 12 in 120 s, 349 capacity waits | 12 of 12 in 9.9 s (1.21 fps), 5 waits |
+| `cg-comp-4k` GPU busy during the fill | 28.2% | 75.2% |
+| `cg-comp-4k` export | 141.2 s/frame, 1 of 4 frames on the CPU | 3.15 s/frame, 4 of 4 on the GPU |
+| `cg-comp-2k` fill | 24 in 55.4 s (0.433 fps), 538 capacity waits | 24 in 5.4 s (4.48 fps), 0 waits |
+| `two-layer-glow-2k` fill | 48 in 4.40 s (10.9 fps), 42 capacity waits | 48 in 3.09 s (15.5 fps), 0 waits |
+
+Where a 4K export frame's time goes (`cg-comp-4k`, 12 frames, 2.37 s per frame over the export,
+medians of per-frame timers in a diagnostic build): preparing the scene on a CPU worker (source
+read, decode and conversion) 1.88 s, up to four frames at once; the GPU run on the owner thread
+0.74 s (0.41 s of it waiting on the processing fence, 46 ms readback, 40 ms host publication);
+semantic identity 76 ms; the EXR write 0.92 s, reopen verification 0.36 s and hash 62 ms, one frame
+at a time with the one-thread codec. Before, a CPU-side profile of the 4K export spent about 531 s
+of 543 s on one thread in the CPU reference evaluator (separable blur 42%, float image reads 17%)
+for the one frame the GPU route refused; the three GPU frames took about 10 s together.
 
 **Measured (#539, #472).** Cold RAM fills of 120 frames on the RTX 4090 profile
 ([benchmark results](../development/benchmark-results-2026-10-31.md)), two footage layers with a

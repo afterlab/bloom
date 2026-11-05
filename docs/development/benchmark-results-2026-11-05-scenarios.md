@@ -86,6 +86,49 @@ failed on longer work areas.
   host claims within 2 times anonymous memory, inside the stated factor of 3. The RAM preview's
   ceiling is the usable memory (58.3 GB), with no fixed cap.
 
+## After #544
+
+The same suite on the same machine and media after the #544 change (retention gives way inside a
+refused device allocation, a mid-frame device refusal waits instead of rendering on the CPU, the
+final render's idle trim, and purge returning device memory;
+[GPU backend](../architecture/gpu-backend.md), "Retention gives way inside the allocation").
+
+- **Build:** main `8e8071b2c` plus the #544 change, RelWithDebInfo, clang.
+- **Machine state:** another Bloom session and other GPU applications were resident (about 1.8 GB
+  of device memory); `gpuBusyPercent` is machine-wide.
+- **Limits:** the defaults, `--reference-frames 1` (frame 0 compared).
+
+| | `two-layer-glow-2k` | `cg-comp-2k` | `cg-comp-4k` |
+|---|---|---|---|
+| First frame (s): fill / playback / scrub | 2.93 / 2.37 / 2.44 | 5.83 / 4.87 / 4.87 | 5.88 / 6.06 / 5.87 |
+| Fill | 48 of 48 in 3.09 s (15.5 fps) | 24 of 24 in 5.36 s (4.48 fps) | 12 of 12 in 9.95 s (1.21 fps) |
+| Capacity waits during the fill | 0 | 0 | 5 |
+| GPU busy during the fill, mean / peak (%) | 44.4 / 100 | 69.8 / 100 | 75.2 / 100 |
+| Cached playback (fps shown) | 23.95 | 23.96 | 23.97 |
+| Cold playback (fps shown) | 21.47 | 1.99 | 0.0 |
+| Scrub median / max (s) | 0.270 / 0.299 | 0.761 / 1.81 | 3.55 / 3.65 (all 6 targets shown) |
+| Export: frames, s/frame | 4, 0.799 | 4, 1.685 | 4, 3.154 (12.6 s) |
+| Export: GPU / CPU reference frames | 4 / 0 | 4 / 0 | 4 / 0 |
+| Export: GPU busy mean (%), CPU cores busy | 14.4, 1.59 | 19.0, 1.50 | 25.4, 2.16 |
+| Peak device claims / Bloom's own device memory / usable (GB), fill | 14.6 / 14.5 / 17.9 | 15.2 / 15.2 / 17.9 | 17.1 / 16.8 / 18.2 |
+| Peak host claims / anonymous memory (GB), fill | 2.90 / 1.36 | 4.12 / 2.61 | 9.60 / 6.37 |
+| CPU reference render (s/frame, `bloom-cli`, no driver) | 27.1 | 76.7 | 530 |
+
+Every route counted zero CPU fallbacks. Checks that pass now and were listed for #544 have been
+removed from the lists. Still listed:
+
+| Check | `two-layer-glow-2k` | `cg-comp-2k` | `cg-comp-4k` |
+|---|---|---|---|
+| `gpu-busy-during-fill` | known-failure, #544 (44.4% over a 3.1 s fill) | pass (69.8%) | pass (75.2%) |
+| `fill-contiguous-from-playhead` | pass | pass | known-failure, #544 (the run started at frames 0, 2 and 3; at most 5 frames ahead) |
+| `export-rate` | known-failure, #544 (0.799 s/frame, limit 0.757 s) | known-failure, #544 (1.685 s/frame, limit 1.39 s) | pass (3.154 s/frame, limit 3.81 s) |
+| `export-cpu-parity` | known-failure, #545 (2189 alpha samples differ; 6 RGB components above 2e-6) | known-failure, #545 (18518 alpha samples differ) | known-failure, #545 (49467 alpha samples differ) |
+
+The 2K exports now fail `export-rate` only because their fills became fast: four frames carry the
+pipeline's first-frame latency (a 4K frame waits about 1.9 s in scene preparation, 0.74 s on the GPU
+and 1.3 s in the EXR write and reopen verification, which run one frame at a time with the
+one-thread codec), and a 12-frame 4K export ran at 2.37 s per frame against 3.21 s for four.
+
 ## Earlier evidence on longer work areas
 
 Before the work areas were shortened and the export capped, a run over 96-frame work areas held
