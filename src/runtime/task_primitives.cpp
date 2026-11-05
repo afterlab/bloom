@@ -160,7 +160,11 @@ TaskSchedulerConfig TaskSchedulerConfig::defaults() noexcept {
     // Left at its own zero default, which CpuRowBandExecutor derives from hardware_concurrency()
     // itself: the row-band pool's width is a property of the machine, not of how many task lanes
     // this configuration wants.
-    config.blockingIoWorkerCount = 2;
+    // #544: background passes (footage verification after an open or import, the encoder probe
+    // at startup, thumbnails) each hold a worker for seconds, and an image-sequence export
+    // publishes up to four frames at once. With two workers, an export's destination check and
+    // frame publications queued behind those passes and ran one at a time.
+    config.blockingIoWorkerCount = 4;
     // The AGGREGATE GPU request-owned reservation ceiling (summed over pending/accepted GPU tasks)
     // is host-derived, not the old fixed 1 GiB. The helper uses the ledger's default
     // operation-cache split when positive, else the usable host budget, else a 1-byte validity

@@ -4,6 +4,7 @@
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/export_job_runner.hpp>
@@ -23,6 +24,10 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
+#include <iterator>
+#include <vector>
+#include <span>
+#include <cstdio>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -649,6 +654,49 @@ void testLifecycle() {
     expect(f.view(longJob)->state == ExportJobState::Stopped &&
                f.view(longJob)->stopCause == host::ExportStopCause::User,
            "stop ends in Stopped with the user cause");
+}
+
+// #544: an image sequence publishes several frames at once (each its own write, reopen
+// verification and artifact hash on a blocking-I/O worker), but the run accounts them in frame
+// order: every frame is on disk, the first and last paths are the range's, and the sequence
+// digest is the SHA-256 over the per-file digests in frame order, whatever order they finished in.
+void testSequencePublishesInFrameOrder() {
+    Fixture f("frame-order");
+    const auto job = f.addJob(png(), "Exports/{name}.png", document::ExportOverwritePolicy::Replace,
+                              {document::ExportRangeKind::Custom, 0, 9});
+    expect(f.startable(job), "the ten-frame job becomes startable");
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, "start the ten-frame job");
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }),
+           "the ten-frame job finishes");
+    const auto* done = f.view(job);
+    expect(done && (done->state == ExportJobState::Done ||
+                    done->state == ExportJobState::DoneWithWarnings),
+           "the ten-frame job succeeds");
+    if (!done || !done->outputs.front().verification)
+        return;
+    const auto& artifacts = done->outputs.front().verification->artifacts;
+    expect(artifacts.publishedArtifacts == 10, "all ten frames are counted");
+    core::Sha256Hasher ordered;
+    std::uint64_t bytes = 0;
+    for (int frame = 0; frame < 10; ++frame) {
+        char name[32];
+        std::snprintf(name, sizeof name, "Exports/Main.%04d.png", frame);
+        std::ifstream in(f.folder / name, std::ios::binary);
+        const std::vector<char> data((std::istreambuf_iterator<char>(in)),
+                                     std::istreambuf_iterator<char>());
+        expect(!data.empty(), std::string("frame file is on disk: ") + name);
+        bytes += data.size();
+        const auto digest = core::Sha256Hasher::hash(std::as_bytes(std::span(data)));
+        if (digest)
+            (void)ordered.update(std::as_bytes(std::span(digest->bytes())));
+    }
+    expect(artifacts.digest && *artifacts.digest == ordered.finalize(),
+           "the sequence digest covers the per-file digests in frame order");
+    expect(artifacts.totalBytes == bytes, "the published bytes are every frame's bytes");
+    expect(artifacts.firstPath.filename() == "Main.0000.png" &&
+               artifacts.lastPath.filename() == "Main.0009.png",
+           "the first and last published paths are the range's first and last frames");
 }
 
 // A processing root that measures no usable host memory and has no ceiling to wait for refuses
@@ -1280,6 +1328,7 @@ int main() {
         testDestinationForPath();
         testUserPresets();
         testLifecycle();
+        testSequencePublishesInFrameOrder();
         testZeroHostCapacityRefusal();
         testReplaceConfirmation();
         testPolicyHoldsAtPublication();

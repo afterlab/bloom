@@ -356,7 +356,7 @@ Application cache purge uses an explicit `usesPurgeableCaches` task bit, set on 
 asset-thumbnail decode, and export evaluation. A GPU preview root retains the bit until its
 asynchronous child stages complete. The purge gates those producers and export stage advancement
 before checking their task lifetimes; unrelated Save/I/O tasks do not delay it. Both purge commands
-run on a CPU worker so a held Save on the single blocking-I/O worker cannot queue a media clear
+run on a CPU worker so a held Save on a blocking-I/O worker cannot queue a media clear
 behind itself. The disk cache's own writer is flushed before on-disk entries are removed.
 
 Private local tests qualify a 64-terminal burst coalescing to one wake with all 64 results delivered
@@ -416,6 +416,12 @@ panel, task monitor, headless renderer, log, or test.
 CPU computation and blocking I/O use bounded executors with separate concurrency controls so slow
 storage cannot consume all compute capacity. The design does not require one operating-system
 thread for every task.
+
+The application's default blocking-I/O executor has four workers (`TaskSchedulerConfig::defaults`,
+#544). Background passes hold a worker for seconds at a time (footage verification after an open or
+import, the encoder probe at startup, thumbnails), and with two workers an export started meanwhile
+waited about a second for its destination check and then published its frames one at a time behind
+them; an image-sequence export now publishes up to four frames at once.
 
 ### Row bands
 

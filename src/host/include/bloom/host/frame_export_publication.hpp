@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -290,10 +291,18 @@ class [[nodiscard]] FrameExportPublicationResultV1 final {
 // through the attempt's reservation (reached through `request.attempt()->resources()`). It shares
 // that reservation's ledger/root, counts concurrent publications independently, and releases after
 // this invocation's writer/verifier exits. No separate ExportResourceLedgerV1 reference is needed.
+//
+// `beforePublication` (#544), when set, runs once the staged file is written and closed and before
+// it is read back and published. An image sequence publishes several frames at once; its gate
+// waits until every earlier frame has published, so the files still appear in frame order and a
+// frame after a failed one is never published. False (the run stopped, or the task was cancelled)
+// ends the publication as cancelled before publication, and the staged file is discarded.
+using FrameExportPublicationGateV1 = std::function<bool(const runtime::CancellationToken&)>;
 [[nodiscard]] FrameExportPublicationResultV1 executeExportPublication(
     runtime::TaskContext& context, platform::StagedArtifactCoordinator& artifacts,
     FrameExportRequestV1 request, const std::filesystem::path& scratchDirectory,
     output::OutputExportClockV1 clock = output::systemOutputExportClockV1(),
-    output::OutputExportProgressCallbackV1 progress = {}) noexcept;
+    output::OutputExportProgressCallbackV1 progress = {},
+    FrameExportPublicationGateV1 beforePublication = {}) noexcept;
 
 } // namespace bloom::host

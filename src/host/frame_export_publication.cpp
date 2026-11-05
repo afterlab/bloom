@@ -225,6 +225,7 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
     runtime::TaskContext& context, platform::StagedArtifactCoordinator& artifacts,
     FrameExportRequestV1 request, const std::filesystem::path& scratchDirectory,
     output::OutputExportClockV1 clock, output::OutputExportProgressCallbackV1 progress,
+    const FrameExportPublicationGateV1& beforePublication,
     FrameExportPublicationStageV1& failureStage) {
     if (!clock) {
         clock = output::systemOutputExportClockV1();
@@ -501,6 +502,16 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
             FrameExportPublicationStageV1::ArtifactCopy, finishResult.error));
     }
 
+    // #544: the caller's turn to publish. Waiting for earlier frames is not this publication's
+    // own lack of progress, so the no-progress interval starts again after it.
+    if (beforePublication) {
+        if (!beforePublication(context.cancellation()) || context.isCancellationRequested()) {
+            static_cast<void>(lease.rejectVerification());
+            return cancelledResult(FrameExportPublicationStageV1::ArtifactCopy);
+        }
+        lastProgress = clock();
+    }
+
     // Read the lease's own staged bytes back and recompute their SHA-256, proving the exclusive
     // staged file the coordinator will atomically publish is byte-identical to what F1 verified --
     // "F1 verifier on the staged identity (Verifying)" extended to the file that is actually
@@ -592,12 +603,13 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
 FrameExportPublicationResultV1 executeExportPublication(
     runtime::TaskContext& context, platform::StagedArtifactCoordinator& artifacts,
     FrameExportRequestV1 request, const std::filesystem::path& scratchDirectory,
-    output::OutputExportClockV1 clock, output::OutputExportProgressCallbackV1 progress) noexcept {
+    output::OutputExportClockV1 clock, output::OutputExportProgressCallbackV1 progress,
+    FrameExportPublicationGateV1 beforePublication) noexcept {
     auto failureStage = FrameExportPublicationStageV1::Preflight;
     try {
         return executeExportPublicationImpl(context, artifacts, std::move(request),
                                             scratchDirectory, std::move(clock),
-                                            std::move(progress), failureStage);
+                                            std::move(progress), beforePublication, failureStage);
     } catch (const std::bad_alloc&) {
         // Unwinding has already destroyed the staged lease, scratch guard and scratch claim.
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(

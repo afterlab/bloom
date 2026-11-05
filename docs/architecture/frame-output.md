@@ -1155,8 +1155,21 @@ explicit output transforms and look policies bind the additional evidence descri
 `SequenceExportRunnerV1` and the export queue's image-sequence driver keep several frames between
 evaluation and the encoder. Each frame's analysis attempt (decode and scene preparation on its own
 CPU worker, GPU evaluation, semantic identity, analysis) runs while earlier frames are approved,
-encoded and published. Frames still reach the encoder or publication strictly in order, one at a
-time; the first frame waits for the caller's approval and later frames are approved in order. The
+encoded and published. Frames still reach the movie encoder strictly in order, one at a time; the
+first frame waits for the caller's approval and later frames are approved in order.
+
+An image sequence (PNG, EXR, TIFF) writes its frames side by side (#544): each analysed frame,
+taken in frame order, is approved and starts its publication task (write, reopen verification and
+artifact hash, each frame on its own blocking-I/O worker with the one-thread codec) while the frames
+before it are still publishing, within the same window depth. A frame's staged file is published
+only after every earlier frame's (`executeExportPublication`'s `beforePublication` gate), so files
+still appear in frame order, and the run counts frames, extends the sequence digest and reports
+the first and last paths in frame order whatever order the publications finished in. A frame that
+fails stops the export: the frames before it that are already publishing finish and are counted,
+and no later frame is published. A publication refused for scratch memory while other frames of
+the export hold memory releases the later frames unpublished, and the export continues one frame at
+a time, publishing the refused frame and then each later one again. Optional EXR deliverable colour
+preparation still runs one frame at a time before the frame's publication. The
 window depth comes from `detail::sequenceExportFramesInFlightV1`, the seam for the measured-capacity
 model (frames that fit in measured free memory minus the headroom preference); until that model is
 available it is a bounded default of four. A frame whose processing admission is refused while
