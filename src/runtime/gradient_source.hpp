@@ -5,11 +5,13 @@
 #include <bloom/render/image_types.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_curves.hpp>
+#include <bloom/runtime/compiled_plan.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <variant>
 #include <vector>
 
@@ -46,6 +48,49 @@ sampleGradientSource(const std::variant<document::GradientValue, CompiledGradien
     if (!sampled || !sampled->isValid())
         return std::nullopt;
     return sampled;
+}
+
+// #543: `sampled` with the stops its value nodes drive this frame. `value` gives the driver's
+// value output (a CompiledValue pointer, null when unavailable); a colour driver reads a Color and
+// a position driver a Scalar, and any other value makes the gradient not evaluable.
+template <typename Driver, typename Lookup>
+[[nodiscard]] std::optional<document::GradientValue>
+applyGradientStopDrivers(std::optional<document::GradientValue> sampled,
+                         const std::vector<Driver>& drivers, Lookup&& value) {
+    if (!sampled || drivers.empty())
+        return sampled;
+    std::vector<document::GradientStopValue> values;
+    values.reserve(drivers.size());
+    for (const auto& driver : drivers) {
+        const CompiledValue* held = value(driver);
+        if (held == nullptr)
+            return std::nullopt;
+        if (driver.component == document::GradientStopComponent::Color) {
+            const auto* color = std::get_if<core::Color4d>(held);
+            if (color == nullptr)
+                return std::nullopt;
+            values.push_back({driver.stop, driver.component, *color});
+        } else {
+            const auto* position = std::get_if<double>(held);
+            if (position == nullptr)
+                return std::nullopt;
+            values.push_back({driver.stop, driver.component, *position});
+        }
+    }
+    return document::applyGradientStopValues(std::move(*sampled), values);
+}
+
+// #543: a compiled gradient parameter at `time` with its driven stops, the value graph's outputs
+// for this frame in `outputs`.
+[[nodiscard]] inline std::optional<document::GradientValue>
+sampleGradientParameter(const CompiledGradientParameter& parameter, const core::RationalTime time,
+                        const std::span<const CompiledValue> outputs) {
+    return applyGradientStopDrivers(
+        sampleGradientSource(parameter.source, time), parameter.drivers,
+        [&](const CompiledGradientStopDriver& driver) -> const CompiledValue* {
+            const auto index = driver.value.value();
+            return index < outputs.size() ? &outputs[index] : nullptr;
+        });
 }
 
 // The stop table of a gradient: sorted by position (equal positions in stored order), each stop's

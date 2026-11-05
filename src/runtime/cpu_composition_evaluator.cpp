@@ -2734,8 +2734,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             if (step.gradient) {
                                 key.add(step.gradient->radial);
                                 // #541: the stops this frame samples, as the kernel reads them.
-                                const auto sampled = detail::sampleGradientSource(
-                                    step.gradient->stops.source, *operandTime);
+                                const auto sampled = detail::sampleGradientParameter(
+                                    step.gradient->stops, *operandTime, resolved.valueOutputs);
                                 key.add(sampled.has_value());
                                 if (sampled)
                                     for (const auto& stop : detail::resolveGradientStops(*sampled)) {
@@ -3006,8 +3006,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             }
                             std::optional<detail::ResolvedGradient> gradient;
                             if (solid.gradient) {
-                                const auto sampled = detail::sampleGradientSource(
-                                    solid.gradient->stops.source, *operandTime);
+                                const auto sampled = detail::sampleGradientParameter(
+                                    solid.gradient->stops, *operandTime, resolved.valueOutputs);
                                 const auto start = detail::resolveParameter(solid.gradient->start,
                                                                             *plan, resolved);
                                 const auto end =

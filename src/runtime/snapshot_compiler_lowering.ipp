@@ -1229,7 +1229,7 @@ lowerGradient(const document::NodeRecord& node) {
     using namespace document;
     const auto* gradientBinding = findParameterBinding(node, "gradient");
     const auto stops =
-        gradientBinding ? compiledGradientParameter(gradientBinding->parameterId) : std::nullopt;
+        gradientBinding ? compiledGradientParameter(node, *gradientBinding) : std::nullopt;
     const auto start = compiledVec2Parameter(findParameterBinding(node, "start"));
     const auto end = compiledVec2Parameter(findParameterBinding(node, "end"));
     const auto width = compiledScalarParameter(findParameterBinding(node, "width"));
@@ -1632,7 +1632,7 @@ lowerImageEffect(const document::NodeRecord& node,
                 color("highlights", kernel.highlights);
             }
             if (gradient != nullptr) {
-                kernel.gradient = compiledGradientParameter(gradient->parameterId);
+                kernel.gradient = compiledGradientParameter(node, *gradient);
                 lowered = lowered && kernel.gradient.has_value();
             } else if (ramp) {
                 color("midtones", kernel.midtones);
@@ -2706,22 +2706,48 @@ compiledPathParameter(const document::ParameterId id) {
     return std::nullopt;
 }
 
-// #541: a gradient is a constant GradientValue or an inline compiled Gradient curve.
+// #541: a gradient is a constant GradientValue or an inline compiled Gradient curve; #543 with
+// the value outputs that drive its stops, in stop order (colour before position).
 [[nodiscard]] std::optional<runtime::CompiledGradientParameter>
-compiledGradientParameter(const document::ParameterId id) {
+compiledGradientParameter(const document::NodeRecord& node,
+                          const document::ParameterBinding& binding) {
+    const auto id = binding.parameterId;
     const auto* parameter = findParameter(id);
     if (parameter == nullptr)
         return std::nullopt;
+    std::optional<runtime::CompiledGradientParameter> compiled;
     if (const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source)) {
-        const auto* value = std::get_if<document::GradientValue>(&constant->value);
-        return value == nullptr ? std::nullopt
-                                : std::optional(runtime::CompiledGradientParameter{id, *value});
-    }
-    if (const auto* source = std::get_if<document::AnimationCurveSource>(&parameter->source)) {
+        if (const auto* value = std::get_if<document::GradientValue>(&constant->value))
+            compiled = runtime::CompiledGradientParameter{id, *value};
+    } else if (const auto* source =
+                   std::get_if<document::AnimationCurveSource>(&parameter->source)) {
         if (const auto* curve = composition_->animationCurves().findGradient(source->curveId))
-            return runtime::CompiledGradientParameter{id, runtime::compileAnimationCurve(*curve)};
+            compiled =
+                runtime::CompiledGradientParameter{id, runtime::compileAnimationCurve(*curve)};
     }
-    return std::nullopt;
+    if (!compiled)
+        return std::nullopt;
+    std::vector<std::pair<document::GradientStopPort, const document::ParameterBinding*>> stops;
+    for (const auto& candidate : node.parameters)
+        if (auto stop = document::parseGradientStopPort(candidate.role);
+            stop && stop->role == binding.role)
+            stops.emplace_back(std::move(*stop), &candidate);
+    std::ranges::sort(stops, {}, [](const auto& entry) {
+        return std::pair{entry.first.stop, static_cast<int>(entry.first.component)};
+    });
+    for (const auto& [stop, link] : stops) {
+        const auto* record = findParameter(link->parameterId);
+        const auto output =
+            record == nullptr
+                ? std::nullopt
+                : driverOutput(*record, stop.component == document::GradientStopComponent::Color
+                                            ? runtime::SocketValueKind::Color
+                                            : runtime::SocketValueKind::Scalar);
+        if (!output)
+            return std::nullopt;
+        compiled->drivers.push_back({link->parameterId, stop.stop, stop.component, *output});
+    }
+    return compiled;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledScalarParameter>

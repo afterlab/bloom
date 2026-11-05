@@ -84,7 +84,8 @@ template <typename Emit, typename Charge>
     const auto solidAspect = descriptor.value()->pixelAspect();
     std::optional<render::GpuBatchGradient> gpuGradient;
     if (solid.gradient) {
-        const auto sampled = sampleGradientSource(solid.gradient->stops.source, time);
+        const auto sampled =
+            sampleGradientParameter(solid.gradient->stops, time, resolved.valueOutputs);
         const auto start = resolveParameter(solid.gradient->start, plan, resolved);
         const auto end = resolveParameter(solid.gradient->end, plan, resolved);
         if (!sampled || !start || !end ||

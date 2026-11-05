@@ -543,10 +543,16 @@ void Evaluator::evaluateBoundsReadout(const runtime::CompiledValueOperation& ope
 // #541: the gradient at this frame, then its colour at the kernel's position.
 void Evaluator::evaluateGradientSample(const runtime::CompiledValueOperation& operation,
                                        const runtime::CompiledValueGradientSample& kernel) {
-    const auto sampled = runtime::detail::sampleGradientSource(kernel.gradient, time_);
+    // #543: with the stops its value nodes drive this frame.
+    const auto sampled = runtime::detail::applyGradientStopDrivers(
+        runtime::detail::sampleGradientSource(kernel.gradient, time_), kernel.drivers,
+        [this](const runtime::CompiledValueGradientStopOperand& driver) {
+            return operandOf(driver.value);
+        });
     if (!sampled) {
         fail(operation, {}, "Gradient is not evaluable at this time",
-             "The gradient's keys could not be sampled; its colour falls back to black.");
+             "The gradient's keys or driven stops could not be sampled; its colour falls back to "
+             "black.");
         write(operation, 0, core::Color4d{0.0, 0.0, 0.0, 1.0});
         return;
     }

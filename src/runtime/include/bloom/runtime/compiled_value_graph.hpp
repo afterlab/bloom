@@ -275,9 +275,19 @@ struct CompiledBoundsReadout final {
 // gradient lowers to one per octave when the gradient is animated (a constant gradient folds into
 // constant colours instead). The gradient is inline, a constant or a whole-value Gradient curve
 // sampled at the frame, so the kernel has no value operand.
+struct CompiledValueGradientStopOperand final {
+    std::uint32_t stop = 0;
+    document::GradientStopComponent component = document::GradientStopComponent::Color;
+    CompiledValueOperand value;
+    friend bool operator==(const CompiledValueGradientStopOperand&,
+                           const CompiledValueGradientStopOperand&) = default;
+};
+
 struct CompiledValueGradientSample final {
     std::variant<document::GradientValue, CompiledGradientCurve> gradient;
     double position = 0.0;
+    // #543: the stops a value node drives, applied over the sampled gradient in this order.
+    std::vector<CompiledValueGradientStopOperand> drivers{};
 
     friend bool operator==(const CompiledValueGradientSample&,
                            const CompiledValueGradientSample&) = default;
@@ -300,9 +310,11 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
         [&visit](const auto& step) {
             using Step = std::decay_t<decltype(step)>;
             if constexpr (std::is_same_v<Step, CompiledValueTime> ||
-                          std::is_same_v<Step, CompiledBoundsReadout> ||
-                          std::is_same_v<Step, CompiledValueGradientSample>) {
+                          std::is_same_v<Step, CompiledBoundsReadout>) {
                 // The one kernel with no operands: its value is the frame being rendered.
+            } else if constexpr (std::is_same_v<Step, CompiledValueGradientSample>) {
+                for (const auto& driver : step.drivers)
+                    visit(driver.value);
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {

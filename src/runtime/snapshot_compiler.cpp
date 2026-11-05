@@ -759,7 +759,10 @@ class CompilePass final {
                     return;
                 }
                 bindings.emplace(binding.role, &binding);
-                if (!declaredRoles.contains(binding.role)) {
+                // #543: a gradient stop's link is bound under the stop's socket.
+                if (!declaredRoles.contains(binding.role) &&
+                    document::gradientParameterOfStopPort(*definition->second, binding.role) ==
+                        nullptr) {
                     auto diagnosticSubject = subject(node->id, "parameter." + binding.role);
                     diagnosticSubject.parameterId = binding.parameterId;
                     addFailure(runtime::CompileDiagnosticCode::UnexpectedParameter,

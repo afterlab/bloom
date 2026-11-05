@@ -130,7 +130,7 @@ lowerRecipe(const document::NodeRecord& node, std::vector<runtime::CompiledOpera
                 operands.gradient = *gradient;
         }
         if (const auto* binding = findParameterBinding(node, "tintGradient")) {
-            auto tintGradient = compiledGradientParameter(binding->parameterId);
+            auto tintGradient = compiledGradientParameter(node, *binding);
             lowered = lowered && tintGradient.has_value();
             if (tintGradient)
                 operands.tintGradient = std::move(*tintGradient);

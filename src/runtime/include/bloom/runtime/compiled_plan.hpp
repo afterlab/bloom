@@ -116,9 +116,21 @@ struct EvaluatedOperationBounds final {
 // the solid colour schema is animatable now, so the value is either a constant or an index into the
 // plan's Color4 curve table -- exactly the shape a Layer Output transform operand already had.
 // #541: a gradient parameter is a constant or an inline Gradient curve.
+// #543: a gradient stop's colour (a Color output) or position (a Scalar output) this frame.
+struct CompiledGradientStopDriver final {
+    document::ParameterId id;
+    std::uint32_t stop = 0;
+    document::GradientStopComponent component = document::GradientStopComponent::Color;
+    ValueOutputIndex value = ValueOutputIndex::fromRaw(0);
+    friend bool operator==(const CompiledGradientStopDriver&,
+                           const CompiledGradientStopDriver&) = default;
+};
+
 struct CompiledGradientParameter final {
     document::ParameterId id;
     std::variant<document::GradientValue, CompiledGradientCurve> source;
+    // #543: the stops a value node drives, applied over the sampled gradient in this order.
+    std::vector<CompiledGradientStopDriver> drivers{};
     friend bool operator==(const CompiledGradientParameter&,
                            const CompiledGradientParameter&) = default;
 };

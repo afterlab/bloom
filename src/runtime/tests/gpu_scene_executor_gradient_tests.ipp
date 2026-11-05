@@ -91,6 +91,46 @@ void testGradientProduction(Expectations& expectations, GpuDevice& device,
                                     keyOf(start.scene->commands().front()),
                             "gradient: a keyed stop table changes the source semantic key");
     }
+    // #543: stops a value node drives: stop 1's colour and stop 0's position from value outputs,
+    // applied over the five-stop table before it is sorted, on the CPU reference and the native
+    // kernel alike; a different driven colour is a different source semantic key.
+    {
+        const auto drivenPlan = [](const Color4d color, const double position) {
+            auto definition = gradientPlan(false)->copyDefinition();
+            auto& stops =
+                std::get<bloom::runtime::CompiledSolid>(definition.operations[0]).gradient->stops;
+            stops.source = multiStop();
+            stops.drivers = {{bloom::document::ParameterId::fromRaw(180401), 1,
+                              bloom::document::GradientStopComponent::Color,
+                              bloom::runtime::ValueOutputIndex::fromRaw(0)},
+                             {bloom::document::ParameterId::fromRaw(180402), 0,
+                              bloom::document::GradientStopComponent::Position,
+                              bloom::runtime::ValueOutputIndex::fromRaw(1)}};
+            definition.valueOperations = {
+                {bloom::document::NodeId::fromRaw(180410),
+                 bloom::runtime::ValueOutputIndex::fromRaw(0), 1,
+                 bloom::runtime::CompiledValuePassthrough{bloom::runtime::CompiledValueOperand{
+                     bloom::document::ParameterId::fromRaw(180411),
+                     bloom::runtime::CompiledValue{color}}}},
+                {bloom::document::NodeId::fromRaw(180412),
+                 bloom::runtime::ValueOutputIndex::fromRaw(1), 1,
+                 bloom::runtime::CompiledValuePassthrough{bloom::runtime::CompiledValueOperand{
+                     bloom::document::ParameterId::fromRaw(180413),
+                     bloom::runtime::CompiledValue{position}}}}};
+            definition.valueOutputCount = 2;
+            return publish(std::move(definition));
+        };
+        const auto driven = drivenPlan(Color4d{0.5, 1.25, -0.75, 0.5}, 0.45);
+        expectParity(expectations, *executor.executor, oracle, driven, requestFor(*driven),
+                     "linear gradient with a driven stop colour and position");
+        const auto other = drivenPlan(Color4d{0.1, 0.2, 0.3, 1.0}, 0.45);
+        const auto first = CpuGpuSceneBuilder{}.build(driven, requestFor(*driven));
+        const auto second = CpuGpuSceneBuilder{}.build(other, requestFor(*other));
+        expectations.expect(first.hasValue() && second.hasValue() &&
+                                keyOf(first.scene->commands().front()) !=
+                                    keyOf(second.scene->commands().front()),
+                            "gradient: a driven stop colour changes the source semantic key");
+    }
     const auto degenerate = gradientPlan(true, true);
     expectParity(expectations, *executor.executor, oracle, degenerate, requestFor(*degenerate),
                  "radial gradient zero-length geometry");

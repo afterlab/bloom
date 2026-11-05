@@ -1,6 +1,7 @@
 #include "color_grade_image_effect.hpp"
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
+#include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "operation_key.hpp"
 
@@ -917,6 +918,14 @@ sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledComposit
             else if (time)
                 sampled =
                     sampleGradientCurve(std::get<CompiledGradientCurve>(parameter.source), *time);
+            // #543: then the stops its value nodes drive this frame.
+            sampled = detail::applyGradientStopDrivers(
+                std::move(sampled), parameter.drivers,
+                [&](const CompiledGradientStopDriver& driver) -> const CompiledValue* {
+                    const auto index = driver.value.value();
+                    return index < resolved.valueOutputs.size() ? &resolved.valueOutputs[index]
+                                                                : nullptr;
+                });
             if (!sampled) {
                 evaluable = false;
                 return;

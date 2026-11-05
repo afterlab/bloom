@@ -136,12 +136,17 @@ RecipeEmitter::components(const CompiledColorParameter& color) {
 
 CompiledColorParameter RecipeEmitter::gradientColor(const CompiledGradientParameter& gradient,
                                                    const double position) {
-    // A constant gradient folds to its colour; a keyed one samples per frame in the value graph.
-    if (const auto* constant = std::get_if<document::GradientValue>(&gradient.source))
+    // A constant gradient folds to its colour; a keyed one, or (#543) one with driven stops,
+    // samples per frame in the value graph.
+    if (const auto* constant = std::get_if<document::GradientValue>(&gradient.source);
+        constant != nullptr && gradient.drivers.empty())
         return CompiledColorParameter{
             {}, gradientTintAt(document::sortedGradientStops(*constant), position)};
-    return CompiledColorParameter{
-        {}, values_(CompiledValueGradientSample{gradient.source, position}, 1)};
+    CompiledValueGradientSample sample{gradient.source, position};
+    for (const auto& driver : gradient.drivers)
+        sample.drivers.push_back(
+            {driver.stop, driver.component, CompiledValueOperand{driver.id, driver.value}});
+    return CompiledColorParameter{{}, values_(std::move(sample), 1)};
 }
 
 CompiledVec2Parameter RecipeEmitter::vector(const CompiledScalarParameter& x,
