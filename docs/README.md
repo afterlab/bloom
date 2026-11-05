@@ -86,6 +86,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Fields](user-guide/fields.md) — noise, cells, patterns, distances and forces as procedural
   fields, their image and mask outputs, Rasterize Field, Field Sample, and the fractal noise
   controls under their familiar names.
+- [Depth effects](user-guide/depth-effects.md) — Z Defocus and Depth Fog from any depth or mist
+  pass: the depth channel and encoding, reading a pass as data, fog before defocus, the lens modes
+  and bokeh, picking the focus in the Viewer and rack focus.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
   channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard

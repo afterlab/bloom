@@ -51,6 +51,12 @@ One render per frame writes every image format:
   (`bench_spec.COLOR_LAYER`, ADR 0026); without it the footage has no Image output and the cell
   measures an empty frame. Projects built before this selection existed need `--rebuild-projects`.
 
+A pass can also be derived from the render rather than rendered (`bench_spec.DERIVED_PASSES`,
+`bench_media.py derive`): `png16_mist` is a 16-bit PNG mist pass of the multilayer EXR's camera
+depth, `clamp((Z - 5) / 35, 0, 1)` and 1 where the render is empty, grey, opaque and untagged (data,
+not a picture). The scenario runner writes the frames a scenario needs on first use; it is
+deterministic from the stored EXR, so it is not pinned in the manifest.
+
 Video is encoded locally with FFmpeg from the 16-bit PNG master. Codecs without alpha are flattened
 over black. All are tagged BT.709 primaries, transfer and matrix, limited range, left chroma siting
 (the usual delivery tagging; colour accuracy is the chart's job):
@@ -405,6 +411,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `cg-comp-4k` | 3840×2160 | 12 | The same comp at 4K |
 | `noise-glow-2k` | 1920×1080 | 24 | A PNG16 plate under a full-frame procedural Noise (Spline, Dynamic Twist, 8 octaves, its evolution keyed so every frame is new) screened on top through a Physical Glow (160) (#525; the issue's Noise-driven Displace waits for Displace, #348) |
 | `cryptomatte-mattes-2k` | 1920×1080 | 24 | A PNG16 plate under the beauty pass shaped by its own Cryptomatte (#383): the pillars and cards minus the veil (a Mask Combine Subtract of two selections) as a matte layer mask and as the mask input of a warm Grade (then Curves), and the cards as the node track matte of an EXR float highlights pass through a 32 px blur and a Physical Glow (128) |
+| `depth-effects-2k` | 1920×1080 | 24 | Depth effects from both depth encodings (#483): a PNG16 plate through Depth Fog (exponential) and a physical-lens Z Defocus (85 mm, f/2, focus racking 8 to 24 m) from its derived 16-bit PNG mist pass read as data, under the beauty pass (multilayer EXR) through Depth Fog and Z Defocus (polygon bokeh, highlight boost) from its own float `ViewLayer.Depth.Z` channel; fog before defocus in both |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -423,6 +430,14 @@ now mostly the ZIP decode of the multilayer EXR, once for the beauty and once mo
 Cryptomatte rank channels, so its marker points at #549. Two of those runs failed
 `claims-within-factor` (3.02 and 3.18 against 3): the fill's host use fell further than the
 preflight claim for a channel read, which #549 did not change ([results](benchmark-results-2026-11-06-549.md)).
+`depth-effects-2k` (2026-11-06, 12 frames, three runs, the last after #549) shows its first frame
+in 2.5 to 3.3 s, fills at 7.9 to 14.5 fps, plays cached at 20.7 to 21.8 fps, exports its 4 frames
+on the GPU with no CPU fallback at 0.50 to 0.56 s a frame, and matches the CPU reference with exact
+alpha (max colour difference 2.4e-7). It lists two checks: the fill's GPU busy (5 to 25%; the fill
+lasts one to three seconds, a few samples, and decodes three sequences on the host a frame), and
+`claims-within-factor`, whose fill host claims reached 3.06 to 3.34 times peak use in every run
+(device claims 1.0 to 1.03): the preflight claim for its EXR depth channel read, the claim estimate
+of #539.
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -608,6 +623,51 @@ the earlier layout was over the per-image ceiling and the cases did not run. At 
 layer's staging buffer is a fresh allocation every frame (about 11 ms of the frame). Their budget
 is 7x the EXR Grade and 1.5x the Image output, and no case is a known failure. The Cryptomatte IDs
 picked do not change the cost measurably up to 256.
+
+### Depth effects (#483)
+
+`bloom_runtime_gpu_depth_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_depth_node_bench_smoke`). Each case filters a frame-sized beauty with a
+full-frame depth ramp (a Linear Gradient read as normalised depth), so the circle of confusion runs
+from in focus to the widest blur across the frame. Z Defocus is compared with a Gaussian blur of the
+same size, Depth Fog with a Luma Key into an Image Mix (one pass deriving a matte, one mix).
+Measured on 2026-11-06 (RTX 4090, 7 reruns, ms/frame):
+
+| Case | 1080p | vs Grade | vs comparable | 2160p | vs Grade | vs comparable |
+|---|---|---|---|---|---|---|
+| Grade (reference) | 3.08 |  |  | 5.03 |  |  |
+| Gaussian blur 8 px | 5.24 | 1.70x |  | 8.40 | 1.67x |  |
+| Gaussian blur 32 px | 5.29 | 1.72x |  | 10.49 | 2.09x |  |
+| Gaussian blur 128 px | 9.75 | 3.17x |  | 24.30 | 4.83x |  |
+| Luma Key into Image Mix | 5.51 | 1.79x |  | 7.27 | 1.45x |  |
+| Z Defocus, maximum 8 px | 17.05 | 5.54x | 3.25x Gaussian 8 | 41.24 | 8.20x | 4.91x |
+| Z Defocus, maximum 32 px | 26.79 | 8.70x | 5.07x Gaussian 32 | 67.56 | 13.43x | 6.44x |
+| Z Defocus, maximum 128 px | 34.18 | 11.10x | 3.51x Gaussian 128 | 86.43 | 17.18x | 3.56x |
+| Z Defocus 32 px, Draft (5 rings) | 21.04 | 6.83x | 3.98x Gaussian 32 | 45.02 | 8.95x | 4.29x |
+| Z Defocus 32 px, High (12 rings) | 32.55 | 10.57x | 6.16x Gaussian 32 | 85.10 | 16.92x | 8.11x |
+| Z Defocus 32 px, Maximum (16 rings) | 32.26 | 10.47x | 6.10x Gaussian 32 | 85.04 | 16.91x | 8.11x |
+| Z Defocus Uniform, 32 px | 17.19 | 5.58x | 3.25x Gaussian 32 | 46.76 | 9.30x | 4.46x |
+| Z Defocus 32 px, image bokeh, chromatic, boost | 29.55 | 9.60x | 5.59x Gaussian 32 | 79.16 | 15.74x | 7.55x |
+| Depth Fog, linear | 7.11 | 2.31x | 1.29x Luma Key | 7.62 | 1.51x | 1.05x |
+| Depth Fog, exponential | 5.99 | 1.94x | 1.09x Luma Key | 7.48 | 1.49x | 1.03x |
+| Depth Fog, curve | 5.54 | 1.80x | 1.00x Luma Key | 7.20 | 1.43x | 0.99x |
+| Depth Fog, filling transparency | 6.32 | 2.05x | 1.15x Luma Key | 10.49 | 2.08x | 1.44x |
+
+Cold runs took 3.8 to 27 ms at 1080p (39 to 84 ms at 2160p for Z Defocus) and warm runs under
+0.01 ms with no dispatch. Depth Fog is one pass over the depth and one mix, about a Luma Key into
+Image Mix. Z Defocus is a two-dimensional gather: up to `1 + 4K(K + 1)` samples a pixel at `K` rings
+(289 at Normal), where a Gaussian blur is two separable passes of `2r + 1` taps. Its cost therefore
+follows the quality and the share of the frame that is out of focus more than the maximum blur, and
+it lands at 3 to 8 Gaussian blurs of the same size (`NODE_COST_BUDGETS` holds each case about 25%
+over this run). Profiling showed the gather's atlas assembly costing whole-atlas passes per slot: a
+transparent base plus a source-over per image, and a separate circle of confusion slot beside its
+tile maximum. It now pads the colour once, blends each slot in once, carries the circle of
+confusion in the tile maximum's red, and leaves the prefilter out when it cannot contribute (23 to 20
+dispatches and a quarter less atlas at 32 px). The rest is the sample count. At 2160p the Grade
+reference is cheap relative to the frame (5 ms), so the High and Maximum qualities read 17x a Grade;
+Draft (121 samples) is the setting for interactive work on large frames.
+A rerun after #549 (7 reruns) stayed within every budget: Z Defocus at 3.6 to 8.8 Gaussian blurs
+of the same size and 6.1 to 13.8 Grades, Depth Fog at 0.8 to 1.2 Luma Keys.
 
 ## Platform notes
 

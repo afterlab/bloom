@@ -1074,6 +1074,208 @@ centre that re-dispatches. The grading cards test holds the card in both modes a
 card with no label cut short, the falloff drawn on the pad and following the centre, and the centre
 drag and a slider drag as one command each.
 
+## Depth effects
+
+`bloom.z-defocus` (Z Defocus) and `bloom.depth-fog` (Depth Fog), schema 1 (#483), are the two
+Filters nodes that read a depth pass: a lens blur whose size follows the depth, and atmospheric fog
+that thickens with distance. Both take an Image on `input`, a depth source on `depth`, an optional
+Image (`bokeh`, the lens kernel; `fog`, a fog picture) and the effect mask (Matte Workflow), and give
+an Image on `image`. In a comp, fog normally goes before defocus: fog is what the far objects look
+like, and the lens then blurs the fogged picture, as a camera would.
+
+### Research basis
+
+The algorithms follow published techniques and the behaviour of established compositing tools,
+not new inventions:
+
+- **Thin-lens circle of confusion** (Potmesil and Chakravarty, "A Lens and Aperture Camera Model
+  for Synthetic Image Generation", SIGGRAPH 1981): for focal length `f`, f-number `N` and focus
+  distance `S`, a point at distance `d` images as a disk of diameter
+  `c = f^2 / (N (S - f)) * |d - S| / d` on the sensor. The Physical lens mode is exactly this,
+  scaled from sensor millimetres to pixels by the frame width over the sensor width.
+- **Scatter-as-gather with a tile maximum and layered near/far handling** (GPU Gems 3, chapter 28,
+  Earl Hammon, "Practical Post-Process Depth of Field"; Jorge Jimenez, "Next Generation Post
+  Processing in Call of Duty: Advanced Warfare", SIGGRAPH 2014 Advances in Real-Time Rendering;
+  Kyle McIntosh, "Efficiently Simulating the Bokeh of Polygonal Apertures in a Post-Process Depth of
+  Field Shader", 2012): every output pixel gathers the samples whose own circles reach it, sized by
+  a dilated tile maximum of the circles so a large foreground blur is found by the pixels it covers,
+  with the near (foreground) and far (background) layers weighed separately and combined by the
+  foreground's coverage, so a blurred foreground spreads over a sharp background but a sharp
+  foreground never takes the background's colour.
+- **Depth-of-field compositing nodes** in node-based compositors and an open-source 3D suite's
+  Defocus node, and the commercial lens-blur plug-ins: focus distance and depth of field, a maximum
+  blur, near/far-only blur, size from a size map, a uniform (no depth) blur, polygonal bokeh with
+  blade rotation and curvature, an image as the lens kernel, highlight boost and chromatic bokeh,
+  and an edge expansion of the near layer for non-antialiased depth.
+- **Fog**: the OpenGL fixed-function fog equations (linear `(z - start) / (end - start)`,
+  exponential `1 - exp(-density z)` and exponential squared `1 - exp(-(density z)^2)`), the
+  exponential being Beer-Lambert extinction through a uniform medium; a renderer's mist pass with
+  its linear, quadratic and inverse-quadratic falloffs.
+- **Deep compositing** is the complete answer to depth-of-field and fog edges (each sample keeps its
+  own depth); a flat depth pass keeps one depth per pixel, which is why the near layer is expanded
+  and empty depth has an explicit rule below.
+
+### The depth source
+
+The depth is any pixel input: an OpenEXR Z or mist pass through Pass or Shuffle (or the channel set
+directly, the channel picked by name), a PNG, TIFF or JPEG depth or mist map (8 or 16-bit integer,
+or float), or any node's image. `depthChannel` picks one channel: R, G, B or A of an Image or Mask
+(empty is the first channel, R; for a Mask, its coverage), or a channel set's channel by name
+(empty is the set's first data channel). It is never a luminance mix of the colour channels. An
+unknown name on an Image is a compile failure that says so. With no depth connected the input
+passes through (outside Uniform).
+
+The stored value is read straight (colour divided by alpha; alpha read as is) and interpreted by
+`interpretation`: **Z** (the distance in scene units), **Inverse depth (1/Z)**, **Normalised (0-1)**
+(0 at `near`, 1 at `far`, linear) or **Mist (0-1)** (0 at `near`, 1 at `far` after the renderer's
+falloff, `mistFalloff` Linear, Quadratic or Inverse quadratic, which is undone first: `sqrt` of a
+quadratic mist, the square of an inverse-quadratic one). `invert` reads a normalised or mist map
+with white near. A pixel is **empty** (no surface) when its alpha is 0, its value is not finite,
+or (Z) it is not above 0 or is 1e9 or more, or (1/Z) it is not above 0; `background` says what an
+empty pixel is: infinitely far (the default), at the far distance, or unaffected (no blur, no fog).
+
+Integer files arrive as their normalised value, so an 8-bit depth has only 256 steps across its
+whole range: blur sizes and fog band visibly on a slow gradient. Use 16-bit or float depth; an 8-bit
+map is fine only for a short range or a coarse effect.
+
+A depth pass is data. The card warns when the depth comes from an Image or Video source read through
+a colour transform (sRGB, Linear, Automatic or an OCIO input space, followed through Reroutes and
+the channel nodes that keep values) and offers **Read as data**, which sets that source's colour
+space to Raw and clears its input colour space in one command. It also warns when the connected
+image looks like a colour picture: on a worker, at a small proxy of the display route, the share of
+covered pixels whose red, green and blue differ by more than 24 levels of 255 is measured
+(`ImagePreviewController::depthChannelSpread`), and above 5% the card says a beauty or normal pass
+seems connected. A grey depth pass spreads by none. Neither check touches the render.
+
+### Z Defocus
+
+| Control | Role | Default | Kind |
+| --- | --- | --- | --- |
+| Mode | `mode` | Depth | Depth (0), Physical lens (1), Size map (2), Uniform (3) |
+| Depth channel, Depth is, Near/Far distance, Near is white, Mist falloff, Empty depth | as above | first channel, Z, 0.1 / 100, off, Linear, Infinitely far | Constants and animatable distances |
+| Scene units | `units` | Metres | Metres, Centimetres, Millimetres, Feet, Inches (Physical) |
+| Focus from | `focusFrom` | Focus distance | Focus distance (0), Depth at the focus point (1) |
+| Focus distance | `focusDistance` | 10 | Animatable, scene units |
+| Focus point | `focusPoint` | (0, 0) | Animatable Vector 2, pixels from the frame's centre |
+| In-focus range | `depthOfField` | 0 | Animatable, scene units (Depth) |
+| Blur size | `size` | 16 px | Animatable `[0, 256]` (Depth, Size map, Uniform) |
+| Maximum blur | `maxSize` | 64 px | Animatable `[0, 256]` (Depth, Physical) |
+| Focal length, Sensor width, F-stop | `focalLength`, `sensorWidth`, `fStop` | 50 mm, 36 mm, 2.8 | Animatable (Physical) |
+| Blur | `blurRegion` | Near and far | Near and far, Far only, Near only |
+| Edge expand | `edgeExpand` | 1 px | Constant `[0, 4]` |
+| Bokeh shape | `shape` | Disk | Disk, Polygon (blades), Image |
+| Blades, Blade rotation, Blade curvature | `blades`, `rotation`, `roundness` | 6, 0 degrees, 0 | Constant `[3, 16]`, animatable |
+| Highlight boost, Highlight threshold | `highlightGain`, `highlightThreshold` | 0, 1.0 | Animatable |
+| Chromatic bokeh | `chromatic` | 0 | Animatable `[0, 1]` |
+| Quality | `quality` | Normal | Draft, Normal, High, Maximum: 5, 8, 12 or 16 rings |
+
+Every distance, size and lens value is animatable and drivable with its own socket (rack focus is
+an animated focus distance or focus point); the choices, blades and edge expand are constants.
+
+**The circle of confusion.** The depth map (`DepthMapKernel`, CircleOfConfusion) writes each
+pixel's signed radius `c` in evaluation pixels, negative in front of the focus (near) and positive
+behind it (far), clamped to the widest radius `R` (`maxSize`, or `size` for Size map and Uniform):
+
+- Depth: with focus `S` and half the in-focus range `h`, `c = size (d - (S + h)) / d` behind and
+  `-size ((S - h) - d) / d` in front, 0 within the range; infinitely far is `size`.
+- Physical: `c = K (d - S) / d`, `K = f^2 / (N (S_mm - f)) * W / (2 sensor)` (`S_mm` the focus in
+  millimetres by the scene units; `W` the frame width in pixels); infinitely far is `K`.
+- Size map: `c = size * v`, the picked channel clamped to 0-1 (and inverted when asked).
+- Uniform: no map; every pixel's radius is `size`.
+
+Focus from the focus point reads the mean distance of the surface pixels in the 5 x 5 area around
+the point (empty pixels skipped), so a pick is not thrown by one noisy or edge pixel. Near only and
+Far only clamp `c` to one sign. **Edge expand** takes the most negative `c` within `edgeExpand`
+pixels: a non-antialiased depth's foreground edge pixels (often holding background depth) blur with
+the foreground instead of leaving a sharp fringe. The map's alpha is `|c| / R`, which a Dilate of
+radius `min(R (1 + chromatic / 4), 256)` turns into the tile maximum. That Dilate carries each
+pixel's own colour (its Rgba policy: alpha dilated, red, green and blue the centre pixel's, zero in
+the grown halo), so one image holds both the signed `c` in red and the tile maximum in alpha.
+
+**The gather** (`DefocusKernel`). Each output pixel `p` with radius `c_p` gathers over a ring
+pattern sized by `R_p = max(|c_p|, tile R)`: `K` rings (the quality) at spacing
+`s = max(1, R_p (1 + chromatic / 4) / K)`, ring `k` holding `8k` samples (odd rings offset by half a
+step), each sample at the integer offset nearest its position. A sample `q` at distance `rho` with
+radius `c_q` contributes:
+
+- to the **foreground**, `phi = clamp(c_p - c_q + 0.5, 0, 1)` (`q` in front of `p`) times its disk's
+  coverage `clamp((|c_q| - rho) / s + 0.5, 0, 1)`, divided by the share of the pattern's area its
+  ring covers (a 1/8-step density table), so a foreground's spread energy is conserved;
+- to the **background**, `1 - phi` times the coverage of `min(|c_q|, |c_p|)`: a background sample
+  never reaches past the receiving pixel's own circle, so a sharp foreground keeps its edge (no
+  bleeding of the background into it, no halo around it).
+
+The output is `alpha F + (1 - alpha) B`, the means of the two layers combined by the foreground's
+coverage `alpha = min(sum of foreground coverage, 1)`, its alpha from the unweighted coverage. A
+Polygon shape scales each sample's distance by its direction's polygon radius (blades, rotation,
+curvature toward the circle), so the bokeh is that polygon. An Image shape weighs each sample by
+the kernel image's bilinear value at the sample's rotated position (the colour only, so a coloured
+kernel tints the bokeh). Highlight boost multiplies a sample's colour weight by
+`1 + gain clamp((L - threshold) / threshold, 0, 1)` (`L` its straight Rec. 709 luma), so bright
+points bloom into bokeh disks; chromatic bokeh scales the red channel's circle by `1 + chromatic / 4`
+and the blue's by `1 - chromatic / 5`. Outer rings read a box prefilter of the input (radius
+`(R / K - 1) / 2`, the ring spacing at the widest blur, blended in by the spacing) so wide blurs do
+not alias. Samples outside the map's window count as in focus. The output window is the input's
+grown by the widest reach.
+
+### Depth Fog
+
+| Control | Role | Default | Kind |
+| --- | --- | --- | --- |
+| Depth channel, Depth is, Near/Far distance, Near is white, Mist falloff, Empty depth | as above | first channel, Mist, 0 / 1, off, Linear, Infinitely far | as above |
+| Fog color | `color` | (0.75, 0.8, 0.85) | Animatable colour |
+| Fog amount | `amount` | 1 | Animatable `[0, 1]` |
+| Falloff | `falloff` | Linear | Linear, Quadratic, Inverse quadratic, Exponential, Exponential squared, Curve |
+| Fog start, Fog end | `start`, `end` | 0, 1 | Animatable distances |
+| Density | `density` | 1 | Animatable (exponential falloffs) |
+| Falloff curve | `curve` | linear | Curves master point list (Curve) |
+| Fog transparent areas | `fillEmpty` | off | Boolean |
+
+The fog factor (`DepthMapKernel`, Fog) is `amount F`, with `t = clamp((d - start) / (end - start))`
+and `F = t`, `t^2`, `sqrt(t)`, `1 - exp(-density z)`, `1 - exp(-(density z)^2)` (`z = max(d -
+start, 0)`) or the curve's 257-entry table at `t`; an empty pixel is fully fogged (infinitely far),
+at the far distance, or unfogged. The fog layer is the fog colour (a Colorize Fill) or the fog
+image, over the input's coverage (or, with Fog transparent areas, over the whole depth window), and
+the result is an Image Mix of the input toward it with the factor as its Mask.
+
+### Evaluation, GPU and cost
+
+Both depth stages and the gather are grade kinds of the shared colour grade machinery
+(`depth_effect_image_effect.cpp`): the host prepares one packed binary32 table (the operands, the
+ring pattern with its polygon radii and kernel positions, the density table, the fog curve), and
+where the effect is applied the CPU evaluator and the GPU scene builder append the geometry (the
+focus point's pixel, the windows, the evaluation scale). The CPU reference and the fixed resident
+GPU programs run the same binary32 operations over the same data (precise fused multiply-adds, the
+wrapper's correctly rounded division; `sqrt` and `exp` to the device's precision). On the GPU the
+gather reads its images (the colour, the tile maximum carrying the map, the prefilter and the
+kernel) from one atlas beside the output window; nothing is read back per operation. Every pass
+over the atlas costs the whole atlas, so it is assembled with one pass a slot: the colour padded to
+the atlas by one exact move, and each slot moved into place and blended over it in Normal mode (the
+regions are disjoint, so every pixel is one image's exact value). The prefilter is left out when
+the widest ring spacing is at most one pixel, where its mix is zero everywhere. The chains are
+built by the shared recipes (`depth_effect_recipes.cpp`) from existing operations (Dilate, Box
+blur, Colorize, Image Mix), so a changed lens value re-runs only the map and the gather. The radius
+is bounded by 256 pixels like every neighbourhood filter, the operations are charged to the pixel
+budget, cancellation is checked per row, and a region of interest gathers only what it needs.
+`DepthMapKernel` and `DefocusKernel` are Required in the GPU coverage contract with the
+`node.bloom.z-defocus` and `node.bloom.depth-fog` fixtures; the native harness holds both at the
+2e-6 colour, exact alpha gate with warm zero-dispatch reuse. The cost per frame against a Grade and
+a Gaussian blur is in [benchmarks](../development/benchmarks.md), "Depth effects".
+
+Defaults chosen here: a Z interpretation for Z Defocus (a renderer's Z pass) and Mist for Depth Fog
+(a mist pass is the common fog input); empty depth infinitely far (the sky is far and fogged);
+edge expand 1 pixel; Normal quality (8 rings); a 64-pixel maximum blur.
+
+The card (`depth_effect_widget.hpp`) shows the two depth checks, the near/far and fog start/end as
+range rows over the depth's own units, the focus point on a point pad with **Pick focus in
+Viewer**, the blade rotation on a dial and the fog curve on a curve graph; rows the current mode,
+interpretation, shape or falloff does not read are hidden. **Pick focus in Viewer** arms the
+Viewer's focus pick (`CompositionSession::requestFocusPick`): a click on the frame, mapped through
+the world transform of the layer that displays the node, sets the focus point and focuses from it in
+one command (a key at the playhead when the point is animated); Shift-click keeps picking for a
+rack focus; Escape cancels. While a Z Defocus that focuses from a point is selected, the Viewer
+draws its focus point and the 5 x 5 area it samples.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,
