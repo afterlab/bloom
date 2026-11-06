@@ -547,7 +547,7 @@ void testSearchKeyboardAndMenus() {
         const auto compositing = entries("nodeAddCategoryMenu.Compositing");
         expect(compositing.contains("Separate Channels") &&
                    compositing.contains("Combine Channels") && compositing.contains("Shuffle") &&
-                   compositing.contains("Drop Shadow"),
+                   compositing.contains("Drop Shadow") && compositing.contains("Lens Flare"),
                "Separate and Combine Channels sit beside the other channel nodes in Compositing");
         expect(entries("nodeAddCategoryMenu.Filters") ==
                    QStringList{"Box Blur", "Depth Fog", "Gaussian Blur", "Matte Blur",

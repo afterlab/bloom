@@ -10,6 +10,7 @@
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
+#include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -405,6 +406,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kColorizeNodeType)
         return QStringLiteral("fill tint tritone duotone gradient map ramp colorama black white "
                               "monochrome greyscale grayscale toner channel mixer");
+    // #507.
+    if (typeId == document::kLensFlareNodeType)
+        return QStringLiteral("lens flare glare sun light streak star ghost halo hoop iris ring "
+                              "anamorphic optical");
     // #505.
     if (typeId == document::kVignetteNodeType)
         return QStringLiteral("vignette lens falloff darken edges corners finishing exposure "

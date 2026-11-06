@@ -164,6 +164,9 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     if (const auto* depth = document::depthParameterSpec(schemaKey); depth != nullptr)
         return QCoreApplication::translate("PropertiesRow",
                                            std::string(depth->label).c_str());
+    // #507 Lens Flare: its table's own labels.
+    if (const auto* flare = document::lensFlareParameterSpec(schemaKey); flare != nullptr)
+        return QCoreApplication::translate("PropertiesRow", std::string(flare->label).c_str());
     return
         isEffectColorSpaceSchema(schemaKey)
             ? node_editor::displayTypeName(role)

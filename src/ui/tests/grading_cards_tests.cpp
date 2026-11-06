@@ -28,6 +28,7 @@
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
+#include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
@@ -42,6 +43,7 @@
 #include <bloom/ui/gradient_parameter_row.hpp>
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
+#include <bloom/ui/lens_flare_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -487,6 +489,133 @@ void colorizeCard() {
 // #505: the Vignette card in both modes paints inside its card with no label cut short and shows
 // the strength its mode reads; its pad draws the falloff, which follows the centre and the shape,
 // and dragging the centre moves it as one command; a slider drag is one command too.
+// #507: the Lens Flare card paints inside its card with no label cut short in every part of the
+// stack; the picker shows one part's rows and its sockets; the pad draws where the elements land and
+// dragging the light is one command; a preset is one command and leaves the light alone.
+void lensFlareCard() {
+    CardFixture fixture(document::kLensFlareNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::LensFlareCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Lens Flare draws its card widget");
+    if (card == nullptr)
+        return;
+    // A new card reads the node and writes nothing: every value keeps its default, however far the
+    // slider's soft minimum lies above zero, and the edit does not build a second card.
+    const auto defaultOf = [&](const std::string_view role) {
+        const auto id = ui::nodeRoleParameter(fixture.session, fixture.node, role);
+        const auto live = id ? fixture.session.liveValue(*id) : std::nullopt;
+        const auto* value = live ? std::get_if<double>(&*live) : nullptr;
+        return value ? *value : -1.0;
+    };
+    expect(defaultOf("flareSize") == 1.0 && defaultOf("sourceWhite") == 1.0 &&
+               defaultOf("cameraZoom") == 2000.0,
+           "a new Lens Flare card writes no value of its own");
+    int cards = 0;
+    for (auto* candidate : fixture.editor->graphScene()->items())
+        if (auto* other = dynamic_cast<ui::node_editor::NodeItem*>(candidate);
+            other != nullptr && other->cardWidget() != nullptr &&
+            qobject_cast<ui::LensFlareCardWidget*>(other->cardWidget()) != nullptr)
+            ++cards;
+    expect(cards == 1, "a new Lens Flare is one card");
+    const std::array<std::pair<document::LensFlareGroup, const char*>, 8> parts{{
+        {document::LensFlareGroup::Light, "lens-flare-light"},
+        {document::LensFlareGroup::Glow, "lens-flare-glow"},
+        {document::LensFlareGroup::Streaks, "lens-flare-streaks"},
+        {document::LensFlareGroup::Ghosts, "lens-flare-ghosts"},
+        {document::LensFlareGroup::Rings, "lens-flare-ring"},
+        {document::LensFlareGroup::Iris, "lens-flare-iris"},
+        {document::LensFlareGroup::Hoop, "lens-flare-hoop"},
+        {document::LensFlareGroup::Anamorphic, "lens-flare-anamorphic"},
+    }};
+    for (const auto& [group, name] : parts) {
+        card->setGroup(group);
+        QApplication::processEvents();
+        if (!paintsInsideCard(*fixture.item)) {
+            std::cerr << name << " paints outside its card\n";
+            ++failures;
+        }
+        if (!cardContentFits(*fixture.item, name))
+            ++failures;
+        capture(fixture, QString::fromLatin1(name));
+    }
+    card->setGroup(document::LensFlareGroup::Ghosts);
+    QApplication::processEvents();
+    expect(card->valueRow("ghostAmount")->isVisibleTo(card) &&
+               !card->valueRow("ringAmount")->isVisibleTo(card) &&
+               card->valueRow("intensity")->isVisibleTo(card) &&
+               card->socketY("ghostAmount").has_value() && !card->socketY("ringAmount").has_value() &&
+               card->socketY("intensity").has_value() && card->socketY("flareRotation").has_value() &&
+               card->showsRole("ghostCount") && card->showsRole("seed") &&
+               !card->showsRole("irisBlades") && card->showsRole("lightPosition") &&
+               card->socketY("lightColor").has_value() && !card->showsRole("lightColor") &&
+               !card->socketY("anamorphicColor").has_value() &&
+               !card->showsRole("anamorphicColor") && !card->showsRole("ghostAmount"),
+           "the picker shows one part's values, its counts and their sockets");
+    // The 3D values and the occlusion values show only when the state reads them.
+    card->setGroup(document::LensFlareGroup::Light);
+    QApplication::processEvents();
+    expect(!card->valueRow("lightDistance")->isVisibleTo(card) &&
+               !card->valueRow("occlusionAmount")->isVisibleTo(card) &&
+               card->valueRow("sampleRadius")->isVisibleTo(card) && card->showsRole("lightMode"),
+           "a new flare shows neither the 3D values nor the occlusion values");
+    const auto mode = ui::nodeRoleParameter(fixture.session, fixture.node, "lightMode");
+    expect(mode && fixture.session.setParameterValue(*mode, document::kLensFlareLight3D,
+                                                     QStringLiteral("Set Mode")),
+           "the light mode is set");
+    QApplication::processEvents();
+    expect(card->valueRow("lightDistance")->isVisibleTo(card) &&
+               card->valueRow("cameraZoom")->isVisibleTo(card),
+           "the 3D mode shows its distance and zoom");
+    expect(mode && fixture.session.setParameterValue(*mode, document::kLensFlareLight2D,
+                                                     QStringLiteral("Set Mode")),
+           "the light mode is restored");
+    QApplication::processEvents();
+
+    // The pad draws the flare: brightest at the light. Dragging the light is one command.
+    const auto brightness = [](const QImage& image, const double x, const double y) {
+        return qGray(image.pixel(static_cast<int>(image.width() * x),
+                                 static_cast<int>(image.height() * y)));
+    };
+    const auto before = card->preview(128);
+    expect(brightness(before, 0.5 - 360.0 / 1920.0, 0.5 - 200.0 / 1080.0) >
+               brightness(before, 0.97, 0.97) + 40,
+           "the pad draws the flare at its light");
+    auto& pad = *card->padRow()->pad();
+    const auto commands = fixture.stack.size();
+    const QPointF from = pad.screenPoint(pad.value(0));
+    const QPointF to = from + QPointF(pad.frameRect().width() * 0.25, 0.0);
+    mouse(pad, QEvent::MouseButtonPress, from);
+    mouse(pad, QEvent::MouseMove, to);
+    mouse(pad, QEvent::MouseButtonRelease, to);
+    QApplication::processEvents();
+    const auto position = ui::nodeRoleParameter(fixture.session, fixture.node, "lightPosition");
+    const auto live = position ? fixture.session.liveValue(*position) : std::nullopt;
+    const auto* moved = live ? std::get_if<document::Vec2d>(&*live) : nullptr;
+    expect(fixture.stack.size() == commands + 1 && moved && moved->x > -360.0,
+           "dragging the light moves it as one command");
+    expect(card->preview(128) != before, "the pad redraws with the light");
+
+    // A preset is one command, sets the stack and keeps the light where it is.
+    const auto movedValue = moved ? *moved : document::Vec2d{};
+    const auto presetCommands = fixture.stack.size();
+    const auto& presets = document::lensFlarePresets();
+    std::size_t anamorphic = presets.size();
+    for (std::size_t index = 0; index < presets.size(); ++index)
+        if (presets[index].name == "Anamorphic")
+            anamorphic = index;
+    expect(anamorphic < presets.size() && card->applyPreset(anamorphic),
+           "the Anamorphic preset applies");
+    QApplication::processEvents();
+    const auto amount = ui::nodeRoleParameter(fixture.session, fixture.node, "anamorphicAmount");
+    const auto after = position ? fixture.session.liveValue(*position) : std::nullopt;
+    const auto* kept = after ? std::get_if<document::Vec2d>(&*after) : nullptr;
+    expect(fixture.stack.size() == presetCommands + 1 && amount &&
+               ui::liveScalar(fixture.session, *amount).value_or(0.0) > 1.0 && kept &&
+               *kept == movedValue,
+           "a preset is one command and keeps the light");
+    capture(fixture, QStringLiteral("lens-flare-preset"));
+}
+
 void vignetteCard() {
     CardFixture fixture(document::kVignetteNodeType);
     auto* card = fixture.item ? qobject_cast<ui::VignetteCardWidget*>(fixture.item->cardWidget())
@@ -1320,6 +1449,7 @@ int main(int argc, char** argv) {
     colorizeCard();
     colorizeGradientMap();
     vignetteCard();
+    lensFlareCard();
     depthEffectCards();
     nodeControlCards();
     linkedGradientStop();
