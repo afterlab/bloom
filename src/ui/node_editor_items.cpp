@@ -413,8 +413,7 @@ QString nodeSearchKeywords(const std::string_view typeId) {
                               "anamorphic optical");
     // #486.
     if (typeId == document::kFilmGrainNodeType)
-        return QStringLiteral("film grain noise add finishing texture stock analogue analog "
-                              "grain regrain");
+        return QStringLiteral("film grain noise add finishing stock analogue analog regrain");
     // #505.
     if (typeId == document::kVignetteNodeType)
         return QStringLiteral("vignette lens falloff darken edges corners finishing exposure "
