@@ -40,6 +40,7 @@ provide research or rationale, but they are not binding until adopted here.
    [`architecture/dependency-intake.md`](architecture/dependency-intake.md),
    [`architecture/scripting-and-addons.md`](architecture/scripting-and-addons.md),
    [`architecture/gpu-backend.md`](architecture/gpu-backend.md),
+   [`architecture/motion-blur.md`](architecture/motion-blur.md),
    [`architecture/platform-support.md`](architecture/platform-support.md),
    [`architecture/ui-feedback.md`](architecture/ui-feedback.md), and
    [`architecture/profiler-feed.md`](architecture/profiler-feed.md) — execution and platform
@@ -93,6 +94,10 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   a tracker or in 3D, and following the picture with source brightness and an occlusion matte.
 - [Film Grain](user-guide/film-grain.md) — seeded, repeatable grain: size, each channel's amount, the
   response to brightness, and holding or redrawing it over time.
+- [Motion blur](user-guide/motion-blur.md) — which motion blur to use, the shared shutter, sub-frame
+  Motion Blur, Transform 2D's shutter, Vector Motion Blur and its renderer conventions, Optical Flow,
+  Optical Flow Motion Blur with mattes, Echo and Posterize Time, and the Viewer handles of
+  Directional, Spin and Zoom Blur.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
   channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard

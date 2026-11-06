@@ -417,6 +417,8 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `depth-effects-2k` | 1920×1080 | 24 | Depth effects from both depth encodings (#483): a PNG16 plate through Depth Fog (exponential) and a physical-lens Z Defocus (85 mm, f/2, focus racking 8 to 24 m) from its derived 16-bit PNG mist pass read as data, under the beauty pass (multilayer EXR) through Depth Fog and Z Defocus (polygon bokeh, highlight boost) from its own float `ViewLayer.Depth.Z` channel; fog before defocus in both |
 | `lens-flare-2k` | 1920×1080 | 24 | A PNG16 plate under a Lens Flare (#507) with every element on at its largest counts (8 streak lines, 16 ghosts, 12 irises of 12 blades, the anamorphic streak), its intensity keyed so every frame is new and its brightness read from the plate through the probes' atlas |
 | `film-grain-2k` | 1920×1080 | 24 | A PNG16 plate under strong Film Grain (#486) of 1.5 pixels, 5% with more in the blue, drawn anew for every frame with no key, so each frame is new |
+| `motion-blur-2k` | 1920×1080 | 24 | Moving plates through Transform 2D's shutter and Directional Blur at High, Motion Blur at Draft and Echo, under a CG layer blurred by Vector Motion Blur (#484) from a per-pixel vector image (the bench media's mist pass stands in: it has no vector pass) |
+| `motion-blur-flow-2k` | 1920×1080 | 24 | A PNG16 plate through Optical Flow Motion Blur with a matte (#484): two layers and eight solves, at Draft |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -450,7 +452,18 @@ frames on the GPU with no CPU fallback at 0.28 to 0.31 s a frame, within its exp
 average 16) the same build filled at 22 to 30 fps and one run missed `export-rate` at 0.73 s a frame.
 It lists one check, the fill's GPU busy (#386): the 24 frames fill in 0.35 s, too short to judge (13
 to 15%); a run with `--frames 240` filled at 88 fps with the GPU 48% busy (peak 85%), since the flare
-is one pass a frame and the rest of the frame is host decode.
+is one pass a frame and the rest of the frame is host decode. `motion-blur-2k` (2026-11-06, one run on an empty
+driver cache) shows its first frame in 3.7 s, fills at 18.4 fps, plays cold at 22.4 fps and cached at
+24.1 fps, scrubs in 0.41 s, and exports its 4 frames on the GPU with no CPU fallback at 0.47 s a frame,
+within its export CPU parity gate (largest difference 1.19e-07, alpha exact). It lists one check, the
+fill's GPU busy (35%, #386): the 24 frames fill in 1.3 s, a few samples, and each decodes three
+sequences on the host. `motion-blur-flow-2k` (the same run) shows its first frame in 7.3 s, fills at
+4.6 fps with the GPU 55% busy, plays cold at 12.2 fps, scrubs in 0.66 s, and exports on the GPU with no
+CPU fallback at 1.18 s a frame. It lists one check, its export CPU parity: a flow solve amplifies the
+upstream's within-tolerance colour differences, so its frame differs by at most 0.0093
+([Motion blur, "Parity"](../architecture/motion-blur.md#parity-determinism-and-identity)). Both exports
+take far longer a frame than their fills; a final render does not reuse native storage
+([Motion blur](#motion-blur-484)), which is part of that, and the rest is not broken down.
 
 `film-grain-2k` (2026-11-06, two runs) shows its first frame in 1.6 to 1.9 s, fills at 83 to 116 fps
 and exports its 4 frames on the GPU with no CPU fallback at 0.24 to 0.25 s a frame, within its export
@@ -748,6 +761,136 @@ ms with the program's build, and warm runs under 0.01 ms with no dispatch. Each 
 Frame grain is new data on the same program, a frame's cold cost without a build. The grain is one pass
 that always hashes nine cells, so its size does not move its cost; the noise itself adds about 0.1 ms
 at 2160p to the pass on this GPU. `NODE_COST_BUDGETS` holds each case about 25% over this run.
+### Motion blur (#484)
+
+`bloom_runtime_gpu_motion_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_motion_node_bench_smoke`). Each case is a moving texture through a motion-blur node,
+compared with a Grade and its closest existing node. Unlike the other node benches, the device runs as
+the preview route does: rooted, taking each frame's native storage back from the frame before (#477). A
+case first runs an unmeasured frame on its own parked storage, as a preview does from its second frame,
+and a frame keeps parked storage within 12 GiB, because nothing in the bench refuses room as production's
+sampled capacity does. Measured on 2026-11-06 (RTX 4090, 5 reruns, ms/frame; "Closest" names the
+comparable the last ratio uses):
+
+| Case | 1080p | vs Grade | vs closest | 2160p | vs Grade | vs closest | Cold 1080p / 2160p | Closest |
+|---|---|---|---|---|---|---|---|---|
+| Grade (reference) | 2.11 |  |  | 6.33 |  |  | 4 / 7 |  |
+| Gaussian Blur 8 | 3.17 | 1.51x |  | 8.43 | 1.33x |  | 7 / 9 |  |
+| Gaussian Blur 32 | 3.17 | 1.51x |  | 10.54 | 1.66x |  | 6 / 12 |  |
+| Gaussian Blur 128 | 7.36 | 3.50x |  | 25.26 | 3.99x |  | 9 / 26 |  |
+| Transform 2D | 2.11 | 1.00x |  | 5.29 | 0.83x |  | 3 / 6 |  |
+| `directional-8` | 3.16 | 1.50x | 1.00x | 8.43 | 1.33x | 1.00x | 7 / 11 | `gaussian-blur-8` |
+| `directional-32` | 4.24 | 2.02x | 1.34x | 12.66 | 2.00x | 1.20x | 5 / 15 | `gaussian-blur-32` |
+| `directional-128` | 5.31 | 2.52x | 0.72x | 13.72 | 2.17x | 0.54x | 6 / 15 | `gaussian-blur-128` |
+| `directional-32-draft` | 4.24 | 2.02x | 1.34x | 8.46 | 1.33x | 0.80x | 5 / 10 | `gaussian-blur-32` |
+| `directional-32-standard` | 4.25 | 2.02x | 1.34x | 9.52 | 1.50x | 0.90x | 5 / 11 | `gaussian-blur-32` |
+| `directional-32-high` | 5.30 | 2.52x | 1.67x | 12.67 | 2.00x | 1.20x | 6 / 15 | `gaussian-blur-32` |
+| `spin-10` | 5.31 | 2.52x | 1.67x | 14.76 | 2.33x | 1.40x | 6 / 16 | `gaussian-blur-32` |
+| `spin-45` | 7.40 | 3.52x | 2.33x | 16.88 | 2.67x | 1.60x | 7 / 18 | `gaussian-blur-32` |
+| `zoom-10` | 5.30 | 2.52x | 1.67x | 13.76 | 2.17x | 1.31x | 6 / 15 | `gaussian-blur-32` |
+| `zoom-50` | 6.35 | 3.02x | 2.00x | 15.82 | 2.50x | 1.50x | 6 / 17 | `gaussian-blur-32` |
+| `transform-blur-draft` | 3.20 | 1.52x | 1.51x | 8.47 | 1.34x | 1.60x | 4 / 10 | `transform-2d` |
+| `transform-blur-standard` | 3.19 | 1.51x | 1.51x | 9.52 | 1.50x | 1.80x | 4 / 11 | `transform-2d` |
+| `transform-blur-high` | 2.42 | 1.15x | 1.15x | 12.66 | 2.00x | 2.39x | 5 / 15 | `transform-2d` |
+| `transform-blur-final` | 1.64 | 0.78x | 0.78x | 8.47 | 1.34x | 1.60x | 4 / 11 | `transform-2d` |
+| `motion-blur-draft` | 3.21 | 1.52x | 1.00x | 25.35 | 4.00x | 2.99x | 12 / 29 | `transform-blur-draft` |
+| `motion-blur-standard` | 11.80 | 5.61x | 3.70x | 64.71 | 10x | 6.80x | 26 / 106 | `transform-blur-standard` |
+| `motion-blur-high` | 46.30 | 22x | 19x | 170 | 27x | 13x | 80 / 251 | `transform-blur-high` |
+| `motion-blur-final` | 45.88 | 22x | 28x | 171 | 27x | 20x | 114 / 300 | `transform-blur-final` |
+| `echo-4` | 8.75 | 4.16x | 4.14x | 24.29 | 3.83x | 4.59x | 13 / 29 | `transform-2d` |
+| `echo-16` | 12.25 | 5.82x | 5.81x | 41.07 | 6.48x | 7.76x | 50 / 116 | `transform-2d` |
+| `frame-blend-4` | 11.63 | 5.53x | 5.51x | 25.35 | 4.00x | 4.79x | 13 / 29 | `transform-2d` |
+| `vector-gather-8` | 8.52 | 4.05x | 2.70x | 19.01 | 3.00x | 2.25x | 20 / 24 | `directional-8` |
+| `vector-gather-32` | 9.51 | 4.52x | 2.24x | 19.01 | 3.00x | 1.50x | 11 / 23 | `directional-32` |
+| `vector-gather-128` | 3.65 | 1.74x | 0.69x | 19.00 | 3.00x | 1.39x | 11 / 23 | `directional-128` |
+| `vector-gather-limit-32` | 3.38 | 1.61x | 0.80x | 19.00 | 3.00x | 1.50x | 11 / 22 | `directional-32` |
+| `vector-gather-limit-128` | 3.41 | 1.62x | 0.80x | 19.00 | 3.00x | 1.50x | 11 / 21 | `directional-32` |
+| `vector-gather-limit-512` | 3.58 | 1.70x | 0.84x | 19.10 | 3.02x | 1.51x | 11 / 22 | `directional-32` |
+| `vector-splat-8` | 49.98 | 24x | 5.87x | 195 | 31x | 10x | 63 / 207 | `vector-gather-8` |
+| `vector-splat-32` | 49.80 | 24x | 5.24x | 195 | 31x | 10x | 57 / 206 | `vector-gather-32` |
+| `vector-splat-128` | 49.69 | 24x | 14x | 194 | 31x | 10x | 57 / 206 | `vector-gather-128` |
+| `vector-layered-32` | 105 | 50x | 2.12x | 414 | 65x | 2.12x | 123 / 437 | `vector-splat-32` |
+| `optical-flow-dis-draft` | 12.33 | 5.86x | 1.68x | 29.80 | 4.71x | 1.18x | 58 / 76 | `gaussian-blur-128` |
+| `optical-flow-dis-standard` | 20.97 | 9.96x | 2.85x | 57.76 | 9.12x | 2.29x | 49 / 109 | `gaussian-blur-128` |
+| `optical-flow-dis-final` | 46.94 | 22x | 6.38x | 159 | 25x | 6.31x | 83 / 216 | `gaussian-blur-128` |
+| `optical-flow-tvl1-draft` | 10.45 | 4.96x | 1.42x | 31.68 | 5.00x | 1.25x | 47 / 115 | `gaussian-blur-128` |
+| `optical-flow-tvl1-standard` | 23.31 | 11x | 3.17x | 73.55 | 12x | 2.91x | 66 / 191 | `gaussian-blur-128` |
+| `optical-flow-tvl1-high` | 53.09 | 25x | 7.21x | 156 | 25x | 6.18x | 100 / 291 | `gaussian-blur-128` |
+| `optical-flow-tvl1-final` | 169 | 80x | 23x | 607 | 96x | 24x | 229 / 751 | `gaussian-blur-128` |
+| `flow-blur-draft` | 71.74 | 34x | 1.44x | 334 | 53x | 1.71x | 117 / 320 | `vector-splat-32` |
+| `flow-blur-standard` | 149 | 71x | 2.99x | 752 | 119x | 3.86x | 230 / 734 | `vector-splat-32` |
+| `flow-blur-high` | 394 | 187x | 7.92x | 1538 | 243x | 7.89x | 490 / 1577 | `vector-splat-32` |
+| `flow-blur-matte-standard` | 321 | 152x | 3.04x | 1603 | 253x | 3.87x | 428 / 1598 | `vector-layered-32` |
+
+Warm runs took under 0.01 ms with no dispatch. Times step by about 1 ms at the bottom of the table (Grade
+and Lens Flare read the same steps), so small differences there do not order the cases.
+
+The budgets in `NODE_COST_BUDGETS` hold each case about 25% over this run. The relaxed ones are for what
+those modes compute, which the breakdown below separates from how they wait:
+
+- **Directional, Spin, Zoom, Transform 2D's shutter.** One pass of up to 64 taps: 0.8 to 3.5 times a Grade
+  and 0.5 to 2.4 times its closest node. These stay near the default budget.
+- **Motion Blur, Echo, Frame Blend.** The upstream once per sample and an accumulator atlas per sample,
+  linear in samples: 64 samples at High are 22 to 27 Grades. The card states the count.
+- **Vector gather.** Tiles, NeighborMax and 16 samples, constant in blur length up to 512 px, about 3 Grades
+  at 2160p. Length 8 reads dearer at 1080p (6.3 ms against 3.5, read alone), with its smaller tiles.
+- **Vector splat.** One soft splat a sample done as a gather, because the portable pipeline has no atomics,
+  24 to 31 Grades and 5 to 14 gathers. The largest ratio is against a gather that happens to read low.
+- **Optical Flow.** DIS at Draft to TV-L1 at Final is 5 to 96 Grades, 1.2 to 24 of the widest Gaussian.
+  Nothing existing solves anything, so that yardstick says only how heavy a solve is.
+- **Optical Flow Motion Blur.** Four solves, a consistency check and a splat per layer: 34 to 253 Grades.
+
+No case is a known failure. The other benches stayed within their budgets on the same run.
+
+Where the heavy frames go, with `breakdown` (one submission per step, so a little above the batched frame;
+a step's submit is allocation, recording and the submit call, its fence is the device and the wait; both sum
+the eight largest step kinds). GPU busy is `nvidia-smi` sampled over that case's whole process, which includes
+its preparation and compile:
+
+| Case | Frame | Host submit | Fence | GPU busy | Largest steps (fence ms) |
+|---|---|---|---|---|---|
+| `optical-flow-tvl1-standard` 1080p | 24 | 3.7 | 23 | 30% (mostly preparation) | tv-iterate 15 |
+| `optical-flow-tvl1-final` 2160p | 647 | 9 | 634 | 87% | tv-iterate 595 |
+| `optical-flow-dis-final` 2160p | 157 | 1 | 150 | 59% (mostly preparation) | dis-search 97, dis-iterate 23 |
+| `flow-blur-standard` 1080p | 156 | 17 | 137 | 62% | tv-iterate 55, splat 40 |
+| `flow-blur-standard` 2160p | 773 | 27 | 716 | 84% | tv-iterate 230, move 173, splat 156 |
+| `flow-blur-high` 2160p | 1589 | 46 | 1506 | 92% | splat 614, tv-iterate 557, move 173 |
+| `flow-blur-matte-standard` 2160p | 1602 | 71 | 1583 | 85% | tv-iterate 509, move 354, splat 329, blend 254 |
+| `vector-splat-32` 2160p | 197 | 0.4 | 197 | 81% | splat 191 |
+| `vector-layered-32` 2160p | 416 | 1 | 431 | 84% | splat 409 |
+| `motion-blur-high` 2160p | 167 | 9 | 164 | 75% | move 47, cut 41, blend 38, accumulate 36 |
+
+So on the preview route these modes' time is the device computing: host submit is 0.2 to 15% of a frame,
+and the rest is fences over passes that write 3 to 300 GB of atlases a frame. Moves and blends that only lay
+a solver's data out take a real share of that (38% of `flow-blur-matte-standard`), so the atlas layout is the
+next place to look. `breakdownCpuMs` follows the frame because the bench's own poll loop spins.
+
+**The final-render route does not reuse native storage.** With `--final-route` every pass allocates from the
+driver, about 3 ms per 265 MB and 7 ms per 664 MB, and that is submit time on the host:
+
+| Case | 1080p preview | 1080p final | 2160p preview | 2160p final |
+|---|---|---|---|---|
+| Grade | 2.11 | 2.80 | 6.33 | 6.68 |
+| `motion-blur-standard` | 11.8 | 42.5 | 64.7 | 151 |
+| `motion-blur-high` | 46.3 | 170 | 170 | 1266 |
+| `vector-splat-32` | 49.8 | 58.7 | 195 | 240 |
+| `optical-flow-dis-final` | 46.9 | 96.1 | 159 | 270 |
+| `optical-flow-tvl1-standard` | 23.3 | 217 | 73.5 | 403 |
+| `optical-flow-tvl1-final` | 169 | 537 | 607 | 2504 |
+| `flow-blur-standard` | 149 | 774 | 752 | 2199 |
+| `flow-blur-high` | 394 | 1097 | 1538 | 3741 |
+| `flow-blur-matte-standard` | 321 | 1247 | 1603 | 4747 |
+
+Budgets hold the preview route. Two more facts come from these runs. A flow blur at 2160p with 4.5 GB live
+reached about 24 GB of device memory with parked storage unlimited, since each atlas shape keeps as many
+images as a batch held; images then landed in host memory, the matte's frame took 10 to 13 s and a Grade on
+the same device read up to 200 ms. Production's sampled capacity should free parked storage first, but the
+preview route was not measured at that edge. And a case right after a heavy one reads high: Echo at 4 echoes
+reads 4.5 ms in a short run and 9.6 after `motion-blur-high`, the cause not established, so the 1080p table's
+Echo, Frame Blend and gather rows at Length 8 and 32 read up to 6 ms over their cost.
+
+The first use of a kernel pass on an empty driver cache compiles its program: 0.18 s (path) to 2.6 s (DIS).
+The cold column leaves that out, and the scenarios' first frames include it.
 
 ## Platform notes
 

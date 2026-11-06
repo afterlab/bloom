@@ -1074,6 +1074,11 @@ centre that re-dispatches. The grading cards test holds the card in both modes a
 card with no label cut short, the falloff drawn on the pad and following the centre, and the centre
 drag and a slider drag as one command each.
 
+## Motion blur
+
+Motion Blur, Vector Motion Blur, Optical Flow, Optical Flow Motion Blur, Echo, and Directional, Spin
+and Zoom Blur are one temporal-sampling engine, specified in [Motion blur](motion-blur.md).
+
 ## Depth effects
 
 `bloom.z-defocus` (Z Defocus) and `bloom.depth-fog` (Depth Fog), schema 1 (#483), are the two

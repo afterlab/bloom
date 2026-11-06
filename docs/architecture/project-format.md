@@ -978,6 +978,16 @@ save writes schema 2.
 - A schema 1 node missing any point binding is not migrated and fails as an unsupported node
   version.
 
+#### Transform 2D Motion Blur
+
+Opening a project (#484) binds every optional `bloom.transform-2d` motion-blur parameter a node lacks:
+`motionBlur`, the shutter's `shutterAngle`, `shutterOffset`, `shutterPhase`, `shutterCurve`,
+`shutterShape`, `quality`, `minSamples`, `maxSamples` and `jitter`.
+`migrateLegacyTransformMotionBlur` rewrites the decoded envelope as the Glow migration below does, on
+the open path only. The node stays at schema 1 and the document schema version is unchanged. `motionBlur`
+defaults to off, and the compiler already lowered an unbound role with that default, so the plan and
+every pixel are the same. [Motion blur](motion-blur.md) specifies the nodes.
+
 #### Glow Controls
 
 Opening a project (#534) binds every optional `bloom.glow` parameter a node lacks: the #506 mode and
