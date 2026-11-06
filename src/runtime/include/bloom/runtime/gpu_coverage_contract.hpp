@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <initializer_list>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -152,6 +153,20 @@ BLOOM_GPU_REQUIRED_EFFECT(LensFlareKernel,
 BLOOM_GPU_REQUIRED_EFFECT(FilmGrainKernel,
                           "Film Grain: seeded per-channel grain with a luma response, a size in "
                           "full-resolution pixels and a frame's own pattern (#486)");
+BLOOM_GPU_REQUIRED_EFFECT(TimeSampleKernel,
+                          "time sample: its input evaluated on a sub-frame or neighbour-frame "
+                          "Offset clock, posterized or holding footage (#484)");
+BLOOM_GPU_REQUIRED_EFFECT(TemporalAccumulateKernel,
+                          "time-sample accumulator: weighted add, maximum, minimum, screen, over "
+                          "and under of premultiplied HDR samples (#484)");
+BLOOM_GPU_REQUIRED_EFFECT(MotionPathBlurKernel,
+                          "shutter path sampler: Directional, Spin, Zoom and Transform 2D motion "
+                          "blur with shutter curves and jitter (#484)");
+BLOOM_GPU_REQUIRED_EFFECT(VectorBlurKernel,
+                          "motion-vector stages: reconstruction gather, layered soft splat, "
+                          "outside-in and temporal fill, forward-backward consistency (#484)");
+BLOOM_GPU_REQUIRED_EFFECT(OpticalFlowKernel,
+                          "dense optical flow (DIS, TV-L1) and cut detection (#484)");
 
 #undef BLOOM_GPU_REQUIRED_OPERATION
 #undef BLOOM_GPU_REQUIRED_EFFECT
@@ -336,6 +351,30 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{
         "feature.matte.track_node", "a track matte read from a node Mask through the Merge",
         GpuCoverageDisposition::Required, "src/runtime matte workflow production scene preparation"});
+    // #484 Motion blur: every axis of the one temporal-sampling engine runs the resident motion
+    // program (ColorGradeKind::Motion) over its pass plan, never a CPU pass.
+    for (const auto& [id, label] : std::initializer_list<std::pair<const char*, const char*>>{
+             {"feature.motion.time.sample", "an upstream graph evaluated on a time-sample clock"},
+             {"feature.motion.time.posterize", "Posterize Time on a time-sample clock"},
+             {"feature.motion.time.hold", "footage held at the frame's time under sub-frames"},
+             {"feature.motion.accumulate.operators", "accumulator operators beyond Add"},
+             {"feature.motion.shutter.curve", "a non-box shutter curve's sample weights"},
+             {"feature.motion.shutter.jitter", "jittered shutter samples"},
+             {"feature.motion.path.directional", "Directional path sampling"},
+             {"feature.motion.path.spin", "Spin path sampling"},
+             {"feature.motion.path.zoom", "Zoom path sampling"},
+             {"feature.motion.path.transform", "Transform 2D shutter sampling"},
+             {"feature.motion.vector.gather", "motion-vector reconstruction gather"},
+             {"feature.motion.vector.splat", "layered soft z-ordered splat with neighbour frames"},
+             {"feature.motion.vector.fill", "outside-in hole fill (jump flooding)"},
+             {"feature.motion.vector.temporal_fill", "temporal background fill"},
+             {"feature.motion.vector.consistency", "forward-backward consistency"},
+             {"feature.motion.flow.dis", "DIS optical flow"},
+             {"feature.motion.flow.tvl1", "TV-L1 optical flow"},
+             {"feature.motion.flow.cut", "cut detection diagnostic"}})
+        out.push_back(GpuFeatureCoverageEntry{id, label, GpuCoverageDisposition::Required,
+                                              "src/runtime motion blur production scene "
+                                              "preparation"});
     // #480 Nearest resampling is a pixel semantic of AffineBilinearV1 (its sampling word), never a
     // CPU resample: Resize, Fit and Transform 2D Nearest each reach the resident affine command.
     out.push_back(GpuFeatureCoverageEntry{

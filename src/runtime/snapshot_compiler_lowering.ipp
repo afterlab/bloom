@@ -688,6 +688,18 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, *lowered);
             continue;
         }
+        // #484 the motion-blur nodes: the temporal-sampling engine's kernels, then the effect
+        // mask (Optical Flow has none).
+        if (document::isMotionBlurNodeType(node->typeId)) {
+            const auto lowered = lowerMotionNode(*node, operations, indices);
+            if (!lowered)
+                return {};
+            const auto masked = applyEffectMask(*node, *lowered, indices);
+            if (!masked)
+                return {};
+            indices.emplace(nodeId, *masked);
+            continue;
+        }
         // #483 Z Defocus and Depth Fog: a depth map and its gather or fog mix, then the effect
         // mask.
         if (document::isDepthEffectNodeType(node->typeId)) {
@@ -1904,12 +1916,15 @@ lowerImageEffect(const document::NodeRecord& node,
         const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
         if (translate && pivot && scale && rotation && extent && *extent >= 0 && *extent <= 2 &&
             filter && (*filter == runtime::kResampleFilterBilinear ||
-                       *filter == runtime::kResampleFilterNearest))
-            return runtime::CompiledImageEffect{
-                node.id, *input,
-                runtime::Transform2DKernel{*translate, *pivot, *scale, *rotation,
-                                           static_cast<runtime::Transform2DExtent>(*extent),
-                                           *filter}};
+                       *filter == runtime::kResampleFilterNearest)) {
+            runtime::Transform2DKernel transform{*translate, *pivot, *scale, *rotation,
+                                                 static_cast<runtime::Transform2DExtent>(*extent),
+                                                 *filter};
+            // #484: with motion blur on, the transform resampled at each sub-frame.
+            if (auto blurred = transformMotionBlurKernel(node, transform))
+                return runtime::CompiledImageEffect{node.id, *input, std::move(*blurred)};
+            return runtime::CompiledImageEffect{node.id, *input, std::move(transform)};
+        }
         addTopologyFailure(node.id, "Transform 2D parameters could not be lowered.");
         return std::nullopt;
     }

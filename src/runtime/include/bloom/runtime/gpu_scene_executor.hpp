@@ -53,6 +53,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace bloom::runtime {
 
@@ -225,6 +226,16 @@ struct GpuSceneExecutorProgress final {
                            const GpuSceneExecutorProgress&) = default;
 };
 
+// One completed step, CPU steady-clock (as the counters' submit and fence stages). `submit` holds the
+// host allocation, recording and queue submit; `fenceObservation` the device and queue and the owner's
+// polling delay.
+struct GpuSceneExecutorStepTiming final {
+    GpuSceneCommandIndex command = kInvalidGpuSceneCommand;
+    std::uint64_t submitNanoseconds = 0;
+    std::uint64_t fenceObservationNanoseconds = 0;
+    std::uint64_t outputBytes = 0;
+};
+
 struct GpuSceneExecutorBudgets final {
     // Per-operation native image ceiling handed to the owned pipelines. This is a configured UPPER
     // BOUND, not an allocation: it is capacity-sized so a large valid source is admitted, and each
@@ -267,6 +278,10 @@ struct GpuSceneExecutorBudgets final {
     // Bounded two-to-eight kernel native command batches; serial native fallback preserves
     // coverage and live-memory bounds for ineligible or pre-submit-refused plans.
     bool enableNativeBatches = true;
+    // Records one GpuSceneExecutorStepTiming per step (the benches' cost breakdown). Off in
+    // production; a batch reports its fence on the step that completes it, so a breakdown runs with
+    // batches off.
+    bool collectStepTimings = false;
     // The output bytes one batch may record (#386). A batch keeps every output until its fence
     // retires, where serial steps release each intermediate after its last reader, so an unbounded
     // batch raises a frame's device peak and fewer frames then fit in flight: a 2160p three-layer
@@ -309,6 +324,8 @@ class GpuSceneExecutor final {
     [[nodiscard]] const GpuSceneExecutorDiagnostic& diagnostic() const noexcept;
     [[nodiscard]] bool isBoundTo(const render::GpuDevice& device) const noexcept;
     [[nodiscard]] GpuSceneExecutorCounters counters() const noexcept;
+    // The steps of the latest job, when budgets.collectStepTimings is on.
+    [[nodiscard]] std::vector<GpuSceneExecutorStepTiming> stepTimings() const;
     [[nodiscard]] GpuSceneExecutorProgress progress() const noexcept;
     // Nonblocking optional graph diagnostic. Available may follow image publication; callers
     // never wait for it. A fully cached graph submits no markers and reports NotRequested.

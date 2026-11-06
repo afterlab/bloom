@@ -4,6 +4,8 @@
 #include "channel_static.hpp"
 #include "compositing_recipes.hpp"
 #include "depth_effect_recipes.hpp"
+#include "motion_blur_recipes.hpp"
+#include "motion_shutter.hpp"
 #include "plan_time_scopes.hpp"
 #include "snapshot_compiler_support.hpp"
 #include <bloom/runtime/layer_time_projection.hpp>
@@ -15,6 +17,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/core/field_program.hpp>
 #include <bloom/document/channel_nodes.hpp>
@@ -1104,6 +1107,7 @@ class CompilePass final {
 #include "snapshot_compiler_fields.ipp"
 #include "snapshot_compiler_recipes.ipp"
 #include "snapshot_compiler_depth.ipp"
+#include "snapshot_compiler_motion.ipp"
 #include "snapshot_compiler_value_graph.ipp"
 #include "snapshot_compiler_mattes.ipp"
 

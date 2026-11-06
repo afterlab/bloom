@@ -486,6 +486,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
     nativeStart = std::chrono::steady_clock::now();
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::nanoseconds>(nativeStart - submitStarted).count();
+    stepSubmitNanoseconds = elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 0;
     auto& submitTime = step.kind == GpuSceneExecutorStepKind::Upload
                            ? counters.uploadSubmitNanoseconds
                            : counters.processingSubmitNanoseconds;

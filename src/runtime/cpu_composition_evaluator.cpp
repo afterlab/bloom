@@ -6,12 +6,14 @@
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
+#include "motion_blur_image_effect.hpp"
 #include "gradient_source.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
 #include "layer_mask_sampling.hpp"
 #include "layer_parent_transform.hpp"
 #include "operation_key.hpp"
+#include "plan_time_scopes.hpp"
 #include "resize_fit_geometry.hpp"
 #include "transform_2d_geometry.hpp"
 #include "video_source.hpp"
@@ -32,6 +34,7 @@
 #include <new>
 #include <numeric>
 #include <optional>
+#include <map>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -495,7 +498,8 @@ enum class ScalarDomain : std::uint8_t {
                 const bool validInputArity =
                     effect.secondaryInput.has_value() ==
                     (std::holds_alternative<ImageCombineKernel>(effect.kernel) ||
-                     std::holds_alternative<ChannelCombineKernel>(effect.kernel));
+                     std::holds_alternative<ChannelCombineKernel>(effect.kernel) ||
+                     std::holds_alternative<TemporalAccumulateKernel>(effect.kernel));
                 bool validKernel = true;
                 if (const auto* combine = std::get_if<ImageCombineKernel>(&effect.kernel)) {
                     validKernel =
@@ -537,7 +541,27 @@ enum class ScalarDomain : std::uint8_t {
                 const auto earlier = [index](const OperationIndex image) {
                     return image.value() < index;
                 };
-                if (const auto* defocus = std::get_if<DefocusKernel>(&effect.kernel)) {
+                // #484: a vector stage and an optical flow read their slots, each named once;
+                // an accumulator reads its time sample as its second image.
+                const auto namedSlots = [&](const auto& slotImages) {
+                    std::size_t named = 0;
+                    for (const auto slot : slotImages) {
+                        validKernel = validKernel && slot >= -1 &&
+                                      slot < static_cast<std::int8_t>(effect.fieldImages.size());
+                        named += slot >= 0 ? 1 : 0;
+                    }
+                    validKernel = validKernel && named == effect.fieldImages.size() &&
+                                  std::ranges::all_of(effect.fieldImages, earlier);
+                };
+                if (std::holds_alternative<TemporalAccumulateKernel>(effect.kernel))
+                    validKernel = validKernel && effect.secondaryInput.has_value() &&
+                                  effect.secondaryInput->value() < index &&
+                                  effect.fieldImages.empty();
+                if (const auto* vector = std::get_if<VectorBlurKernel>(&effect.kernel)) {
+                    namedSlots(vector->slotImages);
+                } else if (const auto* flow = std::get_if<OpticalFlowKernel>(&effect.kernel)) {
+                    namedSlots(flow->slotImages);
+                } else if (const auto* defocus = std::get_if<DefocusKernel>(&effect.kernel)) {
                     std::size_t named = 0;
                     for (const auto slot : defocus->slotImages) {
                         validKernel = validKernel && slot >= -1 &&
@@ -1227,7 +1251,16 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         color4CurveFields[curveIndex] = field;
         return true;
     };
-    std::set<std::pair<std::size_t, document::NodeId>> clockCopies;
+    // ADR 0024: an operation copied onto several time clocks shares its parameter and curve
+    // identities with its other copies; they are claimed once, by the first copy. A copy is the
+    // same operation as the first apart from its inputs (#484: one node's recipe chain is several
+    // operations of the same kind and node, each claiming its own identities).
+    std::map<std::pair<std::size_t, document::NodeId>, std::vector<std::size_t>> clockCopies;
+    const auto withoutInputs = [](CompiledOperation operation) {
+        detail::remapOperationInputs(operation,
+                                     [](const OperationIndex) { return OperationIndex::fromRaw(0); });
+        return operation;
+    };
     for (std::size_t index = 0; index < plan->operations().size() && !parameterFailure.has_value();
          ++index) {
         if (cancellation.isCancellationRequested()) {
@@ -1235,12 +1268,20 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
         }
         const auto operationSubject =
             subjectFor(OperationIndex::fromRaw(index), plan->operations()[index]);
-        // ADR 0024: an operation copied onto several time clocks shares its parameter and curve
-        // identities with its other copies; they are claimed once, by the first copy.
-        if (!plan->clocks().empty() && operationSubject.nodeId &&
-            !clockCopies.emplace(plan->operations()[index].index(), *operationSubject.nodeId)
-                 .second)
-            continue;
+        if (!plan->clocks().empty() && operationSubject.nodeId) {
+            auto& claimed =
+                clockCopies[{plan->operations()[index].index(), *operationSubject.nodeId}];
+            bool copy = false;
+            if (!claimed.empty()) {
+                const auto canonical = withoutInputs(plan->operations()[index]);
+                copy = std::ranges::any_of(claimed, [&](const std::size_t first) {
+                    return withoutInputs(plan->operations()[first]) == canonical;
+                });
+            }
+            if (copy)
+                continue;
+            claimed.push_back(index);
+        }
         std::visit(
             Overloaded{
                 [&](const CompiledSolid& solid) {
@@ -2249,8 +2290,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                std::holds_alternative<DirectionalBlurKernel>(effect->kernel) ||
                                std::holds_alternative<DepthMapKernel>(effect->kernel) ||
                                std::holds_alternative<DefocusKernel>(effect->kernel) ||
-                               std::holds_alternative<LensFlareKernel>(effect->kernel))) {
+                               std::holds_alternative<LensFlareKernel>(effect->kernel) ||
+                               isMotionKernel(effect->kernel))) {
                     fullSupport[effect->input.value()] = true;
+                    // #484: a motion kernel reads its sample, vectors, neighbour frames and
+                    // flows around every pixel.
+                    if (effect->secondaryInput)
+                        fullSupport[effect->secondaryInput->value()] = true;
                     // #483: the defocus gather reads its depth map, tile maximum, prefiltered
                     // colour and bokeh image around every pixel; #507 a lens flare reads the input
                     // and its occlusion matte at the light, wherever the ROI is.
@@ -3417,7 +3463,66 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             slots[index] = slots[effect.input.value()];
                             bounds[index].local = bounds[effect.input.value()].output;
                             bounds[index].output = bounds[index].local;
-                            if (slots[index] && !preparedEffect->identity()) {
+                            // #484: a motion kernel reads its plan's inputs; an accumulator runs
+                            // with an empty accumulator when its time sample has pixels.
+                            const bool motion =
+                                preparedEffect->colorGrade &&
+                                preparedEffect->colorGrade->kind == detail::ColorGradeKind::Motion;
+                            std::vector<const render::Rgba32fImage*> motionInputs;
+                            detail::MotionGeometry motionGeometry;
+                            if (motion) {
+                                motionInputs.assign(detail::motionInputCount(effect.kernel),
+                                                    nullptr);
+                                motionInputs[0] = slots[effect.input.value()].get();
+                                if (std::holds_alternative<TemporalAccumulateKernel>(
+                                        effect.kernel) &&
+                                    effect.secondaryInput)
+                                    motionInputs[1] = slots[effect.secondaryInput->value()].get();
+                                const auto slotImage = [&](const std::size_t at,
+                                                           const std::int8_t image) {
+                                    if (image >= 0 &&
+                                        static_cast<std::size_t>(image) < effect.fieldImages.size())
+                                        motionInputs[at] =
+                                            slots[effect.fieldImages[static_cast<std::size_t>(image)]
+                                                      .value()]
+                                                .get();
+                                };
+                                if (const auto* vector = std::get_if<VectorBlurKernel>(&effect.kernel))
+                                    for (std::size_t s = 0; s < kVectorSlots; ++s)
+                                        slotImage(1 + s, vector->slotImages[s]);
+                                if (const auto* flow = std::get_if<OpticalFlowKernel>(&effect.kernel))
+                                    for (std::size_t s = 0; s < flow->slotImages.size(); ++s)
+                                        slotImage(1 + s, flow->slotImages[s]);
+                                const render::Rgba32fImage* colour = nullptr;
+                                std::size_t colourOperation = effect.input.value();
+                                for (std::size_t i = 0; i < motionInputs.size(); ++i)
+                                    if (motionInputs[i] != nullptr) {
+                                        colour = motionInputs[i];
+                                        if (i == 1 && effect.secondaryInput)
+                                            colourOperation = effect.secondaryInput->value();
+                                        break;
+                                    }
+                                if (colour != nullptr) {
+                                    const auto display = colour->descriptor()->displayWindow();
+                                    const auto aspect = colour->descriptor()->pixelAspect();
+                                    motionGeometry.display = {
+                                        display.originX(), display.originY(),
+                                        static_cast<std::int64_t>(display.extent().width()),
+                                        static_cast<std::int64_t>(display.extent().height())};
+                                    motionGeometry.pixelAspect =
+                                        static_cast<double>(aspect.numerator()) /
+                                        static_cast<double>(aspect.denominator());
+                                    motionGeometry.horizontalScale = resolved.horizontalScale;
+                                    motionGeometry.verticalScale = resolved.verticalScale;
+                                    const auto centre = bounds[colourOperation].output.centre();
+                                    motionGeometry.centreX = centre.x;
+                                    motionGeometry.centreY = centre.y;
+                                } else {
+                                    motionInputs.clear();
+                                }
+                            }
+                            if ((motion ? !motionInputs.empty() : slots[index] != nullptr) &&
+                                !preparedEffect->identity()) {
                                 // #525: a field raster reads its program's images beside its
                                 // canvas (an empty image is an absent slot).
                                 std::array<const render::Rgba32fImage*,
@@ -3461,6 +3566,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                               !effect.fieldImages.empty(), resolved.horizontalScale,
                                               resolved.verticalScale, effectPixelBudget,
                                               cancellation, operationIndex, progress, rowBands)
+                                    : motion
+                                        ? detail::applyMotion(
+                                              effect.kernel, *preparedEffect->colorGrade,
+                                              std::span<const render::Rgba32fImage* const>(
+                                                  motionInputs.data(), motionInputs.size()),
+                                              motionGeometry, effectPixelBudget, cancellation,
+                                              operationIndex, progress, rowBands)
                                     : gradeKind == detail::ColorGradeKind::DepthMap
                                         ? detail::applyDepthMap(
                                               *preparedEffect->colorGrade, *slots[index],

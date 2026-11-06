@@ -669,6 +669,167 @@ struct FilmGrainKernel final {
     friend bool operator==(const FilmGrainKernel&, const FilmGrainKernel&) = default;
 };
 
+// #484 Motion blur (docs/architecture/motion-blur.md). One temporal-sampling engine shared by every
+// motion-blur node: the shutter model below, a time sample (an input evaluated at a sub-frame or
+// neighbour-frame time), the accumulator that sums time samples, the path sampler (Directional,
+// Spin, Zoom and Transform 2D blur), the motion-vector stages and the optical flow solver. Every
+// pixel stage runs the one motion kernel (motion_kernel.glsl) over an atlas on the CPU and the
+// GPU alike (motion_blur_image_effect.hpp).
+//
+// The shutter, constant per node. `shutter` is the open time in frames (180 degrees = 0.5);
+// `offset` (document::kShutterOffset*) places it Centred on the frame, from its Start, ending at
+// its End, or (Custom) opening at `phase` frames; `curve` (document::kShutterCurve*) weights the
+// open time Box, Triangle, Gaussian or by `customCurve` (a Curves point list over [0, 1]).
+// `quality` (document::kMotionQuality*) picks the sample count: Draft 4, Standard 16, High 64, or
+// Final, adaptive from the widest displacement to at most a pixel per sample within [minSamples,
+// maxSamples]. `jitter` offsets each pixel's samples within their strata by a hash of the node,
+// the frame and the pixel. `maxBlur` limits the blur length in full-resolution pixels.
+// `rate` converts shutter frames to seconds.
+struct CompiledShutter final {
+    double shutter = 0.5;
+    std::int64_t offset = 0;
+    double phase = 0.0;
+    std::int64_t curve = 0;
+    document::PathValue customCurve{};
+    std::int64_t quality = 3;
+    std::int64_t minSamples = 8;
+    std::int64_t maxSamples = 64;
+    bool jitter = false;
+    double maxBlur = 512.0;
+    // The composition's frame rate: a frame of shutter time in seconds.
+    document::FrameRate rate = document::FrameRate::framesPerSecond24();
+    friend bool operator==(const CompiledShutter&, const CompiledShutter&) = default;
+};
+// The pixels of `input` evaluated on a time-offset clock: this operation's clock time, posterized
+// first to `posterizeNumerator / posterizeDenominator` frames a second when the numerator is
+// positive (Echo's Posterize Time), plus `offset`. With `holdFootage` (Motion Blur's Hold), an
+// operation whose only time dependence is footage keeps the frame's own time. The effect itself is
+// the identity: its pixels are its input's at that time (plan_time_scopes.hpp).
+struct TimeSampleKernel final {
+    core::RationalTime offset{};
+    std::int64_t posterizeNumerator = 0;
+    std::int64_t posterizeDenominator = 1;
+    bool holdFootage = false;
+    friend bool operator==(const TimeSampleKernel&, const TimeSampleKernel&) = default;
+};
+// Two images combined over the union of their windows, premultiplied and HDR-safe: `input` (the
+// accumulator) times `inputWeight` and `secondaryInput` (a time sample) times `sampleWeight` by
+// the operator (sum, per-channel maximum or minimum, screen, the sample over or under the
+// accumulator); alpha is limited to [0, 1]. A chain of them sums a node's time samples.
+enum class AccumulateOperator : std::uint8_t { Add, Maximum, Minimum, Screen, Over, Under };
+struct TemporalAccumulateKernel final {
+    AccumulateOperator op = AccumulateOperator::Add;
+    double inputWeight = 1.0;
+    double sampleWeight = 1.0;
+    friend bool operator==(const TemporalAccumulateKernel&,
+                           const TemporalAccumulateKernel&) = default;
+};
+// The path sampler: each output pixel averages the input along a path sampled across the shutter
+// (bilinear, or nearest with Transform 2D's Nearest filter). Directional moves by `length` pixels
+// along `angle` (degrees clockwise from screen right); Spin turns by `amount` degrees and Zoom
+// scales by 1 + `amount` about `centre` (an offset in full-resolution pixels from the display
+// window's centre); Transform resamples through `transform` sampled at each sub-frame time.
+enum class MotionPathMode : std::uint8_t { Directional, Spin, Zoom, Transform };
+struct MotionPathBlurKernel final {
+    MotionPathMode mode = MotionPathMode::Directional;
+    CompiledShutter shutter{};
+    CompiledScalarParameter angle{{}, 0.0};
+    CompiledScalarParameter length{{}, 0.0};
+    CompiledVec2Parameter centre{{}, document::Vec2d{}};
+    CompiledScalarParameter amount{{}, 0.0};
+    std::optional<Transform2DKernel> transform{};
+    std::uint32_t seed = 0;
+    friend bool operator==(const MotionPathBlurKernel&, const MotionPathBlurKernel&) = default;
+};
+// How a motion-vector pass reads (the renderer convention): component v of a vector is
+// (stored * scale + offset) in `units` (0 full-resolution pixels, 1 normalised device coordinates,
+// -1 to 1 across the frame, 2 evaluation pixels: Bloom's own optical flow), y up when `flipY`; `layout` 0 one vector (the path linear), 1 the forward vector and
+// a backward one (to the previous frame), 2 the motion from the previous frame and the motion to
+// the next (in that order); `alphaValid` reads anything under a full third channel of the forward
+// image (the vector image's alpha) as no vector.
+struct CompiledVectorDecode final {
+    double scale = 1.0;
+    double offset = 0.0;
+    bool flipY = false;
+    std::int64_t layout = 0;
+    std::int64_t units = 0;
+    bool alphaValid = false;
+    friend bool operator==(const CompiledVectorDecode&, const CompiledVectorDecode&) = default;
+};
+// The images a vector stage reads beside its input, in VectorBlurKernel::slotImages order.
+inline constexpr std::size_t kVectorForwardSlot = 0;
+inline constexpr std::size_t kVectorBackwardSlot = 1;
+inline constexpr std::size_t kVectorTileSlot = 2;
+inline constexpr std::size_t kVectorDepthSlot = 3;
+inline constexpr std::size_t kVectorMatteSlot = 4;
+inline constexpr std::size_t kVectorNextSlot = 5;
+inline constexpr std::size_t kVectorNextFlowSlot = 6;
+inline constexpr std::size_t kVectorPreviousSlot = 7;
+inline constexpr std::size_t kVectorPreviousFlowSlot = 8;
+inline constexpr std::size_t kVectorConsistencySlot = 9;
+// (Consistency reads a second flow's flow back from kVectorPreviousFlowSlot.)
+inline constexpr std::size_t kVectorNextConsistencySlot = 10;
+inline constexpr std::size_t kVectorPreviousConsistencySlot = 11;
+inline constexpr std::size_t kVectorNextMatteSlot = 12;
+inline constexpr std::size_t kVectorPreviousMatteSlot = 13;
+inline constexpr std::size_t kVectorSlots = 14;
+// The motion-vector stages. Gather is McGuire et al. 2012's reconstruction filter with Guertin et
+// al. 2014's tile neighbourhood and jitter (the tiles are its own first pass); Splat the soft z-ordered forward splat of the colour input
+// (Niklaus and Liu 2020) for the layered algorithm and optical-flow blur, with the neighbour
+// frames blended by visibility (Jiang et al. 2018); Fill Baker et al. 2011's outside-in fill of
+// the input where the matte slot's coverage reaches `threshold`; TemporalFill (TemporalFillMask)
+// the background behind the foreground from the neighbour frames (the pixels still unfilled);
+// Consistency Sundaram et al. 2010's forward-backward check of the input flow against the
+// forward slot (the other frame's flow back), the Mask of consistency (`layer` 1: of occlusion), or
+// with the backward slot and its flow back in the previous-flow slot the pair as data.
+enum class VectorBlurStage : std::uint8_t {
+    Gather,
+    Splat,
+    Fill,
+    TemporalFill,
+    TemporalFillMask,
+    Consistency
+};
+struct VectorBlurKernel final {
+    VectorBlurStage stage = VectorBlurStage::Gather;
+    CompiledVectorDecode decode{};
+    CompiledShutter shutter{};
+    bool curved = false;
+    // The depth slot's channel (0 R .. 3 A) and McGuire et al.'s soft depth extent in its units;
+    // `zMode` (Splat): 0 no ordering, 1 nearer depth first, 2 brightness constancy.
+    std::int64_t depthChannel = 0;
+    double softZ = 1.0;
+    std::int64_t zMode = 0;
+    // Splat: 0 every pixel, 1 the matte's foreground, 2 its background.
+    std::int64_t layer = 0;
+    // 0 transparent, 1 the edge extended, 2 wrapped horizontally (a 360 frame).
+    std::int64_t border = 0;
+    double brightness = 20.0;
+    double threshold = 0.5;
+    std::array<std::int8_t, kVectorSlots> slotImages{-1, -1, -1, -1, -1, -1, -1,
+                                                     -1, -1, -1, -1, -1, -1, -1};
+    std::uint32_t seed = 0;
+    friend bool operator==(const VectorBlurKernel&, const VectorBlurKernel&) = default;
+};
+// Dense optical flow from the input frame to the frame in slot 0, in evaluation pixels with y down
+// as [u, v, 0, 1] over the union of both frames' windows. `method` 0 is DIS (Kroeger et al. 2016),
+// 1 TV-L1 (Zach et al. 2007, as Sanchez Perez et al.'s IPOL 2013 algorithm); `quality`
+// (document::kMotionQuality*) fixes the pyramid, warps and iterations; `layer` 1 (2) weights the
+// data term by the matte in slot 1 (by its complement), Wang and Adelson's per-layer motion.
+// CutDetect gives the Mask of 1 everywhere when the mean residual of the flow in slot 2 between the
+// input and slot 0 exceeds `cutThreshold` grey levels (a diagnostic only).
+enum class OpticalFlowStage : std::uint8_t { Solve, CutDetect };
+struct OpticalFlowKernel final {
+    OpticalFlowStage stage = OpticalFlowStage::Solve;
+    std::int64_t method = 1;
+    std::int64_t quality = 1;
+    std::int64_t border = 1;
+    std::int64_t layer = 0;
+    double cutThreshold = 24.0;
+    std::array<std::int8_t, 3> slotImages{-1, -1, -1};
+    friend bool operator==(const OpticalFlowKernel&, const OpticalFlowKernel&) = default;
+};
+
 using ImageEffectKernel =
     std::variant<IdentityImageKernel, CstKernel, FileTransformKernel, PointwiseImageKernel,
                  ImageCombineKernel, CanvasImageKernel, DiscreteImageKernel, ResizeFitKernel,
@@ -677,7 +838,16 @@ using ImageEffectKernel =
                  ChannelCombineKernel, GradeKernel, DirectionalBlurKernel, HighlightRollOffKernel,
                  AlphaAssociationKernel, ColorizeKernel, VignetteKernel, FieldRasterKernel,
                  MaskDistanceKernel, DepthMapKernel, DefocusKernel, LensFlareKernel,
-                 FilmGrainKernel>;
+                 FilmGrainKernel, TimeSampleKernel, TemporalAccumulateKernel,
+                 MotionPathBlurKernel, VectorBlurKernel, OpticalFlowKernel>;
+
+// #484: the motion kernels that run the motion kernel (a time sample is an identity).
+[[nodiscard]] inline bool isMotionKernel(const ImageEffectKernel& kernel) noexcept {
+    return std::holds_alternative<TemporalAccumulateKernel>(kernel) ||
+           std::holds_alternative<MotionPathBlurKernel>(kernel) ||
+           std::holds_alternative<VectorBlurKernel>(kernel) ||
+           std::holds_alternative<OpticalFlowKernel>(kernel);
+}
 
 // #525: every operand of a field program, in instruction order and, within one, scalars, vectors,
 // the curve, then the ramp.
@@ -821,7 +991,22 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
             visit(value);
         return true;
     }
-    return false;
+    // #484: the path sampler's angle, length, centre and amount, then a Transform path's
+    // translate, pivot, scale and rotation. The other motion kernels have constant operands.
+    if (const auto* path = std::get_if<MotionPathBlurKernel>(&kernel)) {
+        visit(path->angle);
+        visit(path->length);
+        visit(path->centre);
+        visit(path->amount);
+        if (path->transform) {
+            visit(path->transform->translate);
+            visit(path->transform->pivot);
+            visit(path->transform->scale);
+            visit(path->transform->rotation);
+        }
+        return true;
+    }
+    return isMotionKernel(kernel);
 }
 
 [[nodiscard]] inline bool isColorGradeKernel(const ImageEffectKernel& kernel) noexcept {
@@ -837,7 +1022,7 @@ bool forEachColorGradeOperand(const ImageEffectKernel& kernel, Visit&& visit) {
            std::holds_alternative<DepthMapKernel>(kernel) ||
            std::holds_alternative<DefocusKernel>(kernel) ||
            std::holds_alternative<LensFlareKernel>(kernel) ||
-           std::holds_alternative<FilmGrainKernel>(kernel);
+           std::holds_alternative<FilmGrainKernel>(kernel) || isMotionKernel(kernel);
 }
 struct CompiledImageEffect final {
     document::NodeId sourceNodeId;
@@ -856,7 +1041,8 @@ struct CompiledImageEffect final {
     bool trackMatte = false;
     // #525: a FieldRasterKernel's image slots, in slot order (an Image Field's image, a mask Shape
     // Distance's distance image), each sampled by its own data window; #483 a DefocusKernel's
-    // (DefocusKernel::slotImages); #507 a LensFlareKernel's occlusion matte.
+    // (DefocusKernel::slotImages); #507 a LensFlareKernel's occlusion matte; #484 a VectorBlurKernel's
+    // and an OpticalFlowKernel's (their slotImages).
     std::vector<OperationIndex> fieldImages{};
     friend bool operator==(const CompiledImageEffect&, const CompiledImageEffect&) = default;
 };
@@ -1165,7 +1351,9 @@ using CompiledOperation =
 // operation evaluates its operands on operationClock(i) and is consumed on placementClock(i); the
 // two differ only for a retimed Layer Output (layer clock vs. the clock it is placed in). A plan
 // with no retimed layer has no clocks and is exactly the pre-v9 operation list.
-enum class CompiledClockKind : std::uint8_t { Plan, Layer, Content };
+// #484: an Offset clock is a TimeSampleKernel's (`layer` names the time sample): its parent's time,
+// posterized, plus the sample's offset.
+enum class CompiledClockKind : std::uint8_t { Plan, Layer, Content, Offset };
 struct CompiledTimeClock final {
     CompiledClockKind kind = CompiledClockKind::Plan;
     std::uint32_t parent = 0;

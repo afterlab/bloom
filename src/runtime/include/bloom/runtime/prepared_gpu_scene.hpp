@@ -185,6 +185,10 @@ struct GpuSceneTranslationCommand final {
     double translationY = 0.0;
     float opacity = 1.0F;
     std::string semanticKey;
+    // A pass inside one effect (#484's solver iterations and atlases): nothing else can ask for this
+    // image, so the executor does not offer it to the scene cache, where hundreds of frame-sized
+    // images would push out what is worth keeping. Not part of the semantic key.
+    bool transientResult = false;
 };
 
 struct GpuSceneMergeCommand final {
@@ -336,6 +340,10 @@ struct GpuSceneBlendCommand final {
     // selection rule, so an arbitrary value here can never bless another shader's cached output.
     std::string artifactDigest;
     std::string semanticKey;
+    // A pass inside one effect (#484's solver iterations and atlases): nothing else can ask for this
+    // image, so the executor does not offer it to the scene cache, where hundreds of frame-sized
+    // images would push out what is worth keeping. Not part of the semantic key.
+    bool transientResult = false;
 };
 
 // One OCIO ProcessEffect transform over a resident RGBA32F input. `program` is the immutable
@@ -356,6 +364,13 @@ struct GpuSceneOcioEffectCommand final {
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
     std::string semanticKey;
+    // A pass inside one effect (#484's solver iterations and atlases): nothing else can ask for this
+    // image, so the executor does not offer it to the scene cache, where hundreds of frame-sized
+    // images would push out what is worth keeping. Not part of the semantic key.
+    bool transientResult = false;
+    // The motion pass this dispatch runs (0: not one), for the cost breakdown only. Not part of the
+    // semantic key.
+    std::uint16_t diagnosticPass = 0;
 };
 
 // One PointResampleV1 nearest-neighbour gather of a resident input into a proxy output. It is the

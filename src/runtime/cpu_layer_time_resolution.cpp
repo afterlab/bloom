@@ -12,6 +12,7 @@
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/composition_time.hpp>
 
+#include <limits>
 #include <utility>
 
 namespace bloom::runtime::detail {
@@ -90,6 +91,51 @@ sampleAt(const CompiledCompositionPlan& plan, const ResolvedEvaluation& base,
 
 } // namespace
 
+std::optional<core::RationalTime> offsetTime(const core::RationalTime parent,
+                                             const TimeSampleKernel& sample) {
+    using Wide = __int128;
+    Wide numerator = parent.numerator();
+    Wide denominator = parent.denominator();
+    if (denominator <= 0)
+        return std::nullopt;
+    // Posterize: floor(t * rate) / rate, rate = posterizeNumerator / posterizeDenominator frames a
+    // second.
+    if (sample.posterizeNumerator > 0) {
+        if (sample.posterizeDenominator <= 0)
+            return std::nullopt;
+        const Wide scaledNumerator = numerator * sample.posterizeNumerator;
+        const Wide scaledDenominator = denominator * sample.posterizeDenominator;
+        Wide frames = scaledNumerator / scaledDenominator;
+        if (scaledNumerator % scaledDenominator != 0 && scaledNumerator < 0)
+            frames -= 1;
+        numerator = frames * sample.posterizeDenominator;
+        denominator = sample.posterizeNumerator;
+    }
+    const Wide offsetNumerator = sample.offset.numerator();
+    const Wide offsetDenominator = sample.offset.denominator();
+    if (offsetDenominator <= 0)
+        return std::nullopt;
+    Wide sumNumerator = numerator * offsetDenominator + offsetNumerator * denominator;
+    Wide sumDenominator = denominator * offsetDenominator;
+    // Reduce, then require 64-bit terms.
+    Wide a = sumNumerator < 0 ? -sumNumerator : sumNumerator;
+    Wide b = sumDenominator;
+    while (b != 0) {
+        const Wide t = a % b;
+        a = b;
+        b = t;
+    }
+    if (a > 1) {
+        sumNumerator /= a;
+        sumDenominator /= a;
+    }
+    constexpr Wide limit = std::numeric_limits<std::int64_t>::max();
+    if (sumNumerator > limit || sumNumerator < -limit || sumDenominator > limit)
+        return std::nullopt;
+    return core::RationalTime::create(static_cast<std::int64_t>(sumNumerator),
+                                      static_cast<std::int64_t>(sumDenominator));
+}
+
 PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                                     const EvaluationRequest& request, ResolvedEvaluation base,
                                     const CancellationToken& cancellation, OperationCache* cache,
@@ -114,6 +160,38 @@ PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledComposit
             return PreflightOutcome::cancellation();
         const auto& clock = clocks[index];
         const auto layerIndex = clock.layer.value();
+        // #484: an Offset clock is its time sample's: the parent's time, posterized, plus the
+        // sample's offset.
+        if (clock.kind == CompiledClockKind::Offset) {
+            const auto* effect =
+                layerIndex < plan->operations().size()
+                    ? std::get_if<CompiledImageEffect>(&plan->operations()[layerIndex])
+                    : nullptr;
+            const auto* sample =
+                effect != nullptr ? std::get_if<TimeSampleKernel>(&effect->kernel) : nullptr;
+            if (clock.parent >= index || sample == nullptr)
+                return PreflightOutcome::failure(diagnostic(EvaluationDiagnosticCode::InvalidPlan,
+                                                            "Time sample clock is malformed"));
+            const auto& parentTime = times[clock.parent];
+            if (!parentTime)
+                continue;
+            const auto time = offsetTime(*parentTime, *sample);
+            if (!time)
+                return failure("Motion blur sample time cannot be represented",
+                               effect->sourceNodeId);
+            bool cancelled = false;
+            auto sampled =
+                sampleAt(*plan, base, *time, cancellation, cache, statistics, cancelled);
+            if (cancelled)
+                return PreflightOutcome::cancellation();
+            if (!sampled)
+                return PreflightOutcome::failure(diagnostic(
+                    EvaluationDiagnosticCode::InvalidPlan,
+                    "Time sample clock could not sample the plan's animation"));
+            times[index] = time;
+            resolutions[index] = std::move(*sampled);
+            continue;
+        }
         const auto* layer = layerIndex < plan->operations().size()
                                 ? std::get_if<CompiledLayerOutput>(&plan->operations()[layerIndex])
                                 : nullptr;

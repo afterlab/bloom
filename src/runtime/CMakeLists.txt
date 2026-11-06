@@ -65,8 +65,10 @@ target_sources(
         snapshot_compiler.cpp
         compositing_recipes.cpp
         depth_effect_recipes.cpp
+        motion_blur_recipes.cpp
         compositing_recipes.hpp
         plan_time_scopes.cpp
+        motion_shutter.cpp
         profiler_gpu_reader.cpp
         layer_time_projection.cpp
         snapshot_compiler_entries.ipp
@@ -161,6 +163,8 @@ target_sources(
         depth_effect_image_effect.cpp
         lens_flare_image_effect.cpp
         film_grain_image_effect.cpp
+        motion_blur_image_effect.cpp
+        motion_blur_planner.cpp
         field_raster.cpp
         channel_image_effect.cpp
         separable_image_effect.cpp
@@ -304,6 +308,23 @@ target_link_libraries(bloom_runtime_evaluator PUBLIC bloom_runtime_compiler bloo
 target_link_libraries(bloom_runtime_evaluator PRIVATE bloom_color_gpu_shader)
 bloom_enable_warnings(bloom_runtime_evaluator)
 bloom_enable_strict_floating_point(bloom_runtime_evaluator)
+
+# #484: the motion kernel is one source compiled as C++ (motion_blur_image_effect.cpp includes it)
+# and handed to the GPU program as text. Embed the text byte for byte, regenerated whenever the
+# kernel changes.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/motion_kernel.glsl")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/motion_kernel.glsl" BLOOM_MOTION_KERNEL_HEX HEX)
+string(LENGTH "${BLOOM_MOTION_KERNEL_HEX}" BLOOM_MOTION_KERNEL_HEX_LENGTH)
+math(EXPR BLOOM_MOTION_KERNEL_SIZE "${BLOOM_MOTION_KERNEL_HEX_LENGTH} / 2")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," BLOOM_MOTION_KERNEL_BYTES
+    "${BLOOM_MOTION_KERNEL_HEX}")
+file(CONFIGURE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/motion_kernel_source.cpp"
+    CONTENT "#include <string_view>\n\nnamespace bloom::runtime::detail {\nnamespace {\nconstexpr unsigned char kMotionKernelSource[] = {${BLOOM_MOTION_KERNEL_BYTES}0x00};\n} // namespace\n\nstd::string_view motionKernelGlsl() noexcept {\n    return {reinterpret_cast<const char*>(kMotionKernelSource), ${BLOOM_MOTION_KERNEL_SIZE}};\n}\n\n} // namespace bloom::runtime::detail\n"
+    @ONLY)
+target_sources(bloom_runtime_evaluator
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/motion_kernel_source.cpp")
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

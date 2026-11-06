@@ -45,7 +45,10 @@ enum class ColorGradeKind : std::uint8_t {
     LensFlare,
     LensFlareProbe,
     // #486: Film Grain (film_grain_image_effect.hpp), its geometry appended where it is applied.
-    FilmGrain
+    FilmGrain,
+    // #484: every motion kernel (motion_blur_image_effect.hpp): the pass table of one pass of the
+    // motion kernel, planned where it is applied.
+    Motion
 };
 
 // The packed table, always a whole number of vec4s:

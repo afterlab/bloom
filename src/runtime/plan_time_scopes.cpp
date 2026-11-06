@@ -22,6 +22,20 @@ template <class... Ts> Visit(Ts...) -> Visit<Ts...>;
     return layer != nullptr && layer->time ? &*layer->time : nullptr;
 }
 
+// #484: a time sample evaluates its input on its own (Offset) clock.
+[[nodiscard]] const TimeSampleKernel* timeSample(const CompiledOperation& operation) {
+    const auto* effect = std::get_if<CompiledImageEffect>(&operation);
+    return effect != nullptr ? std::get_if<TimeSampleKernel>(&effect->kernel) : nullptr;
+}
+
+// #484: a leaf that reads footage frames (Hold keeps them at the frame's own time).
+[[nodiscard]] bool footageLeaf(const CompiledOperation& operation) {
+    return std::holds_alternative<CompiledVideoSource>(operation) ||
+           std::holds_alternative<CompiledImageSource>(operation) ||
+           std::holds_alternative<CompiledChannelShuffle>(operation) ||
+           std::holds_alternative<CompiledCryptomatte>(operation);
+}
+
 // Calls `function(input, clockOfInput)` for every input of `operation` placed on `clock`, where a
 // retimed Layer Output feeds its image input from its content clock.
 template <typename Function>
@@ -34,7 +48,10 @@ void forEachScopedInput(const CompiledOperation& operation, const std::uint32_t 
               [](const CompiledCompositionSource&) {}, [](const CompiledChannelShuffle&) {},
               [](const CompiledCryptomatte&) {},
               [&](const CompiledImageEffect& effect) {
-                  function(effect.input, clock);
+                  // #484: a time sample's input is on its Offset clock (`contentClock`).
+                  function(effect.input,
+                           std::holds_alternative<TimeSampleKernel>(effect.kernel) ? contentClock
+                                                                                  : clock);
                   if (effect.secondaryInput)
                       function(*effect.secondaryInput, clock);
                   if (effect.maskInput)
@@ -77,7 +94,8 @@ void remapInputs(CompiledOperation& operation, Function&& function) {
                      [](CompiledCompositionSource&) {}, [](CompiledChannelShuffle&) {},
                      [](CompiledCryptomatte&) {},
                      [&](CompiledImageEffect& effect) {
-                         effect.input = function(effect.input, false);
+                         effect.input = function(
+                             effect.input, std::holds_alternative<TimeSampleKernel>(effect.kernel));
                          if (effect.secondaryInput)
                              effect.secondaryInput = function(*effect.secondaryInput, false);
                          if (effect.maskInput)
@@ -232,6 +250,17 @@ void pruneUnreachable(CompiledCompositionPlanDefinition& definition) {
 
 } // namespace
 
+void forEachOperationInput(const CompiledOperation& operation,
+                           const std::function<void(OperationIndex)>& function) {
+    forEachScopedInput(operation, 0, 0,
+                       [&](const OperationIndex input, std::uint32_t) { function(input); });
+}
+
+void remapOperationInputs(CompiledOperation& operation,
+                          const std::function<OperationIndex(OperationIndex)>& function) {
+    remapInputs(operation, [&](const OperationIndex input, bool) { return function(input); });
+}
+
 void separateChannelLayerImages(CompiledCompositionPlanDefinition& definition) {
     if (definition.output.value() >= definition.operations.size())
         return;
@@ -270,11 +299,17 @@ void separateChannelLayerImages(CompiledCompositionPlanDefinition& definition) {
 
 std::optional<TimeScopeFailure> scopeLayerTime(CompiledCompositionPlanDefinition& definition) {
     const auto& operations = definition.operations;
-    if (std::ranges::none_of(operations, [](const auto& item) { return retimed(item) != nullptr; }))
+    const bool sampled =
+        std::ranges::any_of(operations, [](const auto& item) { return timeSample(item) != nullptr; });
+    if (!sampled &&
+        std::ranges::none_of(operations, [](const auto& item) { return retimed(item) != nullptr; }))
         return std::nullopt;
 
-    // Clock 0 is the plan clock. Layer and Content clocks are keyed by (parent clock, layer op).
+    // Clock 0 is the plan clock. Layer and Content clocks are keyed by (parent clock, layer op),
+    // #484 Offset clocks by (parent clock, time sample op).
     std::vector<CompiledTimeClock> clocks{CompiledTimeClock{}};
+    // Whether a clock is a time sample's that holds footage at its parent's time.
+    std::vector<bool> holds{false};
     std::map<std::tuple<std::uint32_t, std::size_t, CompiledClockKind>, std::uint32_t> clockIds;
     const auto clockFor = [&](const std::uint32_t parent, const std::size_t layer,
                               const CompiledClockKind kind) -> std::optional<std::uint32_t> {
@@ -286,19 +321,64 @@ std::optional<TimeScopeFailure> scopeLayerTime(CompiledCompositionPlanDefinition
         const auto id = static_cast<std::uint32_t>(clocks.size());
         // `layer` is rewritten to the emitted copy below.
         clocks.push_back({kind, parent, OperationIndex::fromRaw(layer)});
+        const auto* sample = kind == CompiledClockKind::Offset ? timeSample(operations[layer])
+                                                               : nullptr;
+        holds.push_back(sample != nullptr && sample->holdFootage);
         clockIds.emplace(key, id);
         return id;
+    };
+    // #484: an operation reached through a time sample is copied onto its Offset clock only when
+    // its pixels can differ there. One that does not vary with time is read on the nearest clock
+    // above the time samples (once, however many sub-frames read it), and under a sample that
+    // holds footage, so is one whose only time dependence is footage (an image sequence or video
+    // and everything derived from it alone): Hold keeps every sub-frame on the frame's own
+    // footage frame. Both are read from the plan's own time-dependence analysis, the second with
+    // every footage leaf replaced by a constant.
+    std::vector<bool> invariant(operations.size(), false);
+    std::vector<bool> holdable(operations.size(), false);
+    if (sampled) {
+        const auto dependence = [&](const bool replaceFootage) {
+            auto copy = definition;
+            copy.clocks.clear();
+            copy.operationClocks.clear();
+            copy.placementClocks.clear();
+            if (replaceFootage)
+                for (auto& operation : copy.operations)
+                    if (footageLeaf(operation))
+                        operation = CompiledSolid{};
+            const CompiledCompositionPlan plan(std::move(copy));
+            std::vector<bool> dependent(operations.size(), true);
+            for (std::size_t index = 0; index < operations.size(); ++index)
+                dependent[index] = plan.operationTimeDependent(OperationIndex::fromRaw(index));
+            return dependent;
+        };
+        const auto real = dependence(false);
+        const auto withoutFootage = dependence(true);
+        for (std::size_t index = 0; index < operations.size(); ++index) {
+            invariant[index] = !real[index];
+            holdable[index] = !withoutFootage[index];
+        }
+    }
+    const auto inputClock = [&](const std::size_t input, std::uint32_t clock) {
+        if (input >= operations.size())
+            return clock;
+        while (clock != 0 && clock < clocks.size() &&
+               clocks[clock].kind == CompiledClockKind::Offset &&
+               (invariant[input] || (holds[clock] && holdable[input])))
+            clock = clocks[clock].parent;
+        return clock;
     };
 
     // Which clocks each original operation is needed on, discovered from the output backwards.
     // Bounds readouts address image operations directly and need them on the plan clock.
     std::vector<std::set<std::uint32_t>> needed(operations.size());
-    std::vector<std::pair<std::size_t, std::uint32_t>> work{{definition.output.value(), 0}};
+    std::vector<std::pair<std::size_t, std::uint32_t>> roots{{definition.output.value(), 0}};
     for (const auto& value : definition.valueOperations)
         if (const auto* bounds = std::get_if<CompiledBoundsReadout>(&value.kernel);
             bounds && bounds->operationIndex.value() < operations.size())
-            work.emplace_back(bounds->operationIndex.value(), 0);
-    // For each (layer op, placement clock): its (layer clock, content clock).
+            roots.emplace_back(bounds->operationIndex.value(), 0);
+    auto work = roots;
+    // For each (layer op or time sample, placement clock): its (operand clock, content clock).
     std::map<std::pair<std::size_t, std::uint32_t>, std::pair<std::uint32_t, std::uint32_t>>
         layerClocks;
     while (!work.empty()) {
@@ -316,10 +396,16 @@ std::optional<TimeScopeFailure> scopeLayerTime(CompiledCompositionPlanDefinition
                 return TimeScopeFailure{"Layer time scopes exceed the supported clock count"};
             layerClocks[{index, clock}] = {*layerClock, *contentClock};
             content = *contentClock;
+        } else if (timeSample(operations[index]) != nullptr) {
+            const auto offsetClock = clockFor(clock, index, CompiledClockKind::Offset);
+            if (!offsetClock)
+                return TimeScopeFailure{"Motion blur time samples exceed the supported clock count"};
+            layerClocks[{index, clock}] = {clock, *offsetClock};
+            content = *offsetClock;
         }
         forEachScopedInput(operations[index], clock, content,
-                           [&](const OperationIndex input, const std::uint32_t inputClock) {
-                               work.emplace_back(input.value(), inputClock);
+                           [&](const OperationIndex input, const std::uint32_t at) {
+                               work.emplace_back(input.value(), inputClock(input.value(), at));
                            });
     }
 
@@ -329,50 +415,119 @@ std::optional<TimeScopeFailure> scopeLayerTime(CompiledCompositionPlanDefinition
     if (total > kMaximumScopedOperations)
         return TimeScopeFailure{"Layer time scopes exceed the supported operation count"};
 
-    // Emit in the original topological order, one copy per clock, remapping inputs.
+    // The emission order: the original topological order, one copy per clock; #484 with time
+    // samples, a depth-first post-order from the output instead, so each time sample's copies are
+    // evaluated (and released) before the next sample's begin.
+    std::vector<std::pair<std::size_t, std::uint32_t>> order;
+    order.reserve(total);
+    if (!sampled) {
+        for (std::size_t index = 0; index < operations.size(); ++index)
+            for (const auto clock : needed[index])
+                order.emplace_back(index, clock);
+    } else {
+        std::set<std::pair<std::size_t, std::uint32_t>> visited;
+        struct Frame final {
+            std::pair<std::size_t, std::uint32_t> node;
+            std::vector<std::pair<std::size_t, std::uint32_t>> inputs;
+            std::size_t next = 0;
+        };
+        const auto inputsOf = [&](const std::pair<std::size_t, std::uint32_t> node) {
+            std::vector<std::pair<std::size_t, std::uint32_t>> inputs;
+            std::uint32_t content = node.second;
+            if (const auto found = layerClocks.find(node); found != layerClocks.end())
+                content = found->second.second;
+            forEachScopedInput(operations[node.first], node.second, content,
+                               [&](const OperationIndex input, const std::uint32_t at) {
+                                   inputs.emplace_back(input.value(),
+                                                       inputClock(input.value(), at));
+                               });
+            return inputs;
+        };
+        // Every needed copy is reached from a root (`needed` was discovered from them).
+        for (const auto& root : roots) {
+            if (root.first >= operations.size() || !visited.insert(root).second)
+                continue;
+            std::vector<Frame> stack;
+            stack.push_back({root, inputsOf(root), 0});
+            while (!stack.empty()) {
+                auto& top = stack.back();
+                if (top.next < top.inputs.size()) {
+                    const auto input = top.inputs[top.next++];
+                    if (input.first < operations.size() && visited.insert(input).second)
+                        stack.push_back({input, inputsOf(input), 0});
+                    continue;
+                }
+                order.push_back(top.node);
+                stack.pop_back();
+            }
+        }
+    }
+
+    // Emit in that order, remapping inputs.
     std::map<std::pair<std::size_t, std::uint32_t>, std::size_t> emitted;
     std::vector<CompiledOperation> scoped;
     std::vector<std::uint32_t> operationClocks;
     std::vector<std::uint32_t> placementClocks;
+    std::vector<std::pair<std::size_t, std::uint32_t>> leaves;
     scoped.reserve(total);
     operationClocks.reserve(total);
     placementClocks.reserve(total);
-    for (std::size_t index = 0; index < operations.size(); ++index) {
-        for (const auto clock : needed[index]) {
-            auto copy = operations[index];
-            std::uint32_t operandClock = clock;
-            std::uint32_t contentClock = clock;
-            if (const auto found = layerClocks.find({index, clock}); found != layerClocks.end()) {
-                operandClock = found->second.first;
-                contentClock = found->second.second;
-            }
-            remapInputs(copy, [&](const OperationIndex input, const bool imageInputOfLayer) {
-                const auto inputClock =
-                    imageInputOfLayer && retimed(operations[index]) ? contentClock : clock;
-                return OperationIndex::fromRaw(emitted.at({input.value(), inputClock}));
-            });
-            const auto findOnClock = [&](const OperationIndex input) -> std::optional<OperationIndex> {
-                const auto found = emitted.find({input.value(), clock});
-                return found == emitted.end() ? std::nullopt
-                                              : std::optional{OperationIndex::fromRaw(found->second)};
-            };
+    for (const auto& [index, clock] : order) {
+        auto copy = operations[index];
+        std::uint32_t operandClock = clock;
+        std::uint32_t contentClock = clock;
+        if (const auto found = layerClocks.find({index, clock}); found != layerClocks.end()) {
+            operandClock = found->second.first;
+            contentClock = found->second.second;
+        }
+        const bool scopes = retimed(operations[index]) != nullptr ||
+                            timeSample(operations[index]) != nullptr;
+        remapInputs(copy, [&](const OperationIndex input, const bool contentInput) {
+            const auto at = contentInput && scopes ? contentClock : clock;
+            return OperationIndex::fromRaw(
+                emitted.at({input.value(), inputClock(input.value(), at)}));
+        });
+        const auto findOnClock = [&](const OperationIndex input) -> std::optional<OperationIndex> {
+            const auto found = emitted.find({input.value(), clock});
+            return found == emitted.end() ? std::nullopt
+                                          : std::optional{OperationIndex::fromRaw(found->second)};
+        };
+        // A leaf's channel images are resolved against the copies emitted so far; in depth-first
+        // order, after every copy is emitted.
+        if (!sampled) {
             if (auto* shuffle = std::get_if<CompiledChannelShuffle>(&copy))
                 remapLeafImages(shuffle->channels, findOnClock);
             else if (auto* cryptomatte = std::get_if<CompiledCryptomatte>(&copy))
                 remapLeafImages(cryptomatte->channels, findOnClock);
-            emitted[{index, clock}] = scoped.size();
-            scoped.push_back(std::move(copy));
-            operationClocks.push_back(operandClock);
-            placementClocks.push_back(clock);
+        } else if (std::holds_alternative<CompiledChannelShuffle>(copy) ||
+                   std::holds_alternative<CompiledCryptomatte>(copy)) {
+            leaves.emplace_back(scoped.size(), clock);
         }
+        emitted[{index, clock}] = scoped.size();
+        scoped.push_back(std::move(copy));
+        operationClocks.push_back(operandClock);
+        placementClocks.push_back(clock);
     }
-    // Clocks name the emitted placement copy of the Layer Output that defines them.
+    for (const auto& [at, clock] : leaves) {
+        const auto findOnClock = [&](const OperationIndex input) -> std::optional<OperationIndex> {
+            const auto found = emitted.find({input.value(), clock});
+            return found == emitted.end() || found->second >= at
+                       ? std::nullopt
+                       : std::optional{OperationIndex::fromRaw(found->second)};
+        };
+        if (auto* shuffle = std::get_if<CompiledChannelShuffle>(&scoped[at]))
+            remapLeafImages(shuffle->channels, findOnClock);
+        else if (auto* cryptomatte = std::get_if<CompiledCryptomatte>(&scoped[at]))
+            remapLeafImages(cryptomatte->channels, findOnClock);
+    }
+    // Clocks name the emitted placement copy of the Layer Output (or time sample) that defines
+    // them.
     for (auto& entry : clocks) {
         if (entry.kind == CompiledClockKind::Plan)
             continue;
-        const auto placement = entry.kind == CompiledClockKind::Layer
-                                   ? entry.parent
-                                   : clocks[entry.parent].parent;
+        const auto placement = entry.kind == CompiledClockKind::Content
+                                   ? clocks[entry.parent].parent
+                                   : entry.parent;
         entry.layer = OperationIndex::fromRaw(emitted.at({entry.layer.value(), placement}));
     }
     for (auto& value : definition.valueOperations)

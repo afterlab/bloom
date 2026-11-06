@@ -1,4 +1,5 @@
 #include "color_grade_image_effect.hpp"
+#include "motion_blur_image_effect.hpp"
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "depth_effect_image_effect.hpp"
@@ -939,6 +940,8 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
         return lensFlareProbeProgramText();
     case ColorGradeKind::FilmGrain:
         return filmGrainProgramText();
+    case ColorGradeKind::Motion:
+        return {}; // One program per pass: the caller asks with the pass (motionProgramText).
     case ColorGradeKind::HueSaturation: {
         static const std::string text =
             "layout(set = 0, binding = 0, std430) readonly buffer BloomHueSaturationData { vec4 "
@@ -964,6 +967,9 @@ std::optional<std::vector<double>>
 sampleColorGradeOperands(const ImageEffectKernel& kernel, const CompiledCompositionPlan& plan,
                          const ResolvedEvaluation& resolved,
                          const std::optional<core::RationalTime> time) {
+    // #484: a motion kernel's operands include the shutter's sub-frame samples.
+    if (isMotionKernel(kernel))
+        return sampleMotionOperands(kernel, plan, resolved, time);
     std::vector<double> values;
     bool evaluable = true;
     const bool grade = forEachColorGradeOperand(kernel, [&](const auto& parameter) {
@@ -1091,6 +1097,8 @@ std::optional<PreparedColorGrade> prepareColorGrade(const ImageEffectKernel& ker
         return prepareLensFlareGrade(*flare, values);
     if (const auto* grain = std::get_if<FilmGrainKernel>(&kernel))
         return prepareFilmGrainGrade(*grain, values);
+    if (isMotionKernel(kernel))
+        return prepareMotionGrade(kernel, values);
     return std::nullopt;
 }
 
@@ -1122,7 +1130,8 @@ bool colorGradePixel(const PreparedColorGrade& grade, std::array<float, 4>& pixe
     if (grade.kind == ColorGradeKind::Vignette || grade.kind == ColorGradeKind::FieldRaster ||
         grade.kind == ColorGradeKind::DepthMap || grade.kind == ColorGradeKind::Defocus ||
         grade.kind == ColorGradeKind::LensFlare || grade.kind == ColorGradeKind::LensFlareProbe ||
-        grade.kind == ColorGradeKind::FilmGrain)
+        grade.kind == ColorGradeKind::FilmGrain ||
+        grade.kind == ColorGradeKind::Motion)
         return false;
     const auto channel = [&](const std::size_t index, const float x) {
         return levelsChannel(grade.data.data() + 4 + index * kLevelsChannelFloats, x);
@@ -1249,9 +1258,9 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                         : kind == ColorGradeKind::LensFlareProbe
                             ? validLensFlareProbeData(data)
                         : kind == ColorGradeKind::FilmGrain ? validFilmGrainProgramData(data)
+                        : kind == ColorGradeKind::Motion ? validMotionProgramData(data)
                             : data.size() == kHueSaturationFloats;
-    if (static_cast<std::uint8_t>(kind) >
-            static_cast<std::uint8_t>(ColorGradeKind::FilmGrain) ||
+    if (static_cast<std::uint8_t>(kind) > static_cast<std::uint8_t>(ColorGradeKind::Motion) ||
         !shaped ||
         !std::ranges::all_of(data, [](const float value) { return std::isfinite(value); }))
         return render::OcioGpuProgramResult::failure(render::OcioGpuProgramError::InvalidRequest);
@@ -1328,8 +1337,15 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
         program.resourcePrefix = "bloom_film_grain_";
         program.semanticsId = "bloom.render.film-grain.v1";
         break;
+    case ColorGradeKind::Motion:
+        program.functionName = "bloom_motion";
+        program.resourcePrefix = "bloom_motion_";
+        program.semanticsId = "bloom.render.motion-blur.v1";
+        break;
     }
-    program.shaderText = glslProgramText(kind);
+    program.shaderText = kind == ColorGradeKind::Motion
+                             ? motionProgramText(static_cast<int>(data[0]))
+                             : glslProgramText(kind);
     program.uniformBufferStorage = true;
     program.uniformBufferSize = data.size() * sizeof(float);
     program.uniformBufferData.resize(data.size() * sizeof(float));

@@ -153,6 +153,13 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::finishNative(render::GpuImage
             ++counters.cacheRefusals;
         }
     }
+    if (budgets.collectStepTimings) {
+        const auto observed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now() - nativeStart)
+                                  .count();
+        stepTimings.push_back({step.command, stepSubmitNanoseconds,
+                               observed > 0 ? static_cast<std::uint64_t>(observed) : 0, actual});
+    }
     ++counters.commandsExecuted;
     ++cursor;
     batchAttempted = false;

@@ -114,6 +114,13 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                         return parameter(key->low) || parameter(key->high);
                     if (const auto* directional = std::get_if<DirectionalBlurKernel>(&step.kernel))
                         return parameter(directional->angle) || parameter(directional->spacing);
+                    // #484: jittered samples are hashed with the frame index.
+                    if (const auto* path = std::get_if<MotionPathBlurKernel>(&step.kernel);
+                        path != nullptr && path->shutter.jitter)
+                        return true;
+                    if (const auto* vector = std::get_if<VectorBlurKernel>(&step.kernel);
+                        vector != nullptr && vector->shutter.jitter)
+                        return true;
                     if (isColorGradeKernel(step.kernel)) {
                         // #525: a field that reads the clock (a looping noise, a moving pattern).
                         const auto* field = std::get_if<FieldRasterKernel>(&step.kernel);

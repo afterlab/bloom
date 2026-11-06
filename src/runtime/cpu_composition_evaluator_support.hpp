@@ -86,6 +86,10 @@ struct PreflightOutcome final {
 
 // ADR 0024: resolves every layer time clock of `plan` for this request on top of the clock-0
 // resolution `base`, attaching clockTimes/clockResolutions. A plan with no clocks is returned as is.
+// #484: a time sample's clock time: `parent` posterized (when the sample posterizes), plus its
+// offset. nullopt when it cannot be represented.
+[[nodiscard]] std::optional<core::RationalTime> offsetTime(core::RationalTime parent,
+                                                           const TimeSampleKernel& sample);
 [[nodiscard]] PreflightOutcome resolveLayerClocks(const std::shared_ptr<const CompiledCompositionPlan>& plan,
                                                   const EvaluationRequest& request,
                                                   ResolvedEvaluation base,

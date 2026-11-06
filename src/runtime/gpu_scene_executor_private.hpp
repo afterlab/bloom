@@ -554,6 +554,8 @@ struct GpuSceneExecutor::Impl final {
     bool drainRequired = false;
     bool deviceLost = false;
     std::chrono::steady_clock::time_point nativeStart{};
+    std::uint64_t stepSubmitNanoseconds = 0;
+    std::vector<GpuSceneExecutorStepTiming> stepTimings;
 
     // #405 upload lookahead state for the current job. `lookaheadStep` is the planned Upload step
     // begun on `lookaheadUpload` (kNoLookahead when none); its actual VMA bytes are reserved

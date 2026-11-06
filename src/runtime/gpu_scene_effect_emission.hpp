@@ -26,6 +26,7 @@
 #include "depth_effect_image_effect.hpp"
 #include "lens_flare_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
+#include "motion_blur_image_effect.hpp"
 #include "discrete_image_effect.hpp"
 #include "field_raster.hpp"
 #include "gpu_scene_layer_emission.hpp"
@@ -198,6 +199,7 @@ struct GpuSceneEffectEmission final {
 #include "gpu_scene_field_emission.ipp"
 #include "gpu_scene_depth_emission.ipp"
 #include "gpu_scene_lens_flare_emission.ipp"
+#include "gpu_scene_motion_emission.ipp"
 
 // Emits the scene command(s) for one reachable CompiledImageEffect. Returns nullopt on success and
 // a fail-closed failure otherwise.
@@ -234,8 +236,10 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     };
 
     // Exact CPU identity cases.
+    // #484: a time sample's pixels are its input's (evaluated on its own clock).
     if (effect.bypass || (request.bypassLookNodes && effect.look) ||
-        std::holds_alternative<IdentityImageKernel>(effect.kernel)) {
+        std::holds_alternative<IdentityImageKernel>(effect.kernel) ||
+        std::holds_alternative<TimeSampleKernel>(effect.kernel)) {
         return identity();
     }
     if (const auto* discrete = std::get_if<DiscreteImageKernel>(&effect.kernel)) {
@@ -359,6 +363,22 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         }
         return emitLensFlareCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
                                     emit, charge, chargeCoverage, result);
+    }
+    // #484 Motion blur: every motion kernel's pass plan.
+    if (isMotionKernel(effect.kernel)) {
+        const auto values = sampleColorGradeOperands(
+            effect.kernel, plan, resolved,
+            timeForClock(ctx.frameResolved != nullptr ? *ctx.frameResolved : resolved,
+                         request.time, plan.operationClock(operationIndex)));
+        const auto grade = values ? prepareColorGrade(effect.kernel, *values) : std::nullopt;
+        if (!grade)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "Motion blur values are out of domain");
+        // No blur anywhere aliases the input, as on the CPU reference.
+        if (grade->identity)
+            return identity();
+        return emitMotionCommand(effect, *grade, operationIndex, ctx, ocioContext, cancellation,
+                                 emit, charge, chargeCoverage, result);
     }
     const auto* cst = std::get_if<CstKernel>(&effect.kernel);
     const auto* file = std::get_if<FileTransformKernel>(&effect.kernel);

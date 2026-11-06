@@ -170,7 +170,9 @@ PreparedImageEffect ImageEffectContext::prepare(
     const std::optional<std::array<double, 2>> lumaKeyRange,
     const std::optional<std::vector<double>> gradeValues,
     const std::optional<std::array<double, 2>> directionalValues) {
-    if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel))
+    // #484: a time sample's pixels are its input's (evaluated on its own clock).
+    if (effect.bypass || std::holds_alternative<IdentityImageKernel>(effect.kernel) ||
+        std::holds_alternative<TimeSampleKernel>(effect.kernel))
         return {};
     PreparedImageEffect prepared;
     if (std::holds_alternative<LayerMaskKernel>(effect.kernel)) {

@@ -186,6 +186,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::begin(std::shared_ptr<const Prepare
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread,
                               "begin must run on the device owner thread");
     }
+    impl.stepTimings.clear();
     if (impl.deviceLost) {
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceLost,
                               "the device generation was lost; this executor is terminal");
@@ -507,6 +508,10 @@ std::shared_ptr<const render::GpuImage> GpuSceneExecutor::takeImage(const bool p
     impl_->state = GpuSceneExecutorJobState::Idle;
     impl_->diagnostic = {};
     return result;
+}
+
+std::vector<GpuSceneExecutorStepTiming> GpuSceneExecutor::stepTimings() const {
+    return impl_ != nullptr ? impl_->stepTimings : std::vector<GpuSceneExecutorStepTiming>{};
 }
 
 void GpuSceneExecutor::cancel() noexcept {

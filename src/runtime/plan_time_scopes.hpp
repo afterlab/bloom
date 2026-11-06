@@ -6,6 +6,7 @@
 #include <bloom/runtime/compiled_plan.hpp>
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -38,5 +39,12 @@ scopeLayerTime(CompiledCompositionPlanDefinition& definition);
 // that names its channels statically (its reference is cleared). A plan in which every operation
 // is reached is left exactly as it was.
 void separateChannelLayerImages(CompiledCompositionPlanDefinition& definition);
+
+// #484: every image input of `operation` (inputs, secondary and mask inputs, field images, layer
+// inputs and parents, merge entries, output layers), read or replaced through `function`.
+void forEachOperationInput(const CompiledOperation& operation,
+                           const std::function<void(OperationIndex)>& function);
+void remapOperationInputs(CompiledOperation& operation,
+                          const std::function<OperationIndex(OperationIndex)>& function);
 
 } // namespace bloom::runtime::detail

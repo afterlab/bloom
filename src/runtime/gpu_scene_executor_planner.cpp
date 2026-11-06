@@ -231,7 +231,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.command = index;
         step.input = translation->input;
         step.cacheKey = translation->semanticKey;
-        step.cacheOnComplete = true;
+        step.cacheOnComplete = !translation->transientResult;
         step.outputWindow = translation->outputWindow;
         step.outputDisplayWindow = translation->outputDisplayWindow;
         step.translationX = translation->translationX;
@@ -329,7 +329,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.destination = blendCommand->destination;
         step.mask = masked ? blendCommand->mask : kInvalidGpuSceneCommand;
         step.cacheKey = key;
-        step.cacheOnComplete = true;
+        step.cacheOnComplete = !blendCommand->transientResult;
         step.outputWindow = blendCommand->outputWindow;
         step.blendMode = blendCommand->mode;
         step.imageCombine = blendCommand->imageCombine;
@@ -382,7 +382,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.command = index;
         step.input = ocioCommand->input;
         step.cacheKey = key;
-        step.cacheOnComplete = true;
+        step.cacheOnComplete = !ocioCommand->transientResult;
         step.outputWindow = ocioCommand->outputWindow;
         step.ocioCommand = ocioCommand->program;
         steps.push_back(std::move(step));
