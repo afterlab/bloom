@@ -155,10 +155,15 @@ void GradingValueRow::setSlider(const GradingSliderSpec& spec) {
                 [this](const double value) { write(value); });
     }
     slider_->setDragMode(spec.mode);
-    slider_->setRange(spec.minimum, spec.maximum);
-    const auto presentation = field_->presentation();
-    slider_->setLimits(presentation.minimum / presentation.displayScale,
-                       presentation.maximum / presentation.displayScale);
+    {
+        // Setting the range clamps the thumb, which is not an edit: a soft minimum above zero must
+        // not write itself into the document. The next refresh reads the value.
+        const QSignalBlocker blocker(slider_);
+        slider_->setRange(spec.minimum, spec.maximum);
+        const auto presentation = field_->presentation();
+        slider_->setLimits(presentation.minimum / presentation.displayScale,
+                           presentation.maximum / presentation.displayScale);
+    }
     slider_->setNeutral(spec.neutral);
     slider_->setTickInterval(spec.ticks);
     slider_->setTrackGradient(spec.gradient);
