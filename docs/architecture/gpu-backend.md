@@ -1482,7 +1482,12 @@ bytes until its envelope has been measured (see below). Its device need is its w
 bytes plus its minimum executor bytes (the live-image peak; GPU scene preparation raises the
 minimum to the preflight live-image peak for previews and final renders alike). GPU scene
 preparation states the source need from the reachable decoded sources (one float frame per probed
-image or video source, the preflight live-image peak when an extent is unknown). Requested source
+image or video source, the preflight live-image peak when an extent is unknown). A channel read is
+stated from its file sources' recorded extent too (#549): a Shuffle holds its one RGBA32F gather,
+and a Cryptomatte type its rank layers, one RGBA32F frame per two ranks, counted once for every
+matte of the type; the ranks are known only from the file, so the claim takes the Cryptomatte
+default depth of six ranks (three layers), and a phase that retains more grows its claim when its
+sources are prepared. An image-backed or nested channel source keeps the preflight peak. Requested source
 and executor sizes are ceilings: a phase may grow toward them, but they are not claimed. Retained
 products (RAM-preview frames, final products) stay charged while they live.
 

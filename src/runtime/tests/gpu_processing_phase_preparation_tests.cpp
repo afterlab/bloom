@@ -9,6 +9,7 @@
 #include <ImfOutputFile.h>
 #include <ImfStringAttribute.h>
 #include <bloom/document/asset.hpp>
+#include <bloom/document/channel_nodes.hpp>
 #include <bloom/media/image.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 
@@ -576,8 +577,110 @@ void mixedAndNestedQuotas() {
             "nested coverage cannot escape exhausted parent coverage quota");
 }
 } // namespace
+// #549: a phase with a channel read claims what the read holds, from its file sources' recorded
+// extent, instead of the frame's preflight live-image peak. A Shuffle holds one RGBA32F gather, as
+// an Image of the same file does; a Cryptomatte type holds its rank layers (the Cryptomatte
+// default of three) after decoding their ranks, once for every matte of the type. The source need
+// is claimed with one source's scratch (twice the largest source), as for Image sources.
+void channelReadClaims() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    const auto directory =
+        std::filesystem::temp_directory_path() /
+        ("bloom-channel-read-claims-" + std::to_string(now.time_since_epoch().count()));
+    std::filesystem::create_directories(directory);
+    struct Cleanup final {
+        std::filesystem::path directory;
+        ~Cleanup() {
+            std::error_code ignored;
+            std::filesystem::remove_all(directory, ignored);
+        }
+    } cleanup{directory};
+    const auto path = directory / "render.exr";
+    writeExrRgba(path, 64, 32, std::vector<ExrPixel>(64 * 32));
+    const auto asset = imageAsset(path, "render", 896000);
+    const std::uint64_t frame = 64ULL * 32 * 16;
+    const auto channels = [&asset] {
+        CompiledChannelExpression expression;
+        expression.sources.push_back(
+            CompiledChannelSource{document::NodeId::fromRaw(896001), asset, 0, 0, 0, {}, {}});
+        CompiledChannelStep step;
+        step.kind = CompiledChannelStepKind::Source;
+        step.nodeId = document::NodeId::fromRaw(896001);
+        expression.steps.push_back(step);
+        return expression;
+    };
+    CompiledChannelShuffle shuffle;
+    shuffle.sourceNodeId = document::NodeId::fromRaw(896002);
+    shuffle.channels = channels();
+    shuffle.mapping = {"depth.Z", "depth.Z", "depth.Z", "1"};
+    shuffle.mode = document::kChannelShuffleRawMode;
+    CompiledCryptomatte cryptomatte;
+    cryptomatte.sourceNodeId = document::NodeId::fromRaw(896003);
+    cryptomatte.channels = channels();
+    cryptomatte.layer = "CryptoObject";
+    cryptomatte.mattes = {"cube"};
+    auto other = cryptomatte;
+    other.sourceNodeId = document::NodeId::fromRaw(896004);
+    other.mattes = {"floor"};
+    const CompiledOperation image = CompiledImageSource{
+        document::NodeId::fromRaw(896001), asset, 0, 0, 0, std::string{}, false};
+    const auto base = bloom::gpu_coverage_fixtures::twoLayerPlan(
+        bloom::gpu_coverage_fixtures::format(1920, 1080), {}, {}, 600.0, 400.0, 897000);
+    // The host claim of one admitted phase whose plan reads `first` and `second`.
+    const auto claim = [&](const CompiledOperation& first, const CompiledOperation& second) {
+        auto policy = std::make_shared<GpuProcessingPhasePolicy>(1);
+        MemoryBudgetState sample;
+        sample.machine.availableBytes = 60 * gib;
+        sample.process.status = ProcessMemoryStatus::Finite;
+        sample.process.source = ProcessMemorySource::LinuxCgroupV2;
+        sample.process.sampledAt = now;
+        sample.process.domains.push_back({.path = "/own",
+                                          .kind = ProcessMemoryLimitKind::Finite,
+                                          .limitBytes = 32 * gib,
+                                          .currentBytes = 0});
+        sample.processSampleFresh = true;
+        sample.sampleSerial = 1;
+        policy->applyHostSample(sample, 60 * gib, now);
+        require(policy->reportDevice(104, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                           .device_local_bytes = 4 * gib,
+                                           .available_bytes = 4 * gib}),
+                "channel read claims: native quota reported");
+        GpuScenePreparationPhase phase{.policy = policy,
+                                       .envelope = {.metadataBytes = 1024ULL * 1024,
+                                                    .retainedCoverageByteLimit = 1024ULL * 1024,
+                                                    .requestedExecutorBytes = gib,
+                                                    .deviceWorkingBytes = 64ULL * 1024 * 1024}};
+        CpuCompositionEvaluator evaluator;
+        evaluator.setAssetBaseDirectory(directory);
+        CpuGpuSceneBuilder builder(nullptr, GpuSceneMediaContext::fromEvaluator(evaluator), {},
+                                   phase);
+        std::uint64_t claimed = 0;
+        GpuSceneBuilderTestAccess::setCheckpoint(
+            builder, [&] { claimed = policy->snapshot().reservations.totalHostClaimBytes; });
+        auto definition = base->copyDefinition();
+        definition.operations[0] = first;
+        definition.operations[2] = second;
+        auto plan = bloom::gpu_coverage_fixtures::publish(std::move(definition));
+        auto request = bloom::gpu_coverage_fixtures::requestFor(*plan);
+        request.pixelStorageByteLimit = 4 * gib;
+        const auto built = builder.build(plan, request);
+        if (claimed == 0)
+            std::cerr << "channel read claims: " << built.diagnostic.message << '\n';
+        require(claimed != 0, "channel read claims: the phase is admitted");
+        return claimed;
+    };
+    const auto images = claim(image, image);
+    require(claim(shuffle, image) == images,
+            "a Shuffle claims one RGBA32F frame of its source, as an Image of it does");
+    require(claim(cryptomatte, image) == images + 6 * frame,
+            "a Cryptomatte claims its type's three rank layers and their decode scratch");
+    require(claim(cryptomatte, other) == claim(cryptomatte, image) - frame,
+            "two mattes of one type claim its rank layers once");
+}
+
 int main() {
     try {
+        channelReadClaims();
         prepare();
         finalPreparation();
         mixedAndNestedQuotas();

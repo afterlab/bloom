@@ -283,14 +283,40 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
         }
         // The phase claims its actual source need: every reachable decoded source as one float
-        // RGBA frame, or the preflight live-image peak when a source has no known extent (nested
-        // compositions, unprobed media). The caller's limit stays an unclaimed ceiling.
+        // RGBA frame, a channel read as what it holds (#549, below), or the preflight live-image
+        // peak when a source has no known extent (nested compositions, unprobed media). The
+        // caller's limit stays an unclaimed ceiling.
         if (!envelope.sourceFree) {
             std::uint64_t sourceNeed = 0;
             std::uint64_t largestSource = 0;
             bool unknownExtent = false;
+            // #549: a channel read holds frames of its file sources' extent. A Shuffle retains its
+            // one RGBA32F gather. A Cryptomatte type retains its rank layers (one RGBA32F frame per
+            // two ranks, shared by every matte of the type) after decoding their ranks' channels;
+            // the ranks are known only from the file, so the claim takes the Cryptomatte
+            // specification's default depth of six ranks (three layers), and a phase that retains
+            // more grows its claim when its sources are prepared. An image-backed or nested channel
+            // source, or one without a recorded extent, keeps the preflight peak.
+            std::vector<std::string> cryptomatteTypes;
+            const auto channelReadFrame =
+                [&unknownExtent](const CompiledChannelExpression& channels) -> std::uint64_t {
+                std::uint64_t frame = 0;
+                for (const auto& source : channels.sources) {
+                    if (source.imageBacked || !source.nesting.empty() || !source.asset ||
+                        source.asset->width == 0 || source.asset->height == 0) {
+                        unknownExtent = true;
+                        return 0;
+                    }
+                    frame = std::max<std::uint64_t>(
+                        frame, static_cast<std::uint64_t>(source.asset->width) *
+                                   source.asset->height * sizeof(render::Rgba32f));
+                }
+                if (frame == 0)
+                    unknownExtent = true;
+                return frame;
+            };
             // Nested compositions contribute their own media sources; only a source without a
-            // recorded extent (or a channel/cryptomatte read) falls back to the preflight peak.
+            // recorded extent falls back to the preflight peak.
             std::vector<const CompiledCompositionPlan*> pending{plan.get()};
             std::vector<const CompiledCompositionPlan*> visited;
             while (!pending.empty()) {
@@ -318,9 +344,31 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         else
                             unknownExtent = true;
                         continue;
-                    } else if (std::holds_alternative<CompiledChannelShuffle>(operation) ||
-                               std::holds_alternative<CompiledCryptomatte>(operation)) {
-                        unknownExtent = true;
+                    } else if (const auto* shuffle =
+                                   std::get_if<CompiledChannelShuffle>(&operation)) {
+                        const auto bytes = channelReadFrame(shuffle->channels);
+                        sourceNeed += bytes;
+                        largestSource = std::max(largestSource, bytes);
+                        continue;
+                    } else if (const auto* cryptomatte =
+                                   std::get_if<CompiledCryptomatte>(&operation)) {
+                        constexpr std::uint64_t kDefaultCryptomatteRankLayers = 3;
+                        const auto frame = channelReadFrame(cryptomatte->channels);
+                        // Every matte of one type over the same sources reads one set of layers.
+                        std::string type = cryptomatte->layer;
+                        for (const auto& source : cryptomatte->channels.sources)
+                            if (source.asset) {
+                                const auto hex = source.asset->contentDigest.toLowercaseHex();
+                                type.append(1, '\0').append(hex.begin(), hex.end());
+                                type.append(1, '\0').append(source.part);
+                            }
+                        if (frame == 0 ||
+                            std::ranges::find(cryptomatteTypes, type) != cryptomatteTypes.end())
+                            continue;
+                        cryptomatteTypes.push_back(std::move(type));
+                        const auto bytes = frame * kDefaultCryptomatteRankLayers;
+                        sourceNeed += bytes;
+                        largestSource = std::max(largestSource, bytes);
                         continue;
                     } else {
                         continue;
