@@ -16,6 +16,12 @@ Nothing clips: HDR values keep their range, and grain may take a dark value slig
 - **Red amount**, **Green amount** and **Blue amount** set each channel's own strength. Each channel
   has its own grain; on real stock blue is usually the strongest. A channel at 0% keeps its value
   exactly.
+- **Monochrome** is off by default. Turn it on and one grain pattern is shared by all three channels,
+  so the grain carries no colour noise. The red, green and blue amounts keep scaling that one pattern:
+  with all three equal the grain is neutral, with them unequal it is tinted but still one pattern,
+  and a channel at 0% still keeps its value exactly. Each channel keeps the strength it had, so the
+  channels no longer partly cancel in the brightness: at the same **Intensity** Monochrome grain looks
+  about a third stronger. Lower **Intensity** to match.
 
 ## Response to brightness
 
@@ -45,7 +51,8 @@ Under a retimed layer the frame is the layer's own.
 ## Limiting it
 
 Connect a Mask to **Mask** to keep the grain to part of the image, or an image read through **Mask
-channel**. Every value but **Seed** and **Grain changes** can be keyed or driven through its socket.
+channel**. Every value but **Seed**, **Grain changes** and **Monochrome** can be keyed or driven
+through its socket.
 
 ## Cost
 

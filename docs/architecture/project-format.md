@@ -988,6 +988,14 @@ the open path only. The node stays at schema 1 and the document schema version i
 defaults to off, and the compiler already lowered an unbound role with that default, so the plan and
 every pixel are the same. [Motion blur](motion-blur.md) specifies the nodes.
 
+#### Film Grain Monochrome
+
+Opening a project (#486) binds the optional `bloom.film-grain` parameter `monochrome` on a node that
+lacks it. `migrateLegacyFilmGrainMonochrome` rewrites the decoded envelope as the Glow migration below
+does, on the open path only. The node stays at schema 1 and the document schema version is unchanged.
+`monochrome` defaults to off, and the compiler already lowered an unbound role with that default, so the
+plan and every pixel are the same. [Image filters](image-filters.md#film-grain) specifies the node.
+
 #### Glow Controls
 
 Opening a project (#534) binds every optional `bloom.glow` parameter a node lacks: the #506 mode and

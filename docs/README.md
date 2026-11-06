@@ -92,8 +92,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   and bokeh, picking the focus in the Viewer and rack focus.
 - [Lens Flare](user-guide/lens-flare.md) — the element stack, presets, placing the light in 2D, from
   a tracker or in 3D, and following the picture with source brightness and an occlusion matte.
-- [Film Grain](user-guide/film-grain.md) — seeded, repeatable grain: size, each channel's amount, the
-  response to brightness, and holding or redrawing it over time.
+- [Film Grain](user-guide/film-grain.md) — seeded, repeatable grain: size, each channel's amount,
+  monochrome grain, the response to brightness, and holding or redrawing it over time.
 - [Motion blur](user-guide/motion-blur.md) — which motion blur to use, the shared shutter, sub-frame
   Motion Blur, Transform 2D's shutter, Vector Motion Blur and its renderer conventions, Optical Flow,
   Optical Flow Motion Blur with mattes, Echo and Posterize Time, and the Viewer handles of

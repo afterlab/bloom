@@ -1378,7 +1378,7 @@ interest draws the whole frame's pixels. A value change is new program data and 
 ## Film Grain
 
 `bloom.film-grain`, schema 1, under Stylize (issue #486), has one Image in, `input`, one Image out,
-`image`, and the optional effect mask every filter takes. Every value below but the last two has a
+`image`, and the optional effect mask every filter takes. Every value below but the last three has a
 socket and can be keyed or driven:
 
 | Role | Default | Domain | Meaning |
@@ -1389,9 +1389,11 @@ socket and can be keyed or driven:
 | `shadows`, `midtones`, `highlights` | 0.1, 1, 1 | 0 to 10 | The response at luma 0, 0.18 and 1 |
 | `animation` | Every Frame | Every Frame (0), Held (1) | Whether each frame has its own grain. Constant |
 | `seed` | 1 | 0 to 2^31 - 1 | Which grain. Constant |
+| `monochrome` | off | off, on | One grain pattern shared by every channel. Constant and optional: a node saved before it opens with it off ([project format](project-format.md#film-grain-monochrome)) |
 
 **The pixel.** With premultiplied `rgb` and `a`, `L = max(luma(rgb) / a, 0)` the pixel's straight
-Rec. 709 luma, `n` the noise below and `k` each channel's amount:
+Rec. 709 luma, `n` the noise below (each channel's own, or with `monochrome` red's in all three) and
+`k` each channel's amount:
 
 ```text
 response(L) = shadows + (midtones - shadows) * L / 0.18          L < 0.18
@@ -1406,6 +1408,15 @@ transparent black. Nothing is clamped: an HDR value keeps its range, the last li
 keeps the grain the same share of a highlight above 1, and a dark value can go slightly negative
 rather than lifting the grain's mean. The node is the identity at intensity 0, with every amount at 0
 or with every response at 0.
+
+**Monochrome.** Every channel reads red's noise, so `rgb' = rgb + a * response(L) * intensity * k * n_red`,
+and `redAmount`, `greenAmount` and `blueAmount` keep scaling that one pattern. Equal amounts over a
+neutral pixel stay neutral to the last bit; unequal amounts tint the grain but it stays one pattern, and
+an amount of 0 keeps its channel exactly. Red is the pattern, so turning `monochrome` on leaves the red
+channel's every bit as it was, and a seed's grain is the same grain. Each channel keeps a standard
+deviation of `intensity * k`, which raises the deviation of the Rec. 709 luma at equal amounts from
+about 0.75 to 1 of it: the channels no longer partly cancel. The option leaves the hash, the stream and
+the seed alone, and with it off the node draws every bit it drew before it existed.
 
 **The noise.** A pixel's centre `(x + 0.5, y + 0.5)`, in the image's absolute pixel coordinates, is
 read at `(x + 0.5) * aspect / (scaleX * size)` and `(y + 0.5) / (scaleY * size)` in cells, where
@@ -1435,18 +1446,25 @@ is then unrelated to its neighbours', and returning to a frame draws it again. `
 and does not vary with time, and neither does anything downstream because of it.
 
 **On the GPU.** One fixed resident program over the input, with every value in its data, so a new
-frame is new data and a new cache identity on one compiled program. The hash is integer arithmetic,
+frame is new data and a new cache identity on one compiled program, and so is a toggle of `monochrome`,
+one 0 or 1 in the data that one branch in the program reads. The hash is integer arithmetic,
 and the sum is additions and multiplications the program marks `precise`, each exact on every device;
 the luma's division is the wrapper's correctly rounded one. A pixel whose response is 0 runs no noise.
 
 **Evidence.** `src/runtime/tests/film_grain_tests.cpp` pins the hash's values, holds the noise to its
 mean, deviation and independence (in sign and in strength) at several spacings, the pixel to the formula over HDR and partial
 alpha, and each promise above, frame and seed identity through the evaluator's memoization, the
-domains, the fixed program, the pixel budget and cancellation. The native harness (`runFilmGrains`)
-holds seven cases (the default, every path at three sizes, held, a proxy and a region of interest) to
-the CPU oracle within 2e-6 on RGB with exact alpha, warm RAM reuse with zero dispatches, the next
-frame with new grain (held: zero dispatches and the same pixels), and a changed value re-running with
-parity. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
+domains, the fixed program, the pixel budget and cancellation. It also pins digests, taken from the
+build before `monochrome` existed, of the pixels of every path, the program data, the cache identity
+and the program with that one branch removed, and holds `monochrome` to its formula, its red channel
+to the bits it has with the option off, a neutral pixel to neutral, and each state to its own cache
+identity. The native harness (`runFilmGrains`) holds fourteen cases (the default, every path at three
+sizes, held, a proxy and a region of interest, each with `monochrome` off and on) to the CPU oracle
+within 2e-6 on RGB with exact alpha, warm RAM reuse with zero dispatches, the next frame with new grain
+(held: zero dispatches and the same pixels), a changed value re-running with parity, and a toggle of
+`monochrome` re-running with parity while going back finds its own entry with zero dispatches.
+`tests/integration/film_grain_monochrome_migration_tests.cpp` opens a node saved without the option to
+the same plan and bit-identical pixels. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
 full frame and ROI. [Benchmarks](../development/benchmarks.md#film-grain-486) holds its cost.
 
 ## Sharpen
