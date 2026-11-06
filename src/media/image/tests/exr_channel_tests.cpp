@@ -336,6 +336,78 @@ int main() {
         source, {}, [&] { return stop; }, [&](std::uint64_t, std::uint64_t) { stop = true; });
     check.expect(!cancelled && cancelled.cancelled, "channel-set decode is cancellable");
 
+    // #549: channels read in the colour decode's pass equal the channel-set decode of the same
+    // names (values bit for bit, order, windows and metadata), and the colour image is unchanged.
+    {
+        const std::vector<std::string> names{"CryptoObject00.g", "CryptoObject00.r", "depth.Z",
+                                             "id"};
+        const auto expected =
+            media::decodeImageChannels(source, {.part = "beauty", .channels = names});
+        const auto same = [&](const media::ImageChannelsAlongside& read) {
+            if (!expected.value || !read.decoded)
+                return false;
+            const auto& want = **expected.value;
+            const auto& got = *read.decoded;
+            if (got.channels().size() != want.channels().size() ||
+                got.dataWindow() != want.dataWindow() ||
+                got.displayWindow() != want.displayWindow() || got.metadata() != want.metadata() ||
+                got.colourSpace() != want.colourSpace())
+                return false;
+            for (std::size_t index = 0; index < want.channels().size(); ++index) {
+                if (got.channels()[index].name != want.channels()[index].name ||
+                    got.channels()[index].sampleKind != want.channels()[index].sampleKind)
+                    return false;
+                const auto a = got.plane(index);
+                const auto b = want.plane(index);
+                if (a.size() != b.size() ||
+                    !std::equal(a.begin(), a.end(), b.begin(), [](const float x, const float y) {
+                        return std::bit_cast<std::uint32_t>(x) == std::bit_cast<std::uint32_t>(y);
+                    }))
+                    return false;
+            }
+            return true;
+        };
+        auto raw = select("beauty", {});
+        raw.colorSpace = media::ImageColorSpace::Raw;
+        media::ImageChannelsAlongside withSamples{.channels = names, .decoded = {}};
+        const auto samples = media::decodeImageSamples(
+            source, raw, {}, media::kMaxImageStorageBytes, nullptr, &withSamples);
+        const auto plainSamples = media::decodeImageSamples(source, raw);
+        check.expect(samples.value && plainSamples.value && same(withSamples),
+                     "a half colour layer's sample decode reads the named channels beside it");
+        check.expect(samples.value && plainSamples.value &&
+                         (*samples.value)->byteCount() == (*plainSamples.value)->byteCount() &&
+                         samples.repairedPixels == plainSamples.repairedPixels,
+                     "the samples read beside channels are the plain samples");
+        media::ImageChannelsAlongside withFloat{.channels = names, .decoded = {}};
+        const auto image = media::decodeImage(source, raw, {}, {}, {}, media::kMaxImageStorageBytes,
+                                              nullptr, &withFloat);
+        const auto plainImage = media::decodeImage(source, raw);
+        check.expect(image.value && same(withFloat),
+                     "the float colour decode reads the named channels beside it");
+        bool pixelsMatch = image.value && plainImage.value;
+        for (std::int64_t y = 1; pixelsMatch && y <= kHeight; ++y)
+            for (std::int64_t x = 1; pixelsMatch && x <= kWidth; ++x) {
+                const auto a = (*image.value)->read(x, y);
+                const auto b = (*plainImage.value)->read(x, y);
+                pixelsMatch = a && b && *a.value() == *b.value();
+            }
+        check.expect(pixelsMatch, "the float colour image read beside channels is unchanged");
+        media::ImageChannelsAlongside missing{.channels = {"specular.R"}, .decoded = {}};
+        media::ImageChannelsAlongside colour{.channels = {"depth.Z", "R"}, .decoded = {}};
+        const auto withMissing = media::decodeImage(
+            source, raw, {}, {}, {}, media::kMaxImageStorageBytes, nullptr, &missing);
+        const auto withColour = media::decodeImageSamples(
+            source, raw, {}, media::kMaxImageStorageBytes, nullptr, &colour);
+        check.expect(withMissing.value && !missing.decoded && withColour.value && !colour.decoded,
+                     "a missing or colour channel is left to its own decode; the colour decodes");
+        media::ImageChannelsAlongside tight{.channels = names, .decoded = {}};
+        const auto withinSamples = media::decodeImageSamples(
+            source, raw, {}, source.retainedBytes() + kSamples * 8U, nullptr, &tight);
+        check.expect(withinSamples.value && !tight.decoded,
+                     "channels that do not fit beside the samples are left to their own decode");
+    }
+
     const auto jpegPath = scratch.file("still.jpg");
     {
         std::ofstream file(jpegPath, std::ios::binary);

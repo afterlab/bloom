@@ -24,7 +24,8 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
 [[nodiscard]] ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeExr(std::span<const std::byte> bytes, const ImageInterpretation& interpretation,
           std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
-          const CancelImageWork& cancel, const ImageProgress& progress, std::size_t pixelBudget);
+          const CancelImageWork& cancel, const ImageProgress& progress, std::size_t pixelBudget,
+          ImageChannelsAlongside* alongside = nullptr);
 
 [[nodiscard]] ImageResult<std::shared_ptr<const render::ChannelSetImage>>
 decodeExrChannels(std::span<const std::byte> bytes, const ImageChannelSelection& selection,
@@ -55,7 +56,8 @@ struct ExrHalfSamples final {
 // NativeSamplesUnavailable when a colour channel is not HALF or is subsampled.
 [[nodiscard]] ImageResult<ExrHalfSamples>
 decodeExrHalfSamples(std::span<const std::byte> bytes, const ImageInterpretation& interpretation,
-                     const CancelImageWork& cancel, std::size_t budget);
+                     const CancelImageWork& cancel, std::size_t budget,
+                     ImageChannelsAlongside* alongside = nullptr);
 // The pixels the float decode's ingest policy would repair, counted from the bits.
 [[nodiscard]] std::uint64_t countExrHalfRepairs(std::span<const std::byte> bytes,
                                                 const ExrHalfLayout& layout,

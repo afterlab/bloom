@@ -469,6 +469,146 @@ struct ExrLayout final {
     return std::nullopt;
 }
 
+// ADR 0026 / #549: named channels of a part as float planes over its whole data window, with the
+// part's string metadata. Each plane is its own OpenEXR slice of the data window, so whatever read
+// pass inserts them fills them from the chunks it inflates anyway (a colour decode's, or a channel
+// decode's own). Half and float widen to Float32; uint keeps its 32-bit pattern in the lane.
+struct ExrChannelPlanes final {
+    struct Selected final {
+        std::string name;
+        Imf::PixelType type = Imf::FLOAT;
+    };
+    std::vector<Selected> selected;
+    std::vector<std::vector<float>> planes;
+    render::ChannelMetadata metadata;
+    // Every selected plane plus the metadata text.
+    std::uint64_t bytes = 0;
+};
+
+// `names` in order (every channel of the part when empty); planes are not allocated yet.
+[[nodiscard]] ImageResult<ExrChannelPlanes>
+selectExrChannels(const Imf::Header& header, const ExrLayout& layout,
+                  const std::span<const std::string> names) {
+    ExrChannelPlanes result;
+    if (names.empty()) {
+        for (auto it = header.channels().begin(); it != header.channels().end(); ++it)
+            result.selected.push_back({it.name(), it.channel().type});
+    } else {
+        for (const auto& name : names) {
+            const auto* channel = header.channels().findChannel(name);
+            if (channel == nullptr)
+                return failure<ExrChannelPlanes>(ImageDiagnosticCode::ChannelNotFound,
+                                                 "A selected OpenEXR channel is not present");
+            if (std::ranges::any_of(result.selected, [&](const ExrChannelPlanes::Selected& item) {
+                    return item.name == name;
+                }))
+                return failure<ExrChannelPlanes>(ImageDiagnosticCode::UnsupportedChannels,
+                                                 "A channel is selected more than once");
+            result.selected.push_back({name, channel->type});
+        }
+    }
+    std::uint64_t metadataBytes = 0;
+    for (auto it = header.begin(); it != header.end(); ++it)
+        if (const auto* text = dynamic_cast<const Imf::StringAttribute*>(&it.attribute())) {
+            metadataBytes += std::strlen(it.name()) + text->value().size();
+            result.metadata.emplace_back(it.name(), text->value());
+        }
+    std::uint64_t pixels = 0;
+    std::uint64_t planeBytes = 0;
+    if (!checkedSizeProduct(layout.width, layout.height, pixels) ||
+        !checkedSizeProduct(pixels, result.selected.size() * sizeof(float), planeBytes) ||
+        planeBytes > std::numeric_limits<std::uint64_t>::max() - metadataBytes)
+        return failure<ExrChannelPlanes>(
+            ImageDiagnosticCode::PixelBudgetExceeded,
+            "Decoded channel set exceeds the pixel working-set budget");
+    result.bytes = planeBytes + metadataBytes;
+    return {std::move(result), {}};
+}
+
+void allocateExrChannelPlanes(ExrChannelPlanes& planes, const ExrLayout& layout) {
+    planes.planes.resize(planes.selected.size());
+    for (auto& plane : planes.planes)
+        plane.assign(static_cast<std::size_t>(layout.width * layout.height), 0.0F);
+}
+
+// Slices address absolute data-window coordinates; each plane starts at the data window.
+void insertExrChannelSlices(Imf::FrameBuffer& frameBuffer, ExrChannelPlanes& planes,
+                            const ExrLayout& layout) {
+    const auto origin = Imath::V2i(layout.dataWindow.min.x, layout.dataWindow.min.y);
+    const auto rowStride = static_cast<std::size_t>(layout.width) * sizeof(float);
+    for (std::size_t channel = 0; channel < planes.selected.size(); ++channel) {
+        const auto readType = planes.selected[channel].type == Imf::UINT ? Imf::UINT : Imf::FLOAT;
+        frameBuffer.insert(planes.selected[channel].name,
+                           Imf::Slice::Make(readType, planes.planes[channel].data(), origin,
+                                            static_cast<std::int64_t>(layout.width),
+                                            static_cast<std::int64_t>(layout.height), sizeof(float),
+                                            rowStride));
+    }
+}
+
+[[nodiscard]] ImageResult<std::shared_ptr<const render::ChannelSetImage>>
+finishExrChannelPlanes(ExrChannelPlanes&& planes, const ExrLayout& layout,
+                       const std::string& inputColorSpaceId) {
+    using Decoded = std::shared_ptr<const render::ChannelSetImage>;
+    std::vector<render::ChannelDescriptor> descriptors;
+    descriptors.reserve(planes.selected.size());
+    for (const auto& item : planes.selected)
+        descriptors.push_back(render::describeChannel(item.name, sampleKind(item.type)));
+    const auto dataWindow = render::ImageWindow::create(
+        layout.dataWindow.min.x, layout.dataWindow.min.y, layout.width, layout.height);
+    const auto displayWindow =
+        render::ImageWindow::create(layout.displayWindow.min.x, layout.displayWindow.min.y,
+                                    layout.displayWidth, layout.displayHeight);
+    if (!dataWindow || !displayWindow)
+        return failure<Decoded>(ImageDiagnosticCode::InvalidDataWindow,
+                                "OpenEXR image window is invalid");
+    auto created = render::ChannelSetImage::create(
+        *dataWindow.value(), *displayWindow.value(), core::PixelAspectRatio::square(),
+        std::move(descriptors), std::move(planes.planes), std::move(planes.metadata),
+        std::numeric_limits<std::size_t>::max(),
+        inputColorSpaceId.empty() ? layout.colorSpaceTag : inputColorSpaceId);
+    if (!created)
+        return failure<Decoded>(ImageDiagnosticCode::DecodeFailed, "Channel set validation failed");
+    return {std::make_shared<const render::ChannelSetImage>(std::move(*created.value())), {}};
+}
+
+// #549: the planes a colour decode reads beside its layer, or nullopt (the caller decodes the
+// channels separately) when a name is missing or repeated or they do not fit `room`.
+[[nodiscard]] std::optional<ExrChannelPlanes>
+alongsidePlanes(const ImageChannelsAlongside* alongside, const Imf::Header& header,
+                const ExrLayout& layout, const std::uint64_t room) {
+    if (alongside == nullptr || alongside->channels.empty())
+        return std::nullopt;
+    // A colour channel already has the colour decode's slice; such a read decodes on its own.
+    // A subsampled channel cannot share the colour layer's full-resolution read.
+    for (const auto& name : alongside->channels) {
+        if (std::ranges::find(layout.colourNames, name) != layout.colourNames.end())
+            return std::nullopt;
+        if (const auto* channel = header.channels().findChannel(name);
+            channel != nullptr && (channel->xSampling != 1 || channel->ySampling != 1))
+            return std::nullopt;
+    }
+    auto selected = selectExrChannels(header, layout, alongside->channels);
+    if (!selected.value || selected.value->bytes > room)
+        return std::nullopt;
+    try {
+        allocateExrChannelPlanes(*selected.value, layout);
+    } catch (const std::bad_alloc&) {
+        return std::nullopt;
+    }
+    return std::move(*selected.value);
+}
+
+void publishAlongside(ImageChannelsAlongside* alongside, std::optional<ExrChannelPlanes>& planes,
+                      const ExrLayout& layout) {
+    if (alongside == nullptr || !planes)
+        return;
+    auto finished = finishExrChannelPlanes(std::move(*planes), layout, {});
+    planes.reset();
+    if (finished.value)
+        alongside->decoded = std::move(*finished.value);
+}
+
 } // namespace
 
 ImageResult<ImageProbe> probeExr(const std::filesystem::path& path,
@@ -498,7 +638,7 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
                const ImageInterpretation& interpretation,
                std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
                const CancelImageWork& cancel, const ImageProgress& progress,
-               const std::size_t pixelBudget) {
+               const std::size_t pixelBudget, ImageChannelsAlongside* alongside) {
     if (cancelled(cancel))
         return failure<std::shared_ptr<const render::Rgba32fImage>>(ImageDiagnosticCode::Cancelled,
                                                                     "Image decode cancelled");
@@ -552,6 +692,9 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::PixelBudgetExceeded,
                 "Decoded image exceeds the pixel working-set budget");
+        // #549: the channels read beside the layer, in the room the working set leaves.
+        auto extras = alongsidePlanes(alongside, input.header(), *layout,
+                                      pixelBudget - finalBytes - bandBytes - rowBytes);
         auto builder = render::Rgba32fImageBuilder::create(*descriptor.value(), pixelBudget);
         if (!builder)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
@@ -642,6 +785,8 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
             }
             if (layout->hasAlpha)
                 insert(layout->colourNames[3].c_str(), band[3]);
+            if (extras)
+                insertExrChannelSlices(frameBuffer, *extras, *layout);
             input.setFrameBuffer(frameBuffer);
             input.readPixels(static_cast<int>(firstY), static_cast<int>(lastY));
 
@@ -745,6 +890,7 @@ decodeExrInput(Imf::InputPart& input, const ExrLayout& selected,
         if (!image)
             return failure<std::shared_ptr<const render::Rgba32fImage>>(
                 ImageDiagnosticCode::DecodeFailed, "Process image validation failed");
+        publishAlongside(alongside, extras, *layout);
         ImageResult<std::shared_ptr<const render::Rgba32fImage>> decoded{
             std::make_shared<const render::Rgba32fImage>(std::move(*image.value())), {}};
         decoded.repairedPixels = repairedPixels;
@@ -763,7 +909,7 @@ static ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeExrParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interpretation,
                std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
                const CancelImageWork& cancel, const ImageProgress& progress,
-               const std::size_t pixelBudget) {
+               const std::size_t pixelBudget, ImageChannelsAlongside* alongside = nullptr) {
     using Decoded = std::shared_ptr<const render::Rgba32fImage>;
     if (const auto error = validateVersion(static_cast<std::uint32_t>(input.version())))
         return failure<Decoded>(*error, "OpenEXR version or flags are unsupported");
@@ -783,7 +929,7 @@ decodeExrParts(Imf::MultiPartInputFile& input, const ImageInterpretation& interp
                                 "No color layer — use Channels");
     Imf::InputPart part(input, *index);
     return decodeExrInput(part, *layout, interpretation, std::move(processor), cancel, progress,
-                          pixelBudget);
+                          pixelBudget, alongside);
 }
 
 // #474: OpenEXR compresses each chunk (a run of scanlines or a tile) on its own, across every
@@ -819,7 +965,7 @@ void releaseExrBandThreads(const unsigned count) noexcept {
 static ImageResult<ExrHalfSamples>
 decodeExrHalfParts(Imf::MultiPartInputFile& input, const std::span<const std::byte> bytes,
                    const ImageInterpretation& interpretation, const CancelImageWork& cancel,
-                   const std::size_t pixelBudget) {
+                   const std::size_t pixelBudget, ImageChannelsAlongside* alongside) {
     using Decoded = ExrHalfSamples;
     if (const auto error = validateVersion(static_cast<std::uint32_t>(input.version())))
         return failure<Decoded>(*error, "OpenEXR version or flags are unsupported");
@@ -861,6 +1007,8 @@ decodeExrHalfParts(Imf::MultiPartInputFile& input, const std::span<const std::by
                                 "Decoded samples exceed the pixel storage budget");
     if (cancelled(cancel))
         return {{}, "Image decode cancelled", true, ImageDiagnosticCode::Cancelled};
+    // #549: the channels read beside the layer, in the room the samples leave.
+    auto extras = alongsidePlanes(alongside, header, *layout, pixelBudget - byteCount);
     Decoded decoded;
     decoded.layout.dataX = layout->dataWindow.min.x;
     decoded.layout.dataY = layout->dataWindow.min.y;
@@ -904,6 +1052,8 @@ decodeExrHalfParts(Imf::MultiPartInputFile& input, const std::span<const std::by
     }
     if (layout->hasAlpha)
         insert(layout->colourNames[3], 3);
+    if (extras)
+        insertExrChannelSlices(frameBuffer, *extras, *layout);
     // Rows [first, first + count) of the data window through `part`, then their repair count.
     // `stop` is polled between reads; false means the band stopped before its end.
     const auto readBand = [&](Imf::InputPart& part, const std::uint64_t first,
@@ -1019,17 +1169,19 @@ decodeExrHalfParts(Imf::MultiPartInputFile& input, const std::span<const std::by
     for (const auto repaired : bandRepairs)
         decoded.repairedPixels += repaired;
     decoded.bytes = std::move(storage);
+    publishAlongside(alongside, extras, *layout);
     return {std::move(decoded), {}};
 }
 
 ImageResult<ExrHalfSamples> decodeExrHalfSamples(const std::span<const std::byte> bytes,
                                                  const ImageInterpretation& interpretation,
                                                  const CancelImageWork& cancel,
-                                                 const std::size_t budget) {
+                                                 const std::size_t budget,
+                                                 ImageChannelsAlongside* alongside) {
     try {
         RevisionStream stream(bytes);
         Imf::MultiPartInputFile input(stream, 1);
-        return decodeExrHalfParts(input, bytes, interpretation, cancel, budget);
+        return decodeExrHalfParts(input, bytes, interpretation, cancel, budget, alongside);
     } catch (const std::bad_alloc&) {
         return failure<ExrHalfSamples>(ImageDiagnosticCode::AllocationFailure,
                                        "OpenEXR decode allocation failed");
@@ -1117,12 +1269,13 @@ decodeExr(const std::filesystem::path& path, const ImageInterpretation& interpre
 ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeExr(const std::span<const std::byte> bytes, const ImageInterpretation& interpretation,
           std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
-          const CancelImageWork& cancel, const ImageProgress& progress, const std::size_t budget) {
+          const CancelImageWork& cancel, const ImageProgress& progress, const std::size_t budget,
+          ImageChannelsAlongside* alongside) {
     try {
         RevisionStream stream(bytes);
         Imf::MultiPartInputFile input(stream, 1);
-        return decodeExrParts(input, interpretation, std::move(processor), cancel, progress,
-                              budget);
+        return decodeExrParts(input, interpretation, std::move(processor), cancel, progress, budget,
+                              alongside);
     } catch (...) {
         return failure<std::shared_ptr<const render::Rgba32fImage>>(
             ImageDiagnosticCode::Truncated, "OpenEXR revision pixel data could not be decoded");
@@ -1150,69 +1303,29 @@ decodeExrChannels(const std::span<const std::byte> bytes, const ImageChannelSele
         const auto layout = inspectHeader(header, {}, error);
         if (!layout)
             return failure<Decoded>(error, "OpenEXR header is unsupported or invalid");
-
-        struct Selected final {
-            std::string name;
-            Imf::PixelType type;
-        };
-        std::vector<Selected> selected;
-        if (selection.channels.empty()) {
-            for (auto it = header.channels().begin(); it != header.channels().end(); ++it)
-                selected.push_back({it.name(), it.channel().type});
-        } else {
-            for (const auto& name : selection.channels) {
-                const auto* channel = header.channels().findChannel(name);
-                if (channel == nullptr)
-                    return failure<Decoded>(ImageDiagnosticCode::ChannelNotFound,
-                                            "A selected OpenEXR channel is not present");
-                if (std::ranges::any_of(selected,
-                                        [&](const Selected& item) { return item.name == name; }))
-                    return failure<Decoded>(ImageDiagnosticCode::UnsupportedChannels,
-                                            "A channel is selected more than once");
-                selected.push_back({name, channel->type});
-            }
-        }
-
-        // Admission: every selected plane (channels x pixels x 4), the part's string metadata and
-        // one bounded band of scratch rows.
+        auto selected = selectExrChannels(header, *layout, selection.channels);
+        if (!selected.value)
+            return {{}, selected.diagnostic, false, selected.code};
+        // Admission: every selected plane (channels x pixels x 4) and the part's string metadata.
+        // The planes are the read's own slices, so it stages no scratch rows.
+        if (!decodeWorkingSetFits(selected.value->bytes, 0U, 0U, budget))
+            return failure<Decoded>(ImageDiagnosticCode::PixelBudgetExceeded,
+                                    "Decoded channel set exceeds the pixel working-set budget");
+        auto& planes = *selected.value;
+        allocateExrChannelPlanes(planes, *layout);
+        Imf::FrameBuffer frameBuffer;
+        insertExrChannelSlices(frameBuffer, planes, *layout);
         const auto width = layout->width;
         const auto height = layout->height;
-        const auto count = static_cast<std::uint64_t>(selected.size());
-        render::ChannelMetadata metadata;
-        std::uint64_t metadataBytes = 0;
-        for (auto it = header.begin(); it != header.end(); ++it)
-            if (const auto* text = dynamic_cast<const Imf::StringAttribute*>(&it.attribute())) {
-                metadataBytes += std::strlen(it.name()) + text->value().size();
-                metadata.emplace_back(it.name(), text->value());
-            }
-        std::uint64_t pixels = 0;
-        std::uint64_t planeBytes = 0;
-        std::uint64_t bytesPerRow = 0;
-        if (!checkedSizeProduct(width, height, pixels) ||
-            !checkedSizeProduct(pixels, count * sizeof(float), planeBytes) ||
-            !checkedSizeProduct(width, count * sizeof(float), bytesPerRow) ||
-            planeBytes > std::numeric_limits<std::uint64_t>::max() - metadataBytes)
-            return failure<Decoded>(ImageDiagnosticCode::PixelBudgetExceeded,
-                                    "Decoded channel set exceeds the pixel working-set budget");
+        // Reads of about a megabyte of planes (a tile row when tiled), polling cancellation.
         constexpr std::uint64_t kBandTargetBytes = std::uint64_t{1024} * 1024U;
-        std::uint64_t chunkRows =
-            layout->tiled ? std::max<std::uint64_t>(1U, layout->tileHeight)
-                          : std::max<std::uint64_t>(1U, kBandTargetBytes /
-                                                            std::max<std::uint64_t>(bytesPerRow, 1U));
-        chunkRows = std::min(chunkRows, height);
-        std::uint64_t bandBytes = 0;
-        if (!checkedSizeProduct(chunkRows, bytesPerRow, bandBytes) ||
-            !decodeWorkingSetFits(planeBytes + metadataBytes, bandBytes, 0U, budget))
-            return failure<Decoded>(ImageDiagnosticCode::PixelBudgetExceeded,
-                                    "Decoded channel set exceeds the pixel working-set budget");
-
-        std::vector<std::vector<float>> planes(selected.size());
-        for (auto& plane : planes)
-            plane.assign(static_cast<std::size_t>(pixels), 0.0F);
-        const auto bandSamples = static_cast<std::size_t>(chunkRows * width);
-        std::vector<float> band(bandSamples * selected.size());
-        const auto rowStride = static_cast<std::size_t>(width) * sizeof(float);
+        const auto bytesPerRow = std::max<std::uint64_t>(
+            1U, width * std::max<std::size_t>(1U, planes.selected.size()) * sizeof(float));
+        const auto chunkRows = std::min(
+            height, layout->tiled ? std::max<std::uint64_t>(1U, layout->tileHeight)
+                                  : std::max<std::uint64_t>(1U, kBandTargetBytes / bytesPerRow));
         Imf::InputPart part(input, *index);
+        part.setFrameBuffer(frameBuffer);
         std::uint64_t completed = 0;
         if (progress)
             progress(0, height);
@@ -1223,24 +1336,8 @@ decodeExrChannels(const std::span<const std::byte> bytes, const ImageChannelSele
             const auto rows = std::min(chunkRows, height - first);
             const auto firstY = static_cast<std::int64_t>(layout->dataWindow.min.y) +
                                 static_cast<std::int64_t>(first);
-            const auto origin = Imath::V2i(layout->dataWindow.min.x, static_cast<int>(firstY));
-            Imf::FrameBuffer frameBuffer;
-            for (std::size_t channel = 0; channel < selected.size(); ++channel) {
-                // Half and float widen to Float32; uint keeps its 32-bit pattern in the lane.
-                const auto readType = selected[channel].type == Imf::UINT ? Imf::UINT : Imf::FLOAT;
-                frameBuffer.insert(selected[channel].name,
-                                   Imf::Slice::Make(readType, band.data() + channel * bandSamples,
-                                                    origin, static_cast<std::int64_t>(width),
-                                                    static_cast<std::int64_t>(rows),
-                                                    sizeof(float), rowStride));
-            }
-            part.setFrameBuffer(frameBuffer);
-            part.readPixels(static_cast<int>(firstY), static_cast<int>(firstY) +
-                                                          static_cast<int>(rows) - 1);
-            for (std::size_t channel = 0; channel < selected.size(); ++channel)
-                std::memcpy(planes[channel].data() + static_cast<std::size_t>(first * width),
-                            band.data() + channel * bandSamples,
-                            static_cast<std::size_t>(rows * width) * sizeof(float));
+            part.readPixels(static_cast<int>(firstY),
+                            static_cast<int>(firstY) + static_cast<int>(rows) - 1);
             completed = first + rows;
             if (progress)
                 progress(completed, height);
@@ -1248,29 +1345,7 @@ decodeExrChannels(const std::span<const std::byte> bytes, const ImageChannelSele
         if (!part.isComplete())
             return failure<Decoded>(ImageDiagnosticCode::Truncated,
                                     "OpenEXR pixel data is truncated");
-
-        std::vector<render::ChannelDescriptor> descriptors;
-        descriptors.reserve(selected.size());
-        for (const auto& item : selected)
-            descriptors.push_back(render::describeChannel(item.name, sampleKind(item.type)));
-        const auto dataWindow = render::ImageWindow::create(
-            layout->dataWindow.min.x, layout->dataWindow.min.y, width, height);
-        const auto displayWindow =
-            render::ImageWindow::create(layout->displayWindow.min.x, layout->displayWindow.min.y,
-                                        layout->displayWidth, layout->displayHeight);
-        if (!dataWindow || !displayWindow)
-            return failure<Decoded>(ImageDiagnosticCode::InvalidDataWindow,
-                                    "OpenEXR image window is invalid");
-        auto created = render::ChannelSetImage::create(
-            *dataWindow.value(), *displayWindow.value(), core::PixelAspectRatio::square(),
-            std::move(descriptors), std::move(planes), std::move(metadata),
-            std::numeric_limits<std::size_t>::max(),
-            selection.inputColorSpaceId.empty() ? layout->colorSpaceTag
-                                                : selection.inputColorSpaceId);
-        if (!created)
-            return failure<Decoded>(ImageDiagnosticCode::DecodeFailed,
-                                    "Channel set validation failed");
-        return {std::make_shared<const render::ChannelSetImage>(std::move(*created.value())), {}};
+        return finishExrChannelPlanes(std::move(planes), *layout, selection.inputColorSpaceId);
     } catch (const std::bad_alloc&) {
         return failure<Decoded>(ImageDiagnosticCode::AllocationFailure,
                                 "OpenEXR channel decode allocation failed");

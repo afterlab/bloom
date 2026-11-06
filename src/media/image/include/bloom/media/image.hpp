@@ -263,6 +263,19 @@ captureImageSourceRevision(const std::filesystem::path& path, std::size_t hostBy
                            std::optional<core::Sha256Digest> expectedDigest = {},
                            std::optional<ImageSourceStamp> expectedStamp = {});
 
+// #549: channels of the decoded colour layer's part read in the same pass over the file. OpenEXR
+// compresses every channel of a chunk together, so decoding a frame's colour layer and then its
+// other channels (a Cryptomatte's ranks, a depth channel) inflates every chunk twice; a decode
+// given `channels` fills `decoded` from the same chunks instead, with exactly the values
+// decodeImageChannels() returns for those names in that order (part metadata included). `decoded`
+// stays empty when the source is not OpenEXR, a name is missing or repeated, or the planes do not
+// fit the decode's budget beside the colour image; the colour decode itself is unchanged, and the
+// caller then decodes the channels on their own.
+struct ImageChannelsAlongside final {
+    std::vector<std::string> channels{};
+    std::shared_ptr<const render::ChannelSetImage> decoded{};
+};
+
 // The revision remains live throughout decode. Its encoded storage is subtracted from the total
 // host allowance before admitting codec staging and output. No path is reopened and no hash
 // repeats.
@@ -271,7 +284,8 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
             std::shared_ptr<const color::CpuColorSpaceProcessor> processor = {},
             const CancelImageWork& cancel = {}, const ImageProgress& progress = {},
             std::size_t hostByteBudget = kMaxImageStorageBytes,
-            ImageDecodeStatistics* statistics = nullptr);
+            ImageDecodeStatistics* statistics = nullptr,
+            ImageChannelsAlongside* alongside = nullptr);
 
 // #422: the raw decode's samples in their native layout, for the GPU route: a PNG or JPEG's 16-bit
 // RGBA samples, or an all-half OpenEXR colour layer's binary16 samples, with the SampleConvertV1
@@ -280,11 +294,10 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
 // raw one (ImageColorSpace::Raw without an input colour space). Any other source or interpretation
 // (TIFF, a FLOAT or UINT OpenEXR layer) returns NativeSamplesUnavailable and the caller decodes to
 // float instead.
-[[nodiscard]] ImageResult<std::shared_ptr<const render::NativeSampleImage>>
-decodeImageSamples(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
-                   const CancelImageWork& cancel = {},
-                   std::size_t hostByteBudget = kMaxImageStorageBytes,
-                   ImageDecodeStatistics* statistics = nullptr);
+[[nodiscard]] ImageResult<std::shared_ptr<const render::NativeSampleImage>> decodeImageSamples(
+    const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
+    const CancelImageWork& cancel = {}, std::size_t hostByteBudget = kMaxImageStorageBytes,
+    ImageDecodeStatistics* statistics = nullptr, ImageChannelsAlongside* alongside = nullptr);
 
 // ADR 0026 channel-set decode. `part` selects an OpenEXR part (empty: the first); `channels` names
 // the channels to decode in order (empty: every channel of the part). Values are source values:

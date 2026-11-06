@@ -524,7 +524,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
                 std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
                 const CancelImageWork& cancel, const ImageProgress& progress,
                 std::size_t pixelBudget, std::optional<core::Sha256Digest> expectedDigest,
-                const ImageProvider* provider) {
+                const ImageProvider* provider, ImageChannelsAlongside* alongside = nullptr) {
     try {
         if (progress)
             progress(0, 0);
@@ -553,7 +553,7 @@ decodeImageImpl(const std::filesystem::path& path, const ImageSourceRevision* re
         if (isExrMagic(view)) {
             if (revision)
                 return detail::decodeExr(revision->bytes(), interpretation, std::move(processor),
-                                         cancel, progress, pixelBudget);
+                                         cancel, progress, pixelBudget, alongside);
             return detail::decodeExr(path, interpretation, std::move(processor), cancel, progress,
                                      pixelBudget);
         }
@@ -756,9 +756,12 @@ ImageResult<std::shared_ptr<const render::Rgba32fImage>>
 decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
             std::shared_ptr<const color::CpuColorSpaceProcessor> processor,
             const CancelImageWork& cancel, const ImageProgress& progress,
-            const std::size_t hostByteBudget, ImageDecodeStatistics* statistics) {
+            const std::size_t hostByteBudget, ImageDecodeStatistics* statistics,
+            ImageChannelsAlongside* alongside) {
     if (statistics)
         *statistics = {};
+    if (alongside)
+        alongside->decoded.reset();
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
     if (revision.retainedBytes() >= hostByteBudget)
@@ -771,7 +774,7 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
         const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
         return decodeImageImpl({}, &revision, interpretation, std::move(processor), cancel,
                                progress, hostByteBudget - revision.retainedBytes(),
-                               revision.probe().contentDigest, nullptr);
+                               revision.probe().contentDigest, nullptr, alongside);
     }();
     if (!decoded.value)
         decodeTime.cancel();
@@ -788,7 +791,7 @@ decodeImage(const ImageSourceRevision& revision, const ImageInterpretation& inte
 static ImageResult<std::shared_ptr<const render::NativeSampleImage>>
 decodeImageSamplesImpl(const ImageSourceRevision& revision,
                        const ImageInterpretation& interpretation, const CancelImageWork& cancel,
-                       const std::size_t pixelBudget) {
+                       const std::size_t pixelBudget, ImageChannelsAlongside* alongside) {
     using Decoded = std::shared_ptr<const render::NativeSampleImage>;
     static_assert(std::endian::native == std::endian::little,
                   "native samples are uploaded as little-endian words");
@@ -805,7 +808,8 @@ decodeImageSamplesImpl(const ImageSourceRevision& revision,
     render::NativeSampleConversion conversion;
     conversion.storedSamples = interpretation.storedSamples;
     if (isExrMagic(view)) {
-        auto decoded = detail::decodeExrHalfSamples(bytes, interpretation, cancel, pixelBudget);
+        auto decoded =
+            detail::decodeExrHalfSamples(bytes, interpretation, cancel, pixelBudget, alongside);
         if (!decoded.value)
             return {{}, decoded.diagnostic, decoded.cancelled, decoded.code};
         const auto& layout = decoded.value->layout;
@@ -894,9 +898,11 @@ decodeImageSamplesImpl(const ImageSourceRevision& revision,
 ImageResult<std::shared_ptr<const render::NativeSampleImage>>
 decodeImageSamples(const ImageSourceRevision& revision, const ImageInterpretation& interpretation,
                    const CancelImageWork& cancel, const std::size_t hostByteBudget,
-                   ImageDecodeStatistics* statistics) {
+                   ImageDecodeStatistics* statistics, ImageChannelsAlongside* alongside) {
     if (statistics)
         *statistics = {};
+    if (alongside)
+        alongside->decoded.reset();
     if (cancelled(cancel))
         return {{}, {}, true, ImageDiagnosticCode::Cancelled};
     if (revision.retainedBytes() >= hostByteBudget)
@@ -909,7 +915,7 @@ decodeImageSamples(const ImageSourceRevision& revision, const ImageInterpretatio
         const detail::ImageWorkTimer timer(statistics ? &statistics->decodeNanoseconds : nullptr);
         try {
             return decodeImageSamplesImpl(revision, interpretation, cancel,
-                                          hostByteBudget - revision.retainedBytes());
+                                          hostByteBudget - revision.retainedBytes(), alongside);
         } catch (const std::exception&) {
             return ImageResult<std::shared_ptr<const render::NativeSampleImage>>{
                 {},
