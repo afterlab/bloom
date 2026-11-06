@@ -16,6 +16,7 @@
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
 #include "film_grain_test_support.hpp"
+#include "motion_blur_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "gpu_composite_native_support.hpp"
 #include "grade_curves_test_support.hpp"
@@ -2317,6 +2318,162 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
 }
 
+// #484 Motion blur: every kernel through the production chains over the moving HDR texture against
+// the CPU oracle at the strict gate (colour within 2e-6, alpha exact), at frame 4. The windows,
+// resident dispatches with no readback, warm reuse with zero dispatches and a changed value
+// re-running only the chain after it (the texture stays cached) hold.
+void runMotionBlur(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::motion_test::MotionValues;
+    using bloom::motion_test::Scene;
+    namespace doc = bloom::document;
+    const CpuCompositionEvaluator evaluator;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const auto draft = doc::kMotionQualityDraft;
+    struct Case final {
+        MotionValues values;
+        const char* name;
+    };
+    std::vector<Case> cases{
+        {{.scene = Scene::Directional, .quality = draft}, "directional"},
+        {{.scene = Scene::Directional, .curve = doc::kShutterCurveGaussian}, "directional gaussian"},
+        {{.scene = Scene::Spin, .quality = draft}, "spin"},
+        {{.scene = Scene::Zoom, .quality = draft, .jitter = true}, "zoom jittered"},
+        {{.scene = Scene::TransformBlur, .quality = draft}, "transform shutter"},
+        {{.scene = Scene::TransformBlur, .curve = doc::kShutterCurveCustom}, "transform custom curve"},
+        {{.scene = Scene::SubFrame, .quality = draft}, "sub-frame"},
+        {{.scene = Scene::SubFrame, .quality = draft, .curve = doc::kShutterCurveTriangle,
+          .offset = doc::kShutterOffsetEnd},
+         "sub-frame triangle, end"},
+        {{.scene = Scene::Echo}, "echo add"},
+        {{.scene = Scene::Echo, .op = bloom::runtime::AccumulateOperator::Maximum}, "echo maximum"},
+        {{.scene = Scene::Echo, .op = bloom::runtime::AccumulateOperator::Minimum}, "echo minimum"},
+        {{.scene = Scene::Echo, .op = bloom::runtime::AccumulateOperator::Screen}, "echo screen"},
+        {{.scene = Scene::Echo, .op = bloom::runtime::AccumulateOperator::Over, .posterize = true},
+         "echo over, posterized"},
+        {{.scene = Scene::Echo, .op = bloom::runtime::AccumulateOperator::Under}, "echo under"},
+        {{.scene = Scene::Echo, .layerIn = 3}, "echo, early samples absent"},
+        {{.scene = Scene::Echo, .layerOut = 2}, "echo, the frame's sample absent"},
+        {{.scene = Scene::VectorGather, .quality = draft}, "vector gather"},
+        {{.scene = Scene::VectorGather, .jitter = true, .curved = true, .depth = true},
+         "vector gather curved, depth, jitter"},
+        {{.scene = Scene::VectorSplat, .quality = draft}, "vector splat"},
+        {{.scene = Scene::VectorSplat, .quality = draft, .curved = true, .depth = true},
+         "vector splat curved, depth"},
+        {{.scene = Scene::VectorLayered, .quality = draft}, "vector layered matte"},
+        {{.scene = Scene::VectorGather, .quality = draft, .alphaValid = true},
+         "vector gather, alpha marks valid"},
+        {{.scene = Scene::VectorSplat, .quality = draft, .alphaValid = true},
+         "vector splat, alpha marks valid"},
+        {{.scene = Scene::FlowDis, .quality = draft}, "flow DIS draft"},
+        {{.scene = Scene::FlowDis, .quality = doc::kMotionQualityFinal}, "flow DIS final"},
+        {{.scene = Scene::FlowTvl1, .quality = draft}, "flow TV-L1 draft"},
+        {{.scene = Scene::FlowTvl1, .quality = doc::kMotionQualityFinal}, "flow TV-L1 final"},
+        {{.scene = Scene::FlowTvl1, .quality = draft, .border = doc::kFlowBorderWrap}, "flow TV-L1 wrap"},
+        {{.scene = Scene::FlowConsistency, .quality = draft}, "flow consistency"},
+        {{.scene = Scene::FlowConsistency, .quality = draft, .depth = true}, "flow occlusion"},
+        {{.scene = Scene::FlowCut, .quality = draft}, "flow cut"},
+        {{.scene = Scene::FlowCut, .quality = draft, .depth = true}, "flow cut unrelated"},
+        {{.scene = Scene::FlowBlur, .quality = draft}, "flow blur"},
+        {{.scene = Scene::FlowBlur, .quality = draft, .border = doc::kFlowBorderWrap}, "flow blur wrap"},
+        {{.scene = Scene::FlowTvl1, .quality = draft, .matteSolve = true}, "flow TV-L1 matte"},
+        {{.scene = Scene::FlowDis, .quality = draft, .matteSolve = true}, "flow DIS matte"},
+        {{.scene = Scene::FlowBlur, .quality = doc::kMotionQualityHigh}, "flow blur High, quadratic"},
+        {{.scene = Scene::FlowBlurMatte, .quality = draft}, "flow blur matte"},
+        {{.scene = Scene::FlowBlurTemporal, .quality = draft}, "flow blur temporal"},
+    };
+    std::uint64_t id = 48400;
+    for (const auto& item : cases) {
+        cache.clear();
+        const std::string name = std::string("motion native (") + item.name + "): ";
+        const auto plan = bloom::motion_test::motionPlan(item.values, id).plan;
+        // A changed value: a wider shutter, or what the scene reads instead of one.
+        auto changedValues = item.values;
+        switch (item.values.scene) {
+        case Scene::Directional:
+        case Scene::Spin:
+        case Scene::Zoom:
+            changedValues.quality =
+                item.values.quality == draft ? doc::kMotionQualityStandard : draft;
+            break;
+        case Scene::Echo:
+            changedValues.op = item.values.op == bloom::runtime::AccumulateOperator::Add
+                                   ? bloom::runtime::AccumulateOperator::Screen
+                                   : bloom::runtime::AccumulateOperator::Add;
+            break;
+        case Scene::FlowDis:
+        case Scene::FlowTvl1:
+        case Scene::FlowCut:
+        case Scene::FlowConsistency:
+            changedValues.border = item.values.border == doc::kFlowBorderExtend
+                                       ? doc::kFlowBorderBlack
+                                       : doc::kFlowBorderExtend;
+            break;
+        default:
+            changedValues.shutter = 0.75;
+            break;
+        }
+        const auto changedPlan = bloom::motion_test::motionPlan(changedValues, id).plan;
+        id += 200;
+        auto request = requestFor(*plan);
+        request.time = *RationalTime::create(4, 24);
+        auto oracleRequest = request;
+        oracleRequest.bypassOperationCache = true;
+        const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+        const auto prepared = builder.build(plan, request);
+        if (!prepared)
+            std::cerr << name << prepared.diagnostic.message << '\n';
+        expectations.expect(oracle.frame() && prepared,
+                            name + "CPU oracle and production scene prepare");
+        if (!oracle.frame() || !prepared)
+            continue;
+        auto executor = GpuSceneExecutor::create(device, cache);
+        expectations.expect(executor.hasValue(), name + "executor creates");
+        if (!executor)
+            continue;
+        const auto cold = runScene(*executor.executor, prepared.scene);
+        const auto coldCounters = executor.executor->counters();
+        std::string detail;
+        expectations.expect(cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(cold.pixels, oracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact),
+                            name + "CPU parity: " + detail);
+        const auto& descriptor = *oracle.frame()->processImage().descriptor();
+        expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                cold.displayWindow == descriptor.displayWindow() &&
+                                cold.pixelAspect == descriptor.pixelAspect(),
+                            name + "data/display-window and PAR parity");
+        expectations.expect(coldCounters.ocioEffectDispatches > 0 && coldCounters.readbacks == 0,
+                            name + "resident dispatches and no per-operation readback");
+        // A pass inside the effect is not retained: the cache holds results, not solver iterations.
+        expectations.expect(2 * cache.entryCount() <= coldCounters.dispatches + 16,
+                            name + "the scene cache keeps results, not every pass: " +
+                                std::to_string(cache.entryCount()) + " entries, " +
+                                std::to_string(coldCounters.dispatches) + " dispatches");
+        const auto warm = runScene(*executor.executor, prepared.scene);
+        expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                warm.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches ==
+                                    coldCounters.dispatches,
+                            name + "warm RAM reuse has identical pixels and zero dispatches");
+        const auto changed = builder.build(changedPlan, request);
+        const auto changedOracle = evaluator.evaluate(changedPlan, oracleRequest, {});
+        expectations.expect(changed && changedOracle.frame(), name + "a changed value prepares");
+        if (!changed || !changedOracle.frame())
+            continue;
+        const auto rerun = runScene(*executor.executor, changed.scene);
+        const auto rerunDispatches =
+            executor.executor->counters().dispatches - coldCounters.dispatches;
+        expectations.expect(
+            rerun.pollResult == GpuSceneExecutorPollResult::Ready &&
+                parity(rerun.pixels, changedOracle.frame()->processImage().pixels(), detail,
+                       AlphaGate::Exact) &&
+                rerunDispatches > 0,
+            name + "a changed value re-runs with CPU parity: " + detail + ", " +
+                std::to_string(rerunDispatches) + " of " +
+                std::to_string(coldCounters.dispatches) + " dispatches");
+    }
+}
+
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                const std::string& from, const std::string& to) {
     runBatchedChains(expectations, device, cache);
@@ -2337,6 +2494,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     runDepthEffects(expectations, device, cache);
     runLensFlares(expectations, device, cache);
     runFilmGrains(expectations, device, cache);
+    runMotionBlur(expectations, device, cache);
 #if defined(__linux__)
     runFileTransform(expectations, device, cache, from, to);
 #endif

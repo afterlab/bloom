@@ -11,7 +11,8 @@ struct RecipeFixture final {
 [[nodiscard]] RecipeFixture
 recipeFixture(const std::string_view type,
               const std::unordered_map<std::string, document::ParameterValue>& values = {},
-              const std::vector<std::string>& secondSolidPorts = {}) {
+              const std::vector<std::string>& secondSolidPorts = {},
+              const std::string_view outputPort = "image") {
     using namespace document;
     RecipeFixture fixture{makeProject(), NodeId::fromRaw(1300), {}};
     auto* composition = fixture.project.findComposition(kCompositionId);
@@ -39,7 +40,7 @@ recipeFixture(const std::string_view type,
     require(graph.addEdge({kFirstSourceEdge, {kFirstSolidNode, "image"},
                            NodeInputRef{fixture.node, "input"}}),
             "source feeds the recipe");
-    require(graph.addEdge({EdgeId::fromRaw(1300), {fixture.node, "image"},
+    require(graph.addEdge({EdgeId::fromRaw(1300), {fixture.node, std::string(outputPort)},
                            NodeInputRef{kFirstLayerNode, std::string(kLayerOutputContentInputPort)}}),
             "recipe feeds Layer");
     std::uint64_t edge = 1301;

@@ -250,6 +250,12 @@ target_link_libraries(bloom_runtime_glow_legacy_controls_test PRIVATE bloom_runt
 bloom_enable_warnings(bloom_runtime_glow_legacy_controls_test)
 bloom_enable_strict_floating_point(bloom_runtime_glow_legacy_controls_test)
 bloom_add_test(NAME bloom.runtime.glow-legacy-controls COMMAND bloom_runtime_glow_legacy_controls_test LABELS unit runtime persistence TIMEOUT 60)
+# #484: a pre-motion-blur Transform 2D opens with its motion blur bound off and renders identically.
+add_executable(bloom_runtime_transform_motion_blur_migration_test ${PROJECT_SOURCE_DIR}/tests/integration/transform_motion_blur_migration_tests.cpp)
+target_link_libraries(bloom_runtime_transform_motion_blur_migration_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
+bloom_enable_warnings(bloom_runtime_transform_motion_blur_migration_test)
+bloom_enable_strict_floating_point(bloom_runtime_transform_motion_blur_migration_test)
+bloom_add_test(NAME bloom.runtime.transform-motion-blur-migration COMMAND bloom_runtime_transform_motion_blur_migration_test LABELS runtime integration)
 # #541: a document older than 1.39 opens its schema 1 colour pairs as gradient values.
 add_executable(bloom_runtime_gradient_color_pairs_test ${PROJECT_SOURCE_DIR}/tests/integration/gradient_color_pair_migration_tests.cpp)
 target_link_libraries(bloom_runtime_gradient_color_pairs_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_project)
@@ -452,6 +458,13 @@ target_link_libraries(bloom_runtime_lens_flare_test PRIVATE bloom_runtime_evalua
 bloom_enable_warnings(bloom_runtime_lens_flare_test)
 bloom_enable_strict_floating_point(bloom_runtime_lens_flare_test)
 bloom_add_test(NAME bloom.runtime.lens-flare COMMAND bloom_runtime_lens_flare_test LABELS unit runtime render)
+# #484 motion blur: the shutter, every motion kernel and the production chains on the CPU reference.
+add_executable(bloom_runtime_motion_blur_test motion_blur_tests.cpp)
+target_include_directories(bloom_runtime_motion_blur_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_motion_blur_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_motion_blur_test)
+bloom_enable_strict_floating_point(bloom_runtime_motion_blur_test)
+bloom_add_test(NAME bloom.runtime.motion-blur COMMAND bloom_runtime_motion_blur_test LABELS unit runtime render)
 
 # #486 Film Grain: the noise's statistics and pinned values, the response, the promises, the fixed
 # program, frame and seed identity, the pixel budget and cancellation.
@@ -911,6 +924,27 @@ bloom_add_test(
     TIMEOUT 300
 )
 set_tests_properties(bloom.runtime.gpu_lens_flare_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
+# #484 motion blur GPU cost benchmark (tools/bench/run_bench.py nodes): every motion-blur node against
+# a Grade and the closest existing node, timed cold, warm and per frame; the CTest is a 64x64 smoke
+# run of every case.
+add_executable(bloom_runtime_gpu_motion_node_bench
+    ${PROJECT_SOURCE_DIR}/tests/integration/gpu_motion_node_bench.cpp)
+target_link_libraries(bloom_runtime_gpu_motion_node_bench
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands bloom_render)
+target_include_directories(bloom_runtime_gpu_motion_node_bench
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/.."
+            "${PROJECT_SOURCE_DIR}/tests/support")
+target_compile_definitions(bloom_runtime_gpu_motion_node_bench PRIVATE
+    "BLOOM_GPU_COVERAGE_TEST_EXECUTABLE=\"$<TARGET_FILE:bloom_runtime_gpu_motion_node_bench>\"")
+bloom_package_gpu_shader_tools(bloom_runtime_gpu_motion_node_bench)
+bloom_enable_warnings(bloom_runtime_gpu_motion_node_bench)
+bloom_add_test(
+    NAME bloom.runtime.gpu_motion_node_bench_smoke
+    COMMAND bloom_runtime_gpu_motion_node_bench --smoke
+    LABELS runtime native gpu
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.gpu_motion_node_bench_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 # #486 Film Grain GPU cost benchmark (tools/bench/run_bench.py nodes): grain at its sizes against a
 # Grade, a Vignette and a procedural Noise, timed cold, warm and per frame; the CTest is a 64x64

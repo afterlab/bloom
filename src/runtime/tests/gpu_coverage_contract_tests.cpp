@@ -37,6 +37,7 @@
 #include "depth_effect_test_support.hpp"
 #include "lens_flare_test_support.hpp"
 #include "film_grain_test_support.hpp"
+#include "motion_blur_test_support.hpp"
 #include "field_test_programs.hpp"
 #include "grade_curves_test_support.hpp"
 #include "merge_entry_test_support.hpp"
@@ -1960,6 +1961,146 @@ displayProofRunner(const bool customView) {
                                 "channels, on a moved frame, full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
+    }
+    // #484 Motion blur: every kernel, node and feature axis through the production chains
+    // (motion_blur_test_support.hpp) over the moving HDR texture at frame 4, full frame and ROI.
+    {
+        using bloom::motion_test::MotionValues;
+        using bloom::motion_test::Scene;
+        namespace doc = bloom::document;
+        const auto draft = doc::kMotionQualityDraft;
+        const auto runMotion = [](const std::vector<MotionValues>& variants, std::uint64_t idBase,
+                                  std::string evidence) {
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const auto& values : variants) {
+                const auto plan = bloom::motion_test::motionPlan(values, idBase).plan;
+                idBase += 100;
+                auto request = requestFor(*plan);
+                request.time = *bloom::core::RationalTime::create(4, 24);
+                auto frame = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && frame.prepared;
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+                const auto roiWindow = bloom::render::ImageWindow::create(5, 3, 12, 9);
+                request.roi = *roiWindow.value();
+                frame = runBuilderWithRequest(plan, request);
+                combined.prepared = combined.prepared && frame.prepared;
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            combined.evidence = std::move(evidence);
+            return combined;
+        };
+        const auto addMotion = [&add, runMotion](std::string id, std::vector<MotionValues> variants,
+                                                 const std::uint64_t idBase, std::string evidence) {
+            add(
+                std::move(id), GpuCoverageFixtureCriterion::Prepared,
+                "src/runtime motion blur tests",
+                [runMotion, variants = std::move(variants), idBase,
+                 evidence = std::move(evidence)] { return runMotion(variants, idBase, evidence); },
+                {}, FixturePrerequisite::PackagedShaderTools);
+        };
+        const MotionValues subFrame{.scene = Scene::SubFrame, .quality = draft};
+        const MotionValues echo{.scene = Scene::Echo};
+        const MotionValues directional{.scene = Scene::Directional, .quality = draft};
+        const MotionValues spin{.scene = Scene::Spin, .quality = draft};
+        const MotionValues zoom{.scene = Scene::Zoom, .quality = draft};
+        const MotionValues shutter{.scene = Scene::TransformBlur, .quality = draft};
+        const MotionValues gather{.scene = Scene::VectorGather, .quality = draft};
+        const MotionValues splat{.scene = Scene::VectorSplat, .quality = draft};
+        const MotionValues layered{.scene = Scene::VectorLayered, .quality = draft};
+        const MotionValues dis{.scene = Scene::FlowDis, .quality = draft};
+        const MotionValues tvl1{.scene = Scene::FlowTvl1, .quality = draft};
+        const MotionValues cut{.scene = Scene::FlowCut, .quality = draft};
+        const MotionValues check{.scene = Scene::FlowConsistency, .quality = draft};
+        const MotionValues flowBlur{.scene = Scene::FlowBlur, .quality = draft};
+        const MotionValues flowMatte{.scene = Scene::FlowBlurMatte, .quality = draft};
+        const MotionValues flowTemporal{.scene = Scene::FlowBlurTemporal, .quality = draft};
+        auto posterized = echo;
+        posterized.posterize = true;
+        auto over = echo;
+        over.op = bloom::runtime::AccumulateOperator::Over;
+        auto screen = echo;
+        screen.op = bloom::runtime::AccumulateOperator::Screen;
+        auto maximum = echo;
+        maximum.op = bloom::runtime::AccumulateOperator::Maximum;
+        auto triangle = subFrame;
+        triangle.curve = doc::kShutterCurveTriangle;
+        auto customCurve = shutter;
+        customCurve.curve = doc::kShutterCurveCustom;
+        auto jittered = zoom;
+        jittered.jitter = true;
+        auto jitteredGather = gather;
+        jitteredGather.jitter = true;
+        jitteredGather.curved = true;
+        jitteredGather.depth = true;
+        auto depthSplat = splat;
+        depthSplat.depth = true;
+        auto validGather = gather;
+        validGather.alphaValid = true;
+        auto disMatte = dis;
+        disMatte.matteSolve = true;
+        auto tvl1Matte = tvl1;
+        tvl1Matte.matteSolve = true;
+        auto flowQuadratic = flowBlur;
+        flowQuadratic.quality = doc::kMotionQualityHigh;
+        addMotion("effect.TimeSampleKernel", {subFrame, echo}, 490000,
+                  "production time samples: sub-frame and neighbour-frame Offset clocks of a "
+                  "moving Transform 2D, full frame and ROI");
+        addMotion("effect.TemporalAccumulateKernel", {subFrame, over}, 490400,
+                  "production accumulator: a weighted add of sub-frames and Echo's over, full "
+                  "frame and ROI");
+        addMotion("effect.MotionPathBlurKernel", {directional, spin, zoom, shutter}, 490800,
+                  "production path sampler: Directional, Spin, Zoom and the Transform 2D shutter, "
+                  "full frame and ROI");
+        addMotion("effect.VectorBlurKernel", {gather, splat, layered, check}, 491400,
+                  "production vector stages: gather, splat, matte fill and consistency, full "
+                  "frame and ROI");
+        addMotion("effect.OpticalFlowKernel", {dis, tvl1, cut}, 492000,
+                  "production optical flow: DIS, TV-L1 and the cut diagnostic, full frame and ROI");
+        addMotion("feature.motion.time.sample", {echo}, 492400, "an upstream graph on Offset clocks");
+        addMotion("feature.motion.time.posterize", {posterized}, 492600,
+                  "Echo with Posterize Time on its Offset clocks");
+        addMotion("feature.motion.time.hold", {subFrame}, 492800,
+                  "Motion Blur's held time samples");
+        addMotion("feature.motion.accumulate.operators", {over, screen, maximum}, 493000,
+                  "Echo's over, screen and maximum operators");
+        addMotion("feature.motion.shutter.curve", {triangle, customCurve}, 493400,
+                  "triangle and custom shutter curves");
+        addMotion("feature.motion.shutter.jitter", {jittered, jitteredGather}, 493800,
+                  "jittered path and gather samples");
+        addMotion("feature.motion.path.directional", {directional}, 494200, "Directional path");
+        addMotion("feature.motion.path.spin", {spin}, 494400, "Spin path");
+        addMotion("feature.motion.path.zoom", {zoom}, 494600, "Zoom path");
+        addMotion("feature.motion.path.transform", {shutter, customCurve}, 494800,
+                  "the Transform 2D shutter through animated rows");
+        addMotion("feature.motion.vector.gather", {gather, jitteredGather, validGather}, 495200,
+                  "the reconstruction gather, curved, with depth, jitter and valid vectors");
+        addMotion("feature.motion.vector.splat", {splat, depthSplat, flowBlur, flowQuadratic}, 495600,
+                  "the soft splat, depth ordered, with neighbour frames and the quadratic path");
+        addMotion("feature.motion.vector.fill", {layered, flowMatte}, 496000,
+                  "the outside-in fill behind a matte");
+        addMotion("feature.motion.vector.temporal_fill", {flowTemporal}, 496400,
+                  "the temporal background fill");
+        addMotion("feature.motion.vector.consistency", {check}, 496600,
+                  "the forward-backward consistency check");
+        addMotion("feature.motion.flow.dis", {dis, disMatte}, 496800, "DIS optical flow");
+        addMotion("feature.motion.flow.tvl1", {tvl1, tvl1Matte}, 497000, "TV-L1 optical flow");
+        addMotion("feature.motion.flow.cut", {cut}, 497200, "the cut diagnostic");
+        addMotion("node.bloom.motion-blur", {subFrame, triangle}, 497400,
+                  "production Motion Blur: sub-frame accumulation with its shutter curve");
+        addMotion("node.bloom.vector-motion-blur", {gather, depthSplat, layered}, 497800,
+                  "production Vector Motion Blur: gather, depth splat and matte layers");
+        addMotion("node.bloom.optical-flow", {dis, tvl1, check, cut}, 498200,
+                  "production Optical Flow: the solvers, consistency and the cut diagnostic");
+        addMotion("node.bloom.optical-flow-motion-blur", {flowBlur, flowMatte, flowTemporal}, 498800,
+                  "production Motion Blur (Optical Flow): no matte, matte, temporal fill");
+        addMotion("node.bloom.echo", {echo, over, posterized}, 499400,
+                  "production Echo: add, over and Posterize Time");
+        addMotion("node.bloom.directional-blur", {directional}, 499800, "production Directional");
+        addMotion("node.bloom.spin-blur", {spin}, 500000, "production Spin");
+        addMotion("node.bloom.zoom-blur", {zoom, jittered}, 500200, "production Zoom");
     }
     // #494 Grade: the wheels and primaries through the production builder's resident program.
     const auto grade = [](const std::array<double, 22> values) {

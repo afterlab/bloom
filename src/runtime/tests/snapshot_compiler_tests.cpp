@@ -12,6 +12,7 @@
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/motion_blur_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -1923,6 +1924,7 @@ void testMidWorkCancellationIsBounded(Expectations& expectations) {
 #include "snapshot_compiler_layout_tests.ipp"
 #include "snapshot_compiler_mute_tests.ipp"
 #include "snapshot_compiler_recipe_tests.ipp"
+#include "snapshot_compiler_motion_tests.ipp"
 #include "snapshot_compiler_field_tests.ipp"
 
 } // namespace
@@ -1954,6 +1956,7 @@ int main() {
         testDepthEffectLowering(expectations);
         testLensFlareLowering(expectations);
         testFilmGrainLowering(expectations);
+        testMotionBlurLowering(expectations);
         testFieldGeneratorRasters(expectations);
         testFieldChainCompilesToOneProgram(expectations);
         testFieldSampleDrivesAValue(expectations);
