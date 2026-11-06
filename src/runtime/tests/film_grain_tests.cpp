@@ -3,7 +3,8 @@
 // promises the node makes (alpha kept, premultiplication, no clipping, a channel's own amount, the
 // luma response, the size and the proxy scale, the data window and region of interest); frame and
 // seed identity through the evaluator's memoization; identity, domains, the one fixed program, the
-// pixel budget and cancellation.
+// pixel budget and cancellation. Monochrome: off is digest-pinned to the build before it, on shares
+// one pattern that each amount still scales, and each state has its own cache identity.
 
 #include "color_grade_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
@@ -18,6 +19,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -526,6 +528,272 @@ void testPrepared() {
            "grain is never applied without its position");
 }
 
+// FNV-1a over raw bits, so these digests hold every bit of what is hashed.
+std::uint64_t digest(const std::uint64_t seed, const void* const data, const std::size_t size) {
+    std::uint64_t hash = seed;
+    const auto* const bytes = static_cast<const unsigned char*>(data);
+    for (std::size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+constexpr std::uint64_t kDigestStart = 14695981039346656037ULL;
+
+// Monochrome off is what the node drew before the option existed. The digests below were taken from
+// the build before it landed (98fe61837): the pixels of every path of the node, the table the GPU
+// reads and the cache identity a frame has. A change here changes the grain of every saved project.
+void testMonochromeOffIsUnchanged() {
+    GrainValues held = film_grain_test::everyPath();
+    held.animation = document::kFilmGrainHeld;
+    GrainValues noRed;
+    noRed.scalars = {{"intensity", 0.1}, {"redAmount", 0.0}, {"blueAmount", 2.0}};
+    const std::array<GrainValues, 4> looks{GrainValues{}, film_grain_test::everyPath(), held, noRed};
+    const std::array<Straight, 4> colors{Straight{0.05F, 0.02F, 0.01F, 0.5F},
+                                         Straight{0.3F, 0.25F, 0.2F, 0.75F},
+                                         Straight{0.8F, 0.6F, 0.5F, 1.0F},
+                                         Straight{6.0F, 3.0F, 1.5F, 0.6F}};
+    const Frame frames[]{Frame{}, Frame{-13, 21, 40, 30},
+                         Frame{0, 0, 48, 32, *core::PixelAspectRatio::create(2, 1)}};
+    std::uint64_t pixels = kDigestStart;
+    std::uint64_t tables = kDigestStart;
+    std::uint64_t identities = kDigestStart;
+    for (const auto& look : looks) {
+        for (const double time : {0.0, 3.0, 1000.0}) {
+            const auto grade = prepare(look, time);
+            if (!grade)
+                throw std::logic_error("the grain prepares");
+            tables = digest(tables, grade->data.data(), grade->data.size() * sizeof(float));
+            const auto identity = runtime::detail::colorGradeIdentity(*grade);
+            identities = digest(identities, identity.data(), identity.size());
+            for (const auto& frame : frames)
+                for (const auto color : colors)
+                    for (const double scale : {1.0, 0.5}) {
+                        const auto input = image(frame, color);
+                        const auto output = apply(look, input, time, scale, scale);
+                        const auto data = output->pixels();
+                        pixels = digest(pixels, data.data(), data.size() * sizeof(render::Rgba32f));
+                    }
+        }
+    }
+    expect(pixels == 0x5dc2be753f319b13ULL, "Monochrome off draws the pixels it always drew");
+    expect(tables == 0xf82cc1e137a703f8ULL, "Monochrome off gives the GPU the table it always did");
+    expect(identities == 0x562610ff73852333ULL,
+           "Monochrome off keeps the cache identity a frame always had");
+    // The GPU program is the one it always was, with one branch this table never takes.
+    const std::string branch = " if (k1.w != 0.0) { grain = grain.xxx; }\n";
+    auto program = runtime::detail::filmGrainProgramText();
+    const auto at = program.find(branch);
+    expect(at != std::string::npos, "the program holds the Monochrome branch");
+    if (at != std::string::npos)
+        program.erase(at, branch.size());
+    expect(digest(kDigestStart, program.data(), program.size()) == 0x6ce0e680bb6a981dULL,
+           "without that branch the GPU program is the one it always was");
+}
+
+void testMonochrome() {
+    const Frame frame;
+    GrainValues off = film_grain_test::everyPath();
+    GrainValues on = film_grain_test::everyPathMonochrome();
+    const auto scalar = [&](const std::string& role) { return on.scalars.at(role); };
+
+    // The formula, over HDR and partial alpha: the red channel's noise in all three, each at its
+    // own amount. Red, whose pattern it is, keeps every bit it has with Monochrome off.
+    const std::array<Straight, 4> colors{Straight{0.05F, 0.02F, 0.01F, 0.5F},
+                                         Straight{0.3F, 0.25F, 0.2F, 0.75F},
+                                         Straight{0.8F, 0.6F, 0.5F, 1.0F},
+                                         Straight{6.0F, 3.0F, 1.5F, 0.6F}};
+    for (const auto color : colors) {
+        const auto input = image(frame, color);
+        const auto output = apply(on, input, 3.0);
+        const auto separate = apply(off, input, 3.0);
+        const auto stream = core::film_grain::stream(on.seed, 3);
+        const double luma = 0.2126 * static_cast<double>(color.red) +
+                            0.7152 * static_cast<double>(color.green) +
+                            0.0722 * static_cast<double>(color.blue);
+        const double response = document::filmGrainResponse(luma, scalar("shadows"),
+                                                            scalar("midtones"), scalar("highlights"));
+        const std::array amounts{scalar("redAmount"), scalar("greenAmount"), scalar("blueAmount")};
+        bool matches = true;
+        bool redKept = true;
+        bool alphaKept = true;
+        for (std::int64_t y = 0; y < frame.height; ++y)
+            for (std::int64_t x = 0; x < frame.width; ++x) {
+                const auto in = at(input, x, y);
+                const auto out = at(*output, x, y);
+                const auto grain = core::film_grain::noise(
+                    (static_cast<float>(x) + 0.5F) * static_cast<float>(1.0 / scalar("size")),
+                    (static_cast<float>(y) + 0.5F) * static_cast<float>(1.0 / scalar("size")), stream);
+                for (std::size_t c = 0; c < 3; ++c) {
+                    const double expected = static_cast<double>(in[c]) +
+                                            static_cast<double>(in[3]) * response *
+                                                scalar("intensity") * amounts[c] *
+                                                core::film_grain::kNormalise *
+                                                static_cast<double>(grain[0]);
+                    matches = matches && std::abs(static_cast<double>(out[c]) - expected) <
+                                             2e-5 * std::max(1.0, std::abs(expected));
+                }
+                redKept = redKept && out[0] == at(*separate, x, y)[0];
+                alphaKept = alphaKept && out[3] == in[3];
+            }
+        expect(matches, "Monochrome grain matches its formula at luma " + std::to_string(luma));
+        expect(redKept, "red keeps every bit of its grain when Monochrome turns on");
+        expect(alphaKept, "Monochrome grain keeps alpha");
+    }
+
+    // Equal amounts over a neutral picture stay neutral to the last bit, where the channels' own
+    // grains do not.
+    const auto grey = image(frame, {0.4F, 0.4F, 0.4F, 1.0F});
+    GrainValues neutral;
+    neutral.scalars = {{"intensity", 0.1}};
+    neutral.monochrome = true;
+    GrainValues coloured = neutral;
+    coloured.monochrome = false;
+    const auto neutralOutput = apply(neutral, grey);
+    const auto colouredOutput = apply(coloured, grey);
+    std::size_t tinted = 0;
+    std::size_t grainy = 0;
+    std::size_t separated = 0;
+    std::vector<double> neutralLuma;
+    std::vector<double> colouredLuma;
+    const auto lumaOf = [](const std::array<float, 4>& p) {
+        return 0.2126 * static_cast<double>(p[0]) + 0.7152 * static_cast<double>(p[1]) +
+               0.0722 * static_cast<double>(p[2]);
+    };
+    for (std::int64_t y = 0; y < frame.height; ++y)
+        for (std::int64_t x = 0; x < frame.width; ++x) {
+            const auto p = at(*neutralOutput, x, y);
+            const auto q = at(*colouredOutput, x, y);
+            tinted += p[0] != p[1] || p[1] != p[2] ? 1U : 0U;
+            grainy += p[0] != 0.4F ? 1U : 0U;
+            separated += q[0] != q[1] || q[1] != q[2] ? 1U : 0U;
+            neutralLuma.push_back(lumaOf(p));
+            colouredLuma.push_back(lumaOf(q));
+        }
+    const std::size_t total = static_cast<std::size_t>(frame.width) * frame.height;
+    expect(tinted == 0, "equal amounts over grey carry no colour noise");
+    expect(grainy > total / 2, "the grey still takes grain");
+    expect(separated > total / 2, "with Monochrome off the channels' grains differ");
+    // Each channel keeps its strength, so the brightness takes more of the grain: channels that move
+    // together no longer partly cancel in the luma (1 against 0.75).
+    const double lumaRatio = statsOf(neutralLuma).deviation / statsOf(colouredLuma).deviation;
+    expect(lumaRatio > 1.2 && lumaRatio < 1.5,
+           "shared grain moves the brightness by more, got " + std::to_string(lumaRatio));
+
+    // Each amount scales the one pattern: a channel at 0 keeps its value, one at twice the amount
+    // moves twice as far, at every pixel and in the same direction.
+    {
+        GrainValues scaled;
+        scaled.scalars = {{"intensity", 0.1}, {"redAmount", 0.0}, {"blueAmount", 2.0}};
+        scaled.monochrome = true;
+        const auto output = apply(scaled, grey);
+        bool redSame = true;
+        bool follows = true;
+        for (std::int64_t y = 0; y < frame.height; ++y)
+            for (std::int64_t x = 0; x < frame.width; ++x) {
+                const auto p = at(*output, x, y);
+                redSame = redSame && p[0] == 0.4F;
+                const double green = static_cast<double>(p[1]) - 0.4;
+                const double blue = static_cast<double>(p[2]) - 0.4;
+                follows = follows && std::abs(blue - 2.0 * green) < 1e-5;
+            }
+        expect(redSame, "a channel at amount 0 keeps its value exactly with Monochrome on");
+        expect(follows, "a channel at twice the amount moves twice as far on the same pattern");
+        GrainValues none = scaled;
+        none.scalars = {{"redAmount", 0.0}, {"greenAmount", 0.0}, {"blueAmount", 0.0}};
+        expect(prepare(none)->identity, "no channel is still an identity with Monochrome on");
+    }
+
+    // The node's other promises hold on the shared pattern: a new frame and seed are new grain, a
+    // frame repeats, and a data window only places the pixels.
+    {
+        GrainValues base = neutral;
+        const auto a = apply(base, grey, 5.0);
+        const auto again = apply(base, grey, 5.0);
+        const auto next = apply(base, grey, 6.0);
+        GrainValues seeded = base;
+        seeded.seed = 2;
+        const auto other = apply(seeded, grey, 5.0);
+        std::size_t againSame = 0;
+        std::size_t nextSame = 0;
+        std::size_t otherSame = 0;
+        for (std::int64_t y = 0; y < frame.height; ++y)
+            for (std::int64_t x = 0; x < frame.width; ++x) {
+                againSame += at(*a, x, y) == at(*again, x, y) ? 1U : 0U;
+                nextSame += at(*a, x, y) == at(*next, x, y) ? 1U : 0U;
+                otherSame += at(*a, x, y) == at(*other, x, y) ? 1U : 0U;
+            }
+        expect(againSame == total && nextSame < total / 20 && otherSame < total / 20,
+               "a frame repeats, and another frame or seed is new, with Monochrome on");
+        const Frame shifted{-13, 21, 40, 30};
+        const auto part = apply(base, image(shifted, {0.4F, 0.4F, 0.4F, 1.0F}));
+        const auto whole = apply(base, image(Frame{-13, 21, 64, 64}, {0.4F, 0.4F, 0.4F, 1.0F}));
+        bool same = true;
+        for (std::int64_t y = 21; y < 51; ++y)
+            for (std::int64_t x = -13; x < 27; ++x)
+                same = same && at(*part, x, y) == at(*whole, x, y);
+        expect(same, "a pixel's shared grain does not depend on the size of its data window");
+    }
+
+    // Cache identity: the two states are one table apart in one slot, on one fixed program, and
+    // never share an entry, through the evaluator's memoization and back.
+    {
+        using runtime::detail::buildColorGradeProgram;
+        using runtime::detail::ColorGradeKind;
+        const auto gradeOff = prepare(off, 3.0);
+        const auto gradeOn = prepare(on, 3.0);
+        expect(gradeOff && gradeOn && gradeOff->data.size() == gradeOn->data.size(),
+               "both states prepare");
+        std::size_t differing = 0;
+        for (std::size_t i = 0; i < gradeOff->data.size(); ++i)
+            differing += gradeOff->data[i] != gradeOn->data[i] ? 1U : 0U;
+        expect(differing == 1 && gradeOff->data[7] == 0.0F && gradeOn->data[7] == 1.0F,
+               "Monochrome is one value of the table");
+        expect(runtime::detail::colorGradeIdentity(*gradeOff) !=
+                   runtime::detail::colorGradeIdentity(*gradeOn),
+               "each state has its own cache identity");
+        const auto window = render::ImageWindow::create(0, 0, 8, 8);
+        const auto dataOff =
+            runtime::detail::filmGrainProgramData(*gradeOff, *window.value(), 1.0, 1.0, 1.0);
+        const auto dataOn =
+            runtime::detail::filmGrainProgramData(*gradeOn, *window.value(), 1.0, 1.0, 1.0);
+        expect(dataOff && dataOn && runtime::detail::validFilmGrainProgramData(*dataOn),
+               "Monochrome's program data is valid");
+        if (dataOff && dataOn) {
+            const auto first = buildColorGradeProgram(ColorGradeKind::FilmGrain, *dataOff);
+            const auto second = buildColorGradeProgram(ColorGradeKind::FilmGrain, *dataOn);
+            expect(first.succeeded() && second.succeeded() &&
+                       first.program()->shaderText == second.program()->shaderText &&
+                       first.program()->uniformBufferData != second.program()->uniformBufferData,
+                   "one fixed program reads Monochrome as data");
+            auto broken = *dataOn;
+            broken[7] = 0.5F;
+            expect(!runtime::detail::validFilmGrainProgramData(broken),
+                   "a Monochrome that is neither on nor off is refused");
+        }
+        const runtime::CpuCompositionEvaluator evaluator;
+        // The same ids, as the same node has when only the toggle changes.
+        const auto planOff = film_grain_test::grainPlan(off);
+        const auto planOn = film_grain_test::grainPlan(on);
+        const auto pixels = [&](const auto& plan) {
+            runtime::EvaluationRequest request{*core::RationalTime::create(2, 24), plan->output(),
+                                               runtime::CompositionFormatResolution{}};
+            request.pixelStorageByteLimit = 1U << 26U;
+            const auto result = evaluator.evaluate(plan, request, {});
+            if (result.frame() == nullptr)
+                throw std::logic_error("the plan evaluates");
+            const auto view = result.frame()->processImage().pixels();
+            return std::vector<render::Rgba32f>(view.begin(), view.end());
+        };
+        const auto firstOff = pixels(planOff);
+        const auto firstOn = pixels(planOn);
+        const auto backOff = pixels(planOff);
+        const auto backOn = pixels(planOn);
+        expect(firstOff != firstOn, "toggling Monochrome redraws the frame, through the cache");
+        expect(firstOff == backOff && firstOn == backOn, "each state keeps its own frame");
+    }
+}
+
 void testBudgetAndCancellation() {
     const auto input = image({}, {0.4F, 0.4F, 0.4F, 1.0F});
     const auto grade = prepare({});
@@ -573,6 +841,8 @@ int main() {
         testPixels();
         testEvaluator();
         testPrepared();
+        testMonochromeOffIsUnchanged();
+        testMonochrome();
         testBudgetAndCancellation();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

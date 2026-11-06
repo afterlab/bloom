@@ -20,7 +20,7 @@ namespace {
 
 // The table:
 //  0  red, green and blue amplitude (intensity * amount * the noise's normalisation), size
-//  4  shadows, midtones, highlights, (unused)
+//  4  shadows, midtones, highlights, monochrome (0 or 1)
 //  8  Rec. 709 luma weights, 1 / mid grey
 // 12  1 / (white - mid grey), the stream's low and high 16 bits, mid grey
 // 16  pixel origin x and y, scale x and y (filmGrainProgramData)
@@ -28,6 +28,7 @@ constexpr std::size_t kSize = 3;
 constexpr std::size_t kShadows = 4;
 constexpr std::size_t kMidtones = 5;
 constexpr std::size_t kHighlights = 6;
+constexpr std::size_t kMonochrome = 7;
 constexpr std::size_t kStreamLow = 13;
 constexpr std::size_t kStreamHigh = 14;
 constexpr std::size_t kMidGrey = 15;
@@ -90,6 +91,7 @@ std::optional<PreparedColorGrade> prepareFilmGrainGrade(const FilmGrainKernel& k
     d[kShadows] = static_cast<float>(at("shadows"));
     d[kMidtones] = static_cast<float>(at("midtones"));
     d[kHighlights] = static_cast<float>(at("highlights"));
+    d[kMonochrome] = kernel.monochrome ? 1.0F : 0.0F;
     d[8] = kLumaRed;
     d[9] = kLumaGreen;
     d[10] = kLumaBlue;
@@ -140,7 +142,8 @@ bool validFilmGrainProgramData(const std::vector<float>& d) noexcept {
     const auto half = [](const float value) {
         return value >= 0.0F && value <= 65535.0F && value == std::floor(value);
     };
-    return half(d[kStreamLow]) && half(d[kStreamHigh]) && d[kScaleX] > 0.0F && d[kScaleY] > 0.0F;
+    return half(d[kStreamLow]) && half(d[kStreamHigh]) && d[kScaleX] > 0.0F && d[kScaleY] > 0.0F &&
+           (d[kMonochrome] == 0.0F || d[kMonochrome] == 1.0F);
 }
 
 bool filmGrainPixel(const float* const k, const std::int64_t x, const std::int64_t y,
@@ -166,8 +169,9 @@ bool filmGrainPixel(const float* const k, const std::int64_t x, const std::int64
     const float px = (static_cast<float>(x) + k[kOriginX]) * k[kScaleX];
     const float py = (static_cast<float>(y) + k[kOriginY]) * k[kScaleY];
     const auto grain = core::film_grain::noise(px, py, streamOf(k));
+    const bool monochrome = k[kMonochrome] != 0.0F;
     for (std::size_t i = 0; i < 3; ++i)
-        pixel[i] = pixel[i] + scale * (k[i] * grain[i]);
+        pixel[i] = pixel[i] + scale * (k[i] * grain[monochrome ? 0 : i]);
     return std::isfinite(pixel[0]) && std::isfinite(pixel[1]) && std::isfinite(pixel[2]);
 }
 
@@ -207,6 +211,7 @@ const std::string& filmGrainProgramText() {
         " precise float py = (float(c.y) + g.y) * g.w;\n"
         " uint stream = uint(k3.y) | (uint(k3.z) << 16u);\n"
         " vec3 grain = bloom_film_grain_noise(px, py, stream);\n"
+        " if (k1.w != 0.0) { grain = grain.xxx; }\n"
         " precise float r = p.r + scale * (k0.x * grain.x);\n"
         " precise float gr = p.g + scale * (k0.y * grain.y);\n"
         " precise float b = p.b + scale * (k0.z * grain.z);\n"

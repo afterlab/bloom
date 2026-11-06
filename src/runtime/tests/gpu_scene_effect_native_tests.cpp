@@ -2204,7 +2204,8 @@ void runLensFlares(Expectations& expectations, GpuDevice& device, GpuSceneCache&
 // #486 Film Grain against the CPU oracle: the default, every path of the program at a larger and a
 // smaller size, held grain, a full-frame proxy and a region of interest; warm RAM reuse with zero
 // dispatches; the next frame new grain with parity, drawn by the same program; a changed value
-// re-running with parity.
+// re-running with parity; Monochrome on every one of those routes; and a toggle of Monochrome
+// re-running with parity while each state keeps its own cache entry.
 void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
     using bloom::film_grain_test::everyPath;
     using bloom::film_grain_test::GrainValues;
@@ -2232,6 +2233,17 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     }
     cases.push_back({everyPath(), "a proxy", true});
     cases.push_back({everyPath(), "a region of interest", false, true});
+    // Monochrome, on every route above.
+    constexpr std::array kMonochromeNames{
+        "monochrome, default", "monochrome, every path", "monochrome, fine",
+        "monochrome, coarse",  "monochrome, held",       "monochrome, a proxy",
+        "monochrome, a region of interest"};
+    for (std::size_t index = 0; index < kMonochromeNames.size(); ++index) {
+        Case monochrome = cases[index];
+        monochrome.values.monochrome = true;
+        monochrome.name = kMonochromeNames[index];
+        cases.push_back(monochrome);
+    }
     std::uint64_t id = 48600;
     for (const auto& item : cases) {
         cache.clear();
@@ -2316,6 +2328,32 @@ void runFilmGrains(Expectations& expectations, GpuDevice& device, GpuSceneCache&
                                        detail, AlphaGate::Exact) &&
                                 executor.executor->counters().dispatches > beforeChanged.dispatches,
                             name + "a changed value re-runs with CPU parity: " + detail);
+        // Toggling Monochrome re-runs with parity on the same node's ids, and neither state serves
+        // the other's frame: going back finds the first state's own entry and pixels.
+        GrainValues toggledValues = item.values;
+        toggledValues.monochrome = !item.values.monochrome;
+        const auto toggledPlan = bloom::film_grain_test::grainPlan(toggledValues, id - 200);
+        const auto toggled = builder.build(toggledPlan, request);
+        const auto toggledOracle = evaluator.evaluate(toggledPlan, oracleRequest, {});
+        expectations.expect(toggled && toggledOracle.frame(), name + "the toggle prepares");
+        if (!toggled || !toggledOracle.frame())
+            continue;
+        const auto backPrepared = builder.build(plan, request);
+        const auto beforeToggle = executor.executor->counters();
+        const auto flipped = runScene(*executor.executor, toggled.scene);
+        expectations.expect(flipped.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                parity(flipped.pixels,
+                                       toggledOracle.frame()->processImage().pixels(), detail,
+                                       AlphaGate::Exact) &&
+                                flipped.pixels != cold.pixels &&
+                                executor.executor->counters().dispatches > beforeToggle.dispatches,
+                            name + "toggling Monochrome redraws with CPU parity: " + detail);
+        const auto beforeBack = executor.executor->counters();
+        const auto back = runScene(*executor.executor, backPrepared.scene);
+        expectations.expect(back.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                back.pixels == cold.pixels &&
+                                executor.executor->counters().dispatches == beforeBack.dispatches,
+                            name + "toggling back finds its own entry: identical pixels, no dispatch");
     }
 }
 

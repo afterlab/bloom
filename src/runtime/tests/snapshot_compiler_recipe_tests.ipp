@@ -857,6 +857,41 @@ void testFilmGrainLowering(Expectations& expectations) {
                                 (animation == kFilmGrainEveryFrame),
                             "only grain drawn for every frame varies with time");
     }
+    // Monochrome lowers on the kernel, so a toggle is a new plan; unbound, it lowers off.
+    for (const bool monochrome : {false, true}) {
+        auto fixture = recipeFixture(kFilmGrainNodeType, {{"monochrome", monochrome}});
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        const auto index = result.plan ? grainOf(*result.plan, node) : std::nullopt;
+        expectations.expect(index.has_value() &&
+                                std::get<runtime::FilmGrainKernel>(
+                                    std::get<runtime::CompiledImageEffect>(
+                                        result.plan->operations()[*index])
+                                        .kernel)
+                                        .monochrome == monochrome,
+                            "Film Grain lowers its Monochrome");
+    }
+    {
+        auto fixture = recipeFixture(kFilmGrainNodeType);
+        auto* composition = fixture.project.findComposition(kCompositionId);
+        auto* record = composition->graph().findNode(fixture.node);
+        std::erase_if(record->parameters, [&](const ParameterBinding& binding) {
+            if (binding.role != "monochrome")
+                return false;
+            static_cast<void>(composition->parameters().erase(binding.parameterId));
+            return true;
+        });
+        const auto node = fixture.node;
+        const auto result = compileRecipe(std::move(fixture.project));
+        const auto index = result.plan ? grainOf(*result.plan, node) : std::nullopt;
+        expectations.expect(index.has_value() &&
+                                !std::get<runtime::FilmGrainKernel>(
+                                     std::get<runtime::CompiledImageEffect>(
+                                         result.plan->operations()[*index])
+                                         .kernel)
+                                     .monochrome,
+                            "a Film Grain with no Monochrome binding lowers with it off");
+    }
     {
         auto fixture = recipeFixture(kFilmGrainNodeType);
         fixture.project.findComposition(kCompositionId)->nodeLayout()[fixture.node].muted = true;

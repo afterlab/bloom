@@ -1784,7 +1784,8 @@ lowerImageEffect(const document::NodeRecord& node,
         }
         return effect;
     }
-    // #486 Film Grain: the constant animation and seed, and every value.
+    // #486 Film Grain: the constant animation, seed and Monochrome, and every value. A node with no
+    // Monochrome binding (saved before it, on a path that does not migrate) lowers with it off.
     if (node.typeId == document::kFilmGrainNodeType) {
         runtime::FilmGrainKernel kernel;
         const auto* animation =
@@ -1794,6 +1795,12 @@ lowerImageEffect(const document::NodeRecord& node,
         if (lowered) {
             kernel.animation = *animation;
             kernel.seed = *seed;
+        }
+        if (const auto* binding = findParameterBinding(node, "monochrome")) {
+            const auto* monochrome = parameterConstant<bool>(binding);
+            lowered = lowered && monochrome != nullptr;
+            if (monochrome != nullptr)
+                kernel.monochrome = *monochrome;
         }
         for (const auto& spec : document::filmGrainParameters()) {
             if (spec.kind != document::FilmGrainParameterKind::Scalar)

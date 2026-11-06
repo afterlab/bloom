@@ -1947,19 +1947,23 @@ displayProofRunner(const bool customView) {
             "effect.FilmGrainKernel", GpuCoverageFixtureCriterion::Prepared,
             "src/runtime film grain tests",
             [runGrain, held] {
-                return runGrain({GrainValues{}, bloom::film_grain_test::everyPath(), held}, 486000,
+                return runGrain({GrainValues{}, bloom::film_grain_test::everyPath(), held,
+                                 bloom::film_grain_test::everyPathMonochrome()},
+                                486000,
                                 "production Film Grain: the default, every channel and response "
-                                "distinct at a larger size, and held grain, over HDR and partial "
-                                "alpha, on a moved frame, full frame and ROI");
+                                "distinct at a larger size, held grain and Monochrome, over HDR "
+                                "and partial alpha, on a moved frame, full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
         add(
             "node.bloom.film-grain", GpuCoverageFixtureCriterion::Prepared,
             "src/runtime film grain tests",
             [runGrain] {
-                return runGrain({GrainValues{}, bloom::film_grain_test::everyPath()}, 487000,
-                                "production Film Grain node: the default and strong distinct "
-                                "channels, on a moved frame, full frame and ROI");
+                return runGrain({GrainValues{}, bloom::film_grain_test::everyPath(),
+                                 bloom::film_grain_test::everyPathMonochrome()},
+                                487000,
+                                "production Film Grain node: the default, strong distinct "
+                                "channels and Monochrome, on a moved frame, full frame and ROI");
             },
             {}, FixturePrerequisite::PackagedShaderTools);
     }

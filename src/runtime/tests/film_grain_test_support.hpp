@@ -28,6 +28,7 @@ struct GrainValues final {
     std::map<std::string, double> scalars{};
     std::int64_t animation = document::kFilmGrainEveryFrame;
     std::int64_t seed = 1;
+    bool monochrome = false;
 };
 
 [[nodiscard]] inline runtime::FilmGrainKernel grainKernel(const GrainValues& values,
@@ -35,6 +36,7 @@ struct GrainValues final {
     runtime::FilmGrainKernel kernel;
     kernel.animation = values.animation;
     kernel.seed = values.seed;
+    kernel.monochrome = values.monochrome;
     std::uint64_t id = idBase;
     for (const auto& spec : document::filmGrainParameters()) {
         if (spec.kind != document::FilmGrainParameterKind::Scalar)
@@ -67,6 +69,13 @@ struct GrainValues final {
                       {"greenAmount", 0.5}, {"blueAmount", 2.0}, {"shadows", 0.75},
                       {"midtones", 1.25},   {"highlights", 0.5}};
     values.seed = 42;
+    return values;
+}
+
+// The same with one grain pattern shared by every channel.
+[[nodiscard]] inline GrainValues everyPathMonochrome() {
+    GrainValues values = everyPath();
+    values.monochrome = true;
     return values;
 }
 

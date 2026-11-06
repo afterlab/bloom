@@ -151,8 +151,8 @@ BLOOM_GPU_REQUIRED_EFFECT(LensFlareKernel,
                           "Lens Flare: glow, streaks, ghosts, ring, iris, hoop and anamorphic "
                           "elements with source brightness and matte occlusion probes (#507)");
 BLOOM_GPU_REQUIRED_EFFECT(FilmGrainKernel,
-                          "Film Grain: seeded per-channel grain with a luma response, a size in "
-                          "full-resolution pixels and a frame's own pattern (#486)");
+                          "Film Grain: seeded per-channel or monochrome grain with a luma response, a "
+                          "size in full-resolution pixels and a frame's own pattern (#486)");
 BLOOM_GPU_REQUIRED_EFFECT(TimeSampleKernel,
                           "time sample: its input evaluated on a sub-frame or neighbour-frame "
                           "Offset clock, posterized or holding footage (#484)");
