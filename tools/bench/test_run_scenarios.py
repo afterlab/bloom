@@ -412,6 +412,15 @@ class DepthScenario(unittest.TestCase):
                 self.assertIn(effect[2]["depth"], passes, "each depth input names a pass")
         self.assertEqual(spec.keyed_alpha(scenario), [])
 
+    def test_lens_flare_scenario_keys_a_plate_flare(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["lens-flare-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.lens-flare")
+        self.assertIn("intensity", effect[2]["keys"], "every frame is new")
+        self.assertGreater(effect[1]["sourceBrightness"], 0.0, "the plate is probed")
+
 
 if __name__ == "__main__":
     unittest.main()

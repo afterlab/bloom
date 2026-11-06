@@ -69,6 +69,10 @@ MATTE_FILL_BUSY = ("#549: the Cryptomatte shot fills at 12 to 13 fps with the GP
 NOISE_FILL_BUSY = ("#386: the Noise shot fills its 24 frames in about 0.4 s (59 fps on "
                    "2026-11-06), two or three GPU utilisation samples: too short to judge the "
                    "average busy fairly (31%, peak 50%)")
+LENS_FLARE_FILL_BUSY = ("#386: the Lens Flare shot fills its 24 frames in 0.35 s (69 fps on "
+                        "2026-11-06), too few GPU utilisation samples to judge (13 to 15%); over 240 "
+                        "frames it filled at 88 fps with the GPU 48% busy: one pass a frame, the rest "
+                        "host decode")
 DEPTH_FILL_BUSY = ("#386: the depth effects shot fills at 16 to 20 fps with the GPU 31 to 58% busy "
                    "(2026-11-06, after #549): its 24 frames fill in a little over a second, a few "
                    "GPU utilisation samples, and every frame first decodes three sequences (the "
@@ -244,6 +248,23 @@ SCENARIOS["cryptomatte-mattes-2k"] = {
                                      "threshold": 0.6}]]},
     ],
     "knownFailures": {"gpu-busy-during-fill": MATTE_FILL_BUSY},
+}
+
+# #507: the Lens Flare over a plate, its intensity keyed so every frame is new, every element on at
+# the largest counts and its brightness following the plate under the light (the probes' atlas path).
+SCENARIOS["lens-flare-2k"] = {
+    "description": "A PNG16 plate under a Lens Flare with every element on at its largest counts, "
+                   "its intensity keyed and its brightness read from the plate.",
+    "tier": "1080p",
+    "frames": 24,
+    "knownFailures": {"gpu-busy-during-fill": LENS_FLARE_FILL_BUSY},
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.lens-flare",
+                      {"ghostCount": 16, "irisCount": 12, "irisBlades": 12, "streakCount": 8,
+                       "anamorphicAmount": 0.5, "sourceBrightness": 0.5, "sampleRadius": 16.0},
+                      {"keys": {"intensity": [[0, 0.6], [23, 1.4]]}}]]},
+    ],
 }
 
 # #483: the depth effects heavy nodes, from synthetic CG passes in both depth encodings. A PNG plate

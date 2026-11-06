@@ -123,7 +123,8 @@ def footage_assets():
 # node case's ms per frame against its cheap reference (a Grade) and its closest existing
 # comparable at the same resolution. A case may carry its own budget; "default" covers the rest.
 NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench",
-                "depth": "src/runtime/tests/bloom_runtime_gpu_depth_node_bench"}
+                "depth": "src/runtime/tests/bloom_runtime_gpu_depth_node_bench",
+                "lens-flare": "src/runtime/tests/bloom_runtime_gpu_lens_flare_node_bench"}
 NODE_COST_TIERS = ("1080p", "2160p")
 NODE_COST_BUDGETS = {
     "default": {"reference": 4.0, "comparable": 2.0},
@@ -155,6 +156,20 @@ NODE_COST_BUDGETS = {
     "z-defocus-32-quality-3": {"reference": 21.5, "comparable": 10.5},
     "z-defocus-uniform-32": {"reference": 12.0, "comparable": 5.75},
     "z-defocus-bokeh-32": {"reference": 20.0, "comparable": 9.75},
+    # #507 Lens Flare is one fixed pass whatever its counts, held about 25% over the 2026-11-06
+    # measurement; a reading of the source or a matte adds its probe and its slot in the atlas.
+    "lens-flare": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-only-glow": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-only-streak": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-only-ghost": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-only-ring": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-only-iris": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-only-hoop": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-only-anamorphic": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-largest": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-largest-size-4": {"reference": 1.75, "comparable": 0.35},
+    "lens-flare-source": {"reference": 2.25, "comparable": 0.45},
+    "lens-flare-occlusion": {"reference": 2.25, "comparable": 0.45},
 }
 # Cases a known limitation keeps from running: none (#549 put the 2160p Cryptomatte cases back on
 # the GPU route).
