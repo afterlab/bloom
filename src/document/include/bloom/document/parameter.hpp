@@ -8,6 +8,7 @@
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/gradient_interpolation.hpp>
 #include <bloom/document/ids.hpp>
@@ -408,6 +409,7 @@ isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isRecipeScalarSchemaKey(schemaKey) || isColorizeScalarSchemaKey(schemaKey) ||
            isVignetteScalarSchemaKey(schemaKey) || isFieldScalarAnimatableSchemaKey(schemaKey) ||
            isDepthScalarAnimatableSchemaKey(schemaKey) || isLensFlareScalarSchemaKey(schemaKey) ||
+           isFilmGrainScalarSchemaKey(schemaKey) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -516,6 +518,9 @@ isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
     // #507 Lens Flare (lens_flare_nodes.hpp).
     if (lensFlareParameterSpec(schemaKey) != nullptr)
         return isLensFlareScalarWithinDomain(schemaKey, value);
+    // #486 Film Grain (film_grain_nodes.hpp).
+    if (filmGrainParameterSpec(schemaKey) != nullptr)
+        return isFilmGrainScalarWithinDomain(schemaKey, value);
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

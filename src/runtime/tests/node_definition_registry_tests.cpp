@@ -153,8 +153,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // Channel Set; #494 adds Grade; #339 adds Drop Shadow, Glow and Light Wrap; #503 adds Alpha
     // Association; #502 adds Adjustment; #504 adds Colorize; #505 adds Vignette; #525 adds the
     // sixteen Fields nodes; #383 adds Mask Combine and Image to Mask; #483 adds Z Defocus and Depth
-    // Fog; #507 adds Lens Flare.
-    expectations.expect(registry.definitions().size() == 177,
+    // Fog; #507 adds Lens Flare; #486 adds Film Grain.
+    expectations.expect(registry.definitions().size() == 178,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -302,7 +302,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectCategory({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"},
                    document::NodeCategory::Color);
     expectCategory({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur",
-                    "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette"},
+                    "bloom.matte-erode", "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain"},
                    document::NodeCategory::Filters);
     // #505 Vignette: an Image in and out; the constant shape (Elliptical) and mode (Multiply) with
     // no socket; every value animatable with its own socket in parameter order, the centre a
@@ -333,6 +333,22 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             vignetteSockets() && vignette->outputs.size() == 1 &&
             vignette->outputs[0].valueKind == runtime::SocketValueKind::Image,
         "#505: Vignette has its constant choices and an animatable socket per value");
+    // #486 Film Grain: an Image in and out, its constant animation and seed with no socket, and an
+    // animatable socket per value; the effect mask follows them.
+    const auto grainUnmasked = withoutMask(registry.find("bloom.film-grain", 1));
+    expectations.expect(
+        grainUnmasked && grainUnmasked->inputs.size() == 9 &&
+            grainUnmasked->parameters.size() == 10 &&
+            grainUnmasked->inputs[0].valueKind == runtime::SocketValueKind::Image &&
+            grainUnmasked->inputs[1].name == "intensity" &&
+            grainUnmasked->parameters[0].defaultValue == document::ParameterValue{0.02} &&
+            grainUnmasked->parameters[8].role == "animation" &&
+            !grainUnmasked->parameters[8].supportsAnimation &&
+            grainUnmasked->parameters[9].role == "seed" &&
+            grainUnmasked->parameters[9].defaultValue == document::ParameterValue{std::int64_t{1}} &&
+            grainUnmasked->outputs.size() == 1 &&
+            grainUnmasked->outputs[0].valueKind == runtime::SocketValueKind::Image,
+        "#486: Film Grain has its constants and an animatable socket per value");
     expectCategory({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow",
                     "bloom.lens-flare", "bloom.glow", "bloom.light-wrap", "bloom.alpha-association"},
                    document::NodeCategory::Compositing);
@@ -1025,19 +1041,19 @@ void testMatteWorkflowDefinitions(Expectations& expectations) {
                  channel.defaultValue == document::ParameterValue{std::int64_t{0}};
     }
     const bool named = std::ranges::all_of(
-        std::array<std::string_view, 16>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
+        std::array<std::string_view, 17>{"bloom.grade", "bloom.levels", "bloom.hue-saturation",
                                          "bloom.exposure", "bloom.offset", "bloom.multiply",
                                          "bloom.invert", "bloom.colorize",
                                          "bloom.ocio-colour-space-transform",
                                          "bloom.ocio-file-transform", "bloom.gaussian-blur",
                                          "bloom.box-blur", "bloom.vignette", "bloom.curves",
-                                         "bloom.z-defocus", "bloom.depth-fog"},
+                                         "bloom.z-defocus", "bloom.depth-fog", "bloom.film-grain"},
         [&](const std::string_view type) {
             return std::ranges::any_of(registry.definitions(), [&](const auto& definition) {
                 return definition.key.typeId == type && document::hasEffectMask(definition);
             });
         });
-    expectations.expect(shaped && named && masked == 16,
+    expectations.expect(shaped && named && masked == 17,
                         "every grade, colour and filter effect carries the effect mask");
     const auto* glow = registry.find("bloom.glow", 2);
     const auto* matteBlur = registry.find("bloom.matte-blur", 1);

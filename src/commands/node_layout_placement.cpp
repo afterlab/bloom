@@ -10,6 +10,7 @@
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/project.hpp>
 
@@ -69,6 +70,8 @@ constexpr double kSlotPitch = 12.0;
 // wide as a label beside two position cells.
 constexpr double kDialSide = 50.0;
 constexpr double kPadMaxHeight = 208.0;
+// #486: FilmGrainResponseGraph's height (film_grain_widget.cpp).
+constexpr double kFilmGrainGraphHeight = 120.0;
 // A gradient row (gradient_parameter_row.cpp) is the gradient editor (Size::Control bar,
 // Size::IconLarge handle band, Spacing::XXS), then its Stop row, (#546) its Color mode and
 // Interpolation rows and its Values button, each Spacing::XS and Size::Control.
@@ -331,6 +334,10 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
     if (node->typeId == document::kLensFlareNodeType)
         thumbnail = kPadMaxHeight + kDialSide + 2.0 * kControl + 9.0 * (kControl + kSmall) +
                     4.0 * kSmall + kPadding;
+    // #486: the Film Grain card's response graph and its eight slider rows, each a value over a
+    // slider.
+    if (node->typeId == document::kFilmGrainNodeType)
+        thumbnail = kFilmGrainGraphHeight + kSmall + 8.0 * (kControl + kSmall) + kPadding;
     const auto controls = nodeControlsEstimate(node->typeId);
     double controlsHeight = static_cast<double>(controls.angles) * (kDialSide - kRow + kSmall) +
                             static_cast<double>(controls.ranges) * (kControl + 2.0 * kSmall) +

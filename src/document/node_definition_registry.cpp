@@ -5,6 +5,7 @@
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
+#include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/grade_curves.hpp>
@@ -569,6 +570,9 @@ template <typename Definition>
         // #507 Lens Flare: the exact generated shape.
         if (definition.key.typeId == kLensFlareNodeType)
             return definition == lensFlareDefinition();
+        // #486 Film Grain: the exact generated shape.
+        if (definition.key.typeId == kFilmGrainNodeType)
+            return definition == filmGrainDefinition();
         if (definition.key.typeId == kGradeNodeType)
             return definition == gradeDefinition();
         if (definition.key.typeId == kSeparateChannelsNodeType)
@@ -1647,6 +1651,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         gradeDefinition(),
         colorizeDefinition(),
         vignetteDefinition(),
+        filmGrainDefinition(),
         depthEffectDefinition(kZDefocusNodeType),
         depthEffectDefinition(kDepthFogNodeType),
         lensFlareDefinition(),

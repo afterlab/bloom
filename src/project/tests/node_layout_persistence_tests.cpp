@@ -177,7 +177,8 @@ void blurNodeReopen() {
           "bloom.matte-dilate", "bloom.luma-key", "bloom.image-preview", "bloom.levels",
           "bloom.curves", "bloom.hue-saturation", "bloom.grade", "bloom.separate-channels",
           "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow", "bloom.light-wrap",
-          "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare"}) {
+          "bloom.alpha-association", "bloom.colorize", "bloom.vignette", "bloom.lens-flare",
+          "bloom.film-grain"}) {
         const auto node = draft.ids().allocateNode();
         if (!node)
             throw std::logic_error("blur node identity");
@@ -255,6 +256,14 @@ void blurNodeReopen() {
                     ? document::ParameterValue{document::Vec2d{-120.5, 64.25}}
                 : parameter.schemaKey.starts_with("bloom.vignette.")
                     ? document::ParameterValue{0.25}
+                // #486 Film Grain: held, its own seed and moved values.
+                : parameter.schemaKey == "bloom.film-grain.animation"
+                    ? document::ParameterValue{std::int64_t{1}}
+                : parameter.schemaKey == "bloom.film-grain.seed"
+                    ? document::ParameterValue{std::int64_t{1234}}
+                : parameter.valueKind == document::ParameterValueKind::Float64 &&
+                        parameter.schemaKey.starts_with("bloom.film-grain.")
+                    ? document::ParameterValue{0.625}
                 // #507 Lens Flare: 3D, an inverted luma matte, moved values and a moved light.
                 : parameter.schemaKey == "bloom.lens-flare.lightMode"
                     ? document::ParameterValue{std::int64_t{1}}

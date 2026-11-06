@@ -2,6 +2,7 @@
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -509,6 +510,23 @@ std::optional<ParameterPresentation> lensFlarePresentation(const std::string_vie
                   spec->decimals, spec->unit);
 }
 
+// #486 Film Grain: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> filmGrainPresentation(const std::string_view schemaKey) {
+    const auto* spec = filmGrainParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    switch (spec->kind) {
+    case FilmGrainParameterKind::Choice:
+        return choice();
+    case FilmGrainParameterKind::Integer:
+        return whole(spec->minimum, spec->maximum, spec->minimum, 9999.0, spec->unit);
+    case FilmGrainParameterKind::Scalar:
+        break;
+    }
+    return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum, spec->step,
+                  spec->decimals, spec->unit, spec->displayScale);
+}
+
 } // namespace
 
 ParameterPresentation parameterPresentation(const std::string_view schemaKey,
@@ -520,6 +538,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *depth;
     if (auto flare = lensFlarePresentation(schemaKey))
         return *flare;
+    if (auto grain = filmGrainPresentation(schemaKey))
+        return *grain;
     for (const auto& entry : table())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;

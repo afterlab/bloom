@@ -6,6 +6,7 @@
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
@@ -182,6 +183,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         Options options;
         for (std::size_t index = 0; index < flare->choices.size(); ++index)
             options.push_back({std::string(flare->choices[index]),
+                               static_cast<std::int64_t>(index)});
+        return options;
+    }
+    // #486 Film Grain.
+    if (const auto* grain = filmGrainParameterSpec(schemaKey);
+        grain != nullptr && grain->kind == FilmGrainParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < grain->choices.size(); ++index)
+            options.push_back({std::string(grain->choices[index]),
                                static_cast<std::int64_t>(index)});
         return options;
     }

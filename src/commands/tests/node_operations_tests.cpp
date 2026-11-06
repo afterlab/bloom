@@ -945,6 +945,26 @@ void testRecipeCommands(TestContext& test) {
                                ConstantValueSource{bloom::document::Vec2d{2e6, 0.0}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *lightMode,
                                ConstantValueSource{std::int64_t{2}});
+
+    // #486 Film Grain: its constant choice and seed and its values edit within their domains and
+    // refuse outside them.
+    const auto grain = addRecipe("bloom.film-grain");
+    const auto grainSize = grain.outputId<ParameterId>("parameter.size");
+    const auto grainAnimation = grain.outputId<ParameterId>("parameter.animation");
+    const auto grainSeed = grain.outputId<ParameterId>("parameter.seed");
+    if (!grainSize || !grainAnimation || !grainSeed)
+        throw std::logic_error("Film Grain exposes registered control identities");
+    (void)exercise<SetParameterSource>(test, fixture, *grainSize, ConstantValueSource{4.0});
+    (void)exercise<SetParameterSource>(test, fixture, *grainAnimation,
+                                       ConstantValueSource{std::int64_t{1}});
+    (void)exercise<SetParameterSource>(test, fixture, *grainSeed,
+                                       ConstantValueSource{std::int64_t{42}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainSize,
+                               ConstantValueSource{0.1});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainAnimation,
+                               ConstantValueSource{std::int64_t{2}});
+    refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *grainSeed,
+                               ConstantValueSource{std::int64_t{-1}});
 }
 
 void testAddAndLayout(TestContext& test) {

@@ -13,6 +13,7 @@ target_sources(
         field_nodes.cpp
         depth_effect_nodes.cpp
         lens_flare_nodes.cpp
+        film_grain_nodes.cpp
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp
