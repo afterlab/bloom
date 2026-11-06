@@ -158,26 +158,26 @@ template <typename Expect> void auditUi3(WindowFixture& fixture, const Expect& e
            &plain, "D14 selected row is the Accent wash with a leading Accent edge");
 
     const auto category = [](std::string_view type) {
-        const auto* definition = document::builtInNodeDefinitions().find(type, 1);
-        return definition ? node_editor::nodeCategoryName(*definition) : QString{};
+        const auto group = document::nodeGroupOf(type);
+        return group ? node_editor::nodeGroupTitle(*group) : QString{};
     };
     for (const auto& [type, expected] :
          std::array{std::pair{document::kScalarToStringNodeType, "Convert"},
                     std::pair{document::kStringLengthNodeType, "String"},
                     std::pair{document::kCompareNodeType, "Logic"},
-                    std::pair{document::kFrameNumberNodeType, "Time"},
+                    std::pair{document::kFrameNumberNodeType, "Time Values"},
                     std::pair{document::kHueShiftNodeType, "Color Values"},
                     std::pair{document::kVector2MathNodeType, "Vector"},
                     std::pair{document::kCompositionSizeNodeType, "Values"},
-                    // #500
-                    std::pair{std::string_view{"bloom.grade"}, "Grade"},
-                    std::pair{std::string_view{"bloom.exposure"}, "Grade"},
+                    // #554
+                    std::pair{std::string_view{"bloom.grade"}, "Color Correction"},
+                    std::pair{std::string_view{"bloom.exposure"}, "Color Correction"},
                     std::pair{std::string_view{"bloom.ocio-file-transform"}, "Color Management"},
-                    std::pair{std::string_view{"bloom.gaussian-blur"}, "Filters"},
-                    std::pair{std::string_view{"bloom.separate-channels"}, "Compositing"}})
+                    std::pair{std::string_view{"bloom.gaussian-blur"}, "Blur & Sharpen"},
+                    std::pair{std::string_view{"bloom.separate-channels"}, "Channels"}})
         expect(category(type) == expected, window, "F24 normalized node category");
     for (const auto& definition : document::builtInNodeDefinitions().definitions())
-        if (node_editor::nodeCategoryName(definition) == "Utilities")
+        if (category(definition.key.typeId) == "Utilities")
             expect(definition.key.typeId.starts_with("bloom.separate-") ||
                        definition.key.typeId.starts_with("bloom.combine-") ||
                        document::isRerouteNodeType(definition.key.typeId),

@@ -380,14 +380,14 @@ class ReadBack(unittest.TestCase):
         full = self.server.query(kind='node-types', nodeType='bloom.solid-source')['record']
         color = next(item for item in full['parameters'] if item['role'] == 'color')
         self.assertEqual(color['metadata']['valueKind'], 'color')
-        # #500: grading reports 'grade', colour management (OCIO) 'color', the blurs 'filters'.
+        # #554: `category` is the node's group in the Add menu's tree.
         category = {record['id']: record['category'] for record in types}
         for type_id in ('bloom.grade', 'bloom.levels', 'bloom.curves', 'bloom.hue-saturation',
                         'bloom.exposure', 'bloom.offset', 'bloom.multiply', 'bloom.invert'):
-            self.assertEqual(category[type_id], 'grade', type_id)
-        self.assertEqual(category['bloom.ocio-file-transform'], 'color')
-        self.assertEqual(category['bloom.gaussian-blur'], 'filters')
-        self.assertEqual(category['bloom.separate-channels'], 'compositing')
+            self.assertEqual(category[type_id], 'color-correction', type_id)
+        self.assertEqual(category['bloom.ocio-file-transform'], 'color-management')
+        self.assertEqual(category['bloom.gaussian-blur'], 'blur-sharpen')
+        self.assertEqual(category['bloom.separate-channels'], 'channels')
 
     def test_asset_kind_is_a_name(self):
         with tempfile.TemporaryDirectory(prefix='bloom-reference-') as directory:

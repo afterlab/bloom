@@ -57,90 +57,8 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
 }
 
 namespace node_editor {
-QString nodeCategoryName(const document::NodeCategory category) {
-    switch (category) {
-    case document::NodeCategory::Sources:
-        return QCoreApplication::translate("node_editor", "Sources");
-    case document::NodeCategory::Layers:
-        return QCoreApplication::translate("node_editor", "Layers");
-    case document::NodeCategory::Color:
-        return QCoreApplication::translate("node_editor", "Color Management");
-    case document::NodeCategory::Compositing:
-        return QCoreApplication::translate("node_editor", "Compositing");
-    case document::NodeCategory::Values:
-        return QCoreApplication::translate("node_editor", "Values");
-    case document::NodeCategory::Math:
-        return QCoreApplication::translate("node_editor", "Math");
-    case document::NodeCategory::Output:
-        return QCoreApplication::translate("node_editor", "Output");
-    case document::NodeCategory::Utilities:
-        return QCoreApplication::translate("node_editor", "Utilities");
-    case document::NodeCategory::Transform:
-        return QCoreApplication::translate("node_editor", "Transform");
-    case document::NodeCategory::Filters:
-        return QCoreApplication::translate("node_editor", "Filters");
-    case document::NodeCategory::Grade:
-        return QCoreApplication::translate("node_editor", "Grade");
-    case document::NodeCategory::Fields:
-        return QCoreApplication::translate("node_editor", "Fields");
-    }
-    return {};
-}
-
-QString nodeCategoryName(const QString& category) { return category; }
-QString nodeCategoryName(const document::NodeDefinition& definition) {
-    const auto& type = definition.key.typeId;
-    if (type == document::kTimeValueNodeType || type == document::kFrameNumberNodeType ||
-        type == document::kFrameRateNodeType || type == document::kSecondsToFramesNodeType ||
-        type == document::kFramesToSecondsNodeType ||
-        type == document::kSecondsToTimecodeNodeType ||
-        type == document::kTimecodeToSecondsNodeType)
-        return QStringLiteral("Time");
-    // #479: Separate/Combine Color (Value) join the other Color value nodes, apart from the image
-    // Separate/Combine Channels under Compositing (#500).
-    if (type == document::kSeparateHsvNodeType || type == document::kCombineHsvNodeType ||
-        type == document::kHueShiftNodeType || type == document::kLuminanceNodeType ||
-        type == document::kColorMixNodeType || type == document::kSeparateRgbaNodeType ||
-        type == document::kCombineRgbaNodeType)
-        return QStringLiteral("Color Values");
-    if (definition.category == document::NodeCategory::Values)
-        return QStringLiteral("Values");
-    if (type == document::kBooleanLogicNodeType || type == document::kBooleanNotNodeType ||
-        type == document::kInRangeNodeType || type == document::kCompareNodeType ||
-        type.starts_with("bloom.switch-"))
-        return QStringLiteral("Logic");
-    if (type == document::kVector2MathNodeType || type == document::kVector3MathNodeType ||
-        type == document::kVector2ReduceNodeType || type == document::kVector3ReduceNodeType ||
-        type == document::kRotate2dNodeType || type == document::kPolarToCartesianNodeType ||
-        type == document::kCartesianToPolarNodeType)
-        return QStringLiteral("Vector");
-    if (definition.category == document::NodeCategory::Utilities &&
-        type.find("-to-") != std::string::npos)
-        return QStringLiteral("Convert");
-    if (type.starts_with("bloom.string-"))
-        return QStringLiteral("String");
-    return nodeCategoryName(definition.category);
-}
-std::span<const QString> nodeCategoryOrder() {
-    static const std::array order{QStringLiteral("Sources"),
-                                  QStringLiteral("Layers"),
-                                  QStringLiteral("Compositing"),
-                                  QStringLiteral("Transform"),
-                                  QStringLiteral("Filters"),
-                                  QStringLiteral("Grade"),
-                                  QStringLiteral("Fields"),
-                                  QStringLiteral("Color Management"),
-                                  QStringLiteral("Values"),
-                                  QStringLiteral("Math"),
-                                  QStringLiteral("Convert"),
-                                  QStringLiteral("String"),
-                                  QStringLiteral("Logic"),
-                                  QStringLiteral("Time"),
-                                  QStringLiteral("Color Values"),
-                                  QStringLiteral("Vector"),
-                                  QStringLiteral("Utilities"),
-                                  QStringLiteral("Output")};
-    return order;
+QString nodeGroupTitle(const document::NodeGroup group) {
+    return QCoreApplication::translate("node_editor", document::nodeGroupName(group).data());
 }
 
 QString displayTypeName(const std::string_view typeId) {
@@ -396,34 +314,6 @@ QString nodeTypeDisplayName(const std::string_view typeId) {
     return displayTypeName(typeId);
 }
 
-QString nodeSearchKeywords(const std::string_view typeId) {
-    if (typeId == document::kSeparateChannelsNodeType ||
-        typeId == document::kCombineChannelsNodeType)
-        return QStringLiteral("RGB RGBA channel split pass");
-    // #503: the names compositors search for.
-    if (typeId == document::kAlphaAssociationNodeType)
-        return QStringLiteral("unmult premultiply unpremultiply premult unpremult straight "
-                              "remove color matting matte black white");
-    // #504.
-    if (typeId == document::kColorizeNodeType)
-        return QStringLiteral("fill tint tritone duotone gradient map ramp colorama black white "
-                              "monochrome greyscale grayscale toner channel mixer");
-    // #507.
-    if (typeId == document::kLensFlareNodeType)
-        return QStringLiteral("lens flare glare sun light streak star ghost halo hoop iris ring "
-                              "anamorphic optical");
-    // #486.
-    if (typeId == document::kFilmGrainNodeType)
-        return QStringLiteral("film grain noise add finishing stock analogue analog regrain");
-    if (typeId == document::kSharpenNodeType)
-        return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
-    // #505.
-    if (typeId == document::kVignetteNodeType)
-        return QStringLiteral("vignette lens falloff darken edges corners finishing exposure "
-                              "light falloff");
-    return {};
-}
-
 // A layer boundary node's display name is the layer's own durable name (the exact string the
 // timeline row shows); every other node is named by its type. Both are the node's real name, read
 // from document truth -- neither is invented here.
@@ -438,11 +328,11 @@ QString nodeDisplayName(const document::Composition& composition,
 }
 
 // A layer boundary card carries its LAYER's name, so the card alone would no longer say what kind
-// of node it is. The eyebrow is what still says it: one small line above the name, nothing else.
+// of node it is. The eyebrow says which group it comes from: one small line above the name, nothing
+// else.
 QString nodeEyebrow(const document::Composition&, const document::NodeRecord& node) {
-    const auto* definition =
-        document::builtInNodeDefinitions().find(node.typeId, node.schemaVersion);
-    return definition ? nodeCategoryName(*definition) : QString{};
+    const auto group = document::nodeGroupOf(node.typeId);
+    return group ? nodeGroupTitle(*group) : QString{};
 }
 
 const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,

@@ -684,8 +684,7 @@ void appendNodeGraph(Json& out, yyjson_mut_val* result, yyjson_mut_val* records,
         out.set(record, "typeId", out.text(node.typeId));
         out.set(record, "name", out.text(scripting::nodeTypeDisplayName(node.typeId)));
         out.set(record, "category",
-                definition ? out.text(scripting::nodeCategoryName(definition->category))
-                           : out.null());
+                definition ? out.text(scripting::nodeCategoryName(*definition)) : out.null());
         out.set(record, "parameters", roles(out, &node));
         const auto placed = layout.find(node.id);
         if (placed != layout.end()) {

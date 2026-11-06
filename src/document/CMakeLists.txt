@@ -19,6 +19,7 @@ target_sources(
         graph.cpp
         keyframe_handles.cpp
         node_definition_registry.cpp
+        node_groups.cpp
         node_layout.cpp
         layer_masks.cpp
         matte_nodes.cpp
@@ -93,6 +94,11 @@ if(BUILD_TESTING)
     target_link_libraries(bloom_document_node_model_test PRIVATE bloom_document)
     bloom_enable_warnings(bloom_document_node_model_test)
     bloom_add_test(NAME bloom.document.node-model COMMAND bloom_document_node_model_test LABELS unit)
+
+    add_executable(bloom_document_node_group_test tests/node_group_tests.cpp)
+    target_link_libraries(bloom_document_node_group_test PRIVATE bloom_document)
+    bloom_enable_warnings(bloom_document_node_group_test)
+    bloom_add_test(NAME bloom.document.node-groups COMMAND bloom_document_node_group_test LABELS unit)
 
     add_executable(bloom_document_parameter_presentation_test
                    tests/parameter_presentation_tests.cpp)

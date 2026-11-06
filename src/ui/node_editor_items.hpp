@@ -9,6 +9,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/image_preview.hpp>
+#include <bloom/document/node_groups.hpp>
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/kit/row.hpp>
 #include <bloom/ui/node_card_widget.hpp>
@@ -175,17 +176,14 @@ QString nodeTypeDisplayName(std::string_view typeId);
 // Extra words the Add search finds a node TYPE by, beside its name, type id and socket kinds
 // (#479: "Separate RGB" finds the image Separate Channels node). Empty for most types.
 QString nodeSearchKeywords(std::string_view typeId);
+// What other compositors call this node TYPE (#554: "Read", "Constant"). Typing one exactly
+// ranks the node just under one actually named that.
+QStringList nodeSearchAliases(std::string_view typeId);
 // The small label above a card's own name, or empty. A layer boundary card is named after its
-// layer, so the eyebrow is what still says the node is a Layer.
+// layer, so the eyebrow is what still says which group the node belongs to.
 QString nodeEyebrow(const document::Composition& composition, const document::NodeRecord& node);
-// The artist-facing heading a node category is listed under in an Add surface (task S1, item 4).
-QString nodeCategoryName(document::NodeCategory category);
-QString nodeCategoryName(const document::NodeDefinition& definition);
-QString nodeCategoryName(const QString& category);
-// The order the headings appear in: the pipeline's own order, from what makes an image to what
-// consumes one. Add surfaces list their entries in this order, and the search popup emits a heading
-// whenever the order moves on.
-[[nodiscard]] std::span<const QString> nodeCategoryOrder();
+// The heading a node group is listed under in an Add surface and on a card (#554).
+QString nodeGroupTitle(document::NodeGroup group);
 QString nodeDisplayName(const document::Composition& composition, const document::NodeRecord& node);
 const document::ParameterRecord* parameterForRole(const document::NodeRecord& node,
                                                   const document::Composition& composition,

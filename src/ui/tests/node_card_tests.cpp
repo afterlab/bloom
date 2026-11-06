@@ -229,8 +229,9 @@ void testNodeTypesAreNamedForWhatTheyAre() {
     expect(node_editor::nodeDisplayName(*f.session.composition(), *record) ==
                QStringLiteral("Backdrop"),
            "a layer card is named after its layer, not after its node type");
-    expect(node_editor::nodeEyebrow(*f.session.composition(), *record) == QStringLiteral("Layers"),
-           "so the category is what still says it is a Layer");
+    expect(node_editor::nodeEyebrow(*f.session.composition(), *record) ==
+               QStringLiteral("Compositing"),
+           "so its group is what still says where a Layer comes from");
     const auto* stack = f.session.composition()->graph().findNode(
         f.session.composition()->graph().layerStack().nodeId());
     expect(node_editor::nodeEyebrow(*f.session.composition(), *stack) ==

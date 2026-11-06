@@ -30,7 +30,9 @@ struct ParameterChoice final {
 
 // "bloom.gaussian-blur" -> "Gaussian Blur".
 [[nodiscard]] std::string nodeTypeDisplayName(std::string_view typeId);
-[[nodiscard]] std::string_view nodeCategoryName(document::NodeCategory category) noexcept;
+// The node's group as MCP and the reference spell it (document/node_groups.hpp): "blur-sharpen".
+[[nodiscard]] std::string_view
+nodeCategoryName(const document::NodeDefinition& definition) noexcept;
 [[nodiscard]] std::string_view socketKindName(document::SocketValueKind kind) noexcept;
 [[nodiscard]] std::string_view parameterKindName(document::ParameterValueKind kind) noexcept;
 [[nodiscard]] std::string_view assetKindName(std::uint8_t kind) noexcept;

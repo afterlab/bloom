@@ -273,55 +273,34 @@ struct LayerSlotInputDefinition {
                            const LayerSlotInputDefinition&) = default;
 };
 
-// Which section of an Add surface a node type is listed under (task S1, item 4). The vocabulary is
-// the artist's, not the lowering's: what a node is FOR, which is why it is declared beside the type
-// rather than derived from NodeLoweringKind (several unrelated lowerings are Sources, and the
-// Unsupported lowering spans every section).
+// A node's authoring family. It is NOT where the node is listed: the Add menu, the search, the card
+// eyebrow and MCP read the group in node_groups.hpp (#554). What still reads the family is
+// behaviour. Grade, Color and Filters image effects take the optional effect mask
+// (takesEffectMask), and the mask lowers differently for Filters (snapshot_compiler_mattes.ipp);
+// value nodes must be Values, Math or Utilities. A new image effect that should take a mask
+// declares one of those three, wherever its group is. Never persisted: a document stores the node's
+// type id.
 enum class NodeCategory : std::uint8_t {
     Sources,
     Layers,
     Compositing,
-    // Colour management (#500): the OCIO transforms, shown as the "Color Management" section.
-    // Grading lives in Grade; the enum keeps its name to limit churn.
+    // The OCIO transforms.
     Color,
     Values,
-    // Task UTIL-1. Arithmetic and shaping got their own section because Utilities had become the
-    // place everything that is not a source, a layer or an output ends up: a Math node, a Switch, a
-    // Reroute and a string Trim are not one family, and burying the arithmetic among the plumbing
-    // is what made an artist scroll past it. The category is NOT persisted -- a document stores the
-    // node's type id -- so moving a type between sections needs no migration.
+    // The arithmetic, apart from the plumbing in Utilities (task UTIL-1).
     Math,
     Output,
     Utilities,
-    // Geometric image operations (Flip, Rotate 90). Not persisted, like every category.
+    // Geometric image operations (Flip, Rotate 90).
     Transform,
-    // #500: the blurs and matte filters, which the Add menu already listed under Filters.
+    // #500: the blurs, the matte filters and the other effects that mix a mask over the result.
     Filters,
     // #500: image grades that never convert colour (Grade, Levels, Curves, Hue/Saturation,
     // Exposure, Offset, Multiply, Invert), apart from colour management.
     Grade,
     // #525: the Fields family (field_nodes.hpp).
     Fields,
-    // Retained persisted schemas, excluded from new-node authoring categories.
 };
-
-// Every NodeCategory, in declaration order (#500). The surfaces that name a category (the Add menu
-// and the scripting/MCP reference) switch over the enum without a default, so a new value without
-// a name is a -Wswitch diagnostic, and their tests walk this list and every registered definition
-// so no category can fall back to another's name silently. The assertion keeps the list in order.
-inline constexpr std::array kNodeCategories{
-    NodeCategory::Sources, NodeCategory::Layers,    NodeCategory::Compositing,
-    NodeCategory::Color,   NodeCategory::Values,    NodeCategory::Math,
-    NodeCategory::Output,  NodeCategory::Utilities, NodeCategory::Transform,
-    NodeCategory::Filters, NodeCategory::Grade,     NodeCategory::Fields};
-static_assert(
-    [] {
-        for (std::size_t index = 0; index < kNodeCategories.size(); ++index)
-            if (static_cast<std::size_t>(kNodeCategories[index]) != index)
-                return false;
-        return true;
-    }(),
-    "kNodeCategories lists every NodeCategory in declaration order");
 
 // How many instances of a node type one composition may hold (task S1, item 5). The composition's
 // single evaluation endpoint and its single layer-stack operator are structural singletons: a

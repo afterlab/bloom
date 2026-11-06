@@ -4,6 +4,7 @@
 #include <bloom/ui/kit/popup_window.hpp>
 
 #include <QString>
+#include <QStringList>
 #include <vector>
 
 class QStandardItemModel;
@@ -23,6 +24,9 @@ struct SearchEntry final {
     // the caller supplies them, and a heading is emitted whenever this string changes, so the
     // caller's own section order is what the artist reads. Empty lists the entry with no heading.
     QString section;
+    // Other names the entry goes by. Unlike keywords, typing one exactly ranks the entry just under
+    // a name that matches exactly, so a name from another application adds the node it means.
+    QStringList aliases = {};
 };
 
 // The Add search: a KPopupWindow holding one KPopupList with its filter shown. Search owns the

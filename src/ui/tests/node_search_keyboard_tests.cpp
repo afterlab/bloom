@@ -258,36 +258,41 @@ void testSearchKeyboardAndMenus() {
     auto* popup = search(f);
     auto* field = popup->findChild<QLineEdit*>(QStringLiteral("kSearchFilter"));
     auto* list = popup->findChild<QListView*>();
-    // ADAPTED (task FIX1, item I): every registered kind EXCEPT the reroute, which is a point on a
-    // link rather than a node to pick out of a list, and is therefore hidden from both Add
-    // surfaces.
-    const auto addable = static_cast<int>(std::ranges::count_if(
-        document::builtInNodeDefinitions().definitions(), [](const auto& definition) {
-            return !document::isRerouteNodeType(definition.key.typeId);
-        }));
-    expect(popup->isVisible() && resultRows(list->model()) == addable,
-           "Tab opens every addable node kind at the cursor, and only those");
-    expect(rowForKey(list->model(), document::kRerouteNodeType).isValid() == false,
-           "the reroute is not one of them");
-    // Task S1, item 4: the list is sectioned, in the pipeline's own reading order, and carries a
-    // heading only for a section that actually has results under it.
-    // Task S7: Values and Utilities are populated now -- the value library is registered under them
-    // -- so the sectioned list is headed in the same pipeline reading order it always used.
-    // Task UTIL-1: Math joins that order after Values, and Output moves to the END, so the reading
-    // order is where pixels come from, how they are arranged, what numbers drive them, the
-    // arithmetic over those numbers, the plumbing that carries them, and finally where the picture
-    // goes. Transform (Resize, Fit, Crop, Pad, Flip, Rotate 90) and Filters (blurs) follow
-    // Compositing (ui-grammar.md); #500: then Grade, #525 Fields, then Color Management.
-    expect(sectionHeadings(list->model()) ==
-               QStringList{
-                   QStringLiteral("Sources"), QStringLiteral("Layers"),
-                   QStringLiteral("Compositing"), QStringLiteral("Transform"),
-                   QStringLiteral("Filters"), QStringLiteral("Grade"), QStringLiteral("Fields"),
-                   QStringLiteral("Color Management"), QStringLiteral("Values"),
-                   QStringLiteral("Math"), QStringLiteral("Convert"), QStringLiteral("String"),
-                   QStringLiteral("Logic"), QStringLiteral("Time"), QStringLiteral("Color Values"),
-                   QStringLiteral("Vector"), QStringLiteral("Utilities"), QStringLiteral("Output")},
-           "every populated section is headed, in category order, and the empty ones are absent");
+    // #554: search lists every node, the reroute included, so "Dot" finds it.
+    expect(popup->isVisible() &&
+               resultRows(list->model()) ==
+                   static_cast<int>(document::builtInNodeDefinitions().definitions().size()),
+           "Tab opens every registered node kind at the cursor");
+    expect(rowForKey(list->model(), document::kRerouteNodeType).isValid(),
+           "the reroute is one of them");
+    // Task S1, item 4: the list is sectioned, and carries a heading only for a section that has
+    // results under it. #554: the owner's tree, in its order; the eight value groups stay sections
+    // of their own here, and Distort, Instances & Particles and Tracking & Analysis have no node
+    // yet so they do not show.
+    expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Sources"),
+                                                         QStringLiteral("Compositing"),
+                                                         QStringLiteral("Channels"),
+                                                         QStringLiteral("Keying & Mattes"),
+                                                         QStringLiteral("Transform"),
+                                                         QStringLiteral("Blur & Sharpen"),
+                                                         QStringLiteral("Light & Shadow"),
+                                                         QStringLiteral("Stylize"),
+                                                         QStringLiteral("Color Correction"),
+                                                         QStringLiteral("Color Management"),
+                                                         QStringLiteral("Time"),
+                                                         QStringLiteral("Text & Paths"),
+                                                         QStringLiteral("Fields"),
+                                                         QStringLiteral("Values"),
+                                                         QStringLiteral("Math"),
+                                                         QStringLiteral("Convert"),
+                                                         QStringLiteral("String"),
+                                                         QStringLiteral("Logic"),
+                                                         QStringLiteral("Time Values"),
+                                                         QStringLiteral("Color Values"),
+                                                         QStringLiteral("Vector"),
+                                                         QStringLiteral("Utilities"),
+                                                         QStringLiteral("Output")},
+           "every populated section is headed, in group order, and the empty ones are absent");
     expect(list->model()->index(0, 0).data(kit::kSearchSectionRole).toBool() &&
                list->model()->index(0, 0).flags() == Qt::NoItemFlags,
            "a heading is not a row the artist can reach");
@@ -337,6 +342,45 @@ void testSearchKeyboardAndMenus() {
                    .isValid(),
                "and still finds the Color-value node after it");
     }
+    // #554: what other compositors call a node finds it, and pressing Enter on the name adds
+    // the node that name means there, not a node that happens to have the word in its own name.
+    for (const auto& [query, typeId] : std::to_array<std::pair<const char*, std::string_view>>({
+             {"Merge", document::kLayerStackNodeType},
+             {"Constant", document::kSolidSourceNodeType},
+             {"Read", "bloom.image-source"},
+             {"Write", document::kCompositionOutputNodeType},
+             {"Reformat", "bloom.fit"},
+             {"Premult", "bloom.alpha-association"},
+             {"Unpremult", "bloom.alpha-association"},
+             {"Copy", "bloom.channel-copy"},
+             {"Shuffle", "bloom.channel-shuffle"},
+             {"Dot", document::kRerouteNodeType},
+             {"Roto", "bloom.mask"},
+             {"Keylight", "bloom.luma-key"},
+             {"Primatte", "bloom.luma-key"},
+             {"CornerPin2D", "bloom.transform-2d"},
+             {"Arithmetic", "bloom.multiply"},
+             {"Fill", document::kColorizeNodeType},
+             {"Tint", document::kColorizeNodeType},
+         })) {
+        field->setText(QString::fromUtf8(query));
+        QModelIndex first;
+        for (int row = 0; row < list->model()->rowCount() && !first.isValid(); ++row)
+            if (!list->model()->index(row, 0).data(kit::kSearchSectionRole).toBool())
+                first = list->model()->index(row, 0);
+        expect(first.isValid() &&
+                   first.data(Qt::UserRole).toString() ==
+                       QString::fromUtf8(typeId.data(), static_cast<qsizetype>(typeId.size())),
+               QStringLiteral("searching %1 lists %2 first")
+                   .arg(QString::fromUtf8(query),
+                        QString::fromUtf8(typeId.data(), static_cast<qsizetype>(typeId.size())))
+                   .toUtf8()
+                   .constData());
+    }
+    field->setText(QStringLiteral("Read"));
+    expect(rowForKey(list->model(), "bloom.video-source").isValid() &&
+               rowForKey(list->model(), "bloom.point-set-read").isValid(),
+           "Read still finds Video Source and the node with Read in its own name");
     field->setText(QStringLiteral("text"));
     const auto textRow = rowForKey(list->model(), document::kTextSourceNodeType);
     // ADAPTED (task S3): text used to be a disabled row carrying AddTextLayer's real refusal; the
@@ -349,7 +393,7 @@ void testSearchKeyboardAndMenus() {
     expect(textRow.data().toString() ==
                node_editor::nodeTypeDisplayName(document::kTextSourceNodeType),
            "and its label is the node's name alone");
-    expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Sources")},
+    expect(sectionHeadings(list->model()) == QStringList{QStringLiteral("Text & Paths")},
            "a filter that empties a section drops that section's heading with it");
     history = f.stack.size();
     field->setText(QStringLiteral("layer output image"));
@@ -509,54 +553,89 @@ void testSearchKeyboardAndMenus() {
     auto* addMenu = menu->findChild<QMenu*>(QStringLiteral("nodeAddMenu"));
     expect(addMenu != nullptr, "and an Add Node submenu");
     if (addMenu != nullptr) {
-        QStringList sections;
-        for (auto* entry : addMenu->actions())
-            if (entry->menu() != nullptr)
-                sections.append(entry->text());
-        QStringList expected;
-        for (const auto& category : node_editor::nodeCategoryOrder())
-            expected.append(node_editor::nodeCategoryName(category));
-        expect(sections == expected, "whose sections are the registry's categories, in order");
-        // #500: every NodeCategory has its own section name, and that section is in the order.
-        QStringList categoryNames;
-        for (const auto category : document::kNodeCategories) {
-            const auto name = node_editor::nodeCategoryName(category);
-            expect(!name.isEmpty() && !categoryNames.contains(name) &&
-                       std::ranges::find(node_editor::nodeCategoryOrder(), name) !=
-                           node_editor::nodeCategoryOrder().end(),
-                   "each node category names its own ordered section");
-            categoryNames.append(name);
-        }
-        const auto entries = [addMenu](const char* name) {
+        const auto titles = [](const QMenu* parent) {
+            QStringList sections;
+            for (auto* entry : parent->actions())
+                if (entry->menu() != nullptr)
+                    sections.append(entry->text());
+            return sections;
+        };
+        // #554: the owner's tree, in its order, without the groups that have no node yet. A menu
+        // title spells its ampersand twice.
+        expect(titles(addMenu) == QStringList{"Sources", "Compositing", "Channels",
+                                              "Keying && Mattes", "Transform", "Blur && Sharpen",
+                                              "Light && Shadow", "Stylize", "Color Correction",
+                                              "Color Management", "Time", "Text && Paths", "Fields",
+                                              "Values", "Utilities", "Output"},
+               "the Add menu's groups are the tree's, in order");
+        auto* values = addMenu->findChild<QMenu*>(QStringLiteral("nodeAddValuesMenu"));
+        expect(values != nullptr &&
+                   titles(values) == QStringList{"Values", "Math", "Convert", "String", "Logic",
+                                                 "Time Values", "Color Values", "Vector"},
+               "and the eight value groups sit under one Values submenu");
+        const auto entries = [addMenu](const QString& group) {
             QStringList nodes;
-            if (auto* section = addMenu->findChild<QMenu*>(name))
+            if (auto* section =
+                    addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") + group))
                 for (auto* entry : section->actions())
                     nodes.append(entry->text());
             nodes.sort();
             return nodes;
         };
-        // #500: the image grades are their own section, apart from colour management.
-        // #504: and Colorize.
-        expect(entries("nodeAddCategoryMenu.Grade") ==
-                   QStringList{"Colorize", "Curves", "Exposure", "Grade", "Hue/Saturation",
-                               "Invert", "Levels", "Multiply", "Offset"},
-               "Grade offers the image grades");
-        expect(entries("nodeAddCategoryMenu.Color Management") ==
-                   QStringList{"OCIO Color Space Transform", "OCIO File Transform"},
-               "Color Management offers only the OCIO transforms");
-        const auto compositing = entries("nodeAddCategoryMenu.Compositing");
-        expect(compositing.contains("Separate Channels") &&
-                   compositing.contains("Combine Channels") && compositing.contains("Shuffle") &&
-                   compositing.contains("Drop Shadow") && compositing.contains("Lens Flare"),
-               "Separate and Combine Channels sit beside the other channel nodes in Compositing");
-        expect(entries("nodeAddCategoryMenu.Filters") ==
-                   QStringList{"Box Blur", "Depth Fog", "Directional Blur", "Echo", "Film Grain",
-                               "Gaussian Blur", "Matte Blur", "Matte Dilate", "Matte Erode",
-                               "Motion Blur", "Optical Flow", "Optical Flow Motion Blur", "Sharpen",
-                               "Spin Blur", "Vector Motion Blur", "Vignette", "Z Defocus",
-                               "Zoom Blur"},
-               "Filters offers the blurs, the matte filters, Film Grain, Sharpen, Vignette, the "
-               "depth effects and motion blur");
+        const auto hasGroup = [&](const QString& group, const QStringList& expected,
+                                  const char* message) {
+            auto nodes = entries(group);
+            auto sorted = expected;
+            sorted.sort();
+            if (nodes != sorted)
+                std::cerr << group.toStdString() << ": " << nodes.join(", ").toStdString() << '\n';
+            expect(nodes == sorted, message);
+        };
+        hasGroup("Sources",
+                 {"Audio", "Checker", "Composition", "Image", "Linear Gradient", "Radial Gradient",
+                  "Solid", "Video"},
+                 "Sources holds what makes an image");
+        hasGroup("Compositing",
+                 {"Adjustment", "Alpha Association", "Image Mix", "Layer", "Merge",
+                  "Multiply Alpha", "Set Alpha"},
+                 "Layers merged into Compositing");
+        hasGroup("Channels",
+                 {"Channel Copy", "Combine Channels", "Image to Channel Set", "Pass",
+                  "Select Channels", "Separate Channels", "Shuffle"},
+                 "Channels holds the channel nodes");
+        hasGroup("Keying & Mattes",
+                 {"Cryptomatte", "Image to Mask", "Luma Key", "Mask", "Mask Combine", "Matte Blur",
+                  "Matte Dilate", "Matte Erode"},
+                 "Keying & Mattes holds the keys and mattes");
+        hasGroup("Transform", {"Crop", "Fit", "Flip", "Pad", "Resize", "Rotate 90", "Transform 2D"},
+                 "Transform holds the geometric operations");
+        hasGroup("Blur & Sharpen",
+                 {"Box Blur", "Directional Blur", "Gaussian Blur", "Motion Blur", "Optical Flow",
+                  "Optical Flow Motion Blur", "Sharpen", "Spin Blur", "Vector Motion Blur",
+                  "Z Defocus", "Zoom Blur"},
+                 "Blur & Sharpen holds the blurs and motion blur");
+        hasGroup("Light & Shadow", {"Depth Fog", "Drop Shadow", "Glow", "Lens Flare", "Light Wrap"},
+                 "Light & Shadow holds the light effects");
+        hasGroup("Stylize", {"Film Grain", "Vignette"}, "Stylize holds the finishing looks");
+        hasGroup("Color Correction",
+                 {"Colorize", "Curves", "Exposure", "Grade", "Hue/Saturation", "Invert", "Levels",
+                  "Multiply", "Offset"},
+                 "Color Correction offers the image grades");
+        hasGroup("Color Management", {"OCIO Color Space Transform", "OCIO File Transform"},
+                 "Color Management offers only the OCIO transforms");
+        hasGroup("Time", {"Echo"}, "Time holds Echo until the retimers land");
+        hasGroup(
+            "Text & Paths",
+            {"Text Source", "Rectangle", "Ellipse", "Polygon", "Star", "Line", "Path", "Triangle"},
+            "Text & Paths holds Text and the shape presets");
+        hasGroup("Utilities",
+                 {"Combine XY", "Combine XYZ", "Reroute", "Separate XY", "Separate XYZ"},
+                 "Utilities holds the plumbing");
+        hasGroup("Output", {"Image Preview", "Output"}, "Output holds what consumes an image");
+        for (const auto* empty : {"Distort", "Instances & Particles", "Tracking & Analysis"})
+            expect(addMenu->findChild<QMenu*>(QStringLiteral("nodeAddCategoryMenu.") +
+                                              QString::fromUtf8(empty)) == nullptr,
+                   "a group with no node yet does not show");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
                "a singleton already present is listed disabled with its refusal");
@@ -566,6 +645,17 @@ void testSearchKeyboardAndMenus() {
         solid->trigger();
     expect(f.session.snapshot().revision().value() == aliasRevision.value() + 1,
            "and one entry adds its node at the click position in one transaction");
+    delete menu;
+    // #554: the tree lists Reroute under Utilities, and adding one from there works.
+    menu = f.editor.contextMenuForTest();
+    if (auto* reroute = named(menu, "nodeAddAction.bloom.reroute")) {
+        const auto before = f.session.snapshot().revision();
+        reroute->trigger();
+        expect(f.session.snapshot().revision().value() == before.value() + 1,
+               "Reroute adds from the Add menu in one transaction");
+    } else {
+        expect(false, "the Add menu lists Reroute");
+    }
     delete menu;
 }
 } // namespace bloom::ui::test

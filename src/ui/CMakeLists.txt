@@ -607,6 +607,7 @@ target_sources(
         node_editor.cpp
         node_editor_canvas.cpp
         node_editor_items.cpp
+        node_search_keywords.cpp
         node_editor_interactions.cpp
         node_editor_gesture_targets.cpp
         node_editor_menus.cpp

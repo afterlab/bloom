@@ -5,6 +5,7 @@
 
 #include "reference_internal.hpp"
 
+#include <bloom/document/node_groups.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter_presentation.hpp>
@@ -121,36 +122,9 @@ std::string nodeTypeDisplayName(const std::string_view typeId) {
     return result;
 }
 
-// A switch without a default (#500): a NodeCategory added without a name here is a -Wswitch
-// diagnostic, and an unnamed value reads back empty rather than as another category's name.
-std::string_view nodeCategoryName(const document::NodeCategory category) noexcept {
-    switch (category) {
-    case document::NodeCategory::Sources:
-        return "sources";
-    case document::NodeCategory::Layers:
-        return "layers";
-    case document::NodeCategory::Compositing:
-        return "compositing";
-    case document::NodeCategory::Color:
-        return "color";
-    case document::NodeCategory::Values:
-        return "values";
-    case document::NodeCategory::Math:
-        return "math";
-    case document::NodeCategory::Output:
-        return "output";
-    case document::NodeCategory::Utilities:
-        return "utilities";
-    case document::NodeCategory::Transform:
-        return "transform";
-    case document::NodeCategory::Filters:
-        return "filters";
-    case document::NodeCategory::Grade:
-        return "grade";
-    case document::NodeCategory::Fields:
-        return "fields";
-    }
-    return {};
+std::string_view nodeCategoryName(const document::NodeDefinition& definition) noexcept {
+    const auto group = document::nodeGroupOf(definition.key.typeId);
+    return group ? document::nodeGroupWireName(*group) : std::string_view{};
 }
 
 std::string_view socketKindName(const document::SocketValueKind kind) noexcept {
@@ -275,7 +249,7 @@ std::string nodeTypeJson(const document::NodeDefinition& definition, const bool 
     std::string text =
         "{\"id\":" + detail::jsonQuote(definition.key.typeId) +
         ",\"name\":" + detail::jsonQuote(nodeTypeDisplayName(definition.key.typeId)) +
-        ",\"category\":" + detail::jsonQuote(nodeCategoryName(definition.category)) +
+        ",\"category\":" + detail::jsonQuote(nodeCategoryName(definition)) +
         ",\"schemaVersion\":" + std::to_string(definition.key.schemaVersion) + ",\"cardinality\":" +
         (definition.cardinality == document::NodeCardinality::OnePerComposition
              ? std::string("\"one-per-composition\"")
@@ -335,7 +309,10 @@ std::string nodeReferenceMarkdown() {
     for (const auto& definition : registry.definitions())
         definitions.push_back(&definition);
     std::ranges::stable_sort(definitions, {}, [](const auto* definition) {
-        return std::pair(static_cast<int>(definition->category), definition->key.typeId);
+        const auto group = document::nodeGroupOf(definition->key.typeId);
+        return std::pair(group ? static_cast<int>(*group)
+                               : static_cast<int>(document::kNodeGroups.size()),
+                         definition->key.typeId);
     });
     std::string text =
         "# Bloom node and parameter reference\n\n"
@@ -353,10 +330,11 @@ std::string nodeReferenceMarkdown() {
         text += "- " + std::to_string(choice.value) + " " + choice.label + "\n";
     std::string_view category;
     for (const auto* definition : definitions) {
-        const auto name = nodeCategoryName(definition->category);
+        const auto group = document::nodeGroupOf(definition->key.typeId);
+        const auto name = group ? document::nodeGroupName(*group) : std::string_view{};
         if (name != category) {
             category = name;
-            text += "\n## " + nodeTypeDisplayName(std::string(name)) + "\n";
+            text += "\n## " + std::string(name) + "\n";
         }
         text += "\n### " + nodeTypeDisplayName(definition->key.typeId) + " (`" +
                 definition->key.typeId + "`)\n\n";

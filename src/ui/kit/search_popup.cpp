@@ -42,6 +42,13 @@ namespace {
     return 0;
 }
 
+// Typing an entry's other name in full ranks it above a name that merely starts with those letters
+// and below a node actually called that (#554): "Read" lands on Image Source rather than on Point
+// Set Read, and "Merge" still means the node called Merge.
+[[nodiscard]] int aliasRelevance(const QStringList& aliases, const QString& query) {
+    return !query.isEmpty() && aliases.contains(query, Qt::CaseInsensitive) ? 3 : 0;
+}
+
 } // namespace
 
 KSearchPopup::KSearchPopup(QWidget* parent) : KPopupWindow(parent, Elevation::Popup) {
@@ -96,12 +103,15 @@ void KSearchPopup::filter() {
     matches.reserve(entries_.size());
     for (std::size_t index = 0; index < entries_.size(); ++index) {
         const auto& entry = entries_[index];
-        const QString haystack = entry.label + ' ' + entry.keywords;
+        const QString haystack = entry.label + ' ' + entry.keywords + ' ' + entry.aliases.join(' ');
         if (!std::ranges::all_of(words, [&](const auto& word) {
                 return haystack.contains(word, Qt::CaseInsensitive);
             }))
             continue;
-        matches.push_back({&entry, nameRelevance(entry.label, query), index});
+        matches.push_back(
+            {&entry,
+             std::max(nameRelevance(entry.label, query), aliasRelevance(entry.aliases, query)),
+             index});
     }
     std::vector<QString> sectionOrder;
     std::map<QString, std::pair<int, std::size_t>> sectionRank;

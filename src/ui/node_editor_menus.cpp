@@ -103,6 +103,19 @@ document::NodeLayoutRecord layoutFor(const document::Composition& composition,
                ? document::defaultNodeLayout(composition.graph().nodes()).at(id)
                : found->second;
 }
+// What an Add surface lists under one group: its registered nodes, alphabetically.
+[[nodiscard]] std::vector<const document::NodeDefinition*>
+definitionsInGroup(const document::NodeGroup group) {
+    std::vector<const document::NodeDefinition*> section;
+    for (const auto& definition : document::builtInNodeDefinitions().definitions())
+        if (document::nodeGroupOf(definition.key.typeId) == group)
+            section.push_back(&definition);
+    std::ranges::sort(section, [](const auto* left, const auto* right) {
+        return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
+    });
+    return section;
+}
+
 QString addActionName(const std::string_view type) {
     if (type == document::kSolidSourceNodeType)
         return QStringLiteral("nodeAddSolidLayerAction");
@@ -444,11 +457,11 @@ void NodeGraphEditor::selectLinkedDownstream() {
     session_.selectNodes(extended, *seeds.begin());
 }
 
-// Task NODES-1: the categorized Add submenu's actual contents, factored out of buildContextMenu()
-// so the header's own persistent Add menu (buildHeaderMenus()) builds the SAME structure -- same
-// category order, same sort, same objectNames -- rather than a second opinion about what is
-// addable. `recordInto`, given only by the header's call, collects each leaf action with its type
-// id for refreshAddMenuState() to re-read afterward.
+// Task NODES-1: the grouped Add submenu's actual contents, factored out of buildContextMenu() so
+// the header's own persistent Add menu (buildHeaderMenus()) builds the SAME structure -- same group
+// order, same sort, same objectNames -- rather than a second opinion about what is addable.
+// `recordInto`, given only by the header's call, collects each leaf action with its type id for
+// refreshAddMenuState() to re-read afterward.
 QString NodeGraphEditor::addNodeRefusal(const document::Snapshot& snapshot,
                                         const std::string& typeId) const {
     const auto result = checkAddEditorNodeEligibility(snapshot, session_.compositionId(), typeId,
@@ -460,25 +473,27 @@ QString NodeGraphEditor::addNodeRefusal(const document::Snapshot& snapshot,
 void NodeGraphEditor::populateAddMenu(QMenu* menu,
                                       std::vector<std::pair<QAction*, std::string>>* recordInto) {
     const auto snapshot = session_.snapshot();
-    for (const auto& category : nodeCategoryOrder()) {
-        std::vector<const document::NodeDefinition*> section;
-        for (const auto& definition : document::builtInNodeDefinitions().definitions())
-            // Task FIX1, item I: a reroute is a point on a LINK, made by right-clicking the link or
-            // dragging across it. It is not something to pick out of a menu and then find a use
-            // for, so it is listed in neither Add surface.
-            if (nodeCategoryName(definition) == category &&
-                !document::isRerouteNodeType(definition.key.typeId))
-                section.push_back(&definition);
+    // #554: the value groups sit under one Values submenu, made when its first group has nodes.
+    QMenu* valuesMenu = nullptr;
+    for (const auto group : document::kNodeGroups) {
+        const auto section = definitionsInGroup(group);
         if (section.empty())
             continue;
-        std::ranges::sort(section, [](const auto* left, const auto* right) {
-            return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
-        });
-        auto* sectionMenu = kit::makeMenu(nodeCategoryName(category), menu);
+        QMenu* parentMenu = menu;
+        if (document::isValueSubgroup(group)) {
+            if (valuesMenu == nullptr) {
+                valuesMenu = kit::makeMenu(tr("Values"), menu);
+                valuesMenu->setObjectName(QStringLiteral("nodeAddValuesMenu"));
+                menu->addMenu(valuesMenu);
+            }
+            parentMenu = valuesMenu;
+        }
+        // A menu title reads a lone ampersand as a mnemonic; "Blur & Sharpen" has to keep its own.
+        auto* sectionMenu = kit::makeMenu(
+            QString(nodeGroupTitle(group)).replace(u'&', QStringLiteral("&&")), parentMenu);
         sectionMenu->setProperty("columnFlow", true);
-        menu->addMenu(sectionMenu);
-        sectionMenu->setObjectName(QStringLiteral("nodeAddCategoryMenu.") +
-                                   nodeCategoryName(category));
+        parentMenu->addMenu(sectionMenu);
+        sectionMenu->setObjectName(QStringLiteral("nodeAddCategoryMenu.") + nodeGroupTitle(group));
         for (const auto* candidate : section) {
             if (candidate->key.typeId == document::kShapeSourceNodeType) {
                 for (std::int64_t index = 0; index <= 6; ++index) {
@@ -863,19 +878,11 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
         search_ = new kit::KSearchPopup(this);
         connect(search_, &kit::KSearchPopup::entryChosen, this, &NodeGraphEditor::addNode);
     }
-    // Listed in the category order the sections are read in, and alphabetically inside each one.
-    // The registry's own order is by type id, which is neither.
+    // Listed in the order the groups are read in, and alphabetically inside each one. The
+    // registry's own order is by type id, which is neither.
     std::vector<const document::NodeDefinition*> ordered;
-    for (const auto& category : nodeCategoryOrder()) {
-        std::vector<const document::NodeDefinition*> section;
-        for (const auto& definition : document::builtInNodeDefinitions().definitions())
-            // The reroute is hidden here for the same reason it is hidden from the Add submenu.
-            if (nodeCategoryName(definition) == category &&
-                !document::isRerouteNodeType(definition.key.typeId))
-                section.push_back(&definition);
-        std::ranges::sort(section, [](const auto* left, const auto* right) {
-            return nodeTypeDisplayName(left->key.typeId) < nodeTypeDisplayName(right->key.typeId);
-        });
+    for (const auto group : document::kNodeGroups) {
+        const auto section = definitionsInGroup(group);
         ordered.insert(ordered.end(), section.begin(), section.end());
     }
 
@@ -898,9 +905,11 @@ void NodeGraphEditor::openAddSearch(const QPointF scenePosition, const QPoint sc
         else if (!scene_->canSubmit() && definition.key.typeId != document::kSolidSourceNodeType &&
                  definition.key.typeId != document::kTextSourceNodeType)
             refusal = tr("Node command submission is unavailable");
+        const auto group = document::nodeGroupOf(definition.key.typeId);
         entries.push_back({QString::fromStdString(definition.key.typeId),
                            nodeTypeDisplayName(definition.key.typeId), keywords, refusal,
-                           nodeCategoryName(definition)});
+                           group ? nodeGroupTitle(*group) : QString{},
+                           nodeSearchAliases(definition.key.typeId)});
     }
     search_->setEntries(std::move(entries));
     search_->openAt(screenPosition);

@@ -215,27 +215,11 @@ void timesReadBackInBothUnits() {
            "one NTSC frame is exact");
 }
 
-// #500: every NodeCategory has its own explicit scripting/MCP name, so a new category can never
-// read back as another's ("utilities" was the silent fallback of an ordinal table). The grading
-// nodes report "grade", the blurs and matte filters "filters", the OCIO transforms "color", and the
-// image channel nodes "compositing": the `category` that MCP `nodes` and `node-types` return.
-void everyNodeCategoryIsNamed() {
-    using bloom::document::NodeCategory;
-    std::set<std::string_view> names;
-    for (const auto category : bloom::document::kNodeCategories) {
-        const auto name = nodeCategoryName(category);
-        const auto ordinal = std::to_string(static_cast<int>(category));
-        expect(!name.empty(), "NodeCategory " + ordinal + " has no scripting name");
-        expect(names.insert(name).second,
-               "NodeCategory " + ordinal + " shares the name " + std::string(name));
-        expect((name == "utilities") == (category == NodeCategory::Utilities),
-               "NodeCategory " + ordinal + " reads back as utilities");
-    }
+// #554: the `category` that MCP `nodes` and `node-types` return is the node's group, the same tree
+// the Add menu shows. The grouping's own guard is node_group_tests; this pins the wire spelling.
+void everyNodeGroupIsNamed() {
     for (const auto& definition : bloom::document::builtInNodeDefinitions().definitions())
-        expect(std::ranges::find(bloom::document::kNodeCategories, definition.category) !=
-                       bloom::document::kNodeCategories.end() &&
-                   !nodeCategoryName(definition.category).empty(),
-               definition.key.typeId + " is in an unlisted category");
+        expect(!nodeCategoryName(definition).empty(), definition.key.typeId + " has no category");
     const auto typeJson = [](const std::string_view typeId) {
         const auto& registry = bloom::document::builtInNodeDefinitions();
         for (const auto& definition : registry.definitions())
@@ -251,14 +235,26 @@ void everyNodeCategoryIsNamed() {
     };
     pinned({"bloom.grade", "bloom.levels", "bloom.curves", "bloom.hue-saturation", "bloom.exposure",
             "bloom.offset", "bloom.multiply", "bloom.invert", "bloom.colorize"},
-           "grade");
-    pinned({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"}, "color");
-    pinned({"bloom.gaussian-blur", "bloom.box-blur", "bloom.matte-blur", "bloom.matte-erode",
-            "bloom.matte-dilate", "bloom.vignette", "bloom.film-grain", "bloom.sharpen"},
-           "filters");
-    pinned({"bloom.separate-channels", "bloom.combine-channels", "bloom.drop-shadow", "bloom.glow",
-            "bloom.light-wrap", "bloom.alpha-association", "bloom.lens-flare"},
-           "compositing");
+           "color-correction");
+    pinned({"bloom.ocio-colour-space-transform", "bloom.ocio-file-transform"}, "color-management");
+    pinned({"bloom.gaussian-blur", "bloom.box-blur", "bloom.z-defocus", "bloom.motion-blur",
+            "bloom.sharpen"},
+           "blur-sharpen");
+    pinned({"bloom.matte-blur", "bloom.matte-erode", "bloom.matte-dilate", "bloom.luma-key"},
+           "keying-mattes");
+    pinned({"bloom.vignette", "bloom.film-grain"}, "stylize");
+    pinned({"bloom.separate-channels", "bloom.combine-channels"}, "channels");
+    pinned({"bloom.drop-shadow", "bloom.glow", "bloom.light-wrap", "bloom.lens-flare"},
+           "light-shadow");
+    pinned({"bloom.echo"}, "time");
+    pinned({"bloom.alpha-association", "bloom.layer-stack", "bloom.layer-output"}, "compositing");
+    pinned({"bloom.frame-number"}, "time-values");
+    // The node reference resource is headed by the same names the Add menu shows.
+    const auto reference = nodeReferenceMarkdown();
+    expect(contains(reference, "\n## Blur & Sharpen\n") &&
+               contains(reference, "\n## Color Correction\n") &&
+               !contains(reference, "\n## Filters\n") && !contains(reference, "\n## Layers\n"),
+           "the node reference is headed by the group names");
 }
 
 } // namespace
@@ -270,7 +266,7 @@ int main() {
     helpTextCarriesTheReference();
     everyChoiceParameterHasValues();
     timesReadBackInBothUnits();
-    everyNodeCategoryIsNamed();
+    everyNodeGroupIsNamed();
     if (failures != 0) {
         std::cerr << failures << " reference check(s) failed\n";
         return 1;
