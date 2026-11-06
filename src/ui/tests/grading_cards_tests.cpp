@@ -31,6 +31,7 @@
 #include <bloom/document/lens_flare_definition.hpp>
 #include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/sharpen_definition.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
@@ -48,6 +49,7 @@
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/lens_flare_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
+#include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -714,6 +716,106 @@ void filmGrainCard() {
     expect(fixture.stack.size() == sliderCommands + 1 && size && *size > 1.0,
            "dragging the size slider is one command");
     capture(fixture, QStringLiteral("film-grain-large"));
+}
+
+// #486: the Sharpen card paints inside its card with no label cut short, writes nothing of its own,
+// and shows its node's rows; the graph follows the values, each handle's drag is one command that
+// moves its own value alone and its row follows; a slider drag is one command too.
+void sharpenCard() {
+    CardFixture fixture(document::kSharpenNodeType);
+    auto* card =
+        fixture.item ? qobject_cast<ui::SharpenCardWidget*>(fixture.item->cardWidget()) : nullptr;
+    expect(card != nullptr, "Sharpen draws its card widget");
+    if (card == nullptr)
+        return;
+    for (const auto& spec : document::sharpenParameters()) {
+        const auto value = stored(fixture.session, fixture.node, std::string(spec.role));
+        expect(value && *value == spec.value, "a new Sharpen card writes no value of its own");
+    }
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "sharpen paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "sharpen"))
+        ++failures;
+    capture(fixture, QStringLiteral("sharpen"));
+    expect(!card->showsRole("amount") && !card->showsRole("radius") && !card->showsRole("threshold") &&
+               card->socketY("amount").has_value() && card->socketY("threshold").has_value(),
+           "the card shows every value on its own row with a socket beside it");
+
+    // The graph draws the node's edge: an overshoot each side that follows the amount.
+    auto& graph = *card->graph();
+    const double peak = graph.sharpenedAt(0);
+    expect(peak > 0.6 && graph.sharpenedAt(-1) < 0.2, "the edge overshoots on both sides");
+    expect(std::abs(graph.sharpenedAt(16) - 0.6) < 1e-9, "past the radius the edge is unchanged");
+    const auto before = graph.preview(256, 8);
+    expect(qGray(before.pixel(250, 4)) > qGray(before.pixel(5, 4)) + 40,
+           "the picture is dark then bright across the edge");
+    const auto amount = ui::nodeRoleParameter(fixture.session, fixture.node, "amount");
+    expect(amount && fixture.session.setParameterValue(*amount, 2.5, QStringLiteral("Set")),
+           "the amount is set");
+    QApplication::processEvents();
+    expect(graph.sharpenedAt(0) > peak + 0.1, "the graph follows the amount");
+    expect(graph.preview(256, 8) != before, "the picture follows the amount");
+    capture(fixture, QStringLiteral("sharpen-strong"));
+    const auto threshold = ui::nodeRoleParameter(fixture.session, fixture.node, "threshold");
+    expect(threshold && fixture.session.setParameterValue(*threshold, 0.5, QStringLiteral("Set")) &&
+               graph.sharpenedAt(0) == 0.6,
+           "detail under the threshold leaves the edge unchanged");
+    expect(fixture.session.setParameterValue(*threshold, 0.0, QStringLiteral("Set")) &&
+               fixture.session.setParameterValue(*amount, 1.0, QStringLiteral("Set")),
+           "the values go back");
+    QApplication::processEvents();
+
+    // The amount handle's drag is one command, moves the amount alone and the handle follows.
+    const auto commands = fixture.stack.size();
+    const QPointF from = graph.handlePosition(0);
+    const QPointF to = from + QPointF(0.0, -graph.plotRect().height() * 0.1);
+    mouse(graph, QEvent::MouseButtonPress, from);
+    mouse(graph, QEvent::MouseMove, to);
+    mouse(graph, QEvent::MouseButtonRelease, to);
+    QApplication::processEvents();
+    const auto raised = stored(fixture.session, fixture.node, "amount");
+    const auto unmoved = stored(fixture.session, fixture.node, "radius");
+    expect(fixture.stack.size() == commands + 1 && raised && *raised > 1.0 && unmoved &&
+               *unmoved == 3.0,
+           "dragging the overshoot raises the amount alone, as one command");
+    expect(std::abs(graph.handlePosition(0).y() - to.y()) < 2.0,
+           "the amount handle follows the pointer");
+    capture(fixture, QStringLiteral("sharpen-amount"));
+
+    // The radius handle's drag is one command, moves the radius alone and the handle follows.
+    const auto radiusCommands = fixture.stack.size();
+    const QPointF radiusFrom = graph.handlePosition(1);
+    const QPointF radiusTo = radiusFrom + QPointF(graph.plotRect().width() * 0.15, 0.0);
+    mouse(graph, QEvent::MouseButtonPress, radiusFrom);
+    mouse(graph, QEvent::MouseMove, radiusTo);
+    mouse(graph, QEvent::MouseButtonRelease, radiusTo);
+    QApplication::processEvents();
+    const auto wider = stored(fixture.session, fixture.node, "radius");
+    const auto sameAmount = stored(fixture.session, fixture.node, "amount");
+    expect(fixture.stack.size() == radiusCommands + 1 && wider && *wider > 3.0 && sameAmount &&
+               sameAmount == raised,
+           "dragging the end of the halo widens the radius alone, as one command");
+    expect(std::abs(graph.handlePosition(1).x() - radiusTo.x()) < 2.0,
+           "the radius handle follows the pointer");
+    capture(fixture, QStringLiteral("sharpen-wide"));
+    // A double-click resets it.
+    mouse(graph, QEvent::MouseButtonDblClick, graph.handlePosition(1));
+    QApplication::processEvents();
+    const auto reset = stored(fixture.session, fixture.node, "radius");
+    expect(reset && *reset == 3.0, "a double-click on a handle resets it");
+    // A slider drag is one command.
+    auto* slider = card->valueRow("threshold")->slider();
+    const auto sliderCommands = fixture.stack.size();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(slider->width() * 0.3, 0.0));
+    const auto dragged = stored(fixture.session, fixture.node, "threshold");
+    expect(fixture.stack.size() == sliderCommands + 1 && dragged && *dragged > 0.0,
+           "dragging the threshold slider is one command");
 }
 
 void vignetteCard() {
@@ -1713,6 +1815,7 @@ int main(int argc, char** argv) {
     vignetteCard();
     lensFlareCard();
     filmGrainCard();
+    sharpenCard();
     depthEffectCards();
     motionBlurCards();
     nodeControlCards();

@@ -578,6 +578,7 @@ target_sources(
         lens_flare_widget.cpp
         film_grain_widget.cpp
         motion_blur_widget.cpp
+        sharpen_widget.cpp
         vignette_widget.cpp
         gradient_parameter_row.cpp
         hue_saturation_widget.cpp
@@ -778,6 +779,7 @@ target_sources(
             include/bloom/ui/lens_flare_widget.hpp
             include/bloom/ui/film_grain_widget.hpp
             include/bloom/ui/motion_blur_widget.hpp
+            include/bloom/ui/sharpen_widget.hpp
             include/bloom/ui/vignette_widget.hpp
             include/bloom/ui/gradient_parameter_row.hpp
             include/bloom/ui/node_controls_widget.hpp

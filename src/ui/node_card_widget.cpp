@@ -6,12 +6,14 @@
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
+#include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/ui/colorize_widget.hpp>
 #include <bloom/ui/curve_graph.hpp>
 #include <bloom/ui/depth_effect_widget.hpp>
 #include <bloom/ui/lens_flare_widget.hpp>
 #include <bloom/ui/film_grain_widget.hpp>
+#include <bloom/ui/sharpen_widget.hpp>
 #include <bloom/ui/grade_wheels.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/levels_graph.hpp>
@@ -27,7 +29,7 @@ bool hasNodeCardWidget(const std::string_view typeId) noexcept {
            typeId == document::kCurvesNodeType || typeId == document::kHueSaturationNodeType ||
            typeId == document::kColorizeNodeType || typeId == document::kVignetteNodeType ||
            document::isDepthEffectNodeType(typeId) || typeId == document::kLensFlareNodeType ||
-           typeId == document::kFilmGrainNodeType ||
+           typeId == document::kFilmGrainNodeType || typeId == document::kSharpenNodeType ||
            document::isMotionBlurNodeType(typeId) ||
            isScalarSliderNodeType(typeId) ||
            hasNodeControlsWidget(typeId);
@@ -52,6 +54,8 @@ NodeCardWidget* makeNodeCardWidget(CompositionSession& session, const document::
         return new LensFlareCardWidget(session, node, card, parent);
     if (typeId == document::kFilmGrainNodeType)
         return new FilmGrainCardWidget(session, node, card, parent);
+    if (typeId == document::kSharpenNodeType)
+        return new SharpenCardWidget(session, node, card, parent);
     if (document::isDepthEffectNodeType(typeId))
         return new DepthEffectCardWidget(session, node, card, parent);
     if (document::isMotionBlurNodeType(typeId))

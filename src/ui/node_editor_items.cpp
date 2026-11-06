@@ -12,6 +12,7 @@
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/sharpen_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -414,6 +415,8 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     // #486.
     if (typeId == document::kFilmGrainNodeType)
         return QStringLiteral("film grain noise add finishing stock analogue analog regrain");
+    if (typeId == document::kSharpenNodeType)
+        return QStringLiteral("sharpen unsharp mask usm crisp detail edges finishing");
     // #505.
     if (typeId == document::kVignetteNodeType)
         return QStringLiteral("vignette lens falloff darken edges corners finishing exposure "

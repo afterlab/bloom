@@ -552,11 +552,11 @@ void testSearchKeyboardAndMenus() {
         expect(entries("nodeAddCategoryMenu.Filters") ==
                    QStringList{"Box Blur", "Depth Fog", "Directional Blur", "Echo", "Film Grain",
                                "Gaussian Blur", "Matte Blur", "Matte Dilate", "Matte Erode",
-                               "Motion Blur", "Optical Flow", "Optical Flow Motion Blur",
+                               "Motion Blur", "Optical Flow", "Optical Flow Motion Blur", "Sharpen",
                                "Spin Blur", "Vector Motion Blur", "Vignette", "Z Defocus",
                                "Zoom Blur"},
-               "Filters offers the blurs, the matte filters, Film Grain, Vignette, the depth "
-               "effects and motion blur");
+               "Filters offers the blurs, the matte filters, Film Grain, Sharpen, Vignette, the "
+               "depth effects and motion blur");
         auto* output = named(menu, "nodeAddCompositionOutputAction");
         expect(output != nullptr && !output->isEnabled() && !output->toolTip().isEmpty(),
                "a singleton already present is listed disabled with its refusal");
