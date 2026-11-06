@@ -91,6 +91,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   and bokeh, picking the focus in the Viewer and rack focus.
 - [Lens Flare](user-guide/lens-flare.md) — the element stack, presets, placing the light in 2D, from
   a tracker or in 3D, and following the picture with source brightness and an occlusion matte.
+- [Film Grain](user-guide/film-grain.md) — seeded, repeatable grain: size, each channel's amount, the
+  response to brightness, and holding or redrawing it over time.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into
   channels, rebuilding it from other images' channels, Luma and the alpha mode.
 - [Keyframe interpolation, easing and layer names](user-guide/keyframe-easing.md) — the standard

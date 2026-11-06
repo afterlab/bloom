@@ -416,6 +416,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `cryptomatte-mattes-2k` | 1920×1080 | 24 | A PNG16 plate under the beauty pass shaped by its own Cryptomatte (#383): the pillars and cards minus the veil (a Mask Combine Subtract of two selections) as a matte layer mask and as the mask input of a warm Grade (then Curves), and the cards as the node track matte of an EXR float highlights pass through a 32 px blur and a Physical Glow (128) |
 | `depth-effects-2k` | 1920×1080 | 24 | Depth effects from both depth encodings (#483): a PNG16 plate through Depth Fog (exponential) and a physical-lens Z Defocus (85 mm, f/2, focus racking 8 to 24 m) from its derived 16-bit PNG mist pass read as data, under the beauty pass (multilayer EXR) through Depth Fog and Z Defocus (polygon bokeh, highlight boost) from its own float `ViewLayer.Depth.Z` channel; fog before defocus in both |
 | `lens-flare-2k` | 1920×1080 | 24 | A PNG16 plate under a Lens Flare (#507) with every element on at its largest counts (8 streak lines, 16 ghosts, 12 irises of 12 blades, the anamorphic streak), its intensity keyed so every frame is new and its brightness read from the plate through the probes' atlas |
+| `film-grain-2k` | 1920×1080 | 24 | A PNG16 plate under strong Film Grain (#486) of 1.5 pixels, 5% with more in the blue, drawn anew for every frame with no key, so each frame is new |
 
 The work areas are short and the export renders only the first `--export-frames` frames (default
 4), so a whole run holds the GPU for minutes, not hours, even when a shot renders slowly. A scenario
@@ -450,6 +451,13 @@ average 16) the same build filled at 22 to 30 fps and one run missed `export-rat
 It lists one check, the fill's GPU busy (#386): the 24 frames fill in 0.35 s, too short to judge (13
 to 15%); a run with `--frames 240` filled at 88 fps with the GPU 48% busy (peak 85%), since the flare
 is one pass a frame and the rest of the frame is host decode.
+
+`film-grain-2k` (2026-11-06, two runs) shows its first frame in 1.6 to 1.9 s, fills at 83 to 116 fps
+and exports its 4 frames on the GPU with no CPU fallback at 0.24 to 0.25 s a frame, within its export
+CPU parity gate (largest difference 1.13e-06, alpha exact). It lists one check, the fill's GPU busy
+(#386): the 24 frames fill in 0.2 to 0.3 s, too short to judge (0 to 4%); a run with `--frames 240`
+filled at 106 fps with the GPU 28% busy, since the grain is one pass a frame and the rest of the frame
+is host decode.
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -715,6 +723,31 @@ and it costs about a Grade and about a fifth of a Glow. A reading of the source 
 2 ms at 1080p and 6 to 7 ms at 2160p: the disc itself is a small window, and the rest is the frame's
 pass into the atlas that carries the reading to the flare. `NODE_COST_BUDGETS` holds each case about
 25% over this run.
+
+### Film Grain (#486)
+
+`bloom_runtime_gpu_film_grain_node_bench` (a 64x64 smoke run is the CTest
+`bloom.runtime.gpu_film_grain_node_bench_smoke`). Each case draws grain over a frame-sized source,
+compared with a Grade (one fixed pass) and a one-octave procedural Noise (the other node that hashes
+for every pixel). Measured on 2026-11-06 (RTX 4090, 5 reruns, ms/frame):
+
+| Case | 1080p | vs Grade | vs Noise | 2160p | vs Grade | vs Noise |
+|---|---|---|---|---|---|---|
+| Grade (reference) | 2.22 |  |  | 6.28 |  |  |
+| Vignette | 2.09 | 0.94x |  | 6.34 | 1.01x |  |
+| Noise (comparable) | 2.10 | 0.95x |  | 7.36 | 1.17x |  |
+| Film Grain, default (size 1) | 2.09 | 0.94x | 0.99x | 6.30 | 1.00x | 0.86x |
+| Size 0.25 | 2.09 | 0.94x | 0.99x | 6.29 | 1.00x | 0.85x |
+| Size 4 | 2.10 | 0.95x | 1.00x | 6.29 | 1.00x | 0.85x |
+| Size 32 | 2.10 | 0.95x | 1.00x | 6.28 | 1.00x | 0.85x |
+| Held | 2.09 | 0.94x | 1.00x | 6.29 | 1.00x | 0.85x |
+| Transparent input (no pixel runs the noise) | 2.07 | 0.93x | 0.99x | 6.21 | 0.99x | 0.84x |
+
+Cold runs took 1.7 to 3.0 ms at 1080p and 6.9 to 7.0 ms at 2160p, the first grain of the process 17.9
+ms with the program's build, and warm runs under 0.01 ms with no dispatch. Each new frame of Every
+Frame grain is new data on the same program, a frame's cold cost without a build. The grain is one pass
+that always hashes nine cells, so its size does not move its cost; the noise itself adds about 0.1 ms
+at 2160p to the pass on this GPU. `NODE_COST_BUDGETS` holds each case about 25% over this run.
 
 ## Platform notes
 

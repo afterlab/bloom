@@ -617,7 +617,7 @@ from the GPU route. The node editor background draws the same image in viewport 
 card and over the dot grid.
 
 A graphically edited node (#494: Grade and Levels; #498: Curves; #501: Hue/Saturation, Exposure,
-Offset and Multiply; #504: Colorize; #505: Vignette) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
+Offset and Multiply; #504: Colorize; #505: Vignette; #486: Film Grain) carries a card widget (`NodeCardWidget`, made by `makeNodeCardWidget`) between
 its transport rows and its parameter rows, inset by the card padding at the card's width. The same
 widget is the first thing in its Properties section, so every edit works on the card without
 Properties. Its controls follow the grading rules under "Live Value Editing": each gesture is one

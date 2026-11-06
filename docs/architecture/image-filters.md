@@ -1370,6 +1370,80 @@ builder at full frame and ROI; the reading images take full support on the CPU, 
 interest draws the whole frame's pixels. A value change is new program data and a new cache identity.
 [Benchmarks](../development/benchmarks.md#lens-flare-507) holds its cost.
 
+## Film Grain
+
+`bloom.film-grain`, schema 1, under Filters (issue #486), has one Image in, `input`, one Image out,
+`image`, and the optional effect mask every filter takes. Every value below but the last two has a
+socket and can be keyed or driven:
+
+| Role | Default | Domain | Meaning |
+|---|---|---|---|
+| `intensity` | 0.02 | 0 to 1 | The grain's standard deviation in linear light where the response is 1 |
+| `size` | 1 | 0.25 to 32 | How wide a grain is, in full-resolution pixels |
+| `redAmount`, `greenAmount`, `blueAmount` | 1 | 0 to 10 | Each channel's share of the intensity |
+| `shadows`, `midtones`, `highlights` | 0.1, 1, 1 | 0 to 10 | The response at luma 0, 0.18 and 1 |
+| `animation` | Every Frame | Every Frame (0), Held (1) | Whether each frame has its own grain. Constant |
+| `seed` | 1 | 0 to 2^31 - 1 | Which grain. Constant |
+
+**The pixel.** With premultiplied `rgb` and `a`, `L = max(luma(rgb) / a, 0)` the pixel's straight
+Rec. 709 luma, `n` the noise below and `k` each channel's amount:
+
+```text
+response(L) = shadows + (midtones - shadows) * L / 0.18          L < 0.18
+            = midtones + (highlights - midtones) * (L - 0.18) / 0.82   0.18 <= L < 1
+            = highlights * L                                     L >= 1
+rgb' = rgb + a * response(L) * intensity * k * n
+a'   = a
+```
+
+The grain is added in proportion to alpha, so the image stays premultiplied. Alpha 0 stays
+transparent black. Nothing is clamped: an HDR value keeps its range, the last line of the response
+keeps the grain the same share of a highlight above 1, and a dark value can go slightly negative
+rather than lifting the grain's mean. The node is the identity at intensity 0, with every amount at 0
+or with every response at 0.
+
+**The noise.** A pixel's centre `(x + 0.5, y + 0.5)`, in the image's absolute pixel coordinates, is
+read at `(x + 0.5) * aspect / (scaleX * size)` and `(y + 0.5) / (scaleY * size)` in cells, where
+`scale` is the evaluation's proxy scale and `aspect` the pixel aspect. So a grain has its size in
+full-resolution square pixels, a proxy samples the same pattern, and a region of interest or another
+data window changes no pixel's grain.
+
+Each cell holds one grain per channel, hashed with Jarzynski and Olano's `pcg3d` from the cell and a
+32-bit stream (a closing `v ^= v >> 16` makes every bit usable): one 32-bit word per channel, 11 bits
+each for the grain's position in the cell and 10 for its amplitude, in (-1, 1). A point sums each
+channel's grains within distance 1, which lie in its own cell and the eight around it:
+
+```text
+n(p) = sqrt(15 / pi) * sum over grains g of (1 - |p - g|^2)^2 * amplitude(g)
+```
+
+Hashed positions leave no lattice in the grain's strength or shape, and a uniform amplitude's variance
+1/3 times the squared weight's integral pi/5 gives the noise a mean of 0 and a standard deviation of
+1, at any size and in any channel. Each channel's grains lie in their own places, as a stock's dye
+layers do, so the channels are independent in sign and in where they are strong. A grain is about
+`size` pixels wide at half its height.
+
+**Time.** The stream is a 64-bit mix of the seed and the frame. `Every Frame` takes the frame by the
+same exact arithmetic as a Time node's frame output, at the operation's clock (so under a retimed layer
+it is that layer's frame), and the plan marks the operation as varying with time; each frame's grain
+is then unrelated to its neighbours', and returning to a frame draws it again. `Held` takes frame 0
+and does not vary with time, and neither does anything downstream because of it.
+
+**On the GPU.** One fixed resident program over the input, with every value in its data, so a new
+frame is new data and a new cache identity on one compiled program. The hash is integer arithmetic,
+and the sum is additions and multiplications the program marks `precise`, each exact on every device;
+the luma's division is the wrapper's correctly rounded one. A pixel whose response is 0 runs no noise.
+
+**Evidence.** `src/runtime/tests/film_grain_tests.cpp` pins the hash's values, holds the noise to its
+mean, deviation and independence (in sign and in strength) at several spacings, the pixel to the formula over HDR and partial
+alpha, and each promise above, frame and seed identity through the evaluator's memoization, the
+domains, the fixed program, the pixel budget and cancellation. The native harness (`runFilmGrains`)
+holds seven cases (the default, every path at three sizes, held, a proxy and a region of interest) to
+the CPU oracle within 2e-6 on RGB with exact alpha, warm RAM reuse with zero dispatches, the next
+frame with new grain (held: zero dispatches and the same pixels), and a changed value re-running with
+parity. `effect.FilmGrainKernel` and `node.bloom.film-grain` prepare through the production builder at
+full frame and ROI. [Benchmarks](../development/benchmarks.md#film-grain-486) holds its cost.
+
 ## Matte Workflow
 
 Issue #383 lets any node that produces a Mask (Cryptomatte, the Mask node, Matte Blur, Luma Key,
