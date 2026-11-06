@@ -446,6 +446,14 @@ class DepthScenario(unittest.TestCase):
         self.assertNotIn("export-cpu-parity", scenarios[0]["knownFailures"],
                          "only the solver's parity is a known parity failure")
 
+    def test_sharpen_scenario_keys_its_amount_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["sharpen-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.sharpen")
+        self.assertIn("amount", effect[2]["keys"], "every frame is new")
+
 
 if __name__ == "__main__":
     unittest.main()

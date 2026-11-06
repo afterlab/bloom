@@ -126,7 +126,8 @@ NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench",
                 "depth": "src/runtime/tests/bloom_runtime_gpu_depth_node_bench",
                 "lens-flare": "src/runtime/tests/bloom_runtime_gpu_lens_flare_node_bench",
                 "film-grain": "src/runtime/tests/bloom_runtime_gpu_film_grain_node_bench",
-                "motion": "src/runtime/tests/bloom_runtime_gpu_motion_node_bench"}
+                "motion": "src/runtime/tests/bloom_runtime_gpu_motion_node_bench",
+                "sharpen": "src/runtime/tests/bloom_runtime_gpu_sharpen_node_bench"}
 NODE_COST_TIERS = ("1080p", "2160p")
 NODE_COST_BUDGETS = {
     "default": {"reference": 4.0, "comparable": 2.0},
@@ -237,6 +238,16 @@ NODE_COST_BUDGETS = {
     "flow-blur-standard": {"reference": 150, "comparable": 5.0},
     "flow-blur-high": {"reference": 305, "comparable": 10.0},
     "flow-blur-matte-standard": {"reference": 320, "comparable": 5.0},
+    # #486 Sharpen is its Gaussian Blur plus one mask pass, held about 25% over the worst of three
+    # 2026-11-06 runs against a Grade and the blur of the same radius. The 1080p times move in steps
+    # of about 1 ms, so radius 1 allows one step against a blur that took the lower one.
+    "sharpen-radius-1": {"reference": 1.9, "comparable": 1.9},
+    "sharpen-radius-3": {"reference": 2.15, "comparable": 1.6},
+    "sharpen-radius-8": {"reference": 2.15, "comparable": 1.55},
+    "sharpen-radius-32": {"reference": 2.45, "comparable": 1.65},
+    "sharpen-radius-128": {"reference": 3.05, "comparable": 1.35},
+    "sharpen-threshold": {"reference": 2.15, "comparable": 1.55},
+    "sharpen-transparent": {"reference": 2.15, "comparable": 1.55},
 }
 # Cases a known limitation keeps from running: none (#549 put the 2160p Cryptomatte cases back on
 # the GPU route).

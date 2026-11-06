@@ -77,6 +77,10 @@ FILM_GRAIN_FILL_BUSY = ("#386: the Film Grain shot fills its 24 frames in 0.2 to
                         "2026-11-06), too few GPU utilisation samples to judge (0 to 4%); over 240 "
                         "frames it filled at 106 fps with the GPU 28% busy: one pass a frame, the "
                         "rest host decode")
+SHARPEN_FILL_BUSY = ("#405: the Sharpen shot fills its 24 frames in 0.3 s (80 fps on 2026-11-06), too "
+                     "few GPU utilisation samples to judge (1 to 6%); over 240 frames it filled at "
+                     "79 fps with the GPU 21% busy (peak 100%) and 11 CPU cores busy: a blur and one "
+                     "pass a frame, the rest host decode")
 DEPTH_FILL_BUSY = ("#386: the depth effects shot fills at 16 to 20 fps with the GPU 31 to 58% busy "
                    "(2026-11-06, after #549): its 24 frames fill in a little over a second, a few "
                    "GPU utilisation samples, and every frame first decodes three sequences (the "
@@ -178,7 +182,8 @@ SCENARIOS["cg-comp-4k"] = dict(SCENARIOS["cg-comp-2k"], tier="2160p", frames=12)
 # Light Wrap, Glow and Drop Shadow recipes built on it), a Grade's gamma or contrast and a Levels
 # gamma (the device `pow`, image-filters.md).
 COLOUR_KEYED_ALPHA = ("bloom.glow",)
-BLURRED_COLOUR = ("bloom.gaussian-blur", "bloom.light-wrap", "bloom.glow", "bloom.drop-shadow")
+BLURRED_COLOUR = ("bloom.gaussian-blur", "bloom.light-wrap", "bloom.glow", "bloom.drop-shadow",
+                  "bloom.sharpen")
 
 
 def tolerance_qualified_colour(effect):
@@ -281,6 +286,20 @@ SCENARIOS["film-grain-2k"] = {
     "layers": [
         {"name": "Plate", "media": "png16",
          "effects": [["bloom.film-grain", {"intensity": 0.05, "size": 1.5, "blueAmount": 1.5}]]},
+    ],
+}
+
+# #486: Sharpen over a plate, its amount keyed so every frame is new: each frame runs the plate's blur
+# and the one pass over the two.
+SCENARIOS["sharpen-2k"] = {
+    "description": "A PNG16 plate under Sharpen with a radius of 8 pixels, its amount keyed.",
+    "tier": "1080p",
+    "frames": 24,
+    "knownFailures": {"gpu-busy-during-fill": SHARPEN_FILL_BUSY},
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.sharpen", {"radius": 8.0},
+                      {"keys": {"amount": [[0, 0.5], [23, 2.0]]}}]]},
     ],
 }
 
