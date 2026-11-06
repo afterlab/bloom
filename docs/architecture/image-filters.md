@@ -1336,7 +1336,7 @@ The ring and hoop are drawn from the squared distance: `(|d|^2 - r^2) / (2 r w)`
 `(|d| - r) / w` to first order, and the ring's width is small next to its radius. That, and polynomial
 shapes that reach exactly 0, leaves additions, multiplications, abs, min and max as the only
 operations, each exact on every device (the program marks them `precise`), so the CPU reference and
-the GPU agree bit for bit with exact alpha.
+the GPU agree within 2e-6 on RGB with exact alpha, which is what the native harness holds them to.
 
 **The level.** Two readings of the disc of `sampleRadius` pixels around the light (32 samples on a
 sunflower spiral, whole-pixel offsets, the first at the light's own pixel; a sample outside its image

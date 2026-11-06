@@ -6,8 +6,8 @@
 // flare is applied it builds the program data from that table and the image's geometry, and the CPU
 // (lensFlarePixel, lensFlareProbeValue) and the two fixed GPU programs run the same binary32
 // operations over it. The stack uses only additions, multiplications, min, max and abs, each exact
-// on every device, so CPU and GPU agree bit for bit. docs/architecture/image-filters.md,
-// "Lens Flare", is the specification.
+// on every device, so CPU and GPU agree within 2e-6 on RGB with exact alpha.
+// docs/architecture/image-filters.md, "Lens Flare", is the specification.
 
 #include "color_grade_image_effect.hpp"
 

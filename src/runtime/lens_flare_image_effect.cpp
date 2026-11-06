@@ -1,8 +1,9 @@
 // #507 Lens Flare. The element stack (lensFlarePixel, lensFlareProgramText) and the light's probe
 // (lensFlareProbeValue, lensFlareProbeProgramText) over the same data. Only additions,
 // multiplications, abs, min and max: no sqrt, no division, no pow, so the CPU reference and the GPU
-// agree bit for bit. Rings are drawn from the squared distance (a ring's own width is small next to
-// its radius), and every shape is a polynomial reaching exactly zero at its edge.
+// agree within 2e-6 on RGB with exact alpha, as the native harness holds them. Rings are drawn from
+// the squared distance (a ring's own width is small next to its radius), and every shape is a
+// polynomial reaching exactly zero at its edge.
 // docs/architecture/image-filters.md, "Lens Flare", is the specification.
 
 #include "lens_flare_image_effect.hpp"
