@@ -344,7 +344,7 @@ QImage LensFlareCardWidget::preview(const int width) const {
     const int w = std::max(1, width);
     const int h = std::max(1, static_cast<int>(std::lround(w * frame.height() / frame.width())));
     QImage image(w, h, QImage::Format_ARGB32_Premultiplied);
-    image.fill(QColor(18, 18, 20));
+    image.fill(kit::color(kit::Color::CanvasBlack));
     double projection = 1.0;
     const bool visible =
         integer("lightMode") != document::kLensFlareLight3D ||
@@ -409,7 +409,7 @@ QImage LensFlareCardWidget::preview(const int width) const {
         QRadialGradient gradient(light, std::max(radius, 1.0));
         gradient.setColorAt(0.0, tinted(kWhite, std::min(amount, 1.0)));
         gradient.setColorAt(0.33, tinted(kWhite, std::min(amount, 1.0) * 0.25));
-        gradient.setColorAt(1.0, QColor(0, 0, 0));
+        gradient.setColorAt(1.0, tinted(kWhite, 0.0));
         painter.setPen(Qt::NoPen);
         painter.setBrush(gradient);
         painter.drawEllipse(light, radius, radius);
@@ -460,7 +460,6 @@ QImage LensFlareCardWidget::preview(const int width) const {
     // The streaks.
     if (const double amount = scalar("streakAmount"); amount > 0.0) {
         QPen pen(tinted(kWhite, std::min(amount * 1.5, 1.0)));
-        pen.setWidthF(1.0);
         painter.setPen(pen);
         for (const auto& line : layout.streaks) {
             const QPointF reach =
