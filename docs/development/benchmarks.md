@@ -425,22 +425,23 @@ driver's own window, caught two or three readings at 31% average and 50% peak; a
 needs a longer work area, which would change the scenario's baseline, so the marker stays and the
 check is not weakened). The light 2K shot's GPU-busy marker was removed when #386's bounded blend
 and OCIO batches and fence waits made it pass (64% busy, 2026-11-06). After #549 (2026-11-06, RTX
-4090, alternating runs) `cryptomatte-mattes-2k` shows its first frame in 3.0 to 3.1 s (4.4 to 4.9
-before), fills at 7.2 to 8.1 fps (2.9 to 3.2) with the GPU 35 to 51% busy (10 to 18%), plays cold
-at 16 fps (2.7), scrubs in 0.8 to 0.9 s (2.1) and exports its 4 frames on the GPU at 0.67 s/frame
-(1.02). The fill's GPU busy passed the 50% bar in one of three runs: each frame's host work is
-now mostly the ZIP decode of the multilayer EXR, once for the beauty and once more for the
-Cryptomatte rank channels, so its marker points at #549. Two of those runs failed
-`claims-within-factor` (3.02 and 3.18 against 3): the fill's host use fell further than the
-preflight claim for a channel read, which #549 did not change ([results](benchmark-results-2026-11-06-549.md)).
-`depth-effects-2k` (2026-11-06, 12 frames, three runs, the last after #549) shows its first frame
-in 2.5 to 3.3 s, fills at 7.9 to 14.5 fps, plays cached at 20.7 to 21.8 fps, exports its 4 frames
-on the GPU with no CPU fallback at 0.50 to 0.56 s a frame, and matches the CPU reference with exact
-alpha (max colour difference 2.4e-7). It lists two checks: the fill's GPU busy (5 to 25%; the fill
-lasts one to three seconds, a few samples, and decodes three sequences on the host a frame), and
-`claims-within-factor`, whose fill host claims reached 3.06 to 3.34 times peak use in every run
-(device claims 1.0 to 1.03): the preflight claim for its EXR depth channel read, the claim estimate
-of #539.
+4090, alternating runs) `cryptomatte-mattes-2k` reads its three Cryptomatte selections from one
+gather and one upload per rank layer per frame ([results](benchmark-results-2026-11-06-549.md)),
+and a frame decodes the multilayer EXR once, its beauty and its Cryptomatte rank channels together
+([results](benchmark-results-2026-11-06-549-decode.md)). It then shows its first frame in 2.7 to
+2.8 s (3.0 to 3.8 with two decodes), fills at 11.8 to 13.4 fps (7.1 to 7.9), plays cold at 21 fps
+(17), scrubs in 0.48 to 0.52 s (0.76 to 0.81) and exports its 4 frames on the GPU at 0.58 to
+0.61 s/frame (0.66). Its fill's GPU busy stayed at 24 to 40% in three runs: the 24 frames fill in
+about 2 s, ten samples, and each frame's host work is still the one ZIP decode of the multilayer
+EXR plus the PNG plate, so its marker points at #549. `depth-effects-2k` (24 frames, three runs a
+build) shows its first frame in 2.4 s (2.5 to 3.0 before), fills at 15.9 to 19.6 fps (13.3 to
+14.4), plays cold at 22 fps, exports its 4 frames on the GPU with no CPU fallback at 0.51 s a frame,
+and passes its export CPU parity check. It lists one check: the fill's GPU busy (31 to 58%,
+#386; the fill lasts a little over a second, a few samples, and decodes three sequences on the host
+a frame). `claims-within-factor` failed in five of the two shots' six runs before (fill host claims
+2.94 to 3.48 times peak use) and in none after (1.53 to 1.90): a phase with a channel read claims what the read holds
+from its sources' extents instead of the frame's preflight peak, so the depth shot's marker for
+that check is removed.
 
 When a new heavy node lands (motion blur, depth effects, Fields), add a scenario that uses it and
 leave the existing ones unchanged, so their baselines stay comparable.
@@ -560,6 +561,7 @@ RTX 4090 workstation and, when it is used, on the RTX 5080 bench host.
 Recorded runs: [RTX 4090 / Ryzen 7 9700X / 64 GB, main 8626d3918, after #544 and after its follow-up](benchmark-results-2026-11-05-scenarios.md);
 [the same machine, before and after #386](benchmark-results-2026-11-06-386.md);
 [the same machine, before and after #549](benchmark-results-2026-11-06-549.md);
+[the same machine, before and after #549's one decode per frame](benchmark-results-2026-11-06-549-decode.md);
 [the same machine, before and after #457](benchmark-results-2026-11-06-457.md).
 
 ## Node cost

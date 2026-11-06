@@ -60,23 +60,19 @@ LEVELS = ["bloom.levels", {"masterInputBlack": 0.02, "masterInputWhite": 0.95,
 # no longer starve on capacity waits and land in frame order, and image sequences publish frames
 # side by side. The GPU-busy check moved to #386, whose batched submissions and fence waits made
 # the light 2K shot pass it (64% busy on 2026-11-06); what is left of it is listed here (the
-# Cryptomatte shot's under #549, which tripled its fill).
-MATTE_FILL_BUSY = ("#549: the Cryptomatte shot fills at 7 to 8 fps with the GPU 35 to 51% busy "
-                   "(2026-11-06, about 3 fps and 10 to 18% before #549): each frame's host work is "
-                   "mostly the ZIP decode of the multilayer EXR, once for the beauty and once more "
-                   "for the Cryptomatte rank channels")
+# Cryptomatte shot's under #549, which tripled its fill and then read each frame's EXR once).
+MATTE_FILL_BUSY = ("#549: the Cryptomatte shot fills at 12 to 13 fps with the GPU 24 to 40% busy "
+                   "(2026-11-06, 7 to 8 fps and 25 to 46% when it decoded the EXR twice): its "
+                   "24 frames fill in about 2 s, ten GPU utilisation samples, and each frame's "
+                   "host work is still the one ZIP decode of the multilayer EXR (beauty and "
+                   "Cryptomatte ranks together) and the PNG plate")
 NOISE_FILL_BUSY = ("#386: the Noise shot fills its 24 frames in about 0.4 s (59 fps on "
                    "2026-11-06), two or three GPU utilisation samples: too short to judge the "
                    "average busy fairly (31%, peak 50%)")
-DEPTH_FILL_BUSY = ("#386: the depth effects shot fills at 8 to 14 fps with the GPU 5 to 25% busy "
-                   "(2026-11-06): its 12 to 24 frames fill in one to three seconds, a few GPU "
-                   "utilisation samples, and every frame first decodes three sequences (the plate, "
-                   "its mist pass and the multilayer EXR) on the host")
-DEPTH_HOST_CLAIMS = ("#539: the depth effects shot's host claims over the fill reached 3.06 to "
-                     "3.34 times the peak anonymous memory in three runs (2026-11-06), over the 3x "
-                     "factor, while its device claims stay at 1.0 to 1.03 times use: the preflight "
-                     "host claim for its EXR depth channel read, as the Cryptomatte shot's channel "
-                     "read shows intermittently")
+DEPTH_FILL_BUSY = ("#386: the depth effects shot fills at 16 to 20 fps with the GPU 31 to 58% busy "
+                   "(2026-11-06, after #549): its 24 frames fill in a little over a second, a few "
+                   "GPU utilisation samples, and every frame first decodes three sequences (the "
+                   "plate, its mist pass and the multilayer EXR) on the host")
 SCENARIOS = {
     # The smallest shot that needs the whole chain admitted at once: a plate and one CG pass
     # with one large Glow (the effect-chain admission case of #539).
@@ -284,6 +280,5 @@ SCENARIOS["depth-effects-2k"] = {
                                   "highlightThreshold": 0.8},
               {"depth": EXR_Z, "depthChannel": "ViewLayer.Depth.Z"}]]},
     ],
-    "knownFailures": {"gpu-busy-during-fill": DEPTH_FILL_BUSY,
-                      "claims-within-factor": DEPTH_HOST_CLAIMS},
+    "knownFailures": {"gpu-busy-during-fill": DEPTH_FILL_BUSY},
 }
