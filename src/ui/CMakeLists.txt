@@ -576,6 +576,7 @@ target_sources(
         colorize_widget.cpp
         depth_effect_widget.cpp
         lens_flare_widget.cpp
+        film_grain_widget.cpp
         vignette_widget.cpp
         gradient_parameter_row.cpp
         hue_saturation_widget.cpp
@@ -773,6 +774,7 @@ target_sources(
             include/bloom/ui/colorize_widget.hpp
             include/bloom/ui/depth_effect_widget.hpp
             include/bloom/ui/lens_flare_widget.hpp
+            include/bloom/ui/film_grain_widget.hpp
             include/bloom/ui/vignette_widget.hpp
             include/bloom/ui/gradient_parameter_row.hpp
             include/bloom/ui/node_controls_widget.hpp

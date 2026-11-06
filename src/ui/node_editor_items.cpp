@@ -11,6 +11,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/field_nodes.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/ui/asset_controller.hpp>
@@ -410,6 +411,10 @@ QString nodeSearchKeywords(const std::string_view typeId) {
     if (typeId == document::kLensFlareNodeType)
         return QStringLiteral("lens flare glare sun light streak star ghost halo hoop iris ring "
                               "anamorphic optical");
+    // #486.
+    if (typeId == document::kFilmGrainNodeType)
+        return QStringLiteral("film grain noise add finishing texture stock analogue analog "
+                              "grain regrain");
     // #505.
     if (typeId == document::kVignetteNodeType)
         return QStringLiteral("vignette lens falloff darken edges corners finishing exposure "

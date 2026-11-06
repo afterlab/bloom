@@ -167,6 +167,9 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #507 Lens Flare: its table's own labels.
     if (const auto* flare = document::lensFlareParameterSpec(schemaKey); flare != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(flare->label).c_str());
+    // #486 Film Grain: its table's own labels.
+    if (const auto* grain = document::filmGrainParameterSpec(schemaKey); grain != nullptr)
+        return QCoreApplication::translate("PropertiesRow", std::string(grain->label).c_str());
     return
         isEffectColorSpaceSchema(schemaKey)
             ? node_editor::displayTypeName(role)

@@ -29,6 +29,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/depth_effect_nodes.hpp>
 #include <bloom/document/lens_flare_definition.hpp>
+#include <bloom/document/film_grain_definition.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/parameter.hpp>
@@ -44,6 +45,7 @@
 #include <bloom/ui/grading_controls.hpp>
 #include <bloom/ui/hue_saturation_widget.hpp>
 #include <bloom/ui/lens_flare_widget.hpp>
+#include <bloom/ui/film_grain_widget.hpp>
 #include <bloom/ui/kit/angle_dial.hpp>
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/controls.hpp>
@@ -614,6 +616,102 @@ void lensFlareCard() {
                *kept == movedValue,
            "a preset is one command and keeps the light");
     capture(fixture, QStringLiteral("lens-flare-preset"));
+}
+
+// #486: the Film Grain card paints inside its card with no label cut short, writes nothing of its
+// own, and shows its node's rows; the graph draws the grain as the node adds it and a handle's drag
+// is one command that its row follows; a slider drag is one command too.
+void filmGrainCard() {
+    CardFixture fixture(document::kFilmGrainNodeType);
+    auto* card = fixture.item ? qobject_cast<ui::FilmGrainCardWidget*>(fixture.item->cardWidget())
+                              : nullptr;
+    expect(card != nullptr, "Film Grain draws its card widget");
+    if (card == nullptr)
+        return;
+    for (const auto& spec : document::filmGrainParameters())
+        if (spec.kind == document::FilmGrainParameterKind::Scalar) {
+            const auto value = stored(fixture.session, fixture.node, std::string(spec.role));
+            expect(value && *value == spec.value,
+                   "a new Film Grain card writes no value of its own");
+        }
+    int cards = 0;
+    for (auto* candidate : fixture.editor->graphScene()->items())
+        if (auto* other = dynamic_cast<ui::node_editor::NodeItem*>(candidate);
+            other != nullptr && other->cardWidget() != nullptr &&
+            qobject_cast<ui::FilmGrainCardWidget*>(other->cardWidget()) != nullptr)
+            ++cards;
+    expect(cards == 1, "a new Film Grain is one card");
+    QApplication::processEvents();
+    if (!paintsInsideCard(*fixture.item)) {
+        std::cerr << "film-grain paints outside its card\n";
+        ++failures;
+    }
+    if (!cardContentFits(*fixture.item, "film-grain"))
+        ++failures;
+    capture(fixture, QStringLiteral("film-grain"));
+    expect(card->showsRole("animation") && card->showsRole("seed") &&
+               !card->showsRole("intensity") && !card->showsRole("shadows") &&
+               card->socketY("intensity").has_value() && card->socketY("highlights").has_value() &&
+               !card->socketY("seed").has_value(),
+           "the card shows the node's constants as its own rows, and a socket beside every value");
+
+    // The graph draws grain: the ramp rises left to right, and more intensity spreads it wider.
+    auto& graph = *card->graph();
+    const auto spread = [](const QImage& image, const int x) {
+        double sum = 0.0;
+        double squares = 0.0;
+        for (int y = 0; y < image.height(); ++y) {
+            const double value = qGreen(image.pixel(x, y));
+            sum += value;
+            squares += value * value;
+        }
+        const double count = image.height();
+        return std::sqrt(std::max(0.0, squares / count - (sum / count) * (sum / count)));
+    };
+    const auto before = graph.preview(256, 256);
+    expect(qGray(before.pixel(250, 128)) > qGray(before.pixel(5, 128)) + 100,
+           "the graph's ramp rises from black to white");
+    const auto intensity = ui::nodeRoleParameter(fixture.session, fixture.node, "intensity");
+    expect(intensity && fixture.session.setParameterValue(*intensity, 0.1, QStringLiteral("Set")),
+           "the intensity is set");
+    QApplication::processEvents();
+    const auto stronger = graph.preview(256, 256);
+    expect(spread(stronger, 128) > spread(before, 128) * 2.0,
+           "the graph's grain follows the intensity");
+    capture(fixture, QStringLiteral("film-grain-strong"));
+
+    // A handle's drag is one command, moves its own response up and its row follows.
+    const auto commands = fixture.stack.size();
+    const QPointF from = graph.handlePosition(1);
+    const QPointF to = from + QPointF(0.0, -graph.plotRect().height() * 0.25);
+    mouse(graph, QEvent::MouseButtonPress, from);
+    mouse(graph, QEvent::MouseMove, to);
+    mouse(graph, QEvent::MouseButtonRelease, to);
+    QApplication::processEvents();
+    const auto midtones = stored(fixture.session, fixture.node, "midtones");
+    const auto shadows = stored(fixture.session, fixture.node, "shadows");
+    expect(fixture.stack.size() == commands + 1 && midtones && *midtones > 1.3 && shadows &&
+               *shadows == 0.1,
+           "dragging the midtones handle raises it alone, as one command");
+    expect(graph.handlePosition(1).y() < from.y() - 1.0, "the handle follows its value");
+    capture(fixture, QStringLiteral("film-grain-response"));
+    // A double-click resets it.
+    const auto resetFrom = graph.handlePosition(1);
+    mouse(graph, QEvent::MouseButtonDblClick, resetFrom);
+    QApplication::processEvents();
+    const auto reset = stored(fixture.session, fixture.node, "midtones");
+    expect(reset && *reset == 1.0, "a double-click on a handle resets it");
+    // A slider drag is one command.
+    auto* slider = card->valueRow("size")->slider();
+    const auto sliderCommands = fixture.stack.size();
+    const QPointF start = slider->rect().center();
+    mouse(*slider, QEvent::MouseButtonPress, start);
+    mouse(*slider, QEvent::MouseMove, start + QPointF(slider->width() * 0.3, 0.0));
+    mouse(*slider, QEvent::MouseButtonRelease, start + QPointF(slider->width() * 0.3, 0.0));
+    const auto size = stored(fixture.session, fixture.node, "size");
+    expect(fixture.stack.size() == sliderCommands + 1 && size && *size > 1.0,
+           "dragging the size slider is one command");
+    capture(fixture, QStringLiteral("film-grain-large"));
 }
 
 void vignetteCard() {
@@ -1450,6 +1548,7 @@ int main(int argc, char** argv) {
     colorizeGradientMap();
     vignetteCard();
     lensFlareCard();
+    filmGrainCard();
     depthEffectCards();
     nodeControlCards();
     linkedGradientStop();
