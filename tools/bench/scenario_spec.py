@@ -73,6 +73,10 @@ LENS_FLARE_FILL_BUSY = ("#386: the Lens Flare shot fills its 24 frames in 0.35 s
                         "2026-11-06), too few GPU utilisation samples to judge (13 to 15%); over 240 "
                         "frames it filled at 88 fps with the GPU 48% busy: one pass a frame, the rest "
                         "host decode")
+FILM_GRAIN_FILL_BUSY = ("#386: the Film Grain shot fills its 24 frames in 0.2 to 0.3 s (83 to 116 fps on "
+                        "2026-11-06), too few GPU utilisation samples to judge (0 to 4%); over 240 "
+                        "frames it filled at 106 fps with the GPU 28% busy: one pass a frame, the "
+                        "rest host decode")
 DEPTH_FILL_BUSY = ("#386: the depth effects shot fills at 16 to 20 fps with the GPU 31 to 58% busy "
                    "(2026-11-06, after #549): its 24 frames fill in a little over a second, a few "
                    "GPU utilisation samples, and every frame first decodes three sequences (the "
@@ -264,6 +268,19 @@ SCENARIOS["lens-flare-2k"] = {
                       {"ghostCount": 16, "irisCount": 12, "irisBlades": 12, "streakCount": 8,
                        "anamorphicAmount": 0.5, "sourceBrightness": 0.5, "sampleRadius": 16.0},
                       {"keys": {"intensity": [[0, 0.6], [23, 1.4]]}}]]},
+    ],
+}
+
+# #486: Film Grain over a plate, strong and in every channel: its frame's own pattern makes every
+# frame new with no key.
+SCENARIOS["film-grain-2k"] = {
+    "description": "A PNG16 plate under strong Film Grain of 1.5 pixels, drawn anew for every frame.",
+    "tier": "1080p",
+    "frames": 24,
+    "knownFailures": {"gpu-busy-during-fill": FILM_GRAIN_FILL_BUSY},
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "effects": [["bloom.film-grain", {"intensity": 0.05, "size": 1.5, "blueAmount": 1.5}]]},
     ],
 }
 

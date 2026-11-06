@@ -421,6 +421,14 @@ class DepthScenario(unittest.TestCase):
         self.assertIn("intensity", effect[2]["keys"], "every frame is new")
         self.assertGreater(effect[1]["sourceBrightness"], 0.0, "the plate is probed")
 
+    def test_film_grain_scenario_draws_new_grain_on_a_plate(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["film-grain-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), ["png16"])
+        effect = scenario["layers"][0]["effects"][0]
+        self.assertEqual(effect[0], "bloom.film-grain")
+        self.assertNotIn("animation", effect[1], "every frame draws new grain")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -124,7 +124,8 @@ def footage_assets():
 # comparable at the same resolution. A case may carry its own budget; "default" covers the rest.
 NODE_BENCHES = {"matte": "src/runtime/tests/bloom_runtime_gpu_matte_node_bench",
                 "depth": "src/runtime/tests/bloom_runtime_gpu_depth_node_bench",
-                "lens-flare": "src/runtime/tests/bloom_runtime_gpu_lens_flare_node_bench"}
+                "lens-flare": "src/runtime/tests/bloom_runtime_gpu_lens_flare_node_bench",
+                "film-grain": "src/runtime/tests/bloom_runtime_gpu_film_grain_node_bench"}
 NODE_COST_TIERS = ("1080p", "2160p")
 NODE_COST_BUDGETS = {
     "default": {"reference": 4.0, "comparable": 2.0},
@@ -170,6 +171,14 @@ NODE_COST_BUDGETS = {
     "lens-flare-largest-size-4": {"reference": 1.75, "comparable": 0.35},
     "lens-flare-source": {"reference": 2.25, "comparable": 0.45},
     "lens-flare-occlusion": {"reference": 2.25, "comparable": 0.45},
+    # #486 Film Grain is one fixed pass whatever its size, held about 25% over the 2026-11-06
+    # measurement against a Grade and a procedural Noise.
+    "film-grain": {"reference": 1.25, "comparable": 1.25},
+    "film-grain-size-0.25": {"reference": 1.25, "comparable": 1.25},
+    "film-grain-size-4": {"reference": 1.25, "comparable": 1.25},
+    "film-grain-size-32": {"reference": 1.25, "comparable": 1.25},
+    "film-grain-held": {"reference": 1.25, "comparable": 1.25},
+    "film-grain-transparent": {"reference": 1.25, "comparable": 1.25},
 }
 # Cases a known limitation keeps from running: none (#549 put the 2160p Cryptomatte cases back on
 # the GPU route).
