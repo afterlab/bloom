@@ -1,7 +1,7 @@
 # Sharpen
 
 **Sharpen** is an unsharp mask: it finds the image's detail, the difference between the image and a
-blur of it, and adds that back. Find it under **Filters** in the Add menu. The formulas and their
+blur of it, and adds that back. Find it under **Blur & Sharpen** in the Add menu. The formulas and their
 limits are in [Image filters, "Sharpen"](../architecture/image-filters.md#sharpen).
 
 Connect your picture to **Input**. Alpha never changes, and a transparent pixel stays transparent. A

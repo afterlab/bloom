@@ -2,8 +2,8 @@
 
 **Z Defocus** blurs a picture by how far each pixel is from the camera, like a lens focused at one
 distance. **Depth Fog** thickens fog with distance. Both read a *depth pass*: a picture whose values
-are distances rather than colours. Find both under **Filters** in the Add menu. The algorithms, their
-sources and their limits are in [Image filters, "Depth effects"](../architecture/image-filters.md#depth-effects).
+are distances rather than colours. Z Defocus is under **Blur & Sharpen** and Depth Fog under
+**Light & Shadow** in the Add menu. The algorithms, their sources and their limits are in [Image filters, "Depth effects"](../architecture/image-filters.md#depth-effects).
 
 ## Connecting a depth pass
 

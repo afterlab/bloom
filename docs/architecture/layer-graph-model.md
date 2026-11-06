@@ -57,8 +57,7 @@ Audio Source -> Layer --audio-+
 
 An image effect has exactly one Image transport input named `input` and one Image output named
 `image`. `NodeLoweringKind::ImageEffect` is the shared lowering for image-to-image kernels. Image effects
-are listed under Compositing, Transform, Filters, Grade or Color Management (`NodeCategory::Color`)
-in the Add menu ([UI grammar](../ux/ui-grammar.md)); categories are not persisted. Effects may connect
+are listed in the Add menu under the group the [UI grammar](../ux/ui-grammar.md) tree gives them; groups are not persisted. Effects may connect
 any image producer to any image consumer, including chains before a Layer Output, Merge, or Output.
 The ordinary graph dependency validation continues to reject cycles.
 
@@ -69,7 +68,7 @@ transparent black. Identity and bypass share the original image without a divide
 trip. Negative and HDR RGB are retained if finite.
 
 The first image-effect definitions are OCIO Color Space Transform and OCIO File Transform.
-Their registry category is Color, shown as Color Management after Grade, and not persisted. Each owns one
+They are listed under Color Management, after Color Correction; their registry category is Color. Neither is persisted. Each owns one
 `input` Image socket and one `image` Image output. Any image producer may feed an effect, and its
 output may feed another effect or any image consumer; ordinary graph validation still rejects
 cycles. For example: Solid → CST → File Transform → CST → Layer Output. Parameters remain command-
@@ -168,7 +167,7 @@ from node mute, whose existing first-image-input bypass semantics remain availab
 
 ### Adjustment Layers
 
-`bloom.adjustment` (Add → Layers → Adjustment, or the Timeline's Add menu, which creates the same
+`bloom.adjustment` (Add → Compositing → Adjustment, or the Timeline's Add menu, which creates the same
 node with a new entry for it) has no inputs or parameters and one Image output. That output is
 **the stack below** the entry its chain lands in:
 
@@ -900,30 +899,28 @@ under the pointer, so a slot's content can be detached, transferred, or re-dropp
 in the order. Reordering within one pill issues `ReorderMergeInput(mergeId, slotId, newIndex)`
 and preserves the slot and edge IDs; a body drop appends. A press where there is no slot starts from the "new slot" sentinel instead.
 
-### Node Categories
+### Node Groups And Categories
 
-`NodeDefinition::category` declares which Add-surface section a node type is listed under:
-`Sources`, `Layers`, `Compositing`, `Color`, `Values`, `Math`, `Utilities`, `Output`. The vocabulary is the
-artist's -- what a node is for -- so it is declared beside the type rather than derived from
-`NodeLoweringKind`, which spans several sections at once. The built-ins are Solid and Text under
-`Sources`, the layer boundary under `Layers`, Merge under `Compositing`, image effects under
-`Color` (shown as **Color**), Output under `Output`, the
-literal value sources and `Time` under `Values`, the arithmetic under `Math`, and the plumbing,
-logic and conversions under `Utilities` (see **Value Graph And Drivers** and
-[value-node-library.md](value-node-library.md)).
+`document/node_groups.hpp` declares which group a node type is listed under, one list per group in
+the order the [UI grammar](../ux/ui-grammar.md) tree gives them. The Add menu, the Add search, the
+card eyebrow and the scripting/MCP `category` read it. The vocabulary is the artist's -- where someone
+coming from another compositor looks for the node -- so it is not derived from `NodeLoweringKind`, which
+spans several groups at once. A registered node in no group fails `bloom.document.node-groups`.
+Groups are NOT persisted -- a document stores the node's type id -- so moving a type between groups
+needs no migration and no schema step.
 
-`Math` exists because `Utilities` had become the place everything that is not a source, a layer or an
-output ends up: a Math node, a Switch, a Reroute and a string Trim are not one family, and burying
-the arithmetic among the plumbing is what made an artist scroll past it. The category is NOT
-persisted -- a document stores the node's type id -- so moving a type between sections needs no
-migration and no schema step.
+`NodeDefinition::category` (`NodeCategory`) is a different thing: a node's authoring family, which
+behaviour reads. Grade, Color and Filters image effects take the optional effect mask, the mask
+lowers differently for Filters ([Image Filters](image-filters.md)), and a value node must be Values,
+Math or Utilities. Changing a node's family changes its schema; changing its group changes nothing
+but where it is listed. It is not persisted either.
 
-Add surfaces list entries in that category order and alphabetically inside each one, and
-`KSearchPopup` emits a heading whenever the section changes. A section with no matching result has no
-heading, and the list is exactly as tall as the rows and headings it holds.
+Add surfaces list entries in group order and alphabetically inside each one, and `KSearchPopup` emits
+a heading whenever the section changes. A section with no matching result has no heading, and the
+list is exactly as tall as the rows and headings it holds.
 
-The canvas's own context menu offers those categories as a **cascading `Add Node` submenu**, one
-section per category in the same order, entries alphabetical inside each section, and every entry adds
+The canvas's own context menu offers those groups as a **cascading `Add Node` submenu**, one
+section per group in the same order (the value groups under one Values submenu), entries alphabetical inside each section, and every entry adds
 its node at the click position through the same path the search uses. A type the command layer would
 refuse -- a singleton already in the composition -- is listed DISABLED with the command's own refusal
 in its tooltip, read from a dry run of the add operation rather than from a second copy of the rule.

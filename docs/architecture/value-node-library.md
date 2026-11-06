@@ -127,14 +127,14 @@ it is known when the plan is built rather than delivered per frame.
 Sixty-two node types, in five groups. Each group has its own section below with the full shape and
 the edge behavior of every row.
 
-| Group | Count | Category | What it is for |
+| Family | Count | Group | What it is for |
 | --- | --- | --- | --- |
 | [Conversions](#conversions) | 20 | `Convert` | Every primitive kind to and from `String`, between the numeric kinds, and between `Color`, `Vector2` and `Vector3` |
-| [Time conversions](#time-conversions) | 4 | `Time` | Seconds, frames and non-drop timecode, at the composition's own rate |
+| [Time conversions](#time-conversions) | 4 | `Time Values` | Seconds, frames and non-drop timecode, at the composition's own rate |
 | [String utilities](#string-utilities) | 15 | `String` | Building, measuring, cutting and comparing text |
 | [Math](#math) | 16 | `Math`, `Vector`, `Color` | The numeric gaps, plus the nine existing arithmetic nodes that moved into the section |
 | [Logic](#logic) | 3 | `Logic` | Boolean combination and a range predicate |
-| [Readouts](#readouts) | 5 | `Time` (frame), `Values` (composition) | What the composition, frame, or evaluated image bounds are, as numbers |
+| [Readouts](#readouts) | 5 | `Time Values` (frame), `Values` (composition) | What the composition, frame, or evaluated image bounds are, as numbers |
 
 Every node's socket names, its inline selectors and its outputs come from ONE record --
 `document::valueUtilityDescriptors()` -- so the tables below describe the same table the registry,
@@ -145,9 +145,9 @@ the compiler and the evaluator read.
 - **No identity or semantics version moved.** These are new node TYPES only. The compiled plan, the
   evaluator, the image primitives, the scalar primitives and the animation sampler all keep their
   versions, and no golden pixel or output digest shifted.
-- **No persistence step.** A new node type is not a stored-shape change. `NodeCategory` is not
+- **No persistence step.** A new node type is not a stored-shape change. Node groups are not
   persisted either, so moving the arithmetic into `Math` needed no migration.
-- **UI classification.** The Add search popup and Add Node menu expose Math after Values.
+- **UI classification.** The Add search popup and Add Node menu list Math after Values.
   The complete current order is defined in [UI grammar](../ux/ui-grammar.md). Node cards render every new node through the registry-driven generic path that
   already existed (`nodeOperandSelector`, `nodeOperandEditor`, `nodeOperandToggle`,
   `nodeOperandTextEditor`, `nodeOperandColorChip`); NO new `objectName` was introduced and none was
@@ -155,7 +155,7 @@ the compiler and the evaluator read.
 
 ## Conversions
 
-Category `Convert` (timecode/frame conversions are `Time`). Every row's inputs are listed in socket order; a **selector** is inline and
+Group `Convert` (timecode/frame conversions are `Time Values`). Every row's inputs are listed in socket order; a **selector** is inline and
 carries no socket.
 
 | Node | Inputs | Outputs | Notes |
@@ -183,7 +183,7 @@ carries no socket.
 
 ## Time Conversions
 
-Category `Time`. All four read the COMPOSITION's frame rate -- the same rate a `Time` node's
+Group `Time Values`. All four read the COMPOSITION's frame rate -- the same rate a `Time` node's
 `frame` output is computed from, so the two can never disagree about which frame an instant falls
 in.
 
@@ -233,7 +233,7 @@ refused rather than read as non-drop.
 
 ## String Utilities
 
-Category `String`.
+Group `String`.
 
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
@@ -351,7 +351,7 @@ of each would be two nodes an artist has to choose between for one operation.
 
 ## Logic
 
-Category `Logic`, alongside Boolean, Compare and Switch.
+Group `Logic`, alongside Boolean, Compare and Switch.
 
 | Node | Inputs | Outputs | Notes |
 | --- | --- | --- | --- |
@@ -421,15 +421,13 @@ outside that set: it either loses information (Vector 3 to Vector 2), invents a 
 to String), or can fail (anything from String). A refusal the artist can see, followed by a node
 they placed deliberately, is better than a silent coercion whose rule they have to remember.
 
-The current UI category order and normalized family mapping are owned by [UI grammar](../ux/ui-grammar.md).
-Value-family normalization is a presentation projection. COLOR-3 adds the non-persisted
-`NodeCategory::Color` for colour-management image effects; #500 adds `NodeCategory::Grade` for the
-image grades and `NodeCategory::Filters` for the blurs and matte filters.
+The current group order and which node sits in which group are owned by the tree in
+[UI grammar](../ux/ui-grammar.md).
 
 ## Color Image Effects
 
 These definitions operate on images and use `NodeLoweringKind::ImageEffect`, independently of the
-Color value nodes. They appear under Add → Color Management, after Grade.
+Color value nodes. They appear under Add → Color Management, after Color Correction.
 
 | Node | Image ports | Constant parameters | Behavior |
 | --- | --- | --- | --- |

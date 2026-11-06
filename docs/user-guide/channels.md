@@ -3,7 +3,7 @@
 Separate Channels splits an image into its red, green, blue and alpha channels, and Combine
 Channels builds an image from channels. Use them to rebuild an image from other images' channels,
 pack render passes into one image, or pull one value out of a pass, such as a mist, depth, normal,
-motion vector or ID pass. Both nodes are in the **Compositing** section of the Add menu and the
+motion vector or ID pass. Both nodes are in the **Channels** section of the Add menu and the
 Tab search, beside the other channel nodes; searching "Separate RGB" or "Combine RGB" finds them
 first.
 
@@ -65,7 +65,7 @@ Color on a data channel is refused, and the Shuffle shows "Shuffle Color mode wo
 the data channel …" and produces no image. Choose Auto or Raw. A project saved with Color mode on a
 data channel opens with this message rather than a converted image.
 
-**Pass** (in the **Compositing** section) is the quick way to pull one pass out. Pick it from the
+**Pass** (in the **Channels** section) is the quick way to pull one pass out. Pick it from the
 **Pass** dropdown, which lists the input's layers and channels. A channel gives a grey image, and a
 layer gives its R, G, B (or X, Y, Z, or U, V, W) channels as red, green and blue. The alpha is
 always 1, so data values are never lost under transparent pixels. The default, **First data layer**,
@@ -79,7 +79,7 @@ far distance for a depth pass. The node reports how many pixels it repaired.
 transparent black, whatever the colour slots hold. Map the alpha slot to `1` (or use Pass) to keep
 data under transparent pixels.
 
-**Image to Channel Set** (in the **Compositing** section) turns an image back into a channel set:
+**Image to Channel Set** (in the **Channels** section) turns an image back into a channel set:
 its red, green, blue and alpha become the channels of one named layer. Use it to send a processed
 pass to **Channel Copy** and on to a layered OpenEXR through the Composition Output's channels.
 **Layer** names the layer (default `pass`), **Channels** names its channels in red, green, blue,

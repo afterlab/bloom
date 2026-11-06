@@ -1,6 +1,6 @@
 # Film Grain
 
-**Film Grain** adds seeded, repeatable grain to an image. Find it under **Filters** in the Add menu.
+**Film Grain** adds seeded, repeatable grain to an image. Find it under **Stylize** in the Add menu.
 The formulas and their limits are in
 [Image filters, "Film Grain"](../architecture/image-filters.md#film-grain).
 

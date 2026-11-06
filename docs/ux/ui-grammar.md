@@ -561,7 +561,7 @@ context menu. Dropdown-backed submenus mirror their footer dropdown item for ite
 | --- | --- |
 | View | Fit (`Ctrl+0`), 100% (`Ctrl+1`), Zoom In, Zoom Out, Zoom ▸ (the zoom presets), Resolution ▸; Channel ▸, Display / View ▸, Look, Reset Exposure and Gamma, Region of Interest, Clear Region of Interest; Guides ▸ (Safe Areas `Ctrl+Alt+S`, Safe Area Preset ▸, Custom Safe Areas…, Center Cross, Thirds, Rulers, Pixel Grid), Background ▸ (Solid, Gray, Black, White: the surround), Transparency Grid |
 | Select | Select All / Deselect All / Invert (`Ctrl+A`, `Ctrl+Shift+A`, `Ctrl+Alt+A`), naming their target: anchors while a path is edited (the Pen tool, a selected mask, or an anchor selection), layers otherwise |
-| Add | Solid, Text; the shape kinds; Adjustment Layer (the same Adjustment node as Add → Layers → Adjustment, with a new entry above the selected row); Import and Add… (the drop path's import, then layers at the playhead) |
+| Add | Solid, Text; the shape kinds; Adjustment Layer (the same Adjustment node as Add → Compositing → Adjustment, with a new entry above the selected row); Import and Add… (the drop path's import, then layers at the playhead) |
 | Canvas context menu | On a layer: Select it, Duplicate Layer, Delete Layer; then Fit, 100%, Zoom In, Zoom Out; Add ▸, Guides ▸; Composition Settings…. The anchor menu stays first while a path is edited |
 
 The frame field defaults to `HH:MM:SS:FF`, honors `timeline/time-format`, accepts either
@@ -1127,22 +1127,50 @@ Properties shows every section with no filter strip and no header search. Sectio
 individually with persisted state; there is no Collapse all / Expand all affordance and no
 section menu. KSection headers carry only the chevron, title, and Reset.
 
-Node Add menu and search order is Sources, Layers, Compositing, Transform, Filters, Grade, Color
-Management, Values, Math, Convert, String, Logic, Time, Color Values, Vector, Utilities, Output.
-Layers holds Layer and Adjustment (#502: an Adjustment's Image output is the stack below the Merge
-entry its chain lands in). Transform holds geometric image operations (Resize, Fit, Transform 2D, Crop, Pad, Flip, Rotate 90);
-Filters (`NodeCategory::Filters`) holds the blurs (Gaussian, Box, Matte) and Matte Erode/Dilate; Luma
-Key, the Drop Shadow, Glow and Light Wrap recipes and the image Separate/Combine Channels (beside
-Shuffle, Channel Copy, Remove and Pass) are under Compositing. Grade (`NodeCategory::Grade`) holds the
-image grades that never convert colour: Grade, Levels, Curves, Hue/Saturation, Exposure, Offset,
-Multiply, Invert and Colorize. Color Management projects `NodeCategory::Color` and holds only the OCIO Color
-Space Transform and OCIO File Transform; Color Values holds the color value nodes. A node card's
-eyebrow is its section name. The UI category projection owns normalization.
-Categories are not persisted, so no migration is needed. Utilities contains only reroute and
-Separate/Combine XY and XYZ plumbing (reroutes remain link gestures). Time includes Time, frame readouts and
-time conversions; composition readouts and literals remain Values. HSV operations and Separate/Combine Color belong to Color Values; the Color value nodes are
-named with a "(Value)" suffix (Separate Color (Value), Hue Shift (Value)) so an image search such as
-"Separate RGB" lists Separate Channels first.
+The node Add menu, the Add search's headings, a node card's eyebrow and the scripting/MCP `category`
+all read one group tree (#554), owned by `document/node_groups.hpp`. In order, with `+` for what the
+group is waiting for:
+
+| Group | Nodes |
+| --- | --- |
+| Sources | Image, Video, Audio, Composition, Solid, Checker, Linear Gradient, Radial Gradient (+ both become one Gradient) |
+| Compositing | Merge (Layer Stack), Adjustment, Layer (Layer Output), Image Mix, Set Alpha, Multiply Alpha, Alpha Association, + Image Switch, + Edge Extend |
+| Channels | Channel Copy, Pass, Select Channels, Shuffle, Separate Channels, Combine Channels, Image to Channel Set, + Image Math, + Image Map Range, + Image Clamp |
+| Keying & Mattes | Luma Key, Cryptomatte, Mask, Mask Combine, Image to Mask, Matte Blur, Matte Dilate, Matte Erode, + Channel Key, + Chroma Key, + Despill, + Matte Refine, + HSL Qualifier, + Transition/Wipe Matte |
+| Transform | Transform 2D, Crop, Pad, Fit, Resize, Flip, Rotate 90, + Camera Shake, + Tile & Mirror |
+| Distort | + Corner Pin, + ST Map, + Displace, + Procedural Warp, + Lens Distortion, + Chromatic Aberration |
+| Blur & Sharpen | Gaussian Blur, Box Blur, Z Defocus, Motion Blur, Vector Motion Blur, Optical Flow, Optical Flow Motion Blur, Directional Blur, Spin Blur, Zoom Blur, Sharpen, + Denoise |
+| Light & Shadow | Glow, Light Wrap, Drop Shadow, Depth Fog, Lens Flare, + Light Rays, + Inner Shadow, + Inner Glow |
+| Stylize | Vignette, Film Grain, + Dither, + Quantize |
+| Color Correction | Grade, Levels, Curves, Hue/Saturation, Exposure, Offset, Multiply, Invert, Colorize, + Color Matrix, + Tone Map |
+| Color Management | OCIO Color Space Transform, OCIO File Transform |
+| Time | Echo, + Time Offset, + Frame Hold, + Time Remap, + Flow Retime |
+| Text & Paths | Text Source, the shape presets (Shape Source), + SVG Vector Source, + Text Layout, + Text Animator, + Text On Path, + Text To Shape, + Transform Path, + Trim Path, + Offset Path, + Boolean/Merge Paths, + Round Corners, + Path Stroke |
+| Instances & Particles | + Point, + Grid, + Scatter, + Points Along Path, + Shape To Points, + Text To Points, + Clone To Points, + Draw Instances, + Particle System |
+| Tracking & Analysis | + Tracker, + Stabilize, + Histogram, + Image Statistics, + Compare, + Audio Amplitude, + Audio Waveform, + Audio Spectrum |
+| Fields | the 16 Field nodes |
+| Values (submenu) | Values, Math (+ Oscillator, + Wiggle, + Loop Value), Convert, String, Logic, Time Values, Color Values, Vector |
+| Utilities | Reroute, Separate/Combine XY and XYZ, + Group Input, + Group Output, + Node Group, + File Cache |
+| Output | Output (Composition Output), Image Preview |
+
+A group with no registered node is not offered. The eight value groups sit under one Values submenu,
+the menu's only second level; the search lists every node and keeps them as sections of their own.
+A new node joins by adding its type id to its group's list in `node_groups.cpp`, and a registered
+node in no list fails `bloom.document.node-groups`. Groups are not persisted (a document stores the
+type id), so moving a node needs no migration. `NodeCategory` is a separate declaration that decides
+a node's effect mask and how it lowers, so regrouping never changes a node's schema or pixels.
+
+Search also finds a node by what other compositors call it (`node_search_keywords.cpp`: Merge,
+Constant, Read, Write, Reformat, Premult, Unpremult, Copy, Shuffle, Dot, Roto, Keylight, Primatte,
+CornerPin2D, Arithmetic, Fill, Tint and others). Typing one of those names in full ranks that node
+just under a node actually called that, so Enter on "Read" adds Image Source. A name whose own node
+has not landed is parked on the closest node until it does: Keylight and Primatte on Luma Key,
+CornerPin2D on Transform 2D, Arithmetic on Multiply and Offset.
+
+Reroute is also still made from a link gesture. HSV operations and Separate/Combine Color belong to
+Color Values; the Color value nodes are named with a "(Value)" suffix (Separate Color (Value), Hue
+Shift (Value)) so an image search such as "Separate RGB" lists Separate Channels first. Time Values
+holds Time, frame readouts and time conversions; composition readouts and literals remain Values.
 Kit menus with `columnFlow` use real action-backed controls in additional columns, capped at
 `kMenuWindowHeightShare` (0.5) of the owner window and positioned within that window. Empty-canvas
 double-click opens Add search at the cursor. Footer count is hidden at zero; snap and link style

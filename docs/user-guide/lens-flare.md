@@ -1,7 +1,7 @@
 # Lens Flare
 
 **Lens Flare** adds the light a bright source scatters inside a lens: a stack of elements around the
-light and along the line through the frame's centre. Find it under **Compositing** in the Add menu.
+light and along the line through the frame's centre. Find it under **Light & Shadow** in the Add menu.
 The formulas and their limits are in
 [Image filters, "Lens Flare"](../architecture/image-filters.md#lens-flare).
 

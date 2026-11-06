@@ -2,7 +2,7 @@
 
 Grade, Levels, Curves and Hue/Saturation adjust an image's colour. They work on render passes as
 well as on colour: none of them converts colour, so a depth, mist, normal or position pass is
-adjusted exactly as it was rendered. All four are in the **Grade** section of the Add menu and
+adjusted exactly as it was rendered. All four are in the **Color Correction** section of the Add menu and
 the Tab search, with Exposure, Offset, Multiply, Invert and [Colorize](#colorize). Each takes an image on **Input** and returns the adjusted image on **Image**.
 
 Every control can be animated, and every change can be undone and is saved with the project.
@@ -230,7 +230,7 @@ multiplier. A drag near the neutral value (0, or 1 for Factor) rests on it; doub
 
 ## Colorize
 
-Colorize replaces an image's colour from its own tones, keeping its alpha. It is in the **Grade**
+Colorize replaces an image's colour from its own tones, keeping its alpha. It is in the **Color Correction**
 section with the nodes above. Choose what it does with **Mode**:
 
 | Mode | Does |
@@ -278,7 +278,7 @@ shows only the current mode's controls; the others keep their values.
 ## Vignette
 
 Vignette darkens an image towards the edges of its frame, the way a lens does; it is in the
-**Filters** section. Its card shows the frame with the vignette drawn over mid grey: drag the
+**Stylize** section. Its card shows the frame with the vignette drawn over mid grey: drag the
 **Center** point to move it (hold **Ctrl** for finer control), and watch the picture follow every
 slider.
 

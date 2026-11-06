@@ -23,7 +23,7 @@ Source ───────────────→ Merge [1, 2]           �
 ```
 
 - **Adjustment layer.** Add one from the Timeline's **Add** menu (**Adjustment Layer**) or from the
-  node editor's **Add → Layers → Adjustment**. Its Image output is the stack below the entry its
+  node editor's **Add → Compositing → Adjustment**. Its Image output is the stack below the entry its
   chain lands in. Put any effects after it and feed the result into the Merge. That entry replaces
   the stack below it rather than compositing over it.
 - **Effect after the Merge.** Wire the Merge's output through Curves.

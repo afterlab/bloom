@@ -1,8 +1,8 @@
 # Motion blur
 
 Motion blur makes moving things smear across the time the shutter stays open. Bloom has one shutter
-and several ways of finding the motion, so choose by what you have. Find the nodes under **Filters** in
-the Add menu. The algorithms, their sources and their limits are in
+and several ways of finding the motion, so choose by what you have. Find the nodes under **Blur & Sharpen** in
+the Add menu, and Echo under **Time**. The algorithms, their sources and their limits are in
 [Motion blur](../architecture/motion-blur.md).
 
 | You have | Use | Why |

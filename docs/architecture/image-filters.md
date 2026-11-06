@@ -10,8 +10,8 @@ Updated: 2026-11-05
 neighborhood effects. Both expose an animatable/drivable `radius` in full-resolution image pixels
 and an `edge` selector: `0` Transparent (default), `1` Clamp. Radius zero is an exact storage alias.
 They use the ordinary Add Node, parameter commands, undo/redo and project parameter codec. The
-Properties radius field displays pixels; the Add menu lists both under Filters. Matte Blur (below)
-reuses the same kernel for Mask coverage.
+Properties radius field displays pixels; the Add menu lists both under Blur & Sharpen. Matte Blur
+(below) reuses the same kernel for Mask coverage.
 
 The v1 algorithm supports authored radius `0..256`, at most 513 coefficients per full-resolution
 axis. Horizontal and vertical support independently use `ceil(radius * resolutionScale)`.
@@ -69,7 +69,7 @@ radius cases. Native execution is deferred to the grouped gate; fixture presence
 matte and feeds Image Mix's `mask`, never an Image socket. It reuses the Gaussian Blur controls and
 schema keys unchanged: animatable/drivable `bloom.blur.radius` (`0..256` full-resolution pixels,
 default `0`) and the constant `bloom.blur.edge` selector (`0` Transparent, default; `1` Clamp). It
-is Gaussian only; there is no kernel selector. The Add menu lists it under Filters.
+is Gaussian only; there is no kernel selector. The Add menu lists it under Keying & Mattes.
 
 It lowers to the same `SeparableBlurKernel` with `BlurChannels::Coverage`. The coefficients,
 supports, bounds, proxy scaling, halo/data-window, ROI, budget, cancellation and failure rules are
@@ -110,7 +110,7 @@ zero-dispatch and changed-radius cases at the 2e-6/exact-alpha gate.
 They have exactly Matte Blur's sockets and controls: a required Mask `input`, a Mask `mask` output,
 the animatable/drivable `bloom.blur.radius` (`0..256` full-resolution pixels, default `0`) and the
 constant `bloom.blur.edge` selector (`0` Transparent, default; `1` Clamp). The Add menu lists both
-under Filters. Radius zero is an exact storage alias, and the supports, proxy scaling, bounds,
+under Keying & Mattes. Radius zero is an exact storage alias, and the supports, proxy scaling, bounds,
 budget, cancellation and failure rules are the Gaussian Blur rules above.
 
 They lower to the same `SeparableBlurKernel` with `BlurChannels::Coverage` and the morphology kinds
@@ -154,7 +154,7 @@ and a Mask `mask` output, so it feeds Image Mix's `mask`, Matte Blur, Matte Erod
 never an Image socket. Its controls are the animatable/drivable `low` (`bloom.luma-key.low`,
 default `0`) and `high` (`bloom.luma-key.high`, default `1`) luma thresholds, each finite in
 `[-1e6, 1e6]`, and the constant `invert` Boolean (`bloom.luma-key.invert`, default false). The Add
-menu lists it under Compositing.
+menu lists it under Keying & Mattes.
 
 The luma is the track-matte Luma: Rec. 709 weights `0.2126, 0.7152, 0.0722` over scene-linear
 colour, unclamped, so HDR and negative values key by their real luma. The coverage is the pixel's
@@ -191,7 +191,7 @@ run at the 2e-6/exact-alpha gate.
 
 `bloom.levels` and `bloom.hue-saturation`, schema 1 (#340), and `bloom.curves`, schema 2 (#493),
 are Image-in,
-Image-out grades listed under Grade in the Add menu. None of them performs a colour transform or
+Image-out grades listed under Color Correction in the Add menu. None of them performs a colour transform or
 reads the working colour space: the values are graded exactly as stored, so a Raw data pass (Z
 depth, mist, normals, position) interpreted with the Raw input colour space can be normalised or
 remapped directly. They lower to the `LevelsKernel`, `CurvesKernel` and `HueSaturationKernel`
@@ -399,7 +399,7 @@ solids at the 2e-6/exact-alpha gate with warm zero-dispatch and changed-value ru
 
 ## Grade
 
-`bloom.grade`, schema 1 (#494), is an Image-in, Image-out primary grade listed under Grade, in the
+`bloom.grade`, schema 1 (#494), is an Image-in, Image-out primary grade listed under Color Correction, in the
 manner of lift/gamma/gain primaries and the ASC CDL. It lowers to the `GradeKernel` alternative and
 shares the grade machinery above (`color_grade_image_effect.hpp`): one host-prepared binary32
 table, the CPU reference that applies it, and one fixed resident GPU program
@@ -503,7 +503,7 @@ Exposure). These rows carry their sockets.
 ## Separate Channels and Combine Channels
 
 `bloom.separate-channels` and `bloom.combine-channels`, schema 1 (#479), split an image into its
-channels and build an image from channels. Both are listed under Compositing in the Add menu,
+channels and build an image from channels. Both are listed under Channels in the Add menu,
 beside the other channel nodes, and work on any Image: footage, a nested composition, a generator
 or a processed result, and render passes such as mist, Z depth, normals, motion vectors and IDs. Every value is the stored Float32 channel:
 nothing is clamped, rounded or colour converted, so a Raw data pass moves between channels exactly
@@ -565,7 +565,7 @@ covered by the Required `node.bloom.separate-channels` and `node.bloom.combine-c
 To make an image search find the image nodes first, the Color value nodes are named as values:
 Separate Color (Value) and Combine Color (Value) (`bloom.separate-rgba`, `bloom.combine-rgba`),
 Separate HSV (Value), Combine HSV (Value), Hue Shift (Value) and Luminance (Value), all listed
-under Color Values. Only display names and Add menu sections changed; type ids, ports and saved
+under Color Values. Only display names and Add menu groups changed; type ids, ports and saved
 projects are unchanged.
 
 Tests: the direct CPU test checks the exact stored greys of HDR, signed, partial-alpha,
@@ -582,7 +582,7 @@ and changed-mapping runs.
 ## Drop Shadow, Glow and Light Wrap
 
 `bloom.drop-shadow`, `bloom.glow` and `bloom.light-wrap`, schema 1 (#339), are compositing
-recipes listed under Compositing in the Add menu. Each has a required Image input, `input`, and an
+recipes listed under Light & Shadow in the Add menu. Each has a required Image input, `input`, and an
 Image output, `image`. None has its own pixel kernel: the compiler lowers each node to a chain of
 the existing image primitives (`compositing_recipes.hpp`), and every value the chain derives from
 the node's parameters (an offset, a knee bound, an octave weight, a gain) is a value-graph
@@ -981,7 +981,7 @@ position field as one command each, keyed as one whole value whose keys interpol
 ## Vignette
 
 `bloom.vignette`, schema 1 (#505), darkens (or brightens) an image towards the edges of its frame,
-the finishing step of a lens look. It is listed under Filters (search also finds it as lens, falloff,
+the finishing step of a lens look. It is listed under Stylize (search also finds it as lens, falloff,
 darken edges or corners) and has one Image in, `input`, and one Image out, `image`, over the input's
 data and display windows with its pixel aspect.
 
@@ -1082,7 +1082,7 @@ and Zoom Blur are one temporal-sampling engine, specified in [Motion blur](motio
 ## Depth effects
 
 `bloom.z-defocus` (Z Defocus) and `bloom.depth-fog` (Depth Fog), schema 1 (#483), are the two
-Filters nodes that read a depth pass: a lens blur whose size follows the depth, and atmospheric fog
+nodes that read a depth pass: a lens blur whose size follows the depth, and atmospheric fog
 that thickens with distance. Both take an Image on `input`, a depth source on `depth`, an optional
 Image (`bokeh`, the lens kernel; `fog`, a fog picture) and the effect mask (Matte Workflow), and give
 an Image on `image`. In a comp, fog normally goes before defocus: fog is what the far objects look
@@ -1283,7 +1283,7 @@ draws its focus point and the 5 x 5 area it samples.
 
 ## Lens Flare
 
-`bloom.lens-flare`, schema 1 (#507), a Compositing node, adds an element stack of light to an image:
+`bloom.lens-flare`, schema 1 (#507), listed under Light & Shadow, adds an element stack of light to an image:
 an Image on `input`, an optional matte on `occlusion` (a Mask, or an Image read through the channel
 selector) and an Image on `image`. It lowers to one `LensFlareKernel` (Required in the GPU coverage
 contract), a grade kind whose table gains the image's geometry where it is applied. Its parameter
@@ -1377,7 +1377,7 @@ interest draws the whole frame's pixels. A value change is new program data and 
 
 ## Film Grain
 
-`bloom.film-grain`, schema 1, under Filters (issue #486), has one Image in, `input`, one Image out,
+`bloom.film-grain`, schema 1, under Stylize (issue #486), has one Image in, `input`, one Image out,
 `image`, and the optional effect mask every filter takes. Every value below but the last two has a
 socket and can be keyed or driven:
 
@@ -1451,7 +1451,7 @@ full frame and ROI. [Benchmarks](../development/benchmarks.md#film-grain-486) ho
 
 ## Sharpen
 
-`bloom.sharpen`, schema 1, under Filters (issue #486), has one Image in, `input`, one Image out, `image`,
+`bloom.sharpen`, schema 1, under Blur & Sharpen (issue #486), has one Image in, `input`, one Image out, `image`,
 and the optional effect mask every filter takes. Every value has a socket and can be keyed or driven:
 
 | Role | Default | Domain | Meaning |
@@ -1520,7 +1520,7 @@ kernels'. The GPU coverage contract requires `node.bloom.mask-combine`,
 
 ### Mask Combine
 
-`bloom.mask-combine`, schema 1, under Compositing, has two optional Mask inputs, `a` and `b`, and
+`bloom.mask-combine`, schema 1, under Keying & Mattes, has two optional Mask inputs, `a` and `b`, and
 one Mask out, `mask`, covering the composition canvas. Its Combine control (`mode`, a constant
 dropdown) is Add (0, the default), Subtract (1), Intersect (2) or Difference (3), with ADR 0028's
 layer-mask arithmetic for coverage `a` and `b`:
@@ -1538,7 +1538,7 @@ Add is Image Mix of it towards white by `b`; Subtract and Intersect are Multiply
 
 ### Image to Mask
 
-`bloom.image-to-mask`, schema 1, under Compositing, has one Image in, `input`, and one Mask out,
+`bloom.image-to-mask`, schema 1, under Keying & Mattes, has one Image in, `input`, and one Mask out,
 `mask`, covering the composition canvas. Its Matte channel control (`channel`) is the matte
 selector Set Alpha and Multiply Alpha use: Alpha (0, the default), Red, Green, Blue, Luma, and the
 same five inverted (5 to 9). The Mask is the canvas multiplied by the selected value (Multiply
@@ -1546,7 +1546,8 @@ Alpha), so a colour channel or luma reads the premultiplied stored value.
 
 ### Effect mask
 
-Every image effect under Grade, Color Management and Filters whose leading input is `input` and
+Every image effect in the Grade, Color and Filters categories (`NodeCategory`, not the Add menu's
+groups) whose leading input is `input` and
 whose only output is an Image `image` takes an optional `mask` input after its own inputs, and a
 Mask channel control (`maskChannel`, the same ten-value matte selector, default Alpha) after its
 own controls. Glow keeps its own `mask` input and so takes none; compositing recipes, transforms
